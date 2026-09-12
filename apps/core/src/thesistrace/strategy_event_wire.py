@@ -18,6 +18,8 @@ _EVENT_SECTIONS = frozenset(
     }
 )
 
+_FRAME_SECTIONS = _EVENT_SECTIONS | {"holding_observations"}
+
 
 def _container(message: Mapping) -> Mapping:
     chunk = message.get("chunk")
@@ -28,8 +30,11 @@ def _replace_events(message: Mapping, key: str, value: object) -> dict:
     container = {
         name: item
         for name, item in _container(message).items()
-        if name not in {"strategy_events", "strategy_event_counts"}
+        if name not in {"strategy_events", "strategy_event_counts", "holding_observations"}
     }
+    if key == "strategy_events" and "holding_observations" in value:
+        value = dict(value)
+        container["holding_observations"] = value.pop("holding_observations")
     container[key] = value
     return (
         {**message, "chunk": container} if isinstance(message.get("chunk"), Mapping) else container
@@ -57,6 +62,9 @@ def strategy_event_messages(message: Mapping) -> Iterator[dict]:
     events = container["strategy_events"]
     if not isinstance(events, dict) or not set(events) <= _EVENT_SECTIONS:
         raise ValueError("Strategy event sections are invalid")
+    events = dict(events)
+    if "holding_observations" in container:
+        events["holding_observations"] = container["holding_observations"]
     counts = {}
     total = 0
     for section, rows in events.items():
@@ -89,7 +97,7 @@ class EventMessageAssembler:
             if set(message) != {"status", "section", "offset", "rows"}:
                 raise ValueError("Strategy event frame is invalid")
             section, offset, rows = message["section"], message["offset"], message["rows"]
-            if not isinstance(section, str) or section not in _EVENT_SECTIONS:
+            if not isinstance(section, str) or section not in _FRAME_SECTIONS:
                 raise ValueError("Strategy event frame section is invalid")
             if not isinstance(rows, list) or not 1 <= len(rows) <= EVENT_FRAME_ROWS:
                 raise ValueError("Strategy event frame size is invalid")
@@ -105,12 +113,12 @@ class EventMessageAssembler:
         if counts is None:
             if self._rows:
                 raise ValueError("Strategy event segment is incomplete")
-            if "strategy_events" in _container(message):
+            if {"strategy_events", "holding_observations"} & _container(message).keys():
                 raise ValueError("Strategy events require framed transport")
             return message
         if (
             not isinstance(counts, dict)
-            or not set(counts) <= _EVENT_SECTIONS
+            or not set(counts) <= _FRAME_SECTIONS
             or not set(self._rows) <= set(counts)
             or any(
                 type(count) is not int or count < 0 or count != len(self._rows.get(section, []))

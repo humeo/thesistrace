@@ -1,3 +1,4 @@
+import json
 from dataclasses import replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -211,7 +212,8 @@ def test_common_statistics_publish_from_checkpoint_to_completed_result(
                 for price in canonical["prices"]:
                     from thesistrace.data.canonical_mapping import adjusted_price_string
 
-                    price["close_raw"] = closes[sessions.index(price["session"])]
+                    close_index = min(sessions.index(price["session"]), len(closes) - 1)
+                    price["close_raw"] = closes[close_index]
                     price["close_adj"] = adjusted_price_string(
                         Decimal(price["close_raw"]),
                         Decimal(price["adjustment_factor"]),
@@ -321,6 +323,41 @@ def test_common_statistics_publish_from_checkpoint_to_completed_result(
 
         event_pages = _assert_published_run_events(client, run_id)
 
+        from thesistrace.publication.holding_retention import HoldingRetention
+
+        retention = HoldingRetention(
+            client.app.state.core_runtime.database, client.app.state.core_runtime.publication,
+        )
+        metadata = retention.inspect(TEST_RESEARCHER.researcher_id, run_id)
+        assert metadata is not None and metadata["status"] == "available"
+        assert metadata["first_session"] == sessions[1]
+        assert metadata["last_session"] == sessions[3]
+        assert not any(name.startswith("daily_holdings") for name in bundle.payloads)
+        _metadata, holding_bundle = retention.read_detail(
+            TEST_RESEARCHER.researcher_id, run_id,
+            lambda tx, ref: client.app.state.core_runtime.publication.read_in_transaction(tx, ref),
+        )
+        assert json.loads(holding_bundle.payloads["daily_holdings"].content)["sessions"] == list(
+            sessions[1:4]
+        )
+
+        before_status = retention.inspect(TEST_RESEARCHER.researcher_id, run_id)
+        holding_status = client.post(
+            f"/api/research-runs/{run_id}/holdings/query",
+            json={"section": "daily_holdings_status"},
+        )
+        assert holding_status.status_code == 200, holding_status.text
+        assert holding_status.json()["units"][0]["unit_id"] == run_id
+        assert retention.inspect(TEST_RESEARCHER.researcher_id, run_id) == before_status
+        holding_page = client.post(
+            f"/api/research-runs/{run_id}/holdings/query",
+            json={"section": "daily_holdings", "unit_id": run_id, "limit": 1},
+        )
+        assert holding_page.status_code == 200, holding_page.text
+        assert holding_page.json()["status"] == "available"
+        assert holding_page.json()["coverage"]["session_count"] == 3
+        assert len(holding_page.json()["rows"]) <= 1
+
         from thesistrace.daily_track.service import _read_publication_json
 
         started = client.post(
@@ -335,6 +372,12 @@ def test_common_statistics_publish_from_checkpoint_to_completed_result(
         )
         assert frozen_page.status_code == 200, frozen_page.text
         frozen_page = frozen_page.json()
+        frozen_holdings = client.post(
+            f"/api/daily-tracks/{track_id}/holdings/query",
+            json={"section": "daily_holdings", "unit_id": run_id, "limit": 1},
+        )
+        assert frozen_holdings.status_code == 200, frozen_holdings.text
+        frozen_holdings = frozen_holdings.json()
         earliest_page = client.post(
             f"/api/daily-tracks/{track_id}/events/query",
             json={"section": "strategy_targets", "limit": 1, "start_session": "0001-01-01"},
@@ -346,6 +389,36 @@ def test_common_statistics_publish_from_checkpoint_to_completed_result(
         assert worker.returncode == 0, worker.stdout + worker.stderr
         tracked = client.get(f"/api/daily-tracks/{track_id}").json()
         assert tracked["strategy_session"] == sessions[-1], tracked
+        tracked_metadata = retention.inspect(
+            TEST_RESEARCHER.researcher_id, f"{track_id}:{sessions[-1]}",
+        )
+        assert tracked_metadata is not None and tracked_metadata["status"] == "available"
+        assert tracked_metadata["first_session"] == sessions[4]
+        assert tracked_metadata["last_session"] == sessions[-1]
+        track_units = client.post(
+            f"/api/daily-tracks/{track_id}/holdings/query",
+            json={"section": "daily_holdings_status", "limit": 1},
+        )
+        assert track_units.status_code == 200, track_units.text
+        assert track_units.json()["units"][0]["unit_id"] == run_id
+        assert track_units.json()["next_cursor"] is not None
+        next_units = client.post(
+            f"/api/daily-tracks/{track_id}/holdings/query",
+            json={"section": "daily_holdings_status", "limit": 1,
+                  "cursor": track_units.json()["next_cursor"]},
+        )
+        assert next_units.status_code == 200, next_units.text
+        assert next_units.json()["units"][0]["unit_id"] == f"{track_id}:{sessions[-1]}"
+        if frozen_holdings["next_cursor"] is not None:
+            continued_holdings = client.post(
+                f"/api/daily-tracks/{track_id}/holdings/query",
+                json={"section": "daily_holdings", "unit_id": run_id, "limit": 1,
+                      "cursor": frozen_holdings["next_cursor"]},
+            )
+            assert continued_holdings.status_code == 200, continued_holdings.text
+            assert continued_holdings.json()["unit"]["unit_id"] == run_id
+            assert all(row["session"] <= sessions[3]
+                       for row in continued_holdings.json()["rows"])
         if frozen_page["next_cursor"] is not None:
             continued = client.post(
                 f"/api/daily-tracks/{track_id}/events/query",
@@ -453,6 +526,24 @@ def test_common_statistics_publish_from_checkpoint_to_completed_result(
                     ("get_research_run_result", {"run_id": run_id}, values),
                     ("get_daily_track_result", {"track_id": track_id}, values + common),
                 ):
+                    before_native_status = retention.inspect(TEST_RESEARCHER.researcher_id, run_id)
+                    status_response = await agent.call_tool(
+                        tool, {**identity, "section": "daily_holdings_status"},
+                    )
+                    assert status_response.is_error is False, status_response
+                    assert status_response.structured_content["units"][0]["unit_id"] == run_id
+                    assert retention.inspect(
+                        TEST_RESEARCHER.researcher_id, run_id,
+                    ) == before_native_status
+                    holding_response = await agent.call_tool(
+                        tool, {**identity, "section": "daily_holdings", "unit_id": run_id,
+                               "limit": 1},
+                    )
+                    assert holding_response.is_error is False, holding_response
+                    assert holding_response.structured_content["status"] == "available"
+                    assert holding_response.structured_content["rows"] == (
+                        holding_page.json()["rows"]
+                    )
                     received = []
                     cursor = None
                     for _ in range(len(expected)):
@@ -488,6 +579,59 @@ def test_common_statistics_publish_from_checkpoint_to_completed_result(
                     )
 
         anyio.run(read_native_common_results)
+
+        with runtime.database.transaction() as transaction:
+            transaction.execute(
+                "UPDATE publication.holding_units "
+                "SET published_at = clock_timestamp() - interval '8 days', "
+                "expires_at = clock_timestamp() - interval '1 second' WHERE id = ANY(%s)",
+                ([run_id, f"{track_id}:{sessions[-1]}"],),
+            )
+        retention.expire_once()
+        expired_before = retention.inspect(TEST_RESEARCHER.researcher_id, run_id)
+
+        async def read_expired_native_holdings():
+            async with _mcp_client(settings, tmp_path / "expired-holdings-mcp.stderr.log") as agent:
+                for tool, identity in (
+                    ("get_research_run_result", {"run_id": run_id}),
+                    ("get_daily_track_result", {"track_id": track_id}),
+                ):
+                    response = await agent.call_tool(
+                        tool, {**identity, "section": "daily_holdings", "unit_id": run_id},
+                    )
+                    assert response.is_error is False, response
+                    assert response.structured_content["status"] == "expired"
+                    assert response.structured_content["rows"] == []
+        anyio.run(read_expired_native_holdings)
+        assert retention.inspect(TEST_RESEARCHER.researcher_id, run_id) == expired_before
+        assert client.get(f"/api/research-runs/{run_id}").status_code == 200
+        assert client.get(f"/api/daily-tracks/{track_id}").status_code == 200
+
+        # The latest checkpoint, not temporary historical holdings, owns continuation.
+        extended_sessions = _business_sessions(date(2024, 8, 1), count=len(sessions) + 1)
+        BenchmarkSnapshotStore(settings.benchmark_mount).publish(
+            (BenchmarkLevel("2010-01-04", "3500"),
+             *(BenchmarkLevel(day, "4000") for day in extended_sessions)),
+            published_at=datetime(2026, 8, 11, 8, tzinfo=UTC),
+        )
+        _publish_head(
+            settings,
+            sessions=(("2024-07-31", *extended_sessions)
+                      if weighting == "inverse_volatility" else extended_sessions),
+            expected_manifest=generation,
+            operation_id="after-holding-expiry",
+        )
+        _refresh_daily_track(client, track_id, "after-holding-expiry")
+        worker = _run_worker_once(settings, "tracking")
+        assert worker.returncode == 0, worker.stdout + worker.stderr
+        continued = client.get(f"/api/daily-tracks/{track_id}").json()
+        assert continued["strategy_session"] == extended_sessions[-1], continued
+        new_unit = retention.inspect(
+            TEST_RESEARCHER.researcher_id, f"{track_id}:{extended_sessions[-1]}",
+        )
+        assert new_unit is not None and new_unit["status"] == "available"
+        assert new_unit["first_session"] == extended_sessions[-1]
+        assert retention.inspect(TEST_RESEARCHER.researcher_id, run_id) == expired_before
 
 
 @pytest.mark.skipif(not core_environment_is_configured(), reason="isolated runtime required")

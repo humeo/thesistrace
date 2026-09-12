@@ -10,8 +10,8 @@ from threading import Event
 from time import monotonic
 
 import pytest
+from core_runtime import TEST_RESEARCHER, drop_product_schemas, isolated_core_settings
 from core_runtime import create_initialized_test_app as create_app
-from core_runtime import drop_product_schemas, isolated_core_settings
 from fastapi.testclient import TestClient
 from test_core_research_batch_admission import (
     _factor_command,
@@ -255,6 +255,19 @@ def test_running_strategy_cancel_preserves_acknowledged_result_and_daily_track(
         ).json()
         assert second_run["status"] == "cancelled"
         assert "result" not in second_run
+        from thesistrace.publication.holding_retention import HoldingRetention
+
+        retention = HoldingRetention(
+            client.app.state.core_runtime.database, client.app.state.core_runtime.publication,
+        )
+        first_unit = retention.inspect(
+            TEST_RESEARCHER.researcher_id, detail["items"][0]["research_run_id"],
+        )
+        assert first_unit is not None and first_unit["status"] == "available"
+        assert retention.inspect(
+            TEST_RESEARCHER.researcher_id, detail["items"][1]["research_run_id"],
+        ) is None
+
         assert client.get(f"/api/daily-tracks/{track_ids[0]}").status_code == 200
         with client.app.state.core_runtime.database.transaction() as transaction:
             state = transaction.execute(

@@ -27,7 +27,8 @@ def maintenance_dependencies(core_settings, rustfs_admin):
         rustfs_admin.create_bucket(Bucket=bucket)
         with database.transaction() as tx:
             tx.execute(
-                "UPDATE publication.maintenance_state SET next_due_at = now(), "
+                "UPDATE publication.maintenance_state SET next_due_at = "
+                "CASE WHEN job = 'holding_expiry' THEN now() + interval '1 day' ELSE now() END, "
                 "last_key = '', cutoff = NULL, sweep_started_at = NULL, "
                 "failure_count = 0, last_error = NULL"
             )

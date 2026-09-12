@@ -25,6 +25,8 @@ from thesistrace.benchmark import (
     StrategyComparisonService,
     strategy_comparison_summary,
 )
+from thesistrace.daily_holding_evidence import HoldingEvidencePublication
+from thesistrace.daily_holding_queries import HoldingQuery, holding_query_response
 from thesistrace.daily_track.cache import _DailyTrackWorkingCache
 from thesistrace.daily_track.calculation import (
     origin_calculation_start_index,
@@ -104,6 +106,7 @@ from thesistrace.publication import (
     decode_compressed_json,
     lock_publication_mutation,
 )
+from thesistrace.publication.holding_retention import HOLDING_KIND, HoldingRetention
 from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.research_kernel import (
     equivalence_bytes,
@@ -681,7 +684,7 @@ class DailyTrackService:
                                 phase="result_ready",
                             )
                         )
-                        prepared, provenance = self._prepare_current_result(
+                        prepared, provenance, holding_prepared = self._prepare_current_result(
                             current_claim,
                             execution.result,
                         )
@@ -698,6 +701,7 @@ class DailyTrackService:
                             prepared,
                             provenance,
                             execution.result.terminal_strategy_state,
+                            holding_prepared,
                         )
                         emit(
                             _tracking_event(
@@ -1680,6 +1684,8 @@ class DailyTrackService:
     ) -> DailyTrackResultSectionResponse | None:
         if self._publication is None:
             raise RuntimeError("DailyTrack Result is not configured")
+        if isinstance(query, HoldingQuery):
+            return self._get_holding_section(researcher_id, query)
         if isinstance(query, StrategyEventQuery):
             return self._get_strategy_event_section(researcher_id, query)
         after: str | None = None
@@ -1801,6 +1807,38 @@ class DailyTrackService:
         ) as error:
             raise DailyTrackResultReadFailed("DailyTrack Result could not be verified") from error
         return result
+
+    def _get_holding_section(self, researcher_id: UUID, query: HoldingQuery):
+        with self._database.transaction() as transaction:
+            secret = _cursor_secret(transaction)
+        after, manifest = _decode_result_cursor(
+            query.cursor, secret=secret, researcher_id=researcher_id, track_id=query.track_id,
+            section=query.section, order=query.cursor_order(),
+        )
+        snapshot = self._session_coordinates.load_read_snapshot(
+            researcher_id, query.track_id, checkpoint_limit=1, manifest_sha256=manifest,
+        )
+        if snapshot is None:
+            if manifest is not None:
+                raise DailyTrackInvalidCursor("DailyTrack holding snapshot is unavailable")
+            return None
+        origin = TrackingOrigin.model_validate(snapshot["origin"])
+        manifest = str(snapshot["current_checkpoint_manifest_sha256"])
+        try:
+            return holding_query_response(
+                HoldingRetention(self._database, self._publication), self._publication,
+                researcher_id, sources=[("research_run", origin.seed_run_id),
+                                        ("daily_track", query.track_id)],
+                boundary=str(snapshot["current_strategy_session"]), query=query, after=after,
+                encode_cursor=lambda position: _next_daily_track_result_cursor(
+                    position, secret=secret, researcher_id=researcher_id,
+                    track_id=query.track_id, section=query.section, order=query.cursor_order(),
+                    snapshot_identity=manifest,
+                ),
+            )
+        except (KeyError, PublicationNotFoundError, PublicationVerificationError,
+                ValueError) as error:
+            raise DailyTrackResultReadFailed("DailyTrack holdings could not be verified") from error
 
     def _get_strategy_event_section(self, researcher_id: UUID, query: StrategyEventQuery):
         assert self._publication is not None
@@ -3394,7 +3432,7 @@ class DailyTrackService:
         self,
         claim: _SessionProgressionClaim,
         result: TrackingExecutionResult,
-    ) -> tuple[PreparedPublication, dict[str, object]]:
+    ) -> tuple[PreparedPublication, dict[str, object], PreparedPublication]:
         assert self._publication is not None
         checkpoint = KernelStateCheckpoint.model_validate(result.checkpoint)
         if checkpoint.boundary_session != claim.target_sessions[-1]:
@@ -3419,7 +3457,17 @@ class DailyTrackService:
             },
             provenance=provenance,
         )
-        return prepared, provenance
+        if result.holding_sessions != list(claim.target_sessions):
+            raise RuntimeError("Tracking holding coverage differs from appended Sessions")
+        holdings = HoldingEvidencePublication()
+        holdings.add_segment(result.holding_sessions, result.holding_observations)
+        holding_prepared = self._publication.prepare(
+            kind=HOLDING_KIND, payloads=holdings.finish(),
+            provenance={
+                **provenance, "holding_unit_id": f"{claim.track_id}:{checkpoint.boundary_session}",
+            },
+        )
+        return prepared, provenance, holding_prepared
 
     def _publish_current(
         self,
@@ -3427,6 +3475,7 @@ class DailyTrackService:
         prepared: PreparedPublication,
         provenance: dict[str, object],
         published_state: Mapping[str, object],
+        holding_prepared: PreparedPublication,
     ) -> PublishedRef:
         assert self._publication is not None
         assert self._dataset_lifecycle is not None
@@ -3451,6 +3500,12 @@ class DailyTrackService:
             }:
                 raise DailyTrackFenced
             published = self._publication.record(transaction, prepared)
+            HoldingRetention(self._database, self._publication).record(
+                transaction, unit_id=f"{claim.track_id}:{claim.target_sessions[-1]}",
+                researcher_id=claim.researcher_id, source_kind="daily_track",
+                source_id=claim.track_id, sessions=list(claim.target_sessions),
+                prepared=holding_prepared,
+            )
             self._session_coordinates.publish_checkpoint(
                 transaction,
                 progression_id=claim.progression_id,

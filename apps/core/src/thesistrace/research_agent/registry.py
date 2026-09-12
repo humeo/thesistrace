@@ -337,6 +337,12 @@ READ_ONLY_TOOL_ANNOTATIONS = ToolAnnotations(
     idempotent_hint=True,
     open_world_hint=False,
 )
+DETAIL_READ_TOOL_ANNOTATIONS = ToolAnnotations(
+    read_only_hint=False,
+    destructive_hint=False,
+    idempotent_hint=False,
+    open_world_hint=False,
+)
 EFFECTFUL_TOOL_ANNOTATIONS = ToolAnnotations(
     read_only_hint=False,
     destructive_hint=False,
@@ -480,11 +486,18 @@ class ResearchAgentCapabilityRegistry:
                     "valuation adjustments, with supported date/instrument/parent-ID filters "
                     "and at most 50 rows. Cash reconciles using Research Settlement, not raw "
                     "notional. not_recorded differs from a recorded empty page."
+                    " daily_holdings_status lists independent retention units without renewing. "
+                    "daily_holdings requires an explicit unit_id and accepts date/instrument "
+                    "filters. Each page scans at most eight partitions; an empty page with "
+                    "next_cursor has not finished scanning. Each successful detail read renews "
+                    "only that unit for seven days. "
+                    "Expired/not_recorded differs from a recorded empty account; no automatic "
+                    "rerun occurs. Holdings cursors remain on their original source."
                 ),
                 required_scope=ResearchAgentScope.RESEARCH_READ,
                 input_model=ResearchRunResultSectionInput,
                 output_model=ResearchRunResultSectionResponse,
-                annotations=READ_ONLY_TOOL_ANNOTATIONS,
+                annotations=DETAIL_READ_TOOL_ANNOTATIONS,
                 handler=self.get_research_run_result,
             ),
             ResearchAgentCapability(
@@ -522,11 +535,18 @@ class ResearchAgentCapabilityRegistry:
                     "with supported date/instrument/parent-ID filters and at most 50 rows. "
                     "Event cursors pin their publication across Refresh; restart without "
                     "a cursor to see newly published events."
+                    " daily_holdings_status lists independent retention units without renewing. "
+                    "daily_holdings requires an explicit unit_id and accepts date/instrument "
+                    "filters. Each page scans at most eight partitions; an empty page with "
+                    "next_cursor has not finished scanning. Each successful detail read renews "
+                    "only that unit for seven days. "
+                    "Expired/not_recorded differs from a recorded empty account; no automatic "
+                    "rerun occurs. Holdings cursors remain on their original source."
                 ),
                 required_scope=ResearchAgentScope.TRACKING_READ,
                 input_model=DailyTrackResultSectionInput,
                 output_model=DailyTrackResultSectionResponse,
-                annotations=READ_ONLY_TOOL_ANNOTATIONS,
+                annotations=DETAIL_READ_TOOL_ANNOTATIONS,
                 handler=self.get_daily_track_result,
             ),
             ResearchAgentCapability(

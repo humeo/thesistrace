@@ -1,3 +1,4 @@
+import { DailyHoldings } from "../analysis/DailyHoldings";
 import { StrategyEvents } from "../analysis/StrategyEvents";
 import { CommonInputObservations } from "../analysis/CommonInputObservations";
 import { useState, type KeyboardEvent, type ReactNode } from "react";
@@ -85,6 +86,7 @@ export function DailyTrackWorkspace({ track, actions, notices }: {
       </div>
       <div className="track-supporting">
         <StrategyEvents key={track.id} endpoint={`/api/daily-tracks/${encodeURIComponent(track.id)}/events/query`} />
+        <DailyHoldings key={track.id} endpoint={`/api/daily-tracks/${encodeURIComponent(track.id)}/holdings/query`} />
         <CommonInputObservations key={`${track.id}:${track.strategy_session}`} endpoint={`/api/daily-tracks/${encodeURIComponent(track.id)}/common-input-observations`} />
         <details className="track-disclosure"><summary>Update details <span>{trackStatusLabel(track)}</span></summary>
           <div className="track-disclosure-content"><TrackingProgressView progress={track.progress} /></div></details>

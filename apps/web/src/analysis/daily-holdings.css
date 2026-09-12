@@ -1,0 +1,13 @@
+.daily-holdings-content { display: grid; gap: 12px; min-width: 0; }
+.daily-holdings-content > button { justify-self: start; }
+.daily-holdings-content > label { display: grid; gap: 6px; min-width: 0; }
+.daily-holdings-content select { max-width: 100%; min-width: 0; }
+.daily-holdings-table { max-width: 100%; overflow-x: auto; }
+.daily-holdings-table table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+.daily-holdings-table th, .daily-holdings-table td { padding: 8px; text-align: left; white-space: nowrap; border-bottom: 1px solid var(--line); }
+
+.daily-holdings > button { margin: 16px 0; }
+.daily-holdings-content > p { color: var(--ink-muted); font-size: 12px; line-height: 1.6; }
+
+.daily-holdings-table :is(th, td):nth-child(n+3) { text-align: right; }
+.daily-holdings-validation { color: var(--danger); font-size: 12px; }

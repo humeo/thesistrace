@@ -94,6 +94,8 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
         "research_series": set(),
         "strategy_evidence": {"_paging", "publication", "research_kernel", "strategy_event_wire"},
         "strategy_event_wire": set(),
+        "daily_holding_evidence": {"publication", "research_kernel"},
+        "daily_holding_queries": {"daily_holding_evidence", "research_kernel"},
         "research_kernel": {"research_series"},
         "data": {
             "_postgres",
@@ -107,6 +109,8 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
         "research_folder": {"_postgres"},
         "researcher": {"_postgres", "research_folder"},
         "daily_track": {
+            "daily_holding_evidence",
+            "daily_holding_queries",
             "strategy_event_wire",
             "strategy_evidence",
             "researcher",
@@ -120,6 +124,8 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
             "research_series",
         },
         "research_run": {
+            "daily_holding_evidence",
+            "daily_holding_queries",
             "strategy_event_wire",
             "strategy_evidence",
             "researcher",
@@ -136,6 +142,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
             "research_series",
         },
         "research_batch": {
+            "daily_holding_evidence",
             "strategy_evidence",
             "_memory",
             "researcher",
@@ -170,6 +177,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
         "fixture": {"data"},
         "adapters": {"benchmark", "data", "fixture", "operational_events"},
         "entrypoints": {
+            "daily_holding_queries",
             "strategy_event_wire",
             "strategy_evidence",
             "_memory",
@@ -457,6 +465,7 @@ def test_http_route_and_action_inventory_is_exactly_the_core_resources() -> None
         ("get", "/api/research-runs/{run_id}/factor-observations"),
         ("get", "/api/research-runs/{run_id}/factor-periods"),
         ("post", "/api/research-runs/{run_id}/events/query"),
+        ("post", "/api/research-runs/{run_id}/holdings/query"),
         ("post", "/api/research-runs/{run_id}/cancel"),
         ("post", "/api/research-runs/{run_id}/daily-tracks"),
         ("get", "/api/daily-tracks"),
@@ -464,6 +473,7 @@ def test_http_route_and_action_inventory_is_exactly_the_core_resources() -> None
         ("get", "/api/daily-tracks/{track_id}/common-input-observations"),
         ("delete", "/api/daily-tracks/{track_id}"),
         ("post", "/api/daily-tracks/{track_id}/events/query"),
+        ("post", "/api/daily-tracks/{track_id}/holdings/query"),
         ("post", "/api/daily-tracks/{track_id}/refresh"),
         ("post", "/api/daily-tracks/{track_id}/retry"),
         ("post", "/api/daily-tracks/{track_id}/stop"),
@@ -752,7 +762,7 @@ def test_daily_track_owns_activation_sql_and_copied_origin() -> None:
         track_source.index("    def activate(") : track_source.index("    def process_next(")
     ]
     assert "daily_tracks.activation_receipts" not in activation_source
-    assert "read_in_transaction" in run_source
+    assert "self._tracking_origin(transaction, row)" in run_source
     assert "TrackingOrigin(" in run_source
     assert "daily_tracks." not in run_source
     assert "research_runs." not in track_source

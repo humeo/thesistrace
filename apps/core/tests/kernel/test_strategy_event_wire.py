@@ -197,3 +197,27 @@ tracking_child.main()
             child.wait(timeout=5)
         child.stdout.close()
         child.stderr.close()
+
+
+def test_holding_rows_are_framed_separately_from_permanent_events():
+    from thesistrace.strategy_event_wire import EventMessageAssembler, strategy_event_messages
+
+    message = {
+        "status": "chunk_succeeded",
+        "chunk": {
+            "strategy_events": {"strategy_targets": []},
+            "holding_sessions": ["2026-01-05", "2026-01-06"],
+            "holding_observations": [
+                {"session": "2026-01-06", "instrument_id": str(index)}
+                for index in range(1100)
+            ],
+        },
+    }
+    frames = list(strategy_event_messages(message))
+    assert len(frames) == 4
+    assert all(frame["section"] == "holding_observations" for frame in frames[:-1])
+    assert "holding_observations" not in frames[-1]["chunk"]
+    assembler = EventMessageAssembler()
+    for frame in frames[:-1]:
+        assert assembler.accept(frame) is None
+    assert assembler.accept(frames[-1]) == message

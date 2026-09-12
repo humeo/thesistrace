@@ -20,6 +20,12 @@ from pydantic import (
 from thesistrace.alpha_language.language import MAX_FORMULA_LENGTH
 from thesistrace.alpha_language.models import DiagnosticDetails, SourceRange
 from thesistrace.benchmark import StrategyComparison, StrategyComparisonSummary
+from thesistrace.daily_holding_queries import (
+    HoldingDetailsPage,
+    HoldingDetailsQuery,
+    HoldingStatusPage,
+    HoldingStatusQuery,
+)
 from thesistrace.daily_track.models import DailyTrackSummary
 from thesistrace.data.models import FinancialResearchReadiness
 from thesistrace.research_kernel.common_observations import CommonInputObservation
@@ -120,7 +126,7 @@ type ResearchRunStatus = Literal[
 ]
 type ResearchRunResultSection = Literal[
     "strategy_targets", "strategy_orders", "strategy_child_orders",
-    "strategy_fills", "strategy_adjustments",
+    "strategy_fills", "strategy_adjustments", "daily_holdings_status", "daily_holdings",
     "factor",
     "factor_observations",
     "factor_periods",
@@ -144,7 +150,7 @@ FACTOR_RESULT_SECTIONS: tuple[ResearchRunResultSection, ...] = (
 )
 STRATEGY_RESULT_SECTIONS: tuple[ResearchRunResultSection, ...] = (
     "strategy_targets", "strategy_orders", "strategy_child_orders",
-    "strategy_fills", "strategy_adjustments",
+    "strategy_fills", "strategy_adjustments", "daily_holdings_status", "daily_holdings",
     "strategy_summary",
     "strategy_observations",
     "terminal_strategy_state",
@@ -848,6 +854,14 @@ class RunStrategyAdjustmentsInput(_ResearchRunResultSectionInput, StrategyAdjust
     pass
 
 
+class RunHoldingStatusInput(_ResearchRunResultSectionInput, HoldingStatusQuery):
+    pass
+
+
+class RunHoldingDetailsInput(_ResearchRunResultSectionInput, HoldingDetailsQuery):
+    pass
+
+
 type ResearchRunResultSectionInput = Annotated[
     FactorResultSectionInput
     | FactorObservationsResultSectionInput
@@ -862,7 +876,9 @@ type ResearchRunResultSectionInput = Annotated[
     | RunStrategyOrdersInput
     | RunStrategyChildOrdersInput
     | RunStrategyFillsInput
-    | RunStrategyAdjustmentsInput,
+    | RunStrategyAdjustmentsInput
+    | RunHoldingStatusInput
+    | RunHoldingDetailsInput,
     Field(discriminator="section"),
 ]
 
@@ -1028,7 +1044,9 @@ type ResearchRunResultSectionResponse = Annotated[
     | StrategyOrdersPage
     | StrategyChildOrdersPage
     | StrategyFillsPage
-    | StrategyAdjustmentsPage,
+    | StrategyAdjustmentsPage
+    | HoldingStatusPage
+    | HoldingDetailsPage,
     Field(discriminator="section"),
 ]
 

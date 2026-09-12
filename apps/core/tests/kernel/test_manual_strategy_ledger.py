@@ -1304,3 +1304,51 @@ def test_publication_rejects_orphaned_or_mismatched_trade_evidence() -> None:
             broken["strategy_child_orders"][0]["quantity"] += 100
         with pytest.raises(ValueError, match="relationship"):
             strategy_evidence_payloads(broken, sessions=SESSIONS)
+
+
+def test_daily_holding_observer_records_open_values_without_changing_account() -> None:
+    canonical = _canonical(opens={
+        SESSIONS[0]: {A: ("10", "20"), B: "20"},
+        SESSIONS[1]: {A: ("10", "20"), B: "20"},
+        SESSIONS[2]: {A: ("10", "40"), B: "20"},
+        SESSIONS[3]: {A: ("10", "40"), B: "20"},
+    })
+    matrix = _alpha_matrix({session: ((A, 2), (B, 1)) for session in SESSIONS})
+    definition = _definition(holdings_count=1, selection_interval=5)
+    definition["strategy"].update({
+        "initial_cash_cny": "100000",
+        "exposure_expression": {"kind": "number", "value": 0.7},
+    })
+    definition["costs"] = dict.fromkeys(definition["costs"], "0")
+    data = aligned_market_data(canonical, universe="manual")
+    baseline = run_strategy(data, matrix, definition, origin_session=SESSIONS[0])
+    observations = []
+    observed = run_strategy(
+        data, matrix, definition, origin_session=SESSIONS[0], observe_holdings=observations.append
+    )
+    assert observed == baseline
+    from thesistrace.research_kernel.holding_observations import holding_rows
+
+    coverage, flat = holding_rows(observations)
+    assert coverage == list(SESSIONS)
+    assert len(flat) == 3
+    assert [row["session"] for row in flat] == list(SESSIONS[1:])
+    assert [row["session"] for row in observations] == list(SESSIONS)
+    assert observations[0] == {"session": SESSIONS[0], "positions": []}
+    bought = observations[1]["positions"]
+    assert len(bought) == 1
+    assert bought[0]["instrument_id"] == A
+    assert bought[0]["execution_shares"] == 7000
+    assert Decimal(bought[0]["adjusted_units"]) == Decimal("3500")
+    assert Decimal(bought[0]["adjusted_mark"]) == Decimal("20")
+    assert Decimal(bought[0]["market_value_cny"]) == Decimal("70000")
+    assert bought[0]["weight"] == pytest.approx(0.7)
+    marked = observations[2]["positions"][0]
+    assert marked["execution_shares"] == 7000
+    assert Decimal(marked["adjusted_units"]) == Decimal("3500")
+    assert Decimal(marked["market_value_cny"]) == Decimal("140000")
+    assert marked["weight"] == pytest.approx(14 / 17)
+    # Snapshots are detached from both later account state and the returned result.
+    bought[0]["execution_shares"] = 0
+    assert observations[2]["positions"][0]["execution_shares"] == 7000
+    assert observed == baseline

@@ -102,6 +102,7 @@ def test_completed_chunk_releases_large_calculation_inputs_before_yield(monkeypa
             continuation={"completed_research_session_count": 1},
             strategy_daily_observations=(),
             strategy_events={},
+            holding_observations=(),
             common_input_sessions=(),
             factor_daily_observations=(),
             final_values=None,

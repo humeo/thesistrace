@@ -19,6 +19,7 @@ from thesistrace.research_kernel import (
     empty_continuation,
 )
 from thesistrace.research_kernel.common_inputs import requires_common_industry
+from thesistrace.research_kernel.holding_observations import holding_rows
 from thesistrace.research_kernel.numeric import require_current_numeric_contract
 from thesistrace.research_kernel.strategy_events import strategy_event_rows
 from thesistrace.research_kernel.tracking_advance import (
@@ -173,6 +174,7 @@ def execute_tracking_target(value: Mapping[str, object]) -> dict[str, object]:
             predecessor=predecessor,
         )
     )
+    holdings = []
     state = advance_tracking(
         AdvanceInput(
             prior_state=prior,
@@ -180,12 +182,16 @@ def execute_tracking_target(value: Mapping[str, object]) -> dict[str, object]:
             appended_sessions=list(target_sessions),
             continuation=continuation,
             calculation_scope="forward_tracking",
-        )
+        ),
+        observe_holdings=holdings.append,
     )
+    holding_sessions, observations = holding_rows(holdings)
     if state.boundary_session != target_sessions[-1]:
         raise RuntimeError("Tracking Advance returned an invalid boundary")
     return {
         "status": "succeeded",
+        "holding_sessions": holding_sessions,
+        "holding_observations": observations,
         "checkpoint": state_payload(
             state,
             retained_strategy_sessions=list(target_sessions),

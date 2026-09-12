@@ -27,6 +27,7 @@ from thesistrace.research_kernel.common_inputs import (
 from thesistrace.research_kernel.common_observations import common_input_observation_rows
 from thesistrace.research_kernel.exposure import validate_exposure
 from thesistrace.research_kernel.factor import prepare_columnar_forward_labels
+from thesistrace.research_kernel.holding_observations import holding_rows
 from thesistrace.research_kernel.kernel_run import RunInput, StrategyRunInput
 from thesistrace.research_kernel.research_chunks import (
     AlphaFactorChunkOutcome,
@@ -1231,6 +1232,9 @@ def _execute_strategy_item_messages(
                 strategy_continuation = outcome.continuation_snapshot()
                 observations = outcome.daily_observations_snapshot()
                 strategy_events = outcome.strategy_events_snapshot()
+                holding_sessions, holding_observations = holding_rows(
+                    outcome.holding_observations_snapshot()
+                )
                 final_values = outcome.final_values_snapshot()
                 strategy_seconds += outcome.phase_seconds["strategy"]
                 finalize_seconds += outcome.phase_seconds["finalize"]
@@ -1271,6 +1275,8 @@ def _execute_strategy_item_messages(
                     ),
                     "strategy_partition": partition,
                     "strategy_events": strategy_events,
+                    "holding_sessions": holding_sessions,
+                    "holding_observations": holding_observations,
                 }
             if reader.final_alpha_continuation != dict(final_alpha_continuation):
                 raise ValueError("Strategy Sweep private artifact continuation changed")

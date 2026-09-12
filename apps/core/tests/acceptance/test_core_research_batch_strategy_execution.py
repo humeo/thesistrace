@@ -661,6 +661,20 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
                 == (ordinary_stored["result_provenance"]["semantic_versions"])
             )
             assert batch_stored["key_metrics"] == ordinary_stored["key_metrics"]
+            from thesistrace.publication.holding_retention import HoldingRetention
+
+            retention = HoldingRetention(runtime.database, runtime.publication)
+            holding_bundles = []
+            for source_id in (str(item["research_run_id"]), str(ordinary_run["id"])):
+                metadata, evidence = retention.read_detail(
+                    TEST_RESEARCHER.researcher_id, source_id,
+                    lambda tx, ref: runtime.publication.read_in_transaction(tx, ref),
+                )
+                assert metadata["status"] == "available"
+                assert metadata["source_id"] == source_id
+                holding_bundles.append({name: payload.content
+                                        for name, payload in evidence.payloads.items()})
+            assert holding_bundles[0] == holding_bundles[1]
             detail = client.get(f"/api/research-runs/{item['research_run_id']}").json()
             frozen = detail["input"]
             expected_source = command["strategies"][item["ordinal"] - 1]["exposure_expression"]

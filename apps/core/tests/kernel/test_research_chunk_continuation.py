@@ -1390,6 +1390,7 @@ def test_research_chunks_emit_common_statistics_only_for_new_sessions():
             cancellation_check=lambda: None,
         )
         state = result.continuation
+        assert result.holding_observations == ()  # Factor never collects Strategy holdings.
         assert tuple(row["session"] for row in result.common_input_sessions) == sessions
         assert all("values" not in row for row in result.common_input_sessions)
         assert all(
@@ -1438,6 +1439,11 @@ def test_shared_signal_artifact_keeps_strategy_exposure_evidence_private(source)
             research_data=fixture, final_chunk=True,
             continuation=empty_strategy_continuation(), cancellation_check=lambda: None,
         )
+        holding_observations = outcome.holding_observations_snapshot()
+        assert tuple(row['session'] for row in holding_observations) == sessions
+        assert all(len(row['positions']) <= 5 for row in holding_observations)
+        assert 'holding_observations' not in outcome.continuation_snapshot()['strategy_state']
+        assert 'holding_observations' not in outcome.final_values_snapshot()
         expected_common = run_input is dynamic or 'universe_return' in source
         assert bool(outcome.common_input_sessions) == expected_common
         if expected_common:

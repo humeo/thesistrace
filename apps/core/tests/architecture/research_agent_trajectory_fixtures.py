@@ -253,6 +253,7 @@ def run_polling_payload(
             else (
                 "strategy_targets", "strategy_orders", "strategy_child_orders",
                 "strategy_fills", "strategy_adjustments",
+                "daily_holdings_status", "daily_holdings",
                 "strategy_summary",
                 "strategy_observations",
                 "terminal_strategy_state",

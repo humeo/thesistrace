@@ -21,6 +21,7 @@ from psycopg_pool import PoolTimeout
 
 from thesistrace._paging import fit_page
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
+from thesistrace.daily_holding_evidence import HoldingEvidencePublication
 from thesistrace.data import DatasetLifecycle
 from thesistrace.publication import (
     Publication,
@@ -378,6 +379,9 @@ class ResearchBatchService:
         common_partitions: dict[int, list[tuple[StagedPayload, int, str, str]]] = {
             ordinal: [] for ordinal, _key, _run in claim.items
         }
+        holding_evidence = {
+            ordinal: HoldingEvidencePublication() for ordinal, _key, _run in claim.items
+        }
         strategy_evidence = {
             ordinal: StrategyEvidencePublication() for ordinal, _key, _run in claim.items
         }
@@ -539,6 +543,15 @@ class ResearchBatchService:
                         sessions = tuple(day.isoformat() for day in plan.calculation_sessions
                                          if partition["first_session"] <= day.isoformat()
                                          <= partition["last_session"])
+                        if message.get("holding_sessions") != list(sessions):
+                            raise RuntimeError("Strategy Batch holding coverage is invalid")
+                        holding_evidence[ordinal].add_segment(
+                            list(sessions), message["holding_observations"],
+                            stage=lambda payload: self._publication.stage(
+                                payload,
+                                staging_authority=lambda: self._authorize_claim_staging(claim),
+                            ),
+                        )
                         append_staged_strategy_evidence(
                             strategy_evidence[ordinal], self._publication, events,
                             sessions=sessions,
@@ -586,6 +599,7 @@ class ResearchBatchService:
                             run_claim,
                             chunk,
                             strategy_evidence=strategy_evidence[ordinal],
+                            holding_evidence=holding_evidence[ordinal],
                             staged_common_partitions=common_partitions[ordinal],
                             staged_partitions=self._strategy_partitions(
                                 claim,

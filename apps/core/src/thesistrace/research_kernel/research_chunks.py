@@ -347,6 +347,7 @@ class AlphaFactorChunkOutcome:
 
 @dataclass(frozen=True, init=False)
 class StrategyChunkOutcome:
+    _holding_observations: tuple[dict[str, object], ...]
     _strategy_events: dict[str, list[dict[str, object]]]
     _continuation: dict[str, object]
     _daily_observations: tuple[dict[str, object], ...]
@@ -364,6 +365,7 @@ class StrategyChunkOutcome:
         run_input: RunInput,
         continuation: dict[str, object],
         daily_observations: list[dict[str, object]],
+        holding_observations: list[dict[str, object]],
         strategy_events: dict[str, list[dict[str, object]]],
         common_input_sessions: tuple[dict[str, object], ...],
         final_values: dict[str, object] | None,
@@ -379,6 +381,7 @@ class StrategyChunkOutcome:
             raise ValueError("Strategy phase timing is invalid")
         instance = object.__new__(cls)
         object.__setattr__(instance, "common_input_sessions", common_input_sessions)
+        object.__setattr__(instance, "_holding_observations", tuple(holding_observations))
         object.__setattr__(instance, "_strategy_events", strategy_events)
         object.__setattr__(instance, "_continuation", continuation)
         object.__setattr__(instance, "_daily_observations", tuple(daily_observations))
@@ -398,6 +401,9 @@ class StrategyChunkOutcome:
 
     def continuation_snapshot(self) -> dict[str, object]:
         return deepcopy(self._continuation)
+
+    def holding_observations_snapshot(self) -> list[dict[str, object]]:
+        return deepcopy(list(self._holding_observations))
 
     def strategy_events_snapshot(self) -> dict[str, list[dict[str, object]]]:
         return deepcopy(self._strategy_events)
@@ -428,6 +434,7 @@ class StrategyChunkOutcome:
 
 @dataclass(frozen=True)
 class ResearchChunkCalculation:
+    holding_observations: tuple[dict[str, object], ...]
     strategy_events: dict[str, list[dict[str, object]]]
     common_input_sessions: tuple[dict[str, object], ...]
     factor_daily_observations: tuple[dict[str, object], ...]
@@ -498,6 +505,7 @@ def execute_research_chunk(
             factor_daily_observations=(),
             strategy_daily_observations=(),
             strategy_events={},
+            holding_observations=(),
             final_values=None,
             phase_seconds={
                 "alpha_and_pending": monotonic() - alpha_started,
@@ -536,6 +544,7 @@ def execute_research_chunk(
             factor_daily_observations=tuple(alpha_factor.factor_daily_observations_snapshot()),
             strategy_daily_observations=(),
             strategy_events={},
+            holding_observations=(),
             final_values=(None if factor_summary is None else {"factor_summary": factor_summary}),
             phase_seconds={
                 "alpha_and_pending": alpha_and_pending_seconds,
@@ -561,6 +570,7 @@ def execute_research_chunk(
         factor_daily_observations=(),
         strategy_daily_observations=(strategy_outcome._daily_observations_for_current_process()),
         strategy_events=strategy_outcome.strategy_events_snapshot(),
+        holding_observations=tuple(strategy_outcome.holding_observations_snapshot()),
         final_values=strategy_outcome._final_values_for_current_process(),
         phase_seconds={
             "alpha_and_pending": alpha_and_pending_seconds,
@@ -634,12 +644,14 @@ def _execute_strategy_chunk_from_validated_alpha_factor(
     else:
         strategy_continuation = None
     exposure_observations = {}
+    holding_observations = []
     strategy = run_strategy_with_metric_state(
         research_data,
         alpha_factor_outcome._alpha_matrix_for_current_process(),
         calculation_definition(run_input),
         origin_session=str(run_input.research_start_session),
         continuation=strategy_continuation,
+        observe_holdings=holding_observations.append,
         observe_common=lambda identifier, code, values: record_common_input(
             exposure_observations, tuple(research_data.sessions), identifier, code, values,
         ),
@@ -730,6 +742,7 @@ def _execute_strategy_chunk_from_validated_alpha_factor(
         run_input=run_input,
         continuation=continuation,
         daily_observations=observations,
+        holding_observations=holding_observations,
         strategy_events=strategy_event_rows(
             strategy, sessions=tuple(row["session"] for row in new_daily),
         ),

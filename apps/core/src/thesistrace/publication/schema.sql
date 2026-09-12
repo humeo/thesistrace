@@ -56,7 +56,7 @@ CREATE TABLE publication.object_deletions (
 
 
 CREATE TABLE publication.maintenance_state (
-    job text PRIMARY KEY CHECK (job IN ('queued_deletions', 'orphan_scan')),
+    job text PRIMARY KEY CHECK (job IN ('queued_deletions', 'orphan_scan', 'holding_expiry')),
     next_due_at timestamptz NOT NULL DEFAULT now(),
     last_key text NOT NULL DEFAULT '',
     sweep_started_at timestamptz,
@@ -69,7 +69,7 @@ CREATE TABLE publication.maintenance_state (
     CHECK (cutoff IS NOT NULL OR last_key = '')
 );
 
-INSERT INTO publication.maintenance_state (job) VALUES ('queued_deletions'), ('orphan_scan');
+INSERT INTO publication.maintenance_state (job) VALUES ('queued_deletions'), ('orphan_scan'), ('holding_expiry');
 
 
 --
@@ -126,3 +126,25 @@ ALTER TABLE ONLY publication.manifest_objects
 
 ALTER TABLE ONLY publication.object_deletions
     ADD CONSTRAINT object_deletions_object_sha256_fkey FOREIGN KEY (object_sha256) REFERENCES publication.objects(sha256) ON DELETE CASCADE;
+
+-- Temporary Daily Holding Observation ownership is independent of Result manifests.
+CREATE TABLE publication.holding_units (
+    id text PRIMARY KEY,
+    researcher_id uuid NOT NULL,
+    source_kind text NOT NULL CHECK (source_kind IN ('research_run', 'daily_track')),
+    source_id text NOT NULL,
+    first_session date NOT NULL,
+    last_session date NOT NULL CHECK (last_session >= first_session),
+    manifest_sha256 text REFERENCES publication.manifests(sha256),
+    provenance jsonb NOT NULL CHECK (jsonb_typeof(provenance) = 'object'),
+    published_at timestamptz NOT NULL,
+    last_read_at timestamptz,
+    expires_at timestamptz NOT NULL,
+    expired_at timestamptz,
+    CHECK (expires_at >= published_at),
+    CHECK ((expired_at IS NULL) = (manifest_sha256 IS NOT NULL))
+);
+CREATE INDEX holding_units_source ON publication.holding_units
+    (researcher_id, source_kind, source_id, first_session, id);
+CREATE INDEX holding_units_expiry ON publication.holding_units (expires_at, id)
+    WHERE expired_at IS NULL;

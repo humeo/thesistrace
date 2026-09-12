@@ -58,6 +58,8 @@ class TrackingExecutionRequest:
 
 @dataclass(frozen=True)
 class TrackingExecutionResult:
+    holding_sessions: list[str]
+    holding_observations: list[dict[str, object]]
     strategy_events: dict[str, list[dict[str, object]]]
     checkpoint: dict[str, object]
     terminal_strategy_state: dict[str, object]
@@ -554,6 +556,10 @@ def _result_from_response(value: Mapping[str, object]) -> TrackingExecutionResul
     strategy_events = value.get("strategy_events")
     if not isinstance(strategy_events, dict):
         raise TrackingExecutionError("Tracking execution event evidence is invalid")
+    holding_sessions = value.get("holding_sessions")
+    holding_observations = value.get("holding_observations")
+    if not isinstance(holding_sessions, list) or not isinstance(holding_observations, list):
+        raise TrackingExecutionError("Tracking holding observations are invalid")
     checkpoint = value.get("checkpoint")
     terminal = value.get("terminal_strategy_state")
     continuation = value.get("continuation")
@@ -567,6 +573,8 @@ def _result_from_response(value: Mapping[str, object]) -> TrackingExecutionResul
         raise TrackingExecutionError("Tracking execution result metadata is invalid")
     return TrackingExecutionResult(
         strategy_events=strategy_events,
+        holding_sessions=holding_sessions,
+        holding_observations=holding_observations,
         checkpoint=dict(checkpoint),
         terminal_strategy_state=dict(terminal),
         continuation=dict(continuation),

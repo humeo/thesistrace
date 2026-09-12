@@ -6,7 +6,7 @@ The row-oriented Advance entry points remain the independent calculation referen
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
 from thesistrace.research_kernel.alpha import (
     alpha_matrix_checksum,
@@ -33,7 +33,9 @@ from thesistrace.research_kernel.strategy import transition_columnar_strategy
 from thesistrace.research_series import ColumnarResearchSeries
 
 
-def advance_tracking(value: AdvanceInput) -> KernelState:
+def advance_tracking(
+    value: AdvanceInput, *, observe_holdings: Callable[[dict[str, object]], None] | None = None,
+) -> KernelState:
     if value.calculation_scope != "forward_tracking":
         raise KernelRunError("Columnar Tracking requires Forward Tracking scope")
     prior = value.prior_state()
@@ -56,6 +58,7 @@ def advance_tracking(value: AdvanceInput) -> KernelState:
             exposure_observations, tuple(data.sessions), identifier, code, values,
         ),
         continuation=prior.strategy_resume_snapshot(),
+        observe_holdings=observe_holdings,
         cancellation_check=lambda: None,
     )
     attach_common_input_evidence(matrix, exposure_observations, tuple(appended))

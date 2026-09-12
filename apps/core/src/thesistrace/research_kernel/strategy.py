@@ -71,6 +71,7 @@ def transition_strategy(
     origin_session: str,
     continuation: dict[str, object] | None = None,
     observe_common: CommonInputObserver | None = None,
+    observe_holdings: Callable[[dict[str, object]], None] | None = None,
 ) -> StrategyTransition:
     """Execute every included Open and retain the completed account boundary."""
     return _transition_strategy(
@@ -80,6 +81,7 @@ def transition_strategy(
         origin_session=origin_session,
         continuation=continuation,
         observe_common=observe_common,
+        observe_holdings=observe_holdings,
     )
 
 
@@ -92,6 +94,7 @@ def transition_columnar_strategy(
     continuation: dict[str, object] | None = None,
     cancellation_check: Callable[[], None],
     observe_common: CommonInputObserver | None = None,
+    observe_holdings: Callable[[dict[str, object]], None] | None = None,
 ) -> StrategyTransition:
     return _transition_strategy(
         research_data,
@@ -100,6 +103,7 @@ def transition_columnar_strategy(
         origin_session=origin_session,
         continuation=continuation,
         observe_common=observe_common,
+        observe_holdings=observe_holdings,
         cancellation_check=cancellation_check,
     )
 
@@ -113,6 +117,7 @@ def _transition_strategy(
     continuation: dict[str, object] | None,
     cancellation_check: Callable[[], None] | None = None,
     observe_common: CommonInputObserver | None = None,
+    observe_holdings: Callable[[dict[str, object]], None] | None = None,
 ) -> StrategyTransition:
     ledger: list[dict[str, object]] = []
     finalized = run_strategy(
@@ -122,6 +127,7 @@ def _transition_strategy(
         origin_session=origin_session,
         continuation=continuation,
         observe_common=observe_common,
+        observe_holdings=observe_holdings,
         ledger=ledger,
         cancellation_check=cancellation_check,
     )
@@ -228,6 +234,7 @@ def run_strategy(
     ledger: list[dict[str, object]] | None = None,
     cancellation_check: Callable[[], None] | None = None,
     observe_common: CommonInputObserver | None = None,
+    observe_holdings: Callable[[dict[str, object]], None] | None = None,
 ) -> dict[str, object]:
     execution = _execute_strategy(
         research_data,
@@ -236,6 +243,7 @@ def run_strategy(
         origin_session=origin_session,
         continuation=continuation,
         observe_common=observe_common,
+        observe_holdings=observe_holdings,
         ledger=ledger,
         cancellation_check=cancellation_check,
     )
@@ -257,6 +265,7 @@ def run_strategy_with_metric_state(
     ledger: list[dict[str, object]] | None = None,
     cancellation_check: Callable[[], None] | None = None,
     observe_common: CommonInputObserver | None = None,
+    observe_holdings: Callable[[dict[str, object]], None] | None = None,
 ) -> dict[str, object]:
     execution = _execute_strategy(
         research_data,
@@ -265,6 +274,7 @@ def run_strategy_with_metric_state(
         origin_session=origin_session,
         continuation=continuation,
         observe_common=observe_common,
+        observe_holdings=observe_holdings,
         ledger=ledger,
         cancellation_check=cancellation_check,
     )
@@ -281,6 +291,7 @@ def _execute_strategy(
     ledger: list[dict[str, object]] | None = None,
     cancellation_check: Callable[[], None] | None = None,
     observe_common: CommonInputObserver | None = None,
+    observe_holdings: Callable[[dict[str, object]], None] | None = None,
 ) -> _StrategyExecution:
     calendar = list(research_data.sessions)
     if continuation is None:
@@ -803,6 +814,22 @@ def _execute_strategy(
                 "valuation_events": unique_events(valuation_events),
             }
         )
+        if observe_holdings is not None:
+            observe_holdings({
+                "session": session,
+                "positions": [
+                    {
+                        "instrument_id": instrument_id,
+                        "execution_shares": position.execution_shares,
+                        "adjusted_units": canonical_decimal(position.adjusted_units),
+                        "adjusted_mark": canonical_decimal(marks[instrument_id]),
+                        "market_value_cny": canonical_decimal(position_values[instrument_id]),
+                        "weight": float(position_values[instrument_id] / net_nav)
+                        if net_nav != 0 else 0.0,
+                    }
+                    for instrument_id, position in sorted(positions.items())
+                ],
+            })
         if ledger is not None:
             ledger.append(
                 {

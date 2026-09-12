@@ -1793,9 +1793,9 @@ def test_v1_inventory_scopes_descriptions_annotations_and_schemas_are_exact() ->
     canonical = _canonical_v1_contract()
 
     assert sha256(canonical).hexdigest() == (
-        "68e1b5fc4baf9a3bcbb0dd3968c50accfd6b5aa16964a7cdf860244e62b134bc"
+        "b2e07b435f83492f0a58d6abeb1cfd24ca284b28ee3541e513904219651c8af8"
     )
-    assert len(canonical) == 207188
+    assert len(canonical) == 218830
 
 
 def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None:
@@ -2087,7 +2087,9 @@ async def _exercise_in_memory_protocol() -> None:
             assert "context" in error_definition["required"]
             assert tool.annotations is not None
             assert tool.annotations.destructive_hint is False
-            assert tool.annotations.idempotent_hint is True
+            assert tool.annotations.idempotent_hint is (
+                tool.name not in {"get_research_run_result", "get_daily_track_result"}
+            )
             assert tool.annotations.open_world_hint is False
             if tool.name in {
                 "start_daily_track",
@@ -2124,9 +2126,10 @@ async def _exercise_in_memory_protocol() -> None:
                     definition = tool.input_schema["$defs"][branch["$ref"].rsplit("/", 1)[-1]]
                     assert definition["additionalProperties"] is False
             elif tool.name in {"get_research_run_result", "get_daily_track_result"}:
-                assert tool.annotations.read_only_hint is True
+                assert tool.annotations.read_only_hint is False
+                assert tool.annotations.idempotent_hint is False
                 assert tool.input_schema["discriminator"]["propertyName"] == "section"
-                expected_section_count = 14 if tool.name == "get_research_run_result" else 10
+                expected_section_count = 16 if tool.name == "get_research_run_result" else 12
                 assert len(tool.input_schema["oneOf"]) == expected_section_count
                 for branch in tool.input_schema["oneOf"]:
                     definition = tool.input_schema["$defs"][branch["$ref"].rsplit("/", 1)[-1]]

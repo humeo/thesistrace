@@ -1,3 +1,4 @@
+import { DailyHoldings } from "../analysis/DailyHoldings";
 import { StrategyEvents } from "../analysis/StrategyEvents";
 import { SelectionEligibilityView, type SelectionEligibility } from "../research/SelectionEligibility";
 import {
@@ -614,6 +615,7 @@ export function ResearchRunsPage({ researcherId, runId }: {
             <ResearchResultView result={run.result} />
             {"factor" in run.result ? <FactorEvidence key={`factor:${run.id}`} runId={run.id} /> : null}
             {"strategy" in run.result && <StrategyEvents key={run.id} endpoint={`/api/research-runs/${encodeURIComponent(run.id)}/events/query`} />}
+            {"strategy" in run.result && <DailyHoldings key={run.id} endpoint={`/api/research-runs/${encodeURIComponent(run.id)}/holdings/query`} />}
             <CommonInputObservations key={run.id} endpoint={`/api/research-runs/${encodeURIComponent(run.id)}/common-input-observations`} />
           </>
         ) : null}

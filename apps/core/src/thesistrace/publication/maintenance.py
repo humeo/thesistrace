@@ -8,6 +8,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from psycopg.errors import LockNotAvailable
 
 from thesistrace._postgres import PostgresDatabase
+from thesistrace.publication.holding_retention import HoldingRetention
 from thesistrace.publication.service import (
     Publication,
     PublicationPreparationError,
@@ -61,6 +62,9 @@ class PublicationMaintenance:
                 if state["job"] == "orphan_scan":
                     result = self._scan(connection, state, started + STEP_SECONDS)
                     delay = SWEEP_REST_SECONDS if result["sweep_completed"] else 60
+                elif state["job"] == "holding_expiry":
+                    delay = 5
+                    result = self._expire_holdings(connection, started + STEP_SECONDS)
                 else:
                     delay = 5
                     result = self._queued(connection, started + STEP_SECONDS)
@@ -111,6 +115,18 @@ class PublicationMaintenance:
                 "elapsed_seconds": time.monotonic() - started,
                 **result,
             }
+
+    def _expire_holdings(self, connection, deadline):
+        owner = HoldingRetention(self._database, self._publication)
+        processed = 0
+        while processed < DELETE_LIMIT and time.monotonic() < deadline:
+            with connection.transaction():
+                connection.execute("SET LOCAL lock_timeout = '1s'")
+                expired = owner.expire_one_in_transaction(connection)
+            if not expired:
+                break
+            processed += 1
+        return {"processed": processed, "deleted": 0, "skipped": 0}
 
     def _queued(self, connection, deadline):
         processed = deleted = 0

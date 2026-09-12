@@ -27,6 +27,7 @@ from thesistrace.benchmark import (
     StrategyComparisonError,
     StrategyComparisonFacts,
 )
+from thesistrace.daily_holding_queries import HoldingPageResponse, HoldingQueryInput
 from thesistrace.daily_track import (
     DailyTrackDeleteConflict,
     DailyTrackDetail,
@@ -1297,6 +1298,31 @@ def create_app(
             raise HTTPException(status_code=404, detail="ResearchRun not found")
         return result
 
+    @app.post(
+        "/api/research-runs/{run_id}/holdings/query", response_model=HoldingPageResponse,
+    )
+    def query_run_holdings(request: Request, run_id: str, query: HoldingQueryInput):
+        owned = TypeAdapter(ResearchRunResultSectionInput).validate_python({
+            **query.model_dump(), "run_id": run_id,
+        })
+        try:
+            result = _runtime(request).research_runs.get_result_section(
+                _researcher_id(request), owned,
+            )
+        except ResearchRunResultSectionIncompatible as error:
+            raise HTTPException(
+                status_code=400, detail="Holdings require Strategy Backtest",
+            ) from error
+        except ResearchRunInvalidCursor as error:
+            raise HTTPException(status_code=400, detail="Invalid result cursor") from error
+        except ResearchRunResultUnavailable as error:
+            raise HTTPException(status_code=409, detail="Result is not available") from error
+        except (ResearchRunResultReadFailed, ResearchRunTemporarilyUnavailable) as error:
+            raise HTTPException(status_code=503, detail="Result is unavailable") from error
+        if result is None:
+            raise HTTPException(status_code=404, detail="ResearchRun not found")
+        return result
+
     @app.get(
         "/api/research-runs/{run_id}/common-input-observations",
         response_model=CommonInputObservationsResultSection,
@@ -1429,6 +1455,27 @@ def create_app(
         "/api/daily-tracks/{track_id}/events/query", response_model=StrategyEventPageResponse,
     )
     def query_track_events(request: Request, track_id: str, query: StrategyEventQueryInput):
+        owned = TypeAdapter(DailyTrackResultSectionInput).validate_python({
+            **query.model_dump(), "track_id": track_id,
+        })
+        try:
+            result = _runtime(request).daily_tracks.get_result_section(
+                _researcher_id(request), owned,
+            )
+        except DailyTrackInvalidCursor as error:
+            raise HTTPException(status_code=400, detail="Invalid result cursor") from error
+        except DailyTrackResultUnavailable as error:
+            raise HTTPException(status_code=409, detail="Result is not available") from error
+        except (DailyTrackResultReadFailed, DailyTrackTemporarilyUnavailable) as error:
+            raise HTTPException(status_code=503, detail="Result is unavailable") from error
+        if result is None:
+            raise HTTPException(status_code=404, detail="DailyTrack not found")
+        return result
+
+    @app.post(
+        "/api/daily-tracks/{track_id}/holdings/query", response_model=HoldingPageResponse,
+    )
+    def query_track_holdings(request: Request, track_id: str, query: HoldingQueryInput):
         owned = TypeAdapter(DailyTrackResultSectionInput).validate_python({
             **query.model_dump(), "track_id": track_id,
         })

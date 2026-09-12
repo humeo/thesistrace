@@ -184,6 +184,7 @@ CREATE TABLE research_runs.execution_checkpoints (
     observation_payload jsonb,
     common_observation_payload jsonb,
     factor_observation_payload jsonb,
+    holding_payloads jsonb NOT NULL CHECK (jsonb_typeof(holding_payloads) = 'object'),
     strategy_event_payloads jsonb NOT NULL,
     final_values_payload jsonb,
     observation_row_count integer NOT NULL,

@@ -14,6 +14,12 @@ from pydantic import (
 )
 
 from thesistrace.benchmark import StrategyComparison, StrategyComparisonSummary
+from thesistrace.daily_holding_queries import (
+    HoldingDetailsPage,
+    HoldingDetailsQuery,
+    HoldingStatusPage,
+    HoldingStatusQuery,
+)
 from thesistrace.daily_track.observation_state import TrackingObservationState
 from thesistrace.research_kernel.common_inputs import common_input_references
 from thesistrace.research_kernel.common_observations import CommonInputObservation
@@ -35,7 +41,7 @@ from thesistrace.strategy_evidence import (
 RequestId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
 type DailyTrackResultSection = Literal[
     "strategy_targets", "strategy_orders", "strategy_child_orders",
-    "strategy_fills", "strategy_adjustments",
+    "strategy_fills", "strategy_adjustments", "daily_holdings_status", "daily_holdings",
     "strategy_summary",
     "strategy_observations",
     "origin",
@@ -44,7 +50,7 @@ type DailyTrackResultSection = Literal[
 ]
 DAILY_TRACK_RESULT_SECTIONS: tuple[DailyTrackResultSection, ...] = (
     "strategy_targets", "strategy_orders", "strategy_child_orders",
-    "strategy_fills", "strategy_adjustments",
+    "strategy_fills", "strategy_adjustments", "daily_holdings_status", "daily_holdings",
     "strategy_summary",
     "strategy_observations",
     "origin",
@@ -109,6 +115,14 @@ class TrackStrategyAdjustmentsInput(_DailyTrackResultSectionInput, StrategyAdjus
     pass
 
 
+class TrackHoldingStatusInput(_DailyTrackResultSectionInput, HoldingStatusQuery):
+    pass
+
+
+class TrackHoldingDetailsInput(_DailyTrackResultSectionInput, HoldingDetailsQuery):
+    pass
+
+
 type DailyTrackResultSectionInput = Annotated[
     DailyTrackStrategySummaryResultSectionInput
     | DailyTrackStrategyObservationsResultSectionInput
@@ -119,7 +133,9 @@ type DailyTrackResultSectionInput = Annotated[
     | TrackStrategyOrdersInput
     | TrackStrategyChildOrdersInput
     | TrackStrategyFillsInput
-    | TrackStrategyAdjustmentsInput,
+    | TrackStrategyAdjustmentsInput
+    | TrackHoldingStatusInput
+    | TrackHoldingDetailsInput,
     Field(discriminator="section"),
 ]
 
@@ -657,7 +673,9 @@ type DailyTrackResultSectionResponse = Annotated[
     | StrategyOrdersPage
     | StrategyChildOrdersPage
     | StrategyFillsPage
-    | StrategyAdjustmentsPage,
+    | StrategyAdjustmentsPage
+    | HoldingStatusPage
+    | HoldingDetailsPage,
     Field(discriminator="section"),
 ]
 
