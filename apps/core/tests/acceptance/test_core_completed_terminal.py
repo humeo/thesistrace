@@ -21,7 +21,10 @@ from thesistrace.entrypoints.schema import initialize_core
 
 
 @pytest.mark.skipif(not core_environment_is_configured(), reason="isolated runtime required")
-def test_one_session_cash_account_publishes_and_tracks_its_first_entry(tmp_path: Path):
+@pytest.mark.parametrize(
+    "formula", ["close", "if_else(close > 0 and not (close == 0), close, -close)"]
+)
+def test_one_session_cash_account_publishes_and_tracks_its_first_entry(tmp_path: Path, formula):
     settings = replace(
         CoreSettings.from_environment(),
         data_mount=tmp_path / "data",
@@ -44,6 +47,7 @@ def test_one_session_cash_account_publishes_and_tracks_its_first_entry(tmp_path:
             json={
                 **_run_command("one-day", start_date=sessions[0], end_date=sessions[0]),
                 "initial_cash_cny": "100000",
+                "formula": formula,
             },
         )
         assert accepted.status_code == 202, accepted.text

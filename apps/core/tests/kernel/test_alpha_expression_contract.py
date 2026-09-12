@@ -206,7 +206,9 @@ def test_normalized_evaluation_preserves_missing_and_non_finite_rules() -> None:
         )
         == [None] * 5
     )
-    assert evaluate_series(literal(1), {}, field_bindings=FIELD_BINDINGS) == [1.0]
+    with pytest.raises(AlphaValidationError) as error:
+        evaluate_series(literal(1), {}, field_bindings=FIELD_BINDINGS)
+    assert error.value.issues[0].reason_code == "ROOT_MUST_BE_SERIES"
 
 
 @pytest.mark.parametrize("identifier", ["ts_sum", "ts_mean", "ts_std"])

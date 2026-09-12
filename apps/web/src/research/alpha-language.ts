@@ -9,7 +9,8 @@ const alphaParser = parser.configure({
       "FunctionName!": tags.function(tags.variableName),
       "FieldName!": tags.variableName,
       Number: tags.number,
-      "UnaryOperator MultiplyOperator AddOperator": tags.arithmeticOperator,
+      "UnaryOperator MultiplyOperator AddOperator ComparisonOperator": tags.arithmeticOperator,
+      "NotOperator AndOperator OrOperator": tags.keyword,
     }),
   ],
 });
@@ -27,6 +28,7 @@ export const alphaHighlightStyle = HighlightStyle.define([
   { tag: tags.variableName, class: "cm-alpha-field" },
   { tag: tags.number, class: "cm-alpha-number" },
   { tag: tags.arithmeticOperator, class: "cm-alpha-operator" },
+  { tag: tags.keyword, class: "cm-alpha-operator" },
 ]);
 
 export const alphaLanguageExtensions = [

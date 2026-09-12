@@ -50,8 +50,16 @@ class _TransportFailureExecutor:
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
+@pytest.mark.parametrize(
+    "formulas",
+    [
+        ("close", "rank(close)"),
+        ("if_else(close > 0, close, -close)", "rank(if_else(close > 0, close, -close))"),
+    ],
+)
 def test_factor_batch_shares_preparation_preserves_frozen_generation_and_matches_ordinary(
     tmp_path: Path,
+    formulas,
 ) -> None:
     settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
@@ -62,7 +70,13 @@ def test_factor_batch_shares_preparation_preserves_frozen_generation_and_matches
         runtime = client.app.state.core_runtime
         batch = client.post(
             "/api/research-batches",
-            json=_factor_command("factor-batch-execution"),
+            json={
+                **_factor_command("factor-batch-execution"),
+                "factors": [
+                    {"item_key": key, "name": key, "formula": formula}
+                    for key, formula in zip(("value", "rank"), formulas, strict=True)
+                ],
+            },
         ).json()
         ordinary = [
             client.post(
@@ -72,7 +86,7 @@ def test_factor_batch_shares_preparation_preserves_frozen_generation_and_matches
                     formula=formula,
                 ),
             ).json()
-            for ordinal, formula in enumerate(("close", "rank(close)"), start=1)
+            for ordinal, formula in enumerate(formulas, start=1)
         ]
         barrier = _PreparationBarrierExecutor(
             SupervisedResearchBatchExecutor(
@@ -426,13 +440,7 @@ def test_widest_admitted_shared_slice_stays_inside_child_memory_budget(
     # A two-Chunk run emits one intermediate progress event; the final Chunk is
     # closed by item_succeeded rather than a second item_chunk_succeeded event.
     assert chunk_events
-    assert (
-        max(
-            int(event["data_io"]["rows_scanned"])
-            for event in chunk_events
-        )
-        >= 58 * 512
-    )
+    assert max(int(event["data_io"]["rows_scanned"]) for event in chunk_events) >= 58 * 512
     assert (
         max(
             int(event["child_peak_rss_bytes"])
@@ -454,9 +462,13 @@ def test_one_and_twenty_factor_items_use_the_same_ordered_execution_contract(
     # Operators may exercise the full Batch capacity in a single day.
     monkeypatch.setattr(
         "thesistrace.entrypoints.runtime.quota_policy_lookup",
-        lambda _origin: lambda _researcher_id: QuotaPolicy(
-            timezone="Asia/Shanghai", daily_model_budget_nanodollars=None,
-            daily_run_limit=None, active_daily_track_limit=None,
+        lambda _origin: (
+            lambda _researcher_id: QuotaPolicy(
+                timezone="Asia/Shanghai",
+                daily_model_budget_nanodollars=None,
+                daily_run_limit=None,
+                active_daily_track_limit=None,
+            )
         ),
     )
     settings = isolated_core_settings(tmp_path)

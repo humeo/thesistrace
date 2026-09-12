@@ -5,6 +5,22 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from thesistrace.research_kernel.alpha_builtins import BUILTIN_DEFINITIONS
+from thesistrace.research_kernel.expression_limits import (
+    MAX_ESTIMATED_WORK,
+    MAX_EXPRESSION_DEPTH,
+    MAX_EXPRESSION_NODES,
+)
+from thesistrace.research_kernel.expression_types import (
+    ARITHMETIC_OPERATORS,
+    BOOLEAN_OPERATORS,
+    BOOLEAN_TYPES,
+    COMPARISON_OPERATORS,
+    NUMERIC_TYPES,
+    ValueType,
+    binary_result_type,
+    conditional_result_type,
+    unary_result_type,
+)
 
 type AlphaExpression = Mapping[str, object]
 
@@ -39,11 +55,33 @@ def validate_normalized_alpha(
     *,
     field_bindings: Mapping[str, str],
 ) -> ParsedAlpha:
-    expression, effective_lookback, estimated_work, fields, field_ids = _validate_compiled_node(
-        expression,
-        location="alpha.expression",
-        field_bindings=field_bindings,
+    pending = [(expression, 1)]
+    count = 0
+    while pending:
+        node, depth = pending.pop()
+        count += 1
+        if depth > MAX_EXPRESSION_DEPTH:
+            _reject("EXPRESSION_TOO_DEEP", "alpha.expression", "Expression exceeds depth limit")
+        if count > MAX_EXPRESSION_NODES:
+            _reject(
+                "TOO_MANY_EXPRESSION_NODES", "alpha.expression", "Expression exceeds node limit"
+            )
+        for value in node.values():
+            if isinstance(value, Mapping):
+                pending.append((value, depth + 1))
+            elif isinstance(value, list):
+                pending.extend((child, depth + 1) for child in value if isinstance(child, Mapping))
+    expression, effective_lookback, estimated_work, fields, field_ids, result_type = (
+        _validate_compiled_node(
+            expression,
+            location="alpha.expression",
+            field_bindings=field_bindings,
+        )
     )
+    if estimated_work > MAX_ESTIMATED_WORK:
+        _reject("WORK_EXCEEDS_LIMIT", "alpha.expression", "Expression exceeds work limit")
+    if result_type is not ValueType.NUMERIC_SERIES:
+        _reject("ROOT_MUST_BE_SERIES", "alpha.expression", "Alpha must produce a Numeric Series")
     if effective_lookback > 252:
         _reject(
             "LOOKBACK_EXCEEDS_LIMIT",
@@ -69,7 +107,7 @@ def _validate_compiled_node(
     *,
     location: str,
     field_bindings: Mapping[str, str],
-) -> tuple[dict[str, object], int, int, set[str], set[str]]:
+) -> tuple[dict[str, object], int, int, set[str], set[str], ValueType]:
     kind = node.get("kind")
     if kind == "field":
         if set(node) != {"kind", "field_id"}:
@@ -77,7 +115,7 @@ def _validate_compiled_node(
         field_id = node.get("field_id")
         if not isinstance(field_id, str) or field_id not in field_bindings:
             _reject("UNKNOWN_FIELD", location, f"unknown Alpha field: {field_id}")
-        return dict(node), 0, 1, {field_bindings[field_id]}, {field_id}
+        return dict(node), 0, 1, {field_bindings[field_id]}, {field_id}, ValueType.NUMERIC_SERIES
     if kind == "number":
         if set(node) != {"kind", "value"}:
             _reject("INVALID_NODE", location, "Alpha number node is malformed")
@@ -88,23 +126,30 @@ def _validate_compiled_node(
             or not math.isfinite(value)
         ):
             _reject("INVALID_LITERAL", location, "Alpha number must be finite")
-        return dict(node), 0, 1, set(), set()
+        return dict(node), 0, 1, set(), set(), ValueType.NUMBER
     if kind == "unary":
         if set(node) != {"kind", "operator", "operand"}:
             _reject("INVALID_NODE", location, "Alpha unary node is malformed")
-        if node.get("operator") != "negate" or not isinstance(node.get("operand"), Mapping):
+        if node.get("operator") not in {"negate", "not"} or not isinstance(
+            node.get("operand"), Mapping
+        ):
             _reject("INVALID_OPERATOR", location, "Alpha unary operator is invalid")
-        child, lookback, work, fields, field_ids = _validate_compiled_node(
+        child, lookback, work, fields, field_ids, child_type = _validate_compiled_node(
             node["operand"],
             location=f"{location}.operand",
             field_bindings=field_bindings,
         )
+        try:
+            result_type = unary_result_type(node["operator"], child_type)
+        except ValueError as error:
+            _reject("TYPE_MISMATCH", location, str(error))
         return (
-            {"kind": "unary", "operator": "negate", "operand": child},
+            {"kind": "unary", "operator": node["operator"], "operand": child},
             lookback,
             work + 1,
             fields,
             field_ids,
+            result_type,
         )
     if kind == "binary":
         if set(node) != {"kind", "operator", "left", "right"}:
@@ -113,23 +158,32 @@ def _validate_compiled_node(
         left = node.get("left")
         right = node.get("right")
         if (
-            operator not in {"add", "subtract", "multiply", "divide"}
+            operator not in ARITHMETIC_OPERATORS | COMPARISON_OPERATORS | BOOLEAN_OPERATORS
             or not isinstance(left, Mapping)
             or not isinstance(right, Mapping)
         ):
             _reject("INVALID_OPERATOR", location, "Alpha binary operator is invalid")
-        left_node, left_lookback, left_work, left_fields, left_ids = _validate_compiled_node(
-            left, location=f"{location}.left", field_bindings=field_bindings
+        left_node, left_lookback, left_work, left_fields, left_ids, left_type = (
+            _validate_compiled_node(
+                left, location=f"{location}.left", field_bindings=field_bindings
+            )
         )
-        right_node, right_lookback, right_work, right_fields, right_ids = _validate_compiled_node(
-            right, location=f"{location}.right", field_bindings=field_bindings
+        right_node, right_lookback, right_work, right_fields, right_ids, right_type = (
+            _validate_compiled_node(
+                right, location=f"{location}.right", field_bindings=field_bindings
+            )
         )
+        try:
+            result_type = binary_result_type(operator, left_type, right_type)
+        except ValueError as error:
+            _reject("TYPE_MISMATCH", location, str(error))
         return (
             {"kind": "binary", "operator": operator, "left": left_node, "right": right_node},
             max(left_lookback, right_lookback),
             left_work + right_work + 1,
             left_fields | right_fields,
             left_ids | right_ids,
+            result_type,
         )
     if kind == "call":
         if set(node) != {"kind", "identifier", "arguments"}:
@@ -146,7 +200,8 @@ def _validate_compiled_node(
             _reject("INVALID_ARITY", location, f"Alpha builtin {identifier} has invalid arity")
         compiled_arguments: list[dict[str, object]] = []
         lookbacks: list[int] = []
-        work = 1
+        argument_types: list[ValueType] = []
+        work = 0
         fields: set[str] = set()
         field_ids: set[str] = set()
         window: int | None = None
@@ -165,17 +220,43 @@ def _validate_compiled_node(
                     )
                 window = value
                 compiled_arguments.append(dict(argument))
+                work += 1
+                argument_types.append(ValueType.WINDOW)
                 continue
-            child, child_lookback, child_work, child_fields, child_ids = _validate_compiled_node(
-                argument,
-                location=f"{location}.arguments[{index}]",
-                field_bindings=field_bindings,
+            child, child_lookback, child_work, child_fields, child_ids, child_type = (
+                _validate_compiled_node(
+                    argument,
+                    location=f"{location}.arguments[{index}]",
+                    field_bindings=field_bindings,
+                )
             )
+            allowed = (
+                NUMERIC_TYPES
+                if parameter.rule == "numeric"
+                else {ValueType.NUMERIC_SERIES}
+                if parameter.rule == "numeric_series"
+                else BOOLEAN_TYPES
+                if parameter.rule == "boolean"
+                else None
+            )
+            if allowed is not None and child_type not in allowed:
+                _reject("TYPE_MISMATCH", location, f"{identifier} requires {parameter.rule}")
+            argument_types.append(child_type)
             compiled_arguments.append(child)
             lookbacks.append(child_lookback)
             work += child_work
             fields |= child_fields
             field_ids |= child_ids
+        try:
+            result_type = (
+                conditional_result_type(*argument_types)
+                if definition.result_rule == "conditional"
+                else ValueType.NUMERIC_SERIES
+                if definition.result_rule == "numeric_series"
+                else argument_types[0]
+            )
+        except ValueError as error:
+            _reject("TYPE_MISMATCH", location, str(error))
         child_lookback = max(lookbacks, default=0)
         return (
             {"kind": "call", "identifier": identifier, "arguments": compiled_arguments},
@@ -183,6 +264,7 @@ def _validate_compiled_node(
             definition.estimated_work(work, window),
             fields,
             field_ids,
+            result_type,
         )
     _reject("INVALID_NODE", location, "Alpha expression must use the compiled Formula IR")
 

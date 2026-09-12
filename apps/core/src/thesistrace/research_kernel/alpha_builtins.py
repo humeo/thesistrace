@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from fractions import Fraction
 from typing import Literal
 
-ParameterRule = Literal["numeric", "numeric_series", "window"]
-ResultRule = Literal["same_as_first", "numeric_series"]
+ParameterRule = Literal["numeric", "numeric_series", "window", "boolean", "value"]
+ResultRule = Literal["same_as_first", "numeric_series", "conditional"]
 LookbackRule = Literal["identity", "historical", "rolling"]
 type NumericSeries = tuple[float | None, ...]
 type NumericValue = float | None | NumericSeries
@@ -318,7 +318,49 @@ _ONE_STEP_WORK = BuiltinWorkDefinition(base_operations=1)
 _ROLLING_WORK = BuiltinWorkDefinition(base_operations=1, per_window_operations=1)
 
 
+def _if_else(arguments: tuple[BuiltinArgument, ...]) -> NumericValue:
+    lengths = {len(value) for value in arguments if isinstance(value, tuple)}
+    if len(lengths) > 1:
+        raise ValueError("if_else inputs must align")
+
+    def choose(condition, when_true, when_false):
+        if condition is None or not math.isfinite(condition):
+            return None
+        selected = when_true if condition else when_false
+        return None if selected is None else _finite(selected)
+
+    if not lengths:
+        return choose(*arguments)
+    length = lengths.pop()
+    expanded = [value if isinstance(value, tuple) else (value,) * length for value in arguments]
+    return tuple(choose(*items) for items in zip(*expanded, strict=True))
+
+
 BUILTIN_DEFINITIONS = (
+    BuiltinDefinition(
+        identifier="if_else",
+        parameters=(
+            BuiltinParameterDefinition("condition", "boolean"),
+            BuiltinParameterDefinition("when_true", "value"),
+            BuiltinParameterDefinition("when_false", "value"),
+        ),
+        result_rule="conditional",
+        description=(
+            "Choose compatible branches using comparisons >, >=, <, <=, ==, != "
+            "and Boolean and/or/not. Boolean values cannot be used as numbers."
+        ),
+        examples=(
+            "if_else(close > open, close, open)",
+            "if_else(close > open and not (open == 0), close / open, 0)",
+        ),
+        lookback_rule="identity",
+        missing_value_behavior=(
+            "Unknown condition produces missing; only the selected branch determines each value."
+        ),
+        numeric_behavior="Both branches are validated and counted in dependencies and work.",
+        work=_ONE_STEP_WORK,
+        evaluator=_if_else,
+    ),
     BuiltinDefinition(
         identifier="abs",
         parameters=_VALUE,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import operator
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from typing import Literal, Protocol
@@ -125,7 +126,7 @@ def evaluate_series_execution_plan(
                 tuple(_finite_or_missing(value) for value in values_by_field[node.identifier])
             )
         elif node.kind == "unary":
-            values.append(_unary(values[node.inputs[0]]))
+            values.append(_unary(values[node.inputs[0]], node.identifier))
         elif node.kind == "binary":
             values.append(
                 _binary(
@@ -186,7 +187,13 @@ def evaluate_series_execution_matrix(
                 }
             )
         elif node.kind == "unary":
-            values.append(_matrix_map(values[node.inputs[0]], _unary, instruments))
+            values.append(
+                _matrix_map(
+                    values[node.inputs[0]],
+                    lambda value, identifier=node.identifier: _unary(value, identifier),
+                    instruments,
+                )
+            )
         elif node.kind == "binary":
             values.append(
                 {
@@ -288,7 +295,11 @@ def evaluate_columnar_execution_matrix(
             value = field_matrices[node.identifier]
         elif node.kind == "unary":
             operand = _columnar_array(values[node.inputs[0]], shape)
-            value = np.where(np.isfinite(operand), -operand, np.nan)
+            value = np.where(
+                np.isfinite(operand),
+                np.logical_not(operand) if node.identifier == "not" else -operand,
+                np.nan,
+            )
         elif node.kind == "binary":
             left = _columnar_array(values[node.inputs[0]], shape)
             right = _columnar_array(values[node.inputs[1]], shape)
@@ -301,6 +312,14 @@ def evaluate_columnar_execution_matrix(
                 "subtract": np.subtract,
                 "multiply": np.multiply,
                 "divide": np.divide,
+                "gt": np.greater,
+                "ge": np.greater_equal,
+                "lt": np.less,
+                "le": np.less_equal,
+                "eq": np.equal,
+                "ne": np.not_equal,
+                "and": np.logical_and,
+                "or": np.logical_or,
             }[node.identifier]
             with np.errstate(all="ignore"):
                 operation(left, right, out=value, where=valid)
@@ -312,6 +331,13 @@ def evaluate_columnar_execution_matrix(
                 sessions,
                 universe_members,
                 cancellation_check,
+            )
+        elif node.identifier == "if_else":
+            condition = _columnar_array(values[node.inputs[0]], shape)
+            when_true = _columnar_array(values[node.inputs[1]], shape)
+            when_false = _columnar_array(values[node.inputs[2]], shape)
+            value = np.where(
+                np.isfinite(condition), np.where(condition != 0, when_true, when_false), np.nan
             )
         elif node.identifier == "pct_change":
             series = _columnar_array(values[node.inputs[0]], shape)
@@ -331,8 +357,7 @@ def evaluate_columnar_execution_matrix(
                 for instrument_index in range(len(instruments))
             ]
             value = (
-                np.asarray(rows, dtype=np.float64)
-                if rows else np.empty(shape, dtype=np.float64)
+                np.asarray(rows, dtype=np.float64) if rows else np.empty(shape, dtype=np.float64)
             )
             if value.shape != shape:
                 raise ValueError("columnar Alpha builtin produced a misaligned result")
@@ -469,12 +494,15 @@ def _cross_section_ranks(values: list[tuple[str, float]]) -> dict[str, float]:
     return result
 
 
-def _unary(value: PlanValue) -> PlanValue:
+def _unary(value: PlanValue, identifier: str) -> PlanValue:
     if value is None:
         return None
+    operation = operator.not_ if identifier == "not" else operator.neg
     if isinstance(value, tuple):
-        return tuple(None if item is None else _finite_or_missing(-item) for item in value)
-    return _finite_or_missing(-float(value))
+        return tuple(
+            None if item is None else _finite_or_missing(operation(item)) for item in value
+        )
+    return _finite_or_missing(operation(float(value)))
 
 
 def _binary(
@@ -496,8 +524,20 @@ def _binary(
             value = left_value - right_value
         elif identifier == "multiply":
             value = left_value * right_value
-        else:
+        elif identifier == "divide":
             value = math.nan if right_value == 0.0 else left_value / right_value
+        else:
+            operation = {
+                "gt": operator.gt,
+                "ge": operator.ge,
+                "lt": operator.lt,
+                "le": operator.le,
+                "eq": operator.eq,
+                "ne": operator.ne,
+                "and": lambda a, b: bool(a) and bool(b),
+                "or": lambda a, b: bool(a) or bool(b),
+            }[identifier]
+            value = operation(left_value, right_value)
         result.append(_finite_or_missing(value))
     return tuple(result)
 

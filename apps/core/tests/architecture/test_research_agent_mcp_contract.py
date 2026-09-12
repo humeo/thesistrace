@@ -1792,9 +1792,9 @@ def test_v1_inventory_scopes_descriptions_annotations_and_schemas_are_exact() ->
     canonical = _canonical_v1_contract()
 
     assert sha256(canonical).hexdigest() == (
-        "518b5544ec0b579f871906653e2bfaa7e06c7a560f9b1dac311a129466c5d060"
+        "503db1eadeb7e00f29d778d104dc74054d84e3d9a1af9a9a1fcdc8d1d542b563"
     )
-    assert len(canonical) == 145038
+    assert len(canonical) == 145070
 
 
 def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None:
@@ -3072,3 +3072,17 @@ def _server(
         trace_id_factory=lambda: f"trace_test_{next(trace_ids)}",
         transport="stdio",
     )
+
+
+def test_registry_conditional_signal_diagnostics_and_catalog() -> None:
+    registry = _registry()
+    catalog = registry.get_alpha_catalog(identifiers=["if_else"])
+    assert [item.identifier for item in catalog.builtins] == ["if_else"]
+    for source, valid in (
+        ("if_else(close > open or close == 0, close, open)", True),
+        ("if_else(close, close, open)", False),
+        ("if_else(close > open, close, ts_mean(open, 253))", False),
+    ):
+        diagnostic = registry.diagnose_alpha_formula(source)
+        assert diagnostic == alpha_language.diagnose(source)
+        assert diagnostic.valid is valid

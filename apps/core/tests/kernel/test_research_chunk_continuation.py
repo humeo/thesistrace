@@ -1054,7 +1054,11 @@ def test_repeated_strategy_consumption_has_a_shared_stage_performance_gate(
     assert all(size > 10_000 for size in strategy_serialization_sizes)
 
 
-def test_chunked_composite_research_is_canonically_equal_across_real_boundaries() -> None:
+@pytest.mark.parametrize("formula", [
+    "rank(ts_mean(close, 5)) + rank(revenue)",
+    "if_else(close > ts_mean(close, 5) and not (revenue < 1000), rank(close), rank(revenue))",
+])
+def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(formula) -> None:
     sessions = tuple(f"s{index:02d}" for index in range(80))
     instruments = tuple(f"equity:{index:03d}.SH" for index in range(40))
     profiles = {
@@ -1119,7 +1123,7 @@ def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(
             "financial.income.total_revenue.latest_fy": revenue,
         },
     )
-    compiled = alpha_language.compile("rank(ts_mean(close, 5)) + rank(revenue)")
+    compiled = alpha_language.compile(formula)
     run_input = RunInput(
         research_data=fixture,
         alpha_expression=compiled.expression,

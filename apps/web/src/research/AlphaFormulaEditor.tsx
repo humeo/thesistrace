@@ -82,6 +82,9 @@ export function AlphaFormulaEditor({
     if (host.current === null) return;
     const root = host.current.shadowRoot ?? host.current.attachShadow({ mode: "open" });
     const options: Completion[] = [
+      ...["and", "or", "not"].map((label) => ({
+        label, type: "keyword", detail: "Boolean operator; unknown values remain unknown",
+      })),
       ...catalog.fields.map((field) => ({
         label: field.identifier,
         type: "variable",

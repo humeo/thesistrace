@@ -5,6 +5,10 @@
   unary
   multiply @left
   add @left
+  compare @left
+  not
+  and @left
+  or @left
 }
 
 Expression {
@@ -13,6 +17,7 @@ Expression {
   CallExpression |
   ParenthesizedExpression |
   UnaryExpression |
+  NotExpression |
   BinaryExpression
 }
 
@@ -27,13 +32,21 @@ ArgumentList { Expression ("," Expression)* }
 ParenthesizedExpression { "(" Expression ")" }
 
 UnaryExpression { !unary UnaryOperator Expression }
+NotExpression { !not NotOperator Expression }
 
 BinaryExpression {
   Expression !multiply MultiplyOperator Expression |
-  Expression !add AddOperator Expression
+  Expression !add AddOperator Expression |
+  Expression !compare ComparisonOperator Expression |
+  Expression !and AndOperator Expression |
+  Expression !or OrOperator Expression
 }
 
-UnaryOperator { "+" | "-" }
+UnaryOperator { "-" }
+NotOperator { @specialize<Identifier, "not"> }
+AndOperator { @specialize<Identifier, "and"> }
+OrOperator { @specialize<Identifier, "or"> }
+ComparisonOperator { ">" | ">=" | "<" | "<=" | "==" | "!=" }
 MultiplyOperator { "*" | "/" }
 AddOperator { "+" | "-" }
 

@@ -1,15 +1,10 @@
 from __future__ import annotations
 
-from enum import StrEnum
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-
-class ValueType(StrEnum):
-    NUMERIC_SERIES = "numeric_series"
-    NUMBER = "number"
-    WINDOW = "window"
+from thesistrace.research_kernel.expression_types import ValueType
 
 
 class SourcePosition(BaseModel):
@@ -83,7 +78,7 @@ class BuiltinParameter(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     name: Annotated[str, Field(max_length=100)]
-    value_type: Literal["numeric", "numeric_series", "window"]
+    value_type: Literal["numeric", "numeric_series", "window", "boolean", "value"]
     minimum: Annotated[int, Field(ge=-(2**63), lt=2**63)] | None = None
     maximum: Annotated[int, Field(ge=-(2**63), lt=2**63)] | None = None
 
@@ -100,7 +95,7 @@ class AlphaBuiltinCatalogEntry(BaseModel):
 
     identifier: Annotated[str, Field(max_length=100)]
     parameters: Annotated[list[BuiltinParameter], Field(max_length=8)]
-    result_type: Literal["same_as_first", "numeric_series"]
+    result_type: Literal["same_as_first", "numeric_series", "conditional"]
     description: Annotated[str, Field(max_length=384)]
     examples: Annotated[list[Annotated[str, Field(max_length=384)]], Field(max_length=4)]
     missing_value_behavior: Annotated[str, Field(max_length=384)]

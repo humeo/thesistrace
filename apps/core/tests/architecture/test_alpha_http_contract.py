@@ -138,3 +138,18 @@ def test_alpha_diagnostics_rejects_request_shape_errors() -> None:
 
     assert missing.status_code == 422
     assert extra.status_code == 422
+
+
+def test_conditional_signal_diagnostics_share_backend_type_rules() -> None:
+    cases = {
+        "if_else(close > open and not (open == 0), close, open)": True,
+        "if_else(close > open, close, open > 0)": False,
+        "if_else(close > open, close, ts_mean(open, 253))": False,
+        "close > open": False,
+    }
+    with _client() as client:
+        for source, valid in cases.items():
+            response = client.post("/api/alpha/diagnostics", json={"source": source})
+            assert response.status_code == 200
+            assert response.json() == alpha_language.diagnose(source).model_dump(mode="json")
+            assert response.json()["valid"] is valid

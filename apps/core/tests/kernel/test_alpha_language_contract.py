@@ -41,6 +41,7 @@ def test_catalog_composes_only_capable_fields_and_public_builtins() -> None:
         if field.alpha is not None
     ]
     assert [builtin["identifier"] for builtin in catalog["builtins"]] == [
+        "if_else",
         "abs",
         "log",
         "sign",
@@ -257,9 +258,7 @@ def test_financial_identifiers_hide_selection_policy_and_reject_obsolete_names()
 
 
 def test_compile_maps_financial_identifier_to_namespaced_field_reference() -> None:
-    compiled = alpha_language.compile(
-        "rank(close) + rank(revenue)"
-    )
+    compiled = alpha_language.compile("rank(close) + rank(revenue)")
 
     assert compiled.field_ids_by_identifier == {
         "close": "price.close.adjusted",
@@ -316,7 +315,13 @@ def test_builtin_evaluators_strictly_propagate_non_finite_values() -> None:
     with pytest.raises(TypeError, match="complete cross-section"):
         builtins["rank"].evaluator((invalid,))
     for builtin in (item for name, item in builtins.items() if name != "rank"):
-        arguments = (invalid,) if len(builtin.parameters) == 1 else (invalid, 1)
+        arguments = (
+            (invalid, invalid, invalid)
+            if builtin.identifier == "if_else"
+            else (invalid,)
+            if len(builtin.parameters) == 1
+            else (invalid, 1)
+        )
         result = builtin.evaluator(arguments)
         assert isinstance(result, tuple)
         assert all(value is None or math.isfinite(value) for value in result)
@@ -423,7 +428,7 @@ def test_one_pass_rolling_matches_fixed_binary64_window_references() -> None:
         ("(x for x in [close])", "UNSUPPORTED_SYNTAX"),
         ("lambda: close", "UNSUPPORTED_SYNTAX"),
         ("close if 1 else volume", "UNSUPPORTED_SYNTAX"),
-        ("close > volume", "UNSUPPORTED_SYNTAX"),
+        ("close > volume", "ROOT_MUST_BE_SERIES"),
         ("ts_mean(series=close, window=20)", "KEYWORD_ARGUMENT_NOT_ALLOWED"),
         ("ts_mean(*(close, 20))", "STARRED_ARGUMENT_NOT_ALLOWED"),
         ("+close", "UNSUPPORTED_OPERATOR"),

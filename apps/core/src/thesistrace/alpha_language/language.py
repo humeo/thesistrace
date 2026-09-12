@@ -24,12 +24,21 @@ from thesistrace.research_kernel.alpha_builtins import (
     BUILTIN_DEFINITIONS,
     BuiltinDefinition,
 )
+from thesistrace.research_kernel.expression_limits import (
+    MAX_EFFECTIVE_LOOKBACK,
+    MAX_ESTIMATED_WORK,
+    MAX_EXPRESSION_DEPTH,
+    MAX_EXPRESSION_NODES,
+    MAX_FORMULA_LENGTH,
+)
+from thesistrace.research_kernel.expression_types import (
+    BOOLEAN_TYPES,
+    NUMERIC_TYPES,
+    binary_result_type,
+    conditional_result_type,
+    unary_result_type,
+)
 
-MAX_FORMULA_LENGTH = 4096
-MAX_EXPRESSION_NODES = 256
-MAX_EXPRESSION_DEPTH = 32
-MAX_EFFECTIVE_LOOKBACK = 252
-MAX_ESTIMATED_WORK = 4096
 ALPHA_IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
@@ -302,21 +311,26 @@ class AlphaLanguage:
                 estimated_work=1,
             )
         if isinstance(node, ast.UnaryOp):
-            if not isinstance(node.op, ast.USub):
+            if not isinstance(node.op, (ast.USub, ast.Not)):
                 self._raise(
                     source,
                     "UNSUPPORTED_OPERATOR",
-                    "Only unary minus is supported",
+                    "Only unary minus and not are supported",
                     node,
                 )
             operand = self._build(source, node.operand, depth=depth + 1)
+            operator = "not" if isinstance(node.op, ast.Not) else "negate"
+            try:
+                result_type = unary_result_type(operator, operand.value_type)
+            except ValueError as error:
+                self._raise(source, "TYPE_MISMATCH", str(error), node)
             return _BuiltExpression(
                 expression={
                     "kind": "unary",
-                    "operator": "negate",
+                    "operator": operator,
                     "operand": operand.expression,
                 },
-                value_type=operand.value_type,
+                value_type=result_type,
                 field_ids_by_identifier=operand.field_ids_by_identifier,
                 effective_lookback=operand.effective_lookback,
                 node_count=operand.node_count + 1,
@@ -331,36 +345,46 @@ class AlphaLanguage:
                 ast.Div: "divide",
             }.get(type(node.op))
             if operator is None:
-                self._raise(
-                    source,
-                    "UNSUPPORTED_OPERATOR",
-                    "Unsupported Alpha arithmetic operator",
-                    node,
-                )
-            left = self._build(source, node.left, depth=depth + 1)
-            right = self._build(source, node.right, depth=depth + 1)
-            result_type = (
-                ValueType.NUMERIC_SERIES
-                if ValueType.NUMERIC_SERIES in {left.value_type, right.value_type}
-                else ValueType.NUMBER
+                self._raise(source, "UNSUPPORTED_OPERATOR", "Unsupported arithmetic operator", node)
+            return self._binary(
+                source,
+                node,
+                operator,
+                self._build(source, node.left, depth=depth + 1),
+                self._build(source, node.right, depth=depth + 1),
+                depth,
             )
-            return _BuiltExpression(
-                expression={
-                    "kind": "binary",
-                    "operator": operator,
-                    "left": left.expression,
-                    "right": right.expression,
-                },
-                value_type=result_type,
-                field_ids_by_identifier={
-                    **left.field_ids_by_identifier,
-                    **right.field_ids_by_identifier,
-                },
-                effective_lookback=max(left.effective_lookback, right.effective_lookback),
-                node_count=left.node_count + right.node_count + 1,
-                depth=max(depth, left.depth, right.depth),
-                estimated_work=left.estimated_work + right.estimated_work + 1,
+        if isinstance(node, ast.Compare):
+            if len(node.ops) != 1:
+                self._raise(source, "UNSUPPORTED_SYNTAX", "Use and to combine comparisons", node)
+            operator = {
+                ast.Gt: "gt",
+                ast.GtE: "ge",
+                ast.Lt: "lt",
+                ast.LtE: "le",
+                ast.Eq: "eq",
+                ast.NotEq: "ne",
+            }.get(type(node.ops[0]))
+            if operator is None:
+                self._raise(source, "UNSUPPORTED_OPERATOR", "Unsupported comparison", node)
+            return self._binary(
+                source,
+                node,
+                operator,
+                self._build(source, node.left, depth=depth + 1),
+                self._build(source, node.comparators[0], depth=depth + 1),
+                depth,
             )
+        if isinstance(node, ast.BoolOp):
+            operator = "and" if isinstance(node.op, ast.And) else "or"
+            children = [
+                self._build(source, value, depth=depth + len(node.values) - 1)
+                for value in node.values
+            ]
+            result = children[0]
+            for child in children[1:]:
+                result = self._binary(source, node, operator, result, child, depth)
+            return result
         if isinstance(node, ast.Call):
             return self._build_call(source, node, depth=depth)
         self._raise(
@@ -368,6 +392,29 @@ class AlphaLanguage:
             "UNSUPPORTED_SYNTAX",
             f"Unsupported Alpha syntax: {type(node).__name__}",
             node,
+        )
+
+    def _binary(self, source, node, operator, left, right, depth) -> _BuiltExpression:
+        try:
+            result_type = binary_result_type(operator, left.value_type, right.value_type)
+        except ValueError as error:
+            self._raise(source, "TYPE_MISMATCH", str(error), node)
+        return _BuiltExpression(
+            expression={
+                "kind": "binary",
+                "operator": operator,
+                "left": left.expression,
+                "right": right.expression,
+            },
+            value_type=result_type,
+            field_ids_by_identifier={
+                **left.field_ids_by_identifier,
+                **right.field_ids_by_identifier,
+            },
+            effective_lookback=max(left.effective_lookback, right.effective_lookback),
+            node_count=left.node_count + right.node_count + 1,
+            depth=max(depth, left.depth, right.depth),
+            estimated_work=left.estimated_work + right.estimated_work + 1,
         )
 
     def _build_call(self, source: str, node: ast.Call, *, depth: int) -> _BuiltExpression:
@@ -476,9 +523,27 @@ class AlphaLanguage:
                         actual=argument.value_type.value,
                     ),
                 )
+            allowed = (
+                NUMERIC_TYPES if rule == "numeric" else BOOLEAN_TYPES if rule == "boolean" else None
+            )
+            if allowed is not None and argument.value_type not in allowed:
+                self._raise(source, "TYPE_MISMATCH", f"{identifier} requires {rule}", argument_node)
             arguments.append(argument)
 
         first = arguments[0]
+        if builtin.result_rule == "conditional":
+            try:
+                result_type = conditional_result_type(
+                    *(argument.value_type for argument in arguments)
+                )
+            except ValueError as error:
+                self._raise(source, "TYPE_MISMATCH", str(error), node)
+        else:
+            result_type = (
+                ValueType.NUMERIC_SERIES
+                if builtin.result_rule == "numeric_series"
+                else first.value_type
+            )
         child_lookback = max(argument.effective_lookback for argument in arguments)
         return _BuiltExpression(
             expression={
@@ -486,11 +551,7 @@ class AlphaLanguage:
                 "identifier": identifier,
                 "arguments": [argument.expression for argument in arguments],
             },
-            value_type=(
-                ValueType.NUMERIC_SERIES
-                if builtin.result_rule == "numeric_series"
-                else first.value_type
-            ),
+            value_type=result_type,
             field_ids_by_identifier={
                 key: value
                 for argument in arguments

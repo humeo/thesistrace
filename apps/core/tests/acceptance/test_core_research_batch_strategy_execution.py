@@ -541,8 +541,10 @@ def test_strategy_deterministic_start_failure_is_not_retried(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
+@pytest.mark.parametrize("formula", ["close", "if_else(close > 0, close, -close)"])
 def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
     tmp_path: Path,
+    formula,
 ) -> None:
     settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
@@ -560,6 +562,7 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
         )
         command = {
             **_strategy_command("strategy-sweep-equivalence"),
+            "alpha": {"formula": formula, "hypothesis": "shared"},
             "end_date": "2026-08-05",
         }
         batch = client.post("/api/research-batches", json=command).json()
@@ -592,12 +595,15 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
         ordinary = [
             client.post(
                 "/api/research-runs",
-                json=_ordinary_strategy_command(
-                    f"ordinary-strategy-{ordinal}",
-                    holdings_count=int(item["holdings_count"]),
-                    rebalance_every_sessions=int(item["rebalance_every_sessions"]),
-                    end_date="2026-08-05",
-                ),
+                json={
+                    **_ordinary_strategy_command(
+                        f"ordinary-strategy-{ordinal}",
+                        holdings_count=int(item["holdings_count"]),
+                        rebalance_every_sessions=int(item["rebalance_every_sessions"]),
+                        end_date="2026-08-05",
+                    ),
+                    "formula": formula,
+                },
             ).json()
             for ordinal, item in enumerate(command["strategies"], start=1)
         ]
@@ -1504,9 +1510,13 @@ def test_strategy_sweep_one_and_twenty_items_use_the_same_ordered_contract(
     # Exercise the batch capacity contract with an Operator, whose daily Run quota is unlimited.
     monkeypatch.setattr(
         "thesistrace.entrypoints.runtime.quota_policy_lookup",
-        lambda _origin: lambda _researcher_id: QuotaPolicy(
-            timezone="Asia/Shanghai", daily_model_budget_nanodollars=None,
-            daily_run_limit=None, active_daily_track_limit=None,
+        lambda _origin: (
+            lambda _researcher_id: QuotaPolicy(
+                timezone="Asia/Shanghai",
+                daily_model_budget_nanodollars=None,
+                daily_run_limit=None,
+                active_daily_track_limit=None,
+            )
         ),
     )
     settings = isolated_core_settings(tmp_path)

@@ -93,6 +93,7 @@ def run_input(data, source, neutralization, holdings=10, rebalance=5):
 
 @pytest.mark.parametrize(("source", "neutralization", "holdings", "rebalance"), [
     ("rank(pct_change(close, 20))", "none", 10, 5),
+    ("if_else(close > ts_mean(close, 5), rank(close), -rank(close))", "none", 5, 3),
     ("-rank(pct_change(close, 20))", "none", 3, 1),
     ("ts_mean(close, 3) + ts_mean(close, 3)", "industry", 5, 3),
 ])
