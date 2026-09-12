@@ -13,10 +13,9 @@
 .mcp-page button.mcp-primary:hover { background: var(--primary-control-hover); }
 .mcp-page button.mcp-danger { background: var(--danger-action); border-color: var(--danger-action); color: white; }
 .mcp-server { padding: 20px; background: var(--surface-1); border: 1px solid var(--line); border-radius: 8px; }
-.mcp-service { display: grid; grid-template-columns: minmax(0,1fr) auto auto; gap: 24px; align-items: center; margin-bottom: 20px; }
+.mcp-service { display: grid; grid-template-columns: minmax(0,1fr) auto auto; gap: 24px; align-items: center; }
 .mcp-service-name h2 { font-size: 16px; font-weight: 600; letter-spacing: -.02em; }
 .mcp-service-name img { flex-shrink: 0; object-fit: contain; }
-.mcp-server-note { margin: 12px 0 0; color: var(--ink-soft); font-size: 12px; }
 .mcp-setup-flow { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 24px; list-style: none; counter-reset: setup; margin: 24px 0; padding: 0; }
 .mcp-setup-flow li { counter-increment: setup; position: relative; padding-left: 30px; }
 .mcp-setup-flow li::before { content: counter(setup); position: absolute; left: 0; top: 1px; color: var(--ink-soft); font-size: 12px; border: 1px solid var(--line-strong); width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; }
@@ -25,7 +24,7 @@
 .mcp-service-name { display: flex; align-items: center; gap: 14px; }
 .mcp-service-name > svg { color: var(--ink-soft); flex-shrink: 0; }
 .mcp-service-name strong { font-size: 14px; font-weight: 500; }
-.mcp-service-name span, .mcp-service-status small { display: block; color: var(--ink-soft); font-size: 12px; margin-top: 4px; }
+.mcp-service-status small { display: block; color: var(--ink-soft); font-size: 12px; margin-top: 4px; }
 .mcp-status { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; }
 .mcp-status::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--ink-soft); }
 .mcp-status-available::before { background: var(--success); }

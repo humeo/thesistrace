@@ -1,7 +1,6 @@
 import { ArrowClockwise, Info, ShieldCheck } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { checkConnection, loadConnections, revokeApp, type AuthorizedApp, type Connection } from "./api";
-import { CopyButton } from "./CopyButton";
 import { McpSetup } from "./McpSetup";
 import { scopeLabels } from "./setup";
 import { McpTools } from "./McpTools";
@@ -42,13 +41,11 @@ export function McpPage() {
   return <section className="page-section mcp-page" aria-labelledby="mcp-page-heading">
     <header className="mcp-page-heading"><h1 id="mcp-page-heading">MCP</h1><p>Use your QuantTrace research tools in the AI assistant you already work with.</p></header>
     <section className="mcp-server" aria-labelledby="mcp-connection-heading">
-      <div className="mcp-service"><div className="mcp-service-name"><img src="/quanttrace-logo.png" alt="" width={36} height={36} /><div><h2 id="mcp-connection-heading">QuantTrace MCP</h2><span>Research, results and daily tracking</span></div></div>
-        <div role="status" className="mcp-service-status"><span className={`mcp-status mcp-status-${status}`}>{status === "checking" ? "Checking…" : status === "available" ? "Available" : "Unavailable"}</span><small>{checkedAt ? `Checked ${new Date(checkedAt).toLocaleTimeString()}` : "Not checked yet"}</small></div>
-        <button type="button" disabled={status === "checking"} onClick={() => void check()}><ArrowClockwise size={15} />{status === "checking" ? "Checking…" : "Check connection"}</button>
+      <div className="mcp-service"><div className="mcp-service-name"><img src="/quanttrace-logo.png" alt="" width={36} height={36} /><div><h2 id="mcp-connection-heading">QuantTrace MCP</h2></div></div>
+        <div role="status" className="mcp-service-status"><span className={`mcp-status mcp-status-${status}`}>{status === "checking" ? "Checking…" : status === "available" ? "Service available" : "Service unavailable"}</span><small>{checkedAt ? `Checked ${new Date(checkedAt).toLocaleTimeString()}` : "Not checked yet"}</small></div>
+        <button type="button" disabled={status === "checking"} onClick={() => void check()}><ArrowClockwise size={15} />{status === "checking" ? "Checking…" : "Check service"}</button>
       </div>
-      {catalog ? <div className="mcp-endpoint"><span>Server URL</span><code>{catalog.server_url}</code><CopyButton text={catalog.server_url} label="Copy URL" /></div> : !catalogError ? <p role="status">Loading server details…</p> : null}
-      <p className="mcp-server-note">This checks the research service. Client access is shown under Authorized apps.</p>
-      {status === "unavailable" ? <p className="mcp-feedback" role="status">The connection could not be verified. Check again before reconnecting.</p> : null}
+      {status === "unavailable" ? <p className="mcp-feedback" role="status">The service could not be verified. Please check again.</p> : null}
       {catalogError ? <div className="mcp-feedback" role="alert">Server details and app access could not be refreshed. <button type="button" onClick={() => void load()}>Retry</button></div> : null}
     </section>
     {catalog ? <McpSetup endpoint={catalog.server_url} /> : null}

@@ -36,7 +36,7 @@ async function mount() { await act(async () => root.render(<StrictMode><McpPage 
 describe("MCP product page", () => {
   it("discovers real tools and copies English setup without granting access", async () => {
     await mount();
-    expect(host.textContent).toContain("Available");
+    expect(host.textContent).toContain("Service available");
     expect(host.textContent).toContain("1 tools");
     expect(host.textContent).not.toContain("Browse daily tracks");
     expect(host.textContent).not.toContain("Built into QuantTrace chat");
@@ -46,13 +46,18 @@ describe("MCP product page", () => {
     await click(button("Claude Code"));
     await click(button("Copy setup prompt"));
     expect(copied).toHaveBeenLastCalledWith(expect.stringContaining("Add QuantTrace MCP to Claude Code"));
+    await click(button("Other client"));
+    const manual = [...host.querySelectorAll("details")].find(element => element.querySelector("summary")?.textContent === "Add the server manually")!;
+    await click(manual.querySelector("summary")!);
+    await click(manual.querySelector<HTMLButtonElement>("button")!);
+    expect(copied).toHaveBeenLastCalledWith(endpoint);
     expect(requested.every(path => !path.includes("revoke") && !path.includes("consent"))).toBe(true);
   });
   it("does not erase authorizations when a service check fails", async () => {
     apps = [{ id: "00000000-0000-4000-8000-000000000001", name: "Codex", client_id: "codex-client", scopes: ["research:read"], authorized_at: "2026-09-05T00:00:00Z" }];
     await mount(); failCheck = true;
-    await click(button("Check connection"));
-    expect(host.textContent).toContain("Unavailable");
+    await click(button("Check service"));
+    expect(host.textContent).toContain("Service unavailable");
     expect(host.textContent).toContain("Tool set not verified");
     expect(host.textContent).toContain("Revoke access");
     expect(host.textContent).not.toContain("Live discovery description");

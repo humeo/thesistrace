@@ -1,13 +1,14 @@
 import {
   ChartLineUp, ClockCounterClockwise, Database, Flask, List, NotePencil,
-  Plug, ShieldCheck, SidebarSimple, X,
+  ShieldCheck, SidebarSimple, X, type IconProps,
 } from "@phosphor-icons/react";
 import {
   createContext, useContext, useEffect, useRef, useState,
-  type CSSProperties, type KeyboardEvent, type ReactNode,
+  type ComponentType, type CSSProperties, type KeyboardEvent, type ReactNode,
 } from "react";
 
 import { AccountMenu } from "../auth/AccountMenu";
+import { McpIcon } from "./McpIcon";
 import { SessionHistoryList } from "../chat/SessionHistoryList";
 import type { SessionHistoryController } from "../chat/useSessionHistory";
 import { handleWorkspaceNavigation, type WorkspaceNavigate } from "./navigation";
@@ -18,7 +19,7 @@ const resourceRoutes = [
   { path: "/research", label: "Research", icon: Flask },
   { path: "/research-runs", label: "Research Runs", icon: ChartLineUp },
   { path: "/daily-tracks", label: "Daily Tracks", icon: ClockCounterClockwise },
-  { path: "/connections/mcp", label: "MCP", icon: Plug },
+  { path: "/connections/mcp", label: "MCP", icon: McpIcon },
 ] as const;
 const operatorRoute = {
   activeRoot: "/operator", path: "/operator/researchers", label: "Operator", icon: ShieldCheck,
@@ -215,7 +216,7 @@ export function AppShell({
 function ResourceLink({ currentPath, navigate, resource }: {
   currentPath: string;
   navigate: WorkspaceNavigate;
-  resource: Readonly<{ icon: typeof Database; label: string; path: string; activeRoot?: string }>;
+  resource: Readonly<{ icon: ComponentType<IconProps>; label: string; path: string; activeRoot?: string }>;
 }) {
   const Icon = resource.icon;
   const isCurrent = isResourceCurrent(currentPath, resource);
