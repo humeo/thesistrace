@@ -7,8 +7,12 @@ from dataclasses import dataclass
 from fractions import Fraction
 from typing import Literal
 
-ParameterRule = Literal["numeric", "numeric_series", "window", "boolean", "value"]
-ResultRule = Literal["same_as_first", "numeric_series", "conditional"]
+from thesistrace.research_kernel.common_inputs import COMMON_INPUT_WORK, COMMON_INPUTS
+
+ParameterRule = Literal[
+    "numeric", "numeric_series", "window", "boolean", "value", "industry", "temporal_series"
+]
+ResultRule = Literal["same_as_first", "numeric_series", "conditional", "common_series"]
 LookbackRule = Literal["identity", "historical", "rolling"]
 type NumericSeries = tuple[float | None, ...]
 type NumericValue = float | None | NumericSeries
@@ -311,7 +315,7 @@ def _rolling_extreme(arguments: tuple[BuiltinArgument, ...], *, minimum: bool) -
 
 _VALUE = (BuiltinParameterDefinition("value", "numeric"),)
 _SERIES_WINDOW = (
-    BuiltinParameterDefinition("series", "numeric_series"),
+    BuiltinParameterDefinition("series", "temporal_series"),
     BuiltinParameterDefinition("window", "window"),
 )
 _ONE_STEP_WORK = BuiltinWorkDefinition(base_operations=1)
@@ -336,7 +340,39 @@ def _if_else(arguments: tuple[BuiltinArgument, ...]) -> NumericValue:
     return tuple(choose(*items) for items in zip(*expanded, strict=True))
 
 
+def _common_context_required(_arguments: tuple[BuiltinArgument, ...]) -> NumericValue:
+    raise TypeError("Common input requires governed market context")
+
+
 BUILTIN_DEFINITIONS = (
+    *(
+        BuiltinDefinition(
+            identifier=identifier,
+            parameters=(BuiltinParameterDefinition("sw2021_l1", "industry"),) if industry else (),
+            result_rule="common_series",
+            description=(
+                "Within the selected research Universe, "
+                + ("restricted to the specified SW2021 L1 historical members: " if industry else "")
+                + (
+                    "equal-weight one-session adjusted Close return."
+                    if metric == "equal_weight_return"
+                    else "fraction of valid members with positive adjusted Close return."
+                )
+                + " This is not an official index."
+            ),
+            examples=(f"if_else({identifier}({801010 if industry else ''}) > 0, close, -close)",),
+            lookback_rule="identity",
+            missing_value_behavior=(
+                "Two positive finite Closes required; no valid members means missing."
+            ),
+            numeric_behavior=(
+                "Historical Universe members; zero returns count in the breadth denominator."
+            ),
+            work=BuiltinWorkDefinition(COMMON_INPUT_WORK),
+            evaluator=_common_context_required,
+        )
+        for identifier, (metric, industry) in COMMON_INPUTS.items()
+    ),
     BuiltinDefinition(
         identifier="if_else",
         parameters=(
@@ -416,7 +452,7 @@ BUILTIN_DEFINITIONS = (
     BuiltinDefinition(
         identifier="lag",
         parameters=_SERIES_WINDOW,
-        result_rule="numeric_series",
+        result_rule="same_as_first",
         description="Value from a prior Research Session.",
         examples=("lag(close, 1)",),
         lookback_rule="historical",
@@ -428,7 +464,7 @@ BUILTIN_DEFINITIONS = (
     BuiltinDefinition(
         identifier="delta",
         parameters=_SERIES_WINDOW,
-        result_rule="numeric_series",
+        result_rule="same_as_first",
         description="Difference from a prior Research Session.",
         examples=("delta(close, 5)",),
         lookback_rule="historical",
@@ -440,7 +476,7 @@ BUILTIN_DEFINITIONS = (
     BuiltinDefinition(
         identifier="pct_change",
         parameters=_SERIES_WINDOW,
-        result_rule="numeric_series",
+        result_rule="same_as_first",
         description="Fractional change from a prior Research Session.",
         examples=("pct_change(close, 20)",),
         lookback_rule="historical",
@@ -452,7 +488,7 @@ BUILTIN_DEFINITIONS = (
     BuiltinDefinition(
         identifier="ts_mean",
         parameters=_SERIES_WINDOW,
-        result_rule="numeric_series",
+        result_rule="same_as_first",
         description="Complete-window rolling mean.",
         examples=("ts_mean(close, 20)",),
         lookback_rule="rolling",
@@ -466,7 +502,7 @@ BUILTIN_DEFINITIONS = (
     BuiltinDefinition(
         identifier="ts_sum",
         parameters=_SERIES_WINDOW,
-        result_rule="numeric_series",
+        result_rule="same_as_first",
         description="Complete-window rolling sum.",
         examples=("ts_sum(volume, 20)",),
         lookback_rule="rolling",
@@ -480,7 +516,7 @@ BUILTIN_DEFINITIONS = (
     BuiltinDefinition(
         identifier="ts_std",
         parameters=_SERIES_WINDOW,
-        result_rule="numeric_series",
+        result_rule="same_as_first",
         description="Complete-window population standard deviation.",
         examples=("ts_std(close, 20)",),
         lookback_rule="rolling",
@@ -494,7 +530,7 @@ BUILTIN_DEFINITIONS = (
     BuiltinDefinition(
         identifier="ts_min",
         parameters=_SERIES_WINDOW,
-        result_rule="numeric_series",
+        result_rule="same_as_first",
         description="Complete-window rolling minimum.",
         examples=("ts_min(close, 20)",),
         lookback_rule="rolling",
@@ -508,7 +544,7 @@ BUILTIN_DEFINITIONS = (
     BuiltinDefinition(
         identifier="ts_max",
         parameters=_SERIES_WINDOW,
-        result_rule="numeric_series",
+        result_rule="same_as_first",
         description="Complete-window rolling maximum.",
         examples=("ts_max(close, 20)",),
         lookback_rule="rolling",

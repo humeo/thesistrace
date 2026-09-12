@@ -10,7 +10,7 @@ function Fixture() {
   return <>
     <h2 id="alpha-formula-title">Alpha formula</h2>
     <div style={{ height: 240 }}><AlphaFormulaEditor
-      catalog={{ fields: [], builtins: [] }} diagnostics={[]}
+      catalog={{ fields: [], industries: [{ code: 801010, name: "农林牧渔" }], builtins: [] }} diagnostics={[]}
       formula={formula} selection={selection}
       onChange={(source, nextSelection) => {
         setFormula(source); setSelection(nextSelection);

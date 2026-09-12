@@ -10,7 +10,7 @@ import pytest
 from core_runtime import create_initialized_test_app as create_app
 from core_runtime import drop_product_schemas, isolated_core_settings
 from fastapi.testclient import TestClient
-from test_core_research_batch_admission import _factor_command, _publish_current_data
+from test_core_research_batch_admission import SESSIONS, _factor_command, _publish_current_data
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.data import DatasetLifecycle
@@ -54,6 +54,10 @@ class _TransportFailureExecutor:
     "formulas",
     [
         ("close", "rank(close)"),
+        pytest.param(
+            ("close * universe_return()", "close * universe_advancing_fraction()"),
+            id="common_input",
+        ),
         ("if_else(close > 0, close, -close)", "rank(if_else(close > 0, close, -close))"),
     ],
 )
@@ -66,7 +70,7 @@ def test_factor_batch_shares_preparation_preserves_frozen_generation_and_matches
     events: list[dict[str, object]] = []
 
     with TestClient(create_app(settings)) as client:
-        frozen_generation = _publish_current_data(settings)
+        frozen_generation = _publish_current_data(settings, sessions=("2026-07-31", *SESSIONS))
         runtime = client.app.state.core_runtime
         batch = client.post(
             "/api/research-batches",
@@ -78,6 +82,7 @@ def test_factor_batch_shares_preparation_preserves_frozen_generation_and_matches
                 ],
             },
         ).json()
+        assert "items" in batch, batch
         ordinary = [
             client.post(
                 "/api/research-runs",
@@ -128,6 +133,7 @@ def test_factor_batch_shares_preparation_preserves_frozen_generation_and_matches
             replacement_generation = _publish_current_data(
                 settings,
                 operation_id="factor-batch-replacement-head",
+                sessions=("2026-07-31", *SESSIONS),
                 expected_generation=frozen_generation,
                 prepared_at=datetime(2026, 8, 11, 13, tzinfo=UTC),
             )
@@ -183,6 +189,14 @@ def test_factor_batch_shares_preparation_preserves_frozen_generation_and_matches
             assert canonical_json_bytes(
                 _stored_factor_summary(runtime, batch_stored)
             ) == canonical_json_bytes(_stored_factor_summary(runtime, ordinary_stored))
+            if "universe_" in formulas[0]:
+                def common_values(stored):
+                    return read_result_bundle(runtime.publication.read(PublishedRef(
+                        manifest_sha256=stored["result_manifest_sha256"], kind="research.result",
+                        provenance=stored["result_provenance"],
+                    )), research_kind="factor_evaluation")["common_input_observations"]
+                assert common_values(batch_stored)
+                assert common_values(batch_stored) == common_values(ordinary_stored)
         assert _batch_pin_state(settings, batch["id"]) == (0, 1)
 
     prepared = [

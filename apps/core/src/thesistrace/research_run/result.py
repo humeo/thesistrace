@@ -25,6 +25,7 @@ from thesistrace.publication.serialization import (
     ParquetWriterContract,
     canonicalize_parquet_rows,
 )
+from thesistrace.research_kernel.common_observations import CommonInputObservation
 from thesistrace.research_kernel.kernel_run import RunOutput
 from thesistrace.research_kernel.numeric import canonical_decimal
 from thesistrace.research_kernel.serialization import canonical_checksum_chain
@@ -169,9 +170,7 @@ def result_publication_payloads(
         or any(not isinstance(row, Mapping) for row in observations)
     ):
         raise ResearchResultError("Strategy Daily Observations are invalid")
-    terminal_state, positions = _split_terminal_strategy_state(
-        result["terminal_strategy_state"]
-    )
+    terminal_state, positions = _split_terminal_strategy_state(result["terminal_strategy_state"])
     payloads: dict[str, JsonPayload | ParquetRowsPayload] = {
         "strategy_summary": JsonPayload(copy.deepcopy(result["strategy_summary"])),
         "terminal_strategy_state": JsonPayload(terminal_state),
@@ -212,6 +211,7 @@ def result_publication_payloads_from_staged(
     partitions: Sequence[tuple[StagedPayload, int, str, str]],
     *,
     research_kind: str,
+    common_partitions: Sequence[tuple[StagedPayload, int, str, str]] = (),
 ) -> dict[str, JsonPayload | ParquetRowsPayload | StagedPayload]:
     if research_kind == "factor_evaluation":
         if set(final_values) != FACTOR_RESULT_VALUE_NAMES or partitions:
@@ -220,7 +220,10 @@ def result_publication_payloads_from_staged(
             FactorSummaryValue.model_validate(final_values["factor_summary"])
         except ValidationError as error:
             raise ResearchResultError("Factor Evaluation Result is invalid") from error
-        return {"factor_summary": JsonPayload(copy.deepcopy(final_values["factor_summary"]))}
+        return {
+            "factor_summary": JsonPayload(copy.deepcopy(final_values["factor_summary"])),
+            **common_input_publication_payloads(common_partitions),
+        }
     if research_kind != "strategy_backtest" or set(final_values) != {
         "strategy_summary",
         "terminal_strategy_state",
@@ -277,6 +280,7 @@ def result_publication_payloads_from_staged(
         }
     )
     payloads.update(_terminal_position_payloads(positions))
+    payloads.update(common_input_publication_payloads(common_partitions))
     return payloads
 
 
@@ -288,10 +292,12 @@ def read_result_bundle(
     if bundle.kind != "research.result":
         raise ResearchResultError("Result Bundle kind is invalid")
     if research_kind == "factor_evaluation":
-        if set(bundle.payloads) != FACTOR_RESULT_VALUE_NAMES:
+        if set(bundle.payloads) != FACTOR_RESULT_VALUE_NAMES | _common_payload_names(bundle):
             raise ResearchResultError("Factor Evaluation Result must contain only Factor Summary")
         result = {"factor_summary": _read_json_value(bundle, "factor_summary")}
         _validate_result_values(result, research_kind=research_kind)
+        if "common_input_observations" in bundle.payloads:
+            result["common_input_observations"] = _read_common_result_observations(bundle)
         return result
     if research_kind != "strategy_backtest" or not STRATEGY_RESULT_VALUE_NAMES <= set(
         bundle.payloads
@@ -307,6 +313,8 @@ def read_result_bundle(
     }
     _require_exact_strategy_payload_names(bundle)
     _validate_result_values(result, research_kind=research_kind)
+    if "common_input_observations" in bundle.payloads:
+        result["common_input_observations"] = _read_common_result_observations(bundle)
     return result
 
 
@@ -316,9 +324,16 @@ def read_semantic_result_section(
     *,
     research_kind: str,
     section: str,
+    has_common_inputs: bool = False,
     after: str | None = None,
     limit: int = 20,
 ) -> SemanticResultSectionRead:
+    if section == "common_input_observations":
+        if not has_common_inputs:
+            return SemanticResultSectionRead(value=[])
+        return read_common_input_observation_page(
+            publication, published_ref, after=after, limit=limit
+        )
     if section == "provenance":
         bundle = publication.read_selected(published_ref, frozenset())
         _require_result_bundle_identity(bundle)
@@ -353,10 +368,7 @@ def read_semantic_result_section(
         _require_result_bundle_identity(bundle)
         terminal_state = _read_terminal_strategy_state(bundle)
         return SemanticResultSectionRead(
-            value={
-                name: terminal_state[name]
-                for name in PUBLIC_TERMINAL_STATE_KEYS
-            }
+            value={name: terminal_state[name] for name in PUBLIC_TERMINAL_STATE_KEYS}
         )
     if section == "strategy_observations":
         descriptor_bundle = publication.read_selected(
@@ -382,9 +394,7 @@ def read_semantic_result_section(
         selected = remaining[:limit]
         return SemanticResultSectionRead(
             value=selected,
-            next_after=(
-                str(selected[-1]["session"]) if len(remaining) > limit else None
-            ),
+            next_after=(str(selected[-1]["session"]) if len(remaining) > limit else None),
         )
     if section == "terminal_positions":
         descriptor_bundle = publication.read_selected(
@@ -406,17 +416,11 @@ def read_semantic_result_section(
             rows = _read_selected_terminal_positions(page_bundle, descriptor, names)
         else:
             rows = []
-        remaining = [
-            row
-            for row in rows
-            if after is None or str(row["instrument_id"]) > after
-        ]
+        remaining = [row for row in rows if after is None or str(row["instrument_id"]) > after]
         selected = remaining[:limit]
         return SemanticResultSectionRead(
             value=selected,
-            next_after=(
-                str(selected[-1]["instrument_id"]) if len(remaining) > limit else None
-            ),
+            next_after=(str(selected[-1]["instrument_id"]) if len(remaining) > limit else None),
         )
     raise ResearchResultError("ResearchRun Result section is unsupported")
 
@@ -572,9 +576,7 @@ def _strategy_summary(
         "alpha_checksum": str(strategy["alpha_checksum"]),
         "entry_session": entry_session,
         "initial_cash_cny": str(strategy["initial_cash_cny"]),
-        "source_checksum": canonical_checksum_chain(
-            _strategy_daily_observations(strategy)
-        ),
+        "source_checksum": canonical_checksum_chain(_strategy_daily_observations(strategy)),
         "metrics": projected,
     }
 
@@ -935,7 +937,7 @@ def _require_exact_strategy_payload_names(bundle: VerifiedBundle) -> None:
     observation_partitions = observation_descriptor.get("partitions")
     if not isinstance(observation_partitions, list):
         raise ResearchResultError("Strategy Daily Observations partitions are invalid")
-    expected = set(STRATEGY_RESULT_BASE_PAYLOAD_NAMES)
+    expected = set(STRATEGY_RESULT_BASE_PAYLOAD_NAMES) | _common_payload_names(bundle)
     expected.update(str(item["name"]) for item in observation_partitions)
     expected.update(str(item["name"]) for item in position_descriptor["partitions"])
     if set(bundle.payloads) != expected:
@@ -963,3 +965,254 @@ def _validate_result_values(result: Mapping[str, object], *, research_kind: str)
         raise ResearchResultError(
             "Result does not match its durable schema: invalid durable type"
         ) from error
+
+
+_COMMON_EXCLUSION_REASONS = (
+    "insufficient_history",
+    "invalid_current_close",
+    "invalid_previous_close",
+    "non_finite_return",
+)
+COMMON_INPUT_OBSERVATIONS_CONTRACT = ParquetWriterContract(
+    name="research-result-common-input-observations",
+    version=1,
+    schema=pa.schema(
+        [
+            pa.field("session", pa.string(), nullable=False),
+            pa.field("identifier", pa.string(), nullable=False),
+            pa.field("industry_code", pa.string(), nullable=False),
+            pa.field("value", pa.float64(), nullable=True),
+            pa.field("member_count", pa.int64(), nullable=False),
+            pa.field("valid_count", pa.int64(), nullable=False),
+            *(pa.field(reason, pa.int64(), nullable=False) for reason in _COMMON_EXCLUSION_REASONS),
+        ]
+    ),
+    sort_keys=("session", "identifier", "industry_code"),
+)
+
+
+def common_input_observation_payload(rows: Sequence[Mapping[str, object]]) -> ParquetRowsPayload:
+    result = []
+    identities = set()
+    for row in rows:
+        try:
+            value = CommonInputObservation.model_validate(row)
+        except ValidationError as error:
+            raise ResearchResultError("Common observation evidence is invalid") from error
+        identity = (value.session, value.identifier, value.industry_code)
+        if identity in identities:
+            raise ResearchResultError("Common observation identity is duplicated")
+        identities.add(identity)
+        result.append(
+            {
+                **value.model_dump(mode="json", exclude={"exclusions"}),
+                # Empty code is the physical encoding of the whole research Universe.
+                "industry_code": value.industry_code or "",
+                **{reason: value.exclusions.get(reason, 0) for reason in _COMMON_EXCLUSION_REASONS},
+            }
+        )
+    return ParquetRowsPayload(rows=tuple(result), contract=COMMON_INPUT_OBSERVATIONS_CONTRACT)
+
+
+def read_common_input_observation_partition(data: bytes) -> list[dict[str, object]]:
+    try:
+        table = pq.read_table(pa.BufferReader(data))
+    except ArrowException as error:
+        raise ResearchResultError("Common observation partition is unreadable") from error
+    if not table.schema.equals(COMMON_INPUT_OBSERVATIONS_CONTRACT.schema, check_metadata=False):
+        raise ResearchResultError("Common observation partition schema is invalid")
+    if any(table[field.name].null_count for field in table.schema if not field.nullable):
+        raise ResearchResultError("Common observation partition has missing required values")
+    result = []
+    prior_identity: tuple[str, str, str] | None = None
+    for row in table.to_pylist():
+        row["industry_code"] = row["industry_code"] or None
+        exclusions = {reason: row.pop(reason) for reason in _COMMON_EXCLUSION_REASONS}
+        try:
+            value = CommonInputObservation.model_validate(
+                {
+                    **row,
+                    "exclusions": {reason: count for reason, count in exclusions.items() if count},
+                }
+            )
+        except ValidationError as error:
+            raise ResearchResultError("Common observation partition evidence is invalid") from error
+        identity = (value.session, value.identifier, value.industry_code or "")
+        if prior_identity is not None and identity <= prior_identity:
+            raise ResearchResultError("Common observation partition order is invalid")
+        prior_identity = identity
+        result.append(value.model_dump(mode="json"))
+    return result
+
+
+def validate_common_chunk_observations(
+    rows: Sequence[Mapping[str, object]],
+    *,
+    expression: Mapping[str, object],
+    sessions: tuple[str, ...],
+) -> None:
+    from thesistrace.research_kernel.common_inputs import common_input_references
+
+    if sessions != tuple(sorted(set(sessions))):
+        raise ResearchResultError("Common observation Sessions are invalid")
+    common_input_observation_payload(rows)
+    expected = {
+        (session, identifier, code)
+        for session in sessions
+        for identifier, code in common_input_references(expression)
+    }
+    actual = {(row["session"], row["identifier"], row["industry_code"]) for row in rows}
+    if actual != expected:
+        raise ResearchResultError("Common observations do not cover the frozen inputs and Sessions")
+
+
+COMMON_INPUT_PARTITION_PREFIX = "common_input_observations.part-"
+
+
+def common_input_publication_payloads(
+    partitions: Sequence[tuple[StagedPayload, int, str, str]],
+) -> dict[str, JsonPayload | StagedPayload]:
+    if not partitions:
+        return {}
+    payloads: dict[str, JsonPayload | StagedPayload] = {}
+    descriptors = []
+    prior: str | None = None
+    for index, (payload, count, first, last) in enumerate(partitions):
+        if (
+            type(count) is not int
+            or count < 1
+            or first > last
+            or (prior is not None and first <= prior)
+            or payload.media_type != "application/vnd.apache.parquet"
+            or payload.serialization
+            != {
+                "format": "canonical-parquet",
+                "writer_contract": COMMON_INPUT_OBSERVATIONS_CONTRACT.descriptor(),
+            }
+        ):
+            raise ResearchResultError("Staged common observation partition is invalid")
+        name = f"{COMMON_INPUT_PARTITION_PREFIX}{index:06d}"
+        payloads[name] = payload
+        descriptors.append(
+            {"name": name, "row_count": count, "first_session": first, "last_session": last}
+        )
+        prior = last
+    payloads["common_input_observations"] = JsonPayload(
+        {
+            "format": "partitioned-parquet",
+            "writer_contract": COMMON_INPUT_OBSERVATIONS_CONTRACT.descriptor(),
+            "partitions": descriptors,
+        }
+    )
+    return payloads
+
+
+def _common_partition_descriptors(bundle: VerifiedBundle) -> list[dict[str, object]]:
+    if "common_input_observations" not in bundle.payloads:
+        return []
+    descriptor = _read_json_value(bundle, "common_input_observations")
+    if (
+        not isinstance(descriptor, dict)
+        or set(descriptor) != {"format", "writer_contract", "partitions"}
+        or descriptor["format"] != "partitioned-parquet"
+        or descriptor["writer_contract"] != COMMON_INPUT_OBSERVATIONS_CONTRACT.descriptor()
+        or not isinstance(descriptor["partitions"], list)
+        or not descriptor["partitions"]
+    ):
+        raise ResearchResultError("Common observation descriptor is invalid")
+    prior = None
+    for index, part in enumerate(descriptor["partitions"]):
+        if (
+            not isinstance(part, dict)
+            or set(part) != {"name", "row_count", "first_session", "last_session"}
+            or part["name"] != f"{COMMON_INPUT_PARTITION_PREFIX}{index:06d}"
+            or type(part["row_count"]) is not int
+            or part["row_count"] < 1
+            or not isinstance(part["first_session"], str)
+            or not isinstance(part["last_session"], str)
+            or part["first_session"] > part["last_session"]
+            or (prior is not None and part["first_session"] <= prior)
+        ):
+            raise ResearchResultError("Common observation partition descriptor is invalid")
+        prior = part["last_session"]
+    return descriptor["partitions"]
+
+
+def _common_payload_names(bundle: VerifiedBundle) -> set[str]:
+    parts = _common_partition_descriptors(bundle)
+    return {"common_input_observations", *(part["name"] for part in parts)} if parts else set()
+
+
+def _read_common_result_observations(bundle: VerifiedBundle) -> list[dict[str, object]]:
+    return _read_common_observation_partitions(bundle, _common_partition_descriptors(bundle))
+
+
+def _read_common_observation_partitions(
+    bundle: VerifiedBundle, parts: Sequence[Mapping[str, object]]
+) -> list[dict[str, object]]:
+    result = []
+    for part in parts:
+        payload = bundle.payloads.get(part["name"])
+        if (
+            payload is None
+            or payload.media_type != "application/vnd.apache.parquet"
+            or payload.serialization
+            != {
+                "format": "canonical-parquet",
+                "writer_contract": COMMON_INPUT_OBSERVATIONS_CONTRACT.descriptor(),
+            }
+        ):
+            raise ResearchResultError("Common observation partition encoding is invalid")
+        rows = read_common_input_observation_partition(payload.content)
+        if (
+            len(rows) != part["row_count"]
+            or not rows
+            or rows[0]["session"] != part["first_session"]
+            or rows[-1]["session"] != part["last_session"]
+        ):
+            raise ResearchResultError("Common observation partition bounds are invalid")
+        result.extend(rows)
+    return result
+
+
+def read_common_input_observation_page(
+    publication: Publication,
+    published_ref: PublishedRef,
+    *,
+    after: str | None = None,
+    limit: int = 20,
+) -> SemanticResultSectionRead:
+    """Read a row page without dropping metrics sharing the cursor's Session."""
+    if type(limit) is not int or limit < 1:
+        raise ResearchResultError("Common observation page limit must be positive")
+    boundary = None if after is None else tuple(after.split("|"))
+    if boundary is not None and (len(boundary) != 3 or not boundary[0] or not boundary[1]):
+        raise ResearchResultError("Common observation cursor is invalid")
+    descriptor_bundle = publication.read_selected(
+        published_ref, frozenset({"common_input_observations"})
+    )
+    _require_result_bundle_identity(descriptor_bundle)
+    parts = _common_partition_descriptors(descriptor_bundle)
+    remaining: list[dict[str, object]] = []
+    for part in parts:
+        if boundary is not None and str(part["last_session"]) < boundary[0]:
+            continue
+        bundle = publication.read_selected(published_ref, frozenset({str(part["name"])}))
+        _require_result_bundle_identity(bundle)
+        rows = _read_common_observation_partitions(bundle, [part])
+        remaining.extend(
+            row for row in rows if boundary is None or _common_observation_order(row) > boundary
+        )
+        if len(remaining) > limit:
+            break
+    selected = remaining[:limit]
+    return SemanticResultSectionRead(
+        value=selected,
+        next_after=(
+            "|".join(_common_observation_order(selected[-1])) if len(remaining) > limit else None
+        ),
+    )
+
+
+def _common_observation_order(row: Mapping[str, object]) -> tuple[str, str, str]:
+    return str(row["session"]), str(row["identifier"]), str(row["industry_code"] or "")

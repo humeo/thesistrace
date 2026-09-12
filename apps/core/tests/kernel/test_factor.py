@@ -93,6 +93,7 @@ def test_columnar_factor_days_are_binary64_equal_to_row_reference() -> None:
         sessions=sessions,
         instruments=instruments,
         fields={},
+        historical_universe_members={session: instrument_ids for session in sessions},
         universe_members={session: instrument_ids for session in sessions},
         industries={},
         execution_prices=prices,
@@ -162,6 +163,7 @@ def test_columnar_factor_days_preserve_multi_horizon_ties_and_order() -> None:
         sessions=sessions,
         instruments=instruments,
         fields={},
+        historical_universe_members={session: instrument_ids for session in sessions},
         universe_members={session: instrument_ids for session in sessions},
         industries={},
         execution_prices=prices,
@@ -208,13 +210,9 @@ def test_columnar_factor_days_preserve_multi_horizon_ties_and_order() -> None:
 
 
 def test_vectorized_pearson_is_binary64_equal_to_ordered_fsum_reference() -> None:
-    left = [
-        ((index % 17) - 8) * (1e-8 if index % 2 else 1e8) + index / 37
-        for index in range(3000)
-    ]
+    left = [((index % 17) - 8) * (1e-8 if index % 2 else 1e8) + index / 37 for index in range(3000)]
     right = [
-        ((index % 23) - 11) * (1e-7 if index % 3 else 1e7) - index / 41
-        for index in range(3000)
+        ((index % 23) - 11) * (1e-7 if index % 3 else 1e7) - index / 41 for index in range(3000)
     ]
     left_mean = math.fsum(left) / len(left)
     right_mean = math.fsum(right) / len(right)
@@ -248,13 +246,17 @@ def test_vectorized_pearson_is_binary64_equal_to_ordered_fsum_reference() -> Non
     ],
 )
 def test_columnar_labels_preserve_entry_exit_and_censoring_rules(
-    horizon, entry, exit_open, state, listed_to, expected, error,
+    horizon,
+    entry,
+    exit_open,
+    state,
+    listed_to,
+    expected,
+    error,
 ) -> None:
     sessions = tuple(f"s{index:02d}" for index in range(23))
     instrument = "equity:000001.SH"
-    prices = {
-        (session, instrument): ExecutionPrice("10", "10") for session in sessions
-    }
+    prices = {(session, instrument): ExecutionPrice("10", "10") for session in sessions}
     for session, price in ((sessions[1], entry), (sessions[1 + horizon], exit_open)):
         if price is None:
             del prices[session, instrument]
@@ -267,21 +269,25 @@ def test_columnar_labels_preserve_entry_exit_and_censoring_rules(
         execution_prices=prices,
         trading_states={(session, instrument): state for session in sessions},
     )
-    matrix = {"sessions": [
-        {"session": session, "values": [{"instrument_id": instrument, "value": 1.0}]}
-        for session in sessions
-    ]}
+    matrix = {
+        "sessions": [
+            {"session": session, "values": [{"instrument_id": instrument, "value": 1.0}]}
+            for session in sessions
+        ]
+    }
     with np.errstate(all="ignore"):
         labels = prepare_columnar_forward_labels(data, cancellation_check=lambda: None)
     if error:
         with pytest.raises(FactorDataError, match=error):
             labels.factor_days_by_horizon(
-                matrix, signal_sessions_by_horizon={horizon: sessions[:1]},
+                matrix,
+                signal_sessions_by_horizon={horizon: sessions[:1]},
                 cancellation_check=lambda: None,
             )
     else:
         days = labels.factor_days_by_horizon(
-            matrix, signal_sessions_by_horizon={horizon: sessions[:1]},
+            matrix,
+            signal_sessions_by_horizon={horizon: sessions[:1]},
             cancellation_check=lambda: None,
         )[str(horizon)]
         assert days[0]["sample_count"] == (0 if expected is None else 1)
@@ -289,16 +295,22 @@ def test_columnar_labels_preserve_entry_exit_and_censoring_rules(
             assert labels.labels_by_horizon[horizon][0, 0] == pytest.approx(expected)
     # Invalid coordinates only fail when selected, and never before an exit matures.
     censored = labels.factor_days_by_horizon(
-        matrix, signal_sessions_by_horizon={horizon: sessions[-horizon - 1:]},
+        matrix,
+        signal_sessions_by_horizon={horizon: sessions[-horizon - 1 :]},
         cancellation_check=lambda: None,
     )[str(horizon)]
     assert all(day["sample_count"] == 0 for day in censored)
 
 
-@pytest.mark.parametrize(("state", "listed_to"), [
-    ("normal", "s2"), ("full_session_suspension", ""),
-    ("data_unavailable", ""), ("normal", ""),
-])
+@pytest.mark.parametrize(
+    ("state", "listed_to"),
+    [
+        ("normal", "s2"),
+        ("full_session_suspension", ""),
+        ("data_unavailable", ""),
+        ("normal", ""),
+    ],
+)
 def test_invalid_label_entry_is_rejected_even_when_exit_is_missing(state, listed_to) -> None:
     sessions = ("s0", "s1", "s2")
     instrument = "equity:000001.SH"
@@ -309,15 +321,20 @@ def test_invalid_label_entry_is_rejected_even_when_exit_is_missing(state, listed
         execution_prices={("s1", instrument): ExecutionPrice("0", "0")},
         trading_states={("s2", instrument): state},
     )
-    matrix = {"checksum": "a" * 64, "sessions": [
-        {"session": "s0", "values": [{"instrument_id": instrument, "value": 1.0}]},
-    ]}
+    matrix = {
+        "checksum": "a" * 64,
+        "sessions": [
+            {"session": "s0", "values": [{"instrument_id": instrument, "value": 1.0}]},
+        ],
+    }
     with pytest.raises(FactorDataError, match="invalid Label entry Open"):
         build_forward_labels(data, matrix, signal_sessions=["s0"], horizons=(1,))
     prepared = prepare_columnar_forward_labels(data, cancellation_check=lambda: None)
     with pytest.raises(FactorDataError, match="invalid Label entry Open"):
         prepared.factor_days_by_horizon(
-            matrix, signal_sessions_by_horizon={1: ["s0"]}, cancellation_check=lambda: None,
+            matrix,
+            signal_sessions_by_horizon={1: ["s0"]},
+            cancellation_check=lambda: None,
         )
 
 
@@ -417,6 +434,9 @@ def test_labels_distinguish_terminal_delisting_from_suspended_exit() -> None:
             "equity:Y.SH": InstrumentProfile(board="main", listed_to=""),
         },
         fields={},
+        historical_universe_members={
+            session: ("equity:X.SH", "equity:Y.SH") for session in sessions
+        },
         universe_members={session: ("equity:X.SH", "equity:Y.SH") for session in sessions},
         industries={},
         execution_prices={
@@ -454,6 +474,7 @@ def test_labels_report_data_unavailable_without_failing_the_run() -> None:
         sessions=tuple(sessions),
         instruments={instrument_id: InstrumentProfile(board="main", listed_to="")},
         fields={},
+        historical_universe_members={session: (instrument_id,) for session in sessions},
         universe_members={session: (instrument_id,) for session in sessions},
         industries={},
         execution_prices={},
@@ -492,6 +513,9 @@ def test_unexplained_label_open_is_a_hard_data_failure() -> None:
                 sessions=tuple(canonical["research_calendar"]),
                 instruments={"equity:X.SH": InstrumentProfile(board="main", listed_to="")},
                 fields={},
+                historical_universe_members={
+                    session: ("equity:X.SH",) for session in canonical["research_calendar"]
+                },
                 universe_members={
                     session: ("equity:X.SH",) for session in canonical["research_calendar"]
                 },

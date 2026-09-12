@@ -41,6 +41,10 @@ def test_catalog_composes_only_capable_fields_and_public_builtins() -> None:
         if field.alpha is not None
     ]
     assert [builtin["identifier"] for builtin in catalog["builtins"]] == [
+        "universe_return",
+        "universe_advancing_fraction",
+        "industry_return",
+        "industry_advancing_fraction",
         "if_else",
         "abs",
         "log",
@@ -314,7 +318,11 @@ def test_builtin_evaluators_strictly_propagate_non_finite_values() -> None:
     assert builtins["lag"].evaluator((invalid, 1)) == (None, None, None, None)
     with pytest.raises(TypeError, match="complete cross-section"):
         builtins["rank"].evaluator((invalid,))
-    for builtin in (item for name, item in builtins.items() if name != "rank"):
+    for builtin in (
+        item
+        for name, item in builtins.items()
+        if name != "rank" and item.result_rule != "common_series"
+    ):
         arguments = (
             (invalid, invalid, invalid)
             if builtin.identifier == "if_else"
@@ -510,7 +518,7 @@ def test_relevant_diagnostics_include_typed_expected_and_actual_details() -> Non
     assert value_type.details is not None
     assert value_type.details.model_dump(mode="json") == {
         "kind": "value_type",
-        "expected": "numeric_series",
+        "expected": ["numeric_series", "common_numeric_series"],
         "actual": "number",
     }
     assert window.details is not None

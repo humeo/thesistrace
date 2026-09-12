@@ -10,6 +10,8 @@ from pathlib import Path
 from time import monotonic
 
 from thesistrace.data import GenerationStoreError, MountedGenerationStore
+from thesistrace.research_kernel.common_inputs import requires_common_industry
+from thesistrace.research_kernel.common_observations import common_input_observation_rows
 from thesistrace.research_kernel.factor import prepare_columnar_forward_labels
 from thesistrace.research_kernel.kernel_run import (
     KernelRunError,
@@ -501,6 +503,7 @@ def _calculate_chunks(
                 "completed_research_sessions": resume_from.completed_research_sessions,
                 "continuation": continuation,
                 "strategy_daily_observations": [],
+                "common_input_observations": [],
                 "final_values": dict(resume_from.final_values),
                 "final": True,
                 "reused_checkpoint": True,
@@ -529,6 +532,7 @@ def _calculate_chunks(
         )
         final_chunk = chunk.ordinal == len(plan.chunks)
         observations: tuple[dict[str, object], ...] = ()
+        common_observations: list[dict[str, object]] = []
         final_values: dict[str, object] | None = None
         if research_sessions:
             fact_instrument_ids = _continuation_instrument_ids(continuation)
@@ -549,6 +553,7 @@ def _calculate_chunks(
                 sessions=context_sessions,
                 universe_name=immutable_input.universe,
                 neutralization=immutable_input.neutralization,
+                require_industry=requires_common_industry(immutable_input.alpha_expression),
                 field_bindings=immutable_input.field_bindings,
                 fact_instrument_ids=fact_instrument_ids,
             )
@@ -591,6 +596,11 @@ def _calculate_chunks(
             }
             continuation = calculation.continuation
             observations = calculation.strategy_daily_observations
+            if calculation.common_input_sessions:
+                common_observations = common_input_observation_rows(
+                    {"sessions": list(calculation.common_input_sessions)},
+                    sessions=research_sessions,
+                )
             final_values = calculation.final_values
             del calculation, run_input, research_data
         # Pure warmup chunks advance progress only. The first research chunk
@@ -615,6 +625,7 @@ def _calculate_chunks(
                 ),
                 "continuation": continuation,
                 "strategy_daily_observations": list(observations),
+                "common_input_observations": common_observations,
                 "final_values": final_values,
                 "final": final_chunk,
                 "reused_checkpoint": False,
@@ -817,6 +828,7 @@ def _chunk_from_response(
         "completed_research_sessions",
         "continuation",
         "strategy_daily_observations",
+        "common_input_observations",
         "final_values",
         "final",
         "reused_checkpoint",

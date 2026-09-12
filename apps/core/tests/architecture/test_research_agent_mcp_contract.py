@@ -1792,9 +1792,9 @@ def test_v1_inventory_scopes_descriptions_annotations_and_schemas_are_exact() ->
     canonical = _canonical_v1_contract()
 
     assert sha256(canonical).hexdigest() == (
-        "503db1eadeb7e00f29d778d104dc74054d84e3d9a1af9a9a1fcdc8d1d542b563"
+        "8b46196bcc587f34f354b0ec5bd15b1d17970db5bb5530fd163859725bbf7e2e"
     )
-    assert len(canonical) == 145070
+    assert len(canonical) == 150402
 
 
 def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None:
@@ -2124,7 +2124,7 @@ async def _exercise_in_memory_protocol() -> None:
             elif tool.name in {"get_research_run_result", "get_daily_track_result"}:
                 assert tool.annotations.read_only_hint is True
                 assert tool.input_schema["discriminator"]["propertyName"] == "section"
-                expected_section_count = 6 if tool.name == "get_research_run_result" else 4
+                expected_section_count = 7 if tool.name == "get_research_run_result" else 5
                 assert len(tool.input_schema["oneOf"]) == expected_section_count
                 for branch in tool.input_schema["oneOf"]:
                     definition = tool.input_schema["$defs"][branch["$ref"].rsplit("/", 1)[-1]]
@@ -2204,7 +2204,7 @@ async def _exercise_in_memory_protocol() -> None:
             for branch in result_schema["oneOf"]
             if "Observations" in branch["$ref"] or "Positions" in branch["$ref"]
         ]
-        assert len(collection_schemas) == 2
+        assert len(collection_schemas) == 3
         assert all(schema["properties"]["limit"]["default"] == 20 for schema in collection_schemas)
         assert all(schema["properties"]["limit"]["maximum"] == 50 for schema in collection_schemas)
         assert all(
@@ -2217,7 +2217,7 @@ async def _exercise_in_memory_protocol() -> None:
             for branch in track_result_schema["oneOf"]
             if "Observations" in branch["$ref"] or "Origin" in branch["$ref"]
         ]
-        assert len(track_collection_schemas) == 2
+        assert len(track_collection_schemas) == 3
         for schema in track_collection_schemas:
             assert schema["properties"]["limit"]["default"] == 20
             assert schema["properties"]["limit"]["maximum"] == 50
@@ -3086,3 +3086,22 @@ def test_registry_conditional_signal_diagnostics_and_catalog() -> None:
         diagnostic = registry.diagnose_alpha_formula(source)
         assert diagnostic == alpha_language.diagnose(source)
         assert diagnostic.valid is valid
+
+
+def test_registry_common_inputs_share_formal_industry_choices_and_diagnostics():
+    registry = _registry()
+    catalog = registry.get_alpha_catalog(identifiers=["industry_return", "universe_return"])
+    assert catalog.industries == alpha_language.catalog().industries
+    assert len(catalog.industries) == 31
+    assert {item.identifier for item in catalog.builtins} == {"industry_return", "universe_return"}
+    for source, valid in (
+        ("close * industry_return(801010)", True),
+        ("close * industry_return(801020)", False),
+        ("close * industry_return(close)", False),
+        ("close * universe_return(801010)", False),
+    ):
+        result = registry.diagnose_alpha_formula(source)
+        assert result == alpha_language.diagnose(source)
+        assert result.valid is valid
+        if not valid:
+            assert result.diagnostics[0].range.end.offset > result.diagnostics[0].range.start.offset

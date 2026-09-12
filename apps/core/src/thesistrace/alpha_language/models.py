@@ -78,7 +78,9 @@ class BuiltinParameter(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     name: Annotated[str, Field(max_length=100)]
-    value_type: Literal["numeric", "numeric_series", "window", "boolean", "value"]
+    value_type: Literal[
+        "numeric", "numeric_series", "window", "boolean", "value", "industry", "temporal_series"
+    ]
     minimum: Annotated[int, Field(ge=-(2**63), lt=2**63)] | None = None
     maximum: Annotated[int, Field(ge=-(2**63), lt=2**63)] | None = None
 
@@ -95,7 +97,7 @@ class AlphaBuiltinCatalogEntry(BaseModel):
 
     identifier: Annotated[str, Field(max_length=100)]
     parameters: Annotated[list[BuiltinParameter], Field(max_length=8)]
-    result_type: Literal["same_as_first", "numeric_series", "conditional"]
+    result_type: Literal["same_as_first", "numeric_series", "conditional", "common_series"]
     description: Annotated[str, Field(max_length=384)]
     examples: Annotated[list[Annotated[str, Field(max_length=384)]], Field(max_length=4)]
     missing_value_behavior: Annotated[str, Field(max_length=384)]
@@ -103,11 +105,19 @@ class AlphaBuiltinCatalogEntry(BaseModel):
     work_estimate: BuiltinWorkEstimate
 
 
+class AlphaIndustryCatalogEntry(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    code: Annotated[int, Field(ge=800000, le=899999)]
+    name: Annotated[str, Field(max_length=64)]
+
+
 class AlphaAuthoringCatalog(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     fields: list[AlphaFieldCatalogEntry]
     builtins: list[AlphaBuiltinCatalogEntry]
+    industries: Annotated[list[AlphaIndustryCatalogEntry], Field(max_length=31)]
 
 
 class CompiledAlpha(BaseModel):

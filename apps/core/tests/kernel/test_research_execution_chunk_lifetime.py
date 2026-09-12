@@ -65,6 +65,7 @@ def test_completed_chunk_releases_large_calculation_inputs_before_yield(monkeypa
             chunk_session_count=1,
         ),
         alpha_admission=SimpleNamespace(effective_lookback=0),
+        alpha_expression={"kind": "field", "field_id": "close_adj"},
         numeric_execution_contract="thesistrace-numeric-v1",
         research_kind="strategy_backtest",
         semantic_versions={"kernel": "test-kernel"},
@@ -99,6 +100,7 @@ def test_completed_chunk_releases_large_calculation_inputs_before_yield(monkeypa
         lambda **_kwargs: SimpleNamespace(
             continuation={"completed_research_session_count": 1},
             strategy_daily_observations=(),
+            common_input_sessions=(),
             final_values=None,
             phase_seconds={
                 "alpha_and_pending": 0.0,

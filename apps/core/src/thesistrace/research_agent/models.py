@@ -10,6 +10,7 @@ from thesistrace.alpha_language.language import MAX_FORMULA_LENGTH
 from thesistrace.alpha_language.models import (
     AlphaBuiltinCatalogEntry,
     AlphaFieldCatalogEntry,
+    AlphaIndustryCatalogEntry,
 )
 from thesistrace.data.models import DataOverview
 from thesistrace.research_authoring.models import ResearchAuthoringConstraints
@@ -147,6 +148,7 @@ class AlphaCatalogView(BaseModel):
 
     fields: list[AlphaFieldCatalogEntry]
     builtins: list[AlphaBuiltinCatalogEntry]
+    industries: Annotated[list[AlphaIndustryCatalogEntry], Field(max_length=31)]
     unknown_identifiers: list[str]
     next_cursor: str | None
 

@@ -6,7 +6,7 @@ from base64 import urlsafe_b64encode
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from threading import Event, Thread
@@ -47,6 +47,8 @@ from thesistrace.daily_track.failure_policy import (
 )
 from thesistrace.daily_track.models import (
     DAILY_TRACK_RESULT_SECTIONS,
+    DailyTrackCommonInputObservationsResultSection,
+    DailyTrackCommonInputObservationsResultSectionInput,
     DailyTrackDetail,
     DailyTrackList,
     DailyTrackOriginAccount,
@@ -107,6 +109,10 @@ from thesistrace.research_kernel import (
     equivalence_bytes,
     first_divergence,
 )
+from thesistrace.research_kernel.common_inputs import (
+    common_input_references,
+    requires_common_industry,
+)
 from thesistrace.research_series import (
     research_sessions,
     slice_research_sessions,
@@ -129,6 +135,7 @@ class SemanticResultSectionReader(Protocol):
         *,
         research_kind: str,
         section: str,
+        has_common_inputs: bool = False,
         after: str | None = None,
         limit: int = 20,
     ) -> SemanticResultSectionRead: ...
@@ -1679,6 +1686,17 @@ class DailyTrackService:
                     section=query.section,
                     order=order,
                 )
+            elif isinstance(query, DailyTrackCommonInputObservationsResultSectionInput):
+                limit = query.limit
+                order = "session_identifier_industry_asc"
+                after, cursor_snapshot_identity = _decode_result_cursor(
+                    query.cursor,
+                    secret=cursor_secret,
+                    researcher_id=researcher_id,
+                    track_id=query.track_id,
+                    section=query.section,
+                    order=order,
+                )
             elif isinstance(query, DailyTrackOriginResultSectionInput):
                 limit = query.limit
                 order = "instrument_asc"
@@ -1692,11 +1710,22 @@ class DailyTrackService:
                 )
             reads_observations = isinstance(
                 query,
-                DailyTrackStrategyObservationsResultSectionInput,
+                (
+                    DailyTrackStrategyObservationsResultSectionInput,
+                    DailyTrackCommonInputObservationsResultSectionInput,
+                ),
             )
             observation_after = after if reads_observations else None
+            if after is not None and isinstance(
+                query, DailyTrackCommonInputObservationsResultSectionInput
+            ):
+                observation_after = (
+                    date.fromisoformat(after.split("|")[0]) - timedelta(days=1)
+                ).isoformat()
         row = self._session_coordinates.load_read_snapshot(
-            researcher_id, query.track_id, after=observation_after,
+            researcher_id,
+            query.track_id,
+            after=observation_after,
             checkpoint_limit=limit + 1 if reads_observations else 0,
         )
         seed_research_available = bool(row and row["seed_research_available"])
@@ -1804,6 +1833,22 @@ class DailyTrackService:
                     detail.strategy.comparison.model_dump(mode="json")
                 ),
             )
+        if isinstance(query, DailyTrackCommonInputObservationsResultSectionInput):
+            rows, next_after = self._bounded_common_input_observations(
+                origin, track_snapshot, after=after, limit=limit,
+            )
+            page = DailyTrackCommonInputObservationsResultSection.model_validate(
+                {"track_id": query.track_id, "items": rows, "next_cursor": None}
+            )
+            return fit_page(page.items, lambda kept: page.model_copy(update={
+                "items": kept,
+                "next_cursor": _next_daily_track_result_cursor(
+                    "|".join((kept[-1].session, kept[-1].identifier, kept[-1].industry_code or ""))
+                    if kept and (len(kept) < len(page.items) or next_after is not None) else None,
+                    secret=cursor_secret, researcher_id=researcher_id, track_id=query.track_id,
+                    section=query.section, order=order, snapshot_identity=current_manifest,
+                ),
+            }))
         if isinstance(query, DailyTrackStrategyObservationsResultSectionInput):
             rows, next_after = self._bounded_strategy_observations(
                 origin,
@@ -1927,6 +1972,63 @@ class DailyTrackService:
                 }
             )
         raise DailyTrackResultUnavailable("DailyTrack Result section is unsupported")
+
+    def _bounded_common_input_observations(
+        self,
+        origin: TrackingOrigin,
+        snapshot: DailyTrackResultSnapshot,
+        *,
+        after: str | None,
+        limit: int,
+    ) -> tuple[list[Mapping[str, object]], str | None]:
+        assert self._publication is not None
+        if self._read_semantic_result_section is None:
+            raise DailyTrackResultUnavailable("DailyTrack semantic Result reader is unavailable")
+        if not common_input_references(origin.immutable_input["alpha_expression"]):
+            return [], None
+        boundary = tuple(after.split("|")) if after is not None else None
+        seed = self._read_semantic_result_section(
+            self._publication,
+            _seed_result_ref(origin),
+            research_kind="strategy_backtest",
+            section="common_input_observations",
+            has_common_inputs=True,
+            after=after,
+            limit=limit + 1,
+        )
+        rows = [dict(row) for row in _mapping_rows(seed.value, "Common input observations")]
+        if len(rows) <= limit and seed.next_after is None:
+            for checkpoint in snapshot.observation_checkpoints:
+                if boundary is not None and checkpoint.boundary_session.isoformat() < boundary[0]:
+                    continue
+                value = _read_publication_json(
+                    self._publication,
+                    PublishedRef(
+                        manifest_sha256=checkpoint.manifest_sha256,
+                        kind="daily-track.checkpoint",
+                        provenance=checkpoint.provenance,
+                    ),
+                    payload_name="checkpoint",
+                )
+                for row in _mapping_rows(
+                    value["common_input_observations"], "Common input observations"
+                ):
+                    key = (
+                        str(row["session"]),
+                        str(row["identifier"]),
+                        str(row["industry_code"] or ""),
+                    )
+                    if boundary is None or key > boundary:
+                        rows.append(dict(row))
+                if len(rows) > limit:
+                    break
+        keys = [
+            (str(row["session"]), str(row["identifier"]), str(row["industry_code"] or ""))
+            for row in rows
+        ]
+        if keys != sorted(set(keys)):
+            raise DailyTrackResultUnavailable("Common input observations overlap or are unordered")
+        return rows[:limit], "|".join(keys[limit - 1]) if len(rows) > limit else None
 
     def _bounded_strategy_observations(
         self,
@@ -2220,6 +2322,7 @@ class DailyTrackService:
             sessions=calculation_calendar,
             universe_name=origin_universe(origin),
             neutralization=origin_neutralization(origin),
+            require_industry=requires_common_industry(origin.immutable_input["alpha_expression"]),
             field_bindings={
                 str(key): str(value)
                 for key, value in origin.immutable_input["field_bindings"].items()
@@ -3519,6 +3622,7 @@ def _origin_dependencies(origin: TrackingOrigin) -> DataDependencies:
     return resolve_data_dependencies(
         field_ids=set(field_bindings),
         neutralization=origin_neutralization(origin),
+        require_industry=requires_common_industry(origin.immutable_input["alpha_expression"]),
     )
 
 

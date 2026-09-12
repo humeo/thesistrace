@@ -210,6 +210,12 @@ class AlphaFactorChunkOutcome:
     def alpha_matrix_snapshot(self) -> dict[str, object]:
         return deepcopy(self._alpha_matrix)
 
+    def common_input_sessions_snapshot(self) -> tuple[dict[str, object], ...]:
+        return tuple(
+            {"session": row["session"], "common_inputs": deepcopy(row["common_inputs"])}
+            for row in self._alpha_matrix["sessions"] if "common_inputs" in row
+        )
+
     def factor_summary_snapshot(self) -> dict[str, object] | None:
         return deepcopy(self._factor_summary)
 
@@ -394,6 +400,7 @@ class StrategyChunkOutcome:
 
 @dataclass(frozen=True)
 class ResearchChunkCalculation:
+    common_input_sessions: tuple[dict[str, object], ...]
     continuation: dict[str, object]
     strategy_daily_observations: tuple[dict[str, object], ...]
     final_values: dict[str, object] | None
@@ -457,6 +464,7 @@ def execute_research_chunk(
         binding.require_run_input(run_input)
         return ResearchChunkCalculation(
             continuation=state,
+            common_input_sessions=(),
             strategy_daily_observations=(),
             final_values=None,
             phase_seconds={
@@ -477,6 +485,12 @@ def execute_research_chunk(
         cancellation_check=cancellation_check,
     )
     state.update(alpha_factor._continuation_for_current_process())
+    selected_sessions = set(research_sessions)
+    common_input_sessions = tuple(
+        {"session": row["session"], "common_inputs": deepcopy(row["common_inputs"])}
+        for row in alpha_factor._alpha_matrix["sessions"]
+        if row["session"] in selected_sessions and "common_inputs" in row
+    )
     alpha_and_pending_seconds = alpha_factor.phase_seconds["alpha_and_pending"]
     factor_seconds = alpha_factor.phase_seconds["factor"]
     factor_finalize_seconds = alpha_factor.phase_seconds["finalize"]
@@ -486,6 +500,7 @@ def execute_research_chunk(
             raise ValueError("Final Alpha-and-Factor outcome is incomplete")
         return ResearchChunkCalculation(
             continuation=state,
+            common_input_sessions=common_input_sessions,
             strategy_daily_observations=(),
             final_values=(None if factor_summary is None else {"factor_summary": factor_summary}),
             phase_seconds={
@@ -508,6 +523,7 @@ def execute_research_chunk(
     state.update(strategy_outcome._continuation_for_current_process())
     return ResearchChunkCalculation(
         continuation=state,
+        common_input_sessions=common_input_sessions,
         strategy_daily_observations=(strategy_outcome._daily_observations_for_current_process()),
         final_values=strategy_outcome._final_values_for_current_process(),
         phase_seconds={
@@ -873,6 +889,7 @@ def _compact_pending_alpha(
         "session": session,
         "values": compact_values,
         "coverage_loss": dict(coverage_loss),
+        **({"common_inputs": deepcopy(row["common_inputs"])} if "common_inputs" in row else {}),
         **({"remaining_horizons": list(HORIZONS)} if research_kind == "factor_evaluation" else {}),
     }
 
@@ -899,6 +916,7 @@ def _expand_pending_alpha(
             if value is not None
         ],
         "coverage_loss": dict(coverage_loss),
+        **({"common_inputs": deepcopy(item["common_inputs"])} if "common_inputs" in item else {}),
     }
 
 

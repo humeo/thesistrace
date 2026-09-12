@@ -84,9 +84,9 @@ def test_terminal_state_round_trip_preserves_absent_short_period_accumulators() 
 
     payloads = result_publication_payloads(result, research_kind="strategy_backtest")
 
-    assert read_result_bundle(
-        _verified_bundle(payloads), research_kind="strategy_backtest"
-    ) == result
+    assert (
+        read_result_bundle(_verified_bundle(payloads), research_kind="strategy_backtest") == result
+    )
 
 
 def test_bounded_partition_planner_selects_only_page_and_lookahead_rows() -> None:
@@ -255,10 +255,7 @@ def test_daily_observations_are_partitioned_at_stable_504_session_boundaries() -
         },
     ]
     assert (
-        read_result_bundle(
-            _verified_bundle(payloads), research_kind="strategy_backtest"
-        )
-        == result
+        read_result_bundle(_verified_bundle(payloads), research_kind="strategy_backtest") == result
     )
 
 
@@ -434,3 +431,46 @@ def _legal_result() -> dict[str, object]:
             "metric_state": metric_state,
         },
     }
+
+
+def test_factor_result_keeps_staged_common_observations_in_its_result_bundle():
+    from hashlib import sha256
+
+    from thesistrace.publication import StagedPayload
+    from thesistrace.research_run.result import (
+        common_input_observation_payload,
+        result_publication_payloads_from_staged,
+    )
+
+    row = {
+        "session": "2026-01-06",
+        "identifier": "universe_return",
+        "industry_code": None,
+        "value": 0.04,
+        "member_count": 2,
+        "valid_count": 2,
+        "exclusions": {},
+    }
+    common = common_input_observation_payload([row])
+    data = parquet_bytes(common.rows, common.contract)
+    staged = StagedPayload(
+        sha256=sha256(data).hexdigest(),
+        byte_size=len(data),
+        media_type="application/vnd.apache.parquet",
+        serialization={
+            "format": "canonical-parquet",
+            "writer_contract": common.contract.descriptor(),
+        },
+    )
+    summary = _legal_factor_summary()
+    payloads = result_publication_payloads_from_staged(
+        {"factor_summary": summary},
+        [],
+        research_kind="factor_evaluation",
+        common_partitions=[(staged, 1, "2026-01-06", "2026-01-06")],
+    )
+    part_name = next(name for name, value in payloads.items() if value is staged)
+    payloads[part_name] = common
+    result = read_result_bundle(_verified_bundle(payloads), research_kind="factor_evaluation")
+    assert result["factor_summary"] == summary
+    assert result["common_input_observations"] == [row]

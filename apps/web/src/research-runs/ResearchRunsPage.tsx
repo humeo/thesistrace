@@ -7,6 +7,7 @@ import {
 } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
 
+import { CommonInputObservations } from "../analysis/CommonInputObservations";
 import { coreFetch } from "../auth/coreFetch";
 import { StrategyComparisonPanel } from "../analysis/StrategyComparisonPanel";
 import { MetricHelp, type MetricHelpContent } from "../analysis/MetricHelp";
@@ -602,7 +603,10 @@ export function ResearchRunsPage({ researcherId, runId }: {
           <p role="alert"><strong>Failure</strong> {run.failure_reason}</p>
         ) : null}
         {run.status === "succeeded" && run.result ? (
-          <ResearchResultView result={run.result} />
+          <>
+            <ResearchResultView result={run.result} />
+            <CommonInputObservations key={run.id} endpoint={`/api/research-runs/${encodeURIComponent(run.id)}/common-input-observations`} />
+          </>
         ) : null}
         {terminal ? progressView : null}
         {!deleting && folders.length > 0 && run.input !== undefined ? (

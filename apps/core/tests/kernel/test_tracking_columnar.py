@@ -93,6 +93,7 @@ def run_input(data, source, neutralization, holdings=10, rebalance=5):
 
 @pytest.mark.parametrize(("source", "neutralization", "holdings", "rebalance"), [
     ("rank(pct_change(close, 20))", "none", 10, 5),
+    ("close * universe_advancing_fraction()", "none", 5, 3),
     ("if_else(close > ts_mean(close, 5), rank(close), -rank(close))", "none", 5, 3),
     ("-rank(pct_change(close, 20))", "none", 3, 1),
     ("ts_mean(close, 3) + ts_mean(close, 3)", "industry", 5, 3),
@@ -161,6 +162,19 @@ def test_columnar_tracking_matches_every_checkpoint_and_recovery_boundary(
             ))
         assert outputs[0] == outputs[1]
         checkpoint, continuation, *_ = outputs[1]
+        if "universe_advancing_fraction" in source:
+            common = checkpoint["common_input_observations"]
+            assert [item["session"] for item in common] == appended
+            assert all(item["identifier"] == "universe_advancing_fraction" for item in common)
+            assert all(item["valid_count"] > 0 for item in common)
+            from pydantic import ValidationError
+
+            from thesistrace.daily_track.models import KernelStateCheckpoint
+
+            KernelStateCheckpoint.model_validate(checkpoint)
+            incomplete = {**checkpoint, "common_input_observations": common[:-1]}
+            with pytest.raises(ValidationError, match="common observations"):
+                KernelStateCheckpoint.model_validate(incomplete)
         start = end
 
 

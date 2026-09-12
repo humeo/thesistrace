@@ -39,6 +39,7 @@ def test_rank_preserves_child_lookback_and_ranks_complete_cross_sections() -> No
                 (sessions[2], instruments[2]): 8,
             }
         },
+        historical_universe_members={session: tuple(instruments) for session in sessions},
         universe_members={session: tuple(instruments) for session in sessions},
         industries={},
         execution_prices={},
@@ -227,6 +228,7 @@ def test_rolling_numeric_result_is_independent_of_execution_prefix(identifier: s
                     for session, value in zip(sessions, series, strict=True)
                 }
             },
+            historical_universe_members={session: (instrument,) for session in sessions},
             universe_members={session: (instrument,) for session in sessions},
             industries={},
             execution_prices={},
@@ -266,6 +268,7 @@ def test_rolling_and_cross_sectional_operators_normalize_non_finite_inputs_to_mi
                 (sessions[1], instruments[2]): -math.inf,
             }
         },
+        historical_universe_members={session: instruments for session in sessions},
         universe_members={session: instruments for session in sessions},
         industries={},
         execution_prices={},

@@ -1,3 +1,4 @@
+import { CommonInputObservations } from "../analysis/CommonInputObservations";
 import { useState, type KeyboardEvent, type ReactNode } from "react";
 import { ArrowLeftIcon, CalendarBlankIcon, WarningCircleIcon } from "@phosphor-icons/react";
 
@@ -82,6 +83,7 @@ export function DailyTrackWorkspace({ track, actions, notices }: {
           : <RebalanceSchedule observation={track.observation} isStopped={track.status === "stopped" || track.status === "stopping"} isBehind={track.lag_sessions > 0} />}
       </div>
       <div className="track-supporting">
+        <CommonInputObservations key={`${track.id}:${track.strategy_session}`} endpoint={`/api/daily-tracks/${encodeURIComponent(track.id)}/common-input-observations`} />
         <details className="track-disclosure"><summary>Update details <span>{trackStatusLabel(track)}</span></summary>
           <div className="track-disclosure-content"><TrackingProgressView progress={track.progress} /></div></details>
         <details className="track-disclosure"><summary>Tracking origin <span>{track.origin.strategy_session}</span></summary>

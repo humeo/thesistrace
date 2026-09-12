@@ -93,6 +93,7 @@ def test_catalog_long_fields_are_declared_and_a_maximal_record_remains_readable(
         cursor=None,
         limit=20,
         build=lambda kept, next_cursor: AlphaCatalogView(
+            industries=[],
             fields=[],
             builtins=kept,
             unknown_identifiers=["a" * 100] * 50,
@@ -252,6 +253,7 @@ def test_worst_json_escaping(kind):
         cursor=None,
         limit=20,
         build=lambda kept, cursor: AlphaCatalogView(
+            industries=[],
             fields=kept if kind == "field" else [],
             builtins=kept if kind == "builtin" else [],
             unknown_identifiers=["a" * 100] * 50,

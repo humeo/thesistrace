@@ -252,6 +252,36 @@ export function DataOverviewView({
         </p>
       )}
       <ResearchFieldCatalog catalog={catalog} />
+      <CommonInputCatalog catalog={catalog} />
+    </section>
+  );
+}
+
+function CommonInputCatalog({ catalog }: { catalog: AlphaCatalog }) {
+  const inputs = catalog.builtins.filter((builtin) => builtin.result_type === "common_series");
+  if (inputs.length === 0) return null;
+  return (
+    <section aria-labelledby="common-inputs-title" className="data-field-catalog">
+      <header><h2 id="common-inputs-title">Common market inputs</h2><span>{inputs.length} expressions</span></header>
+      <p>Calculated from historical members of your selected research Universe. Industry inputs use its SW2021 L1 subset, not a full industry or official index. Selecting an industry here does not change the stock selection Universe.</p>
+      <div className="data-field-table-scroll">
+        <table className="data-field-table">
+          <caption className="visually-hidden">Common market expressions</caption>
+          <thead><tr><th scope="col">Expression</th><th scope="col">Meaning</th><th scope="col">Missing values</th></tr></thead>
+          <tbody>{inputs.map((input) => (
+            <tr key={input.identifier}>
+              <th scope="row"><code>{input.identifier}({input.parameters.map((parameter) => parameter.name).join(", ")})</code></th>
+              <td>{input.description}<small>{input.examples.join(" · ")}</small></td>
+              <td>{input.missing_value_behavior}</td>
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>
+      <details>
+        <summary>SW2021 L1 industry parameters ({catalog.industries.length})</summary>
+        <p>These codes identify industries; data coverage is checked for the chosen research period.</p>
+        <ul>{catalog.industries.map((industry) => <li key={industry.code}><code>{industry.code}</code> {industry.name}</li>)}</ul>
+      </details>
     </section>
   );
 }

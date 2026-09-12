@@ -9,6 +9,7 @@ from thesistrace.alpha_language.models import (
     AlphaAuthoringCatalog,
     AlphaBuiltinCatalogEntry,
     AlphaFieldCatalogEntry,
+    AlphaIndustryCatalogEntry,
     BuiltinParameter,
     BuiltinWorkEstimate,
     CompiledAlpha,
@@ -24,6 +25,11 @@ from thesistrace.research_kernel.alpha_builtins import (
     BUILTIN_DEFINITIONS,
     BuiltinDefinition,
 )
+from thesistrace.research_kernel.common_inputs import (
+    CLOSE_FIELD_ID,
+    COMMON_INPUT_WORK,
+    common_reference,
+)
 from thesistrace.research_kernel.expression_limits import (
     MAX_EFFECTIVE_LOOKBACK,
     MAX_ESTIMATED_WORK,
@@ -38,6 +44,7 @@ from thesistrace.research_kernel.expression_types import (
     conditional_result_type,
     unary_result_type,
 )
+from thesistrace.research_kernel.industry_catalog import SW2021_L1
 
 ALPHA_IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]*$")
 
@@ -113,6 +120,10 @@ class AlphaLanguage:
                 for identifier, field in field_by_identifier.items()
             ],
             builtins=[_public_builtin(builtin) for builtin in builtins],
+            industries=[
+                AlphaIndustryCatalogEntry(code=int(code), name=name)
+                for code, name in SW2021_L1.items()
+            ],
         )
 
     def catalog(self, *, financial_authoring_ready: bool = True) -> AlphaAuthoringCatalog:
@@ -492,6 +503,32 @@ class AlphaLanguage:
                 ),
             )
 
+        if builtin.result_rule == "common_series":
+            try:
+                expression = common_reference(
+                    identifier,
+                    [arg.value if isinstance(arg, ast.Constant) else None for arg in node.args],
+                )
+            except ValueError as error:
+                self._raise(source, "INVALID_COMMON_INPUT", str(error), node)
+            # Static industry arguments still consume the ordinary expression depth budget.
+            for argument in node.args:
+                self._build(source, argument, depth=depth + 1)
+            close_field = self._field_by_identifier.get("close")
+            if close_field is None or close_field.field_id != CLOSE_FIELD_ID:
+                self._raise(
+                    source, "UNKNOWN_IDENTIFIER", "Common input requires adjusted Close", node
+                )
+            return _BuiltExpression(
+                expression=expression,
+                value_type=ValueType.COMMON_NUMERIC_SERIES,
+                field_ids_by_identifier={"close": CLOSE_FIELD_ID},
+                effective_lookback=1,
+                node_count=1 + len(node.args),
+                depth=depth + bool(node.args),
+                estimated_work=COMMON_INPUT_WORK,
+            )
+
         arguments: list[_BuiltExpression] = []
         window: int | None = None
         for argument_node, parameter in zip(node.args, builtin.parameters, strict=True):
@@ -520,6 +557,24 @@ class AlphaLanguage:
                     details=DiagnosticDetails(
                         kind="value_type",
                         expected=ValueType.NUMERIC_SERIES.value,
+                        actual=argument.value_type.value,
+                    ),
+                )
+            if rule == "temporal_series" and argument.value_type not in {
+                ValueType.NUMERIC_SERIES,
+                ValueType.COMMON_NUMERIC_SERIES,
+            }:
+                self._raise(
+                    source,
+                    "TYPE_MISMATCH",
+                    "Expected a numeric time series",
+                    argument_node,
+                    details=DiagnosticDetails(
+                        kind="value_type",
+                        expected=[
+                            ValueType.NUMERIC_SERIES.value,
+                            ValueType.COMMON_NUMERIC_SERIES.value,
+                        ],
                         actual=argument.value_type.value,
                     ),
                 )

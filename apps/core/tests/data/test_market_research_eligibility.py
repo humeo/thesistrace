@@ -102,3 +102,4 @@ def test_row_research_universe_uses_the_same_positive_turnover_eligibility() -> 
     )
 
     assert series.universe_members[session] == (positive,)
+    assert series.historical_universe_members[session] == (positive, zero, absent)

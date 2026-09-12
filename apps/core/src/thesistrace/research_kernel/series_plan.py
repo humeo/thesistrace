@@ -12,9 +12,16 @@ from thesistrace.research_kernel.alpha_builtins import (
     BUILTIN_DEFINITIONS,
     NumericSeries,
 )
+from thesistrace.research_kernel.common_inputs import CLOSE_FIELD_ID, COMMON_INPUTS
+from thesistrace.research_kernel.common_market import (
+    CommonMarketSeries,
+    compute_common_market_series,
+)
+
+type CommonInputObserver = Callable[[str, str | None, CommonMarketSeries], None]
 
 type PlanValue = float | int | None | NumericSeries
-type PlanNodeKind = Literal["number", "field", "unary", "binary", "builtin"]
+type PlanNodeKind = Literal["number", "field", "unary", "binary", "builtin", "common"]
 
 
 class CompiledAlphaLike(Protocol):
@@ -36,6 +43,7 @@ class SeriesPlanNode:
     identifier: str
     inputs: tuple[int, ...] = ()
     value: float | int | None = None
+    industry_code: str | None = None
 
 
 @dataclass(frozen=True)
@@ -53,6 +61,14 @@ def build_series_execution_plan(compiled: CompiledAlphaLike) -> SeriesExecutionP
         kind = node["kind"]
         if kind == "number":
             nodes.append(SeriesPlanNode(kind="number", identifier="number", value=node["value"]))
+        elif kind == "common":
+            nodes.append(
+                SeriesPlanNode(
+                    kind="common",
+                    identifier=str(node["identifier"]),
+                    industry_code=node["industry_code"],
+                )
+            )
         elif kind == "field":
             nodes.append(SeriesPlanNode(kind="field", identifier=str(node["field_id"])))
         elif kind == "unary":
@@ -104,6 +120,7 @@ def evaluate_series_execution_plan(
     values_by_field: dict[str, list[float | None] | NumericSeries],
     *,
     length: int | None = None,
+    common_values: Mapping[tuple[str, str | None], NumericSeries] | None = None,
 ) -> list[float | None]:
     lengths = {len(values_by_field[field]) for field in plan.field_names}
     if len(lengths) > 1:
@@ -121,6 +138,10 @@ def evaluate_series_execution_plan(
         if node.kind == "number":
             assert node.value is not None
             values.append(node.value)
+        elif node.kind == "common":
+            if common_values is None:
+                raise ValueError("Common input requires governed market context")
+            values.append(common_values[(node.identifier, node.industry_code)])
         elif node.kind == "field":
             values.append(
                 tuple(_finite_or_missing(value) for value in values_by_field[node.identifier])
@@ -159,13 +180,35 @@ def evaluate_series_execution_matrix(
     length: int,
     universe_members: Mapping[str, tuple[str, ...]] | None = None,
     sessions: tuple[str, ...] | None = None,
+    industries: Mapping[tuple[str, str], str] | None = None,
+    historical_universe_members: Mapping[str, tuple[str, ...]] | None = None,
+    observe_common: CommonInputObserver | None = None,
 ) -> dict[str, list[float | None]]:
     instruments = tuple(instrument_ids)
     inputs = {instrument_id: inputs_for_instrument(instrument_id) for instrument_id in instruments}
+    common_values = {}
+    if any(node.kind == "common" for node in plan.nodes):
+        if sessions is None or len(sessions) != length or historical_universe_members is None:
+            raise ValueError("Common input requires aligned Sessions and historical Universe")
+        common_values = {
+            key: tuple(_finite_or_missing(value) for value in values)
+            for key, values in _common_values(
+                plan,
+                instruments,
+                sessions,
+                np.asarray(
+                    [inputs[instrument][CLOSE_FIELD_ID] for instrument in instruments],
+                    dtype=np.float64,
+                ).reshape((len(instruments), length)),
+                historical_universe_members,
+                industries,
+                observe_common,
+            ).items()
+        }
     if not any(node.kind == "builtin" and node.identifier == "rank" for node in plan.nodes):
         return {
             instrument_id: evaluate_series_execution_plan(
-                plan, inputs[instrument_id], length=length
+                plan, inputs[instrument_id], length=length, common_values=common_values
             )
             for instrument_id in instruments
         }
@@ -176,6 +219,8 @@ def evaluate_series_execution_matrix(
     for node in plan.nodes:
         if node.kind == "number":
             values.append(node.value)
+        elif node.kind == "common":
+            values.append(common_values[(node.identifier, node.industry_code)])
         elif node.kind == "field":
             values.append(
                 {
@@ -274,11 +319,29 @@ def evaluate_columnar_execution_matrix(
     universe_members: Mapping[str, tuple[str, ...]],
     *,
     cancellation_check: Callable[[], None],
+    industries: Mapping[tuple[str, str], str] | None = None,
+    historical_universe_members: Mapping[str, tuple[str, ...]] | None = None,
+    observe_common: CommonInputObserver | None = None,
 ) -> np.ndarray:
     shape = (len(instruments), len(sessions))
     if any(matrix.shape != shape for matrix in field_matrices.values()):
         raise ValueError("columnar Alpha fields are misaligned")
     plan = _share_columnar_subexpressions(plan, cancellation_check)
+    if any(node.kind == "common" for node in plan.nodes) and historical_universe_members is None:
+        raise ValueError("Common input requires historical Universe")
+    common_values = (
+        _common_values(
+            plan,
+            instruments,
+            sessions,
+            field_matrices[CLOSE_FIELD_ID],
+            historical_universe_members,
+            industries,
+            observe_common,
+        )
+        if any(node.kind == "common" for node in plan.nodes)
+        else {}
+    )
     values: list[float | int | np.ndarray | None] = []
     remaining = [0] * len(plan.nodes)
     for node in plan.nodes:
@@ -291,6 +354,8 @@ def evaluate_columnar_execution_matrix(
     for node in plan.nodes:
         if node.kind == "number":
             value: float | int | np.ndarray | None = node.value
+        elif node.kind == "common":
+            value = np.broadcast_to(common_values[(node.identifier, node.industry_code)], shape)
         elif node.kind == "field":
             value = field_matrices[node.identifier]
         elif node.kind == "unary":
@@ -368,6 +433,43 @@ def evaluate_columnar_execution_matrix(
             if remaining[input_index] == 0 and input_index != plan.root:
                 values[input_index] = None
     return _columnar_array(values[plan.root], shape)
+
+
+def _common_values(
+    plan: SeriesExecutionPlan,
+    instruments: tuple[str, ...],
+    sessions: tuple[str, ...],
+    closes: np.ndarray,
+    universe_members: Mapping[str, tuple[str, ...]],
+    industries: Mapping[tuple[str, str], str] | None,
+    observe_common: CommonInputObserver | None,
+) -> dict[tuple[str, str | None], np.ndarray]:
+    aggregates = {}
+    result = {}
+    for node in plan.nodes:
+        if node.kind != "common":
+            continue
+        if node.industry_code is not None and industries is None:
+            raise ValueError("Industry common input requires historical classifications")
+        if node.industry_code not in aggregates:
+            aggregates[node.industry_code] = compute_common_market_series(
+                sessions=sessions,
+                instruments=instruments,
+                adjusted_close=closes,
+                universe_members=universe_members,
+                industries={} if industries is None else industries,
+                industry_code=node.industry_code,
+            )
+        key = (node.identifier, node.industry_code)
+        if key in result:
+            continue
+        if observe_common is not None:
+            observe_common(node.identifier, node.industry_code, aggregates[node.industry_code])
+        metric = COMMON_INPUTS[node.identifier][0]
+        result[(node.identifier, node.industry_code)] = getattr(
+            aggregates[node.industry_code], metric
+        )
+    return result
 
 
 def _columnar_pct_change(values: np.ndarray, window: int) -> np.ndarray:

@@ -70,7 +70,7 @@ const catalog: AlphaCatalog = {
       example: "rank(revenue)",
     },
   ],
-  builtins: [],
+  industries: [], builtins: [],
 };
 
 describe("DataOverviewView", () => {
@@ -132,7 +132,7 @@ describe("DataOverviewView", () => {
 
   it("does not fabricate coverage or unavailable dataset fields", () => {
     const markup = renderToStaticMarkup(createElement(DataOverviewView, {
-      catalog: { fields: catalog.fields.slice(0, 1), builtins: [] },
+      catalog: { fields: catalog.fields.slice(0, 1), industries: [], builtins: [] },
       overview: {
         market_coverage: null,
         financial_coverage: null,
@@ -264,4 +264,30 @@ describe("DataOverviewView", () => {
     expect(recovered).toHaveBeenNthCalledWith(1, "/api/data");
     expect(recovered).toHaveBeenNthCalledWith(2, "/api/alpha/catalog");
   });
+});
+
+it("explains the research Universe scope and formal industry choices for common inputs", () => {
+  const markup = renderToStaticMarkup(createElement(DataOverviewView, {
+    overview,
+    onRefresh: vi.fn(),
+    catalog: {
+      ...catalog,
+      industries: [{ code: 801010, name: "农林牧渔" }],
+      builtins: [{
+        identifier: "industry_return",
+        parameters: [{ name: "industry", value_type: "industry", minimum: null, maximum: null }],
+        result_type: "common_series",
+        description: "Equal-weight return of the historical industry subset of the research Universe.",
+        examples: ["close * industry_return(801010)"],
+        missing_value_behavior: "Missing when no valid members remain.",
+        numeric_behavior: "Adjusted Close return over one Session.",
+      }],
+    },
+  }));
+  expect(markup).toContain("Common market inputs");
+  expect(markup).toContain("not a full industry or official index");
+  expect(markup).toContain("does not change the stock selection Universe");
+  expect(markup).toContain("801010");
+  expect(markup).toContain("农林牧渔");
+  expect(markup).toContain("data coverage is checked for the chosen research period");
 });

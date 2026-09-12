@@ -46,3 +46,21 @@ test("conditional Alpha editing preserves source and recognizes Boolean grammar"
   await editor.fill('if_else(close >= open or close != 0, close, open)');
   await expect(page.getByLabel('Syntax errors')).toHaveText('0');
 });
+
+
+test("common industry parameters are discoverable in the actual editor", async ({ page }) => {
+  await page.setContent('<div id="root"></div>');
+  await page.addStyleTag({ content: styles });
+  await page.addScriptTag({ content: timelineScript });
+  const editor = page.locator('.cm-content');
+  await editor.fill('close * industry_return(801');
+  await editor.press('Control+Space');
+  const choice = page.getByRole('option').filter({ hasText: '801010' });
+  await expect(choice).toBeVisible();
+  await expect(choice).toContainText('农林牧渔');
+  await choice.click();
+  await editor.press('End');
+  await editor.press(')');
+  await expect(page.getByLabel('Saved formula')).toHaveText('close * industry_return(801010)');
+  await expect(page.getByLabel('Syntax errors')).toHaveText('0');
+});

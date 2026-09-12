@@ -2172,6 +2172,20 @@ def test_industry_admission_requires_only_neutralized_period_coverage(
         assert len(issues) == 1
         assert issues[0]["code"] == "INDUSTRY_CALCULATION_OUTSIDE_COVERAGE"
         assert issues[0]["message"].endswith("Industry Coverage is not ready.")
+        common_missing = client.post(
+            "/api/research-runs",
+            json=_run_command(
+                "industry-common-not-ready", start_date="2026-08-07", end_date="2026-08-07",
+                neutralization="none", formula="close * industry_return(801010)",
+            ),
+        )
+        assert common_missing.status_code == 422, common_missing.text
+        common_issue = common_missing.json()["issues"][0]
+        assert common_issue["code"] == "INDUSTRY_CALCULATION_OUTSIDE_COVERAGE"
+        assert common_issue["field"] == "formula"
+        assert common_issue["range"]["start"]["offset"] == 0
+        assert common_issue["range"]["end"]["offset"] == len("close * industry_return(801010)")
+
 
     _publish_composite_head(
         settings,

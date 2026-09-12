@@ -20,6 +20,11 @@ from thesistrace.research_batch.private_artifact import (
     PrivateAlphaFactorArtifactWriter,
     PrivateAlphaFactorChunk,
 )
+from thesistrace.research_kernel.common_inputs import (
+    common_input_references,
+    requires_common_industry,
+)
+from thesistrace.research_kernel.common_observations import common_input_observation_rows
 from thesistrace.research_kernel.factor import prepare_columnar_forward_labels
 from thesistrace.research_kernel.kernel_run import RunInput, StrategyRunInput
 from thesistrace.research_kernel.research_chunks import (
@@ -40,7 +45,9 @@ from thesistrace.research_run.execution import (
     ResearchExecutionResourceExhausted,
 )
 from thesistrace.research_run.models import ImmutableRunInput
-from thesistrace.research_run.result import STRATEGY_DAILY_OBSERVATIONS_CONTRACT
+from thesistrace.research_run.result import (
+    STRATEGY_DAILY_OBSERVATIONS_CONTRACT,
+)
 from thesistrace.research_run.supervised_child import (
     ChildTransportCgroupOom,
     ChildTransportError,
@@ -139,6 +146,10 @@ class _SharedFactorResearchData:
     @property
     def universe_members(self):
         return self._universe_members
+
+    @property
+    def historical_universe_members(self):
+        return self._source.historical_universe_members
 
     @property
     def industries(self):
@@ -705,6 +716,10 @@ def _execute_factor_batch_messages(
                 universe=common.universe,
                 neutralization=common.neutralization,
                 field_bindings=union_bindings,
+                require_industry=any(
+                    requires_common_industry(item.immutable_input.alpha_expression)
+                    for item in items
+                ),
                 effective_lookback=max_lookback,
                 fact_instrument_ids=frozenset(),
             )
@@ -763,6 +778,13 @@ def _execute_factor_batch_messages(
                 for name, seconds in calculation.phase_seconds.items():
                     state.phase_seconds[name] += seconds
                     chunk_phase_seconds[name] += seconds
+                if common_input_references(item.immutable_input.alpha_expression):
+                    common_rows = common_input_observation_rows(
+                        {"sessions": list(calculation.common_input_sessions)},
+                        sessions=window.research_sessions,
+                    )
+                    yield _common_input_chunk_message(item, window, common_rows)
+                    del common_rows
                 del calculation, run_input
             except (MemoryError, ResearchExecutionResourceExhausted):
                 raise
@@ -942,6 +964,7 @@ def _execute_strategy_sweep_messages(
                         universe=shared_input.universe,
                         neutralization=shared_input.neutralization,
                         field_bindings=union_bindings,
+                        require_industry=requires_common_industry(shared_input.alpha_expression),
                         effective_lookback=(shared_input.alpha_admission.effective_lookback),
                         fact_instrument_ids=frozenset(),
                     )
@@ -1150,6 +1173,13 @@ def _execute_strategy_item_messages(
                     stored.outcome_payload,
                     binding=binding,
                 )
+                if common_input_references(item.immutable_input.alpha_expression):
+                    common_rows = common_input_observation_rows(
+                        {"sessions": list(alpha_factor_outcome.common_input_sessions_snapshot())},
+                        sessions=window.research_sessions,
+                    )
+                    yield _common_input_chunk_message(item, window, common_rows)
+                    del common_rows
                 run_input = _strategy_run_input(
                     item.immutable_input,
                     research_data,
@@ -1283,6 +1313,7 @@ def _read_shared_window(
     field_bindings: Mapping[str, str],
     effective_lookback: int,
     fact_instrument_ids: frozenset[str],
+    require_industry: bool = False,
 ) -> _SharedFactorResearchData:
     first_index = calendar.index(research_sessions[0])
     context_start = max(0, first_index - max(effective_lookback, 21, 2))
@@ -1292,6 +1323,7 @@ def _read_shared_window(
         sessions=list(context_sessions),
         universe_name=universe,
         neutralization=neutralization,
+        require_industry=require_industry,
         field_bindings=field_bindings,
         fact_instrument_ids=fact_instrument_ids,
     )
@@ -1491,6 +1523,7 @@ def _read_message(
         "item_succeeded",
         "item_started",
         "item_strategy_chunk_succeeded",
+        "item_common_input_chunk_succeeded",
         "item_chunk_succeeded",
         "item_failed",
         "batch_succeeded",
@@ -1566,3 +1599,20 @@ def item_failure_error(message: Mapping[str, object]) -> Exception:
     if message.get("category") == "calculation":
         return ResearchExecutionCalculationFailed("Factor item calculation failed")
     return ResearchExecutionError("Factor item execution failed")
+
+
+
+def _common_input_chunk_message(
+    item: ResearchBatchExecutionItem,
+    window: _ResearchWindow,
+    rows: list[dict[str, object]],
+) -> dict[str, object]:
+    return {
+        "status": "item_common_input_chunk_succeeded",
+        "item_ordinal": item.ordinal,
+        "item_key": item.item_key,
+        "run_id": item.run_id,
+        "chunk_ordinal": window.ordinal,
+        "child_peak_rss_bytes": _current_process_peak_rss_bytes(),
+        "common_input_observations": rows,
+    }

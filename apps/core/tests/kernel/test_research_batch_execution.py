@@ -121,7 +121,9 @@ def _completed_chunks(messages):
     ]
 
 
-def _batch_request(tmp_path: Path, *, kind: str) -> dict[str, object]:
+def _batch_request(
+    tmp_path: Path, *, kind: str, formula: str = "rank(ts_mean(volume, 30))"
+) -> dict[str, object]:
     _, canonical = build_fixture(session_count=100)
     store = MountedGenerationStore(tmp_path / "data")
     generation = store.materialize(
@@ -131,7 +133,7 @@ def _batch_request(tmp_path: Path, *, kind: str) -> dict[str, object]:
         source_lineage={"snapshot": "fixed"},
     )
     sessions = tuple(date.fromisoformat(value) for value in canonical["research_calendar"])
-    compiled = alpha_language.compile("rank(ts_mean(volume, 30))")
+    compiled = alpha_language.compile(formula)
     offset = max(21, compiled.effective_lookback)
     plan = plan_research_chunks(
         calculation_sessions=sessions,
@@ -208,3 +210,26 @@ def _batch_request(tmp_path: Path, *, kind: str) -> dict[str, object]:
         "private_artifact_path": str(tmp_path / "reference.alpha-factor") if strategy else None,
         "reuse_private_artifact": False,
     }
+
+
+@pytest.mark.parametrize("kind", ["factor_evaluation", "strategy_sweep"])
+def test_batch_streams_common_statistics_for_every_item_and_research_session(tmp_path, kind):
+    request = _batch_request(
+        tmp_path,
+        kind=kind,
+        formula="rank(ts_mean(close, 30)) * universe_advancing_fraction()",
+    )
+    messages = list(execute_research_batch_messages(request))
+    assert len(_completed_chunks(messages)) == 3, messages
+    streams = {ordinal: [] for ordinal in (1, 2, 3)}
+    for message in messages:
+        if message["status"] == "item_common_input_chunk_succeeded":
+            streams[message["item_ordinal"]].extend(message["common_input_observations"])
+    first = streams[1]
+    assert first
+    assert streams[2] == first == streams[3]
+    immutable = request["items"][0]["immutable_input"]
+    assert len(first) == immutable["execution_plan"]["research_session_count"]
+    assert first[0]["session"] == immutable["data_admission"]["first_research_session"]
+    assert first[-1]["session"] == immutable["data_admission"]["last_research_session"]
+    assert all(row["identifier"] == "universe_advancing_fraction" for row in first)

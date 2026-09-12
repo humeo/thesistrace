@@ -13,6 +13,7 @@ export type AlphaCatalogField = {
 };
 
 export type AlphaCatalog = {
+  industries: Array<{ code: number; name: string }>;
   fields: AlphaCatalogField[];
   builtins: Array<{
     identifier: string;

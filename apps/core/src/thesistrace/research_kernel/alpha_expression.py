@@ -5,6 +5,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from thesistrace.research_kernel.alpha_builtins import BUILTIN_DEFINITIONS
+from thesistrace.research_kernel.common_inputs import (
+    CLOSE_FIELD_ID,
+    COMMON_INPUT_WORK,
+    validate_common_reference,
+)
 from thesistrace.research_kernel.expression_limits import (
     MAX_ESTIMATED_WORK,
     MAX_EXPRESSION_DEPTH,
@@ -59,8 +64,10 @@ def validate_normalized_alpha(
     count = 0
     while pending:
         node, depth = pending.pop()
-        count += 1
-        if depth > MAX_EXPRESSION_DEPTH:
+        # Common IR stores its literal as metadata, but it remains a source expression node.
+        literal_count = int(node.get("kind") == "common" and node.get("industry_code") is not None)
+        count += 1 + literal_count
+        if depth + literal_count > MAX_EXPRESSION_DEPTH:
             _reject("EXPRESSION_TOO_DEEP", "alpha.expression", "Expression exceeds depth limit")
         if count > MAX_EXPRESSION_NODES:
             _reject(
@@ -109,6 +116,21 @@ def _validate_compiled_node(
     field_bindings: Mapping[str, str],
 ) -> tuple[dict[str, object], int, int, set[str], set[str], ValueType]:
     kind = node.get("kind")
+    if kind == "common":
+        try:
+            reference = validate_common_reference(node)
+        except ValueError as error:
+            _reject("INVALID_COMMON_INPUT", location, str(error))
+        if CLOSE_FIELD_ID not in field_bindings:
+            _reject("UNKNOWN_FIELD", location, "Common input requires adjusted Close")
+        return (
+            reference,
+            1,
+            COMMON_INPUT_WORK,
+            {field_bindings[CLOSE_FIELD_ID]},
+            {CLOSE_FIELD_ID},
+            ValueType.COMMON_NUMERIC_SERIES,
+        )
     if kind == "field":
         if set(node) != {"kind", "field_id"}:
             _reject("INVALID_NODE", location, "Alpha field node is malformed")
@@ -196,6 +218,8 @@ def _validate_compiled_node(
         )
         if definition is None or not isinstance(arguments, list):
             _reject("INVALID_OPERATOR", location, f"unknown Alpha builtin: {identifier}")
+        if definition.result_rule == "common_series":
+            _reject("INVALID_COMMON_INPUT", location, "Common inputs require canonical references")
         if len(arguments) != len(definition.parameters):
             _reject("INVALID_ARITY", location, f"Alpha builtin {identifier} has invalid arity")
         compiled_arguments: list[dict[str, object]] = []
@@ -235,6 +259,8 @@ def _validate_compiled_node(
                 if parameter.rule == "numeric"
                 else {ValueType.NUMERIC_SERIES}
                 if parameter.rule == "numeric_series"
+                else {ValueType.NUMERIC_SERIES, ValueType.COMMON_NUMERIC_SERIES}
+                if parameter.rule == "temporal_series"
                 else BOOLEAN_TYPES
                 if parameter.rule == "boolean"
                 else None

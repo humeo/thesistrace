@@ -11,6 +11,8 @@ from thesistrace.research_kernel.alpha_expression import (
     ParsedAlpha,
     validate_normalized_alpha,
 )
+from thesistrace.research_kernel.common_inputs import COMMON_INPUTS
+from thesistrace.research_kernel.common_market import CommonMarketSeries
 from thesistrace.research_kernel.numeric import canonical_binary64_bytes
 from thesistrace.research_kernel.series_plan import (
     CompiledAlphaLike,
@@ -69,6 +71,7 @@ def evaluate_alpha_matrix(
     calendar = list(research_data.sessions)
     instruments = sorted(research_data.instruments)
     plan = build_series_execution_plan(compiled_alpha)
+    common_observations: dict[str, list[dict[str, object]]] = {}
     evaluated = evaluate_series_execution_matrix(
         plan,
         instruments,
@@ -87,6 +90,15 @@ def evaluate_alpha_matrix(
         length=len(calendar),
         universe_members=research_data.universe_members,
         sessions=tuple(calendar),
+        industries=research_data.industries,
+        historical_universe_members=research_data.historical_universe_members,
+        observe_common=lambda identifier, code, values: _record_common_input(
+            common_observations,
+            calendar,
+            identifier,
+            code,
+            values,
+        ),
     )
     return _compose_alpha_matrix(
         research_data,
@@ -94,6 +106,7 @@ def evaluate_alpha_matrix(
         neutralization=neutralization,
         value_at=lambda instrument_id, session_index: evaluated[instrument_id][session_index],
         cancellation_check=None,
+        common_observations=common_observations,
     )
 
 
@@ -140,16 +153,22 @@ def _evaluate_columnar_alpha(
     if neutralization not in {"none", "industry"}:
         raise ValueError("neutralization must be none or industry")
     calendar = tuple(research_data.sessions)
+    plan = build_series_execution_plan(compiled_alpha)
+    input_members = (
+        research_data.historical_universe_members
+        if any(node.kind == "common" for node in plan.nodes)
+        else research_data.universe_members
+    )
     instruments = tuple(
         sorted(
             {
                 instrument_id
                 for session in calendar
-                for instrument_id in research_data.universe_members.get(session, ())
+                for instrument_id in input_members.get(session, ())
             }
         )
     )
-    plan = build_series_execution_plan(compiled_alpha)
+    common_observations: dict[str, list[dict[str, object]]] = {}
     evaluated = evaluate_columnar_execution_matrix(
         plan,
         instruments,
@@ -157,6 +176,15 @@ def _evaluate_columnar_alpha(
         research_data.numeric_field_matrices(plan.field_names, instruments),
         research_data.universe_members,
         cancellation_check=cancellation_check,
+        industries=research_data.industries,
+        historical_universe_members=research_data.historical_universe_members,
+        observe_common=lambda identifier, code, values: _record_common_input(
+            common_observations,
+            calendar,
+            identifier,
+            code,
+            values,
+        ),
     )
     positions = {instrument_id: index for index, instrument_id in enumerate(instruments)}
     if neutralization == "none":
@@ -167,6 +195,7 @@ def _evaluate_columnar_alpha(
             positions=positions,
             cancellation_check=cancellation_check,
             include_checksum=include_checksum,
+            common_observations=common_observations,
         )
     return _compose_alpha_matrix(
         research_data,
@@ -177,6 +206,7 @@ def _evaluate_columnar_alpha(
         ],
         cancellation_check=cancellation_check,
         include_checksum=include_checksum,
+        common_observations=common_observations,
     )
 
 
@@ -188,6 +218,7 @@ def _compose_unneutralized_columnar_alpha_matrix(
     positions: Mapping[str, int],
     cancellation_check: Callable[[], None],
     include_checksum: bool,
+    common_observations: Mapping[str, list[dict[str, object]]],
 ) -> dict[str, object]:
     session_results: list[dict[str, object]] = []
     for session_index, session in enumerate(research_data.sessions):
@@ -212,10 +243,13 @@ def _compose_unneutralized_columnar_alpha_matrix(
         session_results.append(
             {
                 "session": session,
-                "values": rows,
-                "coverage_loss": (
-                    {"missing_expression": missing_count} if missing_count else {}
+                **(
+                    {"common_inputs": common_observations[session]}
+                    if session in common_observations
+                    else {}
                 ),
+                "values": rows,
+                "coverage_loss": ({"missing_expression": missing_count} if missing_count else {}),
             }
         )
         cancellation_check()
@@ -236,6 +270,7 @@ def _compose_alpha_matrix(
     value_at: Callable[[str, int], float | None],
     cancellation_check: Callable[[], None] | None,
     include_checksum: bool = True,
+    common_observations: Mapping[str, list[dict[str, object]]],
 ) -> dict[str, object]:
     calendar = list(research_data.sessions)
     session_results: list[dict[str, object]] = []
@@ -272,7 +307,16 @@ def _compose_alpha_matrix(
             for instrument_id in sorted(final_values)
         ]
         session_results.append(
-            {"session": session, "values": rows, "coverage_loss": dict(sorted(coverage.items()))}
+            {
+                "session": session,
+                "values": rows,
+                "coverage_loss": dict(sorted(coverage.items())),
+                **(
+                    {"common_inputs": common_observations[session]}
+                    if session in common_observations
+                    else {}
+                ),
+            }
         )
         if cancellation_check is not None:
             cancellation_check()
@@ -330,3 +374,24 @@ def issue(reason_code: str, column: int, message: str) -> AlphaValidationIssue:
         location=f"alpha.expression:{column}",
         message=message,
     )
+
+
+def _record_common_input(
+    observations: dict[str, list[dict[str, object]]],
+    sessions: list[str] | tuple[str, ...],
+    identifier: str,
+    industry_code: str | None,
+    series: CommonMarketSeries,
+) -> None:
+    values = getattr(series, COMMON_INPUTS[identifier][0])
+    for index, session in enumerate(sessions):
+        observations.setdefault(session, []).append(
+            {
+                "identifier": identifier,
+                "industry_code": industry_code,
+                "value": finite_or_missing(float(values[index])),
+                "member_count": series.member_count[index],
+                "valid_count": series.valid_count[index],
+                "exclusions": dict(series.exclusions[index]),
+            }
+        )

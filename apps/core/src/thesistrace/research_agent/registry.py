@@ -847,6 +847,7 @@ class ResearchAgentCapabilityRegistry:
                 build=lambda kept, next_cursor: AlphaCatalogView(
                     fields=[item for item in kept if isinstance(item, AlphaFieldCatalogEntry)],
                     builtins=[item for item in kept if isinstance(item, AlphaBuiltinCatalogEntry)],
+                    industries=list(catalog.industries),
                     unknown_identifiers=unknown,
                     next_cursor=next_cursor,
                 ),

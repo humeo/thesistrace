@@ -18,6 +18,7 @@ from thesistrace.research_kernel import (
     continuation_snapshot,
     empty_continuation,
 )
+from thesistrace.research_kernel.common_inputs import requires_common_industry
 from thesistrace.research_kernel.numeric import require_current_numeric_contract
 from thesistrace.research_kernel.tracking_advance import (
     advance_tracking,
@@ -114,9 +115,7 @@ def execute_tracking_target(value: Mapping[str, object]) -> dict[str, object]:
     if not isinstance(target_value, list) or not target_value:
         raise RuntimeError("Tracking Target is invalid")
     target_sessions = tuple(str(session) for session in target_value)
-    require_current_numeric_contract(
-        origin.calculation_contracts.get("numeric_execution_contract")
-    )
+    require_current_numeric_contract(origin.calculation_contracts.get("numeric_execution_contract"))
     store = MountedGenerationStore(Path(str(value["data_mount"])))
     admission = store.open_admission(generation_id)
     if admission.generation.data_through_session != data_through_session:
@@ -129,14 +128,14 @@ def execute_tracking_target(value: Mapping[str, object]) -> dict[str, object]:
     calculation_start_index = origin_calculation_start_index(origin, full_calendar)
     lookback = origin_effective_lookback(origin)
     dependency_sessions = full_calendar[
-        max(calculation_start_index, current_index - max(lookback, 21) + 1) :
-        target_end_index + 1
+        max(calculation_start_index, current_index - max(lookback, 21) + 1) : target_end_index + 1
     ]
     research_data = store.read_columnar_slice(
         generation_id,
         sessions=dependency_sessions,
         universe_name=origin_universe(origin),
         neutralization=origin_neutralization(origin),
+        require_industry=requires_common_industry(origin.immutable_input["alpha_expression"]),
         field_bindings={
             str(key): str(binding)
             for key, binding in origin.immutable_input["field_bindings"].items()
@@ -224,6 +223,7 @@ def _rebuild_continuation(
             sessions=calendar[context_start : chunk_end + 1],
             universe_name=origin_universe(origin),
             neutralization=origin_neutralization(origin),
+            require_industry=requires_common_industry(origin.immutable_input["alpha_expression"]),
             field_bindings={
                 str(key): str(binding)
                 for key, binding in origin.immutable_input["field_bindings"].items()

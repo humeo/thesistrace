@@ -301,6 +301,17 @@ class ColumnarResearchData:
         return _InstrumentProfiles(self._instruments, self._instrument_axis)
 
     @cached_property
+    def historical_universe_members(self) -> Mapping[str, tuple[str, ...]]:
+        return {
+            str(session): tuple(map(str, members))
+            for session, members in zip(
+                self._universes["session"].to_pylist(),
+                self._universes["instrument_ids"].to_pylist(),
+                strict=True,
+            )
+        }
+
+    @cached_property
     def universe_members(self) -> Mapping[str, tuple[str, ...]]:
         return _UniverseMembers(self._universes, self._eod_index)
 

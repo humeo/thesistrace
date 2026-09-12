@@ -65,7 +65,7 @@ const catalog = {
       example: "rank(revenue)",
     },
   ],
-  builtins: [{
+  industries: [], builtins: [{
     identifier: "ts_mean",
     parameters: [{ name: "value", value_type: "numeric_series", minimum: null, maximum: null }],
     result_type: "same_as_first",

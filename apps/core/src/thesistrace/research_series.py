@@ -49,6 +49,7 @@ class AlignedResearchData:
     instruments: dict[str, InstrumentProfile]
     fields: dict[str, dict[Coordinate, NumericValue]]
     universe_members: dict[str, tuple[str, ...]]
+    historical_universe_members: dict[str, tuple[str, ...]]
     industries: dict[Coordinate, str]
     execution_prices: dict[Coordinate, ExecutionPrice]
     trading_states: dict[Coordinate, str]
@@ -63,6 +64,7 @@ class ColumnarResearchSeries(Protocol):
     sessions: tuple[str, ...]
     instruments: Mapping[str, InstrumentProfile]
     universe_members: Mapping[str, tuple[str, ...]]
+    historical_universe_members: Mapping[str, tuple[str, ...]]
     industries: Mapping[Coordinate, str]
     execution_prices: Mapping[Coordinate, ExecutionPrice]
     trading_states: Mapping[Coordinate, str]
@@ -121,6 +123,10 @@ def slice_research_sessions(
         universe_members={
             session: tuple(data.universe_members[session]) for session in selected_sessions
         },
+        historical_universe_members={
+            session: tuple(data.historical_universe_members[session])
+            for session in selected_sessions
+        },
         industries={
             coordinate: value for coordinate, value in selected_coordinates(data.industries).items()
         },
@@ -150,6 +156,10 @@ def research_data_identity(data: AlignedResearchData) -> dict[str, object]:
         },
         "universe_members": {
             session: list(values) for session, values in sorted(data.universe_members.items())
+        },
+        "historical_universe_members": {
+            session: list(values)
+            for session, values in sorted(data.historical_universe_members.items())
         },
         "industries": [
             [session, instrument_id, value]

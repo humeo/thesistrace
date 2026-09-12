@@ -555,6 +555,7 @@ def compose_output(
                 {
                     "session": item["session"],
                     "coverage_loss": item["coverage_loss"],
+                    **({"common_inputs": item["common_inputs"]} if "common_inputs" in item else {}),
                 }
                 for item in matrix["sessions"]
             ],

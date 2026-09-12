@@ -90,6 +90,8 @@ from thesistrace.research_run.models import (
 from thesistrace.research_run.result import (
     RESULT_DAILY_PARTITION_SESSION_COUNT,
     STRATEGY_DAILY_OBSERVATIONS_CONTRACT,
+    common_input_observation_payload,
+    validate_common_chunk_observations,
 )
 from thesistrace.research_run.service import (
     SEMANTIC_VERSIONS,
@@ -364,6 +366,9 @@ class ResearchBatchService:
                 claim_announced = True
             external_emit(event)
 
+        common_partitions: dict[int, list[tuple[StagedPayload, int, str, str]]] = {
+            ordinal: [] for ordinal, _key, _run in claim.items
+        }
         execution: SupervisedResearchBatchExecution | None = None
         private_artifact_path: Path | None = None
         try:
@@ -448,6 +453,33 @@ class ResearchBatchService:
                     if message.get("status") == "item_started":
                         execution.advance("acknowledge_progress")
                         continue
+                    if message.get("status") == "item_common_input_chunk_succeeded":
+                        parts = common_partitions[ordinal]
+                        chunk_ordinal = message.get("chunk_ordinal")
+                        rows = message.get("common_input_observations")
+                        if type(chunk_ordinal) is not int or chunk_ordinal != len(parts) + 1:
+                            raise RuntimeError("Common Batch partition order is invalid")
+                        plan = run_claim.immutable_input.execution_plan
+                        research_sessions = plan.calculation_sessions[plan.research_session_offset:]
+                        offset = (chunk_ordinal - 1) * plan.chunk_session_count
+                        sessions = tuple(day.isoformat() for day in research_sessions[
+                            offset:offset + plan.chunk_session_count
+                        ])
+                        if not sessions or not isinstance(rows, list):
+                            raise RuntimeError("Common Batch partition scope is invalid")
+                        validate_common_chunk_observations(
+                            rows, expression=run_claim.immutable_input.alpha_expression,
+                            sessions=sessions,
+                        )
+                        if not rows:
+                            raise RuntimeError("Unexpected empty Common Batch partition")
+                        staged = self._publication.stage(
+                            common_input_observation_payload(rows),
+                            staging_authority=lambda: self._authorize_claim_staging(claim),
+                        )
+                        parts.append((staged, len(rows), sessions[0], sessions[-1]))
+                        execution.advance("acknowledge_progress")
+                        continue
                     if message.get("status") == "item_strategy_chunk_succeeded":
                         if claim.batch_kind != "strategy_sweep":
                             raise RuntimeError("Research Batch item response Kind is invalid")
@@ -493,6 +525,7 @@ class ResearchBatchService:
                         self._research_runs.complete_batch_owned_strategy_item(
                             run_claim,
                             chunk,
+                            staged_common_partitions=common_partitions[ordinal],
                             staged_partitions=self._strategy_partitions(
                                 claim,
                                 item_ordinal=ordinal,
@@ -527,6 +560,7 @@ class ResearchBatchService:
                         self._research_runs.complete_batch_owned_factor_item(
                             run_claim,
                             chunk,
+                            staged_common_partitions=common_partitions[ordinal],
                             authorize_batch=lambda transaction: (
                                 self._authorize_claim_in_transaction(transaction, claim)
                             ),

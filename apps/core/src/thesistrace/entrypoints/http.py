@@ -45,6 +45,11 @@ from thesistrace.daily_track import (
     RetryDailyTrackCommand,
     StopDailyTrackCommand,
 )
+from thesistrace.daily_track.models import (
+    DailyTrackCommonInputObservationsResultSection,
+    DailyTrackCommonInputObservationsResultSectionInput,
+)
+from thesistrace.daily_track.service import DailyTrackResultReadFailed, DailyTrackResultUnavailable
 from thesistrace.data import (
     DataOverview,
     DataRefreshError,
@@ -127,6 +132,14 @@ from thesistrace.research_run import (
     ResearchRunTrackingTemporarilyUnavailable,
     ResearchRunTrackingUnavailable,
     StartTrackingCommand,
+)
+from thesistrace.research_run.models import (
+    CommonInputObservationsResultSection,
+    CommonInputObservationsResultSectionInput,
+)
+from thesistrace.research_run.service import (
+    ResearchRunInvalidCursor,
+    ResearchRunResultReadFailed,
 )
 from thesistrace.researcher import ResearcherBootstrapResult, ResearcherIdentity
 
@@ -1152,6 +1165,40 @@ def create_app(
             raise HTTPException(status_code=404, detail="ResearchRun not found")
         return run
 
+    @app.get(
+        "/api/research-runs/{run_id}/common-input-observations",
+        response_model=CommonInputObservationsResultSection,
+    )
+    def get_run_common_inputs(
+        request: Request,
+        run_id: str,
+        cursor: str | None = Query(default=None, min_length=1, max_length=1024),
+        limit: int = Query(default=20, ge=1, le=50),
+    ) -> CommonInputObservationsResultSection:
+        try:
+            result = _runtime(request).research_runs.get_result_section(
+                _researcher_id(request),
+                CommonInputObservationsResultSectionInput(
+                    run_id=run_id,
+                    section="common_input_observations",
+                    cursor=cursor,
+                    limit=limit,
+                ),
+            )
+        except ResearchRunInvalidCursor as error:
+            raise HTTPException(status_code=400, detail="Invalid result cursor") from error
+        except ResearchRunResultUnavailable as error:
+            raise HTTPException(
+                status_code=409, detail="ResearchRun result is not available"
+            ) from error
+        except (ResearchRunResultReadFailed, ResearchRunTemporarilyUnavailable) as error:
+            raise HTTPException(
+                status_code=503, detail="ResearchRun result is unavailable"
+            ) from error
+        if result is None:
+            raise HTTPException(status_code=404, detail="ResearchRun not found")
+        return result
+
     @app.delete(
         "/api/research-runs/{run_id}",
         status_code=status.HTTP_204_NO_CONTENT,
@@ -1245,6 +1292,40 @@ def create_app(
         if track is None:
             raise HTTPException(status_code=404, detail="DailyTrack not found")
         return track
+
+    @app.get(
+        "/api/daily-tracks/{track_id}/common-input-observations",
+        response_model=DailyTrackCommonInputObservationsResultSection,
+    )
+    def get_track_common_inputs(
+        request: Request,
+        track_id: str,
+        cursor: str | None = Query(default=None, min_length=1, max_length=1024),
+        limit: int = Query(default=20, ge=1, le=50),
+    ) -> DailyTrackCommonInputObservationsResultSection:
+        try:
+            result = _runtime(request).daily_tracks.get_result_section(
+                _researcher_id(request),
+                DailyTrackCommonInputObservationsResultSectionInput(
+                    track_id=track_id,
+                    section="common_input_observations",
+                    cursor=cursor,
+                    limit=limit,
+                ),
+            )
+        except DailyTrackInvalidCursor as error:
+            raise HTTPException(status_code=400, detail="Invalid or stale result cursor") from error
+        except DailyTrackResultUnavailable as error:
+            raise HTTPException(
+                status_code=409, detail="DailyTrack result is not available"
+            ) from error
+        except (DailyTrackResultReadFailed, DailyTrackTemporarilyUnavailable) as error:
+            raise HTTPException(
+                status_code=503, detail="DailyTrack result is unavailable"
+            ) from error
+        if result is None:
+            raise HTTPException(status_code=404, detail="DailyTrack not found")
+        return result
 
     @app.delete(
         "/api/daily-tracks/{track_id}",

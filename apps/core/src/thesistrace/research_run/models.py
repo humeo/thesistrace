@@ -22,6 +22,7 @@ from thesistrace.alpha_language.models import DiagnosticDetails, SourceRange
 from thesistrace.benchmark import StrategyComparison, StrategyComparisonSummary
 from thesistrace.daily_track.models import DailyTrackSummary
 from thesistrace.data.models import FinancialResearchReadiness
+from thesistrace.research_kernel.common_observations import CommonInputObservation
 from thesistrace.research_kernel.numeric import MAX_INITIAL_CASH_CNY
 from thesistrace.research_run.result_schema import StrategyMetrics
 
@@ -108,6 +109,7 @@ type ResearchRunResultSection = Literal[
     "terminal_strategy_state",
     "terminal_positions",
     "provenance",
+    "common_input_observations",
 ]
 type ResearchUniverse = Literal["top300", "top1000", "top2000", "top3000"]
 type ResearchNeutralization = Literal["none", "industry"]
@@ -116,6 +118,7 @@ RESEARCH_RUN_POLL_RETRY_SECONDS = 2
 FACTOR_RESULT_SECTIONS: tuple[ResearchRunResultSection, ...] = (
     "factor",
     "provenance",
+    "common_input_observations",
 )
 STRATEGY_RESULT_SECTIONS: tuple[ResearchRunResultSection, ...] = (
     "strategy_summary",
@@ -123,6 +126,7 @@ STRATEGY_RESULT_SECTIONS: tuple[ResearchRunResultSection, ...] = (
     "terminal_strategy_state",
     "terminal_positions",
     "provenance",
+    "common_input_observations",
 )
 RESEARCH_KINDS: tuple[ResearchKind, ...] = (
     "factor_evaluation",
@@ -698,6 +702,12 @@ class TerminalPositionsResultSectionInput(_ResearchRunResultSectionInput):
     limit: ResultPageLimit = 20
 
 
+class CommonInputObservationsResultSectionInput(_ResearchRunResultSectionInput):
+    section: Literal["common_input_observations"]
+    cursor: ResultCursor | None = None
+    limit: ResultPageLimit = 20
+
+
 class ProvenanceResultSectionInput(_ResearchRunResultSectionInput):
     section: Literal["provenance"]
 
@@ -708,7 +718,8 @@ type ResearchRunResultSectionInput = Annotated[
     | StrategyObservationsResultSectionInput
     | TerminalStrategyStateResultSectionInput
     | TerminalPositionsResultSectionInput
-    | ProvenanceResultSectionInput,
+    | ProvenanceResultSectionInput
+    | CommonInputObservationsResultSectionInput,
     Field(discriminator="section"),
 ]
 
@@ -751,6 +762,16 @@ class StrategySummaryResultSection(BaseModel):
     initial_cash_cny: str
     metrics: StrategyMetrics
     comparison: StrategyComparisonSummary
+
+
+class CommonInputObservationsResultSection(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    section: Literal["common_input_observations"] = "common_input_observations"
+    run_id: str
+    research_kind: ResearchKind
+    items: list[CommonInputObservation]
+    next_cursor: str | None
 
 
 class StrategyObservationsResultSection(BaseModel):
@@ -823,7 +844,8 @@ type ResearchRunResultSectionResponse = Annotated[
     | StrategyObservationsResultSection
     | TerminalStrategyStateResultSection
     | TerminalPositionsResultSection
-    | ProvenanceResultSection,
+    | ProvenanceResultSection
+    | CommonInputObservationsResultSection,
     Field(discriminator="section"),
 ]
 

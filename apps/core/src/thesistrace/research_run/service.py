@@ -59,6 +59,10 @@ from thesistrace.publication import (
 )
 from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.research_kernel.alpha_expression import estimate_alpha_run_work
+from thesistrace.research_kernel.common_inputs import (
+    common_input_references,
+    requires_common_industry,
+)
 from thesistrace.research_kernel.numeric import (
     NUMERIC_CONTRACT_ID,
     NumericContractError,
@@ -84,6 +88,8 @@ from thesistrace.research_run.failure_policy import (
 )
 from thesistrace.research_run.models import (
     AlphaAdmissionFacts,
+    CommonInputObservationsResultSection,
+    CommonInputObservationsResultSectionInput,
     DataAdmissionFacts,
     FactorEvaluationResearchRunKeyMetrics,
     FactorEvaluationResearchRunResult,
@@ -141,13 +147,17 @@ from thesistrace.research_run.planning import (
 )
 from thesistrace.research_run.quota import daily_run_count
 from thesistrace.research_run.result import (
+    COMMON_INPUT_OBSERVATIONS_CONTRACT,
     STRATEGY_DAILY_OBSERVATIONS_CONTRACT,
     ResearchResultError,
     SemanticResultSectionRead,
+    common_input_observation_payload,
     enforce_result_bundle_budget,
+    read_common_input_observation_partition,
     read_result_bundle,
     read_semantic_result_section,
     result_publication_payloads_from_staged,
+    validate_common_chunk_observations,
 )
 from thesistrace.researcher.quota import (
     QuotaPolicyLookup,
@@ -584,12 +594,14 @@ class ResearchRunService:
         claim: ResearchRunExecutionClaim,
         final_chunk: Mapping[str, object],
         *,
+        staged_common_partitions: Sequence[tuple[StagedPayload, int, str, str]],
         authorize_batch: BatchExecutionAuthorization,
         complete_batch_item: BatchItemCompletion,
     ) -> None:
         if self._publication is None:
             raise RuntimeError("ResearchRun Result publication is not configured")
         final_values = self._validate_batch_factor_final_chunk(claim, final_chunk)
+        _validate_batch_common_partitions(claim.immutable_input, staged_common_partitions)
         provenance = _result_provenance(claim)
         key_metrics = _result_key_metrics(final_values, "factor_evaluation")
         prepared = self._publication.prepare(
@@ -598,6 +610,7 @@ class ResearchRunService:
                 final_values,
                 [],
                 research_kind="factor_evaluation",
+                common_partitions=staged_common_partitions,
             ),
             provenance=provenance,
             staging_authority=lambda: self._authorize_batch_result_staging(
@@ -721,6 +734,7 @@ class ResearchRunService:
         claim: ResearchRunExecutionClaim,
         final_chunk: Mapping[str, object],
         *,
+        staged_common_partitions: Sequence[tuple[StagedPayload, int, str, str]],
         staged_partitions: Sequence[tuple[StagedPayload, int, str, str]],
         authorize_batch: BatchExecutionAuthorization,
         complete_batch_item: BatchItemCompletion,
@@ -731,6 +745,7 @@ class ResearchRunService:
             claim,
             final_chunk,
         )
+        _validate_batch_common_partitions(claim.immutable_input, staged_common_partitions)
         provenance = _result_provenance(claim)
         key_metrics = _result_key_metrics(
             final_values,
@@ -754,6 +769,7 @@ class ResearchRunService:
                 final_values,
                 partitions,
                 research_kind="strategy_backtest",
+                common_partitions=staged_common_partitions,
             ),
             provenance=provenance,
             staging_authority=lambda: self._authorize_batch_result_staging(
@@ -2386,6 +2402,13 @@ class ResearchRunService:
                 order="session_asc",
                 manifest_sha256=manifest_sha256,
             )
+        elif isinstance(query, CommonInputObservationsResultSectionInput):
+            limit = query.limit
+            after = _decode_result_cursor(
+                query.cursor, secret=cursor_secret, researcher_id=researcher_id,
+                run_id=query.run_id, section=query.section,
+                order="session_identifier_industry_asc", manifest_sha256=manifest_sha256,
+            )
         elif isinstance(query, TerminalPositionsResultSectionInput):
             limit = query.limit
             after = _decode_result_cursor(
@@ -2403,6 +2426,7 @@ class ResearchRunService:
                 published_ref,
                 research_kind=immutable_input.research_kind,
                 section=query.section,
+                has_common_inputs=bool(common_input_references(immutable_input.alpha_expression)),
                 after=after,
                 limit=limit,
             )
@@ -2942,6 +2966,7 @@ class ResearchRunService:
                 completed_warmup += plan_chunk.warmup_session_count
                 completed_research += plan_chunk.research_session_count
                 observation_value = row["observation_payload"]
+                common_value = row["common_observation_payload"]
                 final_values_value = row["final_values_payload"]
                 binding = _checkpoint_binding(
                     immutable_input=claim.immutable_input,
@@ -2957,6 +2982,9 @@ class ResearchRunService:
                     continuation_payload=dict(row["continuation_payload"]),
                     observation_payload=(
                         None if observation_value is None else dict(observation_value)
+                    ),
+                    common_observation_payload=(
+                        None if common_value is None else dict(common_value)
                     ),
                     final_values_payload=(
                         None if final_values_value is None else dict(final_values_value)
@@ -2993,6 +3021,8 @@ class ResearchRunService:
                 expected_payload_names = {"continuation"}
                 if observation_value is not None:
                     expected_payload_names.add("strategy_daily_observations")
+                if common_value is not None:
+                    expected_payload_names.add("common_input_observations")
                 if final_values_value is not None:
                     expected_payload_names.add("final_values")
                 if set(bundle.payloads) != expected_payload_names:
@@ -3026,6 +3056,19 @@ class ResearchRunService:
                     }
                 ):
                     raise ResearchCheckpointIntegrityError
+                common_rows = []
+                if common_value is not None:
+                    common_payload = bundle.payloads["common_input_observations"]
+                    if common_payload.serialization != {
+                        "format": "canonical-parquet",
+                        "writer_contract": COMMON_INPUT_OBSERVATIONS_CONTRACT.descriptor(),
+                    } or common_payload.media_type != "application/vnd.apache.parquet":
+                        raise ResearchCheckpointIntegrityError
+                    common_rows = read_common_input_observation_partition(common_payload.content)
+                validate_common_chunk_observations(
+                    common_rows, expression=claim.immutable_input.alpha_expression,
+                    sessions=_checkpoint_research_sessions(claim.immutable_input, expected_ordinal),
+                )
                 prior_chain = chain_sha256
             latest = rows[-1]
             if (
@@ -3102,6 +3145,15 @@ class ResearchRunService:
                 """,
                 (claim.run_id,),
             ).fetchall()
+            common_rows = transaction.execute(
+                """
+                SELECT ordinal, common_observation_payload
+                FROM research_runs.execution_checkpoints
+                WHERE run_id = %s AND common_observation_payload IS NOT NULL
+                ORDER BY ordinal
+                """,
+                (claim.run_id,),
+            ).fetchall()
             progress = transaction.execute(
                 """
                 SELECT completed_research_sessions
@@ -3119,12 +3171,23 @@ class ResearchRunService:
             )
             for row in rows
         ]
+        common_partitions = []
+        input_count = len(common_input_references(claim.immutable_input.alpha_expression))
+        for row in common_rows:
+            sessions = _checkpoint_research_sessions(claim.immutable_input, int(row["ordinal"]))
+            if not sessions or input_count == 0:
+                raise ResearchResultError("Unexpected common observation checkpoint partition")
+            common_partitions.append((
+                _staged_payload(row["common_observation_payload"]),
+                len(sessions) * input_count, sessions[0], sessions[-1],
+            ))
         prepared = self._publication.prepare(
             kind="research.result",
             payloads=result_publication_payloads_from_staged(
                 final_values,
                 partitions,
                 research_kind=claim.immutable_input.research_kind,
+                common_partitions=common_partitions,
             ),
             provenance=provenance,
             staging_authority=lambda: self._authorize_result_staging(claim),
@@ -3150,6 +3213,7 @@ class ResearchRunService:
         completed_research = int(chunk["completed_research_sessions"])
         continuation = chunk.get("continuation")
         observations = chunk.get("strategy_daily_observations")
+        common_rows = chunk.get("common_input_observations")
         final_values = chunk.get("final_values")
         try:
             plan_chunk = claim.immutable_input.execution_plan.chunks[ordinal - 1]
@@ -3189,6 +3253,20 @@ class ResearchRunService:
             )
         except ValueError as error:
             raise ResearchResultError("Research Chunk continuation is invalid") from error
+        if not isinstance(common_rows, list) or any(
+            not isinstance(row, Mapping) for row in common_rows
+        ):
+            raise ResearchResultError("Common Chunk observations are invalid")
+        validate_common_chunk_observations(
+            common_rows, expression=claim.immutable_input.alpha_expression,
+            sessions=_checkpoint_research_sessions(claim.immutable_input, ordinal),
+        )
+        common_payload = (
+            self._publication.stage(
+                common_input_observation_payload(common_rows),
+                staging_authority=lambda: self._authorize_result_staging(claim),
+            ) if common_rows else None
+        )
         continuation_payload = self._publication.stage(
             JsonPayload(continuation),
             staging_authority=lambda: self._authorize_result_staging(claim),
@@ -3250,6 +3328,9 @@ class ResearchRunService:
             completed_research_sessions=completed_research,
             continuation_payload=continuation_value,
             observation_payload=observation_value,
+            common_observation_payload=(
+                _staged_payload_value(common_payload) if common_payload is not None else None
+            ),
             final_values_payload=final_values_value,
             prior_chain_sha256=expected_prior_chain,
         )
@@ -3258,6 +3339,10 @@ class ResearchRunService:
             kind="research.execution-checkpoint",
             payloads={
                 "continuation": continuation_payload,
+                **(
+                    {"common_input_observations": common_payload}
+                    if common_payload is not None else {}
+                ),
                 **(
                     {"strategy_daily_observations": observation_payload}
                     if observation_payload is not None
@@ -3301,11 +3386,12 @@ class ResearchRunService:
                 INSERT INTO research_runs.execution_checkpoints (
                     id, run_id, attempt_id, ordinal, boundary_session, phase,
                     completed_warmup_sessions, completed_research_sessions,
-                    continuation_payload, observation_payload, final_values_payload,
+                    continuation_payload, observation_payload, common_observation_payload,
+                    final_values_payload,
                     observation_row_count, observation_first_session,
                     observation_last_session, checkpoint_manifest_sha256,
                     chain_sha256
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     f"checkpoint_{uuid4().hex[:20]}",
@@ -3318,6 +3404,8 @@ class ResearchRunService:
                     completed_research,
                     Jsonb(continuation_value),
                     Jsonb(observation_value) if observation_value is not None else None,
+                    (Jsonb(_staged_payload_value(common_payload))
+                     if common_payload is not None else None),
                     Jsonb(final_values_value) if final_values_value is not None else None,
                     len(observations),
                     observations[0]["session"] if observations else None,
@@ -3836,6 +3924,7 @@ def _admitted_input(
     dependencies = resolve_data_dependencies(
         field_ids=field_ids,
         neutralization=command.neutralization,
+        require_industry=requires_common_industry(compiled.expression),
     )
     if dependencies.financial:
         first_index = snapshot.research_sessions.index(sessions[0])
@@ -3867,12 +3956,19 @@ def _admitted_input(
                 ]
             )
     if dependencies.industry:
+        common_industry = requires_common_industry(compiled.expression)
+        first_index = snapshot.research_sessions.index(sessions[0])
+        required_start = (
+            snapshot.research_sessions[max(0, first_index - compiled.effective_lookback)]
+            if common_industry
+            else sessions[0]
+        )
         industry_start = snapshot.industry_coverage_start
         industry_end = snapshot.industry_coverage_end
         if (
             industry_start is None
             or industry_end is None
-            or sessions[0] < industry_start
+            or required_start < industry_start
             or sessions[-1] > industry_end
         ):
             available = (
@@ -3884,10 +3980,27 @@ def _admitted_input(
                 [
                     ResearchRunAdmissionIssue(
                         code="INDUSTRY_CALCULATION_OUTSIDE_COVERAGE",
-                        field="neutralization",
+                        field="formula" if common_industry else "neutralization",
                         message=(
-                            "Industry Neutralization needs its requested period inside "
-                            f"Industry Coverage; current Industry Coverage is {available}."
+                            (
+                                "Common industry inputs need their calculation period "
+                                "and lookback inside "
+                                if common_industry
+                                else "Industry Neutralization needs its requested period inside "
+                            )
+                            + f"Industry Coverage; current Industry Coverage is {available}."
+                        ),
+                        range=(
+                            {
+                                "start": {"offset": 0, "line": 1, "column": 1},
+                                "end": {
+                                    "offset": len(compiled.source),
+                                    "line": compiled.source.count("\n") + 1,
+                                    "column": len(compiled.source.rsplit("\n", 1)[-1]) + 1,
+                                },
+                            }
+                            if common_industry
+                            else None
                         ),
                     )
                 ]
@@ -4388,6 +4501,7 @@ def _checkpoint_binding(
     completed_research_sessions: int,
     continuation_payload: Mapping[str, object],
     observation_payload: Mapping[str, object] | None,
+    common_observation_payload: Mapping[str, object] | None,
     final_values_payload: Mapping[str, object] | None,
     prior_chain_sha256: str | None,
 ) -> dict[str, object]:
@@ -4432,6 +4546,9 @@ def _checkpoint_binding(
         "completed_research_sessions": completed_research_sessions,
         "continuation_payload": dict(continuation_payload),
         "observation_payload": (None if observation_payload is None else dict(observation_payload)),
+        "common_observation_payload": (
+            None if common_observation_payload is None else dict(common_observation_payload)
+        ),
         "final_values_payload": (
             None if final_values_payload is None else dict(final_values_payload)
         ),
@@ -4537,6 +4654,36 @@ def _result_section_response(
                 "metrics": metrics,
                 "comparison": comparison,
             }
+        )
+    if isinstance(query, CommonInputObservationsResultSectionInput):
+        page = CommonInputObservationsResultSection.model_validate(
+            {
+                "run_id": run_id,
+                "research_kind": research_kind,
+                "items": section_read.value,
+                "next_cursor": None,
+            }
+        )
+        return fit_page(
+            page.items,
+            lambda kept: page.model_copy(
+                update={
+                    "items": kept,
+                    "next_cursor": _encode_result_cursor(
+                        "|".join(
+                            (kept[-1].session, kept[-1].identifier, kept[-1].industry_code or "")
+                        ),
+                        secret=cursor_secret,
+                        researcher_id=researcher_id,
+                        run_id=run_id,
+                        section=query.section,
+                        order="session_identifier_industry_asc",
+                        manifest_sha256=manifest_sha256,
+                    )
+                    if kept and (len(kept) < len(page.items) or section_read.next_after is not None)
+                    else None,
+                }
+            ),
         )
     if isinstance(query, StrategyObservationsResultSectionInput):
         page = StrategyObservationsResultSection.model_validate(
@@ -4803,3 +4950,33 @@ def research_result_manifest_is_referenced(
         ).fetchone()
         is not None
     )
+
+
+def _checkpoint_research_sessions(
+    immutable_input: ImmutableRunInput, ordinal: int,
+) -> tuple[str, ...]:
+    plan = immutable_input.execution_plan
+    chunk = plan.chunks[ordinal - 1]
+    return tuple(
+        session.isoformat()
+        for session in plan.calculation_sessions[plan.research_session_offset:]
+        if chunk.first_session <= session <= chunk.last_session
+    )
+
+
+def _validate_batch_common_partitions(
+    immutable_input: ImmutableRunInput,
+    partitions: Sequence[tuple[StagedPayload, int, str, str]],
+) -> None:
+    input_count = len(common_input_references(immutable_input.alpha_expression))
+    plan = immutable_input.execution_plan
+    sessions = plan.calculation_sessions[plan.research_session_offset :]
+    expected = []
+    if input_count:
+        for offset in range(0, len(sessions), plan.chunk_session_count):
+            window = sessions[offset : offset + plan.chunk_session_count]
+            expected.append(
+                (len(window) * input_count, window[0].isoformat(), window[-1].isoformat())
+            )
+    if [(count, first, last) for _payload, count, first, last in partitions] != expected:
+        raise ResearchResultError("Batch common observation partitions are incomplete")

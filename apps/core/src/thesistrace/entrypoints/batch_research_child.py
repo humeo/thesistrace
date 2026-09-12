@@ -90,6 +90,7 @@ def _expected_command(response: dict[str, object]) -> str:
         "shared_alpha_factor_chunk_succeeded",
         "item_started",
         "item_strategy_chunk_succeeded",
+        "item_common_input_chunk_succeeded",
     }:
         return "acknowledge_progress"
     if status == "item_failed":

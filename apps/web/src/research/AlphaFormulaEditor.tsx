@@ -85,6 +85,12 @@ export function AlphaFormulaEditor({
       ...["and", "or", "not"].map((label) => ({
         label, type: "keyword", detail: "Boolean operator; unknown values remain unknown",
       })),
+      ...catalog.industries.map((industry) => ({
+        label: String(industry.code),
+        type: "constant",
+        detail: `SW2021 L1 · ${industry.name}`,
+        info: "Historical industry subset of the selected research Universe; not an official index.",
+      })),
       ...catalog.fields.map((field) => ({
         label: field.identifier,
         type: "variable",
@@ -116,9 +122,9 @@ export function AlphaFormulaEditor({
         keymap.of([]),
         autocompletion({
           override: [(context) => {
-            const token = context.matchBefore(/[A-Za-z_][A-Za-z0-9_]*/);
+            const token = context.matchBefore(/[A-Za-z_][A-Za-z0-9_]*|[0-9]+/);
             if (token === null && !context.explicit) return null;
-            return { from: token?.from ?? context.pos, options, validFor: /^[A-Za-z_][A-Za-z0-9_]*$/ };
+            return { from: token?.from ?? context.pos, options, validFor: /^(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+)$/ };
           }],
         }),
         EditorView.updateListener.of((update) => {

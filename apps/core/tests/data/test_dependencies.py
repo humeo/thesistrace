@@ -25,3 +25,12 @@ def test_data_dependencies_are_derived_from_fields_and_neutralization() -> None:
     assert combined.required_families == frozenset(
         {"market", "financial", "industry"}
     )
+
+
+def test_industry_conditions_require_industry_without_neutralization() -> None:
+    dependencies = resolve_data_dependencies(
+        field_ids={"price.close.adjusted"},
+        neutralization="none",
+        require_industry=True,
+    )
+    assert dependencies.required_families == frozenset({"market", "industry"})

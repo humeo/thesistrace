@@ -178,6 +178,7 @@ def research_context_payload() -> dict[str, object]:
 def alpha_catalog_payload() -> dict[str, object]:
     catalog = alpha_language.catalog()
     return AlphaCatalogView(
+        industries=[],
         fields=[item for item in catalog.fields if item.identifier == "close"],
         builtins=[item for item in catalog.builtins if item.identifier == "ts_mean"],
         unknown_identifiers=[],
@@ -233,7 +234,7 @@ def run_polling_payload(
         finished_at = datetime(2024, 2, 1, 0, 0, 20, tzinfo=UTC)
         elapsed_seconds = 20.0
         sections = (
-            ("factor", "provenance")
+            ("factor", "provenance", "common_input_observations")
             if research_kind == "factor_evaluation"
             else (
                 "strategy_summary",
@@ -241,6 +242,7 @@ def run_polling_payload(
                 "terminal_strategy_state",
                 "terminal_positions",
                 "provenance",
+                "common_input_observations",
             )
         )
     detail = ResearchRunPollingDetail(

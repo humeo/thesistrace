@@ -13,6 +13,7 @@ from thesistrace.daily_track.observation_state import (
     TrackingObservationState,
     advance_tracking_observation_state,
 )
+from thesistrace.research_kernel.common_observations import common_input_observation_rows
 from thesistrace.research_kernel.kernel_advance import continuation_snapshot
 from thesistrace.research_kernel.kernel_run import (
     KernelRunError,
@@ -78,6 +79,9 @@ def project_tracking_checkpoint(
             "neutralization": alpha["neutralization"],
         },
         "strategy_state": strategy_state,
+        "common_input_observations": common_input_observation_rows(
+            alpha, sessions=tuple(retained_strategy_sessions),
+        ),
         "continuation_sha256": hashlib.sha256(continuation_bytes).hexdigest(),
         "pending_alpha_sessions": len(continuation["pending_alpha"]),
     }

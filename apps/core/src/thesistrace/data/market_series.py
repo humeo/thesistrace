@@ -51,6 +51,7 @@ def align_market_research_data(
     industry_membership: list[dict[str, object]],
     field_bindings: Mapping[str, str],
     neutralization: str,
+    require_industry: bool = False,
 ) -> AlignedResearchData:
     aligned_sessions = tuple(str(value) for value in sessions)
     ranked_universe_members = {
@@ -122,13 +123,13 @@ def align_market_research_data(
         if str(row["session"]) in aligned_sessions and str(row["instrument_id"]) in instrument_ids
     }
     industries: dict[tuple[str, str], str] = {}
-    if neutralization == "industry":
+    if neutralization == "industry" or require_industry:
         memberships: dict[str, list[dict[str, object]]] = {}
         for row in industry_membership:
             instrument_id = str(row["instrument_id"])
             if instrument_id in instrument_ids:
                 memberships.setdefault(instrument_id, []).append(row)
-        for session, members in universe_members.items():
+        for session, members in ranked_universe_members.items():
             for instrument_id in members:
                 visible = [
                     row
@@ -143,6 +144,7 @@ def align_market_research_data(
         instruments=instruments,
         fields=fields,
         universe_members=universe_members,
+        historical_universe_members=ranked_universe_members,
         industries=industries,
         execution_prices=execution_prices,
         trading_states=trading_states,

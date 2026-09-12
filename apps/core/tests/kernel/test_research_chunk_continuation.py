@@ -164,6 +164,10 @@ class _ColumnarFixture:
     price_limits: dict[tuple[str, str], PriceLimit]
     matrices: dict[str, np.ndarray]
 
+    @property
+    def historical_universe_members(self):
+        return self.universe_members
+
     def snapshot(self) -> _ColumnarFixture:
         return self
 
@@ -223,6 +227,7 @@ class _ColumnarFixture:
 def _minimal_alpha_factor_case(
     *,
     session_count: int = 30,
+    formula: str = "rank(close)",
 ) -> tuple[_ColumnarFixture, RunInput]:
     sessions = tuple(f"s{index:02d}" for index in range(session_count))
     instrument_ids = tuple(f"equity:{index:03d}.SH" for index in range(40))
@@ -265,7 +270,7 @@ def _minimal_alpha_factor_case(
             )
         },
     )
-    compiled = alpha_language.compile("rank(close)")
+    compiled = alpha_language.compile(formula)
     run_input = RunInput(
         research_data=fixture,
         alpha_expression=compiled.expression,
@@ -1326,3 +1331,44 @@ def _read_staged_chunk_result(
         ),
         research_kind="strategy_backtest",
     )
+
+
+def test_common_input_observations_survive_chunk_compression_and_reuse():
+    fixture, run_input = _minimal_alpha_factor_case(formula="rank(close) * universe_return()")
+    binding = _alpha_factor_binding(run_input)
+    outcome = execute_alpha_factor_chunk(
+        run_input=run_input, binding=binding, research_data=fixture,
+        forward_labels=_forward_labels(fixture), research_sessions=fixture.sessions,
+        final_chunk=True, continuation=empty_alpha_factor_continuation(),
+        cancellation_check=lambda: None,
+    )
+    observations = outcome.alpha_matrix_snapshot()["sessions"][1]["common_inputs"]
+    assert len(observations) == 1
+    assert observations[0]["identifier"] == "universe_return"
+    assert observations[0]["member_count"] == 40
+    assert observations[0]["valid_count"] == 40
+    assert observations[0]["exclusions"] == {}
+    restored = AlphaFactorChunkOutcome.from_compact_for_reuse(
+        outcome.compact_for_reuse(), binding=binding,
+    )
+    assert restored.alpha_matrix_snapshot() == outcome.alpha_matrix_snapshot()
+
+
+def test_research_chunks_emit_common_statistics_only_for_new_sessions():
+    fixture, run_input = _minimal_alpha_factor_case(formula="rank(close) * universe_return()")
+    binding = _alpha_factor_binding(run_input)
+    state = empty_research_continuation("factor_evaluation")
+    for sessions in (fixture.sessions[:15], fixture.sessions[15:]):
+        result = execute_research_chunk(
+            run_input=run_input, binding=binding, research_data=fixture,
+            forward_labels=_forward_labels(fixture), research_sessions=sessions,
+            final_chunk=sessions[-1] == fixture.sessions[-1], continuation=state,
+            cancellation_check=lambda: None,
+        )
+        state = result.continuation
+        assert tuple(row["session"] for row in result.common_input_sessions) == sessions
+        assert all("values" not in row for row in result.common_input_sessions)
+        assert all(
+            row["common_inputs"][0]["member_count"] == 40
+            for row in result.common_input_sessions
+        )

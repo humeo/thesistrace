@@ -15,7 +15,7 @@ from core_runtime import TEST_RESEARCHER, drop_product_schemas, isolated_core_se
 from core_runtime import create_initialized_test_app as create_app
 from fastapi.testclient import TestClient
 from psycopg.types.json import Jsonb
-from test_core_research_batch_admission import _publish_current_data, _strategy_command
+from test_core_research_batch_admission import SESSIONS, _publish_current_data, _strategy_command
 from test_core_research_batch_factor_recovery import (
     _expire_batch_attempt,
     _lost_attempt_evidence,
@@ -541,7 +541,10 @@ def test_strategy_deterministic_start_failure_is_not_retried(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-@pytest.mark.parametrize("formula", ["close", "if_else(close > 0, close, -close)"])
+@pytest.mark.parametrize("formula", [
+    "close", "if_else(close > 0, close, -close)",
+    pytest.param("close * universe_advancing_fraction()", id="common_input"),
+])
 def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
     tmp_path: Path,
     formula,
@@ -550,7 +553,7 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
     drop_product_schemas(settings)
     events: list[dict[str, object]] = []
     with TestClient(create_app(settings)) as client:
-        generation_id = _publish_current_data(settings)
+        generation_id = _publish_current_data(settings, sessions=("2026-07-31", *SESSIONS))
         BenchmarkSnapshotStore(settings.benchmark_mount).publish(
             (
                 BenchmarkLevel("2010-01-04", "3500"),
@@ -566,6 +569,7 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
             "end_date": "2026-08-05",
         }
         batch = client.post("/api/research-batches", json=command).json()
+        assert "items" in batch, batch
         child_ids = [str(item["research_run_id"]) for item in batch["items"]]
         assert client.delete(f"/api/research-runs/{child_ids[0]}").status_code == 409
         batch_folder_runs = client.get(

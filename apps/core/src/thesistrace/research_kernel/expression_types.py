@@ -8,12 +8,25 @@ class ValueType(StrEnum):
     NUMBER = "number"
     BOOLEAN_SERIES = "boolean_series"
     BOOLEAN = "boolean"
+    COMMON_NUMERIC_SERIES = "common_numeric_series"
+    COMMON_BOOLEAN_SERIES = "common_boolean_series"
     WINDOW = "window"
 
 
-NUMERIC_TYPES = frozenset({ValueType.NUMBER, ValueType.NUMERIC_SERIES})
-BOOLEAN_TYPES = frozenset({ValueType.BOOLEAN, ValueType.BOOLEAN_SERIES})
-SERIES_TYPES = frozenset({ValueType.NUMERIC_SERIES, ValueType.BOOLEAN_SERIES})
+NUMERIC_TYPES = frozenset(
+    {ValueType.NUMBER, ValueType.NUMERIC_SERIES, ValueType.COMMON_NUMERIC_SERIES}
+)
+BOOLEAN_TYPES = frozenset(
+    {ValueType.BOOLEAN, ValueType.BOOLEAN_SERIES, ValueType.COMMON_BOOLEAN_SERIES}
+)
+SERIES_TYPES = frozenset(
+    {
+        ValueType.NUMERIC_SERIES,
+        ValueType.BOOLEAN_SERIES,
+        ValueType.COMMON_NUMERIC_SERIES,
+        ValueType.COMMON_BOOLEAN_SERIES,
+    }
+)
 COMPARISON_OPERATORS = frozenset({"gt", "ge", "lt", "le", "eq", "ne"})
 ARITHMETIC_OPERATORS = frozenset({"add", "subtract", "multiply", "divide"})
 BOOLEAN_OPERATORS = frozenset({"and", "or"})
@@ -35,10 +48,17 @@ def binary_result_type(operator: str, left: ValueType, right: ValueType) -> Valu
         raise ValueError(f"Unknown binary operator: {operator}")
     if left not in allowed or right not in allowed:
         raise ValueError(f"{operator} cannot combine {left.value} and {right.value}")
-    series = left in SERIES_TYPES or right in SERIES_TYPES
-    if operator in BOOLEAN_OPERATORS | COMPARISON_OPERATORS:
-        return ValueType.BOOLEAN_SERIES if series else ValueType.BOOLEAN
-    return ValueType.NUMERIC_SERIES if series else ValueType.NUMBER
+    return _result_scope(
+        (left, right), boolean=operator in BOOLEAN_OPERATORS | COMPARISON_OPERATORS
+    )
+
+
+def _result_scope(types: tuple[ValueType, ...], *, boolean: bool) -> ValueType:
+    if any(value in {ValueType.NUMERIC_SERIES, ValueType.BOOLEAN_SERIES} for value in types):
+        return ValueType.BOOLEAN_SERIES if boolean else ValueType.NUMERIC_SERIES
+    if any(value in SERIES_TYPES for value in types):
+        return ValueType.COMMON_BOOLEAN_SERIES if boolean else ValueType.COMMON_NUMERIC_SERIES
+    return ValueType.BOOLEAN if boolean else ValueType.NUMBER
 
 
 def conditional_result_type(
@@ -49,9 +69,9 @@ def conditional_result_type(
     if condition not in BOOLEAN_TYPES:
         raise ValueError("if_else condition must be Boolean")
     if when_true in NUMERIC_TYPES and when_false in NUMERIC_TYPES:
-        scalar, series = ValueType.NUMBER, ValueType.NUMERIC_SERIES
+        boolean = False
     elif when_true in BOOLEAN_TYPES and when_false in BOOLEAN_TYPES:
-        scalar, series = ValueType.BOOLEAN, ValueType.BOOLEAN_SERIES
+        boolean = True
     else:
         raise ValueError("if_else branches must have the same value type")
-    return series if any(t in SERIES_TYPES for t in (condition, when_true, when_false)) else scalar
+    return _result_scope((condition, when_true, when_false), boolean=boolean)

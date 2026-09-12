@@ -846,6 +846,7 @@ class MountedGenerationStore:
         universe_name: str,
         neutralization: str,
         field_bindings: Mapping[str, str],
+        require_industry: bool = False,
     ) -> MountedMarketSeries:
         if not sessions or sessions != sorted(set(sessions)):
             raise GenerationStoreError("Market Series sessions are invalid")
@@ -894,7 +895,7 @@ class MountedGenerationStore:
             "equity.trading_state",
             "equity.price_limit",
         }
-        if neutralization == "industry":
+        if neutralization == "industry" or require_industry:
             required_families.add("equity.industry_membership")
         for family in descriptor.families:
             if family.family_id not in required_families:
@@ -946,6 +947,7 @@ class MountedGenerationStore:
                 industry_membership=tables["industry_membership"],
                 field_bindings=field_bindings,
                 neutralization=neutralization,
+                require_industry=require_industry,
             )
         except MarketSeriesError as error:
             raise GenerationStoreError(str(error)) from error
@@ -959,6 +961,7 @@ class MountedGenerationStore:
         universe_name: str,
         neutralization: str,
         field_bindings: Mapping[str, str],
+        require_industry: bool = False,
     ) -> MountedMarketSeries:
         """Resolve one storage-independent market/financial calculation slice."""
         from thesistrace.data.fields import FINANCIAL_FIELDS, MARKET_FIELDS
@@ -991,6 +994,7 @@ class MountedGenerationStore:
             sessions=sessions,
             universe_name=universe_name,
             neutralization=neutralization,
+            require_industry=require_industry,
             field_bindings=market_bindings,
         )
         if not financial_bindings:
@@ -1023,6 +1027,7 @@ class MountedGenerationStore:
         universe_name: str,
         neutralization: str,
         field_bindings: Mapping[str, str],
+        require_industry: bool = False,
         fact_instrument_ids: frozenset[str],
     ):
         from thesistrace.data.columnar_series import ColumnarResearchData
@@ -1087,7 +1092,7 @@ class MountedGenerationStore:
             "equity.trading_state",
             "equity.price_limit",
         }
-        if neutralization == "industry":
+        if neutralization == "industry" or require_industry:
             required_families.add("equity.industry_membership")
         for family in descriptor.families:
             if family.family_id not in required_families:

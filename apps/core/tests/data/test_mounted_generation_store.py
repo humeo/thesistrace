@@ -2175,3 +2175,97 @@ def _write_candidate_root(storage_root: Path, root: dict[str, object]) -> str:
     root["data_identity"] = hashlib.sha256(canonical_json_bytes(identity)).hexdigest()
     sha256, _ = _write_manifest(storage_root, root)
     return sha256
+
+
+@pytest.mark.parametrize(
+    "reader", ["read_market_slice", "read_composite_slice", "read_columnar_slice"]
+)
+def test_industry_condition_loads_historical_members_without_neutralization(tmp_path: Path, reader):
+    canonical = _canonical()
+    for member in canonical["industry_membership"]:
+        member["sw2021_l1"] = "801010"
+    store = MountedGenerationStore(tmp_path)
+    generation = store.materialize(
+        canonical,
+        prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+        source_name="deterministic-test",
+        source_lineage={"snapshot": "fixed"},
+    )
+    sessions = canonical["research_calendar"][-2:]
+    kwargs = {"fact_instrument_ids": frozenset()} if reader == "read_columnar_slice" else {}
+    result = getattr(store, reader)(
+        generation.manifest_sha256,
+        sessions=sessions,
+        universe_name="top300",
+        neutralization="none",
+        require_industry=True,
+        field_bindings={"price.close.adjusted": "close"},
+        **kwargs,
+    )
+    data = result if reader == "read_columnar_slice" else result.research_data
+    assert data.industries
+    for session in sessions:
+        assert data.industries[(session, "equity:A.SH")] == "801010"
+
+
+def test_common_return_keeps_zero_turnover_members_across_readers_and_slices(tmp_path: Path):
+    from thesistrace.alpha_language import alpha_language
+    from thesistrace.research_kernel.alpha import (
+        evaluate_alpha_matrix,
+        evaluate_columnar_alpha_matrix,
+    )
+    from thesistrace.research_series import slice_research_sessions
+
+    canonical = _canonical(3)
+    sessions = canonical["research_calendar"]
+    for row in canonical["prices"]:
+        if row["instrument_id"] == "equity:B.SZ":
+            row["turnover_cny"] = "0"
+    store = MountedGenerationStore(tmp_path)
+    generation = store.materialize(
+        canonical,
+        prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+        source_name="deterministic-test",
+        source_lineage={"snapshot": "fixed"},
+    )
+    arguments = dict(
+        sessions=sessions,
+        universe_name="top300",
+        neutralization="none",
+        field_bindings={"price.close.adjusted": "close"},
+    )
+    aligned = store.read_market_slice(generation.manifest_sha256, **arguments).research_data
+    columnar = store.read_columnar_slice(
+        generation.manifest_sha256,
+        **arguments,
+        fact_instrument_ids=frozenset(),
+    )
+    compiled = alpha_language.compile("close * universe_return()")
+    for data, evaluator in (
+        (aligned, evaluate_alpha_matrix),
+        (columnar, evaluate_columnar_alpha_matrix),
+    ):
+        sliced = slice_research_sessions(data, sessions[:2])
+        assert sliced.universe_members[sessions[1]] == ("equity:A.SH",)
+        assert set(sliced.historical_universe_members[sessions[1]]) == {
+            "equity:A.SH",
+            "equity:B.SZ",
+        }
+        kwargs = {"cancellation_check": lambda: None} if data is columnar else {}
+        result = evaluator(sliced, compiled_alpha=compiled, neutralization="none", **kwargs)
+        assert result["sessions"][1]["values"] == [
+            {"instrument_id": "equity:A.SH", "value": pytest.approx(22 / 21)}
+        ]
+        assert result["sessions"][1]["common_inputs"] == [
+            {
+                "identifier": "universe_return",
+                "industry_code": None,
+                "value": pytest.approx(44 / 483),
+                "member_count": 2,
+                "valid_count": 2,
+                "exclusions": {},
+            }
+        ]
+        assert result["sessions"][0]["common_inputs"][0]["exclusions"] == {
+            "insufficient_history": 2,
+        }

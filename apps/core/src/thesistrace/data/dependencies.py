@@ -27,12 +27,13 @@ def resolve_data_dependencies(
     *,
     field_ids: set[str] | frozenset[str],
     neutralization: str,
+    require_industry: bool = False,
 ) -> DataDependencies:
     if neutralization not in {"none", "industry"}:
         raise ValueError("neutralization is invalid")
     return DataDependencies(
         financial=bool(field_ids & _FINANCIAL_FIELD_IDS),
-        industry=neutralization == "industry",
+        industry=neutralization == "industry" or require_industry,
     )
 
 

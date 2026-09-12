@@ -15,6 +15,8 @@ from pydantic import (
 
 from thesistrace.benchmark import StrategyComparison, StrategyComparisonSummary
 from thesistrace.daily_track.observation_state import TrackingObservationState
+from thesistrace.research_kernel.common_inputs import common_input_references
+from thesistrace.research_kernel.common_observations import CommonInputObservation
 
 RequestId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
 type DailyTrackResultSection = Literal[
@@ -22,12 +24,14 @@ type DailyTrackResultSection = Literal[
     "strategy_observations",
     "origin",
     "provenance",
+    "common_input_observations",
 ]
 DAILY_TRACK_RESULT_SECTIONS: tuple[DailyTrackResultSection, ...] = (
     "strategy_summary",
     "strategy_observations",
     "origin",
     "provenance",
+    "common_input_observations",
 )
 DailyTrackResultCursor = Annotated[str, Field(strict=True, min_length=1, max_length=1024)]
 DailyTrackResultPageLimit = Annotated[int, Field(strict=True, ge=1, le=50)]
@@ -51,6 +55,12 @@ class DailyTrackStrategyObservationsResultSectionInput(_DailyTrackResultSectionI
     limit: DailyTrackResultPageLimit = 20
 
 
+class DailyTrackCommonInputObservationsResultSectionInput(_DailyTrackResultSectionInput):
+    section: Literal["common_input_observations"]
+    cursor: DailyTrackResultCursor | None = None
+    limit: DailyTrackResultPageLimit = 20
+
+
 class DailyTrackOriginResultSectionInput(_DailyTrackResultSectionInput):
     section: Literal["origin"]
     cursor: DailyTrackResultCursor | None = None
@@ -65,7 +75,8 @@ type DailyTrackResultSectionInput = Annotated[
     DailyTrackStrategySummaryResultSectionInput
     | DailyTrackStrategyObservationsResultSectionInput
     | DailyTrackOriginResultSectionInput
-    | DailyTrackProvenanceResultSectionInput,
+    | DailyTrackProvenanceResultSectionInput
+    | DailyTrackCommonInputObservationsResultSectionInput,
     Field(discriminator="section"),
 ]
 
@@ -523,6 +534,15 @@ class DailyTrackStrategyObservationsResultSection(BaseModel):
     next_cursor: str | None
 
 
+class DailyTrackCommonInputObservationsResultSection(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    section: Literal["common_input_observations"] = "common_input_observations"
+    track_id: str
+    items: list[CommonInputObservation]
+    next_cursor: str | None
+
+
 class DailyTrackOriginAccountSummary(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -583,7 +603,8 @@ type DailyTrackResultSectionResponse = Annotated[
     DailyTrackStrategySummaryResultSection
     | DailyTrackStrategyObservationsResultSection
     | DailyTrackOriginResultSection
-    | DailyTrackProvenanceResultSection,
+    | DailyTrackProvenanceResultSection
+    | DailyTrackCommonInputObservationsResultSection,
     Field(discriminator="section"),
 ]
 
@@ -698,6 +719,7 @@ class KernelStateCheckpoint(BaseModel):
     run_input: KernelRunInputSnapshot
     alpha_state: dict[str, object]
     strategy_state: dict[str, object]
+    common_input_observations: list[CommonInputObservation]
     continuation_sha256: str
     pending_alpha_sessions: int
 
@@ -706,4 +728,23 @@ class KernelStateCheckpoint(BaseModel):
     def observation_boundary_matches(self) -> KernelStateCheckpoint:
         if self.tracking_observation_state.boundary_session != self.boundary_session:
             raise ValueError("Checkpoint observation boundary differs")
+        references = common_input_references(self.run_input.alpha_expression)
+        delta = self.strategy_state.get("retained_delta")
+        if not isinstance(delta, list) or any(
+            not isinstance(row, dict) or not isinstance(row.get("session"), str) for row in delta
+        ):
+            raise ValueError("Checkpoint retained Sessions are invalid")
+        expected = {
+            (row["session"], identifier, code or "")
+            for row in delta
+            for identifier, code in references
+        }
+        actual = [
+            (row.session, row.identifier, row.industry_code or "")
+            for row in self.common_input_observations
+        ]
+        if actual != sorted(expected):
+            raise ValueError(
+                "Checkpoint common observations do not cover its frozen inputs and delta"
+            )
         return self

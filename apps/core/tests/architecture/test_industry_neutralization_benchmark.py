@@ -114,6 +114,7 @@ def test_columnar_industry_neutralization_matches_the_row_reference() -> None:
                 for index, instrument_id in enumerate(instruments)
             }
         },
+        historical_universe_members={session: instruments for session in sessions},
         universe_members={session: instruments for session in sessions},
         industries={
             (session, instrument_id): series.industries[(session, instrument_id)]

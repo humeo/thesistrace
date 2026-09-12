@@ -39,6 +39,7 @@ def test_factor_batch_prepares_one_shared_chunk_and_releases_it_before_yield(
             last_research_session=date(2026, 8, 13),
         ),
         alpha_admission=SimpleNamespace(effective_lookback=3),
+        alpha_expression={"kind": "field", "field_id": "price.close.adjusted"},
         numeric_execution_contract="thesistrace-numeric-v1",
         semantic_versions={"kernel": "test"},
         universe="top300",
