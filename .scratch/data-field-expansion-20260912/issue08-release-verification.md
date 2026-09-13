@@ -333,3 +333,17 @@ R12移除全部已加载探针、冷启动Agent后的完整容量1 passed28.2s�
 /tmp/issue08-clean-release-gate-r1.log，session17943退出1。工具29通过、Ruff通过、Python1422通过/1失败（176.86秒）。失败为test_agent_host_is_a_private_node_package_without_research_authority精确依赖白名单遗漏新增直接@modelcontextprotocol/client；SDK仍沿用原锁定2.0.0。补齐单项白名单，不删除依赖/禁止导入断言。原文件9测试通过0.10秒、Ruff及diff检查通过。后续阶段未执行，不能声明release gate成功。
 
 单行固定快照issue08-review-sdk-allowlist-1mi_45eu的Standards→Spec串行复审均0新增。保留首次门禁失败证据，独立补充提交后继续干净提交门禁。
+
+### 干净提交发布门禁 R2 与最后一项测试修正
+
+R2固定dde78933，/tmp/issue08-clean-release-gate-r2.log，session15660退出1。快速检查全部通过：Python1423、Agent651、Auth200、Web356、工具29及全部类型/lint；浏览器组件33通过。Core集成run20260913t180352z-77993-3dadfda6为499普通+6重启全部通过，普通阶段1305秒；Auth145、Agent100真实依赖全部通过。
+
+E2E共享run20260913t183254z-87604-95e8b428为70通过/1失败（11.7分钟），后续8隔离组全部通过，合计78通过/1失败；汇总在field-expansion-226-release/.local/e2e-runs/1789324361277-87391/results.json，清理记录均0。唯一失败是MCP断连用例serviceLogs未读出Agent日志，之前MCP_TRANSIENT和代理计数断言已经通过。
+
+原helper未记录error.code；对该次最终脱敏Agent日志重放，默认spawnSync缓冲得到ENOBUFS，8MiB得到完整1146499字符、退出0。这支持缓冲不足诊断，不伪称当时已直接保存ENOBUFS。证据.local/field-expansion-226-integration-backup/log-buffer-replay.json。单行改用同目录chat-privacy现有8MiB上限，保留完整日志、隐私断言和10秒超时。类型检查通过，固定快照issue08-review-log-buffer-97rcmbe0 Standards→Spec各0新增。
+
+定向真实E2E run20260913t191042z-16754-d22cc3e3（/tmp/issue08-mcp-log-buffer-e2e.log，session6964）1通过14.2秒、退出0、清理0；覆盖断连失败、完整日志隐私检查、刷新后持久化失败与显式恢复。最终代码相对完整镜像R8对应39e4b88c只变化测试白名单、测试日志缓冲及记录，apps/deploy/packages无变化，复用已通过的完整镜像验收，不无故重跑未变镜像。
+
+必须区分：完整check:release命令R2没有零退出，且因E2E失败没有再次进入镜像阶段；当前结论是所有所需边界由本次完整产品检查、修正后定向验收和未变代码的完整镜像资格记录覆盖。不能写成首次整条发布命令通过。生产发布与最终main核验仍待执行。
+
+浏览器测试生成了一张已跟踪截图差异，已保留到验收worktree的.local/issue08-generated-metric-filters-mobile.png，再恢复该隔离worktree中的原跟踪字节；没有提交生成差异，也未触碰main原文件。

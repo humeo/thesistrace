@@ -1964,6 +1964,7 @@ function serviceLogs(service: "agent"): string {
       killSignal: "SIGKILL",
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 10_000,
+      maxBuffer: 8 * 1024 * 1024,
     },
   );
   if (result.status !== 0) {
