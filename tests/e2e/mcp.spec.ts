@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { request as apiRequest } from "@playwright/test";
 import { createServer } from "node:http";
-import { test, expect, sameOriginHeaders, fillPasswordInput } from "./auth-fixture";
+import { test, expect, sameOriginHeaders, emailCode } from "./auth-fixture";
 
 test("MCP product connects an external client through login, consent, discovery and revocation", async ({ page, researcher }, testInfo) => {
   test.setTimeout(90_000);
@@ -12,7 +12,7 @@ test("MCP product connects an external client through login, consent, discovery 
   await expect(page.getByText(`${base}/mcp`, { exact: true })).toBeVisible();
   await expect(page.getByText("No authorized apps yet")).toBeVisible();
   await page.getByText("View setup prompt", { exact: true }).click();
-  await expect(page.locator(".mcp-agent-prompt")).toContainText("Add ThesisTrace MCP to Codex");
+  await expect(page.locator(".mcp-agent-prompt")).toContainText("Add QuantTrace MCP to Codex");
   await expect(page.locator(".mcp-agent-prompt")).not.toContainText(".example");
   await page.screenshot({ path: testInfo.outputPath("mcp-desktop.png"), fullPage: true, animations: "disabled" });
   await page.setViewportSize({ width: 390, height: 844 });
@@ -45,11 +45,13 @@ test("MCP product connects an external client through login, consent, discovery 
       code_challenge_method: "S256", code_challenge: createHash("sha256").update(verifier).digest("base64url") });
     await page.context().clearCookies();
     await page.goto(`/api/auth/oauth2/authorize?${query}`);
-    await expect(page.getByRole("heading", { name: "Log in to ThesisTrace" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Welcome to QuantTrace" })).toBeVisible();
     await page.getByLabel("Email", { exact: true }).fill(researcher.email);
-    await fillPasswordInput(page.getByLabel("Password", { exact: true }));
-    await page.getByRole("button", { name: "Log in", exact: true }).click();
-    await expect(page.getByRole("heading", { name: "Allow MCP acceptance client to access ThesisTrace?" })).toBeVisible();
+    await page.getByRole("button", { name: "Continue with email", exact: true }).click();
+    await expect(page.getByLabel("Verification code")).toBeVisible();
+    await page.getByLabel("Verification code").fill(await emailCode(researcher.email));
+    await page.getByRole("button", { name: "Verify and continue", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Allow MCP acceptance client to access QuantTrace?" })).toBeVisible();
     await expect(page.getByText("Create research runs and batches", { exact: true })).toHaveCount(0);
     await page.screenshot({ path: testInfo.outputPath("mcp-consent.png"), fullPage: true, animations: "disabled" });
     await page.getByRole("button", { name: "Allow access" }).click();

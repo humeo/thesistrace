@@ -676,8 +676,14 @@ async def _exercise_daily_tracks(settings: CoreSettings, tmp_path: Path) -> None
             transient_seed_summary_keys
         )
         _assert_finite_result(summary_result.structured_content)
+        provenance = provenance_result.structured_content
+        checkpoint_digest = provenance["checkpoint_manifest_sha256"]
+        assert len(checkpoint_digest) == 64 and set(checkpoint_digest) <= set("0123456789abcdef")
         serialized_provenance = json.dumps(
-            provenance_result.structured_content,
+            {
+                key: value for key, value in provenance.items()
+                if key != "checkpoint_manifest_sha256"
+            },
             sort_keys=True,
         ).lower()
         for private_name in (
@@ -1685,10 +1691,10 @@ def _assert_compact_track(
 ) -> None:
     serialized = str(payload).lower()
     assert payload["available_result_sections"] == [
-        "strategy_summary",
-        "strategy_observations",
-        "origin",
-        "provenance",
+        "strategy_targets", "strategy_orders", "strategy_child_orders",
+        "strategy_fills", "strategy_adjustments", "daily_holdings_status", "daily_holdings",
+        "strategy_summary", "strategy_observations", "origin", "provenance",
+        "common_input_observations",
     ]
     assert payload["action_eligibility"] == {
         "refresh": refresh,

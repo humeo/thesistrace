@@ -28,6 +28,9 @@ test("Chat saturation rejects an unaccepted Session and preserves an explicit br
           return { ok: response.ok, finished: body.includes('"type":"RUN_FINISHED"') && !body.includes('"type":"RUN_ERROR"') };
         } catch { return { ok: false, finished: false }; }
       })());
+      // Fill the Host while respecting Core's per-principal concurrent-call guard.
+      // The proxy holds each completed Core response, so every accepted Run remains active.
+      await expect.poll(() => proxyState("mcp-fault-proxy", 8150).pending_held_tool_responses, { timeout: 20_000 }).toBe(index + 1);
     }
     await expect.poll(() => proxyState("mcp-fault-proxy", 8150).pending_held_tool_responses, { timeout: 20_000 }).toBe(activeRunLimit);
     await page.goto("/chat");

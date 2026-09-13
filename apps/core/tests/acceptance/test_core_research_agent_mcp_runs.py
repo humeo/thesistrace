@@ -165,14 +165,20 @@ async def _exercise_research_runs(
             str(strategy.structured_content["run_id"]),
         )
         assert factor_detail["result_available"] is True
-        assert factor_detail["available_result_sections"] == ["factor", "provenance"]
+        assert factor_detail["available_result_sections"] == [
+            "factor", "factor_observations", "factor_periods", "provenance",
+            "common_input_observations",
+        ]
         assert strategy_detail["result_available"] is True
         assert strategy_detail["available_result_sections"] == [
+            "strategy_targets", "strategy_orders", "strategy_child_orders",
+            "strategy_fills", "strategy_adjustments", "daily_holdings_status", "daily_holdings",
             "strategy_summary",
             "strategy_observations",
             "terminal_strategy_state",
             "terminal_positions",
             "provenance",
+            "common_input_observations",
         ]
         assert factor_detail["retry_after_seconds"] is None
         assert strategy_detail["retry_after_seconds"] is None
@@ -716,6 +722,7 @@ async def _assert_first_semantic_result_pages(
         "initial_cash_cny": "10000000",
         "holdings_count": 51,
         "selection_every_sessions": 1,
+        "exposure_expression": "1",
     }
     assert provenance.structured_content["data"]["data_through_session"] >= (
         strategy_command["end_date"]

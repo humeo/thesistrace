@@ -81,7 +81,7 @@ for (const variant of ["single", "batch"] as const) {
     await page.goto("/chat");
     await finishPrompt(page, "Prepare research.");
     const threadId = new URL(page.url()).searchParams.get("session")!;
-    seedHistory(threadId, researcher.id, 18400);
+    seedHistory(threadId, researcher.id, 17400);
     sql(`INSERT INTO research_folders.folders (researcher_id, id, name, is_default)
       SELECT session.researcher_id, 'folder_context_' || ordinal, repeat('研', 118) || lpad(ordinal::text, 2, '0'), false
       FROM agent.chat_session session CROSS JOIN generate_series(1, 24) ordinal
@@ -143,7 +143,7 @@ function ownedIdentity(threadId: string, researcherId: string) {
 
 function seedHistory(threadId: string, researcherId: string, repetitions: number, append = false) {
   ownedIdentity(threadId, researcherId);
-  if (repetitions !== 11000 && repetitions !== 18400 && repetitions !== 22000) throw new Error("Unknown context fixture size");
+  if (repetitions !== 11000 && repetitions !== 17400 && repetitions !== 22000) throw new Error("Unknown context fixture size");
   sql(`INSERT INTO agent.mastra_messages (id, thread_id, content, role, type, "createdAt", "createdAtZ", "resourceId")
     SELECT 'context-browser-${threadId}-${append ? 'appended' : 'initial'}-' || ordinal, session.id::text,
       jsonb_build_object('format', 2, 'parts', jsonb_build_array(jsonb_build_object('type', 'text', 'text', repeat('archived context evidence ', ${repetitions}))))::text,

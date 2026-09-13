@@ -1327,7 +1327,7 @@ def _assert_factor_checkpoint_evidence(
                 provenance=provenance,
             )
         )
-        assert set(bundle.payloads) == {"continuation"}
+        assert set(bundle.payloads) == {"continuation", "factor_daily_observations"}
         continuation = json.loads(bundle.payloads["continuation"].content)
         assert set(continuation) == {
             "schema_version",

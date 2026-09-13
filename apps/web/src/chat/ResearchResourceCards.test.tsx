@@ -49,12 +49,20 @@ test("reads DailyTrack observation and reports blocked state from Core", async (
   expect(document.body.textContent).toContain("-2.50%");
   expect(request.mock.calls[0][0]).toBe(`/api/daily-tracks/${id}`);
 });
-test("requires strategy results and formats their authoritative metrics", async () => {
-  request.mockResolvedValueOnce(new Response(JSON.stringify({ ...run(), research_kind: "strategy_backtest" }))).mockResolvedValueOnce(new Response(JSON.stringify({ ...run(), research_kind: "strategy_backtest", result: { ...run().result, strategy: { summary: { metrics: { annualized_excess_return: 0.2, sharpe: null, maximum_drawdown: { value: -0.12 } } } } } })));
+test("requires strategy results and renders them without Factor evidence", async () => {
+  const strategy = {
+    ...run(), research_kind: "strategy_backtest",
+    result: { strategy: { summary: { metrics: {
+      annualized_excess_return: 0.2, sharpe: null, maximum_drawdown: { value: -0.12 },
+    } } } },
+  };
+  request.mockResolvedValueOnce(new Response(JSON.stringify({ ...strategy, result: undefined })))
+    .mockResolvedValueOnce(new Response(JSON.stringify(strategy)));
   await mount([first]);
   expect(document.body.textContent).toContain("Completed research result is unavailable");
   await act(async () => document.querySelector('button')!.click());
   expect(document.body.textContent).toContain("20.00%");
   expect(document.body.textContent).toContain("-12.00%");
   expect(document.body.textContent).toContain("Not available");
+  expect(document.body.textContent).not.toContain("Rank IC");
 });

@@ -22,19 +22,19 @@ test("Chat DailyTrack uses the full grant and explains a real Strategy's current
   await send(page, startPrompt);
   await expect((await revealToolActivity(page, "start_daily_track", "complete")).last()).toBeVisible();
   const surface = page.getByRole("article", { name: "Research surface" }).last();
-  const link = surface.getByRole("link", { name: "Open DailyTrack", exact: true });
+  const link = surface.getByRole("link", { name: /^track_[a-f0-9]{20}$/ });
   const href = await link.getAttribute("href");
   if (href === null || !/^\/daily-tracks\/track_[a-f0-9]{20}$/.test(href)) throw new Error("No canonical DailyTrack navigation");
   const id = href.split("/").at(-1)!;
   const detail = await track(page, id);
   expect(detail.status).toBe("active");
   await expect(surface).toContainText(detail.origin.seed_run_id);
-  await expect(surface).toContainText(`Data through ${detail.data_through_session}`);
+  await expect(surface.locator(".chat-a2ui-facts")).toContainText(detail.data_through_session);
   await assertCurrentObservation(page, detail);
-  const oldText = await surface.innerText();
+  const oldFacts = await surface.locator(".chat-a2ui-facts").textContent();
   const sessionUrl = page.url();
   await page.reload();
-  await expect(page.getByRole("article", { name: "Research surface" }).last()).toHaveText(oldText, { useInnerText: true });
+  await expect(page.getByRole("article", { name: "Research surface" }).last().locator(".chat-a2ui-facts")).toHaveText(oldFacts!);
   await send(page, reloadPrompt);
   await assertCurrentObservation(page, await track(page, id));
   await send(page, startPrompt);
@@ -54,14 +54,14 @@ test("Chat DailyTrack uses the full grant and explains a real Strategy's current
   await expect(page.getByRole("button", { name: /^(Stop|Confirm|Retry)( DailyTrack)?$/ })).toHaveCount(0);
   await expect(page.getByRole("log", { name: "Conversation timeline", exact: true })).not.toContainText(/checkpoint|lease_owner|object_key/);
   expect(browserCoreWrites).toEqual([]);
-  await page.getByRole("table", { name: "Latest DailyTrack Observation", exact: true }).last().scrollIntoViewIfNeeded();
+  await page.getByRole("region", { name: `DailyTrack ${id}`, exact: true }).last().scrollIntoViewIfNeeded();
   await testInfo.attach("daily-track-desktop", { body: await page.screenshot(), contentType: "image/png" });
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByRole("table", { name: "Latest DailyTrack Observation", exact: true }).last().scrollIntoViewIfNeeded();
+  await page.getByRole("region", { name: `DailyTrack ${id}`, exact: true }).last().scrollIntoViewIfNeeded();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await testInfo.attach("daily-track-mobile", { body: await page.screenshot(), contentType: "image/png" });
   await page.setViewportSize({ width: 1280, height: 900 });
-  await page.getByRole("link", { name: "Open DailyTrack", exact: true }).last().click();
+  await page.getByRole("link", { name: /^track_[a-f0-9]{20}$/ }).last().click();
   await expect(page).toHaveURL(new RegExp(`${href}$`));
   await expect(page.locator(".track-title-row .track-status")).toHaveAttribute("data-status", "active");
   await page.goto(sessionUrl);
@@ -79,9 +79,10 @@ test("Chat DailyTrack replays lost Start and Retry responses while Tracking adva
       name: "Tracking advance fixture", formula: "rank(close)", hypothesis: null,
       start_date: "2026-08-03", end_date: "2026-08-04", universe: "top300", neutralization: "none",
       research_kind: "strategy_backtest", holdings_count: 10, selection_every_sessions: 1,
+      initial_cash_cny: "100000", weighting: "equal_weight", volatility_window: 20, exposure_expression: "1",
     }, headers: sameOriginHeaders(),
   });
-  expect(admitted.status()).toBe(202);
+  expect(admitted.status(), await admitted.text()).toBe(202);
   const runId = ((await admitted.json()) as { id: string }).id;
   await expect.poll(async () => ((await (await page.request.get(`/api/research-runs/${runId}`)).json()) as { status: string }).status, { timeout: 90_000 }).toBe("succeeded");
   controlWorker("pause", "tracking-worker");
@@ -144,6 +145,7 @@ test("Chat DailyTrack replays lost Start and Retry responses while Tracking adva
 type Track = Readonly<{
   id: string; status: string; blocked_reason: string | null; strategy_session: string; data_through_session: string;
   origin: { seed_run_id: string };
+  observation: { session: string; net_return: number | null; maximum_drawdown: number | null };
   strategy: { summary: { metrics: { sharpe: number | null } }; observations: Array<{ session: string; net_nav: string; net_cash: string; holdings_count: number; transaction_cost_cny: string }> };
 }>;
 
@@ -154,16 +156,17 @@ async function track(page: Page, id: string): Promise<Track> {
 }
 
 async function assertCurrentObservation(page: Page, detail: Track): Promise<void> {
-  const observation = detail.strategy.observations.at(-1);
-  expect(observation?.session).toBe(detail.strategy_session);
-  const table = page.getByRole("table", { name: "Latest DailyTrack Observation", exact: true }).last();
-  await expect(table).toBeVisible();
-  for (const value of [observation!.session, observation!.net_nav, observation!.net_cash, String(observation!.holdings_count), observation!.transaction_cost_cny]) {
-    await expect(table).toContainText(value);
+  const observation = detail.observation;
+  expect(observation.session).toBe(detail.strategy_session);
+  const card = page.getByRole("region", { name: `DailyTrack ${detail.id}`, exact: true }).last();
+  await expect(card).toBeVisible();
+  const facts = card.locator(".chat-a2ui-facts");
+  for (const value of [detail.origin.seed_run_id, detail.strategy_session, detail.data_through_session]) {
+    await expect(facts).toContainText(value);
   }
-  const metrics = page.getByRole("region", { name: "Current DailyTrack metrics", exact: true }).last();
-  const sharpe = detail.strategy.summary.metrics.sharpe;
-  await expect(metrics).toContainText(sharpe === null ? "Unavailable" : sharpe.toFixed(4));
+  for (const value of [observation.net_return, observation.maximum_drawdown]) {
+    await expect(facts).toContainText(value === null ? "Not available" : `${(value * 100).toFixed(2)}%`);
+  }
 }
 
 async function send(page: Page, prompt: string, status = "Run complete"): Promise<void> {

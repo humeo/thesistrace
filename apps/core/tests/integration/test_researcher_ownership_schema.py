@@ -325,12 +325,12 @@ def test_schema_rejects_cross_parent_receipts_checkpoints_and_blocked_links(
                 INSERT INTO research_runs.execution_checkpoints (
                     id, run_id, attempt_id, ordinal, boundary_session, phase,
                     completed_warmup_sessions, completed_research_sessions,
-                    continuation_payload, observation_row_count,
-                    checkpoint_manifest_sha256, chain_sha256
+                    continuation_payload, holding_payloads, strategy_event_payloads,
+                    observation_row_count, checkpoint_manifest_sha256, chain_sha256
                 ) VALUES (
                     'checkpoint-cross-attempt', 'run-parent-a',
                     'attempt-parent-b', 1, DATE '2026-08-01', 'research',
-                    0, 1, '{}'::jsonb, 0, %s, %s
+                    0, 1, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, 0, %s, %s
                 )
                 """,
                 ("a" * 64, "b" * 64),

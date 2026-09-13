@@ -233,46 +233,18 @@ test("Alpha formula editor keeps line numbers on the dark workbench surface", as
 });
 
 test("date inputs retain a browser-populated value when focus leaves the field", async ({ page }) => {
-  await page.route("**/api/**", async (route) => {
-    const pathname = new URL(route.request().url()).pathname;
-    if (pathname.startsWith("/api/auth/") || pathname === "/api/researcher/bootstrap") {
-      await route.continue();
-      return;
-    }
-    if (pathname === "/api/research-folders") {
-      await route.fulfill({ json: { items: [{ id: "folder_default", name: "Default", is_default: true, created_at: "2026-08-13T00:00:00Z" }], next_cursor: null } });
-      return;
-    }
-    if (pathname === "/api/alpha/catalog") {
-      await route.fulfill({ json: { fields: [], builtins: [] } });
-      return;
-    }
-    if (pathname === "/api/data") {
-      await route.fulfill({ json: {
-        market_coverage: { start: "2010-01-04", end: "2026-08-13" },
-        financial_coverage: null,
-        industry_coverage: null,
-        benchmark_coverage: null,
-        benchmark_snapshot_sha256: null,
-        benchmark_last_published_at: null,
-        data_through_session: "2026-08-13",
-        last_market_refresh_at: null,
-        last_financial_refresh_at: null,
-        last_industry_refresh_at: null,
-        industry_refresh_status: null,
-        industry_refresh_failure_code: null,
-        market_research_readiness: true,
-        benchmark_research_readiness: false,
-        financial_research_readiness: "not_ready",
-        industry_research_readiness: false,
-      } });
-      return;
-    }
-    await route.abort();
+  await page.route("**/api/data", async (route) => {
+    const response = await route.fetch();
+    const data = await response.json();
+    await route.fulfill({ response, json: {
+      ...data,
+      market_coverage: { start: "2010-01-04", end: "2026-08-13" },
+      data_through_session: "2026-08-13",
+    } });
   });
   await page.goto("/research?new");
   await page.getByLabel("Research name").fill("Browser populated dates");
-  await page.locator(".cm-content").click();
+  await page.getByRole("textbox", { name: "Alpha formula", exact: true }).click();
   await page.keyboard.type("close");
   await page.getByLabel("Universe").selectOption("top300");
   await page.getByLabel("Neutralization").selectOption("none");
@@ -392,7 +364,7 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await expect(holdingsCount).toHaveValue("10");
 
     await page.getByLabel("Research name").fill("Browser Mean Research");
-    const editor = page.locator(".cm-content");
+    const editor = page.getByRole("textbox", { name: "Alpha formula", exact: true });
     await editor.click();
     await page.keyboard.type("ts_");
     await page.keyboard.press("Control+Space");
@@ -452,7 +424,7 @@ test("Default Folder retains one local Research Draft with authoritative Formula
 
     await page.reload();
     await expect(page.getByLabel("Research name")).toHaveValue("Browser Mean Research");
-    await expect(page.locator(".cm-content")).toHaveText("ts_mean(close, 2)");
+    await expect(page.getByRole("textbox", { name: "Alpha formula", exact: true })).toHaveText("ts_mean(close, 2)");
     await expect(page.getByLabel("Notes")).toHaveValue("Short rolling mean retains signal.");
     await expect(page.getByLabel("Universe")).toHaveValue("top300");
 
@@ -473,9 +445,9 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     const customFolderId = new URL(page.url()).searchParams.get("folder");
     expect(customFolderId).toMatch(/^folder_[a-f0-9]+$/);
     if (customFolderId === null) throw new Error("Custom Folder route is missing folder id");
-    await expect(page.getByText("Signals", { exact: true }).first()).toBeVisible();
+    await expect(page.locator(".research-folder-navigation > summary")).toHaveText("Signals folder");
     await page.getByLabel("Research name").fill("Signals browser Draft");
-    await page.locator(".cm-content").click();
+    await page.getByRole("textbox", { name: "Alpha formula", exact: true }).click();
     await page.keyboard.type("volume");
 
     await closeResearchFolderMenu(page);
@@ -495,7 +467,7 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await openResearchFolderMenu(page);
     await page.getByRole("link", { name: "Signals", exact: true }).click();
     await expect(page.getByLabel("Research name")).toHaveValue("Signals browser Draft");
-    await expect(page.locator(".cm-content")).toHaveText("volume");
+    await expect(page.getByRole("textbox", { name: "Alpha formula", exact: true })).toHaveText("volume");
     expect(await page.evaluate(() => Object.keys(localStorage).sort())).toEqual([
       `thesistrace.research-draft.${researcher.id}.${customFolderId}`,
     ]);
@@ -914,12 +886,14 @@ test("Batch children keep ordinary Research organization, reuse, tracking, and d
         {
           item_key: "browser-focused",
           name: "Browser Batch Focused",
+          initial_cash_cny: "100000",
           holdings_count: 10,
           selection_every_sessions: 1,
         },
         {
           item_key: "browser-broad",
           name: "Browser Batch Broad",
+          initial_cash_cny: "100000",
           holdings_count: 20,
           selection_every_sessions: 2,
         },
@@ -927,7 +901,7 @@ test("Batch children keep ordinary Research organization, reuse, tracking, and d
     },
     headers: sameOriginHeaders(),
   });
-  expect(admitted.status()).toBe(202);
+  expect(admitted.status(), await admitted.text()).toBe(202);
   const admittedBatch = await admitted.json() as {
     id: string;
     items: Array<{ research_run_id: string }>;
@@ -972,7 +946,7 @@ test("Batch children keep ordinary Research organization, reuse, tracking, and d
   await page.getByRole("button", { name: "Create draft" }).click();
   await expect(page).toHaveURL(new RegExp(`/research\\?folder=${folderId}$`));
   await expect(page.getByRole("radio", { name: /Strategy Backtest/ })).toBeChecked({ timeout: 30_000 });
-  await expect(page.locator(".cm-content")).toHaveText("close");
+  await expect(page.getByRole("textbox", { name: "Alpha formula", exact: true })).toHaveText("close");
   await expect(page.getByLabel("Notes")).toHaveValue("Browser Batch hypothesis");
   await expect(page.getByLabel("Holdings count")).toHaveValue("10");
   await expect(page.getByLabel("Selection sessions")).toHaveValue("1");
@@ -1100,7 +1074,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await expect(strategyConditions).toContainText("Universe Top 300");
     await expect(strategyConditions).toContainText("Neutralization None");
     await expect(strategyConditions).toContainText("Holdings count 10");
-    await expect(strategyConditions).toContainText("Rebalance Every 2 sessions");
+    await expect(strategyConditions).toContainText("Selection Every 2 sessions");
     await expect(page.getByRole("button", { name: "Refresh" })).toHaveCount(0);
 
     const retainedAfterRun = await page.evaluate((draftKey) => JSON.parse(
@@ -1120,7 +1094,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     const acceptedItems = (await acceptedHistory.json()).items as Array<{ id: string }>;
 
     await page.goto("/research");
-    await expect(page.locator(".cm-content")).toHaveText("ts_mean(close, 3)");
+    await expect(page.getByRole("textbox", { name: "Alpha formula", exact: true })).toHaveText("ts_mean(close, 3)");
     await replaceFormula(page, "unknown_field");
     await page.getByRole("button", { name: "Run research", exact: true }).click();
     await expect(page.getByRole("list", { name: "Run issues" })).toContainText("UNKNOWN_IDENTIFIER");
@@ -1128,7 +1102,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     const rejectedHistory = await page.request.get("/api/research-runs");
     expect(((await rejectedHistory.json()).items as unknown[])).toHaveLength(acceptedItems.length);
     await page.reload();
-    await expect(page.locator(".cm-content")).toHaveText("unknown_field");
+    await expect(page.getByRole("textbox", { name: "Alpha formula", exact: true })).toHaveText("unknown_field");
 
     await openResearchFolderMenu(page);
     await page.getByLabel("New Folder").fill("Signals");
@@ -1152,7 +1126,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await expect(factorConditions).toContainText("Universe Top 300");
     await expect(factorConditions).toContainText("Neutralization None");
     await expect(factorConditions.getByText("Holdings count", { exact: true })).toHaveCount(0);
-    await expect(factorConditions.getByText("Rebalance", { exact: true })).toHaveCount(0);
+    await expect(factorConditions.getByText("Selection", { exact: true })).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Factor Summary" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Strategy Summary" })).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Daily Observations" })).toHaveCount(0);
@@ -1298,7 +1272,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await page.unroute("**/api/research-folders");
 
     await page.goto(`/research?folder=${customFolderId}`);
-    await expect(page.locator(".cm-content")).toHaveText("close");
+    await expect(page.getByRole("textbox", { name: "Alpha formula", exact: true })).toHaveText("close");
     await page.getByLabel("Research name").fill("Target Local Name");
     await page.goto(`/research-runs/${defaultRunId}`);
     await expect(page.getByRole("button", { name: "Create draft" })).toBeVisible();
@@ -1310,7 +1284,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await page.getByRole("button", { name: "Create draft" }).click();
     await expect(page).toHaveURL(new RegExp(`/research\\?folder=${customFolderId}$`));
     await expect(page.getByLabel("Research name")).toHaveValue("Target Local Name");
-    await expect(page.locator(".cm-content")).toHaveText("ts_mean(close, 2)");
+    await expect(page.getByRole("textbox", { name: "Alpha formula", exact: true })).toHaveText("ts_mean(close, 2)");
     await expect(page.getByLabel("Notes")).toHaveValue("Browser Run acceptance.");
     await expect(page.getByLabel("Research start date")).toHaveValue("2026-08-04");
     await expect(page.getByLabel("Research end date")).toHaveValue("2026-08-05");
@@ -1410,6 +1384,48 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await expect(page.locator(".track-dates")).toContainText("Last observation 2026-08-11");
     await expect(page.getByRole("button", { name: "Delete DailyTrack" })).toHaveCount(0);
 
+    // Expire only this test's published Track diagnostics; permanent history must survive.
+    if (!/^track_[a-f0-9]+$/.test(trackId)) throw new Error("Unexpected test Track identity");
+    execFileSync("docker", ["exec", testContainer("postgres"), "psql",
+      "--username", "thesistrace_owner", "--dbname", "thesistrace",
+      "--set", "ON_ERROR_STOP=1", "--command",
+      `UPDATE publication.holding_units
+       SET published_at = now() - interval '8 days', expires_at = now() - interval '1 second'
+       WHERE source_kind = 'daily_track' AND source_id = '${trackId}'`,
+    ], { stdio: ["ignore", "pipe", "pipe"] });
+    const preservedTrack = await (await page.request.get(`/api/daily-tracks/${trackId}`)).json();
+    const historyBeforeExpiryRead = await (await page.request.get("/api/research-runs")).json();
+    await page.getByRole("button", { name: "Daily holdings", exact: false }).click();
+    const expiredPeriod = page.getByLabel("Recorded period").locator("option").filter({ hasText: /Tracking · Expired/ }).first();
+    await expect(expiredPeriod).toHaveCount(1);
+    const expiredUnitId = await expiredPeriod.getAttribute("value");
+    if (!expiredUnitId) throw new Error("Expired Track period is unavailable");
+    await page.getByLabel("Recorded period").selectOption(expiredUnitId);
+    await expect(page.getByRole("button", { name: "Rerun to generate holdings" })).toBeVisible();
+    expect(await (await page.request.get("/api/research-runs")).json()).toEqual(historyBeforeExpiryRead);
+    await page.screenshot({ path: testInfo.outputPath("expired-track-holdings.png"), fullPage: true });
+    const rerunAccepted = page.waitForResponse(response =>
+      new URL(response.url()).pathname === "/api/research-runs"
+      && response.request().method() === "POST");
+    await page.getByRole("button", { name: "Rerun to generate holdings" }).click();
+    const rerunResponse = await rerunAccepted;
+    expect(rerunResponse.status()).toBe(202);
+    await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
+    const diagnosticRunId = new URL(page.url()).pathname.split("/").at(-1);
+    expect(diagnosticRunId).not.toBe(reusedRunId);
+    await expect(page.locator(".research-run-facts").getByText(/Status\s+succeeded/)).toBeVisible({ timeout: 90_000 });
+    await expect(page.getByRole("link", { name: "Source Daily Track" })).toHaveAttribute("href", `/daily-tracks/${trackId}`);
+    const diagnosticDetail = await (await page.request.get(`/api/research-runs/${diagnosticRunId}`)).json();
+    expect(diagnosticDetail.rerun_origin).toMatchObject({ source_track_id: trackId, source_run_id: reusedRunId });
+    expect(diagnosticDetail.start_date).toBe("2026-08-04");
+    expect(diagnosticDetail.input.initial_cash_cny).toBe("100000");
+    expect(await (await page.request.get(`/api/daily-tracks/${trackId}`)).json()).toEqual(preservedTrack);
+    await page.getByRole("button", { name: "Daily holdings", exact: false }).click();
+    await page.getByRole("button", { name: "Load holdings", exact: true }).click();
+    await expect(page.getByText(/Research Sessions covered/)).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath("current-data-rerun-holdings.png"), fullPage: true });
+    await page.goto(`/daily-tracks/${trackId}`);
+
     await confirmTrackStop(page);
     await expect(page.locator(".track-title-row .track-status")).toHaveText("Stopped");
     const deleteTrackButton = page.getByRole("button", { name: "Delete DailyTrack" });
@@ -1471,7 +1487,7 @@ async function fillCompleteDraft(
 }
 
 async function replaceFormula(page: Page, formula: string): Promise<void> {
-  const editor = page.locator(".cm-content");
+  const editor = page.getByRole("textbox", { name: "Alpha formula", exact: true });
   await editor.click();
   await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
   await page.keyboard.type(formula);

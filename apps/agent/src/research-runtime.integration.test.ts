@@ -2836,7 +2836,6 @@ describe.sequential("durable Research Agent runtime", () => {
       expect(events.at(-1)?.type).toBe("RUN_FINISHED");
       const json = JSON.stringify(events);
       expect(json).toContain(BATCH_ID);
-      expect(json).toContain("Ordered child ResearchRun results");
       expect(json).not.toContain("private-batch-core-provenance");
       for (const childId of CHILD_IDS) expect(json).toContain(`/research-runs/${childId}`);
       const admission = calls.find((call) => call.name === "submit_research_batch");
@@ -2850,6 +2849,15 @@ describe.sequential("durable Research Agent runtime", () => {
       // authoritative Result surface; a stale progress surface would make a
       // fast Batch render differently from the same terminal Batch on Resume.
       expect(surfaces).toHaveLength(1);
+      expect(surfaces[0].content).toMatchObject({
+        a2ui_operations: expect.arrayContaining([expect.objectContaining({
+          updateComponents: expect.objectContaining({
+            components: expect.arrayContaining([expect.objectContaining({
+              component: "ResearchComparison", runIds: [...CHILD_IDS],
+            })]),
+          }),
+        })]),
+      });
       expect(JSON.stringify(surfaces)).toContain("batch-results-");
       expect(JSON.stringify(surfaces)).not.toContain("batch-progress-");
       const stored = await owner.query<{ content: unknown; lifecycle_status: string }>(`

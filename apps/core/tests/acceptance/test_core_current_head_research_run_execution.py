@@ -254,7 +254,9 @@ def test_composite_formula_runs_and_starts_a_daily_track(tmp_path: Path) -> None
                 provenance=factor_stored["result_provenance"],
             )
         )
-        assert set(factor_bundle.payloads) == {"factor_summary"}
+        assert set(read_result_bundle(
+            factor_bundle, research_kind="factor_evaluation",
+        )) == {"factor_summary"}
         factor_result = read_result_bundle(
             factor_bundle,
             research_kind="factor_evaluation",
@@ -792,7 +794,9 @@ def test_research_kinds_publish_separate_evidence_when_strategy_changes(
             if index == 0:
                 factor_payloads.append(bundle.payloads["factor_summary"].content)
                 public_factors.append(detail["result"]["factor"])
-                assert set(bundle.payloads) == {"factor_summary"}
+                assert set(read_result_bundle(
+                    bundle, research_kind="factor_evaluation",
+                )) == {"factor_summary"}
                 assert detail["research_kind"] == "factor_evaluation"
                 assert set(detail["result"]) == {"factor", "provenance"}
             else:
@@ -2641,6 +2645,8 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
             "positions",
             "selection_phase",
             "pending_target",
+            "target_selection",
+            "target_exposure",
         }
         assert "generation" not in str(public_run).lower()
 
@@ -2798,9 +2804,9 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
         checkpoint_c = project_tracking_checkpoint(
             reference_c,
             prior_observation_state=initial_tracking_observation_state(
-                sessions[-1], "10000000",
+                sessions[-1], activation["terminal_strategy_state"]["net_nav"],
             ),
-            retained_strategy_sessions=[sessions[-1], *extended_sessions[len(sessions) :]],
+            retained_strategy_sessions=list(extended_sessions[len(sessions) :]),
         )
         canonical_d = open_complete_refresh_basis(store, head_d)
         research_data_d = _research_data(canonical_d)
@@ -4805,7 +4811,9 @@ def test_short_attempt_publishes_exact_period_and_complete_terminal_state(
             assert public_detail["status"] == "succeeded"
             assert public_detail["result"]["strategy"]["comparison"] == {
                 "status": "unavailable",
-                "reason": "benchmark_snapshot_unavailable",
+                "reason": (
+                    "no_entry_open" if session_count == 1 else "benchmark_snapshot_unavailable"
+                ),
             }
             assert public_detail["result"]["strategy"]["summary"]["metrics"][
                 "annualized_excess_return"
@@ -5000,7 +5008,7 @@ def test_result_read_failure_stays_sanitized(tmp_path: Path) -> None:
         assert runtime.research_runs.process_next() is True
 
         stored = _stored_execution(settings, run_id)
-        digest = _first_result_object_sha256(
+        digest = _strategy_summary_object_sha256(
             settings,
             str(stored["result_manifest_sha256"]),
         )
@@ -6253,7 +6261,7 @@ def _publication_manifest_count(settings: CoreSettings) -> int:
         database.close()
 
 
-def _first_result_object_sha256(settings: CoreSettings, manifest_sha256: str) -> str:
+def _strategy_summary_object_sha256(settings: CoreSettings, manifest_sha256: str) -> str:
     database = PostgresDatabase(settings.database_url)
     database.open()
     try:
@@ -6262,9 +6270,7 @@ def _first_result_object_sha256(settings: CoreSettings, manifest_sha256: str) ->
                 """
                 SELECT object_sha256
                 FROM publication.manifest_objects
-                WHERE manifest_sha256 = %s
-                ORDER BY ordinal
-                LIMIT 1
+                WHERE manifest_sha256 = %s AND logical_name = 'strategy_summary'
                 """,
                 (manifest_sha256,),
             ).fetchone()

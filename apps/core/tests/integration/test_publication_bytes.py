@@ -779,7 +779,8 @@ def test_compressed_checkpoint_is_verified_persistent_and_released(
             pass
         with runtime.database.transaction() as transaction:
             count = transaction.execute(
-                "SELECT count(*) AS count FROM publication.objects"
+                "SELECT count(*) AS count FROM publication.objects WHERE sha256 = %s",
+                (prepared.payload_sha256s["checkpoint"],),
             ).fetchone()
             assert count["count"] == 0
         assert rustfs_admin.list_objects_v2(Bucket=core_settings.s3_bucket).get("KeyCount", 0) == 0

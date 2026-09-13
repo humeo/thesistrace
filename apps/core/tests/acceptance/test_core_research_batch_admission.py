@@ -210,7 +210,7 @@ def test_strategy_sweep_capacity_rejection_creates_no_product_state(
     settings = replace(
         CoreSettings.from_environment(),
         data_mount=tmp_path,
-        research_execution_memory_bytes=67_112_600,
+        research_execution_memory_bytes=128 * 1024**2,
     )
     drop_product_schemas(settings)
     with TestClient(create_app(settings)) as client:

@@ -1486,13 +1486,15 @@ def test_strategy_sweep_isolates_one_strategy_failure_and_keeps_order(
     with TestClient(create_app(settings)) as client:
         _publish_current_data(settings)
         command = _strategy_command("strategy-sweep-item-failure")
-        admitted = client.post(
+        response = client.post(
             "/api/research-batches",
             json={
                 **command,
+                "start_date": "2026-08-04",
+                "end_date": "2026-08-05",
                 "strategies": [
                     command["strategies"][0],
-                    command["strategies"][1],
+                    {**command["strategies"][1], "exposure_expression": "universe_return() + 2"},
                     {"volatility_window": 20, "weighting": "equal_weight",
                         "item_key": "later",
                         "initial_cash_cny": "10000000",
@@ -1501,8 +1503,9 @@ def test_strategy_sweep_isolates_one_strategy_failure_and_keeps_order(
                     },
                 ],
             },
-        ).json()
-        _replace_nested_strategy_holdings(settings, admitted["id"], 2, 0)
+        )
+        assert response.status_code == 202, response.text
+        admitted = response.json()
 
         assert (
             client.app.state.core_runtime.research_batches.process_next(
@@ -1924,35 +1927,6 @@ def _replace_item_json(
                   AND run.id = item.research_run_id
                 """,
                 (field, canonical_json_bytes(value).decode(), batch_id, ordinal),
-            )
-        assert updated.rowcount == 1
-    finally:
-        database.close()
-
-
-def _replace_nested_strategy_holdings(
-    settings: CoreSettings,
-    batch_id: str,
-    ordinal: int,
-    holdings_count: int,
-) -> None:
-    database = PostgresDatabase(settings.database_url)
-    database.open()
-    try:
-        with database.transaction() as transaction:
-            updated = transaction.execute(
-                """
-                UPDATE research_runs.runs AS run
-                SET immutable_input = jsonb_set(
-                    run.immutable_input,
-                    '{strategy,holdings_count}',
-                    to_jsonb(%s::integer)
-                )
-                FROM research_batches.items AS item
-                WHERE item.batch_id = %s AND item.ordinal = %s
-                  AND run.id = item.research_run_id
-                """,
-                (holdings_count, batch_id, ordinal),
             )
         assert updated.rowcount == 1
     finally:

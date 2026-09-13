@@ -4,7 +4,11 @@ import argparse
 import sys
 
 from thesistrace.alpha_language import alpha_language
-from thesistrace.data import DatasetAdmissionService, DatasetLifecycle, MountedGenerationStore
+from thesistrace.data import (
+    DatasetAdmissionService,
+    DatasetLifecycle,
+    MountedGenerationStore,
+)
 from thesistrace.entrypoints.runtime import CoreSettings, open_core_runtime
 from thesistrace.research_run import ResearchRunService
 from thesistrace.research_run.execution import SupervisedResearchExecutor
@@ -16,9 +20,13 @@ def main() -> None:
     arguments = parser.parse_args()
     settings = CoreSettings.from_environment()
 
+    claimed_target = False
+
     def progress(stage: str, run_id: str) -> None:
+        nonlocal claimed_target
         if stage != "claimed" or run_id != arguments.run_id:
             return
+        claimed_target = True
         print(f"claimed:{run_id}", flush=True)
         if sys.stdin.buffer.read(1) != b"1":
             raise RuntimeError("Browser ResearchRun barrier was not released")
@@ -40,8 +48,11 @@ def main() -> None:
             track_references_result=runtime.daily_tracks.references_result_manifest,
             annualized_excess_calculator=runtime.annualized_excess_calculator,
         )
-        if not service.process_next():
-            raise RuntimeError("Browser ResearchRun was not claimed")
+        # Earlier browser cases may leave valid queued work. Preserve the
+        # normal claim order until this test's specific Run reaches its barrier.
+        while not claimed_target:
+            if not service.process_next():
+                raise RuntimeError("Browser ResearchRun was not claimed")
 
 
 if __name__ == "__main__":

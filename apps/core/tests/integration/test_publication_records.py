@@ -32,6 +32,7 @@ def _initialized_core(core_settings: CoreSettings) -> None:
 def test_record_joins_the_callers_transaction_and_read_starts_from_commit(
     core_settings: CoreSettings,
 ) -> None:
+    _reset_core_schemas(core_settings)
     with open_core_runtime(core_settings) as runtime:
         _reset_product_probe(runtime.database)
         prepared = runtime.publication.prepare(
@@ -338,7 +339,7 @@ def test_failed_object_deletion_remains_durable_until_worker_retry(
         with runtime.database.transaction() as tx:
             tx.execute(
                 "UPDATE publication.maintenance_state SET next_due_at = now() + interval '1 day' "
-                "WHERE job = 'orphan_scan'"
+                "WHERE job <> 'queued_deletions'"
             )
     completed = subprocess.run(
         [
@@ -472,7 +473,7 @@ def _ready_orphan_scan(database):
         )
         tx.execute(
             "UPDATE publication.maintenance_state SET next_due_at = now() + interval '1 day' "
-            "WHERE job = 'queued_deletions'"
+            "WHERE job <> 'orphan_scan'"
         )
 
 

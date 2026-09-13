@@ -1966,10 +1966,10 @@ def _strategy_command(request_id: str) -> dict[str, object]:
 def _assert_compact_track(payload: dict[str, object]) -> None:
     serialized = str(payload).lower()
     assert payload["available_result_sections"] == [
-        "strategy_summary",
-        "strategy_observations",
-        "origin",
-        "provenance",
+        "strategy_targets", "strategy_orders", "strategy_child_orders",
+        "strategy_fills", "strategy_adjustments", "daily_holdings_status", "daily_holdings",
+        "strategy_summary", "strategy_observations", "origin", "provenance",
+        "common_input_observations",
     ]
     for private_name in (
         "positions",

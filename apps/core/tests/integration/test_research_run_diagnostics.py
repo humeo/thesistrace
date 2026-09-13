@@ -480,10 +480,11 @@ def _insert_checkpoint(
             id, run_id, attempt_id, ordinal, boundary_session, phase,
             completed_warmup_sessions, completed_research_sessions,
             continuation_payload, observation_payload, final_values_payload,
+            holding_payloads, strategy_event_payloads,
             observation_row_count, checkpoint_manifest_sha256, chain_sha256
         ) VALUES (
             'checkpoint-diagnostic', %s, %s, 1, '2026-01-03', 'research',
-            2, 4, '{}'::jsonb, NULL, NULL, 0, %s, %s
+            2, 4, '{}'::jsonb, NULL, NULL, '{}'::jsonb, '{}'::jsonb, 0, %s, %s
         )
         """,
         (run_id, attempt_id, "c" * 64, "d" * 64),

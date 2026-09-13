@@ -29,22 +29,17 @@ def rustfs_admin(core_settings: CoreSettings) -> BaseClient:
 
 @pytest.fixture
 def rank_ic_migration_target_schemas():
-    """Keep existing migration tests on their historical target, not today's schema."""
-    from importlib.resources import files
+    """Use the actual historical DDL, independent of current product schema changes."""
+    import json
+    from pathlib import Path
 
     from thesistrace._postgres import SchemaDefinition
-    from thesistrace.entrypoints.schema import CORE_SCHEMA_DEFINITIONS
+    from thesistrace._postgres.schema import _fingerprint
+    from thesistrace.migrations.publication_maintenance_0002 import TARGET
 
-    constraint = files("thesistrace.migrations").joinpath("0001_target.sql").read_text().strip()
-    definitions = []
-    for definition in CORE_SCHEMA_DEFINITIONS:
-        if definition.name != "research_runs":
-            definitions.append(definition)
-            continue
-        statement = definition.statement
-        start = statement.index("CONSTRAINT runs_key_metrics_check")
-        end = statement.index(",\n    CONSTRAINT runs_status_check", start)
-        definitions.append(SchemaDefinition(
-            name=definition.name, statement=statement[:start] + constraint + statement[end:],
-        ))
-    return tuple(definitions)
+    fixture = json.loads(
+        (Path(__file__).parent / "fixtures" / "publication_maintenance_target.json").read_text()
+    )
+    definitions = tuple(SchemaDefinition(**row) for row in fixture["schemas"])
+    assert _fingerprint(definitions) == fixture["fingerprint"] == TARGET
+    return definitions

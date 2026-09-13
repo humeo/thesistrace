@@ -4,19 +4,25 @@ import { coreFetch } from "../auth/coreFetch";
 
 const metric = z.number().finite().nullable();
 const strategyMetrics = z.object({ annualized_excess_return: metric, sharpe: metric, maximum_drawdown: z.object({ value: metric }) });
-const runSchema = z.object({
+const runBase = z.object({
   id: z.string(), name: z.string(), status: z.enum(["queued", "running", "cancelling", "succeeded", "failed", "cancelled"]),
   formula_summary: z.string(), start_date: z.string(), end_date: z.string(),
-  research_kind: z.enum(["factor_evaluation", "strategy_backtest"]), failure_reason: z.string().optional(),
-  result: z.object({
-    factor: z.object({ horizons: z.object({
+  failure_reason: z.string().optional(),
+});
+const runSchema = z.discriminatedUnion("research_kind", [
+  runBase.extend({
+    research_kind: z.literal("factor_evaluation"),
+    result: z.object({ factor: z.object({ horizons: z.object({
       "1": z.object({ summary: z.object({ rank_ic: z.object({ mean: metric }) }) }),
       "5": z.object({ summary: z.object({ rank_ic: z.object({ mean: metric }) }) }),
       "20": z.object({ summary: z.object({ rank_ic: z.object({ mean: metric }) }) }),
-    }) }),
-    strategy: z.object({ summary: z.object({ metrics: strategyMetrics }) }).optional(),
-  }).optional(),
-});
+    }) }) }).optional(),
+  }),
+  runBase.extend({
+    research_kind: z.literal("strategy_backtest"),
+    result: z.object({ strategy: z.object({ summary: z.object({ metrics: strategyMetrics }) }) }).optional(),
+  }),
+]);
 const trackSchema = z.object({
   id: z.string(), status: z.enum(["active", "blocked", "stopping", "stopped"]),
   origin: z.object({ seed_run_id: z.string(), strategy_session: z.string() }),
@@ -44,7 +50,7 @@ function ResourceCard({ kind, id }: { kind: "run" | "track"; id: string }) {
         const body: unknown = await response.json();
         const resource: Resource = kind === "run" ? { kind, value: runSchema.parse(body) } : { kind, value: trackSchema.parse(body) };
         if (resource.value.id !== id) throw new Error("Research response identity mismatch.");
-        if (resource.kind === "run" && resource.value.status === "succeeded" && (!resource.value.result || (resource.value.research_kind === "strategy_backtest" && !resource.value.result.strategy))) throw new Error("Completed research result is unavailable.");
+        if (resource.kind === "run" && resource.value.status === "succeeded" && !resource.value.result) throw new Error("Completed research result is unavailable.");
         if (!controller.signal.aborted) setState({ id, resource, loadedAt: new Date().toISOString() });
       } catch (error) {
         if (!controller.signal.aborted) setState({ id, error: error instanceof z.ZodError ? "Research response is invalid." : error instanceof Error ? error.message : "Research data could not be loaded." });
@@ -71,12 +77,14 @@ function ResourceFacts({ resource }: { resource: Resource }) {
   }
   const run = resource.value;
   const result = run.status === "succeeded" ? run.result : undefined;
+  const factor = run.research_kind === "factor_evaluation" ? run.result?.factor : undefined;
+  const strategy = run.research_kind === "strategy_backtest" ? run.result?.strategy : undefined;
   return <><h2>{run.name}</h2><p>{run.status} · {run.research_kind === "factor_evaluation" ? "Factor Evaluation" : "Strategy Backtest"}</p>
     <p>{run.start_date} — {run.end_date}</p><code>{run.formula_summary}</code>
     {run.failure_reason ? <p role="alert">{run.failure_reason}</p> : null}
     {result ? <dl className="chat-a2ui-metrics">
-      {(["1", "5", "20"] as const).map((horizon) => <Fact key={horizon} label={`${horizon}S Rank IC`} value={formatMetric(result.factor.horizons[horizon].summary.rank_ic.mean)} />)}
-      {result.strategy ? <><Fact label="Annualized excess return" value={formatMetric(result.strategy.summary.metrics.annualized_excess_return, true)} /><Fact label="Sharpe" value={formatMetric(result.strategy.summary.metrics.sharpe)} /><Fact label="Maximum drawdown" value={formatMetric(result.strategy.summary.metrics.maximum_drawdown.value, true)} /></> : null}
+      {factor ? (["1", "5", "20"] as const).map((horizon) => <Fact key={horizon} label={`${horizon}S Rank IC`} value={formatMetric(factor.horizons[horizon].summary.rank_ic.mean)} />) : null}
+      {strategy ? <><Fact label="Annualized excess return" value={formatMetric(strategy.summary.metrics.annualized_excess_return, true)} /><Fact label="Sharpe" value={formatMetric(strategy.summary.metrics.sharpe)} /><Fact label="Maximum drawdown" value={formatMetric(strategy.summary.metrics.maximum_drawdown.value, true)} /></> : null}
     </dl> : <p>Results are available after this research succeeds.</p>}</>;
 }
 function Fact({ label, value }: { label: string; value: string }) { return <div><dt>{label}</dt><dd>{value}</dd></div>; }

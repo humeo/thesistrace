@@ -110,6 +110,12 @@ export function SessionHistoryList({
   useEffect(() => {
     if (openMenu === null) return;
     const dismissForLayoutChange = () => closeMenu(true);
+    const dismissForAnchorScroll = (event: Event) => {
+      const trigger = menuButtons.current.get(openMenu);
+      if (trigger && event.target instanceof Node && event.target.contains(trigger)) {
+        closeMenu(true);
+      }
+    };
     const dismissFromOutside = (event: PointerEvent) => {
       const target = event.target;
       if (!(target instanceof Node)) {
@@ -123,11 +129,11 @@ export function SessionHistoryList({
     };
     window.addEventListener("resize", dismissForLayoutChange);
     document.addEventListener("pointerdown", dismissFromOutside, true);
-    document.addEventListener("scroll", dismissForLayoutChange, true);
+    document.addEventListener("scroll", dismissForAnchorScroll, true);
     return () => {
       window.removeEventListener("resize", dismissForLayoutChange);
       document.removeEventListener("pointerdown", dismissFromOutside, true);
-      document.removeEventListener("scroll", dismissForLayoutChange, true);
+      document.removeEventListener("scroll", dismissForAnchorScroll, true);
     };
   }, [openMenu]);
 

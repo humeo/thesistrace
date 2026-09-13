@@ -81,6 +81,7 @@ async def _exercise_stdio(settings: CoreSettings, stderr_path: Path) -> None:
                 "get_research_context",
                 "get_alpha_catalog",
                 "diagnose_alpha_formula",
+                "diagnose_research_spec",
                 "list_research_runs",
                 "get_research_run",
                 "get_research_run_result",
@@ -129,7 +130,12 @@ async def _exercise_stdio(settings: CoreSettings, stderr_path: Path) -> None:
 
             first_full_catalog = await client.call_tool("get_alpha_catalog", {})
             second_full_catalog = await client.call_tool("get_alpha_catalog", {})
-            assert first_full_catalog.structured_content == (second_full_catalog.structured_content)
+            first_page = first_full_catalog.structured_content
+            second_page = second_full_catalog.structured_content
+            assert bool(first_page["next_cursor"]) == bool(second_page["next_cursor"])
+            assert {key: value for key, value in first_page.items() if key != "next_cursor"} == {
+                key: value for key, value in second_page.items() if key != "next_cursor"
+            }
             assert [
                 field["identifier"] for field in first_full_catalog.structured_content["fields"]
             ] == sorted(
@@ -218,6 +224,7 @@ def _assert_raw_stdio_process_exits_cleanly(settings: CoreSettings) -> None:
             "get_research_context",
             "get_alpha_catalog",
             "diagnose_alpha_formula",
+            "diagnose_research_spec",
             "list_research_runs",
             "get_research_run",
             "get_research_run_result",
@@ -290,7 +297,7 @@ async def _exercise_official_client_oversize_disconnect_and_reconnect(
     with reconnected_stderr.open("w+") as errlog:
         async with Client(stdio_client(parameters, errlog=errlog)) as client:
             tools = await client.list_tools()
-    assert len(tools.tools) == 16
+    assert len(tools.tools) == 17
     assert reconnected_stderr.read_text() == ""
 
 

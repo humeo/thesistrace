@@ -441,7 +441,17 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
         frozen = _stored_run(settings, queued["id"])
         assert frozen["name"] == "Direct Research"
         assert frozen["folder_id"] == "folder_default"
-        assert frozen["immutable_input"] == {
+        frozen_input = frozen["immutable_input"]
+        plan = frozen_input["execution_plan"]
+        assert 0 < plan["estimated_peak_bytes"] <= settings.research_execution_memory_bytes
+        assert plan["estimated_chunk_work"] > 0
+        assert {
+            **frozen_input,
+            "execution_plan": {
+                key: value for key, value in plan.items()
+                if key not in {"estimated_peak_bytes", "estimated_chunk_work"}
+            },
+        } == {
             "formula_source": "close",
             "alpha_expression": {"kind": "field", "field_id": "price.close.adjusted"},
             "hypothesis": None,
@@ -475,10 +485,10 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
             },
             "expression_admission": {
                 "effective_lookback": 0,
-                "node_count": 1,
+                "node_count": 2,
                 "depth": 1,
-                "formula_work": 1,
-                "estimated_run_work": 2,
+                "formula_work": 2,
+                "estimated_run_work": 4,
             },
             "data_admission": {
                 "generation_manifest_sha256": frozen["immutable_input"]["data_admission"][
@@ -498,8 +508,6 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
                 "chunk_time_target_seconds": 30,
                 "chunk_session_count": 64,
                 "time_target_exceeded": False,
-                "estimated_peak_bytes": 67_163_968,
-                "estimated_chunk_work": 2_112,
                 "maximum_universe_cardinality": 1,
                 "calculation_sessions": ["2026-08-03", "2026-08-04"],
                 "research_session_offset": 0,
@@ -523,6 +531,7 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
         completed = client.get(f"/api/research-runs/{queued['id']}")
         assert completed.status_code == 200
         assert completed.json()["status"] == "succeeded"
+        assert _stored_run(settings, queued["id"])["immutable_input"] == frozen_input
         assert completed.json()["execution_timing"]["started_at"] is not None
         assert completed.json()["execution_timing"]["finished_at"] is not None
         assert completed.json()["execution_timing"]["elapsed_seconds"] >= 0

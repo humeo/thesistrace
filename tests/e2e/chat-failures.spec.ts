@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import type { Page } from "@playwright/test";
 import { expect, test, testProjectName } from "./auth-fixture";
-import { modelPickerTrigger, revealToolActivity, selectModel, selectReasoning, submitChatPrompt } from "../fixtures/chat-ui";
+import { modelPickerTrigger, revealToolActivity, selectModel, selectReasoning, submitChatPrompt, waitForChatTurn } from "../fixtures/chat-ui";
 import { proxyState } from "./fault-proxy";
 import { controlWorker } from "./research-run-control";
 
@@ -93,8 +93,9 @@ test("Chat provider failure preserves admitted Core work and completed Tools wit
       return (await response.json()).status;
     }, { timeout: 45_000 }).toBe("succeeded");
     expect(requests).toHaveLength(1);
-    await send(page, SCRIPTED_RESUME_RESEARCH_PROMPT);
-    await expect(page.getByRole("region", { name: "Factor Evaluation result", exact: true })).toBeVisible({ timeout: 30_000 });
+    const resumedTurn = await submitChatPrompt(page, SCRIPTED_RESUME_RESEARCH_PROMPT);
+    await waitForChatTurn(page, resumedTurn);
+    await expect(page.getByRole("region", { name: `ResearchRun ${coreRunId}`, exact: true })).toBeVisible({ timeout: 30_000 });
     await expect(page.getByRole("textbox", { name: "Message", exact: true })).toBeEnabled();
     const after = databaseFacts(researcher.id);
     expect(after).toMatchObject({ agent_runs: 2, user_messages: 2, active_runs: 0, core_runs: 1 });
