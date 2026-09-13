@@ -1,6 +1,6 @@
 # 08 — 统一验收与发布记录
 
-状态：进行中。01–07 已提交，当前准备基线为 `4ed13765ac716519eee64027b0210ce53eee487f`。本文不代表生产发布成功。
+状态：进行中。01–07 已提交，08预发布代码已独立提交为 `39e4b88cd4f6f595472a225c51b06a9436c0d030`。本文不代表生产发布成功。
 
 ## 当前结论与未完成项
 
@@ -9,7 +9,7 @@
 - 01–07 已分别提交；08 的结构升级已获明确授权，本地升级五项测试和独立备份恢复演练通过。
 - Core静态schema、MCP编译缓存、预算连接占用与上下文读取已调整，业务池等待10秒、MCP连接复用5秒发现期限。测试代理旧barrier竞态已修复。最终新镜像20260913t171901z-40746-a02f1901的13项定向E2E全部通过（3.4分钟），含50并发、Host/context及研究保留，清理0。
 - 最新Agent 651单元和类型检查通过；真实依赖完整99通过/1等待断言失败，修正该测试的明确等待边界后定向通过。完整Core505、Auth145以及先前其余E2E通过范围见下文；保留所有首次失败，不声称首次全套无失败。
-- 完整镜像资格验证已通过；干净提交上的最终 release gate、08 独立提交、main 集成、生产真实备份及切换后研究/Track/刷新核验仍未完成。局部通过不能替代这些要求。
+- 完整镜像资格验证已通过；干净提交上的最终 release gate、main 集成、生产真实备份及切换后研究/Track/刷新核验仍未完成。局部通过不能替代这些要求。
 - 原 main 的用户改动与备份保持；生产未执行本票结构升级或 Dataset Head 切换。恢复执行前仍须重新核对生产状态。
 
 ## 生产只读预检 — 2026-09-13
@@ -325,3 +325,11 @@ R12移除全部已加载探针、冷启动Agent后的完整容量1 passed28.2s�
 完整镜像资格 R8（/tmp/issue08-image-qualification-r8.log，session61946）退出0；Core run20260913t172742z-44945-89c40f54的所有阶段通过，包括故障恢复、Operator真实浏览器、最终证据与secret scan，cleanup_status=0。后续Auth、Agent、Caddy独立镜像检查均执行成功，顶层入口正常完成。404/502等输出属于网关拒绝/故障场景，不能单凭日志文字误判失败。
 
 最终62文件固定快照issue08-review-final-r3-eiiu4neo，Standards后Spec串行审查均0新增可执行问题。最后一次Agent类型检查session92663退出0。准备以独立提交保存08的已验收实现和切换计划；工单仍不关闭，生产切换、真实备份、main集成及干净提交release gate尚待完成。候选上传保持暂停，等待具体目的地的数据传输授权。
+
+### 干净提交发布门禁 R1
+
+提交39e4b88cd4f6f595472a225c51b06a9436c0d030已保存62文件；原有inventory构建器、223旧清单及ticket-drafts仍排除。新建并验证干净detached worktree field-expansion-226-release，锁定依赖离线安装；MISE仅在命令环境显式信任已经读取的固定工具配置。
+
+/tmp/issue08-clean-release-gate-r1.log，session17943退出1。工具29通过、Ruff通过、Python1422通过/1失败（176.86秒）。失败为test_agent_host_is_a_private_node_package_without_research_authority精确依赖白名单遗漏新增直接@modelcontextprotocol/client；SDK仍沿用原锁定2.0.0。补齐单项白名单，不删除依赖/禁止导入断言。原文件9测试通过0.10秒、Ruff及diff检查通过。后续阶段未执行，不能声明release gate成功。
+
+单行固定快照issue08-review-sdk-allowlist-1mi_45eu的Standards→Spec串行复审均0新增。保留首次门禁失败证据，独立补充提交后继续干净提交门禁。
