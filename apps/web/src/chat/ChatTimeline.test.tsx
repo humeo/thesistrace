@@ -445,3 +445,37 @@ test("keeps the current tool visible outside folded history and clears running s
   await mount(controller({ turns: [timelineTurn(entries)] }));
   expect(document.querySelector(".chat-current-activity")).toBeNull();
 });
+
+test("keeps restored history at the bottom as resource cards grow without stealing an upward scroll", async () => {
+  let resized = () => {};
+  class TestResizeObserver {
+    constructor(callback: ResizeObserverCallback) {
+      resized = () => callback([], this as unknown as ResizeObserver);
+    }
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  vi.stubGlobal("ResizeObserver", TestResizeObserver);
+  await mount(controller({ turns: [timelineTurn([
+    entry("assistant_message", "assistant:1", { content: "Restored response", status: "complete" }),
+  ])] }));
+  const viewport = document.querySelector<HTMLElement>('[role="log"]')!;
+  const content = document.querySelector<HTMLElement>(".chat-timeline-content")!;
+  content.style.paddingBottom = "0px";
+  let height = 1000;
+  Object.defineProperty(viewport, "clientHeight", { configurable: true, value: 600 });
+  Object.defineProperty(viewport, "scrollHeight", { configurable: true, get: () => height });
+  await act(async () => resized());
+  expect(viewport.scrollTop + viewport.clientHeight).toBeGreaterThanOrEqual(height);
+
+  height = 2000;
+  await act(async () => resized());
+  expect(viewport.scrollTop + viewport.clientHeight).toBeGreaterThanOrEqual(height);
+
+  await act(async () => viewport.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -100 })));
+  viewport.scrollTop = 300;
+  height = 2400;
+  await act(async () => resized());
+  expect(viewport.scrollTop).toBe(300);
+});

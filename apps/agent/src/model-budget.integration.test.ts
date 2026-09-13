@@ -38,6 +38,32 @@ it("admits exactly one concurrent call when only one reservation fits", async ()
   expect(outcomes.filter(result => result.status === "fulfilled")).toHaveLength(1);
   expect(outcomes.filter(result => result.status === "rejected")).toHaveLength(1);
 });
+it("keeps database connections available while waiting for the quota policy", async () => {
+  const limitedPool = new Pool({ connectionString: url, max: 1, connectionTimeoutMillis: 2_000 });
+  let markEntered!: () => void;
+  let releasePolicy!: () => void;
+  const entered = new Promise<void>(resolve => { markEntered = resolve; });
+  const released = new Promise<void>(resolve => { releasePolicy = resolve; });
+  const delayed = new ModelBudget(limitedPool, "http://auth.invalid", async () => {
+    markEntered();
+    await released;
+    return Response.json({ timezone: "Asia/Shanghai", daily_model_budget_nanodollars: null,
+      daily_run_limit: null, active_daily_track_limit: null });
+  });
+  const pending = delayed.reserve(randomUUID(), 0);
+  // Attach a handler before any asynchronous assertion can fail.
+  const settled = Promise.allSettled([pending]);
+  try {
+    await entered;
+    const query = await limitedPool.query("SELECT 1 AS available");
+    expect(query.rows).toEqual([{ available: 1 }]);
+  } finally {
+    releasePolicy();
+    await settled;
+    await limitedPool.end();
+  }
+  await expect(pending).resolves.toMatchObject({ amount: 0 });
+});
 it("settles once, releases the unused reservation, and retains unknown calls", async () => {
   const researcher = randomUUID();
   const call = await budget.reserve(researcher, 1_000_000_000);

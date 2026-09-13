@@ -73,6 +73,11 @@ export function ChatTimeline({
     measure();
     const observer = new ResizeObserver(() => {
       measure();
+      if (following && initialPositionedRef.current && anchorRef.current === null
+        && scrollFrameRef.current === null) {
+        viewport.scrollTop = viewport.scrollHeight;
+        previousScrollTopRef.current = viewport.scrollTop;
+      }
       updateLatestVisibility();
     });
     observer.observe(viewport);
@@ -80,7 +85,7 @@ export function ChatTimeline({
     const latestResponse = content.querySelector(".chat-turn:last-child .chat-turn-response");
     if (latestResponse) observer.observe(latestResponse);
     return () => observer.disconnect();
-  }, [empty, latestTurnId]);
+  }, [empty, latestTurnId, following]);
 
   useLayoutEffect(() => {
     const viewport = scrollRef.current;

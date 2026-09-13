@@ -42,7 +42,7 @@ EXPECTED_OVERVIEW = {
         "discovery_complete_through_session": "2026-08-05",
         "historical_reconciliation_watermark": "2026-08-05",
         "revision_coverage": "source-dated-and-first-observed-corrections",
-        "seed_policy": "latest-pre-start-annual-flow-and-balance-facts",
+        "seed_policy": "annual-stock-and-ttm-dependency-seeds",
         "readiness_status": "ready",
         "pending_instrument_count": 0,
         "discovery_gap_count": 0,
@@ -58,7 +58,8 @@ EXPECTED_OVERVIEW = {
     "data_through_session": "2026-08-05",
     "market_research_readiness": True,
     "benchmark_research_readiness": True,
-    "financial_research_readiness": "ready",
+    # Market warmup starts in December; statement coverage starts in January.
+    "financial_research_readiness": "ready_with_gaps",
     "industry_research_readiness": True,
 }
 READY_DEPENDENCIES = {
@@ -616,7 +617,7 @@ def _before_restart(
     _request_with_secret_canary(api_origin)
     catalog = _request_json(api_origin, "GET", "/api/alpha/catalog")
     identifiers = {field["identifier"] for field in catalog["fields"]}
-    assert identifiers >= {
+    expected_identifiers = {
         "open",
         "high",
         "low",
@@ -629,6 +630,12 @@ def _before_restart(
         "assets",
         "liabilities",
         "equity",
+    }
+    assert identifiers >= expected_identifiers, {
+        "missing": sorted(expected_identifiers - identifiers),
+        "actual": sorted(identifiers),
+        "overview_generation": overview.get("generation_manifest_sha256"),
+        "catalog_generation": catalog.get("generation_manifest_sha256"),
     }
     assert identifiers.isdisjoint(
         {
@@ -3125,7 +3132,17 @@ def _assert_private_operator_installed() -> None:
 
 
 def _assert_expected_overview(overview: dict[str, object]) -> None:
-    assert {key: overview[key] for key in EXPECTED_OVERVIEW} == EXPECTED_OVERVIEW
+    actual = {key: overview[key] for key in EXPECTED_OVERVIEW}
+    assert actual == EXPECTED_OVERVIEW, actual
+    families = {family["family_id"]: family for family in overview["field_families"]}
+    statements = families["equity.financial_pit"]
+    indicators = families["equity.financial_indicator"]
+    assert statements["readiness"] == "partial", statements
+    assert statements["coverage_start"] == "2010-01-01", statements
+    assert len(statements["available_field_ids"]) == 41, statements
+    assert indicators["readiness"] == "ready", indicators
+    assert indicators["coverage_start"] == "2009-12-07", indicators
+    assert len(indicators["available_field_ids"]) == 163, indicators
     snapshot_sha256 = overview.get("benchmark_snapshot_sha256")
     assert isinstance(snapshot_sha256, str)
     assert len(snapshot_sha256) == 64

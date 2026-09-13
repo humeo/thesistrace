@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Protocol
 from uuid import UUID
 
@@ -289,14 +291,18 @@ class ResearchAgentCapability:
     handler: Callable[..., BaseModel]
 
     def input_schema(self) -> dict[str, object]:
-        schema = TypeAdapter(self.input_model).json_schema()
-        schema["type"] = "object"
-        return schema
+        return deepcopy(_model_schema(self.input_model))
 
     def output_schema(self) -> dict[str, object]:
-        schema = TypeAdapter(self.output_model | ResearchAgentToolError).json_schema()  # type: ignore[operator]
-        schema["type"] = "object"
-        return schema
+        return deepcopy(_model_schema(self.output_model | ResearchAgentToolError))  # type: ignore[operator]
+
+
+@lru_cache(maxsize=128)
+def _model_schema(model: object) -> dict[str, object]:
+    # Model contracts are process-static; authority and handlers remain request-local.
+    schema = TypeAdapter(model).json_schema()
+    schema["type"] = "object"
+    return schema
 
 
 @dataclass(frozen=True)

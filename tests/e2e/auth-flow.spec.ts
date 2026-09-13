@@ -27,20 +27,20 @@ test("Email verification creates one account and preserves the access lifecycle"
   await openAccountMenu(page);
   await expect(page.getByRole("button",{name:"Change password"})).toHaveCount(0);
   await page.getByRole("button",{name:"Log out"}).click();
-  await expect(page.getByRole("heading",{name:"Get started with QuantTrace"})).toBeVisible();
+  await expect(page.getByRole("heading",{name:"Welcome to QuantTrace"})).toBeVisible();
   await loginThroughUi(page,email.toUpperCase());
   await expect(page).toHaveURL(/\/data$/);
   const second = await (await page.request.get("/api/auth/get-session")).json();
   expect(second.user.id).toBe(first.user.id);
   expect(runAuthOperator("deactivate","--email",email)).toMatchObject({status:"updated"});
   await page.evaluate(()=>window.dispatchEvent(new Event("focus")));
-  await expect(page.getByRole("heading",{name:"Get started with QuantTrace"})).toBeVisible();
+  await expect(page.getByRole("heading",{name:"Welcome to QuantTrace"})).toBeVisible();
   expect(runAuthOperator("reactivate","--email",email)).toMatchObject({status:"updated"});
   await loginThroughUi(page,email);
   await expect(page).toHaveURL(/\/data$/);
   expect(runAuthOperator("revoke-sessions","--email",email)).toMatchObject({status:"updated"});
   await page.evaluate(()=>window.dispatchEvent(new Event("focus")));
-  await expect(page.getByRole("heading",{name:"Get started with QuantTrace"})).toBeVisible();
+  await expect(page.getByRole("heading",{name:"Welcome to QuantTrace"})).toBeVisible();
 });
 
 test("Invitation expiry, reissue, and lost-response replay converge safely", async ({ page }) => {
@@ -144,7 +144,7 @@ test("Bootstrap and Core failures preserve the exact Session boundary", async ({
     status: 401,
   }));
   await page.getByRole("link", { name: "Data", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Get started with QuantTrace" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Welcome to QuantTrace" })).toBeVisible();
   await expect(page.getByLabel("Account menu")).toHaveCount(0);
 });
 
@@ -177,7 +177,7 @@ test.describe("tablet touch presentation", () => {
   });
 });
 
-test("Two Researchers isolate Drafts, receipts, cursors, and system Folder identity", async ({ page }) => {
+test("Two Researchers isolate Drafts, receipts, paged lists, and system Folder identity", async ({ page }) => {
   test.setTimeout(180_000);
   const researcherA = await createResearcher(page, "browser-isolation-a@example.test");
   const bootstrapA = await bootstrap(page);
@@ -226,7 +226,7 @@ test("Two Researchers isolate Drafts, receipts, cursors, and system Folder ident
   await page.goto("/research");
   await expect(page.getByLabel("Research name")).toHaveValue("Researcher A draft");
   const runA = await admitRun(page, sharedRequestId, "Researcher A shared receipt");
-  await admitRun(page, "browser-owner-cursor-second", "Researcher A cursor second");
+  const secondRunA = await admitRun(page, "browser-owner-page-second", "Researcher A page second");
   expect(runA).not.toBe(runB);
   expect((await page.request.get(`/api/research-runs/${runB}`)).status()).toBe(404);
   expect((await page.request.get(`/api/research-batches/${batchB}`)).status()).toBe(404);
@@ -235,18 +235,31 @@ test("Two Researchers isolate Drafts, receipts, cursors, and system Folder ident
     items: Array<{ id: string }>;
   };
   expect(foldersA.items.map((folder) => folder.id)).not.toContain(folderB.id);
-  const firstPage = await page.request.get("/api/research-runs?limit=1");
+  const firstPage = await page.request.get("/api/research-runs?page=1&page_size=1");
   expect(firstPage.status()).toBe(200);
-  const firstPageBody = await firstPage.json() as { next_cursor: string | null };
-  expect(firstPageBody.next_cursor).not.toBeNull();
-  if (firstPageBody.next_cursor === null) throw new Error("Researcher A cursor was not created");
+  const firstPageBody = await firstPage.json() as { items: Array<{ id: string }>; total_count: number };
+  expect(firstPageBody.items).toHaveLength(1);
+  expect(firstPageBody.total_count).toBeGreaterThanOrEqual(2);
+  expect(firstPageBody.items[0]!.id).not.toBe(runB);
+  const secondPage = await page.request.get("/api/research-runs?page=2&page_size=1");
+  expect(secondPage.status()).toBe(200);
+  const secondPageBody = await secondPage.json() as { items: Array<{ id: string }>; total_count: number };
+  expect(secondPageBody.items).toHaveLength(1);
+  expect(secondPageBody.total_count).toBe(firstPageBody.total_count);
+  expect(secondPageBody.items[0]!.id).not.toBe(firstPageBody.items[0]!.id);
+  expect(secondPageBody.items[0]!.id).not.toBe(runB);
+  expect([firstPageBody.items[0]!.id, secondPageBody.items[0]!.id].sort())
+    .toEqual([runA, secondRunA].sort());
 
   await restoreResearcherSession(page, researcherB);
   await bootstrap(page);
   expect((await page.request.get(`/api/research-runs/${runA}`)).status()).toBe(404);
-  expect((await page.request.get(
-    `/api/research-runs?limit=1&cursor=${encodeURIComponent(firstPageBody.next_cursor)}`,
-  )).status()).toBe(400);
+  const pageB = await page.request.get("/api/research-runs?page=1&page_size=1");
+  expect(pageB.status()).toBe(200);
+  const pageBBody = await pageB.json() as { items: Array<{ id: string }>; total_count: number };
+  expect(pageBBody.items).toHaveLength(1);
+  expect(pageBBody.total_count).toBeGreaterThanOrEqual(1);
+  expect([runA, secondRunA]).not.toContain(pageBBody.items[0]!.id);
   await page.goto("/research");
   await expect(page.getByLabel("Research name")).toHaveValue("Researcher B draft");
   expect(await page.evaluate(() => Object.keys(localStorage).sort())).toEqual([keyA, keyB].sort());

@@ -29,6 +29,7 @@
     "@mastra/mcp": "1.17.2",
     "@mastra/memory": "1.28.1",
     "@mastra/pg": "1.22.1",
+    "@modelcontextprotocol/client": "2.0.0",
     "ai": "6.0.271",
     "exit-hook": "5.1.0",
     "hono": "4.13.5",

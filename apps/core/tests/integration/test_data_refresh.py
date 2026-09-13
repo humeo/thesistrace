@@ -446,9 +446,11 @@ def test_refresh_publishes_a_physically_valid_family_candidate(
         database.close()
 
 
+@pytest.mark.parametrize("include_daily_basic", [False, True])
 def test_identical_refresh_keeps_generation_and_advances_last_refresh_time(
     core_settings: CoreSettings,
     tmp_path: Path,
+    include_daily_basic: bool,
 ) -> None:
     database = _database(core_settings)
     try:
@@ -460,6 +462,20 @@ def test_identical_refresh_keeps_generation_and_advances_last_refresh_time(
                 (FIRST_REFRESH_AT,),
             )
         current = _twenty_session_canonical()
+        if include_daily_basic:
+            from thesistrace.data.canonical_mapping import daily_basic_field_catalog
+            from thesistrace.data.fields import DAILY_BASIC_FIELDS
+
+            sessions = current["research_calendar"]
+            current["daily_basic_sessions"] = [{"session": session} for session in sessions]
+            current["daily_basic"] = [{
+                "session": session, "instrument_id": current["instruments"][0]["instrument_id"],
+                "source_close": "10",
+                **{field.source_column: "15" if field.alpha.identifier == "pe" else None
+                   for field in DAILY_BASIC_FIELDS},
+            } for session in sessions]
+            current["field_catalog"].extend(daily_basic_field_catalog(sessions[0]))
+            current["field_catalog"].sort(key=lambda row: row["field_id"])
         manifest = _establish_head(database, tmp_path, current)
         source = RecordingRefreshSource(current)
         lifecycle_events: list[dict[str, object]] = []
@@ -470,13 +486,14 @@ def test_identical_refresh_keeps_generation_and_advances_last_refresh_time(
             lifecycle_event=lifecycle_events.append,
         )
 
-        first = refresh.submit(idempotency_key="no-change", as_of=AS_OF)
-        replay = refresh.submit(idempotency_key="no-change", as_of=AS_OF)
+        key = f"no-change-{include_daily_basic}"
+        first = refresh.submit(idempotency_key=key, as_of=AS_OF)
+        replay = refresh.submit(idempotency_key=key, as_of=AS_OF)
         assert replay == first
         benchmark_source = FixtureBenchmarkSource()
         assert _process_next(refresh, source, benchmark_source) is True
 
-        terminal = refresh.inspect("no-change")
+        terminal = refresh.inspect(key)
         assert terminal.status == "succeeded"
         assert terminal.outcome == "no_change"
         assert terminal.last_refresh_at == SECOND_REFRESH_AT.isoformat()

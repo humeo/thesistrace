@@ -3809,7 +3809,7 @@ def _canonical_from_rows(tables: Mapping[str, list[dict[str, object]]]) -> dict[
         "field_catalog": tables["field_catalog"],
         **({
             "daily_basic": [{name: value if name in {"session", "instrument_id"} or value is None
-                             else format(value, "f") for name, value in row.items()}
+                             else _daily_basic_decimal_text(value) for name, value in row.items()}
                             for row in tables["daily_basic"]],
             "daily_basic_sessions": tables["daily_basic_sessions"],
         } if "daily_basic" in tables else {}),
@@ -3819,6 +3819,12 @@ def _canonical_from_rows(tables: Mapping[str, list[dict[str, object]]]) -> dict[
             else {}
         ),
     }
+
+
+def _daily_basic_decimal_text(value: Decimal) -> str:
+    # Match source normalization without Decimal.normalize's context rounding.
+    text = format(value, "f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
 
 
 def _partition_rows(

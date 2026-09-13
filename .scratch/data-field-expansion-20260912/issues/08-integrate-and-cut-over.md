@@ -8,7 +8,7 @@
 
 **Execution contract:** 在从 main 创建并核实的新 worktree 中，严格按 01→08 串行执行。每票开始实现前先记录 Plan；完成实现后逐项验收，进行代码审查、修复及复审，更新 tracker 并形成该票独立 git commit，完成后才开始下一票。审查同样串行，不并行委派实现或审查。
 
-**Latest user decision:** 按用户最新要求，直接实现当前合同，不做兼容、版本迁移或 vXX 升级链；这覆盖母规格中有条件引入迁移的旧提议。保留数据、原有字段语义与必要研究引用的要求继续有效，不将“不迁移”解释为允许清库。
+**Latest user decision:** 按用户最新要求，直接实现当前合同，不做兼容、版本迁移或 vXX 升级链；保留数据、原有字段语义与必要研究引用的要求继续有效，不将“不迁移”解释为允许清库。用户随后明确批准本票切换方案的三表两列保留数据结构升级，作为限定源/目标的一次例外；详见下方授权补充，应用不增加运行时兼容。
 
 **Execution order:** 08；必须先完成 07 的验收、复审、tracker 更新和独立提交。
 
@@ -30,3 +30,29 @@
 ## Comments
 
 - 2026-09-12：用户确认发布工单。已纳入最新的串行执行、每票 Plan / 验收 / 审查修复复审 / tracker / 独立提交，以及不兼容、不做版本迁移的要求。
+
+## Plan — 2026-09-13
+
+- Predecessor07 is committed as4ed13765 after all11acceptance criteria and serial Standards/Spec reviews. Continue in the verified codex/field-expansion-226 worktree. Its only untracked files are the excluded original inventory builders and ticket-drafts; preserve them.
+- Audit T01–T16 against committed evidence and current consumer code. Reuse the verified finalcandidate77d45ba1e49444b235308bc05fe1803e4e727532d0a8aec6e30bfe2a3b138e5d and19-hash handoff. SourceHead17f5694f6a9d47b915ffde326928b919a55181e75a4908cb661934850ac8c983 is a pinned preparation coordinate, not a claim of current productionHead.
+- Inspect Data page search/filter/completion, HTTP/MCP/Agent catalog, research/Track admission and operator release controls. Add a failing regression only for a demonstrated missing behavior, then implement the smallest current-contract fix. Verify the existing four sections and22Market/204Financial counts in a real isolated browser, including mixed-source research submission and partial readiness.
+- Run the existing final release gate for this cross-module production cutover, with isolated dependencies and current tool versions; preserve first-failure evidence and rerun only affected scopes after fixes. Browser evidence must identify its actual build/data coordinate. Existing07history qualification remains separate from deterministic release fixtures.
+- Capture current production Head, version, in-flight operations and retained result/checkpoint references read-only. Prepare a concrete cutover record covering verified candidate transport, backup coordinates, admission pause/drain, component versions, atomic Head/lifecycle publication, recovery and entry resumption. Reconcile any sourceHead advancement before publication.
+- Current code adds indicator ledger tables and two operation columns to data/schema.sql. Inspect the existing schema initialization/fingerprint rules and actual destination schema before any deployment. Do not invent a migration/version chain, wipe/recreate shared data or change only the fingerprint to bypass validation. If preserving existing production data requires a schema operation that conflicts with the user's no-migration instruction, surface that concrete release decision after completing unaffected implementation/verification.
+- main is an ancestor of the worktree, so integration is currently fast-forwardable. Its dirty domain docs and untracked original design artifacts must be preserved; compare overlaps and retain exact backups before any authorized integration. Validate and commit main before the deployment branch merges only main; no direct deployment-branch implementation or cherry-picks.
+- Once pre-release implementation/acceptance and serial review/fixes are complete, integrate the validated code on main and perform the concrete authorized release sequence. Verify previous results, one new research, Track progression and a normal refresh after resuming; verify retained family/field coverage and publication recovery without automatic Head rollback.
+- Record exact tested, committed and deployed versions, source limitations and any blocked release boundary honestly. Close08and the overall goal only after all12criteria, finalreview, independentcommit and actualcutoververification are proven.
+
+## 授权补充与结构实施计划 — 2026-09-13
+
+用户本轮明确回复“允许”，批准切换方案列出的三表两列、限定源/目标且保留数据的显式结构升级。这是上述禁止迁移要求的一次具体例外；不授权清库、修改指纹绕过校验或运行时兼容。
+
+- 使用现有显式升级入口风格，固定生产来源合同与当前目标合同；只新增指标账本三表及刷新操作两列，验证完整受影响表结构后才记录合同与执行回执。
+- 先以真实历史 schema 在隔离 PostgreSQL 验证原数据保留、重复执行、结构漂移拒绝及晚期失败事务回滚，再完成 Standards → Spec 串行审查。
+- 生产执行前备份并验证恢复；提交后的恢复使用备份与匹配镜像，不添加长期双合同运行分支。现有回归失败仍是发布前置条件，授权不代表已经发布。
+
+## 预发布实现验收 — 2026-09-14
+
+已完成限定源/目标的三表两列结构升级及保留数据演练；完成当前226字段合同下的回归修复、最终62文件Standards→Spec串行复审（均0）。最终新镜像13项受影响E2E及完整镜像资格入口通过。快速与真实依赖检查的首次失败、修复和定向通过详见[统一验收记录](../issue08-release-verification.md)。
+
+保存本票独立代码提交，但状态继续ready-for-agent：尚未完成main集成、干净提交release gate与真实生产切换。候选外传暂停等待具体授权，不以本地验收替代线上发布。

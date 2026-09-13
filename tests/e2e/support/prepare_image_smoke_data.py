@@ -12,12 +12,14 @@ from pathlib import Path
 import boto3
 import pyarrow as pa
 from botocore.exceptions import ClientError
+from prepare_current_data import publish_indicator_fixture
 
 sys.path.insert(0, "/qualification")
 from benchmark_financial_io import build_market_benchmark_stream  # noqa: E402
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.data import DatasetLifecycle, MountedGenerationStore
+from thesistrace.data.canonical_mapping import field_catalog
 from thesistrace.data.source import (
     CanonicalBootstrapStream,
     CanonicalColumnarSessionPartition,
@@ -103,6 +105,7 @@ def _publish_financial_candidate(settings: CoreSettings, end: str, mode: str) ->
     replay = _qualification_financial_replay(
         fixture_root / "tushare-financial-product-replay.json"
     )
+    replay["request_end"] = end
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", encoding="utf-8") as file:
         json.dump(replay, file, sort_keys=True)
         file.flush()
@@ -126,15 +129,18 @@ def _publish_financial_candidate(settings: CoreSettings, end: str, mode: str) ->
             text=True,
             timeout=120,
         )
-    if completed.returncode != 0:
-        raise RuntimeError(f"Image Smoke Financial Bootstrap failed: {completed.stderr}")
-    outcome = json.loads(completed.stdout)
+        if completed.returncode != 0:
+            raise RuntimeError(f"Image Smoke Financial Bootstrap failed: {completed.stderr}")
+        outcome = json.loads(completed.stdout)
+        generation_manifest_sha256 = publish_indicator_fixture(
+            settings, str(outcome["generation_manifest_sha256"]), Path(file.name),
+        )
     print(
         json.dumps(
             {
                 "coverage_start": START,
                 "data_through_session": end,
-                "generation_manifest_sha256": outcome["generation_manifest_sha256"],
+                "generation_manifest_sha256": generation_manifest_sha256,
                 "mode": mode,
                 "operator_status": outcome["status"],
             },
@@ -189,7 +195,9 @@ def _qualification_market_stream(sessions: list[str]) -> CanonicalBootstrapStrea
     return CanonicalBootstrapStream(
         source_name="production-image-qualification-market",
         source_lineage={"profile": "production-image-qualification-v1"},
-        static=source.static,
+        # The I/O benchmark advertises only close. This product fixture contains
+        # the complete EOD price columns and must publish their actual catalog.
+        static={**source.static, "field_catalog": field_catalog(sessions[0])},
         covered_session_range=source.covered_session_range,
         partitions=partitions,
     )
@@ -275,6 +283,7 @@ def _qualification_financial_replay(path: Path) -> dict[str, object]:
             "total_hldr_eqy_exc_min_int",
         ),
         "cashflow": ("n_cashflow_act",),
+        "fina_indicator": ("eps", "roe", "q_roe"),
     }
     expanded: dict[str, object] = {}
     for endpoint, fields_to_vary in value_fields.items():
@@ -286,18 +295,21 @@ def _qualification_financial_replay(path: Path) -> dict[str, object]:
             raise RuntimeError(f"Image Smoke {endpoint} replay template is unavailable")
         fields = list(template["fields"])
         template_items = template["items"]
-        if not isinstance(template_items, list) or len(template_items) != 1:
+        if not isinstance(template_items, list) or not template_items:
             raise RuntimeError(f"Image Smoke {endpoint} replay template is invalid")
         instruments: dict[str, object] = {}
         for ordinal in range(1, QUALIFICATION_INSTRUMENT_COUNT + 1):
             ts_code = f"{ordinal:06d}.SZ"
-            item = list(template_items[0])
-            item[fields.index("ts_code")] = ts_code
-            for field_name in fields_to_vary:
-                item[fields.index(field_name)] = str(
-                    int(str(item[fields.index(field_name)])) * ordinal
-                )
-            instruments[ts_code] = {"fields": fields, "items": [item]}
+            items = []
+            for template_item in template_items:
+                item = list(template_item)
+                item[fields.index("ts_code")] = ts_code
+                for field_name in fields_to_vary:
+                    item[fields.index(field_name)] = str(
+                        Decimal(str(item[fields.index(field_name)])) * ordinal
+                    )
+                items.append(item)
+            instruments[ts_code] = {"fields": fields, "items": items}
         expanded[endpoint] = instruments
     replay["financial"] = expanded
     return replay

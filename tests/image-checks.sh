@@ -379,6 +379,9 @@ child = subprocess.Popen(
     [
         sys.executable,
         "-c",
+        # Select the allocating child as the OOM victim, not its supervisor.
+        "from pathlib import Path\n"
+        "Path(\"/proc/self/oom_score_adj\").write_text(\"1000\")\n"
         "values=[]\nwhile True: values.append(bytearray(16 * 1024 * 1024))",
     ],
     stdin=subprocess.PIPE,

@@ -8,8 +8,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event
 
+from prepare_current_data import publish_indicator_fixture
+
 from thesistrace._postgres import PostgresDatabase
-from thesistrace.data import DatasetLifecycle, FinancialCandidateStore, MountedGenerationStore
+from thesistrace.data import (
+    DatasetLifecycle,
+    FinancialCandidateStore,
+    MountedGenerationStore,
+)
 from thesistrace.data.financial_candidate import FinancialDiscoveryPublication
 from thesistrace.data.financial_collection import CompletedFinancialCollection
 from thesistrace.entrypoints.runtime import CoreSettings
@@ -48,6 +54,11 @@ def main() -> None:
             mount_root=settings.data_mount,
             generation=root.manifest_sha256,
         )
+        outcome["generation_manifest_sha256"] = publish_indicator_fixture(
+            settings, str(outcome["generation_manifest_sha256"]),
+            Path(__file__).resolve().parents[2] / "fixtures"
+            / "tushare-financial-market-refresh-replay.json",
+        )
     print(json.dumps({"mode": mode, "operator_outcome": outcome}, sort_keys=True))
 
 
@@ -57,7 +68,7 @@ def _publish_ready_financial_fixture(
     mount_root: Path,
     generation: str,
 ) -> dict[str, object]:
-    prepared_at = datetime(2026, 8, 11, 10, tzinfo=UTC)
+    prepared_at = datetime.now(UTC)
     candidates = FinancialCandidateStore(mount_root)
     generations = MountedGenerationStore(mount_root)
     root = generations.inspect_root(generation)
@@ -130,7 +141,7 @@ def _run_operator(*arguments: str) -> dict[str, object]:
         )
     outcome = json.loads(completed.stdout)
     if not isinstance(outcome, dict):
-        raise RuntimeError("private Data Operator returned an invalid outcome")
+        raise TypeError("private Data Operator returned an invalid outcome")
     return outcome
 
 

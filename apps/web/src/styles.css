@@ -3196,6 +3196,8 @@ select { color-scheme: dark; }
 }
 
 @media (max-width: 480px) {
+  .chat-a2ui-resource > header > button,
+  .chat-a2ui-resource > header .chat-a2ui-navigation { min-width: 44px; min-height: 44px; }
   .chat-empty-state { width: calc(100% - 24px); }
   .chat-empty-state h1 { font-size: 23px; }
   .chat-a2ui-facts,

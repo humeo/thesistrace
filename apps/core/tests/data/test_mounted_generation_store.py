@@ -2512,3 +2512,34 @@ def test_price_refresh_crosses_partition_boundary_with_retained_daily_family(
     assert result[0, 0] == 15
     assert math.isnan(result[0, 1])
     assert reopened.validate_generation(original.manifest_sha256) == original
+
+
+def test_daily_basic_refresh_base_preserves_normalized_source_values(tmp_path: Path) -> None:
+    from thesistrace.adapters.tushare_daily_basic import (
+        DAILY_BASIC_SOURCE_FIELDS,
+        normalize_daily_basic,
+    )
+    from thesistrace.data.canonical_mapping import daily_basic_field_catalog
+    from thesistrace.data.source import RawSourceResponse
+
+    canonical = _canonical()
+    session = canonical["research_calendar"][-1]
+    values = dict.fromkeys(DAILY_BASIC_SOURCE_FIELDS)
+    values.update(ts_code="A.SH", trade_date=session.replace("-", ""),
+                  close="10", pe="15", turnover_rate="1.25", total_mv="0")
+    raw = RawSourceResponse(
+        DAILY_BASIC_SOURCE_FIELDS,
+        (tuple(values[field] for field in DAILY_BASIC_SOURCE_FIELDS),),
+    )
+    source_rows = list(normalize_daily_basic(raw, instrument_ids={"A.SH": "equity:A.SH"}))
+    canonical["daily_basic"] = source_rows
+    canonical["daily_basic_sessions"] = [{"session": session}]
+    canonical["field_catalog"].extend(daily_basic_field_catalog(session))
+    store = MountedGenerationStore(tmp_path)
+    generation = store.materialize(
+        canonical, prepared_at=datetime(2026, 9, 13, tzinfo=UTC),
+        source_name="test", source_lineage={},
+    )
+
+    reopened = MountedGenerationStore(tmp_path).open_refresh_base(generation.manifest_sha256)
+    assert reopened.canonical["daily_basic"] == source_rows

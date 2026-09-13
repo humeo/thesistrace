@@ -26,20 +26,23 @@ test(`Chat Batch ${mode} preserves ordered child Results independently of its Se
     controlWorker("pause", "batch-research-worker");
     paused = true;
   }
-  let originalSurface = "";
+  let originalRunIds: string[] = [];
   let batchId = "";
   try {
     await send(page, mode === "factor_evaluation" ? factorPrompt : strategyPrompt);
     await expect((await revealToolActivity(page, "submit_research_batch", "complete")).last()).toBeVisible();
     const surface = page.getByRole("article", { name: "Research surface" }).first();
     await expect(surface).toBeVisible();
-    originalSurface = await surface.innerText();
-    const match = originalSurface.match(/batch_[a-f0-9]{20}/);
-    if (match === null) throw new Error("Batch surface exposed no authoritative Batch identity");
-    batchId = match[0];
+    const admitted = batchDatabaseFacts(researcher.id);
+    expect(admitted).toMatchObject({ admissions: 1, batches: 1, children: 2 });
+    batchId = admitted.batch_ids[0]!;
+    const submitted = await batch(page, batchId);
+    originalRunIds = submitted.items.map((item) => item.research_run_id);
+    await expect(surface.locator("section.chat-a2ui-resource")).toHaveCount(2);
+    expect(await surface.locator("section.chat-a2ui-resource").evaluateAll((cards) => cards.map((card) => card.getAttribute("aria-label")))).toEqual(originalRunIds.map((id) => `ResearchRun ${id}`));
     if (paused) {
-      expect(originalSurface).toContain("queued");
-      expect(originalSurface).toContain("0/2 completed");
+      expect(submitted.status).toBe("queued");
+      await expect(surface.getByRole("region").first()).toContainText("queued");
       controlWorker("unpause", "batch-research-worker");
       paused = false;
     }
@@ -54,10 +57,11 @@ test(`Chat Batch ${mode} preserves ordered child Results independently of its Se
     ? ["positive-price-rank", "negative-price-rank"] : ["focused-holdings", "broad-holdings"]);
   expect(new Set(complete.items.map((item) => item.research_run_id)).size).toBe(2);
   await send(page, resumePrompt);
-  await expect(page.getByRole("article", { name: "Research surface" }).first()).toHaveText(originalSurface, { useInnerText: true });
-  const comparison = page.getByRole("table", { name: "Ordered child ResearchRun results" }).last();
-  await expect(comparison).toBeVisible();
-  await expect(comparison.getByRole("row")).toHaveCount(3);
+  const original = page.getByRole("article", { name: "Research surface" }).first();
+  expect(await original.locator("section.chat-a2ui-resource").evaluateAll((cards) => cards.map((card) => card.getAttribute("aria-label")))).toEqual(originalRunIds.map((id) => `ResearchRun ${id}`));
+  const comparison = page.getByRole("article", { name: "Research surface" }).last();
+  await expect(comparison.locator("section.chat-a2ui-resource")).toHaveCount(2);
+  expect(await comparison.locator("section.chat-a2ui-resource").evaluateAll((cards) => cards.map((card) => card.getAttribute("aria-label")))).toEqual(originalRunIds.map((id) => `ResearchRun ${id}`));
   const childSnapshots = new Map<string, ChildRun>();
   for (const [ordinal, item] of complete.items.entries()) {
     const run = await childRun(page, item.research_run_id);
@@ -68,21 +72,21 @@ test(`Chat Batch ${mode} preserves ordered child Results independently of its Se
       input: { research_kind: mode === "factor_evaluation" ? "factor_evaluation" : "strategy_backtest", universe: "top1000", neutralization: "none" },
       result: { provenance: { research_run_id: item.research_run_id } },
     });
-    const row = comparison.getByRole("row").nth(ordinal + 1);
-    await expect(row).toContainText(item.item_key);
+    const row = comparison.getByRole("region", { name: `ResearchRun ${item.research_run_id}`, exact: true });
+    await expect(row).toContainText("succeeded");
     await expect(row).toContainText(item.research_run_id);
     if (mode === "factor_evaluation") {
       expect(run.input.formula).toBe(ordinal === 0 ? "rank(close)" : "-rank(close)");
       const value = run.result.factor.horizons["5"].summary.rank_ic.mean;
-      await expect(row).toContainText(value === null ? "Unavailable" : value.toFixed(4));
+      await expect(row).toContainText(value === null ? "Not available" : value.toFixed(3));
     } else {
       expect(run.input.holdings_count).toBe(ordinal === 0 ? 10 : 20);
       expect(run.input.rebalance_every_sessions).toBe(5);
       const value = run.result.strategy?.summary.metrics.sharpe;
       expect(value).not.toBeUndefined();
-      await expect(row).toContainText(value === null ? "Unavailable" : value!.toFixed(4));
+      await expect(row).toContainText(value === null ? "Not available" : value!.toFixed(3));
     }
-    await expect(page.getByRole("link", { name: `Open ${item.item_key} ResearchRun`, exact: true }).last()).toHaveAttribute("href", `/research-runs/${item.research_run_id}`);
+    await expect(page.getByRole("link", { name: item.research_run_id, exact: true }).last()).toHaveAttribute("href", `/research-runs/${item.research_run_id}`);
   }
   expect(batchDatabaseFacts(researcher.id)).toMatchObject({
     admissions: 1, batches: 1, children: 2, generations: 1, folder_ids: ["folder_batch_research"],
@@ -95,14 +99,13 @@ test(`Chat Batch ${mode} preserves ordered child Results independently of its Se
   const durableUrl = page.url();
   const sessionId = new URL(durableUrl).searchParams.get("session");
   if (sessionId === null) throw new Error("Batch Chat has no durable Session");
-  const resultText = await comparison.innerText();
+  const resultText = await comparison.locator(".chat-a2ui-metrics").allTextContents();
   await page.reload();
-  await expect(page.getByRole("table", { name: "Ordered child ResearchRun results" }).last()).toHaveText(resultText, { useInnerText: true });
+  await expect(page.getByRole("article", { name: "Research surface" }).last().locator(".chat-a2ui-metrics")).toHaveText(resultText);
   expect(batchDatabaseFacts(researcher.id)).toMatchObject({ admissions: 1, batches: 1, children: 2 });
   await testInfo.attach(`${mode}-desktop`, { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
   await page.setViewportSize({ width: 390, height: 844 });
-  const narrowTable = page.getByRole("table", { name: "Ordered child ResearchRun results" }).last();
-  await expect(narrowTable.getByRole("columnheader")).toHaveText(["Order", "Item", "ResearchRun", "Status", "Result"]);
+  await expect(page.getByRole("article", { name: "Research surface" }).last().locator(".chat-a2ui-metrics")).toHaveText(resultText);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await testInfo.attach(`${mode}-mobile`, { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
   await page.setViewportSize({ width: 1280, height: 900 });
@@ -120,7 +123,7 @@ test(`Chat Batch ${mode} preserves ordered child Results independently of its Se
   await send(page, "List my recent Research Batches.");
   await expect((await revealToolActivity(page, "list_research_batches", "complete")).last()).toBeVisible();
   expect(batchDatabaseFacts(researcher.id)).toMatchObject({ admissions: 1, batches: 1 });
-  const navigation = page.getByRole("link", { name: `Open ${complete.items[0]!.item_key} ResearchRun`, exact: true }).last();
+  const navigation = page.getByRole("link", { name: complete.items[0]!.research_run_id, exact: true }).last();
   await navigation.click();
   await expect(page).toHaveURL(new RegExp(`/research-runs/${complete.items[0]!.research_run_id}$`));
   await expect(page.getByRole("heading", { name: mode === "factor_evaluation" ? "Factor Summary" : "Strategy Summary" })).toBeVisible();
@@ -157,7 +160,9 @@ test("Chat Batch response loss replays the same admission and child identities",
     setProxyMode("mcp-fault-proxy", 8150, "tool-call", "pass");
     await send(page, resumePrompt);
     await expect((await revealToolActivity(page, "submit_research_batch", "complete")).last()).toBeVisible();
-    await expect(page.getByRole("table", { name: "Ordered child ResearchRun results" })).toBeVisible();
+    const recovered = page.getByRole("article", { name: "Research surface" }).last();
+    await expect(recovered.locator("section.chat-a2ui-resource")).toHaveCount(2);
+    expect(await recovered.locator("section.chat-a2ui-resource").evaluateAll((cards) => cards.map((card) => card.getAttribute("aria-label")))).toEqual(beforeReplay.items.map((item) => `ResearchRun ${item.research_run_id}`));
     expect(batchDatabaseFacts(researcher.id)).toEqual(before);
     expect(await batch(page, batchId)).toEqual(beforeReplay);
   } finally {

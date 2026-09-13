@@ -233,42 +233,14 @@ test("Alpha formula editor keeps line numbers on the dark workbench surface", as
 });
 
 test("date inputs retain a browser-populated value when focus leaves the field", async ({ page }) => {
-  await page.route("**/api/**", async (route) => {
-    const pathname = new URL(route.request().url()).pathname;
-    if (pathname.startsWith("/api/auth/") || pathname === "/api/researcher/bootstrap") {
-      await route.continue();
-      return;
-    }
-    if (pathname === "/api/research-folders") {
-      await route.fulfill({ json: { items: [{ id: "folder_default", name: "Default", is_default: true, created_at: "2026-08-13T00:00:00Z" }], next_cursor: null } });
-      return;
-    }
-    if (pathname === "/api/alpha/catalog") {
-      await route.fulfill({ json: { fields: [], builtins: [] } });
-      return;
-    }
-    if (pathname === "/api/data") {
-      await route.fulfill({ json: {
-        market_coverage: { start: "2010-01-04", end: "2026-08-13" },
-        financial_coverage: null,
-        industry_coverage: null,
-        benchmark_coverage: null,
-        benchmark_snapshot_sha256: null,
-        benchmark_last_published_at: null,
-        data_through_session: "2026-08-13",
-        last_market_refresh_at: null,
-        last_financial_refresh_at: null,
-        last_industry_refresh_at: null,
-        industry_refresh_status: null,
-        industry_refresh_failure_code: null,
-        market_research_readiness: true,
-        benchmark_research_readiness: false,
-        financial_research_readiness: "not_ready",
-        industry_research_readiness: false,
-      } });
-      return;
-    }
-    await route.abort();
+  await page.route("**/api/data", async (route) => {
+    const response = await route.fetch();
+    const overview = await response.json();
+    await route.fulfill({ response, json: {
+      ...overview,
+      market_coverage: { start: "2010-01-04", end: "2026-08-13" },
+      data_through_session: "2026-08-13",
+    } });
   });
   await page.goto("/research?new");
   await page.getByLabel("Research name").fill("Browser populated dates");
@@ -463,7 +435,7 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     const customFolderId = new URL(page.url()).searchParams.get("folder");
     expect(customFolderId).toMatch(/^folder_[a-f0-9]+$/);
     if (customFolderId === null) throw new Error("Custom Folder route is missing folder id");
-    await expect(page.getByText("Signals", { exact: true }).first()).toBeVisible();
+    await expect(page.getByRole("group", { name: "Research Folders", exact: true }).locator("summary")).toHaveText("Signals folder");
     await page.getByLabel("Research name").fill("Signals browser Draft");
     await page.locator(".cm-content").click();
     await page.keyboard.type("volume");
@@ -531,7 +503,7 @@ test("Default Folder retains one local Research Draft with authoritative Formula
   }
 });
 
-test("Financial catalog composes one Formula and starts its DailyTrack", { tag: "@isolated" }, async ({ page }, testInfo) => {
+test("Complete field catalog composes one Formula and starts its DailyTrack", { tag: "@isolated" }, async ({ page }, testInfo) => {
   test.setTimeout(180_000);
   const responses: string[] = [];
   let runId: string | undefined;
@@ -549,12 +521,34 @@ test("Financial catalog composes one Formula and starts its DailyTrack", { tag: 
     workerPaused = true;
     await openDataOverview(page);
     await expect(page.getByRole("heading", { name: "Research fields" })).toBeVisible();
+    await expect(page.getByText("226 available", { exact: true })).toBeVisible();
+    await expect(page.locator(".signal-strip")).toHaveCount(4);
+    await expect(page.locator(".data-field-dataset > header")).toContainText([
+      "22 fields", "204 fields",
+    ]);
+    await page.getByRole("searchbox", { name: "Search fields" }).fill("close_raw");
+    await expect(page.locator(".data-field-table tbody tr")).toHaveCount(1);
+    await expect(page.locator(".data-field-table tbody tr")).toContainText("未复权收盘价");
+    await page.getByRole("searchbox", { name: "Search fields" }).fill("");
+    await page.getByRole("combobox", { name: "Research purpose" }).selectOption("盈利");
+    await expect(page.locator(".data-field-table tbody tr")).toHaveCount(12);
+    await page.getByRole("combobox", { name: "Research purpose" }).selectOption("");
+    await page.getByRole("combobox", { name: "Field source" }).selectOption("fina_indicator");
+    await expect(page.locator(".data-field-table tbody tr")).toHaveCount(163);
+    await page.getByRole("searchbox", { name: "Search fields" }).fill("单季净资产收益率");
+    await expect(page.locator(".data-field-table tbody tr")).toHaveCount(1);
+    await expect(page.locator(".data-field-table tbody tr")).toContainText("q_roe");
+    await page.getByRole("searchbox", { name: "Search fields" }).fill("");
+    await page.getByRole("combobox", { name: "Field source" }).selectOption("");
+    await page.getByRole("combobox", { name: "Field period" }).selectOption("latest_visible_ttm");
+    await expect(page.locator(".data-field-table tbody tr")).toHaveCount(19);
+    await page.getByRole("combobox", { name: "Field period" }).selectOption("");
     await expect(page.getByText("revenue", { exact: true })).toBeVisible();
     await expect(page.getByText("Latest full year visible on each Research Session").first()).toBeVisible();
     await page.goto("/research?new");
     await fillCompleteDraft(page, {
       name: "Composite financial browser run",
-      formula: "rank(close) + rank(revenue)",
+      formula: "rank(close_raw) + rank(pe) + rank(roe) + rank(revenue)",
     });
     const runCapture = page.waitForResponse((response) => (
       response.url().endsWith("/api/research-runs")

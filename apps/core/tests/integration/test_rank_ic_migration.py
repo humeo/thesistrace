@@ -9,9 +9,8 @@ from thesistrace.migrations.rank_ic_0001 import MIGRATION, SOURCE, TARGET, migra
 
 
 @pytest.fixture
-def migration_database(core_settings, monkeypatch):
+def migration_database(core_settings, monkeypatch, historical_core_schema):
     from thesistrace._postgres import SchemaDefinition
-    from thesistrace.entrypoints.schema import CORE_SCHEMA_DEFINITIONS
     from thesistrace.migrations import rank_ic_0001
 
     original_publication = (
@@ -24,7 +23,7 @@ def migration_database(core_settings, monkeypatch):
             SchemaDefinition(name=item.name, statement=original_publication)
             if item.name == "publication"
             else item
-            for item in CORE_SCHEMA_DEFINITIONS
+            for item in historical_core_schema
         ),
     )
     db = PostgresDatabase(core_settings.database_url)

@@ -115,21 +115,17 @@ export { expect };
 
 export async function openDataOverview(page: Page): Promise<void> {
   // Cold navigation includes Auth, capability, and Researcher bootstrap before
-  // these requests start. Wait for network readiness before the short UI check.
-  const [overview, catalog] = await Promise.all([
+  // the snapshot request starts. Its catalog and availability share one Head.
+  const [overview] = await Promise.all([
     page.waitForResponse((response) => (
       new URL(response.url()).pathname === "/api/data"
-      && response.request().method() === "GET"
-    )),
-    page.waitForResponse((response) => (
-      new URL(response.url()).pathname === "/api/alpha/catalog"
       && response.request().method() === "GET"
     )),
     page.goto("/data"),
   ]);
   expect(overview.status(), "Data overview request").toBe(200);
-  expect(catalog.status(), "Alpha catalog request").toBe(200);
-  await Promise.all([overview.finished(), catalog.finished()]);
+  const snapshot = await overview.json();
+  expect(snapshot.catalog.fields.length, "Data snapshot field catalog").toBeGreaterThan(0);
   await expect(page.getByRole("heading", { name: "Data overview" })).toBeVisible();
 }
 
@@ -223,7 +219,18 @@ export async function emailCode(email: string): Promise<string> {
 export async function requestOperatorCode(page: Page): Promise<string> {
   const sessionResponse = await page.request.get("/api/auth/get-session");
   const session = await sessionResponse.json();
-  const sent = await page.request.post("/api/auth/operator/proofs/send-code", {data:{},headers:sameOriginHeaders()});
+  const send = () => page.request.post("/api/auth/operator/proofs/send-code", { data: {}, headers: sameOriginHeaders() });
+  let sent = await send();
+  if (sent.status() === 429) {
+    expect(await sent.json()).toEqual({ code: "RATE_LIMITED" });
+    const retryAfterSeconds = Number(sent.headers()["retry-after"]);
+    expect(Number.isInteger(retryAfterSeconds)).toBe(true);
+    expect(retryAfterSeconds).toBeGreaterThan(0);
+    expect(retryAfterSeconds).toBeLessThanOrEqual(60);
+    // Respect the server's fixed rate window; never change the isolated Auth limit.
+    await new Promise((resolve) => setTimeout(resolve, retryAfterSeconds * 1_000));
+    sent = await send();
+  }
   expect(sent.status()).toBe(200);
   return emailCode(session.user.email);
 }

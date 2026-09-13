@@ -166,7 +166,7 @@ describe("per-Run MCP lifecycle", () => {
     const servers = clientOptions?.servers as Record<string, Record<string, unknown>>;
     expect(servers.thesistrace).toMatchObject({
       allowedHosts: ["api:8100"],
-      connectTimeout: 2_000,
+      connectTimeout: 5_000,
       enableServerLogs: false,
       forwardInstructions: false,
       onToolError: "return",

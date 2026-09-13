@@ -91,7 +91,7 @@ test("Operator access control and responsive navigation", { tag: "@isolated" }, 
   await expect(closeNavigation).toBeFocused();
   await expectMinimumTouchTarget(closeNavigation);
   const mobileOperatorLink = page.getByRole("link", { name: "Operator", exact: true });
-  const mobileHomeLink = page.getByRole("link", { name: "ThesisTrace home" });
+  const mobileHomeLink = page.getByRole("link", { name: "QuantTrace home" });
   const mobileAccountMenu = applicationSidebar.getByLabel("Account menu");
   await expect(mobileOperatorLink).toBeVisible();
   await mobileHomeLink.focus();
@@ -346,7 +346,7 @@ test("Operator researchers and invitations", { tag: "@isolated" }, async ({ page
   let confirmation = page.getByRole("dialog", { name: "Issue Invitation?" });
   await expect(confirmation).toBeVisible();
   await expect(confirmation).toContainText("Target email");
-  await expect(confirmation).toContainText("A 48-hour Invitation");
+  await expect(confirmation).toContainText("An optional 48-hour invitation link");
   const issueEmail = confirmation.getByLabel("Target email");
   const issuePassword = confirmation.getByLabel("Verification code");
   await expect(issueEmail).toBeFocused();
@@ -359,7 +359,7 @@ test("Operator researchers and invitations", { tag: "@isolated" }, async ({ page
     element.contains(document.activeElement)
   )).toBe(true);
   await issueEmail.fill(consoleInvitationEmail);
-  await fillOperatorCode(issuePassword);
+  await issuePassword.fill("123456");
   await page.keyboard.press("Escape");
   await expect(confirmation).toHaveCount(0);
   await expect(inviteResearcher).toBeFocused();
@@ -500,7 +500,7 @@ test("Operator researchers and invitations", { tag: "@isolated" }, async ({ page
   );
   const revocationPassword = revocationDialog.getByLabel("Verification code");
   await expect(revocationPassword).toBeFocused();
-  await fillOperatorCode(revocationPassword);
+  await revocationPassword.fill("123456");
   await revocationPassword.press("Shift+Tab");
   expect(await revocationDialog.evaluate((element) =>
     element.contains(document.activeElement)
@@ -514,7 +514,7 @@ test("Operator researchers and invitations", { tag: "@isolated" }, async ({ page
     name: "Revoke Login Sessions?",
   });
   await expect(revocationDialog.getByLabel("Verification code")).toHaveValue("");
-  await fillOperatorCode(revocationDialog.getByLabel("Verification code"));
+  await revocationDialog.getByLabel("Verification code").fill("123456");
   await revocationDialog.getByRole("button", { name: "Cancel" }).click();
   await expect(revocationDialog).toHaveCount(0);
   await expect(revokeSessions).toBeFocused();
@@ -559,7 +559,7 @@ test("Operator researchers and invitations", { tag: "@isolated" }, async ({ page
 
   await restoreResearcherSession(page, ordinary);
   await refreshRevokedSessionOnBrowserEvent(page);
-  await expect(page.getByRole("heading", { name: "Get started with QuantTrace" }))
+  await expect(page.getByRole("heading", { name: "Welcome to QuantTrace" }))
     .toBeVisible();
   await restoreResearcherSession(page, operator);
   await refreshOperatorSessionOnBrowserEvent(page);
@@ -2097,7 +2097,7 @@ test("Operator Dataset operations and Worker recovery", { tag: "@isolated" }, as
       || request.path === "/api/operator/data/refreshes/retry",
   );
   expect(actionProofRequests).toHaveLength(3);
-  expect(actionProofRequests.every((request) => request.body.includes(browserPassword)))
+  expect(actionProofRequests.every((request) => /^[0-9]{6}$/.test(JSON.parse(request.body).otp)))
     .toBe(true);
   expect(actionMutations).toHaveLength(3);
   expect(actionMutations.every((request) => !request.body.includes(browserPassword)))

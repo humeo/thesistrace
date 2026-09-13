@@ -94,8 +94,17 @@ test("Chat provider failure preserves admitted Core work and completed Tools wit
     }, { timeout: 45_000 }).toBe("succeeded");
     expect(requests).toHaveLength(1);
     await send(page, SCRIPTED_RESUME_RESEARCH_PROMPT);
-    await expect(page.getByRole("region", { name: "Factor Evaluation result", exact: true })).toBeVisible({ timeout: 30_000 });
+    const recoveredCard = page.getByRole("region", { name: `ResearchRun ${coreRunId}`, exact: true });
+    await expect(recoveredCard).toContainText("succeeded", { timeout: 30_000 });
+    const recoveredResponse = await page.request.get(`/api/research-runs/${coreRunId}`);
+    expect(recoveredResponse.status()).toBe(200);
+    const recoveredResult = await recoveredResponse.json() as { result: { factor: { horizons: Record<string, { summary: { rank_ic: { mean: number | null } } }> } } };
+    for (const horizon of ["1", "5", "20"]) {
+      const value = recoveredResult.result.factor.horizons[horizon]!.summary.rank_ic.mean;
+      await expect(recoveredCard.locator(".chat-a2ui-metrics div").filter({ has: page.getByText(`${horizon}S Rank IC`, { exact: true }) }).locator("dd")).toHaveText(value === null ? "Not available" : value.toFixed(3));
+    }
     await expect(page.getByRole("textbox", { name: "Message", exact: true })).toBeEnabled();
+    await expect.poll(() => databaseFacts(researcher.id).active_runs, { timeout: 30_000 }).toBe(0);
     const after = databaseFacts(researcher.id);
     expect(after).toMatchObject({ agent_runs: 2, user_messages: 2, active_runs: 0, core_runs: 1 });
     await testInfo.attach("independent-core-metadata", { contentType: "application/json", body: Buffer.from(JSON.stringify({ before, after, core_run_id: coreRunId, requests, seed: 0, exit_code: 0 })) });

@@ -4,6 +4,7 @@ const upstreamOrigin = requiredOrigin("THESISTRACE_MCP_PROXY_UPSTREAM");
 const port = requiredPort("THESISTRACE_MCP_PROXY_PORT");
 const upstreamTimeoutMs = 30_000;
 let toolCallMode = "pass";
+let toolCallModeRevision = 0;
 let discoveryRequests = 0;
 let toolListRequests = 0;
 let toolCallRequests = 0;
@@ -95,6 +96,7 @@ http.createServer(async (request, response) => {
       return;
     }
     toolCallMode = body.mode;
+    toolCallModeRevision += 1;
     for (const release of [...heldResponses]) release();
     if (body.reset) {
       discoveryRequests = 0;
@@ -131,6 +133,7 @@ http.createServer(async (request, response) => {
     && toolNames.some((name) => ["submit_research_run", "submit_research_batch", "start_daily_track", "refresh_daily_track", "retry_daily_track"].includes(name));
   const disconnectResponse = methods.includes("tools/call")
     && (toolCallMode === "disconnect" || disconnectSubmitResponse);
+  const holdRevision = toolCallModeRevision;
   const holdResponse = methods.includes("tools/call") && (
     toolCallMode === "hold"
     || (toolCallMode === "hold-detail" && toolNames.includes("get_research_run"))
@@ -153,7 +156,7 @@ http.createServer(async (request, response) => {
       responseBody = new TextEncoder().encode(JSON.stringify(envelope));
       canaryToolResponses++;
     }
-    if (holdResponse && !await waitForBarrier(response)) return;
+    if (holdResponse && holdRevision === toolCallModeRevision && !await waitForBarrier(response)) return;
     if (disconnectResponse) {
       disconnectedToolResponses += 1;
       if (disconnectSubmitResponse) disconnectedSubmitResponses += 1;

@@ -254,6 +254,22 @@ export class ResearchSessionRepository {
     });
   }
 
+  /** Read the model's context inputs under one ownership check and Session lock. */
+  async contextInput(threadId: string, researcherId: string): Promise<Readonly<{
+    checkpoint: SessionContextCheckpoint | null;
+    messages: readonly MastraDBMessage[];
+    recoveries: readonly ModelStepRecovery[];
+  }>> {
+    return withSessionMutation(this.pool, threadId, async (client) => {
+      await loadOwnedThreadForUpdate(client, threadId, researcherId);
+      const checkpoint = await loadContextCheckpoint(client, threadId);
+      const messages = await loadRawContextMessages(client, threadId, researcherId);
+      const recoveries = (await client.query<ModelStepRecovery>(`SELECT ${modelRecoveryColumns}
+        FROM agent.model_step_recovery WHERE thread_id = $1::uuid ORDER BY created_at, original_message_id`, [threadId])).rows;
+      return { checkpoint, messages, recoveries };
+    });
+  }
+
   async contextCheckpoint(threadId: string, researcherId: string): Promise<SessionContextCheckpoint | null> {
     return withSessionMutation(this.pool, threadId, async (client) => {
       await loadOwnedThreadForUpdate(client, threadId, researcherId);

@@ -802,6 +802,21 @@ def test_local_operator_has_only_safe_default_scopes() -> None:
     assert stop_authority.scopes == authority.scopes | {ResearchAgentScope.TRACKING_STOP}
 
 
+def test_discovery_schemas_are_independent_across_requests() -> None:
+    first = _registry().accessible_capabilities()
+    expected = [(tool.input_schema(), tool.output_schema()) for tool in first]
+    for tool in first:
+        for schema in (tool.input_schema(), tool.output_schema()):
+            schema.clear()
+        # Mutating nested definitions must not affect a later request either.
+        for schema in (tool.input_schema(), tool.output_schema()):
+            for value in schema.values():
+                if isinstance(value, dict):
+                    value.clear()
+    second = _registry().accessible_capabilities()
+    assert [(tool.input_schema(), tool.output_schema()) for tool in second] == expected
+
+
 def test_registry_filters_discovery_and_rechecks_scope_at_invocation() -> None:
     denied = _registry(
         ResearchAgentAuthority(

@@ -49,3 +49,21 @@ test('sidebar resizes by pointer and keyboard, clamps bounds and retains width a
  await expect(page.getByLabel('Account menu').locator('.account-identity-copy')).toBeVisible();
  await page.screenshot({path:testInfo.outputPath('account-menu-mobile.png')});
 });
+
+test('Chat actions remain usable while independent research content scrolls', async ({ page }) => {
+ const actions = page.getByRole('button', { name: 'Actions for Quality Alpha' });
+ await actions.locator('..').hover();
+ await actions.click();
+ const menu = page.getByRole('menu', { name: 'Actions for Quality Alpha' });
+ await expect(menu).toBeVisible();
+ await page.getByLabel('Research content').evaluate(element => { element.scrollTop = 100; });
+ await expect.poll(() => page.getByLabel('Research content').evaluate(element => element.scrollTop)).toBe(100);
+ await expect(menu).toBeVisible();
+ await menu.getByRole('menuitem', { name: 'Delete Chat' }).click();
+ await expect(page.getByRole('dialog', { name: 'Delete Chat?' })).toBeVisible();
+ await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+ await actions.click();
+ await page.getByRole('region', { name: 'Chats', exact: true }).dispatchEvent('scroll');
+ await expect(menu).toBeHidden();
+ await expect(actions).toBeFocused();
+});

@@ -804,6 +804,8 @@ def _financial_market_generation(store: MountedGenerationStore) -> str:
 
 
 def _financial_generation(root: Path, market: str, *, value: str, ordinal: int) -> str:
+    from thesistrace.data.fields import FINANCIAL_FIELDS
+
     fields = {
         "income": (
             "ts_code",
@@ -861,6 +863,12 @@ def _financial_generation(root: Path, market: str, *, value: str, ordinal: int) 
             *endpoint_values[endpoint],
             "0",
         ]
+        additional = tuple(sorted({
+            field.source_column for field in FINANCIAL_FIELDS
+            if field.source_endpoint == endpoint and field.source_column not in fields[endpoint]
+        }))
+        fields[endpoint] = (*fields[endpoint], *additional)
+        item.extend([None] * len(additional))
         payload_sha256 = hashlib.sha256(
             canonical_json_bytes({"fields": list(fields[endpoint]), "items": [item]})
         ).hexdigest()

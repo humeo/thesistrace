@@ -152,7 +152,9 @@ test("Chat Host restart retains completed Tools and Core work without replaying 
     }, { timeout: 45_000 }).toBe("succeeded");
     setProxyMode("mcp-fault-proxy", 8150, "tool-call", "pass");
     await send(page, resumePrompt);
-    await expect(page.getByRole("region", { name: "Factor Evaluation result", exact: true }).last()).toBeVisible({ timeout: 30_000 });
+    const resultCard = page.getByRole("region", { name: `ResearchRun ${coreRunId}`, exact: true }).last();
+    await expect(resultCard).toContainText("succeeded", { timeout: 30_000 });
+    await expect(resultCard.getByText("1S Rank IC", { exact: true })).toBeVisible();
     await expect(page.getByRole("textbox", { name: "Message", exact: true })).toBeEnabled();
     const after = databaseFacts(researcher.id);
     expect(after).toMatchObject({ active_runs: 0, admissions: 1, agent_runs: 2, core_runs: 1, user_messages: 2 });

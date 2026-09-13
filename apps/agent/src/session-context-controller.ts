@@ -12,7 +12,7 @@ import type { ResearchSessionRepository } from "./session-repository.js";
 import { AgentRunFailure, providerFailureCode } from "./run-failure.js";
 
 type GenerationOptions = Parameters<typeof generateSessionContext>[0];
-type Repository = Pick<ResearchSessionRepository, "contextCheckpoint" | "rawContextMessages" | "beginContextCycle" | "commitContextCycle" | "releaseContextCycle" | "modelStepRecoveries">;
+type Repository = Pick<ResearchSessionRepository, "contextInput" | "rawContextMessages" | "beginContextCycle" | "commitContextCycle" | "releaseContextCycle">;
 type ControllerOptions = Omit<GenerationOptions, "removed" | "sourceParts" | "turnPrefixMessageIds" | "currentRequest" | "requiredReferences" | "previous"> & Readonly<{
   repository: Repository; threadId: string; researcherId: string; runId: string;
 }>;
@@ -53,9 +53,8 @@ export class SessionContextController {
   private async prepareContext(request: LanguageModelV3CallOptions, currentRequestId?: string, recovery?: ModelRequestFailure): Promise<LanguageModelV3CallOptions> {
     const { repository, threadId, researcherId, runId, selection, abortSignal } = this.options;
     abortSignal.throwIfAborted();
-    const checkpoint = await repository.contextCheckpoint(threadId, researcherId);
-    const raw = await repository.rawContextMessages(threadId, researcherId);
-    const excluded = invalidRecoveryMessageIds(await repository.modelStepRecoveries(threadId, researcherId));
+    const { checkpoint, messages: raw, recoveries } = await repository.contextInput(threadId, researcherId);
+    const excluded = invalidRecoveryMessageIds(recoveries);
     let effective = checkpoint || excluded.length ? await this.withContext(request, raw, checkpoint?.snapshot, excluded) : request;
     const before = modelRequestBudget(effective, selection.model, this.counter);
     const threshold = Math.floor(selection.model.contextWindow * 0.9);
