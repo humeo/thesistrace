@@ -357,3 +357,16 @@ E2E共享run20260913t183254z-87604-95e8b428为70通过/1失败（11.7分钟）�
 目标main锁定依赖离线同步后，227项字段/TTM/来源/准入/Agent契约测试通过18秒（/tmp/issue08-main-contracts.log），Agent与E2E类型检查通过。随后仅补充本验收记录，不新增运行时代码。
 
 剩余阻断：候选压缩续传因自动审批缺少具体数据和目的地授权而暂停，等待用户答复。没有推送部署分支、执行生产结构升级、合并生产数据卷或发布新Head。真实生产备份恢复、新研究、旧结果、Track及正常刷新仍待授权边界满足后完成。工单08保持ready-for-agent，不能标complete。
+
+
+### 候选远端暂存完成 — 2026-09-14
+
+用户于2026-09-13T19:43:14.591Z回复“允许”，对应完整约8.6GB候选续传至 `thesistrace-contabo:/opt/thesistrace-staging/field-expansion-226-77d45ba1e494/candidate-data/`、排除根HEAD.json的具体授权。此项授权已落实，前述等待上传授权是历史状态。
+
+压缩单流曾因SSH连接重置失败（session95827，SSH255）；重新逐文件核验后，仅续传3641个缺失或不完整文件，共1609154596字节。13个串行批次全部成功，session1774退出0，记录 `/tmp/issue08-candidate-batches-upload.log` 与 `.local/field-expansion-226-integration-backup/stream-batches-r2/`。
+
+旧传输附带44451个AppleDouble文件（7245513字节），逐个验证格式及移动前后SHA-256后，保留至同一暂存父目录的 `candidate-upload-metadata-backup-r2/`，没有删除。正式候选最终严格核验文件集合、大小和全部SHA-256通过：71929文件、8593065687字节，无HEAD.json；候选77d45ba1e49444b235308bc05fe1803e4e727532d0a8aec6e30bfe2a3b138e5d，传输清单SHA-256为90e96508648136cc0bef5786758790a7caffde8fdccac574f7cdd8073fce345c。回执 `.local/field-expansion-226-integration-backup/candidate-transfer-verification.json`，只读验证session50131退出0。
+
+本地部署分支仅从已核验main快进至e2ff4e88e72239793b194d5c44eb32a601e2920a；未推送。自动审批单独拒绝向 `git@github.com:humeo/thesistrace.git` 推送 `codex/contabo-deployment`，认为候选上传许可不涵盖代码外传；已单独询问用户，尚未收到该问题答复。不得用上传源码绕过此限制。
+
+生产未暂停、未执行真实备份/结构升级、未合并Canonical卷、未发布Head。当前仅证明候选暂存完整，不证明上线完成；工单08保持未完成，真实生产备份恢复、新研究、旧结果、Track及正常刷新验收仍待执行。

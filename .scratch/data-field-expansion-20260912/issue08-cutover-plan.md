@@ -6,7 +6,7 @@
 
 - 源 Head：`17f5694f6a9d47b915ffde326928b919a55181e75a4908cb661934850ac8c983`。
 - 候选：`77d45ba1e49444b235308bc05fe1803e4e727532d0a8aec6e30bfe2a3b138e5d`，覆盖至 2026-09-09。
-- 当前已提交能力：`4ed13765ac716519eee64027b0210ce53eee487f`；08 尚未提交，因此它不是最终发布 revision。
+- 当前实现及main验收记录已提交至 `e2ff4e88e72239793b194d5c44eb32a601e2920a`；部署分支仅在本地从main快进，尚未推送或发布。
 - 组件必须来自最终 main 集成版本及从 main 合并的部署版本；发布前填写提交 SHA、实际镜像 ID、配置校验结果，不能用镜像名称代替证据。
 - 当前生产结构缺少以下三表和两列。数据库处理决策、真实依赖演练及备份恢复证明完成前，不停止线上服务、不执行部署。
 
@@ -37,7 +37,7 @@
 7. 核对健康、226 字段及各家族覆盖，恢复入口。验证新研究固定新 Head、已有结果可读取、Track 保留 Origin/历史检查点并推进，再执行一次正常刷新，确认各家族与新增字段没有丢失。
 8. 记录实际提交、镜像、备份、切换时间、前后 Head、各项验证结果。出现失败时停止新的写入，按演练过的备份与匹配镜像恢复方案处理，不清库或修改引用绕过校验。
 
-最终提交、备份坐标和切换回执尚未产生，当前不得将此方案当作发布完成证明。
+实现提交已经产生；真实生产备份坐标和切换回执尚未产生，当前不得将此方案当作发布完成证明。
 
 ## 只读路径与空间核对
 
@@ -48,3 +48,16 @@
 暂存准备已获工具审批并开始执行：创建 `/opt/thesistrace-staging/field-expansion-226-77d45ba1e494/candidate-data`（父发布目录与数据目录0700），rsync排除根HEAD.json上传。传输日志 `/tmp/issue08-candidate-staging-upload.log`；当前仍待传输终态及目的内容校验。没有合并生产卷、暂停服务、变更生产数据库或发布Head。
 
 暂存传输后续状态：原rsync已在保留断点后暂停，计划启用压缩续传以减少JSON传输量；压缩续传被自动审批拒绝，认为缺少对具体数据与目的地的明确外传授权。已向用户请求确认，当前待答复，未绕过审批或继续传输。前述“开始上传”是历史状态；目的完整性验证尚未完成。
+
+
+### 候选远端暂存完成 — 2026-09-14
+
+用户于2026-09-13T19:43:14.591Z回复“允许”，对应完整约8.6GB候选续传至 `thesistrace-contabo:/opt/thesistrace-staging/field-expansion-226-77d45ba1e494/candidate-data/`、排除根HEAD.json的具体授权。此项授权已落实，前述等待上传授权是历史状态。
+
+压缩单流曾因SSH连接重置失败（session95827，SSH255）；重新逐文件核验后，仅续传3641个缺失或不完整文件，共1609154596字节。13个串行批次全部成功，session1774退出0，记录 `/tmp/issue08-candidate-batches-upload.log` 与 `.local/field-expansion-226-integration-backup/stream-batches-r2/`。
+
+旧传输附带44451个AppleDouble文件（7245513字节），逐个验证格式及移动前后SHA-256后，保留至同一暂存父目录的 `candidate-upload-metadata-backup-r2/`，没有删除。正式候选最终严格核验文件集合、大小和全部SHA-256通过：71929文件、8593065687字节，无HEAD.json；候选77d45ba1e49444b235308bc05fe1803e4e727532d0a8aec6e30bfe2a3b138e5d，传输清单SHA-256为90e96508648136cc0bef5786758790a7caffde8fdccac574f7cdd8073fce345c。回执 `.local/field-expansion-226-integration-backup/candidate-transfer-verification.json`，只读验证session50131退出0。
+
+本地部署分支仅从已核验main快进至e2ff4e88e72239793b194d5c44eb32a601e2920a；未推送。自动审批单独拒绝向 `git@github.com:humeo/thesistrace.git` 推送 `codex/contabo-deployment`，认为候选上传许可不涵盖代码外传；已单独询问用户，尚未收到该问题答复。不得用上传源码绕过此限制。
+
+生产未暂停、未执行真实备份/结构升级、未合并Canonical卷、未发布Head。当前仅证明候选暂存完整，不证明上线完成；工单08保持未完成，真实生产备份恢复、新研究、旧结果、Track及正常刷新验收仍待执行。
