@@ -375,11 +375,30 @@ class FinancialCandidateStore:
         unchanged_evidence = _merge_evidence_checkpoints(
             (*prior_checkpoints, *collection.shards)
         ) == prior_checkpoints
+        discovery = None
+        if (
+            unchanged_evidence and prior.discovery_baseline_session is not None
+            and observation_through_session == prior.observation_through_session
+        ):
+            # Reprojecting retained receipts does not perform new reconciliation.
+            # Preserve the actual discovery watermarks and unresolved source state.
+            coverage = prior_manifest["dataset_coverage"]
+            discovery = FinancialDiscoveryPublication(
+                baseline_session=coverage["discovery_baseline_session"],
+                attempted_through_session=coverage["discovery_attempted_through_session"],
+                complete_through_session=coverage["discovery_complete_through_session"],
+                source_lineage_sha256=coverage["source_lineage_sha256"],
+                readiness_status=coverage["readiness_status"],
+                pending_instrument_count=coverage["pending_instrument_count"],
+                discovery_gap_count=coverage["discovery_gap_count"],
+                earliest_unresolved_date=coverage["earliest_unresolved_date"],
+            )
         return self._materialize(
             collection,
             observation_through_session=observation_through_session,
             prior_checkpoints=prior_checkpoints,
             prior_shards=prior_shards,
+            discovery=discovery,
             prior_candidate_manifest_sha256=(
                 prior_candidate_manifest_sha256 if unchanged_evidence else None
             ),
@@ -487,6 +506,7 @@ class FinancialCandidateStore:
         self._validate_historical_identities(prior_checkpoints, historical)
         deltas, quarantine_unchanged = self._daily_table_deltas(
             collection.shards,
+            calendar_instruments=frozenset(),
             prior_checkpoints=prior_checkpoints,
             endpoint_fields=endpoint_fields,
             coverage_start=str(prior_manifest["dataset_coverage"]["start"]),
@@ -517,6 +537,10 @@ class FinancialCandidateStore:
         coverage_start = str(prior_manifest["dataset_coverage"]["start"])
         deltas, quarantine_unchanged = self._daily_table_deltas(
             collection.shards,
+            calendar_instruments=self._calendar_reprojection_instruments(
+                prior_candidate_manifest_sha256, prior_sessions, current_sessions,
+                frozenset(item.instrument_id for item in current_lifecycles),
+            ),
             prior_checkpoints=prior_checkpoints,
             endpoint_fields=endpoint_fields,
             coverage_start=coverage_start,
@@ -593,6 +617,7 @@ class FinancialCandidateStore:
         self,
         current_checkpoints: Sequence[FinancialShardCheckpoint],
         *,
+        calendar_instruments: frozenset[str],
         prior_checkpoints: Sequence[FinancialShardCheckpoint],
         endpoint_fields: Mapping[str, tuple[str, ...]],
         coverage_start: str,
@@ -601,7 +626,7 @@ class FinancialCandidateStore:
         current_lifecycles: Sequence[HistoricalInstrumentLifecycle],
         prior_generation_manifest_sha256: str,
     ) -> tuple[dict[str, list[dict[str, object]]], bool]:
-        affected = {item.instrument_id for item in current_checkpoints}
+        affected = {item.instrument_id for item in current_checkpoints} | calendar_instruments
         if not affected:
             return ({endpoint: [] for endpoint in FINANCIAL_ENDPOINTS}, True)
         prior_affected = tuple(
@@ -671,6 +696,40 @@ class FinancialCandidateStore:
                 item.source_row_sha256 for item in old_quarantine
             } == {item.source_row_sha256 for item in new_quarantine}
         return deltas, quarantine_unchanged
+
+    def _calendar_reprojection_instruments(
+        self, prior_digest: str, prior_sessions: list[str], current_sessions: list[str],
+        instrument_ids: frozenset[str],
+    ) -> frozenset[str]:
+        if current_sessions == prior_sessions:
+            return frozenset()
+        affected: set[str] = set()
+        columns = (
+            "instrument_id", "availability_status", "source_published_date",
+            "first_observed_at", "source_available_session", "first_observed_session",
+        )
+        for endpoint in FINANCIAL_ENDPOINTS:
+            table = self.read_financial_table(
+                prior_digest, endpoint, columns, (prior_sessions[-1],), instrument_ids,
+                compact_history=False,
+            )
+            pending = table.filter(pc.is_in(table["availability_status"], value_set=pa.array(
+                ["pending_calendar", "quarantined"],
+            )))
+            for batch in pending.to_batches(max_chunksize=4096):
+                for row in batch.to_pylist():
+                    if not row["source_published_date"]:
+                        continue
+                    available = _next_session(
+                        current_sessions, _iso_date(row["source_published_date"]),
+                    )
+                    observed = _next_session(
+                        current_sessions, _market_date(row["first_observed_at"]),
+                    )
+                    if (available != row["source_available_session"]
+                            or observed != row["first_observed_session"]):
+                        affected.add(row["instrument_id"])
+        return frozenset(affected)
 
     def _materialize_incremental_table(
         self,
@@ -1207,6 +1266,7 @@ class FinancialCandidateStore:
             "availability_status", "revision_basis", "coverage_role", "effective_available_session",
             "first_observed_session", "source_available_session",
         }
+        session_set = frozenset(sessions)
         for endpoint, reference in zip(FINANCIAL_ENDPOINTS, references, strict=True):
             fields = endpoint_fields[endpoint]
             versions, _ = self._canonical_versions(
@@ -1238,7 +1298,7 @@ class FinancialCandidateStore:
                     raise FinancialCandidateError("FINANCIAL_STORED_AVAILABILITY_INVALID")
                 if status == "available":
                     available = str(row["source_available_session"])
-                    if not available or effective not in sessions or effective < available:
+                    if not available or effective not in session_set or effective < available:
                         raise FinancialCandidateError("FINANCIAL_STORED_AVAILABILITY_INVALID")
                     if basis == "observed_correction" and (
                         not row["first_observed_session"]
@@ -1487,6 +1547,10 @@ class FinancialCandidateStore:
             raise FinancialCandidateError("FINANCIAL_SOURCE_COLLECTION_INVALID")
         deltas, quarantine_unchanged = self._daily_table_deltas(
             current_checkpoints,
+            calendar_instruments=self._calendar_reprojection_instruments(
+                str(source_collection["prior_candidate_manifest_sha256"]), prior_sessions, sessions,
+                frozenset(historical),
+            ),
             prior_checkpoints=prior_checkpoints,
             endpoint_fields=endpoint_fields,
             coverage_start=descriptor.coverage_start,
@@ -1596,6 +1660,8 @@ class FinancialCandidateStore:
         source_columns: tuple[str, ...],
         sessions: tuple[str, ...],
         instrument_ids: frozenset[str],
+        *,
+        compact_history: bool = True,
     ) -> pa.Table:
         if endpoint not in FINANCIAL_ENDPOINTS:
             raise FinancialCandidateError("FINANCIAL_ENDPOINT_INVALID")
@@ -1663,6 +1729,9 @@ class FinancialCandidateStore:
                     *source_columns,
                     *_FINANCIAL_HISTORY_IDENTITY_FIELDS,
                     *_FINANCIAL_HISTORY_VERSION_FIELDS,
+                    "logical_revision_group_sha256",
+                    "source_available_session",
+                    "first_observed_session",
                 )
             )
         )
@@ -1709,7 +1778,14 @@ class FinancialCandidateStore:
         if not tables:
             return pa.Table.from_batches([], schema=expected_schema)
         overlaid = _overlay_financial_table(pa.concat_tables(tables), query_schema)
-        compacted = _compact_financial_history(overlaid, sessions[0])
+        overlaid = _project_agreeing_financial_values(
+            overlaid, tuple(name for name in source_columns
+                            if name in source_fields and name not in _REQUIRED_SOURCE_FIELDS),
+            through_session, descriptor.coverage_start,
+        )
+        compacted = (
+            _compact_financial_history(overlaid, sessions[0]) if compact_history else overlaid
+        )
         sort_columns = tuple(
             name
             for name in (
@@ -2732,6 +2808,59 @@ def _ttm_coverage_seeds(
     return seeds
 
 
+def _project_agreeing_financial_values(
+    table: pa.Table, value_columns: tuple[str, ...], through_session: str, coverage_start: str,
+) -> pa.Table:
+    """Keep raw conflicts isolated; expose only fieldwise consensus in query output."""
+    if not table.num_rows or not value_columns:
+        return table
+    conflicts = table.filter(pc.and_(
+        pc.equal(table["availability_status"], "quarantined"),
+        pc.not_equal(table["source_available_session"], ""),
+    ))
+    if not conflicts.num_rows:
+        return table
+    revision_keys = ["logical_revision_group_sha256", "source_published_date"]
+    keys = [*revision_keys, "first_observed_at"]
+    columns = [name for name in table.column_names if name not in keys]
+    aggregates = [(name, "max" if name == "update_flag" else "min") for name in columns]
+    aggregates += [(name, "count_distinct", pc.CountOptions(mode="all"))
+                   for name in value_columns]
+    aggregates.append(("source_row_sha256", "count"))
+    consensus = conflicts.group_by(keys).aggregate(aggregates)
+    consensus = consensus.rename_columns([
+        name.removesuffix("_max").removesuffix("_min") + "_one"
+        if name.endswith(("_min", "_max")) else name for name in consensus.column_names
+    ])
+    consensus = consensus.filter(pc.greater_equal(consensus["source_row_sha256_count"], 2))
+    if not consensus.num_rows:
+        return table
+    earliest = table.group_by(revision_keys).aggregate([("first_observed_at", "min")])
+    consensus = consensus.join(earliest, keys=revision_keys)
+    correction = pc.greater(consensus["first_observed_at"], consensus["first_observed_at_min"])
+    available = consensus["source_available_session_one"]
+    observed = consensus["first_observed_session_one"]
+    effective = pc.if_else(correction, pc.max_element_wise(available, observed), available)
+    valid = pc.and_(pc.less_equal(effective, through_session),
+                    pc.or_(pc.invert(correction), pc.not_equal(observed, "")))
+    projected = {}
+    for name in table.column_names:
+        values = consensus[name if name in keys else name + "_one"]
+        if name in value_columns:
+            values = pc.if_else(pc.equal(consensus[name + "_count_distinct"], 1), values, None)
+        elif name == "availability_status":
+            values = pa.array(["available"] * consensus.num_rows)
+        elif name == "effective_available_session":
+            values = effective
+        elif name == "revision_basis":
+            values = pc.if_else(correction, "observed_correction", "source_version")
+        elif name == "coverage_role":
+            values = pc.if_else(pc.less(effective, coverage_start), "pre_start_seed", "in_coverage")
+        projected[name] = values
+    resolved = pa.table(projected, schema=table.schema).filter(valid)
+    return pa.concat_tables((table, resolved))
+
+
 def _compact_financial_history(table: pa.Table, start_session: str) -> pa.Table:
     """Keep one PIT seed per logical report plus every in-window version."""
     if table.num_rows == 0:
@@ -3053,7 +3182,13 @@ def _validated_discovery_coverage(coverage: Mapping[str, object]) -> dict[str, o
         _validate_discovery_publication(publication)
     except (KeyError, TypeError, ValueError) as error:
         raise FinancialCandidateError("FINANCIAL_COVERAGE_INVALID") from error
+    seed_policy = coverage["seed_policy"]
+    if not isinstance(seed_policy, str) or not seed_policy.strip():
+        raise FinancialCandidateError("FINANCIAL_COVERAGE_INVALID")
     normalized = _discovery_coverage(start, publication)
+    # Seed provenance describes the stored facts, not the currently active writer.
+    # Field admission still uses the candidate's own declared projection contract.
+    normalized["seed_policy"] = seed_policy
     if coverage.get("historical_reconciliation_watermark") != publication.baseline_session:
         raise FinancialCandidateError("FINANCIAL_COVERAGE_INVALID")
     if normalized != dict(coverage):

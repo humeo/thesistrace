@@ -793,6 +793,122 @@ class MountedGenerationStore:
         self._store_addressed(self._manifest_path(digest), digest, content)
         return _family_generation_descriptor_from_root(digest, manifest)
 
+    def materialize_daily_basic_history(
+        self,
+        source_manifest_sha256: str,
+        partitions: Iterable[CanonicalSessionPartition],
+        *,
+        source_evidence: Sequence[Mapping[str, str]],
+        prepared_at: datetime,
+    ) -> MountedFamilyGenerationDescriptor:
+        """Add complete daily history in bounded blocks, reusing all other families.
+
+        This prepares an immutable root only. Publication still checks the source
+        family against the current Head through the ordinary publication owner.
+        """
+        from thesistrace.data.canonical_mapping import daily_basic_field_catalog
+        from thesistrace.data.canonical_mapping import field_catalog as market_field_catalog
+
+        source = self.inspect_root(source_manifest_sha256)
+        calendar = list(source.research_sessions)
+        if self._verify_daily_basic_evidence(source_evidence) != frozenset(calendar):
+            raise GenerationStoreError(
+                "Daily basic history evidence must cover the source calendar"
+            )
+        allowed = {identity.instrument_id for identity in
+                   self.read_historical_ordinary_a_share_identities(source_manifest_sha256)}
+        root = self._read_family_generation_root(source_manifest_sha256)
+        names = DAILY_BASIC_FAMILY_SPEC.table_names
+        objects: dict[str, list[dict[str, object]]] = {name: [] for name in names}
+        row_counts = dict.fromkeys(names, 0)
+        offset = 0
+        for ordinal, partition in enumerate(partitions):
+            expected = tuple(calendar[offset:offset + GENERATION_SESSION_PARTITION_COUNT])
+            if not expected or partition.sessions != expected or set(partition.canonical) != set(
+                names
+            ):
+                raise GenerationStoreError("Daily basic history partition scope is incompatible")
+            normalized = {}
+            for name in names:
+                spec = _MARKET_CANDIDATE_TABLE_SPEC_BY_NAME[name]
+                try:
+                    normalized[name] = canonicalize_parquet_rows(
+                        _table_rows(partition.canonical, name), spec.contract,
+                    )
+                except ParquetContractError as error:
+                    raise GenerationStoreError(
+                        "Daily basic history table is incompatible"
+                    ) from error
+            rows = normalized["daily_basic"]
+            coordinates = {(row["session"], row["instrument_id"]) for row in rows}
+            if (
+                normalized["daily_basic_sessions"] != [{"session": day} for day in expected]
+                or len(coordinates) != len(rows)
+                or any(day not in expected or instrument not in allowed
+                       for day, instrument in coordinates)
+            ):
+                raise GenerationStoreError("Daily basic history observed coordinates are invalid")
+            for name in names:
+                spec = _MARKET_CANDIDATE_TABLE_SPEC_BY_NAME[name]
+                objects[name].append(self._materialize_partition(spec, normalized[name], ordinal))
+                row_counts[name] += len(normalized[name])
+            offset += len(expected)
+        if offset != len(calendar):
+            raise GenerationStoreError("Daily basic history partitions are incomplete")
+        tables = {
+            name: self._materialize_table_manifest(
+                _MARKET_CANDIDATE_TABLE_SPEC_BY_NAME[name], objects[name], row_counts[name],
+            ) for name in names
+        }
+        retained_evidence = {
+            item["sha256"]: dict(item) for item in (
+                *self.daily_basic_source_evidence(source_manifest_sha256), *source_evidence,
+            )
+        }
+        daily_reference = self._materialize_market_family(
+            DAILY_BASIC_FAMILY_SPEC, table_references=tables,
+            canonical={"daily_basic_sessions": [{"session": day} for day in calendar]},
+            calendar=calendar, source_evidence=tuple(retained_evidence.values()),
+        )
+        catalog_spec, catalog_reference = self._family_table_reference(
+            root, "data.field_catalog", "field_catalog",
+        )
+        catalog = {
+            str(row["field_id"]): row
+            for row in self._open_table(catalog_spec, catalog_reference, calendar)
+        }
+        catalog.update({str(row["field_id"]): row for row in (
+            *market_field_catalog(calendar[-1]), *daily_basic_field_catalog(calendar[-1]),
+        )})
+        catalog_rows = list(catalog.values())
+        catalog_table = self._materialize_table(catalog_spec, catalog_rows, calendar)
+        catalog_family = get_family_spec("data.field_catalog")
+        assert catalog_family is not None
+        catalog_reference = self._materialize_market_family(
+            catalog_family, table_references={"field_catalog": catalog_table},
+            canonical={"field_catalog": catalog_rows}, calendar=calendar,
+        )
+        identity = {key: root[key] for key in (
+            "schema_contract", "data_through_session", "research_sessions",
+            "financial_research_readiness",
+        )}
+        identity["families"] = _replace_family_references(root["families"], {
+            DAILY_BASIC_FAMILY_SPEC.family_id: daily_reference,
+            "data.field_catalog": catalog_reference,
+        })
+        identity["field_availability"] = sorted(set(root["field_availability"]) | set(catalog))
+        manifest = {
+            **root, **identity,
+            "data_identity": hashlib.sha256(canonical_json_bytes(identity)).hexdigest(),
+            "preparation": _preparation(prepared_at, "daily-basic-history", {
+                "source_generation": source_manifest_sha256,
+            }),
+        }
+        content = _bounded_manifest_bytes(manifest)
+        digest = hashlib.sha256(content).hexdigest()
+        self._store_addressed(self._manifest_path(digest), digest, content)
+        return self.validate_market_generation(digest)
+
     def materialize_industry_candidate(
         self,
         market_generation_manifest_sha256: str,

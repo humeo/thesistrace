@@ -2,7 +2,7 @@
 
 **Status:** ready-for-agent
 
-2026-09-12 已获用户确认，发布 8 张正式工单。01—06 已完成独立验收与串行复审；07—08 尚未开始。
+2026-09-12 已获用户确认，发布 8 张正式工单。01—07 已完成独立验收与串行复审；08 尚未开始。
 
 母规格：[226 字段规格](../spec.md)。逐字段定义沿用该规格的权威附件；母规格没有修改或关闭。
 
@@ -25,7 +25,7 @@
 | 04 | [提供 19 个 TTM 流量及不同期缺失规则](04-ttm-flow-fields.md) | 01 | 03 完成并提交 | complete |
 | 05 | [贯通 fina_indicator 的代表性指标链路](05-financial-indicator-pilot.md) | 01 | 04 完成并提交 | complete |
 | 06 | [补齐 fina_indicator 全部 163 个指标](06-financial-indicator-catalog.md) | 05 | 05 完成并提交 | complete |
-| 07 | [构建并验证 226 字段完整历史候选数据集](07-build-full-history-candidate.md) | 02、03、04、06 | 06 完成并提交 | ready-for-agent |
+| 07 | [构建并验证 226 字段完整历史候选数据集](07-build-full-history-candidate.md) | 02、03、04、06 | 06 完成并提交 | complete |
 | 08 | [完成统一验收并一次硬切发布](08-integrate-and-cut-over.md) | 07 | 07 完成并提交 | ready-for-agent |
 
 ## 验收和证据

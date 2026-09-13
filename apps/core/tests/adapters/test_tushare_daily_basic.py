@@ -43,6 +43,84 @@ def test_collect_session_retains_raw_nulls_and_exact_source_contract() -> None:
     assert provider.requests == [{"trade_date": "20260909"}]
 
 
+@pytest.mark.parametrize("old_code,new_code,last_old_day,first_new_day", [
+    ("000022.SZ", "001872.SZ", "2018-12-20", "2018-12-26"),
+    ("000043.SZ", "001914.SZ", "2019-12-11", "2019-12-16"),
+    ("300114.SZ", "302132.SZ", "2025-02-14", "2025-02-17"),
+])
+def test_historical_security_code_change_preserves_raw_and_current_identity_values(
+    tmp_path, old_code, new_code, last_old_day, first_new_day,
+) -> None:
+    from thesistrace.adapters.tushare_daily_basic import normalize_daily_basic
+    from thesistrace.data.daily_basic_evidence import DailyBasicCheckpoint
+
+    for day, codes in ((last_old_day, (old_code, new_code)), (first_new_day, (new_code,))):
+        raw = response(codes, session=day.replace("-", ""))
+        values = [list(item) for item in raw.items]
+        for ordinal, item in enumerate(values):
+            item[DAILY_BASIC_SOURCE_FIELDS.index("dv_ratio")] = 0.34 if ordinal == 0 else 0.3351
+        raw = RawSourceResponse(raw.fields, tuple(tuple(item) for item in values))
+        checkpoint = DailyBasicCheckpoint(tmp_path, collection_key=day)
+        source = TushareDailyBasicSource(Provider([raw]))
+        collected = source.collect_session(
+            session=day, instrument_codes=(new_code,), checkpoint=checkpoint,
+        )
+        assert collected.items == (raw.items[-1],)
+        rows = normalize_daily_basic(collected, instrument_ids={new_code: "stable-security"})
+        assert len(rows) == 1
+        assert rows[0]["instrument_id"] == "stable-security"
+        assert rows[0]["session"] == day
+        assert rows[0]["dv_ratio"] == ("0.003351" if len(codes) == 2 else "0.0034")
+        assert TushareDailyBasicSource(Provider([])).collect_session(
+            session=day, instrument_codes=(new_code,),
+            checkpoint=DailyBasicCheckpoint(tmp_path, collection_key=day),
+        ) == collected
+        import json
+        receipt = json.loads((tmp_path / checkpoint.evidence()[0]["path"]).read_text())
+        assert receipt["response"]["items"] == [list(item) for item in raw.items]
+
+
+def test_retired_code_cannot_replace_a_missing_current_identity_row() -> None:
+    raw = response(("000022.SZ",), session="20100104")
+    with pytest.raises(DataSourceError):
+        TushareDailyBasicSource(Provider([raw])).collect_session(
+            session="2010-01-04", instrument_codes=("001872.SZ",),
+        )
+
+
+@pytest.mark.parametrize("excluded_code", ("000022.SZ", "920023.BJ"))
+def test_excluded_source_row_does_not_hide_a_capped_whole_day(excluded_code) -> None:
+    codes = tuple(f"{number:06}.SZ" for number in range(6000) if number != 22)
+    expected = RawSourceResponse(DAILY_BASIC_SOURCE_FIELDS, tuple(
+        tuple(ordinal + 1 if field == "pe" else value
+              for field, value in zip(DAILY_BASIC_SOURCE_FIELDS, item, strict=True))
+        for ordinal, item in enumerate(response(codes, session="20100104").items)
+    ))
+    provider = Provider([
+        response((*codes, excluded_code), session="20100104"),
+        *[RawSourceResponse(DAILY_BASIC_SOURCE_FIELDS, (item,)) for item in expected.items],
+    ])
+    collected = TushareDailyBasicSource(provider).collect_session(
+        session="2010-01-04", instrument_codes=codes,
+    )
+    assert collected == expected
+
+
+def test_whole_day_preserves_beijing_source_evidence_outside_shanghai_shenzhen_scope(tmp_path):
+    import json
+
+    from thesistrace.data.daily_basic_evidence import DailyBasicCheckpoint
+
+    raw = response(("600519.SH", "920023.BJ"))
+    checkpoint = DailyBasicCheckpoint(tmp_path, collection_key="shanghai-shenzhen")
+    collected = TushareDailyBasicSource(Provider([raw])).collect_session(
+        session="2026-09-09", instrument_codes=("600519.SH",), checkpoint=checkpoint,
+    )
+    assert collected == response(("600519.SH",))
+    receipt = json.loads((tmp_path / checkpoint.evidence()[0]["path"]).read_text())
+    assert receipt["response"]["items"] == [list(item) for item in raw.items]
+
+
 def test_full_day_is_split_by_historical_security_without_offset() -> None:
     codes = tuple(f"{number:06}.SZ" for number in range(6000))
     provider = Provider([response(codes), *[response((code,)) for code in codes]])

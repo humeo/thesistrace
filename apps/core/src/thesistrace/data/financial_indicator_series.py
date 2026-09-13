@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Callable, Sequence
 from decimal import Decimal, InvalidOperation
 from math import isfinite
@@ -86,6 +87,9 @@ class FinancialIndicatorSeriesResolver:
         for instrument_index, instrument in enumerate(ordered_instruments):
             facts = table.filter(pc.equal(table["instrument_id"], instrument)).to_pylist()
             facts = [row for row in facts if row["state_effective_session"] is not None]
+            facts = _agreeing_observation_states(
+                facts, tuple(field.source_column for field in fields),
+            )
             facts.sort(
                 key=lambda row: (row["state_effective_session"], row["observation_event_at"])
             )
@@ -132,3 +136,29 @@ class FinancialIndicatorSeriesResolver:
             field: {(row["session"], row["instrument_id"]): row[field] for row in table.to_pylist()}
             for field in request["field_ids"]
         }
+
+
+def _agreeing_observation_states(
+    rows: list[dict[str, object]], source_columns: Sequence[str],
+) -> list[dict[str, object]]:
+    """Project each simultaneous source group without selecting a winning row."""
+    grouped: dict[tuple[object, ...], list[dict[str, object]]] = defaultdict(list)
+    for row in rows:
+        grouped[(row["source_report_period"], row["source_published_date"],
+                 row["observation_event_at"], row["state_effective_session"])].append(row)
+    states = []
+    for group in grouped.values():
+        if len(group) == 1:
+            states.append(group[0])
+            continue
+        state = dict(group[0])
+        state["availability_status"] = (
+            "available" if all(row["availability_status"] in
+                               {"available", "conflicting_observation"} for row in group)
+            else "conflicting_observation"
+        )
+        for column in source_columns:
+            values = {row[column] for row in group}
+            state[column] = next(iter(values)) if len(values) == 1 else None
+        states.append(state)
+    return states

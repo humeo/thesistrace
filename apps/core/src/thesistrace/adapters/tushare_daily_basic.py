@@ -20,6 +20,13 @@ DAILY_BASIC_SOURCE_FIELDS = (
     "total_share", "float_share", "free_share", "total_mv", "circ_mv", "limit_status",
 )
 _DAILY_BASIC_ROW_LIMIT = 6000
+# Effective source-code changes; the canonical Instrument Identity stays stable.
+# Evidence: issue07-source-code-identity.md in the field-expansion qualification.
+_SECURITY_CODE_CHANGES = (
+    ("000022.SZ", "001872.SZ", "2018-12-26"),
+    ("000043.SZ", "001914.SZ", "2019-12-16"),
+    ("300114.SZ", "302132.SZ", "2025-02-17"),
+)
 
 
 class RawDailyBasicProvider(Protocol):
@@ -51,7 +58,10 @@ class TushareDailyBasicSource:
             if len(raw.items) < _DAILY_BASIC_ROW_LIMIT:
                 if checkpoint is not None:
                     checkpoint.mark_session_collected(session)
-                return raw
+                code_index = DAILY_BASIC_SOURCE_FIELDS.index("ts_code")
+                return RawSourceResponse(raw.fields, tuple(
+                    item for item in raw.items if item[code_index] in codes
+                ))
             items: list[tuple[object, ...]] = []
             code_index = DAILY_BASIC_SOURCE_FIELDS.index("ts_code")
             observed_codes = {row[code_index] for row in raw.items}
@@ -89,14 +99,36 @@ class TushareDailyBasicSource:
         if (
             len(set(raw.fields)) != len(raw.fields)
             or not set(DAILY_BASIC_SOURCE_FIELDS) <= set(raw.fields)
+            or any(len(item) != len(raw.fields) for item in raw.items)
         ):
             raise ValueError("Daily basic source columns are incomplete or duplicated")
         items: list[tuple[object, ...]] = []
         seen: set[str] = set()
+        observed_codes = {item[raw.fields.index("ts_code")] for item in raw.items}
+        # Whole-day responses can include both retired and current codes, with
+        # differing backfilled ratios. The current identity's own source row is
+        # authoritative; retain both raw rows, never merge their numeric values.
+        retired_duplicates = {
+            old for old, current, since in _SECURITY_CODE_CHANGES
+            if "ts_code" not in params and trade_date < since.replace("-", "")
+            and current in codes and current in observed_codes
+        }
+        # The canonical market universe is SSE/SZSE; whole-day source payloads
+        # also contain Beijing/NEEQ history. Keep those raw rows for audit, but
+        # never use them to broaden the requested identity set or hide a cap.
+        outside_market = {
+            code for code in observed_codes
+            if "ts_code" not in params and isinstance(code, str)
+            and len(code) == 9 and code.endswith(".BJ") and code[:6].isdigit()
+        }
+        allowed_codes = codes | retired_duplicates | outside_market
         for item in raw.items:
             row = dict(zip(raw.fields, item, strict=True))
             code = row["ts_code"]
-            if code not in codes or code in seen or row["trade_date"] != trade_date:
+            if (
+                code not in allowed_codes or code in seen
+                or row["trade_date"] != trade_date
+            ):
                 raise ValueError("Daily basic identity or session is invalid or duplicated")
             seen.add(code)
             items.append(tuple(row[field] for field in DAILY_BASIC_SOURCE_FIELDS))

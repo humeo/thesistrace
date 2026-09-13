@@ -59,6 +59,30 @@ def test_latest_report_null_and_conflict_hide_previous_values():
     assert [r["financial.indicator.roe"] for r in result] == [0.15, 0.03, None, 0.04]
 
 
+@pytest.mark.parametrize("conflicting_roe", [None, 8.0])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_simultaneous_indicator_versions_preserve_only_agreeing_fields(conflicting_roe, reverse):
+    simultaneous = [
+        fact("20200331", "2020-04-30", eps=1.0, roe=value,
+             availability_status="conflicting_observation")
+        for value in (3.0, conflicting_roe, conflicting_roe)
+    ]
+    rows = [fact("20191231", "2020-04-21", eps=2.0, roe=15.0),
+            *(reversed(simultaneous) if reverse else simultaneous),
+            fact("20200331", "2020-05-05", eps=1.2, roe=4.0)]
+    request = dict(manifest_sha256="a" * 64,
+                   sessions=("2020-04-21", "2020-04-30", "2020-05-05"),
+                   instrument_ids=("stock-1",))
+    single = resolver(rows).resolve_table(field_ids=("financial.indicator.eps",), **request)
+    multi = resolver(rows).resolve_table(
+        field_ids=("financial.indicator.eps", "financial.indicator.roe"), **request,
+    )
+    assert single["financial.indicator.eps"].to_pylist() == [2.0, 1.0, 1.2]
+    assert single["financial.indicator.eps"].equals(multi["financial.indicator.eps"])
+    assert multi["financial.indicator.roe"].to_pylist() == [.15, None, .04]
+    assert all(row["availability_status"] == "conflicting_observation" for row in simultaneous)
+
+
 def test_old_report_revision_does_not_replace_newer_report():
     rows = [
         fact("20191231", "2020-04-21", eps=2.0),

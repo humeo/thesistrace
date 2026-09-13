@@ -1,0 +1,839 @@
+{
+  "source_generation": "17f5694f6a9d47b915ffde326928b919a55181e75a4908cb661934850ac8c983",
+  "indicator_candidate": "3dda0030608f8528f84d40bb31865bef97526ea7c52759952e197ac04b26893e",
+  "status": "indicator_dsl_statistics_complete",
+  "instrument_count": 5550,
+  "field_count": 163,
+  "listed_security_sessions": 14430804,
+  "evaluated_state_intervals": 279311,
+  "dense_daily_verified_instruments": [
+    "equity:000001.SZ",
+    "equity:000002.SZ",
+    "equity:000004.SZ",
+    "equity:000005.SZ",
+    "equity:000006.SZ"
+  ],
+  "counting_basis": "Every listed research date, weighted from all state changes and calendar-year boundaries.",
+  "company_type": "not_provided_by_source",
+  "csv": ".scratch/data-field-expansion-20260912/issue07-indicator-dsl-qualification.csv",
+  "fields_without_non_null_dsl_values": [],
+  "examples": {
+    "financial.indicator.eps": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 1.17
+    },
+    "financial.indicator.bps": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 6.1468
+    },
+    "financial.indicator.roe": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.204987
+    },
+    "financial.indicator.q_roe": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.071531
+    },
+    "financial.indicator.netprofit_yoy": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.096601
+    },
+    "financial.indicator.impai_ttm": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.123761
+    },
+    "financial.indicator.q_impair_to_gr_ttm": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.074921
+    },
+    "financial.indicator.total_revenue_ps": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 3.5789
+    },
+    "financial.indicator.revenue_ps": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 3.5789
+    },
+    "financial.indicator.capital_rese_ps": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 2.2635
+    },
+    "financial.indicator.surplus_rese_ps": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.2515
+    },
+    "financial.indicator.undist_profit_ps": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 1.4779
+    },
+    "financial.indicator.diluted2_eps": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 1.1713
+    },
+    "financial.indicator.ocfps": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": -0.08
+    },
+    "financial.indicator.retainedps": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 1.7294
+    },
+    "financial.indicator.cfps": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 2.1808
+    },
+    "financial.indicator.q_eps": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.427
+    },
+    "financial.indicator.ocf_to_or": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": -0.0232
+    },
+    "financial.indicator.ocf_to_opincome": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": -0.067
+    },
+    "financial.indicator.ocf_to_profit": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": -0.056961
+    },
+    "financial.indicator.q_ocf_to_sales": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": -1.132372
+    },
+    "financial.indicator.q_ocf_to_or": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": -2.709758
+    },
+    "financial.indicator.net_profit_margin": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.327284
+    },
+    "financial.indicator.profit_to_gr": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.327284
+    },
+    "financial.indicator.adminexp_of_gr": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.39985
+    },
+    "financial.indicator.op_of_gr": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.407276
+    },
+    "financial.indicator.opincome_of_ebt": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.847195
+    },
+    "financial.indicator.investincome_of_ebt": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.149679
+    },
+    "financial.indicator.n_op_profit_of_ebt": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.003126
+    },
+    "financial.indicator.tax_to_ebt": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.19892
+    },
+    "financial.indicator.dtprofit_to_profit": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.995804
+    },
+    "financial.indicator.op_to_ebt": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.996874
+    },
+    "financial.indicator.nop_to_ebt": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.003126
+    },
+    "financial.indicator.profit_to_op": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.408553
+    },
+    "financial.indicator.q_net_profit_margin": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.365993
+    },
+    "financial.indicator.q_profit_to_gr": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.365993
+    },
+    "financial.indicator.q_adminexp_to_gr": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.41428
+    },
+    "financial.indicator.q_op_to_gr": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.442968
+    },
+    "financial.indicator.q_opincome_to_ebt": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.939723
+    },
+    "financial.indicator.q_investincome_to_ebt": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.056402
+    },
+    "financial.indicator.q_dtprofit_to_profit": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.99227
+    },
+    "financial.indicator.debt_to_assets": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.965561
+    },
+    "financial.indicator.assets_to_eqt": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 29.0368
+    },
+    "financial.indicator.debt_to_eqt": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 28.0367
+    },
+    "financial.indicator.eqt_to_debt": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.0357
+    },
+    "financial.indicator.ocf_to_debt": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": -0.0005
+    },
+    "financial.indicator.op_to_debt": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.0085
+    },
+    "financial.indicator.basic_eps_yoy": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.073394
+    },
+    "financial.indicator.dt_eps_yoy": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.083333
+    },
+    "financial.indicator.ocfps_yoy": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": -1.0048
+    },
+    "financial.indicator.op_yoy": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.037176
+    },
+    "financial.indicator.ebt_yoy": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.052373
+    },
+    "financial.indicator.dt_netprofit_yoy": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.078789
+    },
+    "financial.indicator.ocf_yoy": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": -1.00652
+    },
+    "financial.indicator.roe_yoy": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.055596
+    },
+    "financial.indicator.tr_yoy": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.034683
+    },
+    "financial.indicator.or_yoy": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.034683
+    },
+    "financial.indicator.equity_yoy": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.038845
+    },
+    "financial.indicator.bps_ytd_growth": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.1639
+    },
+    "financial.indicator.assets_ytd_growth": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.16825
+    },
+    "financial.indicator.equity_parent_ytd_growth": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.163873
+    },
+    "financial.indicator.q_gr_yoy": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": -0.000841
+    },
+    "financial.indicator.q_sales_yoy": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": -0.000841
+    },
+    "financial.indicator.q_op_yoy": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.053645
+    },
+    "financial.indicator.q_profit_yoy": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.130307
+    },
+    "financial.indicator.q_netprofit_yoy": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.130307
+    },
+    "financial.indicator.q_gr_qoq": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": -0.028723
+    },
+    "financial.indicator.q_sales_qoq": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": -0.028723
+    },
+    "financial.indicator.q_op_qoq": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.139943
+    },
+    "financial.indicator.q_profit_qoq": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.114957
+    },
+    "financial.indicator.q_netprofit_qoq": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.114957
+    },
+    "financial.indicator.dt_eps": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 1.17
+    },
+    "financial.indicator.extra_item": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 15264000.0
+    },
+    "financial.indicator.profit_dedt": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 3622155000.0
+    },
+    "financial.indicator.op_income": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 3846810000.0
+    },
+    "financial.indicator.valuechange_income": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 679641000.0
+    },
+    "financial.indicator.non_op_profit": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 14193000.0
+    },
+    "financial.indicator.retained_earnings": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 5370496000.0
+    },
+    "financial.indicator.fixed_assets": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 2243111000.0
+    },
+    "financial.indicator.q_opincome": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 1514047000.0
+    },
+    "financial.indicator.q_investincome": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 90873000.0
+    },
+    "financial.indicator.q_dtprofit": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 1315781000.0
+    },
+    "financial.indicator.assets_turn": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.0216
+    },
+    "financial.indicator.total_fa_trun": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 5.1338
+    },
+    "financial.indicator.dp_assets_to_eqt": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 28.9864
+    },
+    "financial.indicator.roe_dt": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.204127
+    },
+    "financial.indicator.npta": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.007072
+    },
+    "financial.indicator.roa_dp": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.007072
+    },
+    "financial.indicator.roe_yearly": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.273316
+    },
+    "financial.indicator.roa_yearly": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.009429
+    },
+    "financial.indicator.q_dt_roe": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.070978
+    },
+    "financial.indicator.q_npta": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.002421
+    },
+    "financial.indicator.roe_waa": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-01-04",
+      "value": 0.1996
+    },
+    "financial.indicator.capitalized_to_da": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-03-15",
+      "value": 2.5141
+    },
+    "financial.indicator.daa": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-03-15",
+      "value": 391898000.0
+    },
+    "financial.indicator.roe_avg": {
+      "instrument_id": "equity:000001.SZ",
+      "session": "2010-03-15",
+      "value": 0.2611
+    },
+    "financial.indicator.current_ratio": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 1.9692
+    },
+    "financial.indicator.gross_profit": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 8924842500.37
+    },
+    "financial.indicator.ebit_ps": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 0.4949
+    },
+    "financial.indicator.salescash_to_or": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 1.3998
+    },
+    "financial.indicator.q_salescash_to_or": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 1.81364
+    },
+    "financial.indicator.gross_profit_margin": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 0.302088
+    },
+    "financial.indicator.cogs_of_sales": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 0.697912
+    },
+    "financial.indicator.expense_of_sales": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 0.076029
+    },
+    "financial.indicator.saleexp_to_gr": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 0.03163
+    },
+    "financial.indicator.finaexp_of_gr": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 0.014363
+    },
+    "financial.indicator.gc_of_gr": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 0.840684
+    },
+    "financial.indicator.ebit_of_gr": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 0.184181
+    },
+    "financial.indicator.q_gross_profit_margin": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 0.274524
+    },
+    "financial.indicator.q_exp_to_sales": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 0.11488
+    },
+    "financial.indicator.q_saleexp_to_gr": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 0.049519
+    },
+    "financial.indicator.q_finaexp_to_gr": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 0.024206
+    },
+    "financial.indicator.q_gc_to_gr": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 0.912579
+    },
+    "financial.indicator.ca_to_assets": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 0.95591
+    },
+    "financial.indicator.nca_to_assets": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 0.04409
+    },
+    "financial.indicator.tbassets_to_totalassets": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 0.257402
+    },
+    "financial.indicator.int_to_talcap": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 0.42852
+    },
+    "financial.indicator.eqt_to_talcapital": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 0.471367
+    },
+    "financial.indicator.currentdebt_to_debt": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 0.721441
+    },
+    "financial.indicator.longdeb_to_debt": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 0.278559
+    },
+    "financial.indicator.quick_ratio": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 0.5892
+    },
+    "financial.indicator.eqt_to_interestdebt": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 1.1
+    },
+    "financial.indicator.tangibleasset_to_debt": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 0.3825
+    },
+    "financial.indicator.tangasset_to_intdebt": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 1.0494
+    },
+    "financial.indicator.tangibleasset_to_netdebt": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 8.0287
+    },
+    "financial.indicator.cash_to_liqdebt": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 0.4393
+    },
+    "financial.indicator.cash_to_liqdebt_withinterest": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 3.3179
+    },
+    "financial.indicator.ocf_to_shortdebt": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 0.1788
+    },
+    "financial.indicator.ocf_to_interestdebt": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 0.3539
+    },
+    "financial.indicator.ocf_to_netdebt": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 2.7075
+    },
+    "financial.indicator.op_to_liqdebt": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 0.0799
+    },
+    "financial.indicator.ebit": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 5441419463.76
+    },
+    "financial.indicator.profit_prefin_exp": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 5447081881.91
+    },
+    "financial.indicator.current_exint": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 54542306656.64
+    },
+    "financial.indicator.noncurrent_exint": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 829576290.36
+    },
+    "financial.indicator.interestdebt": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 31766476515.8
+    },
+    "financial.indicator.netdebt": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 4151860420.63
+    },
+    "financial.indicator.tangible_asset": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 33334171004.2
+    },
+    "financial.indicator.working_capital": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 60927541419.2
+    },
+    "financial.indicator.networking_capital": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 41635845207.91
+    },
+    "financial.indicator.invest_capital": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 74130626234.71
+    },
+    "financial.indicator.invturn_days": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 1130.18
+    },
+    "financial.indicator.arturn_days": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 6.5083
+    },
+    "financial.indicator.turn_days": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 1136.6883
+    },
+    "financial.indicator.inv_turn": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 0.2389
+    },
+    "financial.indicator.ar_turn": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 41.4855
+    },
+    "financial.indicator.ca_turn": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 0.2491
+    },
+    "financial.indicator.fa_turn": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 24.4559
+    },
+    "financial.indicator.longdebt_to_workingcapital": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 0.3984
+    },
+    "financial.indicator.roa": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 0.043752
+    },
+    "financial.indicator.roic": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 0.054616
+    },
+    "financial.indicator.roa2_yearly": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 0.058336
+    },
+    "financial.indicator.roic_yearly": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 0.072821
+    },
+    "financial.indicator.cash_ratio": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 0.5139
+    },
+    "financial.indicator.ebit_to_interest": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": 12.8232
+    },
+    "financial.indicator.fcff": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": -4614774534.3255
+    },
+    "financial.indicator.fcfe": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": -5570612980.0055
+    },
+    "financial.indicator.fcff_ps": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": -0.4197
+    },
+    "financial.indicator.fcfe_ps": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-01-04",
+      "value": -0.5066
+    },
+    "financial.indicator.ebitda_to_debt": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-03-03",
+      "value": 0.1005
+    },
+    "financial.indicator.interest_expense": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-03-03",
+      "value": 540294331.74
+    },
+    "financial.indicator.ebitda": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2010-03-03",
+      "value": 9262765958.26
+    },
+    "financial.indicator.rd_exp": {
+      "instrument_id": "equity:000002.SZ",
+      "session": "2018-10-29",
+      "value": 375153269.41
+    }
+  },
+  "source_requests": 0,
+  "elapsed_seconds": 310.8155347079737
+}

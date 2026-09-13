@@ -1,0 +1,13 @@
+{
+  "source_generation": "17f5694f6a9d47b915ffde326928b919a55181e75a4908cb661934850ac8c983",
+  "statement_candidate": "a1a8b35e1ff966431ebe75f414bbc7c3d57897320c11ff5bff2b561c11e869ae",
+  "coordinate_count": 15098,
+  "causes": {
+    "retained_pending_report_activated_by_calendar": 13302,
+    "conflicting_field_projects_to_missing": 1796
+  },
+  "decision": "Apply evidenced corrections to the new candidate under the existing development-stage bug-fix instruction.",
+  "basis": "All coordinates are attributed; source frozen family has zero quarantined rows and its stored bytes are unchanged. No legacy compatibility or migration path is added.",
+  "prior_question": "Withdrawn as unnecessary after complete source attribution; no user reply is claimed.",
+  "ticket_acceptance": "accepted_after_full_candidate_reads_successor_checks_and_serial_reviews"
+}
