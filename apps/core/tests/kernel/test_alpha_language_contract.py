@@ -719,4 +719,4 @@ def test_browser_field_fixture_matches_the_current_public_catalog() -> None:
     )
     expected = alpha_language.catalog(generation_manifest_sha256="a" * 64).model_dump(mode="json")
     assert json.loads(fixture.read_text()) == expected
-    assert len(expected["fields"]) == 69
+    assert len(expected["fields"]) == 226

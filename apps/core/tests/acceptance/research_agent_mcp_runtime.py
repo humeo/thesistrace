@@ -143,6 +143,10 @@ def publish_current_data(
                 "ts_code": code, "end_date": "20260630", "ann_date": "20260802",
                 "eps": index / 10, "bps": 10 + index, "current_ratio": 2,
                 "roe": 5 + index, "q_roe": 2 + index, "netprofit_yoy": index - 10,
+                "debt_to_assets": 30 + index, "q_ocf_to_sales": 10 + index,
+                "eqt_yoy": index - 5, "gross_margin": 1000 * index,
+                "fcff": 2000 * index, "fcfe": 2500 * index,
+                "ebit_to_interest": 2 + index / 10,
             }
             observation = observations.save(
                 RawSourceResponse(

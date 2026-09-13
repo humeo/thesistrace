@@ -138,7 +138,7 @@
 | `noncurrent_exint` | 无息非流动负债 | `noncurrent_exint` | 沿用该供应商指标定义。 |
 | `interestdebt` | 有息债务额 | `interestdebt` | 沿用该供应商指标定义。 |
 | `netdebt` | 净债务额 | `netdebt` | 沿用该供应商指标定义。 |
-| `tangible_asset` | 有形资产额 | `tangible_asset` | 沿用该供应商指标定义。 |
+| `tangible_asset` | 有形净资产（供应商口径） | `tangible_asset` | 沿用该供应商指标定义。 |
 | `working_capital` | 营运资金额 | `working_capital` | 沿用该供应商指标定义。 |
 | `networking_capital` | 营运流动资本 | `networking_capital` | 供应商与 working_capital 分列；未展开公式，不能擅自合并或改写计算口径。 |
 | `invest_capital` | 全部投入资本 | `invest_capital` | 沿用该供应商指标定义。 |
@@ -223,7 +223,7 @@
 | `dp_assets_to_eqt` | 杜邦权益乘数 | `dp_assets_to_eqt` | 保留杜邦分析口径，不直接与 assets_to_eqt 合并。 |
 | `ca_to_assets` | 流动资产占总资产比 | `ca_to_assets` | 沿用该供应商指标定义。 |
 | `nca_to_assets` | 非流动资产占总资产比 | `nca_to_assets` | 沿用该供应商指标定义。 |
-| `tbassets_to_totalassets` | 有形资产占总资产比 | `tbassets_to_totalassets` | 沿用该供应商指标定义。 |
+| `tbassets_to_totalassets` | 有形净资产/总资产（供应商口径） | `tbassets_to_totalassets` | 沿用该供应商指标定义。 |
 | `int_to_talcap` | 有息债务/全部投入资本 | `int_to_talcap` | 沿用该供应商指标定义。 |
 | `eqt_to_talcapital` | 归母权益/全部投入资本 | `eqt_to_talcapital` | 沿用该供应商指标定义。 |
 | `currentdebt_to_debt` | 流动负债占总负债比 | `currentdebt_to_debt` | 沿用该供应商指标定义。 |
@@ -232,9 +232,9 @@
 | `debt_to_eqt` | 产权比率 | `debt_to_eqt` | 当前官方简述未展开权益范围，本清单不自行指定为归母权益。 |
 | `eqt_to_debt` | 归母权益/负债合计 | `eqt_to_debt` | 沿用该供应商指标定义。 |
 | `eqt_to_interestdebt` | 归母权益/有息债务 | `eqt_to_interestdebt` | 沿用该供应商指标定义。 |
-| `tangibleasset_to_debt` | 有形资产/负债合计 | `tangibleasset_to_debt` | 沿用该供应商指标定义。 |
-| `tangasset_to_intdebt` | 有形资产/有息债务 | `tangasset_to_intdebt` | 沿用该供应商指标定义。 |
-| `tangibleasset_to_netdebt` | 有形资产/净债务 | `tangibleasset_to_netdebt` | 沿用该供应商指标定义。 |
+| `tangibleasset_to_debt` | 有形净资产/负债合计（供应商口径） | `tangibleasset_to_debt` | 沿用该供应商指标定义。 |
+| `tangasset_to_intdebt` | 有形净资产/有息债务（供应商口径） | `tangasset_to_intdebt` | 沿用该供应商指标定义。 |
+| `tangibleasset_to_netdebt` | 有形净资产/净债务（供应商口径） | `tangibleasset_to_netdebt` | 沿用该供应商指标定义。 |
 | `ocf_to_debt` | 经营现金净流量/负债合计 | `ocf_to_debt` | 沿用该供应商指标定义。 |
 | `ocf_to_interestdebt` | 经营现金净流量/有息债务 | `ocf_to_interestdebt` | 沿用该供应商指标定义。 |
 | `ocf_to_netdebt` | 经营现金净流量/净债务 | `ocf_to_netdebt` | 沿用该供应商指标定义。 |

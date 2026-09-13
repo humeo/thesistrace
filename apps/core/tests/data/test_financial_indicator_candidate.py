@@ -33,7 +33,14 @@ def test_candidate_reopens_and_reads_selected_indicator_columns(tmp_path):
     )
     reference = store.family_reference(digest)
     assert reference["family_id"] == "equity.financial_indicator"
-    assert len(reference["field_ids"]) == 6
+    assert {
+        "financial.indicator.eps", "financial.indicator.bps",
+        "financial.indicator.current_ratio", "financial.indicator.roe",
+        "financial.indicator.q_roe", "financial.indicator.netprofit_yoy",
+        "financial.indicator.gross_profit", "financial.indicator.impai_ttm",
+        "financial.indicator.q_impair_to_gr_ttm",
+    }.issubset(reference["field_ids"])
+    assert len(reference["field_ids"]) == len(set(reference["field_ids"]))
     assert reference["dataset_coverage"]["start"] == "2020-04-20"
     assert reference["dataset_coverage"]["end"] == "2020-05-04"
     reopened = FinancialIndicatorCandidateStore(tmp_path)

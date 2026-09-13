@@ -87,7 +87,7 @@ for (const width of [1280, 390]) {
     await page.goto("http://data.test/");
     await page.addStyleTag({ content: styles });
     await page.addScriptTag({ content: script });
-    await expect(page.getByText("69 available", { exact: true })).toBeVisible();
+    await expect(page.getByText("226 available", { exact: true })).toBeVisible();
     await expect(page.getByText("Market partially ready", { exact: true })).toBeVisible();
     expect(requests).toEqual(["/api/data"]);
     await expect(page.locator(".signal-strip")).toHaveCount(4);
@@ -100,7 +100,7 @@ for (const width of [1280, 390]) {
     }
 
     await page.getByRole("combobox", { name: "Field source" }).selectOption("fina_indicator");
-    await expect(page.locator(".data-field-table tbody tr")).toHaveCount(6);
+    await expect(page.locator(".data-field-table tbody tr")).toHaveCount(163);
     await page.getByRole("searchbox", { name: "Search fields" }).fill("单季净资产收益率");
     await expect(page.locator(".data-field-table tbody tr")).toHaveCount(1);
     await expect(page.locator(".data-field-table tbody tr")).toContainText("q_roe");
@@ -115,7 +115,7 @@ for (const width of [1280, 390]) {
     await expect(page.locator(".data-field-table tbody tr")).toHaveCount(1);
     await expect(page.locator(".data-field-table tbody tr")).toContainText("未复权收盘价");
     await page.getByRole("searchbox", { name: "Search fields" }).fill("营业总收入");
-    await expect(page.locator(".data-field-table tbody tr")).toHaveCount(3);
+    await expect(page.locator(".data-field-table tbody tr")).toHaveCount(22);
     await expect(page.locator(".data-field-table tbody tr").first()).toContainText("revenue");
     await page.getByRole("searchbox", { name: "Search fields" }).fill("");
     await page.getByRole("combobox", { name: "Field source" }).selectOption("cashflow");

@@ -567,7 +567,7 @@
       "status": "拟新增",
       "group": "资产与资本基础值",
       "dsl_identifier": "tangible_asset",
-      "label": "有形资产额",
+      "label": "有形净资产（供应商口径）",
       "source_endpoint": "fina_indicator",
       "source_column": "tangible_asset",
       "note": ""
@@ -1107,7 +1107,7 @@
       "status": "拟新增",
       "group": "财务结构与偿债",
       "dsl_identifier": "tbassets_to_totalassets",
-      "label": "有形资产占总资产比",
+      "label": "有形净资产/总资产（供应商口径）",
       "source_endpoint": "fina_indicator",
       "source_column": "tbassets_to_totalassets",
       "note": ""
@@ -1188,7 +1188,7 @@
       "status": "拟新增",
       "group": "财务结构与偿债",
       "dsl_identifier": "tangibleasset_to_debt",
-      "label": "有形资产/负债合计",
+      "label": "有形净资产/负债合计（供应商口径）",
       "source_endpoint": "fina_indicator",
       "source_column": "tangibleasset_to_debt",
       "note": ""
@@ -1197,7 +1197,7 @@
       "status": "拟新增",
       "group": "财务结构与偿债",
       "dsl_identifier": "tangasset_to_intdebt",
-      "label": "有形资产/有息债务",
+      "label": "有形净资产/有息债务（供应商口径）",
       "source_endpoint": "fina_indicator",
       "source_column": "tangasset_to_intdebt",
       "note": ""
@@ -1206,7 +1206,7 @@
       "status": "拟新增",
       "group": "财务结构与偿债",
       "dsl_identifier": "tangibleasset_to_netdebt",
-      "label": "有形资产/净债务",
+      "label": "有形净资产/净债务（供应商口径）",
       "source_endpoint": "fina_indicator",
       "source_column": "tangibleasset_to_netdebt",
       "note": ""

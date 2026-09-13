@@ -616,7 +616,7 @@ async def _exercise_indicator_consumers(settings, tmp_path, sessions):
     from test_core_research_agent_mcp_daily_tracks import _run_tracking_worker_once
     from test_core_research_agent_mcp_runs import _command
 
-    formula = "rank(roe + q_roe + netprofit_yoy)"
+    formula = "rank(roe + debt_to_assets + q_ocf_to_sales + equity_parent_ytd_growth)"
     end = sessions[20]
     batch_command = _strategy_batch_command("indicator-batch", end_date=end)
     batch_command["alpha"] = {"formula": formula, "hypothesis": "Indicator consumer equivalence."}

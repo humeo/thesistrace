@@ -1233,7 +1233,11 @@ def test_mcp_indicator_catalog_and_submission_complete_through_real_worker(tmp_p
 
 
 async def _exercise_indicator_fields(settings: CoreSettings, tmp_path: Path) -> None:
-    identifiers = ["eps", "bps", "current_ratio", "roe", "q_roe", "netprofit_yoy"]
+    identifiers = [
+        "eps", "bps", "current_ratio", "roe", "q_roe", "netprofit_yoy",
+        "debt_to_assets", "q_ocf_to_sales", "equity_parent_ytd_growth",
+        "gross_profit", "fcff", "ebit_to_interest",
+    ]
     async with _mcp_client(settings, tmp_path / "mcp-indicators.stderr.log") as client:
         response = await client.call_tool("get_alpha_catalog", {"identifiers": identifiers})
         assert response.is_error is False
@@ -1242,9 +1246,14 @@ async def _exercise_indicator_fields(settings: CoreSettings, tmp_path: Path) -> 
         assert fields["roe"]["unit"] == "ratio"
         assert fields["eps"]["unit"] == "CNY/share"
         assert fields["current_ratio"]["unit"] == "multiple"
+        assert fields["gross_profit"]["source_column"] == "gross_margin"
+        assert fields["fcff"]["unit"] == "CNY"
+        assert fields["equity_parent_ytd_growth"]["source_column"] == "eqt_yoy"
+        assert fields["ebit_to_interest"]["unit"] == "multiple"
         assert all(item["family_id"] == "equity.financial_indicator" for item in fields.values())
         accepted = await client.call_tool("submit_research_run", {
-            **_command("mcp-indicator-pilot"), "formula": "rank(roe + q_roe + netprofit_yoy)",
+            **_command("mcp-indicator-pilot"),
+            "formula": "rank(roe + debt_to_assets + q_ocf_to_sales + equity_parent_ytd_growth)",
         })
         assert accepted.is_error is False
         assert accepted.structured_content["outcome"] == "accepted", accepted.structured_content
