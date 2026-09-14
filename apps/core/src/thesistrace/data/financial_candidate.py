@@ -4,7 +4,7 @@ import bisect
 import hashlib
 import json
 from collections import defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -1269,17 +1269,22 @@ class FinancialCandidateStore:
         session_set = frozenset(sessions)
         for endpoint, reference in zip(FINANCIAL_ENDPOINTS, references, strict=True):
             fields = endpoint_fields[endpoint]
-            versions, _ = self._canonical_versions(
-                tuple(item for item in checkpoints if item.endpoint == endpoint), fields, sessions,
-            )
+            # Keep only source-fact digests across instruments, never the complete
+            # wide source history alongside the stored table's Python rows.
             originals = {
-                version.source_row_sha256: _version_row(version, fields) for version in versions
+                bytes.fromhex(version.source_row_sha256): _stored_fact_digest(
+                    _version_row(version, fields), projection_columns,
+                )
+                for version in self._iter_canonical_versions(
+                    tuple(item for item in checkpoints if item.endpoint == endpoint),
+                    fields, sessions,
+                )
             }
-            for row in self._open_table(endpoint, fields, reference, sessions):
-                original = originals.get(str(row["source_row_sha256"]))
-                if original is None or any(
-                    row[key] != value for key, value in original.items()
-                    if key not in projection_columns
+            for row in self._iter_table_rows(endpoint, fields, reference, sessions):
+                source_hash = str(row["source_row_sha256"])
+                _require_sha256(source_hash)
+                if originals.get(bytes.fromhex(source_hash)) != _stored_fact_digest(
+                    row, projection_columns,
                 ):
                     raise FinancialCandidateError("FINANCIAL_SOURCE_FACT_INVALID")
                 for key, day in (
@@ -1317,6 +1322,7 @@ class FinancialCandidateStore:
                         quarantine_hashes.append(str(row["source_row_sha256"]))
                 else:
                     raise FinancialCandidateError("FINANCIAL_STORED_AVAILABILITY_INVALID")
+            del originals
         expected_summary = {
             "status": "validated", "table_count": 3,
             "row_count": sum(int(item["row_count"]) for item in references),
@@ -2066,10 +2072,21 @@ class FinancialCandidateStore:
         source_fields: tuple[str, ...],
         sessions: list[str],
     ) -> tuple[list[CanonicalFinancialVersion], list[CanonicalFinancialVersion]]:
+        canonical = list(self._iter_canonical_versions(checkpoints, source_fields, sessions))
+        quarantine = [
+            version for version in canonical if version.availability_status == "quarantined"
+        ]
+        return canonical, quarantine
+
+    def _iter_canonical_versions(
+        self,
+        checkpoints: Sequence[FinancialShardCheckpoint],
+        source_fields: tuple[str, ...],
+        sessions: list[str],
+    ) -> Iterator[CanonicalFinancialVersion]:
         grouped: dict[tuple[str, str], list[FinancialShardCheckpoint]] = defaultdict(list)
         for checkpoint in checkpoints:
             grouped[(checkpoint.endpoint, checkpoint.instrument_id)].append(checkpoint)
-        canonical: list[CanonicalFinancialVersion] = []
         for group in grouped.values():
             observations: list[FinancialSourceObservation] = []
             for checkpoint in group:
@@ -2089,11 +2106,7 @@ class FinancialCandidateStore:
                         )
                     )
                 del batch
-            canonical.extend(FinancialVersionProjector().project(observations, sessions))
-        quarantine = [
-            version for version in canonical if version.availability_status == "quarantined"
-        ]
-        return canonical, quarantine
+            yield from FinancialVersionProjector().project(observations, sessions)
 
     def _retain_coverage_versions(
         self,
@@ -2299,6 +2312,18 @@ class FinancialCandidateStore:
         reference: Mapping[str, object],
         sessions: list[str],
     ) -> list[dict[str, object]]:
+        return canonicalize_parquet_rows(
+            list(self._iter_table_rows(endpoint, source_fields, reference, sessions)),
+            _table_contract(_ENDPOINT_TABLES[endpoint], source_fields),
+        )
+
+    def _iter_table_rows(
+        self,
+        endpoint: str,
+        source_fields: tuple[str, ...],
+        reference: Mapping[str, object],
+        sessions: list[str],
+    ) -> Iterator[dict[str, object]]:
         manifest_sha256 = str(reference.get("manifest_sha256"))
         manifest = self._read_json(
             self._manifest_path(manifest_sha256),
@@ -2333,9 +2358,14 @@ class FinancialCandidateStore:
         objects = manifest.get("objects")
         if not isinstance(objects, list):
             raise FinancialCandidateError("FINANCIAL_TABLE_MANIFEST_INVALID")
-        rows: list[dict[str, object]] = []
-        partitions: list[list[dict[str, object]]] = []
-        for ordinal, object_ref in enumerate(objects):
+        physical_row_count = 0
+        seen: set[bytes] = set()
+        # Reverse object order implements last-observation precedence with only
+        # compact identities retained. Every physical object is still verified.
+        boundaries: dict[int, tuple[int, int, tuple[object, ...], tuple[object, ...]]] = {}
+        session_index = {session: index for index, session in enumerate(sessions)}
+        for ordinal in reversed(range(len(objects))):
+            object_ref = objects[ordinal]
             if not isinstance(object_ref, Mapping) or object_ref.get("ordinal") != ordinal:
                 raise FinancialCandidateError("FINANCIAL_OBJECT_REFERENCE_INVALID")
             content = self._read(
@@ -2361,19 +2391,41 @@ class FinancialCandidateStore:
                 != ([partition[-1][key] for key in contract.sort_keys] if partition else None)
             ):
                 raise FinancialCandidateError("FINANCIAL_OBJECT_BOUNDARY_INVALID")
-            rows.extend(partition)
-            partitions.append(partition)
-        physical_row_count = len(rows)
-        if layered is None:
-            if rows != canonicalize_parquet_rows(rows, contract):
-                raise FinancialCandidateError("FINANCIAL_TABLE_ORDER_INVALID")
-            if partitions != _partition_financial_rows(rows, sessions):
-                raise FinancialCandidateError("FINANCIAL_TABLE_PARTITIONING_INVALID")
-        else:
-            delta_rows = [row for group in partitions[layered:] for row in group]
-            if partitions[layered:] != _partition_financial_rows(delta_rows, sessions):
-                raise FinancialCandidateError("FINANCIAL_TABLE_PARTITIONING_INVALID")
-            rows = _overlay_financial_rows(rows, contract)
+            physical_row_count += len(partition)
+            if layered is None or ordinal >= layered:
+                if not partition or _partition_financial_rows(partition, sessions) != [partition]:
+                    raise FinancialCandidateError("FINANCIAL_TABLE_PARTITIONING_INVALID")
+                session = str(partition[0]["effective_available_session"])
+                block = (
+                    session_index[session] // GENERATION_SESSION_PARTITION_COUNT if session else -1
+                )
+                boundaries[ordinal] = (
+                    block, len(partition),
+                    tuple(partition[0][key] for key in contract.sort_keys),
+                    tuple(partition[-1][key] for key in contract.sort_keys),
+                )
+            for row in reversed(partition):
+                if layered is not None:
+                    source_hash = str(row["source_row_sha256"])
+                    _require_sha256(source_hash)
+                    identity = bytes.fromhex(source_hash)
+                    if identity in seen:
+                        continue
+                    seen.add(identity)
+                yield row
+            del partition, table, content
+        previous = None
+        for ordinal in sorted(boundaries):
+            block, count, first, last = boundaries[ordinal]
+            if previous is not None:
+                previous_block, previous_count, previous_last = previous
+                if layered is None and previous_last >= first:
+                    raise FinancialCandidateError("FINANCIAL_TABLE_ORDER_INVALID")
+                if block < previous_block or (
+                    block == previous_block and previous_count != GENERATION_ROW_PARTITION_COUNT
+                ):
+                    raise FinancialCandidateError("FINANCIAL_TABLE_PARTITIONING_INVALID")
+            previous = (block, count, last)
         if (
             manifest.get("row_count") != physical_row_count
             or reference.get("row_count") != physical_row_count
@@ -2381,7 +2433,6 @@ class FinancialCandidateStore:
             raise FinancialCandidateError("FINANCIAL_TABLE_ROW_COUNT_INVALID")
         if reference.get("object_count") != len(objects):
             raise FinancialCandidateError("FINANCIAL_TABLE_OBJECT_COUNT_INVALID")
-        return rows
 
     def _incremental_base_object_count(
         self,
@@ -2742,6 +2793,12 @@ class FinancialCandidateStore:
     def _object_path(self, sha256: str) -> Path:
         _require_sha256(sha256)
         return self._root / "objects" / "sha256" / sha256[:2] / f"{sha256}.parquet"
+
+
+def _stored_fact_digest(row: Mapping[str, object], projection_columns: set[str]) -> bytes:
+    return hashlib.sha256(canonical_json_bytes({
+        key: value for key, value in row.items() if key not in projection_columns
+    })).digest()
 
 
 def _table_contract(table_name: str, source_fields: tuple[str, ...]) -> ParquetWriterContract:

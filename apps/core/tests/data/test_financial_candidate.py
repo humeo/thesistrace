@@ -1989,6 +1989,7 @@ def test_targeted_daily_rebuild_appends_only_changed_rows_to_immutable_tables(
         ),
     )
     assert store.validate(second.manifest_sha256) == second
+    assert FinancialCandidateStore(tmp_path).validate_stored(second.manifest_sha256) == second
     second_income = store.read_table(second.manifest_sha256, "income_statement_versions")
     assert sum(row["revenue"] == "900" for row in second_income
                if row["instrument_id"] == "equity:000001.SZ") == 1
@@ -2818,3 +2819,65 @@ def test_stored_discovery_family_preserves_its_recorded_seed_policy(tmp_path, se
     assert store.read_table(digest, "income_statement_versions") == store.read_table(
         daily.manifest_sha256, "income_statement_versions"
     )
+
+
+def test_stored_financial_validation_bounds_python_memory(tmp_path: Path) -> None:
+    store, candidate, _, _ = _materialized_candidate(tmp_path, extra_income_versions=6000)
+    gc.collect()
+    tracemalloc.start()
+    try:
+        assert store.validate_stored(candidate.manifest_sha256) == candidate
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < 16 * 1024**2, f"Stored validation allocated {peak} Python bytes"
+
+
+@pytest.mark.parametrize("damage, error", [
+    ("revenue", "FINANCIAL_SOURCE_FACT_INVALID"),
+    ("first_observed_session", "FINANCIAL_STORED_AVAILABILITY_INVALID"),
+    ("duplicate_partition", "FINANCIAL_TABLE_(ORDER|PARTITIONING)_INVALID"),
+])
+def test_stored_validation_rejects_resigned_fact_and_partition_damage(
+    tmp_path: Path, damage: str, error: str,
+) -> None:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from thesistrace.data.financial_candidate import _table_contract
+    from thesistrace.publication.serialization import parquet_bytes
+
+    store, candidate, _, _ = _materialized_candidate(tmp_path)
+    family = _read_manifest(tmp_path, candidate.manifest_sha256)
+    reference = family["tables"][0]
+    table = _read_manifest(tmp_path, reference["manifest_sha256"])
+
+    def save_manifest(value):
+        content = canonical_json_bytes(value)
+        sha = hashlib.sha256(content).hexdigest()
+        path = tmp_path / "manifests/sha256" / sha[:2] / f"{sha}.json"
+        AddressedFileStore(tmp_path).store(path, sha, content)
+        return sha, len(content)
+
+    if damage == "duplicate_partition":
+        table["objects"].insert(1, dict(table["objects"][0]))
+        for ordinal, item in enumerate(table["objects"]):
+            item["ordinal"] = ordinal
+        table["row_count"] += table["objects"][0]["row_count"]
+        reference["row_count"] = table["row_count"]
+        reference["object_count"] = len(table["objects"])
+    else:
+        object_ref = table["objects"][0]
+        sha = object_ref["sha256"]
+        path = tmp_path / "objects/sha256" / sha[:2] / f"{sha}.parquet"
+        rows = pq.read_table(pa.BufferReader(path.read_bytes())).to_pylist()
+        rows[0][damage] = "unverified" if damage == "revenue" else "2010-01-04"
+        content = parquet_bytes(rows, _table_contract(reference["name"], FIELDS))
+        sha = hashlib.sha256(content).hexdigest()
+        path = tmp_path / "objects/sha256" / sha[:2] / f"{sha}.parquet"
+        AddressedFileStore(tmp_path).store(path, sha, content)
+        object_ref.update(sha256=sha, byte_count=len(content))
+    reference["manifest_sha256"], reference["manifest_byte_count"] = save_manifest(table)
+    sha, _ = save_manifest(family)
+    with pytest.raises(FinancialCandidateError, match=error):
+        store.validate_stored(sha)
