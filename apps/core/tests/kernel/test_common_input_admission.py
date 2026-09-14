@@ -5,6 +5,7 @@ import pytest
 
 from thesistrace.alpha_language import alpha_language
 from thesistrace.data.admission import DatasetAdmissionSnapshot
+from thesistrace.data.models import DatasetCoverage
 from thesistrace.research_run.models import FactorEvaluationAdmissionCommand
 from thesistrace.research_run.service import ResearchRunAdmissionRejected, _admitted_input
 
@@ -32,8 +33,10 @@ def inputs(source, neutralization="none"):
         maximum_universe_cardinality=lambda *_: 1,
         universe_member_union_cardinalities=lambda _universe, windows: tuple(1 for _ in windows),
         financial_research_readiness="not_ready",
-        industry_coverage_start=days[2],
-        industry_coverage_end=days[-1],
+        family_coverage={
+            "equity.eod_price": DatasetCoverage(start=days[0], end=days[-1]),
+            "equity.industry_membership": DatasetCoverage(start=days[2], end=days[-1]),
+        },
     )
     return command, compiled, snapshot
 
@@ -48,7 +51,12 @@ def test_common_industry_requires_its_calculation_history_and_points_to_formula(
     assert issue.range is not None
     assert issue.range.start.offset == 0
     assert issue.range.end.offset == len(command.formula)
-    ready = replace(snapshot, industry_coverage_start=snapshot.coverage_start)
+    ready = replace(snapshot, family_coverage={
+        **snapshot.family_coverage,
+        "equity.industry_membership": DatasetCoverage(
+            start=snapshot.coverage_start, end=snapshot.coverage_end,
+        ),
+    })
     admitted = _admitted_input(command, compiled, ready, execution_memory_bytes=1536 * 1024**2)
     assert admitted.expression_admission.effective_lookback == 3
 
@@ -155,7 +163,12 @@ def test_daily_exposure_adds_its_real_window_fields_and_industry_requirement():
         _admitted_input(command, compiled, snapshot, execution_memory_bytes=1536 * 1024**2)
     assert caught.value.issues[0].code == 'INDUSTRY_CALCULATION_OUTSIDE_COVERAGE'
     assert caught.value.issues[0].field == 'exposure_expression'
-    ready = replace(snapshot, industry_coverage_start=snapshot.coverage_start)
+    ready = replace(snapshot, family_coverage={
+        **snapshot.family_coverage,
+        "equity.industry_membership": DatasetCoverage(
+            start=snapshot.coverage_start, end=snapshot.coverage_end,
+        ),
+    })
     admitted = _admitted_input(command, compiled, ready, execution_memory_bytes=1536 * 1024**2)
     exposure = alpha_language.compile(source, context='exposure')
     assert admitted.expression_admission.effective_lookback == 3

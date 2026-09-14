@@ -4440,91 +4440,50 @@ def _admitted_input(
         neutralization=command.neutralization,
         require_industry=requirements.require_industry,
     )
-    if dependencies.financial:
-        first_index = snapshot.research_sessions.index(sessions[0])
-        warmup_index = first_index - requirements.effective_lookback
-        financial_start = snapshot.financial_coverage_start
-        financial_end = snapshot.financial_coverage_end
-        if (
-            financial_start is None
-            or financial_end is None
-            or warmup_index < 0
-            or snapshot.research_sessions[warmup_index] < financial_start
-            or sessions[-1] > financial_end
-        ):
+    first_index = snapshot.research_sessions.index(sessions[0])
+    calculation_start = snapshot.research_sessions[
+        max(0, first_index - requirements.effective_lookback)
+    ]
+    unavailable = dependencies.unavailable_families(
+        snapshot.family_coverage, start=sessions[0], end=sessions[-1],
+        calculation_start=calculation_start,
+    )
+    if unavailable:
+        issues = []
+        for family_id in sorted(unavailable):
+            coverage = snapshot.family_coverage.get(family_id)
             available = (
-                "not ready"
-                if financial_start is None or financial_end is None
-                else f"{financial_start.isoformat()} to {financial_end.isoformat()}"
+                "not ready" if coverage is None
+                else f"{coverage.start.isoformat()} to {coverage.end.isoformat()}"
             )
-            raise ResearchRunAdmissionRejected(
-                [
-                    ResearchRunAdmissionIssue(
-                        code="FINANCIAL_CALCULATION_OUTSIDE_COVERAGE",
-                        field="formula",
-                        message=(
-                            "Financial Formula needs its requested period and lookback inside "
-                            f"Financial Coverage; current Financial Coverage is {available}."
-                        ),
-                    )
-                ]
-            )
-    if dependencies.industry:
-        common_industry = requirements.require_industry
-        industry_expression = (
-            compiled if requires_common_industry(compiled.expression) else exposure
-        )
-        industry_field = "formula" if industry_expression is compiled else "exposure_expression"
-        first_index = snapshot.research_sessions.index(sessions[0])
-        required_start = (
-            snapshot.research_sessions[max(0, first_index - requirements.effective_lookback)]
-            if common_industry
-            else sessions[0]
-        )
-        industry_start = snapshot.industry_coverage_start
-        industry_end = snapshot.industry_coverage_end
-        if (
-            industry_start is None
-            or industry_end is None
-            or required_start < industry_start
-            or sessions[-1] > industry_end
-        ):
-            available = (
-                "not ready"
-                if industry_start is None or industry_end is None
-                else f"{industry_start.isoformat()} to {industry_end.isoformat()}"
-            )
-            raise ResearchRunAdmissionRejected(
-                [
-                    ResearchRunAdmissionIssue(
-                        code="INDUSTRY_CALCULATION_OUTSIDE_COVERAGE",
-                        field=industry_field if common_industry else "neutralization",
-                        message=(
-                            (
-                                "Common industry inputs need their calculation period "
-                                "and lookback inside "
-                                if common_industry
-                                else "Industry Neutralization needs its requested period inside "
-                            )
-                            + f"Industry Coverage; current Industry Coverage is {available}."
-                        ),
-                        range=(
-                            {
-                                "start": {"offset": 0, "line": 1, "column": 1},
-                                "end": {
-                                    "offset": len(industry_expression.source),
-                                    "line": industry_expression.source.count("\n") + 1,
-                                    "column": (
-                                        len(industry_expression.source.rsplit("\n", 1)[-1]) + 1
-                                    ),
-                                },
-                            }
-                            if common_industry
-                            else None
-                        ),
-                    )
-                ]
-            )
+            if family_id == "equity.industry_membership":
+                code, field = "INDUSTRY_CALCULATION_OUTSIDE_COVERAGE", "neutralization"
+            elif family_id in dependencies.financial_families:
+                code, field = "FINANCIAL_CALCULATION_OUTSIDE_COVERAGE", "formula"
+            else:
+                code, field = "FIELD_CALCULATION_OUTSIDE_COVERAGE", "formula"
+            issue_range = None
+            if family_id == "equity.industry_membership" and requirements.require_industry:
+                industry_expression = (
+                    compiled if requires_common_industry(compiled.expression) else exposure
+                )
+                field = "formula" if industry_expression is compiled else "exposure_expression"
+                issue_range = {
+                    "start": {"offset": 0, "line": 1, "column": 1},
+                    "end": {
+                        "offset": len(industry_expression.source),
+                        "line": industry_expression.source.count("\n") + 1,
+                        "column": len(industry_expression.source.rsplit("\n", 1)[-1]) + 1,
+                    },
+                }
+            issues.append(ResearchRunAdmissionIssue(
+                code=code, field=field, range=issue_range,
+                message=(
+                    f"Formula requires {family_id} coverage for its calculation period; "
+                    f"current coverage is {available}."
+                ),
+            ))
+        raise ResearchRunAdmissionRejected(issues)
     try:
         calculation_session_count, universe_instrument_count = snapshot.calculation_shape(
             start=sessions[0],

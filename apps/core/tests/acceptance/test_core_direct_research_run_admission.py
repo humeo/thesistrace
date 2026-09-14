@@ -21,6 +21,7 @@ from thesistrace._postgres import PostgresDatabase
 from thesistrace.alpha_language import alpha_language
 from thesistrace.data import DatasetAdmissionSnapshot, DatasetLifecycle, MountedGenerationStore
 from thesistrace.data.canonical_mapping import field_catalog
+from thesistrace.data.models import DatasetCoverage
 from thesistrace.entrypoints.quota_policy import quota_policy_lookup
 from thesistrace.entrypoints.runtime import (
     CoreSettings,
@@ -281,6 +282,9 @@ def test_long_research_is_admitted_by_peak_capacity_and_freezes_its_chunk_plan()
     drop_product_schemas(settings)
     sessions = tuple(date(2024, 1, 1) + timedelta(days=index) for index in range(505))
     snapshot = DatasetAdmissionSnapshot(
+        family_coverage={
+            "equity.eod_price": DatasetCoverage(start=sessions[0], end=sessions[-1]),
+        },
         generation_manifest_sha256="a" * 64,
         data_through_session=sessions[-1],
         coverage_start=sessions[0],
@@ -339,6 +343,10 @@ def test_degraded_financial_readiness_is_admitted_and_frozen() -> None:
     drop_product_schemas(settings)
     sessions = tuple(date(2026, 8, 3) + timedelta(days=index) for index in range(4))
     snapshot = DatasetAdmissionSnapshot(
+        family_coverage={
+            "equity.eod_price": DatasetCoverage(start=sessions[0], end=sessions[-1]),
+            "equity.financial_pit": DatasetCoverage(start=sessions[0], end=sessions[-1]),
+        },
         generation_manifest_sha256="b" * 64,
         data_through_session=sessions[-1],
         coverage_start=sessions[0],
@@ -347,8 +355,6 @@ def test_degraded_financial_readiness_is_admitted_and_frozen() -> None:
         available_field_ids=frozenset({"financial.income.total_revenue.latest_fy"}),
         maximum_universe_cardinality=lambda _universe, _start, _end: 300,
         universe_member_union_cardinalities=lambda _universe, windows: tuple(300 for _ in windows),
-        financial_coverage_start=sessions[0],
-        financial_coverage_end=sessions[-1],
         financial_research_readiness="ready_with_pending",
     )
     command = TypeAdapter(ResearchRunAdmissionCommand).validate_python(

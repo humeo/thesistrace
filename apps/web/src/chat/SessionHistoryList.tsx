@@ -112,6 +112,8 @@ export function SessionHistoryList({
     const dismissForLayoutChange = () => closeMenu(true);
     const dismissForAnchorScroll = (event: Event) => {
       const trigger = menuButtons.current.get(openMenu);
+      // Independent content can scroll as a Run settles without moving this
+      // sidebar anchor. Only scrolling its ancestors invalidates placement.
       if (trigger && event.target instanceof Node && event.target.contains(trigger)) {
         closeMenu(true);
       }

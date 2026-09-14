@@ -79,7 +79,7 @@ def _industry_series(
                 ],
             }
         ),
-        _financial_values=None,
+        _family_values=None,
         _field_columns={"price.close.adjusted": "close_adj"},
     )
 

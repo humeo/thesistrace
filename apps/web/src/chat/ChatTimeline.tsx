@@ -73,6 +73,11 @@ export function ChatTimeline({
     measure();
     const observer = new ResizeObserver(() => {
       measure();
+      if (following && initialPositionedRef.current && anchorRef.current === null
+        && scrollFrameRef.current === null) {
+        viewport.scrollTop = viewport.scrollHeight;
+        previousScrollTopRef.current = viewport.scrollTop;
+      }
       updateLatestVisibility();
     });
     observer.observe(viewport);
@@ -80,7 +85,7 @@ export function ChatTimeline({
     const latestResponse = content.querySelector(".chat-turn:last-child .chat-turn-response");
     if (latestResponse) observer.observe(latestResponse);
     return () => observer.disconnect();
-  }, [empty, latestTurnId]);
+  }, [empty, latestTurnId, following]);
 
   useLayoutEffect(() => {
     const viewport = scrollRef.current;
@@ -591,12 +596,16 @@ function CopyTextButton({
   onAnnounce: (message: string) => void;
 }) {
   const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 1_500);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
   async function copy(): Promise<void> {
     try {
       await navigator.clipboard.writeText(content);
       setCopied(true);
       onAnnounce("Copied to clipboard.");
-      window.setTimeout(() => setCopied(false), 1_500);
     } catch {
       onAnnounce("Could not copy to clipboard.");
     }

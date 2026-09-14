@@ -779,6 +779,7 @@ def test_core_has_one_operational_output_schema_and_no_log_files() -> None:
         "entrypoints/live_tushare.py",
         "strategy_event_wire.py",
         "entrypoints/tracking_child.py",
+        "migrations/financial_indicator.py",  # Explicit data-preserving upgrade receipt.
         "migrations/publication_maintenance_0002.py",  # Explicit migration receipt.
         "migrations/rank_ic_0001.py",  # Explicit migration CLI JSON receipt.
     }

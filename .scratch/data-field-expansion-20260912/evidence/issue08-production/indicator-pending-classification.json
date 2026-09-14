@@ -1,0 +1,10 @@
+{
+  "operation_key": "field226-postcutover-financial-new-identities-4083a2ba",
+  "collection_saved": true,
+  "pending_target_count": 13,
+  "classification_counts": {
+    "no_matching_announcement_in_current_observations": 6,
+    "unknown_report_period": 7
+  },
+  "scope": "Server-local comparison of pending targets with current retained provider observations; no claim about future provider completeness."
+}

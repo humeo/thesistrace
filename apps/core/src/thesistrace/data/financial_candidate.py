@@ -4,7 +4,7 @@ import bisect
 import hashlib
 import json
 from collections import defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -16,6 +16,7 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from pyarrow import ArrowException
 
+from thesistrace.data.fields import FINANCIAL_FIELDS
 from thesistrace.data.financial_collection import (
     FINANCIAL_ENDPOINTS,
     FINANCIAL_SOURCE_CONTRACT_VERSION,
@@ -260,7 +261,24 @@ class FinancialVersionProjector:
                 ),
             )
             earliest_observation = ordered[0].first_observed_at
+            observations_by_time: dict[str, set[str]] = defaultdict(set)
             for version in ordered:
+                # A supplier update marker is evidence, not a different financial value.
+                content = {
+                    key: value for key, value in version.source().items()
+                    if key != "update_flag"
+                }
+                observations_by_time[version.first_observed_at].add(_sha(content))
+            for version in ordered:
+                if len(observations_by_time[version.first_observed_at]) > 1:
+                    canonical.append(
+                        replace(
+                            version,
+                            availability_status="quarantined",
+                            coverage_role="quarantined",
+                        )
+                    )
+                    continue
                 revision_basis = (
                     "source_version"
                     if version.first_observed_at == earliest_observation
@@ -354,19 +372,36 @@ class FinancialCandidateStore:
         prior_shards = self._manifest_evidence_shards(prior_manifest)
         historical = {item.instrument_id: item.ts_code for item in current_lifecycles}
         self._validate_historical_identities(prior_checkpoints, historical)
-        historical_checkpoints = _merge_evidence_checkpoints(
+        unchanged_evidence = _merge_evidence_checkpoints(
             (*prior_checkpoints, *collection.shards)
-        )
+        ) == prior_checkpoints
+        discovery = None
         if (
-            observation_through_session == prior.observation_through_session
-            and historical_checkpoints == prior_checkpoints
+            unchanged_evidence and prior.discovery_baseline_session is not None
+            and observation_through_session == prior.observation_through_session
         ):
-            return prior
+            # Reprojecting retained receipts does not perform new reconciliation.
+            # Preserve the actual discovery watermarks and unresolved source state.
+            coverage = prior_manifest["dataset_coverage"]
+            discovery = FinancialDiscoveryPublication(
+                baseline_session=coverage["discovery_baseline_session"],
+                attempted_through_session=coverage["discovery_attempted_through_session"],
+                complete_through_session=coverage["discovery_complete_through_session"],
+                source_lineage_sha256=coverage["source_lineage_sha256"],
+                readiness_status=coverage["readiness_status"],
+                pending_instrument_count=coverage["pending_instrument_count"],
+                discovery_gap_count=coverage["discovery_gap_count"],
+                earliest_unresolved_date=coverage["earliest_unresolved_date"],
+            )
         return self._materialize(
             collection,
             observation_through_session=observation_through_session,
             prior_checkpoints=prior_checkpoints,
             prior_shards=prior_shards,
+            discovery=discovery,
+            prior_candidate_manifest_sha256=(
+                prior_candidate_manifest_sha256 if unchanged_evidence else None
+            ),
         )
 
     def rebuild_daily(
@@ -471,6 +506,7 @@ class FinancialCandidateStore:
         self._validate_historical_identities(prior_checkpoints, historical)
         deltas, quarantine_unchanged = self._daily_table_deltas(
             collection.shards,
+            calendar_instruments=frozenset(),
             prior_checkpoints=prior_checkpoints,
             endpoint_fields=endpoint_fields,
             coverage_start=str(prior_manifest["dataset_coverage"]["start"]),
@@ -501,6 +537,10 @@ class FinancialCandidateStore:
         coverage_start = str(prior_manifest["dataset_coverage"]["start"])
         deltas, quarantine_unchanged = self._daily_table_deltas(
             collection.shards,
+            calendar_instruments=self._calendar_reprojection_instruments(
+                prior_candidate_manifest_sha256, prior_sessions, current_sessions,
+                frozenset(item.instrument_id for item in current_lifecycles),
+            ),
             prior_checkpoints=prior_checkpoints,
             endpoint_fields=endpoint_fields,
             coverage_start=coverage_start,
@@ -577,6 +617,7 @@ class FinancialCandidateStore:
         self,
         current_checkpoints: Sequence[FinancialShardCheckpoint],
         *,
+        calendar_instruments: frozenset[str],
         prior_checkpoints: Sequence[FinancialShardCheckpoint],
         endpoint_fields: Mapping[str, tuple[str, ...]],
         coverage_start: str,
@@ -585,7 +626,7 @@ class FinancialCandidateStore:
         current_lifecycles: Sequence[HistoricalInstrumentLifecycle],
         prior_generation_manifest_sha256: str,
     ) -> tuple[dict[str, list[dict[str, object]]], bool]:
-        affected = {item.instrument_id for item in current_checkpoints}
+        affected = {item.instrument_id for item in current_checkpoints} | calendar_instruments
         if not affected:
             return ({endpoint: [] for endpoint in FINANCIAL_ENDPOINTS}, True)
         prior_affected = tuple(
@@ -655,6 +696,40 @@ class FinancialCandidateStore:
                 item.source_row_sha256 for item in old_quarantine
             } == {item.source_row_sha256 for item in new_quarantine}
         return deltas, quarantine_unchanged
+
+    def _calendar_reprojection_instruments(
+        self, prior_digest: str, prior_sessions: list[str], current_sessions: list[str],
+        instrument_ids: frozenset[str],
+    ) -> frozenset[str]:
+        if current_sessions == prior_sessions:
+            return frozenset()
+        affected: set[str] = set()
+        columns = (
+            "instrument_id", "availability_status", "source_published_date",
+            "first_observed_at", "source_available_session", "first_observed_session",
+        )
+        for endpoint in FINANCIAL_ENDPOINTS:
+            table = self.read_financial_table(
+                prior_digest, endpoint, columns, (prior_sessions[-1],), instrument_ids,
+                compact_history=False,
+            )
+            pending = table.filter(pc.is_in(table["availability_status"], value_set=pa.array(
+                ["pending_calendar", "quarantined"],
+            )))
+            for batch in pending.to_batches(max_chunksize=4096):
+                for row in batch.to_pylist():
+                    if not row["source_published_date"]:
+                        continue
+                    available = _next_session(
+                        current_sessions, _iso_date(row["source_published_date"]),
+                    )
+                    observed = _next_session(
+                        current_sessions, _market_date(row["first_observed_at"]),
+                    )
+                    if (available != row["source_available_session"]
+                            or observed != row["first_observed_session"]):
+                        affected.add(row["instrument_id"])
+        return frozenset(affected)
 
     def _materialize_incremental_table(
         self,
@@ -845,6 +920,7 @@ class FinancialCandidateStore:
         prior_checkpoints: Sequence[FinancialShardCheckpoint],
         prior_shards: Sequence[FinancialDateShard],
         discovery: FinancialDiscoveryPublication | None = None,
+        prior_candidate_manifest_sha256: str | None = None,
         validated_endpoint_fields: Mapping[str, tuple[str, ...]] | None = None,
     ) -> FinancialFamilyCandidate:
         sessions = self._validated_market_sessions(
@@ -920,7 +996,7 @@ class FinancialCandidateStore:
                 "reconciliation_status": "complete",
                 "historical_reconciliation_watermark": observation_through_session,
                 "revision_coverage": "source-dated-and-first-observed-corrections",
-                "seed_policy": "latest-pre-start-annual-flow-and-balance-facts",
+                "seed_policy": "annual-stock-and-ttm-dependency-seeds",
             }
             if discovery is None
             else _discovery_coverage(coverage_start, discovery)
@@ -953,6 +1029,13 @@ class FinancialCandidateStore:
             },
             "tables": table_references,
         }
+        if prior_candidate_manifest_sha256 is not None:
+            prior_family = self._read_family(prior_candidate_manifest_sha256)
+            if all(
+                family[key] == prior_family[key]
+                for key in ("schema_contract", "dataset_coverage", "quarantine", "tables")
+            ):
+                return self._descriptor(prior_candidate_manifest_sha256, prior_family)
         content = self._manifest_bytes(family)
         sha256 = hashlib.sha256(content).hexdigest()
         self._store(self._manifest_path(sha256), sha256, content)
@@ -1115,6 +1198,145 @@ class FinancialCandidateStore:
             "manifest_byte_count": len(content),
         }
 
+    def validate_stored(self, manifest_sha256: str) -> FinancialFamilyCandidate:
+        """Verify immutable stored facts without regenerating their projection."""
+        manifest = self._read_family(manifest_sha256)
+        descriptor = self._descriptor(manifest_sha256, manifest)
+        contract = self._manifest_collection_contract(manifest)
+        _validate_contract(contract)
+        evidence = self._read_evidence_index(manifest["raw_evidence"])
+        current = self._read_evidence_index(manifest["current_raw_evidence"])
+        if len(evidence) != descriptor.raw_batch_count:
+            raise FinancialCandidateError("FINANCIAL_EVIDENCE_COUNT_INVALID")
+        if _merge_evidence_descriptors(evidence) != _merge_evidence_descriptors(
+            (*evidence, *current)
+        ):
+            raise FinancialCandidateError("FINANCIAL_REFRESH_EVIDENCE_UNION_INVALID")
+        endpoint_fields = self._validate_evidence_entries(
+            evidence, contract=contract, historical=True
+        )
+        if current:
+            self._validate_evidence_entries(current, contract=contract)
+        sessions = self._validated_market_sessions(
+            str(manifest["source_generation_manifest_sha256"]),
+            descriptor.observation_through_session,
+        )
+        checkpoints = tuple(_checkpoint_from_evidence(item) for item in evidence)
+        lifecycles = self._market.read_historical_ordinary_a_share_lifecycles(
+            str(manifest["source_generation_manifest_sha256"])
+        )
+        historical = {item.instrument_id: item.ts_code for item in lifecycles}
+        self._validate_historical_identities(checkpoints, historical)
+        self._validate_target_set(
+            tuple(_checkpoint_from_evidence(item) for item in current), historical, contract,
+            targeted=descriptor.discovery_baseline_session is not None,
+        )
+        source_collection = manifest["source_collection"]
+        finished_at = _aware_iso(str(source_collection["finished_at"]))
+        if _market_date(finished_at) < descriptor.observation_through_session or any(
+            _aware_iso(item.collected_at) > finished_at for item in checkpoints
+        ):
+            raise FinancialCandidateError("FINANCIAL_SOURCE_COLLECTION_INVALID")
+        if contract.shards != self._manifest_evidence_shards(manifest):
+            raise FinancialCandidateError("FINANCIAL_EVIDENCE_SHARD_SET_INVALID")
+        coverage = manifest["dataset_coverage"]
+        if not isinstance(coverage.get("seed_policy"), str) or not coverage["seed_policy"]:
+            raise FinancialCandidateError("FINANCIAL_COVERAGE_INVALID")
+        if descriptor.discovery_baseline_session is None:
+            if any(coverage.get(key) != value for key, value in {
+                "expected_instrument_count": len(historical),
+                "expected_shard_count": len(current), "completed_shard_count": len(current),
+                "historical_reconciliation_watermark": descriptor.observation_through_session,
+            }.items()):
+                raise FinancialCandidateError("FINANCIAL_COVERAGE_INVALID")
+        else:
+            _validated_discovery_coverage(coverage)
+        if "prior_candidate_manifest_sha256" in source_collection:
+            parent = self._read_family(str(source_collection["prior_candidate_manifest_sha256"]))
+            parent_evidence = self._read_evidence_index(parent["raw_evidence"])
+            if _merge_evidence_descriptors(evidence) != _merge_evidence_descriptors(
+                (*parent_evidence, *current)
+            ):
+                raise FinancialCandidateError("FINANCIAL_REFRESH_EVIDENCE_UNION_INVALID")
+        references = manifest["tables"]
+        if [item.get("name") for item in references] != list(_ENDPOINT_TABLES.values()):
+            raise FinancialCandidateError("FINANCIAL_TABLE_SET_INVALID")
+        quarantine_hashes: list[str] = []
+        projection_columns = {
+            "availability_status", "revision_basis", "coverage_role", "effective_available_session",
+            "first_observed_session", "source_available_session",
+        }
+        session_set = frozenset(sessions)
+        for endpoint, reference in zip(FINANCIAL_ENDPOINTS, references, strict=True):
+            fields = endpoint_fields[endpoint]
+            # Keep only source-fact digests across instruments, never the complete
+            # wide source history alongside the stored table's Python rows.
+            originals = {
+                bytes.fromhex(version.source_row_sha256): _stored_fact_digest(
+                    _version_row(version, fields), projection_columns,
+                )
+                for version in self._iter_canonical_versions(
+                    tuple(item for item in checkpoints if item.endpoint == endpoint),
+                    fields, sessions,
+                )
+            }
+            for row in self._iter_table_rows(endpoint, fields, reference, sessions):
+                source_hash = str(row["source_row_sha256"])
+                _require_sha256(source_hash)
+                if originals.get(bytes.fromhex(source_hash)) != _stored_fact_digest(
+                    row, projection_columns,
+                ):
+                    raise FinancialCandidateError("FINANCIAL_SOURCE_FACT_INVALID")
+                for key, day in (
+                    ("first_observed_session", _market_date(str(row["first_observed_at"]))),
+                    ("source_available_session", (
+                        _iso_date(str(row["source_published_date"]))
+                        if row["source_published_date"] else ""
+                    )),
+                ):
+                    if row[key] and (not day or row[key] != _next_session(sessions, day)):
+                        raise FinancialCandidateError("FINANCIAL_STORED_AVAILABILITY_INVALID")
+                status = row["availability_status"]
+                effective = str(row["effective_available_session"])
+                basis = row["revision_basis"]
+                if basis not in {"source_version", "observed_correction"}:
+                    raise FinancialCandidateError("FINANCIAL_STORED_AVAILABILITY_INVALID")
+                if status == "available":
+                    available = str(row["source_available_session"])
+                    if not available or effective not in session_set or effective < available:
+                        raise FinancialCandidateError("FINANCIAL_STORED_AVAILABILITY_INVALID")
+                    if basis == "observed_correction" and (
+                        not row["first_observed_session"]
+                        or effective < row["first_observed_session"]
+                    ):
+                        raise FinancialCandidateError("FINANCIAL_STORED_AVAILABILITY_INVALID")
+                    role = (
+                        "pre_start_seed" if effective < descriptor.coverage_start else "in_coverage"
+                    )
+                    if row["coverage_role"] != role:
+                        raise FinancialCandidateError("FINANCIAL_STORED_AVAILABILITY_INVALID")
+                elif status in {"quarantined", "pending_calendar"}:
+                    if effective or row["coverage_role"] != status:
+                        raise FinancialCandidateError("FINANCIAL_STORED_AVAILABILITY_INVALID")
+                    if status == "quarantined":
+                        quarantine_hashes.append(str(row["source_row_sha256"]))
+                else:
+                    raise FinancialCandidateError("FINANCIAL_STORED_AVAILABILITY_INVALID")
+            del originals
+        expected_summary = {
+            "status": "validated", "table_count": 3,
+            "row_count": sum(int(item["row_count"]) for item in references),
+            "object_count": sum(int(item["object_count"]) for item in references),
+            "raw_batch_count": len(evidence),
+        }
+        if manifest["validation_summary"] != expected_summary:
+            raise FinancialCandidateError("FINANCIAL_VALIDATION_SUMMARY_INVALID")
+        if manifest["quarantine"] != {
+            "row_count": len(quarantine_hashes), "rows_sha256": _sha(sorted(quarantine_hashes)),
+        }:
+            raise FinancialCandidateError("FINANCIAL_QUARANTINE_INVALID")
+        return descriptor
+
     def validate(self, manifest_sha256: str) -> FinancialFamilyCandidate:
         manifest = self._read_family(manifest_sha256)
         descriptor = self._descriptor(manifest_sha256, manifest)
@@ -1240,7 +1462,7 @@ class FinancialCandidateStore:
             "reconciliation_status": "complete",
             "historical_reconciliation_watermark": descriptor.observation_through_session,
             "revision_coverage": "source-dated-and-first-observed-corrections",
-            "seed_policy": "latest-pre-start-annual-flow-and-balance-facts",
+            "seed_policy": "annual-stock-and-ttm-dependency-seeds",
         }:
             raise FinancialCandidateError("FINANCIAL_COVERAGE_INVALID")
         quarantine_manifest = manifest["quarantine"]
@@ -1331,6 +1553,10 @@ class FinancialCandidateStore:
             raise FinancialCandidateError("FINANCIAL_SOURCE_COLLECTION_INVALID")
         deltas, quarantine_unchanged = self._daily_table_deltas(
             current_checkpoints,
+            calendar_instruments=self._calendar_reprojection_instruments(
+                str(source_collection["prior_candidate_manifest_sha256"]), prior_sessions, sessions,
+                frozenset(historical),
+            ),
             prior_checkpoints=prior_checkpoints,
             endpoint_fields=endpoint_fields,
             coverage_start=descriptor.coverage_start,
@@ -1440,6 +1666,8 @@ class FinancialCandidateStore:
         source_columns: tuple[str, ...],
         sessions: tuple[str, ...],
         instrument_ids: frozenset[str],
+        *,
+        compact_history: bool = True,
     ) -> pa.Table:
         if endpoint not in FINANCIAL_ENDPOINTS:
             raise FinancialCandidateError("FINANCIAL_ENDPOINT_INVALID")
@@ -1507,6 +1735,9 @@ class FinancialCandidateStore:
                     *source_columns,
                     *_FINANCIAL_HISTORY_IDENTITY_FIELDS,
                     *_FINANCIAL_HISTORY_VERSION_FIELDS,
+                    "logical_revision_group_sha256",
+                    "source_available_session",
+                    "first_observed_session",
                 )
             )
         )
@@ -1553,7 +1784,14 @@ class FinancialCandidateStore:
         if not tables:
             return pa.Table.from_batches([], schema=expected_schema)
         overlaid = _overlay_financial_table(pa.concat_tables(tables), query_schema)
-        compacted = _compact_financial_history(overlaid, sessions[0])
+        overlaid = _project_agreeing_financial_values(
+            overlaid, tuple(name for name in source_columns
+                            if name in source_fields and name not in _REQUIRED_SOURCE_FIELDS),
+            through_session, descriptor.coverage_start,
+        )
+        compacted = (
+            _compact_financial_history(overlaid, sessions[0]) if compact_history else overlaid
+        )
         sort_columns = tuple(
             name
             for name in (
@@ -1834,10 +2072,21 @@ class FinancialCandidateStore:
         source_fields: tuple[str, ...],
         sessions: list[str],
     ) -> tuple[list[CanonicalFinancialVersion], list[CanonicalFinancialVersion]]:
+        canonical = list(self._iter_canonical_versions(checkpoints, source_fields, sessions))
+        quarantine = [
+            version for version in canonical if version.availability_status == "quarantined"
+        ]
+        return canonical, quarantine
+
+    def _iter_canonical_versions(
+        self,
+        checkpoints: Sequence[FinancialShardCheckpoint],
+        source_fields: tuple[str, ...],
+        sessions: list[str],
+    ) -> Iterator[CanonicalFinancialVersion]:
         grouped: dict[tuple[str, str], list[FinancialShardCheckpoint]] = defaultdict(list)
         for checkpoint in checkpoints:
             grouped[(checkpoint.endpoint, checkpoint.instrument_id)].append(checkpoint)
-        canonical: list[CanonicalFinancialVersion] = []
         for group in grouped.values():
             observations: list[FinancialSourceObservation] = []
             for checkpoint in group:
@@ -1857,11 +2106,7 @@ class FinancialCandidateStore:
                         )
                     )
                 del batch
-            canonical.extend(FinancialVersionProjector().project(observations, sessions))
-        quarantine = [
-            version for version in canonical if version.availability_status == "quarantined"
-        ]
-        return canonical, quarantine
+            yield from FinancialVersionProjector().project(observations, sessions)
 
     def _retain_coverage_versions(
         self,
@@ -1872,7 +2117,12 @@ class FinancialCandidateStore:
         retained: dict[str, list[CanonicalFinancialVersion]] = {
             endpoint: [] for endpoint in FINANCIAL_ENDPOINTS
         }
-        seed_candidates: dict[tuple[str, str], list[CanonicalFinancialVersion]] = defaultdict(list)
+        seed_candidates: dict[
+            tuple[str, str, str], list[CanonicalFinancialVersion]
+        ] = defaultdict(list)
+        selections = {
+            (field.source_endpoint, field.report_period_selection) for field in FINANCIAL_FIELDS
+        }
         for version in versions:
             if version.availability_status != "available":
                 retained[version.endpoint].append(version)
@@ -1886,9 +2136,13 @@ class FinancialCandidateStore:
             report_period = str(source["end_date"])
             if str(source.get("report_type") or "") != "1":
                 continue
-            if version.endpoint != "balancesheet" and not report_period.endswith("1231"):
-                continue
-            seed_candidates[(version.endpoint, version.instrument_id)].append(version)
+            for endpoint, selection in selections:
+                if endpoint != version.endpoint or selection == "latest_visible_ttm":
+                    continue
+                if selection == "latest_visible_full_year" and not report_period.endswith("1231"):
+                    continue
+                seed_candidates[(endpoint, version.instrument_id, selection)].append(version)
+        retained_seed_ids: set[tuple[str, str, str]] = set()
         for candidates in seed_candidates.values():
             latest = max(
                 candidates,
@@ -1899,7 +2153,17 @@ class FinancialCandidateStore:
                     item.source_row_sha256,
                 ),
             )
-            retained[latest.endpoint].append(replace(latest, coverage_role="pre_start_seed"))
+            seed_id = (latest.endpoint, latest.instrument_id, latest.source_row_sha256)
+            if seed_id not in retained_seed_ids:
+                retained[latest.endpoint].append(replace(latest, coverage_role="pre_start_seed"))
+                retained_seed_ids.add(seed_id)
+        ttm_endpoints = {endpoint for endpoint, selection in selections
+                         if selection == "latest_visible_ttm"}
+        for seed in _ttm_coverage_seeds(versions, coverage_start, ttm_endpoints):
+            seed_id = (seed.endpoint, seed.instrument_id, seed.source_row_sha256)
+            if seed_id not in retained_seed_ids:
+                retained[seed.endpoint].append(replace(seed, coverage_role="pre_start_seed"))
+                retained_seed_ids.add(seed_id)
         return retained
 
     def _materialize_table(
@@ -2048,6 +2312,18 @@ class FinancialCandidateStore:
         reference: Mapping[str, object],
         sessions: list[str],
     ) -> list[dict[str, object]]:
+        return canonicalize_parquet_rows(
+            list(self._iter_table_rows(endpoint, source_fields, reference, sessions)),
+            _table_contract(_ENDPOINT_TABLES[endpoint], source_fields),
+        )
+
+    def _iter_table_rows(
+        self,
+        endpoint: str,
+        source_fields: tuple[str, ...],
+        reference: Mapping[str, object],
+        sessions: list[str],
+    ) -> Iterator[dict[str, object]]:
         manifest_sha256 = str(reference.get("manifest_sha256"))
         manifest = self._read_json(
             self._manifest_path(manifest_sha256),
@@ -2082,9 +2358,14 @@ class FinancialCandidateStore:
         objects = manifest.get("objects")
         if not isinstance(objects, list):
             raise FinancialCandidateError("FINANCIAL_TABLE_MANIFEST_INVALID")
-        rows: list[dict[str, object]] = []
-        partitions: list[list[dict[str, object]]] = []
-        for ordinal, object_ref in enumerate(objects):
+        physical_row_count = 0
+        seen: set[bytes] = set()
+        # Reverse object order implements last-observation precedence with only
+        # compact identities retained. Every physical object is still verified.
+        boundaries: dict[int, tuple[int, int, tuple[object, ...], tuple[object, ...]]] = {}
+        session_index = {session: index for index, session in enumerate(sessions)}
+        for ordinal in reversed(range(len(objects))):
+            object_ref = objects[ordinal]
             if not isinstance(object_ref, Mapping) or object_ref.get("ordinal") != ordinal:
                 raise FinancialCandidateError("FINANCIAL_OBJECT_REFERENCE_INVALID")
             content = self._read(
@@ -2110,19 +2391,41 @@ class FinancialCandidateStore:
                 != ([partition[-1][key] for key in contract.sort_keys] if partition else None)
             ):
                 raise FinancialCandidateError("FINANCIAL_OBJECT_BOUNDARY_INVALID")
-            rows.extend(partition)
-            partitions.append(partition)
-        physical_row_count = len(rows)
-        if layered is None:
-            if rows != canonicalize_parquet_rows(rows, contract):
-                raise FinancialCandidateError("FINANCIAL_TABLE_ORDER_INVALID")
-            if partitions != _partition_financial_rows(rows, sessions):
-                raise FinancialCandidateError("FINANCIAL_TABLE_PARTITIONING_INVALID")
-        else:
-            delta_rows = [row for group in partitions[layered:] for row in group]
-            if partitions[layered:] != _partition_financial_rows(delta_rows, sessions):
-                raise FinancialCandidateError("FINANCIAL_TABLE_PARTITIONING_INVALID")
-            rows = _overlay_financial_rows(rows, contract)
+            physical_row_count += len(partition)
+            if layered is None or ordinal >= layered:
+                if not partition or _partition_financial_rows(partition, sessions) != [partition]:
+                    raise FinancialCandidateError("FINANCIAL_TABLE_PARTITIONING_INVALID")
+                session = str(partition[0]["effective_available_session"])
+                block = (
+                    session_index[session] // GENERATION_SESSION_PARTITION_COUNT if session else -1
+                )
+                boundaries[ordinal] = (
+                    block, len(partition),
+                    tuple(partition[0][key] for key in contract.sort_keys),
+                    tuple(partition[-1][key] for key in contract.sort_keys),
+                )
+            for row in reversed(partition):
+                if layered is not None:
+                    source_hash = str(row["source_row_sha256"])
+                    _require_sha256(source_hash)
+                    identity = bytes.fromhex(source_hash)
+                    if identity in seen:
+                        continue
+                    seen.add(identity)
+                yield row
+            del partition, table, content
+        previous = None
+        for ordinal in sorted(boundaries):
+            block, count, first, last = boundaries[ordinal]
+            if previous is not None:
+                previous_block, previous_count, previous_last = previous
+                if layered is None and previous_last >= first:
+                    raise FinancialCandidateError("FINANCIAL_TABLE_ORDER_INVALID")
+                if block < previous_block or (
+                    block == previous_block and previous_count != GENERATION_ROW_PARTITION_COUNT
+                ):
+                    raise FinancialCandidateError("FINANCIAL_TABLE_PARTITIONING_INVALID")
+            previous = (block, count, last)
         if (
             manifest.get("row_count") != physical_row_count
             or reference.get("row_count") != physical_row_count
@@ -2130,7 +2433,6 @@ class FinancialCandidateStore:
             raise FinancialCandidateError("FINANCIAL_TABLE_ROW_COUNT_INVALID")
         if reference.get("object_count") != len(objects):
             raise FinancialCandidateError("FINANCIAL_TABLE_OBJECT_COUNT_INVALID")
-        return rows
 
     def _incremental_base_object_count(
         self,
@@ -2493,6 +2795,12 @@ class FinancialCandidateStore:
         return self._root / "objects" / "sha256" / sha256[:2] / f"{sha256}.parquet"
 
 
+def _stored_fact_digest(row: Mapping[str, object], projection_columns: set[str]) -> bytes:
+    return hashlib.sha256(canonical_json_bytes({
+        key: value for key, value in row.items() if key not in projection_columns
+    })).digest()
+
+
 def _table_contract(table_name: str, source_fields: tuple[str, ...]) -> ParquetWriterContract:
     schema = pa.schema(
         [pa.field(name, pa.string(), nullable=False) for name in _METADATA_FIELDS]
@@ -2512,6 +2820,102 @@ def _table_contract(table_name: str, source_fields: tuple[str, ...]) -> ParquetW
             "source_row_sha256",
         ),
     )
+
+
+
+def _ttm_coverage_seeds(
+    versions: Sequence[CanonicalFinancialVersion],
+    coverage_start: str,
+    endpoints: set[str],
+) -> list[CanonicalFinancialVersion]:
+    grouped: dict[tuple[str, str], list[CanonicalFinancialVersion]] = defaultdict(list)
+    for version in versions:
+        source = version.source()
+        if (version.endpoint in endpoints and version.availability_status == "available"
+                and source.get("report_type") == "1"
+                and str(source.get("comp_type")) in {"1", "2", "3", "4"}
+                and str(source["end_date"])[-4:] in {"0331", "0630", "0930", "1231"}):
+            grouped[(version.endpoint, version.instrument_id)].append(version)
+    seeds: list[CanonicalFinancialVersion] = []
+    for group in grouped.values():
+        before: dict[tuple[str, str], list[CanonicalFinancialVersion]] = defaultdict(list)
+        targets: set[str] = set()
+        for version in group:
+            source = version.source()
+            period = str(source["end_date"])
+            if version.effective_available_session < coverage_start:
+                before[(period, str(source["comp_type"]))].append(version)
+            else:
+                targets.add(period)
+        if before:
+            targets.add(max(period for period, _ in before))
+        required = set(targets)
+        for period in targets:
+            if not period.endswith("1231"):
+                previous_year = int(period[:4]) - 1
+                required.update((f"{previous_year}1231", f"{previous_year}{period[4:]}"))
+        for (period, _company_type), candidates in before.items():
+            if period not in required:
+                continue
+            seeds.append(max(candidates, key=lambda item: (
+                item.effective_available_session,
+                str(item.source().get("update_flag") or "") == "1",
+                item.source_published_date, item.first_observed_at, item.source_row_sha256,
+            )))
+    return seeds
+
+
+def _project_agreeing_financial_values(
+    table: pa.Table, value_columns: tuple[str, ...], through_session: str, coverage_start: str,
+) -> pa.Table:
+    """Keep raw conflicts isolated; expose only fieldwise consensus in query output."""
+    if not table.num_rows or not value_columns:
+        return table
+    conflicts = table.filter(pc.and_(
+        pc.equal(table["availability_status"], "quarantined"),
+        pc.not_equal(table["source_available_session"], ""),
+    ))
+    if not conflicts.num_rows:
+        return table
+    revision_keys = ["logical_revision_group_sha256", "source_published_date"]
+    keys = [*revision_keys, "first_observed_at"]
+    columns = [name for name in table.column_names if name not in keys]
+    aggregates = [(name, "max" if name == "update_flag" else "min") for name in columns]
+    aggregates += [(name, "count_distinct", pc.CountOptions(mode="all"))
+                   for name in value_columns]
+    aggregates.append(("source_row_sha256", "count"))
+    consensus = conflicts.group_by(keys).aggregate(aggregates)
+    consensus = consensus.rename_columns([
+        name.removesuffix("_max").removesuffix("_min") + "_one"
+        if name.endswith(("_min", "_max")) else name for name in consensus.column_names
+    ])
+    consensus = consensus.filter(pc.greater_equal(consensus["source_row_sha256_count"], 2))
+    if not consensus.num_rows:
+        return table
+    earliest = table.group_by(revision_keys).aggregate([("first_observed_at", "min")])
+    consensus = consensus.join(earliest, keys=revision_keys)
+    correction = pc.greater(consensus["first_observed_at"], consensus["first_observed_at_min"])
+    available = consensus["source_available_session_one"]
+    observed = consensus["first_observed_session_one"]
+    effective = pc.if_else(correction, pc.max_element_wise(available, observed), available)
+    valid = pc.and_(pc.less_equal(effective, through_session),
+                    pc.or_(pc.invert(correction), pc.not_equal(observed, "")))
+    projected = {}
+    for name in table.column_names:
+        values = consensus[name if name in keys else name + "_one"]
+        if name in value_columns:
+            values = pc.if_else(pc.equal(consensus[name + "_count_distinct"], 1), values, None)
+        elif name == "availability_status":
+            values = pa.array(["available"] * consensus.num_rows)
+        elif name == "effective_available_session":
+            values = effective
+        elif name == "revision_basis":
+            values = pc.if_else(correction, "observed_correction", "source_version")
+        elif name == "coverage_role":
+            values = pc.if_else(pc.less(effective, coverage_start), "pre_start_seed", "in_coverage")
+        projected[name] = values
+    resolved = pa.table(projected, schema=table.schema).filter(valid)
+    return pa.concat_tables((table, resolved))
 
 
 def _compact_financial_history(table: pa.Table, start_session: str) -> pa.Table:
@@ -2783,7 +3187,7 @@ def _discovery_coverage(
         "discovery_complete_through_session": discovery.complete_through_session,
         "historical_reconciliation_watermark": discovery.baseline_session,
         "revision_coverage": "cninfo-announcement-driven-tushare-observed",
-        "seed_policy": "latest-pre-start-annual-flow-and-balance-facts",
+        "seed_policy": "annual-stock-and-ttm-dependency-seeds",
         "readiness_status": discovery.readiness_status,
         "pending_instrument_count": discovery.pending_instrument_count,
         "discovery_gap_count": discovery.discovery_gap_count,
@@ -2835,7 +3239,13 @@ def _validated_discovery_coverage(coverage: Mapping[str, object]) -> dict[str, o
         _validate_discovery_publication(publication)
     except (KeyError, TypeError, ValueError) as error:
         raise FinancialCandidateError("FINANCIAL_COVERAGE_INVALID") from error
+    seed_policy = coverage["seed_policy"]
+    if not isinstance(seed_policy, str) or not seed_policy.strip():
+        raise FinancialCandidateError("FINANCIAL_COVERAGE_INVALID")
     normalized = _discovery_coverage(start, publication)
+    # Seed provenance describes the stored facts, not the currently active writer.
+    # Field admission still uses the candidate's own declared projection contract.
+    normalized["seed_policy"] = seed_policy
     if coverage.get("historical_reconciliation_watermark") != publication.baseline_session:
         raise FinancialCandidateError("FINANCIAL_COVERAGE_INVALID")
     if normalized != dict(coverage):

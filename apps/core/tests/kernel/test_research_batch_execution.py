@@ -122,9 +122,24 @@ def _completed_chunks(messages):
 
 
 def _batch_request(
-    tmp_path: Path, *, kind: str, formula: str = "rank(ts_mean(volume, 30))"
+    tmp_path: Path, *, kind: str, daily_fields: bool = False,
+    formula: str = "rank(ts_mean(volume, 30))",
 ) -> dict[str, object]:
     _, canonical = build_fixture(session_count=100)
+    if daily_fields:
+        from thesistrace.data.canonical_mapping import daily_basic_field_catalog, field_catalog
+        from thesistrace.data.fields import DAILY_BASIC_FIELDS
+
+        calendar = canonical["research_calendar"]
+        canonical["daily_basic_sessions"] = [{"session": session} for session in calendar]
+        canonical["daily_basic"] = [{
+            **dict.fromkeys(field.source_column for field in DAILY_BASIC_FIELDS),
+            "session": price["session"], "instrument_id": price["instrument_id"],
+            "source_close": "999", "pe": str(10 + index % 7), "turnover_rate": "0.025",
+        } for index, price in enumerate(canonical["prices"]) if price["session"] != calendar[60]]
+        canonical["field_catalog"] = [
+            *field_catalog(calendar[-1]), *daily_basic_field_catalog(calendar[-1]),
+        ]
     store = MountedGenerationStore(tmp_path / "data")
     generation = store.materialize(
         canonical,
@@ -133,14 +148,16 @@ def _batch_request(
         source_lineage={"snapshot": "fixed"},
     )
     sessions = tuple(date.fromisoformat(value) for value in canonical["research_calendar"])
-    compiled = alpha_language.compile(formula)
+    compiled = alpha_language.compile(
+        "rank(close_raw / pe + turnover_rate)" if daily_fields else formula
+    )
     offset = max(21, compiled.effective_lookback)
     plan = plan_research_chunks(
         calculation_sessions=sessions,
         research_session_offset=offset,
         formula_work=compiled.estimated_work,
         node_count=compiled.node_count,
-        field_count=1,
+        field_count=len(compiled.field_ids_by_identifier),
         maximum_universe_cardinality=len(canonical["instruments"]),
         effective_lookback=compiled.effective_lookback,
         execution_memory_bytes=1536 * 1024**2,
@@ -256,3 +273,31 @@ def test_factor_batch_streams_daily_evidence_for_each_item_and_horizon(tmp_path)
             [row for row in rows if row["horizon"] == h][-1]["label_exit_session"] is None
             for h in (1, 5, 20)
         )
+
+
+@pytest.mark.parametrize("kind", ("factor_evaluation", "strategy_sweep"))
+def test_daily_field_batch_matches_single_research_execution(tmp_path, monkeypatch, kind) -> None:
+    from thesistrace.adapters.tushare_provider import TushareAdapter
+    from thesistrace.research_run.execution import execute_request_chunks
+
+    request = _batch_request(tmp_path, kind=kind, daily_fields=True)
+
+    def reject_source(*_args, **_kwargs):
+        raise AssertionError("Research cannot fetch supplier data")
+
+    monkeypatch.setattr(TushareAdapter, "query_raw", reject_source)
+    messages = list(execute_research_batch_messages(request))
+    completed = _completed_chunks(messages)
+    assert len(completed) == 3, messages
+    for item, batch_chunk in zip(request["items"], completed, strict=True):
+        single_messages = list(execute_request_chunks({
+            "schema_version": "research-child-request-v1",
+            "data_mount": request["data_mount"],
+            "data_generation_id": request["data_generation_id"],
+            "immutable_input": item["immutable_input"],
+        }, cancel_requested=lambda: False))
+        assert all(message["status"] == "chunk_succeeded" for message in single_messages)
+        single_chunk = single_messages[-1]["chunk"]
+        assert single_chunk["final"]
+        assert single_chunk["final_values"] == batch_chunk["final_values"]
+        assert single_chunk["continuation"] == batch_chunk["continuation"]

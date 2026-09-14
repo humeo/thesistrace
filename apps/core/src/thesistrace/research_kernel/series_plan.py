@@ -115,12 +115,59 @@ def build_series_execution_plan(compiled: CompiledAlphaLike) -> SeriesExecutionP
     )
 
 
+
+def _validate_ttm_windows(
+    fields: Mapping[str, np.ndarray] | None, shape: tuple[int, ...],
+) -> Mapping[str, np.ndarray]:
+    if fields is None:
+        return {}
+    if any(window.shape != shape or window.dtype.kind not in "iu"
+           for window in fields.values()):
+        raise ValueError("TTM windows are misaligned")
+    return fields
+
+
+def _ttm_node_window(
+    node: SeriesPlanNode,
+    fields: Mapping[str, np.ndarray],
+    windows: list[np.ndarray | None],
+    condition: np.ndarray | None = None,
+) -> tuple[np.ndarray | None, np.ndarray | None]:
+    if node.kind == "field":
+        return fields.get(node.identifier), None
+    if (node.kind == "unary" and node.identifier != "not") or (
+        node.kind == "builtin" and node.identifier in {"abs", "log", "sign"}
+    ):
+        return windows[node.inputs[0]], None
+    if node.kind == "builtin" and node.identifier == "if_else":
+        left, right = (windows[index] for index in node.inputs[1:])
+        if left is None and right is None:
+            return None, None
+        assert condition is not None
+        # -1 marks a selected non-TTM value, distinct from an invalid TTM window (0).
+        selected = np.where(condition != 0, -1 if left is None else left,
+                            -1 if right is None else right)
+        return np.where(np.isfinite(condition), selected, 0), None
+    if node.kind != "binary" or node.identifier not in {"add", "subtract", "multiply", "divide"}:
+        return None, None
+    left, right = (windows[index] for index in node.inputs)
+    if left is None:
+        return right, None
+    if right is None:
+        return left, None
+    matching = (left == -1) | (right == -1) | ((left > 0) & (left == right))
+    result = np.where(left == -1, right, np.where(right == -1, left,
+                                               np.where(matching, left, 0)))
+    return result, matching
+
+
 def evaluate_series_execution_plan(
     plan: SeriesExecutionPlan,
     values_by_field: dict[str, list[float | None] | NumericSeries],
     *,
     length: int | None = None,
     common_values: Mapping[tuple[str, str | None], NumericSeries] | None = None,
+    ttm_windows: Mapping[str, np.ndarray] | None = None,
 ) -> list[float | None]:
     lengths = {len(values_by_field[field]) for field in plan.field_names}
     if len(lengths) > 1:
@@ -131,10 +178,16 @@ def evaluate_series_execution_plan(
     result_length = (
         length if length is not None else (1 if inferred_length is None else inferred_length)
     )
+    fields_windows = _validate_ttm_windows(ttm_windows, (result_length,))
+    windows: list[np.ndarray | None] = []
     values: list[PlanValue] = []
     builtins = {definition.identifier: definition for definition in BUILTIN_DEFINITIONS}
 
     for node in plan.nodes:
+        condition = (np.asarray(_broadcast(values[node.inputs[0]], result_length), dtype=float)
+                     if node.kind == "builtin" and node.identifier == "if_else" else None)
+        window, matching = _ttm_node_window(node, fields_windows, windows, condition)
+        windows.append(window)
         if node.kind == "number":
             assert node.value is not None
             values.append(node.value)
@@ -161,6 +214,14 @@ def evaluate_series_execution_plan(
             arguments = tuple(values[index] for index in node.inputs)
             values.append(builtins[node.identifier].evaluator(arguments))
 
+        if matching is not None:
+            values[-1] = tuple(
+                value if valid else None
+                for value, valid in zip(
+                    _broadcast(values[-1], result_length), matching, strict=True
+                )
+            )
+
     result = values[plan.root]
     if not isinstance(result, tuple):
         result = _broadcast(result, result_length)
@@ -183,6 +244,7 @@ def evaluate_series_execution_matrix(
     industries: Mapping[tuple[str, str], str] | None = None,
     historical_universe_members: Mapping[str, tuple[str, ...]] | None = None,
     observe_common: CommonInputObserver | None = None,
+    ttm_windows_for_instrument: Callable[[str], Mapping[str, np.ndarray]] | None = None,
 ) -> dict[str, list[float | None]]:
     instruments = tuple(instrument_ids)
     inputs = {instrument_id: inputs_for_instrument(instrument_id) for instrument_id in instruments}
@@ -205,10 +267,15 @@ def evaluate_series_execution_matrix(
                 observe_common,
             ).items()
         }
+    field_windows = {instrument: _validate_ttm_windows(
+        ttm_windows_for_instrument(instrument) if ttm_windows_for_instrument else None, (length,),
+    ) for instrument in instruments}
+    windows: dict[str, list[np.ndarray | None]] = {instrument: [] for instrument in instruments}
     if not any(node.kind == "builtin" and node.identifier == "rank" for node in plan.nodes):
         return {
             instrument_id: evaluate_series_execution_plan(
-                plan, inputs[instrument_id], length=length, common_values=common_values
+                plan, inputs[instrument_id], length=length, common_values=common_values,
+                ttm_windows=field_windows[instrument_id],
             )
             for instrument_id in instruments
         }
@@ -217,6 +284,15 @@ def evaluate_series_execution_matrix(
     values: list[PlanValue | dict[str, PlanValue]] = []
     builtins = {definition.identifier: definition for definition in BUILTIN_DEFINITIONS}
     for node in plan.nodes:
+        masks: dict[str, np.ndarray | None] = {}
+        for instrument in instruments:
+            window, masks[instrument] = _ttm_node_window(
+                node, field_windows[instrument], windows[instrument],
+                (np.asarray(_broadcast(_matrix_value(values[node.inputs[0]], instrument),
+                                       length), dtype=float)
+                 if node.kind == "builtin" and node.identifier == "if_else" else None),
+            )
+            windows[instrument].append(window)
         if node.kind == "number":
             values.append(node.value)
         elif node.kind == "common":
@@ -282,6 +358,14 @@ def evaluate_series_execution_matrix(
                     for instrument_id in instruments
                 }
             )
+        # Window checks happen before rank so missing values never enter its sample.
+        if any(mask is not None for mask in masks.values()):
+            values[-1] = {instrument: tuple(
+                value if masks[instrument] is None or masks[instrument][index] else None
+                for index, value in enumerate(_broadcast(
+                    _matrix_value(values[-1], instrument), length,
+                ))
+            ) for instrument in instruments}
     root = values[plan.root]
     return {
         instrument_id: list(_broadcast(_matrix_value(root, instrument_id), length))
@@ -322,10 +406,13 @@ def evaluate_columnar_execution_matrix(
     industries: Mapping[tuple[str, str], str] | None = None,
     historical_universe_members: Mapping[str, tuple[str, ...]] | None = None,
     observe_common: CommonInputObserver | None = None,
+    ttm_windows: Mapping[str, np.ndarray] | None = None,
 ) -> np.ndarray:
     shape = (len(instruments), len(sessions))
     if any(matrix.shape != shape for matrix in field_matrices.values()):
         raise ValueError("columnar Alpha fields are misaligned")
+    field_windows = _validate_ttm_windows(ttm_windows, shape)
+    windows: list[np.ndarray | None] = []
     plan = _share_columnar_subexpressions(plan, cancellation_check)
     if any(node.kind == "common" for node in plan.nodes) and historical_universe_members is None:
         raise ValueError("Common input requires historical Universe")
@@ -352,6 +439,10 @@ def evaluate_columnar_execution_matrix(
     instrument_positions = {instrument_id: index for index, instrument_id in enumerate(instruments)}
 
     for node in plan.nodes:
+        condition = (_columnar_array(values[node.inputs[0]], shape)
+                     if node.kind == "builtin" and node.identifier == "if_else" else None)
+        window, matching = _ttm_node_window(node, field_windows, windows, condition)
+        windows.append(window)
         if node.kind == "number":
             value: float | int | np.ndarray | None = node.value
         elif node.kind == "common":
@@ -426,12 +517,15 @@ def evaluate_columnar_execution_matrix(
             )
             if value.shape != shape:
                 raise ValueError("columnar Alpha builtin produced a misaligned result")
+        if matching is not None:
+            value = np.where(matching, value, np.nan)
         values.append(value)
         cancellation_check()
         for input_index in node.inputs:
             remaining[input_index] -= 1
             if remaining[input_index] == 0 and input_index != plan.root:
                 values[input_index] = None
+                windows[input_index] = None
     return _columnar_array(values[plan.root], shape)
 
 

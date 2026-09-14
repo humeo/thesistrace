@@ -28,9 +28,11 @@ def test_fixture_collects_direct_and_wider_incremental_source_gaps(
     root = fixture_bootstrap_batch
     frontier = root.covered_session_range[1]
 
-    direct = FixtureDataSource().collect(CollectionPlan.incremental(frontier))
+    direct = FixtureDataSource().collect(CollectionPlan.incremental(frontier,
+        collection_key="test-collection"))
     wider_source = FixtureDataSource(sessions_after_bootstrap=3)
-    catch_up = wider_source.collect(CollectionPlan.incremental(frontier))
+    catch_up = wider_source.collect(CollectionPlan.incremental(frontier,
+        collection_key="test-collection"))
 
     assert len(direct.canonical["research_calendar"]) == 65
     assert len(catch_up.canonical["research_calendar"]) == 67
@@ -38,7 +40,8 @@ def test_fixture_collects_direct_and_wider_incremental_source_gaps(
     assert catch_up.source_lineage["source_horizon_sessions_after_bootstrap"] == 3
 
     intermediate_catch_up = wider_source.collect(
-        CollectionPlan.incremental(direct.covered_session_range[1])
+        CollectionPlan.incremental(direct.covered_session_range[1],
+            collection_key="test-collection")
     )
     assert len(intermediate_catch_up.canonical["research_calendar"]) == 67
     assert (
@@ -48,7 +51,8 @@ def test_fixture_collects_direct_and_wider_incremental_source_gaps(
     )
 
     no_change = FixtureDataSource().collect(
-        CollectionPlan.incremental(direct.covered_session_range[1])
+        CollectionPlan.incremental(direct.covered_session_range[1],
+            collection_key="test-collection")
     )
     assert len(no_change.canonical["research_calendar"]) == 65
     assert no_change.covered_session_range == direct.covered_session_range
@@ -56,12 +60,13 @@ def test_fixture_collects_direct_and_wider_incremental_source_gaps(
 
 def test_fixture_availability_sequence_advances_deterministically_by_frontier() -> None:
     source = FixtureDataSource(availability_sequence=(1, 2, 3))
-    root = source.collect(CollectionPlan.bootstrap())
+    root = source.collect(CollectionPlan.bootstrap( collection_key="test-collection"))
     observed_counts: list[int] = []
     frontier = root.covered_session_range[1]
 
     for _ in range(4):
-        batch = source.collect(CollectionPlan.incremental(frontier))
+        batch = source.collect(CollectionPlan.incremental(frontier,
+            collection_key="test-collection"))
         observed_counts.append(len(batch.canonical["research_calendar"]))
         frontier = batch.covered_session_range[1]
 
@@ -70,7 +75,8 @@ def test_fixture_availability_sequence_advances_deterministically_by_frontier() 
 
 def test_fixture_uses_the_provider_independent_error_contract() -> None:
     with pytest.raises(DataSourceError) as failure:
-        FixtureDataSource().collect(CollectionPlan.incremental("2020-01-01"))
+        FixtureDataSource().collect(CollectionPlan.incremental("2020-01-01",
+            collection_key="test-collection"))
 
     assert failure.value.category == "invalid_source_data"
     assert failure.value.detail_code == "FRONTIER_NOT_RESEARCH_SESSION"
@@ -89,4 +95,4 @@ def test_collection_plan_rejects_illegal_states(
     after_session: str | None,
 ) -> None:
     with pytest.raises(ValueError, match="CollectionPlan state is invalid"):
-        CollectionPlan(kind=kind, after_session=after_session)
+        CollectionPlan(kind=kind, after_session=after_session, collection_key="test-collection")

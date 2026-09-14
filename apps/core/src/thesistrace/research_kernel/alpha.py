@@ -98,6 +98,12 @@ def evaluate_alpha_matrix(
             code,
             values,
         ),
+        ttm_windows_for_instrument=lambda instrument: {
+            field_id: np.array([windows.get((session, instrument), 0) for session in calendar],
+                               dtype=np.int32)
+            for field_id, windows in research_data.ttm_windows.items()
+            if field_id in plan.field_names
+        },
     )
     return _compose_alpha_matrix(
         research_data,
@@ -184,6 +190,7 @@ def _evaluate_columnar_alpha(
             code,
             values,
         ),
+        ttm_windows=research_data.ttm_window_matrices(plan.field_names, instruments),
     )
     positions = {instrument_id: index for index, instrument_id in enumerate(instruments)}
     if neutralization == "none":

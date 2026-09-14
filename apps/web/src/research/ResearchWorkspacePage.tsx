@@ -66,12 +66,11 @@ export function ResearchWorkspacePage({ location, researcherId }: { location: Br
     setError(null);
     setResources(null);
     try {
-      const [folderResponse, catalogResponse, dataResponse] = await Promise.all([
+      const [folderResponse, dataResponse] = await Promise.all([
         coreFetch("/api/research-folders", { signal: controller.signal }),
-        coreFetch("/api/alpha/catalog", { signal: controller.signal }),
         coreFetch("/api/data", { signal: controller.signal }),
       ]);
-      if (!folderResponse.ok || !catalogResponse.ok || !dataResponse.ok) {
+      if (!folderResponse.ok || !dataResponse.ok) {
         throw new Error("Research workspace unavailable");
       }
       const folders = (await folderResponse.json()) as ResearchFolderList;
@@ -80,7 +79,7 @@ export function ResearchWorkspacePage({ location, researcherId }: { location: Br
       const parameters = new URLSearchParams(location.search);
       const requestedFolderId = parameters.has("new") ? null : parameters.get("folder");
       const selected = folders.items.find((folder) => folder.id === requestedFolderId) ?? defaults[0];
-      const [catalog, data] = await Promise.all([catalogResponse.json(), dataResponse.json()]);
+      const { catalog, ...data } = await dataResponse.json();
       if (controller.signal.aborted) return;
       setResources({
         folder: selected,

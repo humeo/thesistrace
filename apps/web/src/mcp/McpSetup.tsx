@@ -22,7 +22,7 @@ export function McpSetup({ endpoint }: { endpoint: string }) {
     <div key={client} className="mcp-setup-details">
       <details><summary>View setup prompt</summary><p className="mcp-agent-prompt" lang="en">{prompt}</p></details>
       <details><summary>{client === "other" ? "Add the server manually" : "Add with a command"}</summary>
-        <div className="mcp-manual">{client === "other" ? <><p>In a client that supports remote MCP and account authorization, add the Server URL above, then sign in to QuantTrace when prompted.</p><p>Name: <strong>QuantTrace</strong> · Transport: <strong>Streamable HTTP</strong></p></> : <>
+        <div className="mcp-manual">{client === "other" ? <><p>In a client that supports remote MCP and account authorization, add the Server URL below, then sign in to QuantTrace when prompted.</p><div className="mcp-endpoint"><span>Server URL</span><code>{endpoint}</code><CopyButton text={endpoint} label="Copy URL" /></div><p>Name: <strong>QuantTrace</strong> · Transport: <strong>Streamable HTTP</strong></p></> : <>
           <div className="mcp-section-heading"><h3><Terminal size={15} />1. Run in your terminal</h3><CopyButton text={addCommand(client, endpoint)} label="Copy command" /></div>
           <pre tabIndex={0} aria-label={`${clients[client]} add command`}><code>{addCommand(client, endpoint)}</code></pre>
           <h3>2. Sign in and authorize</h3>

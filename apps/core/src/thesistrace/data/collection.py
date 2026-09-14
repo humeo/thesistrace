@@ -324,7 +324,7 @@ class DataGarbageCollector:
         root_ids: tuple[str, ...],
         retained_outputs: tuple[GenerationFileRef, ...],
     ) -> frozenset[GenerationFileRef]:
-        retained: set[GenerationFileRef] = set()
+        retained = set(self._generations.indicator_checkpoint_referenced_files())
         for manifest_sha256 in root_ids:
             self._generations.validate_generation(manifest_sha256)
             retained.update(self._generations.referenced_files(manifest_sha256))
@@ -332,6 +332,14 @@ class DataGarbageCollector:
             if output.kind == "financial_candidate":
                 retained.update(
                     self._generations.financial_candidate_referenced_files(output.sha256)
+                )
+            elif output.kind == "indicator_candidate":
+                retained.update(
+                    self._generations.indicator_candidate_referenced_files(output.sha256)
+                )
+            elif output.kind == "indicator_collection":
+                retained.update(
+                    self._generations.indicator_collection_referenced_files(output.sha256)
                 )
             elif output.kind == "raw_financial":
                 self._generations.validate_raw_financial_batch(output.sha256)
@@ -473,6 +481,39 @@ def _retention_snapshot(
     retained.update(
         GenerationFileRef("raw_financial", str(row["batch_sha256"]))
         for row in daily_raw_rows
+    )
+    indicator_rows = transaction.execute(
+        """
+        SELECT observation_sha256 AS digest
+        FROM data.financial_indicator_collections
+        UNION
+        SELECT observation_sha256 AS digest
+        FROM data.financial_indicator_reconciliation
+        UNION
+        SELECT resolved_observation_sha256 AS digest
+        FROM data.financial_indicator_report_targets
+        WHERE resolved_observation_sha256 IS NOT NULL
+        UNION
+        SELECT jsonb_array_elements_text(
+            indicator_collection -> 'collection_evidence_sha256s'
+        ) AS digest
+        FROM data.financial_daily_refresh_operations
+        WHERE indicator_collection IS NOT NULL AND retention_released_at IS NULL
+        """
+    ).fetchall()
+    retained.update(
+        GenerationFileRef("indicator_collection", str(row["digest"]))
+        for row in indicator_rows
+    )
+    indicator_candidate_rows = transaction.execute(
+        """SELECT indicator_candidate_manifest_sha256 AS digest
+           FROM data.financial_daily_refresh_operations
+           WHERE indicator_candidate_manifest_sha256 IS NOT NULL
+             AND retention_released_at IS NULL"""
+    ).fetchall()
+    retained.update(
+        GenerationFileRef("indicator_candidate", str(row["digest"]))
+        for row in indicator_candidate_rows
     )
     industry_candidate_rows = transaction.execute(
         """

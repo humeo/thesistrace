@@ -1108,3 +1108,170 @@ def _command(request_id: str, *, research_kind: str = "strategy_backtest") -> di
             "initial_cash_cny": "10000000", "holdings_count": 1, "selection_every_sessions": 1,
         })
     return command
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_mcp_daily_field_catalog_and_submission_complete_through_real_worker(
+    tmp_path: Path,
+) -> None:
+    settings = isolated_core_settings(tmp_path / "data")
+    settings.data_mount.mkdir(parents=True)
+    settings.batch_attempt_control_directory.mkdir(parents=True)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    try:
+        publish_current_data(settings, daily_fields=True)
+        anyio.run(_exercise_daily_fields, settings, tmp_path)
+    finally:
+        drop_product_schemas(settings)
+
+
+async def _exercise_daily_fields(settings: CoreSettings, tmp_path: Path) -> None:
+    async with _mcp_client(settings, tmp_path / "mcp-daily.stderr.log") as client:
+        catalog = await client.call_tool("get_alpha_catalog", {
+            "identifiers": ["close_raw", "pe", "turnover_rate"],
+        })
+        assert catalog.is_error is False
+        assert {field["identifier"] for field in catalog.structured_content["fields"]} == {
+            "close_raw", "pe", "turnover_rate",
+        }
+        accepted = await client.call_tool("submit_research_run", {
+            **_command("mcp-daily-fields"), "formula": "rank(close_raw / pe + turnover_rate)",
+        })
+        assert accepted.is_error is False
+        assert accepted.structured_content["outcome"] == "accepted"
+        run_id = accepted.structured_content["run_id"]
+    worker = await anyio.to_thread.run_sync(run_research_worker_once, settings)
+    assert_worker_succeeded(worker)
+    async with _mcp_client(settings, tmp_path / "mcp-daily-result.stderr.log") as client:
+        detail = await client.call_tool("get_research_run", {"run_id": run_id})
+        assert detail.is_error is False
+        assert detail.structured_content["status"] == "succeeded"
+        assert detail.structured_content["result_available"] is True
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+@pytest.mark.parametrize("ttm", [False, True])
+def test_mcp_statement_fields_complete_through_real_worker(
+    tmp_path: Path, ttm: bool,
+) -> None:
+    from test_core_current_head_research_run_execution import _publish_composite_head
+
+    settings = isolated_core_settings(tmp_path / "data")
+    settings.data_mount.mkdir(parents=True)
+    settings.batch_attempt_control_directory.mkdir(parents=True)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    from thesistrace.researcher import ResearcherService
+
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        ResearcherService(database).bootstrap(TEST_RESEARCHER)
+    finally:
+        database.close()
+    try:
+        _publish_composite_head(
+            settings,
+            sessions=("2010-01-04", "2010-04-20", "2010-04-21",
+                      "2026-08-03", "2026-08-04", "2026-08-05"),
+            all_market_fields=True,
+        )
+        anyio.run(_exercise_statement_fields, settings, tmp_path, ttm)
+    finally:
+        drop_product_schemas(settings)
+
+
+async def _exercise_statement_fields(settings: CoreSettings, tmp_path: Path, ttm: bool) -> None:
+    identifiers = (["revenue_ttm", "operating_cash_flow_ttm", "cash_paid_capex_ttm"] if ttm else
+                   ["monetary_funds", "cash_equivalents", "contract_liabilities"])
+    formula = ("rank(operating_cash_flow_ttm - cash_paid_capex_ttm)" if ttm else
+               "rank((monetary_funds + cash_equivalents) / assets)")
+    async with _mcp_client(settings, tmp_path / "mcp-stocks.stderr.log") as client:
+        catalog = await client.call_tool("get_alpha_catalog", {
+            "identifiers": identifiers,
+        })
+        assert catalog.is_error is False
+        fields = {field["identifier"]: field for field in catalog.structured_content["fields"]}
+        assert set(fields) == set(identifiers)
+        assert all(field["unit"] == "CNY" for field in fields.values())
+        if ttm:
+            assert all(field["report_period_selection"] == "latest_visible_ttm"
+                       for field in fields.values())
+        else:
+            assert fields["cash_equivalents"]["report_period_selection"] == (
+                "latest_visible_quarterly_or_annual"
+            )
+            assert fields["contract_liabilities"]["applicable_company_types"] == ["1", "2", "4"]
+        accepted = await client.call_tool("submit_research_run", {
+            **_command("mcp-statement-stocks"),
+            "formula": formula,
+        })
+        assert accepted.is_error is False
+        assert accepted.structured_content["outcome"] == "accepted", accepted.structured_content
+        run_id = accepted.structured_content["run_id"]
+    worker = await anyio.to_thread.run_sync(run_research_worker_once, settings)
+    assert_worker_succeeded(worker)
+    async with _mcp_client(settings, tmp_path / "mcp-stocks-result.stderr.log") as client:
+        detail = await client.call_tool("get_research_run", {"run_id": run_id})
+        assert detail.is_error is False
+        assert detail.structured_content["status"] == "succeeded"
+        assert detail.structured_content["result_available"] is True
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_mcp_indicator_catalog_and_submission_complete_through_real_worker(tmp_path: Path) -> None:
+    settings = isolated_core_settings(tmp_path / "data")
+    settings.data_mount.mkdir(parents=True)
+    settings.batch_attempt_control_directory.mkdir(parents=True)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    try:
+        publish_current_data(settings, indicator_fields=True)
+        anyio.run(_exercise_indicator_fields, settings, tmp_path)
+    finally:
+        drop_product_schemas(settings)
+
+
+async def _exercise_indicator_fields(settings: CoreSettings, tmp_path: Path) -> None:
+    identifiers = [
+        "eps", "bps", "current_ratio", "roe", "q_roe", "netprofit_yoy",
+        "debt_to_assets", "q_ocf_to_sales", "equity_parent_ytd_growth",
+        "gross_profit", "fcff", "ebit_to_interest",
+    ]
+    async with _mcp_client(settings, tmp_path / "mcp-indicators.stderr.log") as client:
+        response = await client.call_tool("get_alpha_catalog", {"identifiers": identifiers})
+        assert response.is_error is False
+        fields = {item["identifier"]: item for item in response.structured_content["fields"]}
+        assert set(fields) == set(identifiers)
+        assert fields["roe"]["unit"] == "ratio"
+        assert fields["eps"]["unit"] == "CNY/share"
+        assert fields["current_ratio"]["unit"] == "multiple"
+        assert fields["gross_profit"]["source_column"] == "gross_margin"
+        assert fields["fcff"]["unit"] == "CNY"
+        assert fields["equity_parent_ytd_growth"]["source_column"] == "eqt_yoy"
+        assert fields["ebit_to_interest"]["unit"] == "multiple"
+        assert all(item["family_id"] == "equity.financial_indicator" for item in fields.values())
+        accepted = await client.call_tool("submit_research_run", {
+            **_command("mcp-indicator-pilot"),
+            "formula": "rank(roe + debt_to_assets + q_ocf_to_sales + equity_parent_ytd_growth)",
+        })
+        assert accepted.is_error is False
+        assert accepted.structured_content["outcome"] == "accepted", accepted.structured_content
+        run_id = accepted.structured_content["run_id"]
+    worker = await anyio.to_thread.run_sync(run_research_worker_once, settings)
+    assert_worker_succeeded(worker)
+    async with _mcp_client(settings, tmp_path / "mcp-indicators-result.stderr.log") as client:
+        detail = await client.call_tool("get_research_run", {"run_id": run_id})
+        assert detail.is_error is False
+        assert detail.structured_content["status"] == "succeeded"
+        assert detail.structured_content["result_available"] is True

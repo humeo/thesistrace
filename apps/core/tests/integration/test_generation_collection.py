@@ -804,6 +804,8 @@ def _financial_market_generation(store: MountedGenerationStore) -> str:
 
 
 def _financial_generation(root: Path, market: str, *, value: str, ordinal: int) -> str:
+    from thesistrace.data.fields import FINANCIAL_FIELDS
+
     fields = {
         "income": (
             "ts_code",
@@ -861,6 +863,12 @@ def _financial_generation(root: Path, market: str, *, value: str, ordinal: int) 
             *endpoint_values[endpoint],
             "0",
         ]
+        additional = tuple(sorted({
+            field.source_column for field in FINANCIAL_FIELDS
+            if field.source_endpoint == endpoint and field.source_column not in fields[endpoint]
+        }))
+        fields[endpoint] = (*fields[endpoint], *additional)
+        item.extend([None] * len(additional))
         payload_sha256 = hashlib.sha256(
             canonical_json_bytes({"fields": list(fields[endpoint]), "items": [item]})
         ).hexdigest()
@@ -1135,3 +1143,115 @@ class _StaticRefreshSource:
             canonical=copy.deepcopy(self._candidate),
             covered_session_range=(str(calendar[0]), str(calendar[-1])),
         )
+
+
+def test_indicator_checkpoint_survives_collection_before_publication(core_settings, tmp_path):
+    from thesistrace.data.financial_indicator_evidence import FinancialIndicatorCheckpoint
+    from thesistrace.data.financial_indicator_source import FINANCIAL_INDICATOR_SOURCE_FIELDS
+    from thesistrace.data.source import RawSourceResponse
+
+    class Provider:
+        def query_raw(self, api_name, *, params, fields):
+            return RawSourceResponse(fields=tuple(fields), items=())
+
+    class Offline:
+        def query_raw(self, *args, **kwargs):
+            raise AssertionError("Checkpoint must survive garbage collection")
+
+    from core_runtime import drop_product_schemas
+
+    drop_product_schemas(core_settings)
+    initialize_core(core_settings.database_url)
+    database = PostgresDatabase(core_settings.database_url)
+    database.open()
+    try:
+        _clear_collection_state(database)
+        request = dict(
+            params={"ts_code": "000001.SZ", "start_date": "20200101", "end_date": "20200630"},
+            fields=FINANCIAL_INDICATOR_SOURCE_FIELDS,
+        )
+        checkpoint = FinancialIndicatorCheckpoint(
+            tmp_path, collection_key="unfinished-indicator", provider=Provider(),
+        )
+        checkpoint.query_raw("fina_indicator", **request)
+        original = checkpoint.observations()
+        # An unrelated raw object proves collection actually removes unrooted data.
+        orphan = RawFinancialBatchStore(tmp_path).store(canonical_json_bytes({"orphan": True}))
+        result = DataGarbageCollector(database, tmp_path).collect(
+            idempotency_key="indicator-checkpoint-gc",
+        )
+        assert result.status == "succeeded"
+        assert result.deleted_file_count >= 1
+        assert orphan not in {ref.sha256 for ref in MountedGenerationStore(tmp_path).inventory()}
+        reopened = FinancialIndicatorCheckpoint(
+            tmp_path, collection_key="unfinished-indicator", provider=Offline(),
+        )
+        reopened.query_raw("fina_indicator", **request)
+        assert reopened.observations() == original
+    finally:
+        _clear_collection_state(database)
+        database.close()
+        drop_product_schemas(core_settings)
+
+
+def test_indicator_completed_ledgers_survive_collection_from_progress_roots(
+    core_settings, tmp_path,
+):
+    from thesistrace.data.financial_indicator_collection import FinancialIndicatorCollector
+    from thesistrace.data.financial_indicator_evidence import validate_indicator_collection_evidence
+    from thesistrace.data.generation_store import HistoricalInstrumentIdentity
+    from thesistrace.data.source import RawSourceResponse
+
+    class Provider:
+        def query_raw(self, api_name, *, params, fields):
+            row = {"ts_code": "000001.SZ", "end_date": "20200331", "ann_date": "20200420"}
+            return RawSourceResponse(
+                fields=tuple(fields), items=(tuple(row.get(field) for field in fields),),
+            )
+
+    from core_runtime import drop_product_schemas
+
+    drop_product_schemas(core_settings)
+    initialize_core(core_settings.database_url)
+    database = PostgresDatabase(core_settings.database_url)
+    database.open()
+    instrument = "indicator-gc-ledgers"
+    try:
+        _clear_collection_state(database)
+        collector = FinancialIndicatorCollector(database, tmp_path, Provider())
+        first = collector.collect(
+            collection_key="ledger-first",
+            identity=HistoricalInstrumentIdentity(instrument, "000001.SZ"),
+            start_date="20200101", end_date="20200430", checked_through="2020-04-30",
+            required_reports=(),
+        )
+        second = collector.collect(
+            collection_key="ledger-second",
+            identity=HistoricalInstrumentIdentity(instrument, "000001.SZ"),
+            start_date="20200101", end_date="20200501", checked_through="2020-05-01",
+            required_reports=(),
+        )
+        assert first.evidence_sha256 != second.evidence_sha256
+        result = DataGarbageCollector(database, tmp_path).collect(
+            idempotency_key="indicator-ledgers-gc",
+        )
+        assert result.status == "succeeded"
+        raw = RawFinancialBatchStore(tmp_path)
+        for completed in (first, second):
+            ledger = validate_indicator_collection_evidence(raw, completed.evidence_sha256)
+            assert ledger["instrument_id"] == instrument
+            for digest in completed.observation_sha256s:
+                assert raw.read(digest)["source"] == "fina_indicator"
+    finally:
+        with database.transaction() as transaction:
+            transaction.execute(
+                "DELETE FROM data.financial_indicator_report_targets WHERE instrument_id=%s",
+                (instrument,),
+            )
+            transaction.execute(
+                "DELETE FROM data.financial_indicator_reconciliation WHERE instrument_id=%s",
+                (instrument,),
+            )
+        _clear_collection_state(database)
+        database.close()
+        drop_product_schemas(core_settings)

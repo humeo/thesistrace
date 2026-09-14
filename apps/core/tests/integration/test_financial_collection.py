@@ -9,10 +9,12 @@ from types import SimpleNamespace
 
 import pytest
 from benchmark_support import FixtureBenchmarkSource, benchmark_mount_for_data_mount
+from core_runtime import drop_product_schemas
 from psycopg.errors import CheckViolation
 
 import thesistrace.data.refresh as refresh_module
 from thesistrace._postgres import PostgresDatabase
+from thesistrace.adapters.tushare_financial_indicator import TushareFinancialIndicatorProvider
 from thesistrace.adapters.tushare_provider import TushareSourceError
 from thesistrace.adapters.tushare_replay import ReplayTushareRefreshBundle
 from thesistrace.data import (
@@ -35,6 +37,7 @@ from thesistrace.data import (
 from thesistrace.data.daily_financial_refresh import (
     DailyFinancialRefreshService,
     FinancialDailyRefreshError,
+    FinancialDailyRefreshStore,
 )
 from thesistrace.data.financial_announcements import (
     FINANCIAL_ANNOUNCEMENT_CATEGORIES,
@@ -50,6 +53,7 @@ from thesistrace.data.financial_collection import (
     FinancialDateShard,
     RawFinancialBatchStore,
 )
+from thesistrace.data.financial_indicator_candidate import FinancialIndicatorCandidateStore
 from thesistrace.data.generation_files import AddressedFileError, AddressedFileStore
 from thesistrace.data.source import RawSourceError, RawSourceResponse
 from thesistrace.entrypoints.runtime import CoreSettings
@@ -70,15 +74,44 @@ FIELDS = (
 )
 
 EXECUTABLE_FIELDS = {
-    "income": (*FIELDS[:7], "total_revenue", "n_income_attr_p", "update_flag"),
+    "income": (
+        *FIELDS[:7],
+        "total_revenue",
+        "n_income_attr_p",
+        "revenue",
+        "n_income",
+        "oper_cost",
+        "rd_exp",
+        "invest_income",
+        "fv_value_chg_gain",
+        "non_oper_income",
+        "non_oper_exp",
+        "update_flag",
+    ),
     "balancesheet": (
         *FIELDS[:7],
         "total_assets",
         "total_liab",
         "total_hldr_eqy_exc_min_int",
+        "money_cap", "accounts_receiv", "notes_receiv", "oth_receiv", "prepayment",
+        "inventories", "acct_payable", "contract_assets", "contract_liab", "goodwill",
+        "st_borr", "lt_borr", "bond_payable", "non_cur_liab_due_1y", "oth_eqt_tools",
         "update_flag",
     ),
-    "cashflow": (*FIELDS[:7], "n_cashflow_act", "update_flag"),
+    "cashflow": (
+        *FIELDS[:7],
+        "n_cashflow_act",
+        "c_cash_equ_end_period",
+        "c_pay_acq_const_fiolta",
+        "c_fr_sale_sg",
+        "c_paid_goods_s",
+        "n_recp_disp_fiolta",
+        "n_disp_subs_oth_biz",
+        "c_paid_invest",
+        "c_recp_borrow",
+        "c_prepay_amt_borr",
+        "update_flag",
+    ),
 }
 
 
@@ -133,9 +166,9 @@ class ExecutableStatementSource(StatementSource):
         ts_code = str(params["ts_code"])
         self.requests.append((endpoint, ts_code, "complete-history"))
         values = {
-            "income": ("10", "4"),
-            "balancesheet": ("20", "8", "12"),
-            "cashflow": ("6",),
+            "income": ("10", "4", *("2",) * 8),
+            "balancesheet": ("20", "8", "12", *("2",) * 15),
+            "cashflow": ("6", "3", *("2",) * 8),
         }[endpoint]
         return RawSourceResponse(
             fields,
@@ -779,6 +812,27 @@ def test_financial_refresh_publishes_executable_family_under_the_one_dataset_hea
             for family in MountedGenerationStore(tmp_path).inspect_root(market).families
         )
 
+        bindings = {
+            "financial.balance_sheet.monetary_funds.latest_reported": "monetary_funds",
+            "financial.cashflow.cash_equivalents.latest_reported": "cash_equivalents",
+            "financial.cashflow.operating_cash_flow.ttm": "operating_cash_flow_ttm",
+        }
+        for root in (source_generation, published.generation_manifest_sha256):
+            series = MountedGenerationStore(tmp_path).read_composite_slice(
+                root, sessions=["2026-08-13"], universe_name="top300",
+                neutralization="none", field_bindings=bindings,
+            )
+            coordinate = ("2026-08-13", "equity:000001.SZ")
+            assert series.research_data.fields[
+                "financial.balance_sheet.monetary_funds.latest_reported"
+            ][coordinate] == "2"
+            assert series.research_data.fields[
+                "financial.cashflow.cash_equivalents.latest_reported"
+            ][coordinate] == "3"
+            ttm = "financial.cashflow.operating_cash_flow.ttm"
+            assert series.research_data.fields[ttm][coordinate] == "6"
+            assert series.research_data.ttm_windows[ttm][coordinate] == "20091231"
+
         def reject_parquet(*_args: object, **_kwargs: object) -> None:
             raise AssertionError("Data Overview opened Parquet")
 
@@ -796,7 +850,7 @@ def test_financial_refresh_publishes_executable_family_under_the_one_dataset_hea
             "discovery_complete_through_session": "2026-08-13",
             "historical_reconciliation_watermark": "2026-08-13",
             "revision_coverage": "source-dated-and-first-observed-corrections",
-            "seed_policy": "latest-pre-start-annual-flow-and-balance-facts",
+            "seed_policy": "annual-stock-and-ttm-dependency-seeds",
             "readiness_status": "ready",
             "pending_instrument_count": 0,
             "discovery_gap_count": 0,
@@ -804,7 +858,7 @@ def test_financial_refresh_publishes_executable_family_under_the_one_dataset_hea
             "sparse_facts": True,
         }
         assert overview.last_financial_refresh_at == COLLECTED_AT + timedelta(days=1)
-        assert overview.financial_research_readiness == "ready"
+        assert overview.financial_research_readiness == "ready_with_gaps"
         assert [event["event"] for event in lifecycle_events] == [
             "data_refresh_started",
             "data_refresh_phase_completed",
@@ -839,9 +893,12 @@ def test_financial_refresh_publishes_executable_family_under_the_one_dataset_hea
         database.close()
 
 
+@pytest.mark.parametrize("indicator_target_changed", [False, True])
 def test_daily_financial_refresh_discovers_one_stock_and_moves_the_one_head(
     core_settings: CoreSettings,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    indicator_target_changed: bool,
 ) -> None:
     class AnnouncementSource:
         def discover(
@@ -852,7 +909,7 @@ def test_daily_financial_refresh_discovers_one_stock_and_moves_the_one_head(
             allowed_ts_codes: set[str] | frozenset[str],
         ) -> FinancialAnnouncementDiscovery:
             assert (start_date, end_date) == ("2026-08-07", "2026-08-14")
-            assert allowed_ts_codes == {"000001.SZ"}
+            assert allowed_ts_codes == {"000001.SZ", "000002.SZ"}
             return FinancialAnnouncementDiscovery(
                 start_date=start_date,
                 end_date=end_date,
@@ -895,9 +952,9 @@ def test_daily_financial_refresh_discovers_one_stock_and_moves_the_one_head(
             ts_code = str(params["ts_code"])
             self.requests.append((endpoint, ts_code, "complete-history"))
             values = {
-                "income": ("11", "5"),
-                "balancesheet": ("21", "8", "13"),
-                "cashflow": ("7",),
+                "income": ("11", "5", *("2",) * 8),
+                "balancesheet": ("21", "8", "13", *("3",) * 15),
+                "cashflow": ("7", "4", *("2",) * 8),
             }[endpoint]
             return RawSourceResponse(
                 fields,
@@ -916,20 +973,24 @@ def test_daily_financial_refresh_discovers_one_stock_and_moves_the_one_head(
                 ),
             )
 
+    drop_product_schemas(core_settings)
     database = _database(core_settings)
     try:
         market = _market_generation(
             tmp_path,
             sessions=("2010-01-04", "2026-08-07", "2026-08-13", "2026-08-14"),
         )
-        _establish_head(database, tmp_path, market, operation_id="daily-financial-market")
+        _establish_head(
+            database, tmp_path, market,
+            operation_id=f"daily-financial-market-{indicator_target_changed}",
+        )
         contract = _executable_contract()
         prior = _initial_candidate(
             database,
             tmp_path,
             ExecutableStatementSource(),
             market,
-            idempotency_key="daily-financial-prior",
+            idempotency_key=f"daily-financial-prior-{indicator_target_changed}",
             contract=contract,
         )
         source_generation = _financial_generation(tmp_path, market, prior)
@@ -937,7 +998,7 @@ def test_daily_financial_refresh_discovers_one_stock_and_moves_the_one_head(
             database,
             tmp_path,
             source_generation,
-            operation_id="daily-financial-source",
+            operation_id=f"daily-financial-source-{indicator_target_changed}",
             expected=market,
         )
         statement_source = DailyStatementSource()
@@ -946,20 +1007,78 @@ def test_daily_financial_refresh_discovers_one_stock_and_moves_the_one_head(
             tmp_path,
             AnnouncementSource(),
             statement_source,
+            indicator_provider=TushareFinancialIndicatorProvider(FixtureIndicatorProvider()),
             clock=lambda: datetime(2026, 8, 14, 10, tzinfo=UTC),
         )
 
-        published = service.publish(
-            idempotency_key="daily-financial-publish",
-            observation_through_session="2026-08-14",
+        if indicator_target_changed:
+            from thesistrace.data.daily_financial_refresh import FinancialDailyRefreshStore
+            publish_candidate = service._publish_candidate
+            competing = []
+
+            def publish_after_competitor(key, candidate):
+                operation = FinancialDailyRefreshStore(database).operation(key)
+                candidates = FinancialIndicatorCandidateStore(tmp_path)
+                prepared = candidates.validate(operation["indicator_candidate_manifest_sha256"])
+                changed = candidates.build(
+                    collection_evidence_sha256s=prepared["collection_evidence_sha256s"],
+                    instrument_ids=prepared["instrument_ids"],
+                    sessions=prepared["research_sessions"],
+                    unresolved_sources={"equity:000001.SZ": "2026-08-13"},
+                )
+                generation = MountedGenerationStore(tmp_path).compose_with_indicator_candidate(
+                    source_generation, changed,
+                    prepared_at=datetime(2026, 8, 14, 10, tzinfo=UTC),
+                )
+                _establish_head(
+                    database, tmp_path, generation.manifest_sha256,
+                    operation_id="competing-indicator", expected=source_generation,
+                )
+                competing.append(generation.manifest_sha256)
+                return publish_candidate(key, candidate)
+
+            monkeypatch.setattr(service, "_publish_candidate", publish_after_competitor)
+            with pytest.raises(
+                FinancialDailyRefreshError, match="FINANCIAL_INDICATOR_TARGET_CHANGED",
+            ):
+                service.publish(
+                    idempotency_key=f"daily-financial-publish-{indicator_target_changed}",
+                    observation_through_session="2026-08-14",
+                )
+            head = MountedDatasetHeadStore(tmp_path).current_pointer()
+            assert head is not None
+            assert head.generation_manifest_sha256 == competing[0]
+            return
+
+        from thesistrace.data.lifecycle import mounted_data_mutation_lock
+
+        # The Worker holds this outer fence while the daily service owns its lock.
+        with mounted_data_mutation_lock(database):
+            published = service.publish(
+                idempotency_key=f"daily-financial-publish-{indicator_target_changed}",
+                observation_through_session="2026-08-14",
+            )
+
+        from thesistrace.data.daily_financial_refresh import FinancialDailyRefreshStore
+        from thesistrace.data.financial_indicator_evidence import (
+            validate_indicator_collection_evidence,
         )
 
-        assert published.status == "succeeded"
+        indicator_result = FinancialDailyRefreshStore(database).operation(
+            f"daily-financial-publish-{indicator_target_changed}",
+        )["indicator_collection"]
+        assert indicator_result["collection_evidence_sha256s"]
+        for digest in indicator_result["collection_evidence_sha256s"]:
+            assert validate_indicator_collection_evidence(
+                RawFinancialBatchStore(tmp_path), digest,
+            )["source"] == "fina_indicator"
+        assert published.status == "succeeded_with_pending"
+        assert published.pending_instrument_count == 1
         assert published.attempted_through_session == "2026-08-14"
         assert published.complete_through_session == "2026-08-14"
         assert published.accepted_instrument_count == 1
         assert published.failed_instrument_count == 0
-        inspection = service.inspect("daily-financial-publish")
+        inspection = service.inspect(f"daily-financial-publish-{indicator_target_changed}")
         assert inspection["matched_trigger_count"] == 2
         assert inspection["checked_no_structured_change_count"] == 0
         assert inspection["pending_trigger_count"] == 0
@@ -972,13 +1091,42 @@ def test_daily_financial_refresh_discovers_one_stock_and_moves_the_one_head(
         generation = MountedGenerationStore(tmp_path).validate_generation(
             pointer.generation_manifest_sha256
         )
+        assert "financial.indicator.eps" in generation.field_availability
+        indicator_family = next(family for family in generation.families
+                                if family.family_id == "equity.financial_indicator")
+        indicator_manifest = FinancialIndicatorCandidateStore(tmp_path).validate(
+            indicator_family.manifest_sha256
+        )
+        discovery_refs = indicator_manifest["discovery_evidence_sha256s"]
+        assert len(discovery_refs) == 1
+        receipt = RawFinancialBatchStore(tmp_path).read(discovery_refs[0])
+        assert set(receipt["instrument_ids"]) == {"000001.SZ", "000002.SZ"}
+        retained = MountedGenerationStore(tmp_path).indicator_candidate_referenced_files(
+            indicator_family.manifest_sha256
+        )
+        assert any(item.sha256 == discovery_refs[0] for item in retained)
+        indicator_values = MountedGenerationStore(tmp_path).read_composite_slice(
+            generation.manifest_sha256, sessions=["2026-08-14"],
+            universe_name="top3000", neutralization="none",
+            field_bindings={"financial.indicator.eps": "eps"},
+        ).research_data.fields["financial.indicator.eps"]
+        assert indicator_values[("2026-08-14", "equity:000001.SZ")] == 1.0
         assert generation.financial_candidate_manifest_sha256 == (
             published.candidate.manifest_sha256
         )
         assert published.candidate.readiness_status == "ready"
         assert published.candidate.discovery_baseline_session == "2026-08-13"
         overview = _overview_service(database, tmp_path).overview()
-        assert overview.financial_research_readiness == "ready"
+        # Neither the Aug 13 correction nor the period-less Aug 14 disclosure is
+        # proven by retained indicator records, despite complete statements.
+        assert indicator_manifest["unresolved_sources"] == {"equity:000001.SZ": "2026-08-13"}
+        assert indicator_family.dataset_coverage["complete_through_session"] == "2026-08-13"
+        assert overview.financial_research_readiness == "ready_with_gaps"
+        indicator_family = next(
+            family for family in overview.field_families
+            if family.family_id == "equity.financial_indicator"
+        )
+        assert indicator_family.readiness == "partial"
         assert overview.financial_coverage is not None
         assert overview.financial_coverage.model_dump(mode="json") == {
             "start": "2010-01-04",
@@ -987,7 +1135,7 @@ def test_daily_financial_refresh_discovers_one_stock_and_moves_the_one_head(
             "discovery_complete_through_session": "2026-08-14",
             "historical_reconciliation_watermark": "2026-08-13",
             "revision_coverage": "cninfo-announcement-driven-tushare-observed",
-            "seed_policy": "latest-pre-start-annual-flow-and-balance-facts",
+            "seed_policy": "annual-stock-and-ttm-dependency-seeds",
             "readiness_status": "ready",
             "pending_instrument_count": 0,
             "discovery_gap_count": 0,
@@ -996,7 +1144,7 @@ def test_daily_financial_refresh_discovers_one_stock_and_moves_the_one_head(
         }
         assert (
             service.publish(
-                idempotency_key="daily-financial-publish",
+                idempotency_key=f"daily-financial-publish-{indicator_target_changed}",
                 observation_through_session="2026-08-14",
             )
             == published
@@ -1004,6 +1152,7 @@ def test_daily_financial_refresh_discovers_one_stock_and_moves_the_one_head(
         assert len(statement_source.requests) == 3
     finally:
         database.close()
+        drop_product_schemas(core_settings)
 
 
 def test_daily_financial_refresh_closes_unchanged_trigger_and_reuses_tables(
@@ -1019,7 +1168,7 @@ def test_daily_financial_refresh_closes_unchanged_trigger_and_reuses_tables(
             allowed_ts_codes: set[str] | frozenset[str],
         ) -> FinancialAnnouncementDiscovery:
             assert (start_date, end_date) == ("2026-08-07", "2026-08-13")
-            assert allowed_ts_codes == {"000001.SZ"}
+            assert allowed_ts_codes == {"000001.SZ", "000002.SZ"}
             return FinancialAnnouncementDiscovery(
                 start_date=start_date,
                 end_date=end_date,
@@ -1052,9 +1201,9 @@ def test_daily_financial_refresh_closes_unchanged_trigger_and_reuses_tables(
             ts_code = str(params["ts_code"])
             self.requests.append((endpoint, ts_code, "complete-history"))
             values = {
-                "income": ("10", "4"),
-                "balancesheet": ("20", "8", "12"),
-                "cashflow": ("6",),
+                "income": ("10", "4", *("2",) * 8),
+                "balancesheet": ("20", "8", "12", *("2",) * 15),
+                "cashflow": ("6", "3", *("2",) * 8),
             }[endpoint]
             return RawSourceResponse(
                 fields,
@@ -1103,6 +1252,7 @@ def test_daily_financial_refresh_closes_unchanged_trigger_and_reuses_tables(
             tmp_path,
             AnnouncementSource(),
             statement_source,
+            indicator_provider=TushareFinancialIndicatorProvider(FixtureIndicatorProvider()),
             clock=lambda: datetime(2026, 8, 13, 10, tzinfo=UTC),
         )
 
@@ -1111,9 +1261,11 @@ def test_daily_financial_refresh_closes_unchanged_trigger_and_reuses_tables(
             observation_through_session="2026-08-13",
         )
 
-        assert published.status == "succeeded"
+        # Unchanged statements close their trigger; the indicator source has no
+        # record with this announcement date and remains independently pending.
+        assert published.status == "succeeded_with_pending"
         assert published.accepted_instrument_count == 1
-        assert published.pending_instrument_count == 0
+        assert published.pending_instrument_count == 1
         inspection = service.inspect("unchanged-daily-publish")
         assert inspection["matched_trigger_count"] == 0
         assert inspection["checked_no_structured_change_count"] == 1
@@ -1167,7 +1319,7 @@ def test_daily_financial_refresh_publishes_zero_trigger_discovery_state(
         ) -> FinancialAnnouncementDiscovery:
             assert start_date == "2026-08-07"
             assert end_date == "2026-08-14"
-            assert allowed_ts_codes == {"000001.SZ"}
+            assert allowed_ts_codes == {"000001.SZ", "000002.SZ"}
             failed_category = FINANCIAL_ANNOUNCEMENT_CATEGORIES[-1]
             return FinancialAnnouncementDiscovery(
                 start_date=start_date,
@@ -1234,6 +1386,7 @@ def test_daily_financial_refresh_publishes_zero_trigger_discovery_state(
             tmp_path,
             AnnouncementSource(),
             UnexpectedStatementSource(),
+            indicator_provider=TushareFinancialIndicatorProvider(FixtureIndicatorProvider()),
             clock=lambda: datetime(2026, 8, 14, 10, tzinfo=UTC),
         ).publish(
             idempotency_key=f"zero-trigger-publish-{has_gap}",
@@ -1259,6 +1412,7 @@ def test_daily_financial_refresh_publishes_zero_trigger_discovery_state(
         "has_gap",
         "has_pending",
         "has_statement_change",
+        "indicator_missing",
         "expected_outcome",
         "expected_complete",
         "expected_accepted",
@@ -1266,10 +1420,12 @@ def test_daily_financial_refresh_publishes_zero_trigger_discovery_state(
         "expected_pending",
     ),
     (
-        (False, False, False, "no_change", "2026-08-14", 0, 0, 0),
-        (True, False, False, "degraded", "2026-08-13", 0, 0, 0),
-        (False, True, False, "degraded", "2026-08-14", 0, 1, 1),
-        (False, False, True, "published", "2026-08-14", 1, 0, 0),
+        (False, False, False, False, "published", "2026-08-14", 0, 0, 0),
+        (True, False, False, False, "degraded", "2026-08-13", 0, 0, 0),
+        (False, True, False, False, "degraded", "2026-08-14", 0, 1, 1),
+        (False, False, True, False, "published", "2026-08-14", 1, 0, 0),
+        (False, False, False, True, "degraded", "2026-08-14", 0, 1, 1),
+        (False, True, False, True, "degraded", "2026-08-14", 0, 1, 1),
     ),
 )
 def test_shared_worker_runs_financial_through_a_versioned_replay(
@@ -1279,6 +1435,7 @@ def test_shared_worker_runs_financial_through_a_versioned_replay(
     has_gap: bool,
     has_pending: bool,
     has_statement_change: bool,
+    indicator_missing: bool,
     expected_outcome: str,
     expected_complete: str,
     expected_accepted: int,
@@ -1300,7 +1457,7 @@ def test_shared_worker_runs_financial_through_a_versioned_replay(
         if has_pending
         else "clean"
     )
-    key = f"shared-replay-financial-{case}"
+    key = f"shared-replay-financial-{case}-{indicator_missing}"
     try:
         market = _market_generation(
             tmp_path,
@@ -1339,6 +1496,11 @@ def test_shared_worker_runs_financial_through_a_versioned_replay(
             ),
             encoding="utf-8",
         )
+        if indicator_missing:
+            recorded = json.loads(replay_path.read_text())
+            missing_security = "000001.SZ" if has_pending else "000002.SZ"
+            del recorded["financial"]["fina_indicator"][missing_security]
+            replay_path.write_text(json.dumps(recorded))
         replay = ReplayTushareRefreshBundle((replay_path,))
         service = DataRefreshService(
             database,
@@ -1358,6 +1520,7 @@ def test_shared_worker_runs_financial_through_a_versioned_replay(
                 benchmark_source=FixtureBenchmarkSource(),
                 financial_announcement_source=replay,
                 financial_source=replay,
+                indicator_provider=TushareFinancialIndicatorProvider(replay),
             )
             is True
         )
@@ -1476,6 +1639,7 @@ def test_shared_financial_worker_reselects_replay_after_durable_discovery(
                 benchmark_source=FixtureBenchmarkSource(),
                 financial_announcement_source=first_replay,
                 financial_source=InterruptedFinancialSource(),
+                indicator_provider=TushareFinancialIndicatorProvider(first_replay),
                 financial_source_window_selector=first_replay.select_financial_window,
             )
         with database.transaction() as transaction:
@@ -1505,6 +1669,7 @@ def test_shared_financial_worker_reselects_replay_after_durable_discovery(
                 benchmark_source=FixtureBenchmarkSource(),
                 financial_announcement_source=resumed_replay,
                 financial_source=resumed_replay,
+                indicator_provider=TushareFinancialIndicatorProvider(resumed_replay),
                 financial_source_window_selector=resumed_replay.select_financial_window,
             )
             is True
@@ -1525,16 +1690,21 @@ def test_shared_financial_worker_reselects_replay_after_durable_discovery(
         database.close()
 
 
+@pytest.mark.parametrize("recovery_route", ["worker", "direct"])
+@pytest.mark.parametrize("successor_family", ["market", "indicator"])
 def test_shared_worker_reconciles_financial_completion_after_a_successor_head(
     core_settings: CoreSettings,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    successor_family: str,
+    recovery_route: str,
 ) -> None:
     class UnexpectedMarketSource:
         def collect(self, plan: object) -> object:
             del plan
             raise AssertionError("Financial recovery must not run Market collection")
 
+    drop_product_schemas(core_settings)
     database = _database(core_settings)
     key = "shared-financial-completion-recovery"
     published_manifest: str | None = None
@@ -1578,6 +1748,35 @@ def test_shared_worker_reconciles_financial_completion_after_a_successor_head(
                 source_name="market-after-shared-financial-receipt-loss",
                 source_lineage={"fixture": "market-after-shared-financial-receipt-loss"},
             )
+            published_indicator = next(
+                family for family in store.inspect_root(published_manifest).families
+                if family.family_id == "equity.financial_indicator"
+            )
+            assert "financial.indicator.roe" in successor.field_availability
+            assert published_indicator in successor.families
+            if successor_family == "indicator":
+                indicator_store = FinancialIndicatorCandidateStore(tmp_path)
+                indicator = indicator_store.reopen(published_indicator.manifest_sha256)
+                identities = indicator["instrument_ids"]
+                assert isinstance(identities, dict)
+                collections = indicator["collection_evidence_sha256s"]
+                sessions = indicator["research_sessions"]
+                assert isinstance(collections, list)
+                assert isinstance(sessions, list)
+                changed_indicator = indicator_store.build(
+                    collection_evidence_sha256s=collections,
+                    discovery_evidence_sha256s=indicator["discovery_evidence_sha256s"],
+                    instrument_ids=identities,
+                    sessions=sessions,
+                    unresolved_sources={next(iter(identities.values())): "2026-08-14"},
+                )
+                assert changed_indicator != published_indicator.manifest_sha256
+                successor = store.compose_with_indicator_candidate(
+                    published_manifest,
+                    changed_indicator,
+                    prepared_at=datetime(2026, 8, 14, 11, tzinfo=UTC),
+                )
+                assert published_indicator not in successor.families
             successor_manifest = successor.manifest_sha256
             _establish_head(
                 database,
@@ -1673,6 +1872,7 @@ def test_shared_worker_reconciles_financial_completion_after_a_successor_head(
                 benchmark_source=FixtureBenchmarkSource(),
                 financial_announcement_source=replay,
                 financial_source=replay,
+                indicator_provider=TushareFinancialIndicatorProvider(replay),
             )
         assert isinstance(failure.value.__cause__, FinancialDailyRefreshError)
         assert failure.value.__cause__.code == (
@@ -1692,6 +1892,13 @@ def test_shared_worker_reconciles_financial_completion_after_a_successor_head(
         assert published_manifest != source_generation
         assert successor_manifest is not None
         manifests_before = tuple((tmp_path / "manifests" / "sha256").glob("*/*.json"))
+        if recovery_route == "direct":
+            recovered = DailyFinancialRefreshService(
+                database, tmp_path, replay, replay,
+                indicator_provider=TushareFinancialIndicatorProvider(replay),
+                clock=lambda: datetime(2026, 8, 14, 12, tzinfo=UTC),
+            ).publish(idempotency_key=key, observation_through_session="2026-08-14")
+            assert recovered.generation_manifest_sha256 == published_manifest
         assert (
             service.process_next(
                 UnexpectedMarketSource(),  # type: ignore[arg-type]
@@ -1702,7 +1909,7 @@ def test_shared_worker_reconciles_financial_completion_after_a_successor_head(
 
         terminal = service.inspect(key)
         assert terminal.status == "succeeded"
-        assert terminal.outcome == "no_change"
+        assert terminal.outcome == "published"
         assert terminal.attempt_count == 1
         assert terminal.data_through_session == "2026-08-14"
         assert terminal.financial_complete_through_session == "2026-08-14"
@@ -1737,6 +1944,7 @@ def test_shared_worker_reconciles_financial_completion_after_a_successor_head(
                 (key,),
             )
         database.close()
+        drop_product_schemas(core_settings)
 
 
 def test_expired_financial_claim_releases_attempt_scoped_publication_candidates(
@@ -1827,6 +2035,7 @@ def test_expired_financial_claim_releases_attempt_scoped_publication_candidates(
                 benchmark_source=FixtureBenchmarkSource(),
                 financial_announcement_source=replay,
                 financial_source=replay,
+                indicator_provider=TushareFinancialIndicatorProvider(replay),
                 financial_source_window_selector=replay.select_financial_window,
             )
         monkeypatch.setattr(
@@ -1974,6 +2183,7 @@ def test_financial_heartbeat_renews_attempt_scoped_publication_candidates(
                 benchmark_source=FixtureBenchmarkSource(),
                 financial_announcement_source=object(),
                 financial_source=object(),
+                indicator_provider=object(),
             )
             assert candidate_ready.wait(timeout=5)
             candidate_operation_id = candidate_operation_ids[0]
@@ -2120,6 +2330,7 @@ def test_shared_worker_classifies_real_financial_replay_failures(
                 benchmark_source=FixtureBenchmarkSource(),
                 financial_announcement_source=replay,
                 financial_source=replay,
+                indicator_provider=TushareFinancialIndicatorProvider(replay),
             )
         assert failure.value.code == expected_worker_code
 
@@ -2270,6 +2481,7 @@ def test_financial_filesystem_failure_retries_and_keeps_discovery_diagnostics(
                     benchmark_source=FixtureBenchmarkSource(),
                     financial_announcement_source=replay,
                     financial_source=replay,
+                    indicator_provider=TushareFinancialIndicatorProvider(replay),
                     financial_source_window_selector=replay.select_financial_window,
                 )
             assert failure.value.code == "REFRESH_INFRASTRUCTURE_FAILURE"
@@ -2348,9 +2560,9 @@ def test_daily_financial_refresh_publishes_other_stocks_when_one_stock_fails(
             if failure_mode == "source" and ts_code == "000002.SZ" and endpoint == "balancesheet":
                 raise RawSourceError("upstream unavailable")
             values = {
-                "income": ("11", "5"),
-                "balancesheet": ("21", "8", "13"),
-                "cashflow": ("7",),
+                "income": ("11", "5", *("2",) * 8),
+                "balancesheet": ("21", "8", "13", *("3",) * 15),
+                "cashflow": ("7", "4", *("2",) * 8),
             }[endpoint]
             return RawSourceResponse(
                 fields,
@@ -2416,6 +2628,7 @@ def test_daily_financial_refresh_publishes_other_stocks_when_one_stock_fails(
             tmp_path,
             AnnouncementSource(),
             source,
+            indicator_provider=TushareFinancialIndicatorProvider(FixtureIndicatorProvider()),
             clock=lambda: datetime(2026, 8, 17, 10, tzinfo=UTC),
         ).publish(
             idempotency_key=f"partial-daily-publish-{failure_mode}",
@@ -2513,9 +2726,9 @@ def test_daily_financial_refresh_resumes_after_each_durable_stock_checkpoint(
             ts_code = str(params["ts_code"])
             self.requests.append((endpoint, ts_code, "complete-history"))
             values = {
-                "income": ("11", "5"),
-                "balancesheet": ("21", "8", "13"),
-                "cashflow": ("7",),
+                "income": ("11", "5", *("2",) * 8),
+                "balancesheet": ("21", "8", "13", *("3",) * 15),
+                "cashflow": ("7", "4", *("2",) * 8),
             }[endpoint]
             return RawSourceResponse(
                 fields,
@@ -2573,6 +2786,7 @@ def test_daily_financial_refresh_resumes_after_each_durable_stock_checkpoint(
             tmp_path,
             AnnouncementSource(),
             statement_source,
+            indicator_provider=TushareFinancialIndicatorProvider(FixtureIndicatorProvider()),
             clock=lambda: datetime(2026, 8, 14, 10, tzinfo=UTC),
             progress=interrupt_after_first,
         )
@@ -2590,6 +2804,7 @@ def test_daily_financial_refresh_resumes_after_each_durable_stock_checkpoint(
             tmp_path,
             AnnouncementSource(),
             statement_source,
+            indicator_provider=TushareFinancialIndicatorProvider(FixtureIndicatorProvider()),
             clock=lambda: datetime(2026, 8, 14, 10, tzinfo=UTC),
         ).publish(
             idempotency_key="daily-resume-publish",
@@ -3303,54 +3518,10 @@ def test_successful_refresh_candidate_survives_gc_until_composed_and_released(
     core_settings: CoreSettings,
     tmp_path: Path,
 ) -> None:
-    composable_fields = {
-        "income": (*FIELDS[:7], "total_revenue", "n_income_attr_p", "update_flag"),
-        "balancesheet": (
-            *FIELDS[:7],
-            "total_assets",
-            "total_liab",
-            "total_hldr_eqy_exc_min_int",
-            "update_flag",
-        ),
-        "cashflow": (*FIELDS[:7], "n_cashflow_act", "update_flag"),
-    }
-
-    class ComposableSource(StatementSource):
-        def query_raw(
-            self,
-            endpoint: str,
-            *,
-            params: dict[str, object],
-            fields: tuple[str, ...],
-        ) -> RawSourceResponse:
-            assert fields == composable_fields[endpoint]
-            self.requests.append((endpoint, str(params["ts_code"]), "complete-history"))
-            values = {
-                "income": ("10", "4"),
-                "balancesheet": ("20", "8", "12"),
-                "cashflow": ("6",),
-            }[endpoint]
-            return RawSourceResponse(
-                fields,
-                (
-                    (
-                        str(params["ts_code"]),
-                        "20100420",
-                        "",
-                        "20091231",
-                        "1",
-                        "1",
-                        "4",
-                        *values,
-                        "0",
-                    ),
-                ),
-            )
-
     composable_contract = FinancialCollectionContract(
         capability_sha256="c" * 64,
         endpoint_fields=tuple(
-            (endpoint, composable_fields[endpoint]) for endpoint in FINANCIAL_ENDPOINTS
+            (endpoint, EXECUTABLE_FIELDS[endpoint]) for endpoint in FINANCIAL_ENDPOINTS
         ),
         suspected_truncation_row_counts=tuple((endpoint, None) for endpoint in FINANCIAL_ENDPOINTS),
         shards=(FinancialDateShard("complete-history"),),
@@ -3361,7 +3532,7 @@ def test_successful_refresh_candidate_survives_gc_until_composed_and_released(
         prior = _initial_candidate(
             database,
             tmp_path,
-            ComposableSource(),
+            ExecutableStatementSource(),
             manifest,
             idempotency_key="retained-refresh-prior",
             contract=composable_contract,
@@ -3369,7 +3540,7 @@ def test_successful_refresh_candidate_survives_gc_until_composed_and_released(
         service = FinancialRefreshService(
             database,
             tmp_path,
-            ComposableSource(),
+            ExecutableStatementSource(),
             clock=lambda: COLLECTED_AT + timedelta(days=1),
         )
         outcome = service.rebuild(
@@ -3985,9 +4156,9 @@ def _daily_financial_replay(
                             "1",
                             "2",
                             *{
-                                "income": ("11", "5"),
-                                "balancesheet": ("21", "8", "13"),
-                                "cashflow": ("7",),
+                                "income": ("11", "5", *("2",) * 8),
+                                "balancesheet": ("21", "8", "13", *("3",) * 15),
+                                "cashflow": ("7", "4", *("2",) * 8),
                             }[endpoint],
                             "0",
                         ]
@@ -3999,6 +4170,18 @@ def _daily_financial_replay(
         if has_statement_change
         else {}
     )
+    from thesistrace.data.financial_indicator_source import FINANCIAL_INDICATOR_SOURCE_FIELDS
+
+    financial["fina_indicator"] = {}
+    for ts_code in ("000001.SZ", "000002.SZ"):
+        indicator_response = FixtureIndicatorProvider().query_raw(
+            "fina_indicator", params={"ts_code": ts_code},
+            fields=FINANCIAL_INDICATOR_SOURCE_FIELDS,
+        )
+        financial["fina_indicator"][ts_code] = {
+            "fields": list(indicator_response.fields),
+            "items": [list(row) for row in indicator_response.items],
+        }
     return {
         "format": "thesistrace-tushare-refresh-replay",
         "version": 3,
@@ -4180,10 +4363,275 @@ def _database(settings: CoreSettings) -> PostgresDatabase:
             "TRUNCATE data.financial_daily_refresh_operations, "
             "data.financial_refresh_operations, "
             "data.financial_collection_shards, "
-            "data.financial_raw_batches, data.financial_collection_operations CASCADE"
+            "data.financial_raw_batches, data.financial_collection_operations, "
+            "data.financial_indicator_report_targets, "
+            "data.financial_indicator_reconciliation CASCADE"
         )
         transaction.execute(
             "UPDATE data.current_dataset_state SET last_financial_refresh_at = NULL "
             "WHERE singleton = 1"
         )
     return database
+
+
+def test_gc_preserves_a_generation_produced_before_stock_projection_expansion(
+    core_settings: CoreSettings, tmp_path: Path,
+) -> None:
+    import zipfile
+
+    fixture = Path(__file__).parents[1] / "fixtures/financial-stored-facts/generation-de55453.zip"
+    with zipfile.ZipFile(fixture) as archive:
+        archive.extractall(tmp_path)
+    generation = "611f1a80a541819b29b57112eed4a2a9d2cef501d2388904e103ee3636f2ef0e"
+    store = MountedGenerationStore(tmp_path)
+    before = store.validate_generation(generation)
+    # This golden mount must not inherit retained roots from other tests' mounts.
+    drop_product_schemas(core_settings)
+    database = _database(core_settings)
+    try:
+        _establish_head(database, tmp_path, generation, operation_id="preserved-old-head")
+        referenced = store.referenced_files(generation)
+        DataGarbageCollector(database, tmp_path).collect(idempotency_key="preserved-old-gc")
+        after = store.validate_generation(generation)
+        assert after == before
+        assert referenced <= store.inventory()
+        assert "financial.cashflow.cash_equivalents.latest_reported" not in after.field_availability
+        assert "financial.cashflow.operating_cash_flow.latest_fy" in after.field_availability
+        head = MountedDatasetHeadStore(tmp_path).current_pointer()
+        assert head is not None and head.generation_manifest_sha256 == generation
+    finally:
+        database.close()
+        drop_product_schemas(core_settings)
+
+
+class FixtureIndicatorProvider:
+    def query_raw(self, api_name, *, params, fields):
+        assert api_name == "fina_indicator"
+        rows = [
+            {"ts_code": params["ts_code"], "end_date": "20260331",
+             "ann_date": "20260420", "eps": 1, "roe": 10},
+            {"ts_code": params["ts_code"], "end_date": "20260630",
+             "ann_date": "20260814", "eps": 2, "roe": 15},
+        ]
+        return RawSourceResponse(
+            fields=tuple(fields),
+            items=tuple(tuple(row.get(field) for field in fields) for row in rows),
+        )
+
+
+@pytest.mark.parametrize("delayed_bootstrap", [False, True])
+@pytest.mark.parametrize("statement_only_history", [False, True])
+def test_daily_indicator_coverage_advances_across_rotating_publications(
+    core_settings: CoreSettings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    delayed_bootstrap: bool, statement_only_history: bool,
+) -> None:
+    import thesistrace.data.financial_indicator_collection as indicator_collection
+    from thesistrace.data.financial_indicator_progress import FinancialIndicatorProgressStore
+
+    class Announcements:
+        def discover(self, *, start_date, end_date, allowed_ts_codes):
+            assert allowed_ts_codes == {"000001.SZ", "000002.SZ"}
+            return FinancialAnnouncementDiscovery(
+                start_date=start_date, end_date=end_date,
+                completed_categories=FINANCIAL_ANNOUNCEMENT_CATEGORIES,
+                announcements=(), gaps=(), source_lineage_sha256="e" * 64,
+            )
+
+    class Provider(FixtureIndicatorProvider):
+        def __init__(self):
+            self.requested = []
+            self.stage = 0
+
+        def query_raw(self, api_name, *, params, fields):
+            self.requested.append(params["ts_code"])
+            if delayed_bootstrap and (
+                (params["ts_code"] == "000001.SZ" and self.stage > 0)
+                or (params["ts_code"] == "000002.SZ" and self.stage < 2)
+            ):
+                raise TushareSourceError("UPSTREAM_UNAVAILABLE", source_code=None)
+            return super().query_raw(api_name, params=params, fields=fields)
+
+    class OneSecurityPerDay(indicator_collection.FinancialIndicatorDailyCollector):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, reconciliation_limit=1, **kwargs)
+
+    targets = (("2026-08-14", "2026-08-24", "2026-09-03") if delayed_bootstrap
+               else ("2026-08-14", "2026-08-17", "2026-08-18"))
+    drop_product_schemas(core_settings)
+    database = _database(core_settings)
+    try:
+        market = _market_generation(
+            tmp_path,
+            sessions=("2010-01-04", "2026-08-07", "2026-08-13", *targets),
+        )
+        _establish_head(database, tmp_path, market, operation_id="rotation-market")
+        prior = _initial_candidate(
+            database, tmp_path, ExecutableStatementSource(), market,
+            idempotency_key="rotation-prior", contract=_executable_contract(),
+        )
+        source = _financial_generation(tmp_path, market, prior)
+        _establish_head(database, tmp_path, source, operation_id="rotation-source", expected=market)
+        provider = Provider()
+        if statement_only_history:
+            history = FinancialDailyRefreshStore(database)
+            history.begin(
+                idempotency_key="statement-only-history",
+                source_generation_manifest_sha256=source,
+                prior_financial_manifest_sha256=prior.manifest_sha256,
+                discovery_baseline_session="2026-08-13",
+                prior_attempted_through_session="2026-08-13",
+                prior_complete_through_session="2026-08-13",
+                target_session=targets[0],
+                started_at=datetime(2026, 8, 14, 9, tzinfo=UTC),
+            )
+            # A retained statement refresh predates indicator collection. Its
+            # discovery is not evidence that indicators were reconciled.
+            history.record_discovery(
+                idempotency_key="statement-only-history",
+                discovery=Announcements().discover(
+                    start_date="2026-08-07", end_date=targets[0],
+                    allowed_ts_codes={"000001.SZ", "000002.SZ"},
+                ),
+                identities=MountedGenerationStore(tmp_path)
+                .read_historical_ordinary_a_share_identities(source),
+                recorded_at=datetime(2026, 8, 14, 9, tzinfo=UTC),
+            )
+            with database.transaction() as transaction:
+                transaction.execute(
+                    "UPDATE data.financial_daily_refresh_operations "
+                    "SET discovery_evidence = discovery_evidence - 'instrument_ids' "
+                    "WHERE idempotency_key = %s",
+                    ("statement-only-history",),
+                )
+        store = MountedGenerationStore(tmp_path)
+        evidence = set()
+        rotated = []
+        for index, target in enumerate(targets):
+            if index == 1 and not delayed_bootstrap:
+                monkeypatch.setattr(
+                    indicator_collection, "FinancialIndicatorDailyCollector", OneSecurityPerDay,
+                )
+            provider.requested.clear()
+            provider.stage = index
+            daily = DailyFinancialRefreshService(
+                database, tmp_path, Announcements(), ExecutableStatementSource(),
+                indicator_provider=TushareFinancialIndicatorProvider(provider),
+                clock=lambda: datetime(2026, 9, 3, 10, tzinfo=UTC),
+            )
+            outcome = daily.publish(
+                idempotency_key=f"rotation-{index}", observation_through_session=target,
+            )
+            generation = store.validate_generation(outcome.generation_manifest_sha256)
+            if delayed_bootstrap and index < 2:
+                assert not any(item.family_id == "equity.financial_indicator"
+                               for item in generation.families)
+                daily.release(f"rotation-{index}")
+                continue
+            family = next(item for item in generation.families
+                          if item.family_id == "equity.financial_indicator")
+            assert family.dataset_coverage["complete_through_session"] == target
+            candidate = FinancialIndicatorCandidateStore(tmp_path).validate(family.manifest_sha256)
+            assert evidence <= set(candidate["discovery_evidence_sha256s"])
+            evidence = set(candidate["discovery_evidence_sha256s"])
+            assert len(evidence) == index + 1
+            assert len(provider.requested) == (2 if delayed_bootstrap or index == 0 else 1)
+            if index:
+                rotated.extend(provider.requested)
+                progress = FinancialIndicatorProgressStore(database)
+                assert any(progress.reconciled_through(identity) < target
+                           for identity in candidate["instrument_ids"].values())
+                values = store.read_composite_slice(
+                    generation.manifest_sha256, sessions=[target], universe_name="top3000",
+                    neutralization="none", field_bindings={"financial.indicator.eps": "eps"},
+                ).research_data.fields["financial.indicator.eps"]
+                assert values[(target, "equity:000001.SZ")] == 2.0
+                assert len(provider.requested) == (2 if delayed_bootstrap else 1)
+        assert set(rotated) == {"000001.SZ", "000002.SZ"}
+    finally:
+        database.close()
+        drop_product_schemas(core_settings)
+
+
+def test_daily_indicator_refresh_seeds_new_market_identity_before_rotation(
+    core_settings: CoreSettings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import thesistrace.data.financial_indicator_collection as indicator_collection
+
+    class Announcements:
+        def discover(self, *, start_date, end_date, allowed_ts_codes):
+            return FinancialAnnouncementDiscovery(
+                start_date=start_date, end_date=end_date,
+                completed_categories=FINANCIAL_ANNOUNCEMENT_CATEGORIES,
+                announcements=(), gaps=(), source_lineage_sha256="e" * 64,
+            )
+
+    class Provider(FixtureIndicatorProvider):
+        def __init__(self):
+            self.requested = []
+
+        def query_raw(self, api_name, *, params, fields):
+            self.requested.append(params["ts_code"])
+            return super().query_raw(api_name, params=params, fields=fields)
+
+    class OneSecurityPerDay(indicator_collection.FinancialIndicatorDailyCollector):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, reconciliation_limit=1, **kwargs)
+
+    drop_product_schemas(core_settings)
+    database = _database(core_settings)
+    try:
+        sessions = ("2010-01-04", "2026-08-07", "2026-08-13", "2026-08-14", "2026-08-17")
+        market = _market_generation(tmp_path, sessions=sessions)
+        _establish_head(database, tmp_path, market, operation_id="new-identity-market")
+        prior = _initial_candidate(
+            database, tmp_path, ExecutableStatementSource(), market,
+            idempotency_key="new-identity-prior", contract=_executable_contract(),
+        )
+        source = _financial_generation(tmp_path, market, prior)
+        _establish_head(
+            database, tmp_path, source, operation_id="new-identity-source", expected=market,
+        )
+        provider = Provider()
+        daily = DailyFinancialRefreshService(
+            database, tmp_path, Announcements(), ExecutableStatementSource(),
+            indicator_provider=TushareFinancialIndicatorProvider(provider),
+            clock=lambda: datetime(2026, 8, 18, 10, tzinfo=UTC),
+        )
+        first = daily.publish(
+            idempotency_key="new-identity-first", observation_through_session="2026-08-14",
+        )
+        store = MountedGenerationStore(tmp_path)
+        replacement = dict(store.open_refresh_base(
+            first.generation_manifest_sha256, overlap_session_count=len(sessions),
+            universe_lookback_session_count=0,
+        ).canonical)
+        replacement["instruments"] = [*replacement["instruments"], {
+            "instrument_id": "equity:000003.SZ", "ts_code": "000003.SZ",
+            "asset_type": "ordinary_a_share", "exchange": "SZSE", "board": "main",
+            "listed_from": "2026-08-17", "listed_to": "",
+        }]
+        grown = store.materialize_refresh(
+            predecessor_manifest_sha256=first.generation_manifest_sha256,
+            replacement_canonical=replacement, replace_from_session=sessions[0],
+            prepared_at=datetime(2026, 8, 18, 11, tzinfo=UTC),
+            source_name="new-identity-market", source_lineage={"fixture": "new-listing"},
+        )
+        _establish_head(
+            database, tmp_path, grown.manifest_sha256,
+            operation_id="new-identity-grown", expected=first.generation_manifest_sha256,
+        )
+        monkeypatch.setattr(
+            indicator_collection, "FinancialIndicatorDailyCollector", OneSecurityPerDay,
+        )
+        provider.requested.clear()
+        second = daily.publish(
+            idempotency_key="new-identity-next", observation_through_session="2026-08-17",
+        )
+        assert "000003.SZ" in provider.requested
+        updated = store.validate_generation(second.generation_manifest_sha256)
+        family = next(f for f in updated.families if f.family_id == "equity.financial_indicator")
+        assert family.dataset_coverage["complete_through_session"] == "2026-08-17"
+        assert family.dataset_coverage["instrument_count"] == 3
+    finally:
+        database.close()
+        drop_product_schemas(core_settings)

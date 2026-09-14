@@ -31,6 +31,14 @@ def test_catalog_composes_only_capable_fields_and_public_builtins() -> None:
             "description": field.description,
             "unit": field.unit,
             "family_id": field.family_id,
+            "research_category": field.research_category,
+            "display_name": field.display_name,
+            "research_purpose": field.research_purpose,
+            "source_unit": field.source_unit,
+            "source_endpoint": field.source_endpoint,
+            "source_column": field.source_column,
+            "source_lineage": field.source_lineage,
+            "reporting_scope": field.reporting_scope,
             "availability": field.availability,
             "report_period_selection": field.report_period_selection,
             "applicable_company_types": list(field.applicable_company_types),
@@ -653,3 +661,75 @@ def _balanced_node_formula(*, node_count: int) -> str:
             for index in range(0, len(leaves), 2)
         ]
     return leaves[0]
+
+
+def test_catalog_uses_actual_fields_from_one_generation() -> None:
+    catalog = alpha_language.catalog(
+        available_field_ids=frozenset({
+            "price.close.adjusted",
+            "financial.balance_sheet.total_assets.latest_reported",
+        }),
+        generation_manifest_sha256="a" * 64,
+    )
+
+    assert {field.identifier for field in catalog.fields} == {"close", "assets"}
+    assert catalog.generation_manifest_sha256 == "a" * 64
+    assert catalog.builtins == alpha_language.catalog().builtins
+    assert alpha_language.catalog(available_field_ids=frozenset()).fields == []
+
+
+def test_catalog_rejects_duplicate_canonical_field_identities() -> None:
+    close = next(field for field in alpha_field_catalog() if field.alpha.identifier == "close")
+    duplicate = replace(close, alpha=AlphaFieldCapability(identifier="another_close"))
+
+    with pytest.raises(AlphaLanguageCatalogError, match="duplicate Canonical Field"):
+        AlphaLanguage(fields=(*alpha_field_catalog(), duplicate))
+
+
+def test_catalog_describes_research_category_and_source_without_changing_units() -> None:
+    fields = {field.identifier: field for field in alpha_language.catalog().fields}
+
+    assert fields["close"].research_category == "market"
+    assert fields["close"].display_name == "复权收盘价"
+    assert fields["amount"].source_column == "amount"
+    assert fields["amount"].source_unit == "thousand CNY"
+    assert fields["amount"].unit == "CNY"
+    assert fields["revenue"].research_category == "financial"
+    assert fields["revenue"].source_column == "total_revenue"
+    assert fields["revenue"].reporting_scope == "report_type_1_consolidated"
+    assert all(field.display_name and field.research_purpose for field in fields.values())
+
+
+def test_daily_basic_fields_bind_to_current_data_families_and_decimal_units() -> None:
+    compiled = alpha_language.compile("close_raw / pe + turnover_rate")
+    assert compiled.field_ids_by_identifier == {
+        "close_raw": "price.close.raw",
+        "pe": "market.valuation.pe",
+        "turnover_rate": "market.turnover.float_ratio",
+    }
+    catalog = alpha_language.catalog(
+        available_field_ids=frozenset(compiled.field_ids_by_identifier.values()),
+        generation_manifest_sha256="d" * 64,
+    )
+    fields = {field.identifier: field for field in catalog.fields}
+    assert set(fields) == {"close_raw", "pe", "turnover_rate"}
+    assert fields["close_raw"].family_id == "equity.eod_price"
+    assert fields["close_raw"].source_endpoint == "daily"
+    assert fields["pe"].family_id == "equity.daily_basic"
+    assert fields["pe"].unit == "multiple"
+    assert fields["turnover_rate"].unit == "ratio"
+    assert fields["turnover_rate"].source_unit == "percent"
+    price_only = alpha_language.catalog(available_field_ids=frozenset({"price.close.raw"}))
+    assert [field.identifier for field in price_only.fields] == ["close_raw"]
+
+
+def test_browser_field_fixture_matches_the_current_public_catalog() -> None:
+    import json
+    from pathlib import Path
+
+    fixture = Path(__file__).resolve().parents[4] / (
+        "apps/web/browser/fixtures/data-field-catalog.json"
+    )
+    expected = alpha_language.catalog(generation_manifest_sha256="a" * 64).model_dump(mode="json")
+    assert json.loads(fixture.read_text()) == expected
+    assert len(expected["fields"]) == 226

@@ -2119,11 +2119,8 @@ def test_financial_admission_explains_coverage_without_blocking_market_only_form
         assert len(issues) == 1
         assert issues[0]["code"] == "FINANCIAL_CALCULATION_OUTSIDE_COVERAGE"
         assert issues[0]["field"] == "formula"
-        assert issues[0]["message"] == (
-            "Financial Formula needs its requested period and lookback inside "
-            "Financial Coverage; current Financial Coverage is "
-            "2010-01-04 to 2026-08-06."
-        )
+        assert "equity.financial_pit" in issues[0]["message"]
+        assert "2010-01-04 to 2026-08-06" in issues[0]["message"]
 
         market_only = client.post(
             "/api/research-runs",
@@ -2175,7 +2172,8 @@ def test_industry_admission_requires_only_neutralized_period_coverage(
         issues = missing.json()["issues"]
         assert len(issues) == 1
         assert issues[0]["code"] == "INDUSTRY_CALCULATION_OUTSIDE_COVERAGE"
-        assert issues[0]["message"].endswith("Industry Coverage is not ready.")
+        assert "equity.industry_membership" in issues[0]["message"]
+        assert "not ready" in issues[0]["message"]
         common_missing = client.post(
             "/api/research-runs",
             json=_run_command(
@@ -2213,11 +2211,8 @@ def test_industry_admission_requires_only_neutralized_period_coverage(
         assert len(issues) == 1
         assert issues[0]["code"] == "INDUSTRY_CALCULATION_OUTSIDE_COVERAGE"
         assert issues[0]["field"] == "neutralization"
-        assert issues[0]["message"] == (
-            "Industry Neutralization needs its requested period inside "
-            "Industry Coverage; current Industry Coverage is "
-            "2010-01-04 to 2026-08-06."
-        )
+        assert "equity.industry_membership" in issues[0]["message"]
+        assert "2010-01-04 to 2026-08-06" in issues[0]["message"]
 
         market_only = client.post(
             "/api/research-runs",
@@ -4154,6 +4149,7 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
         overview = client.get("/api/data")
         assert overview.status_code == 200
         assert set(overview.json()) == {
+            "catalog", "generation_manifest_sha256", "available_field_ids", "field_families",
             "market_coverage",
             "financial_coverage",
             "industry_coverage",
@@ -4171,6 +4167,15 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
             "financial_research_readiness",
             "industry_research_readiness",
         }
+        assert overview.json()["generation_manifest_sha256"] == (
+            correction_head.generation_manifest_sha256
+        )
+        assert overview.json()["catalog"]["generation_manifest_sha256"] == (
+            overview.json()["generation_manifest_sha256"]
+        )
+        assert {field["field_id"] for field in overview.json()["catalog"]["fields"]} == set(
+            overview.json()["available_field_ids"]
+        )
         assert "correction" not in overview.text.lower()
 
         impact_sessions = (
@@ -5045,6 +5050,236 @@ def test_result_read_failure_stays_sanitized(tmp_path: Path) -> None:
         assert "object" not in response.text.lower()
 
 
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_admission_rechecks_head_after_catalog_read(tmp_path: Path) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    sessions = ("2010-01-04", "2010-04-20", "2010-04-21",
+                "2026-08-03", "2026-08-04", "2026-08-05")
+    head_a = _publish_composite_head(settings, sessions=sessions, all_market_fields=True)
+    with TestClient(create_app(settings)) as client:
+        snapshot = client.get("/api/data").json()
+        assert snapshot["generation_manifest_sha256"] == head_a
+        assert snapshot["catalog"]["generation_manifest_sha256"] == head_a
+        assert len(snapshot["catalog"]["fields"]) == 48
+        assert "revenue" in {field["identifier"] for field in snapshot["catalog"]["fields"]}
+
+        head_b = _publish_head(
+            settings, sessions=sessions, price_offset=2, expected_manifest=head_a,
+        )
+        rejected = client.post(
+            "/api/research-runs", json=_run_command("stale-catalog-finance", formula="revenue"),
+        )
+        assert rejected.status_code == 422
+        assert rejected.json()["issues"][0]["code"] == "FIELD_UNAVAILABLE_IN_CURRENT_DATA"
+        runtime = client.app.state.core_runtime
+        with runtime.database.transaction() as transaction:
+            row = transaction.execute("SELECT count(*) AS n FROM research_runs.runs").fetchone()
+            assert row["n"] == 0
+        accepted = client.post(
+            "/api/research-runs", json=_run_command("new-head-market", formula="close"),
+        )
+        assert accepted.status_code == 202
+        run_id = accepted.json()["id"]
+        assert runtime.research_runs.process_next() is True
+        assert client.get(f"/api/research-runs/{run_id}").json()["status"] == "succeeded"
+        assert _stored_execution(settings, run_id)["attempt_data_generation_id"] == head_b
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_daily_fields_http_research_and_track_use_their_frozen_generations(tmp_path: Path) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    sessions = ("2010-01-04", "2010-04-20", "2010-04-21",
+                "2026-08-03", "2026-08-04", "2026-08-05")
+    prior = _publish_composite_head(settings, sessions=sessions, all_market_fields=True)
+    formula = "rank(close_raw / pe + turnover_rate)"
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        before = client.get("/api/data").json()
+        assert "pe" not in {field["identifier"] for field in before["catalog"]["fields"]}
+        rejected = client.post("/api/research-runs", json=_run_command(
+            "daily-not-yet-available", formula=formula,
+        ))
+        assert rejected.status_code == 422
+        assert rejected.json()["issues"][0]["code"] == "FIELD_UNAVAILABLE_IN_CURRENT_DATA"
+        expanded = _publish_composite_head(
+            settings, sessions=sessions, all_market_fields=True, daily_fields=True,
+            expected_manifest=prior, operation_id="daily-fields-first-publication",
+        )
+        snapshot = client.get("/api/data").json()
+        assert snapshot["generation_manifest_sha256"] == expanded
+        fields = {field["identifier"] for field in snapshot["catalog"]["fields"]}
+        assert len(fields) == 63
+        assert {"close_raw", "pe", "turnover_rate", "revenue"} <= fields
+        accepted = client.post("/api/research-runs", json=_run_command(
+            "daily-mixed-research", formula=formula,
+        ))
+        assert accepted.status_code == 202, accepted.text
+        run_id = accepted.json()["id"]
+        assert runtime.research_runs.process_next()
+        detail = client.get(f"/api/research-runs/{run_id}").json()
+        assert detail["status"] == "succeeded"
+        assert _stored_execution(settings, run_id)["attempt_data_generation_id"] == expanded
+        started = client.post(f"/api/research-runs/{run_id}/daily-tracks", json={
+            "request_id": "daily-mixed-track",
+        })
+        assert started.status_code == 201, started.text
+        track_id = started.json()["id"]
+        advanced = _publish_composite_head(
+            settings, sessions=(*sessions, "2026-08-06"), all_market_fields=True,
+            daily_fields=True, expected_manifest=expanded, operation_id="daily-fields-next-session",
+        )
+        _refresh_daily_track(client, track_id, "daily-mixed-track-refresh")
+        assert runtime.daily_tracks.process_next()
+        tracked = client.get(f"/api/daily-tracks/{track_id}").json()
+        assert tracked["status"] == "active"
+        assert tracked["strategy_session"] == "2026-08-06"
+        assert client.get("/api/data").json()["generation_manifest_sha256"] == advanced
+        assert _stored_execution(settings, run_id)["attempt_data_generation_id"] == expanded
+        old_fields = (
+            MountedGenerationStore(settings.data_mount).inspect_root(prior).field_availability
+        )
+        assert "market.valuation.pe" not in old_fields
+
+
+
+def test_statement_stock_formula_completes_through_http_and_real_worker(tmp_path: Path) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    sessions = ("2010-01-04", "2010-04-20", "2010-04-21",
+                "2026-08-03", "2026-08-04", "2026-08-05")
+    generation = _publish_composite_head(settings, sessions=sessions, all_market_fields=True)
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        overview = client.get("/api/data").json()
+        catalog = {field["identifier"]: field for field in overview["catalog"]["fields"]}
+        assert overview["generation_manifest_sha256"] == generation
+        assert len(catalog) == 48
+        assert catalog["cash_equivalents"]["report_period_selection"] == (
+            "latest_visible_quarterly_or_annual"
+        )
+        assert catalog["monetary_funds"]["unit"] == "CNY"
+        accepted = client.post("/api/research-runs", json=_run_command(
+            "statement-stock-mixed",
+            formula="rank((monetary_funds + cash_equivalents) / assets)",
+        ))
+        assert accepted.status_code == 202, accepted.text
+        run_id = accepted.json()["id"]
+        assert runtime.research_runs.process_next()
+        detail = client.get(f"/api/research-runs/{run_id}").json()
+        assert detail["status"] == "succeeded", detail
+        assert _stored_execution(settings, run_id)["attempt_data_generation_id"] == generation
+
+
+@pytest.mark.parametrize("mismatched", [False, True])
+def test_ttm_http_research_uses_windows_without_extra_ui_contract(
+    tmp_path: Path, mismatched: bool,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    sessions = ("2010-01-04", "2010-04-20", "2010-04-21",
+                "2026-08-03", "2026-08-04", "2026-08-05")
+    generation = _publish_composite_head(
+        settings, sessions=sessions, all_market_fields=True, mismatched_ttm=mismatched,
+    )
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        catalog = client.get("/api/data").json()["catalog"]["fields"]
+        ttm = [field for field in catalog
+               if field["report_period_selection"] == "latest_visible_ttm"]
+        assert len(ttm) == 19
+        assert all(field["unit"] == "CNY" for field in ttm)
+        accepted = client.post("/api/research-runs", json=_run_command(
+            f"ttm-window-{mismatched}",
+            formula="rank((revenue_ttm * 2) / (operating_cash_flow_ttm * 2))",
+        ))
+        assert accepted.status_code == 202, accepted.text
+        run_id = accepted.json()["id"]
+        assert runtime.research_runs.process_next()
+        stored = _stored_execution(settings, run_id)
+        assert stored["status"] == "succeeded", stored
+        assert stored["attempt_data_generation_id"] == generation
+        result = read_result_bundle(runtime.publication.read(PublishedRef(
+            manifest_sha256=str(stored["result_manifest_sha256"]), kind="research.result",
+            provenance=stored["result_provenance"],
+        )), research_kind="strategy_backtest")
+        assert bool(result["terminal_strategy_state"]["positions"]) is not mismatched
+
+        batch_response = client.post("/api/research-batches", json={
+            "request_id": f"ttm-shared-{mismatched}",
+            "batch_kind": "strategy_sweep",
+            "start_date": "2026-08-03", "end_date": "2026-08-05",
+            "universe": "top300", "neutralization": "none",
+            "alpha": {
+                "formula": "rank((revenue_ttm * 2) / (operating_cash_flow_ttm * 2))",
+                "hypothesis": "TTM windows survive shared calculation",
+            },
+            "strategies": [
+                {"item_key": "daily", "name": "Daily", "holdings_count": 1,
+                 "initial_cash_cny": "10000000", "selection_every_sessions": 1},
+                {"item_key": "alternate", "name": "Alternate", "holdings_count": 1,
+                 "initial_cash_cny": "10000000", "selection_every_sessions": 2},
+            ],
+        })
+        assert batch_response.status_code == 202, batch_response.text
+        batch_id = batch_response.json()["id"]
+        assert runtime.research_batches.process_next()
+        batch = client.get(f"/api/research-batches/{batch_id}").json()
+        assert batch["status"] == "succeeded", json.dumps(batch, ensure_ascii=False)
+        assert batch["progress"]["shared_alpha_factor_status"] == "succeeded"
+        for item in batch["items"]:
+            with runtime.database.transaction() as transaction:
+                batch_stored = transaction.execute(
+                    "SELECT result_manifest_sha256, result_provenance "
+                    "FROM research_runs.runs WHERE id = %s",
+                    (item["research_run_id"],),
+                ).fetchone()
+            assert batch_stored is not None
+            assert batch_stored["result_provenance"]["data_generation_id"] == generation
+            batch_result = read_result_bundle(runtime.publication.read(PublishedRef(
+                manifest_sha256=str(batch_stored["result_manifest_sha256"]),
+                kind="research.result", provenance=batch_stored["result_provenance"],
+            )), research_kind="strategy_backtest")
+            assert bool(batch_result["terminal_strategy_state"]["positions"]) is not mismatched
+            if item["item_key"] == "daily":
+                assert canonical_json_bytes(batch_result) == canonical_json_bytes(result)
+
+        started = client.post(f"/api/research-runs/{run_id}/daily-tracks", json={
+            "request_id": f"ttm-track-{mismatched}",
+        })
+        assert started.status_code == 201, started.text
+        track_id = started.json()["id"]
+        before = _tracking_checkpoint_history(settings, track_id)
+        origin = _stored_tracking_activation(settings, track_id)["origin"]
+        advanced = _publish_composite_head(
+            settings, sessions=(*sessions, "2026-08-06", "2026-08-07"),
+            all_market_fields=True, mismatched_ttm=not mismatched,
+            expected_manifest=generation, operation_id=f"ttm-track-new-window-{mismatched}",
+        )
+        _refresh_daily_track(client, track_id, f"ttm-track-refresh-{mismatched}")
+        assert runtime.daily_tracks.process_next()
+        tracked = client.get(f"/api/daily-tracks/{track_id}").json()
+        assert tracked["status"] == "active"
+        assert tracked["strategy_session"] == "2026-08-07"
+        state = _stored_tracking_activation(settings, track_id)
+        assert state["origin"] == origin
+        assert bool(state["terminal_strategy_state"]["positions"]) is mismatched
+        assert _tracking_checkpoint_history(settings, track_id)[:len(before)] == before
+        assert client.get("/api/data").json()["generation_manifest_sha256"] == advanced
+        assert _stored_execution(settings, run_id)["attempt_data_generation_id"] == generation
+
+
 def _run_command(
     request_id: str,
     *,
@@ -5278,6 +5513,7 @@ def _write_refresh_replay(
         if isinstance(price, dict)
     ]
     snapshot = {
+        "daily_basic": [],
         "benchmark_index_daily": [
             {
                 "ts_code": "399300.SZ",
@@ -5440,6 +5676,9 @@ def _publish_composite_head(
     settings: CoreSettings,
     *,
     sessions: tuple[str, ...],
+    all_market_fields: bool = False,
+    daily_fields: bool = False,
+    mismatched_ttm: bool = False,
     financial_through: str | None = None,
     financial_readiness_status: str = "ready",
     industry_through: str | None = None,
@@ -5450,6 +5689,21 @@ def _publish_composite_head(
     finished_date = max(observation_through, "2026-08-05")
     store = MountedGenerationStore(settings.data_mount)
     market_canonical = _two_instrument_canonical(sessions, corrected=False)
+    if all_market_fields:
+        market_canonical["field_catalog"] = [
+            row for row in field_catalog(sessions[0]) if row["alpha_authorable"]
+        ]
+    if daily_fields:
+        from thesistrace.data.canonical_mapping import daily_basic_field_catalog
+        from thesistrace.data.fields import DAILY_BASIC_FIELDS
+
+        market_canonical["daily_basic_sessions"] = [{"session": session} for session in sessions]
+        market_canonical["daily_basic"] = [{
+            **dict.fromkeys(field.source_column for field in DAILY_BASIC_FIELDS),
+            "session": price["session"], "instrument_id": price["instrument_id"],
+            "source_close": "999", "pe": "15", "turnover_rate": "0.025",
+        } for price in market_canonical["prices"]]
+        market_canonical["field_catalog"].extend(daily_basic_field_catalog(sessions[-1]))
     prepared_at = datetime(2026, 8, 5, 10, tzinfo=UTC)
     if expected_manifest is None:
         market = store.materialize(
@@ -5492,6 +5746,14 @@ def _publish_composite_head(
             "end_type",
             "total_revenue",
             "n_income_attr_p",
+            "revenue",
+            "n_income",
+            "oper_cost",
+            "rd_exp",
+            "invest_income",
+            "fv_value_chg_gain",
+            "non_oper_income",
+            "non_oper_exp",
             "update_flag",
         ),
         "balancesheet": (
@@ -5505,6 +5767,9 @@ def _publish_composite_head(
             "total_assets",
             "total_liab",
             "total_hldr_eqy_exc_min_int",
+            "money_cap", "accounts_receiv", "notes_receiv", "oth_receiv", "prepayment",
+            "inventories", "acct_payable", "contract_assets", "contract_liab", "goodwill",
+            "st_borr", "lt_borr", "bond_payable", "non_cur_liab_due_1y", "oth_eqt_tools",
             "update_flag",
         ),
         "cashflow": (
@@ -5516,13 +5781,27 @@ def _publish_composite_head(
             "comp_type",
             "end_type",
             "n_cashflow_act",
+            "c_cash_equ_end_period",
+            "c_pay_acq_const_fiolta",
+            "c_fr_sale_sg",
+            "c_paid_goods_s",
+            "n_recp_disp_fiolta",
+            "n_disp_subs_oth_biz",
+            "c_paid_invest",
+            "c_recp_borrow",
+            "c_prepay_amt_borr",
             "update_flag",
         ),
     }
     values = {
-        "income": (("100", "10"), ("200", "20")),
-        "balancesheet": (("1000", "400", "600"), ("2000", "800", "1200")),
-        "cashflow": (("30",), ("60",)),
+        "income": (("100", "10", *("10",) * 8),
+                   ("200", "20", *("20",) * 8)),
+        "balancesheet": (
+            ("1000", "400", "600", "200", *("10",) * 14),
+            ("2000", "800", "1200", "100", *("20",) * 14),
+        ),
+        "cashflow": (("30", "50", *("5",) * 8),
+                     ("60", "75", *("10",) * 8)),
     }
     raw = RawFinancialBatchStore(settings.data_mount)
     checkpoints: list[FinancialShardCheckpoint] = []
@@ -5542,8 +5821,14 @@ def _publish_composite_head(
                 *values[endpoint][index],
                 "0",
             ]
+            items = [item]
+            if mismatched_ttm and endpoint == "income":
+                for period, amount in (("20090331", "50"), ("20100331", "60")):
+                    quarter = list(item)
+                    quarter[3], quarter[6], quarter[7] = period, "1", amount
+                    items.append(quarter)
             payload_sha256 = hashlib.sha256(
-                canonical_json_bytes({"fields": list(fields), "items": [item]})
+                canonical_json_bytes({"fields": list(fields), "items": items})
             ).hexdigest()
             payload = {
                 "format": "thesistrace-raw-financial-batch",
@@ -5552,8 +5837,8 @@ def _publish_composite_head(
                 "endpoint": endpoint,
                 "parameters": {"ts_code": ts_code},
                 "returned_fields": list(fields),
-                "items": [item],
-                "row_count": 1,
+                "items": items,
+                "row_count": len(items),
                 "source_date_extent": ["20100420", "20100420"],
                 "payload_sha256": payload_sha256,
             }

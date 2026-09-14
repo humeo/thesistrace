@@ -155,6 +155,9 @@ class DiagnoseResearchSpecInput(BaseModel):
 class AlphaCatalogView(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
+    generation_manifest_sha256: Annotated[
+        str, Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+    ] | None
     fields: list[AlphaFieldCatalogEntry]
     builtins: list[AlphaBuiltinCatalogEntry]
     industries: Annotated[list[AlphaIndustryCatalogEntry], Field(max_length=31)]

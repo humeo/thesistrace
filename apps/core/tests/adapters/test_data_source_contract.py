@@ -75,6 +75,7 @@ def test_product_data_contract_has_no_provider_or_collection_modes() -> None:
 
 
 def test_live_tushare_gate_is_separate_from_the_default_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     package = json.loads((Path(__file__).resolve().parents[4] / "package.json").read_text())
@@ -89,6 +90,9 @@ def test_live_tushare_gate_is_separate_from_the_default_gate(
     )
 
     class StubProvider:
+        def query_raw(self, api_name, *, params, fields):
+            return replay.query_raw(api_name, params=params, fields=fields)
+
         def __init__(self) -> None:
             self.preflight_count = 0
             self.windows: list[tuple[date, date]] = []
@@ -117,6 +121,7 @@ def test_live_tushare_gate_is_separate_from_the_default_gate(
             )
 
     provider = StubProvider()
+    monkeypatch.chdir(tmp_path)
     live_tushare.main(
         provider=provider,
         as_of=datetime(2026, 8, 3, 10, tzinfo=UTC),

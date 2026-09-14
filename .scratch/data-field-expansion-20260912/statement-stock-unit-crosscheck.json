@@ -1,0 +1,86 @@
+{
+  "source_url": "https://www.moutai.com.cn/mtgf/articleFileDir/2026-04/17/1b9fae59825c41bf9a776892a00565f7.pdf",
+  "report": "600519.SH 2025 annual consolidated statements",
+  "pages": [
+    56,
+    57,
+    58,
+    66
+  ],
+  "unit": "CNY yuan",
+  "checks": [
+    {
+      "source_column": "money_cap",
+      "report_value_cny": "51690610946.50",
+      "observed_values": [
+        51690610946.5
+      ],
+      "matches": true
+    },
+    {
+      "source_column": "accounts_receiv",
+      "report_value_cny": "2609048.49",
+      "observed_values": [
+        2609048.49
+      ],
+      "matches": true
+    },
+    {
+      "source_column": "prepayment",
+      "report_value_cny": "6637314.31",
+      "observed_values": [
+        6637314.31
+      ],
+      "matches": true
+    },
+    {
+      "source_column": "inventories",
+      "report_value_cny": "61427421796.18",
+      "observed_values": [
+        61427421796.18
+      ],
+      "matches": true
+    },
+    {
+      "source_column": "c_cash_equ_end_period",
+      "report_value_cny": "126425609447.72",
+      "observed_values": [
+        126425609447.72
+      ],
+      "matches": true
+    },
+    {
+      "source_column": "oth_receiv",
+      "report_value_cny": "36281302.94",
+      "observed_values": [
+        36281302.94
+      ],
+      "matches": true
+    },
+    {
+      "source_column": "acct_payable",
+      "report_value_cny": "4007309049.87",
+      "observed_values": [
+        4007309049.87
+      ],
+      "matches": true
+    },
+    {
+      "source_column": "contract_liab",
+      "report_value_cny": "8006739780.94",
+      "observed_values": [
+        8006739780.94
+      ],
+      "matches": true
+    },
+    {
+      "source_column": "non_cur_liab_due_1y",
+      "report_value_cny": "44206237.05",
+      "observed_values": [
+        44206237.05
+      ],
+      "matches": true
+    }
+  ],
+  "limit": "Nine observed fields cross-checked against this report; remaining fields require separate evidence. Not full field qualification."
+}

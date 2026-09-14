@@ -3,11 +3,14 @@ import { Pool } from "pg";
 import { diagnoseAgentFailure } from "./failure.js";
 
 const DATABASE_OPERATION_TIMEOUT_MS = 2_000;
+// pg also applies this deadline while waiting for a busy pooled connection.
+// Runtime work may queue behind Session transactions; health checks stay fast.
+const RUNTIME_CONNECTION_TIMEOUT_MS = 10_000;
 
 export function createAgentPool(databaseUrl: string): Pool {
   return withIdleClientErrorHandler(new Pool({
     connectionString: databaseUrl,
-    connectionTimeoutMillis: DATABASE_OPERATION_TIMEOUT_MS,
+    connectionTimeoutMillis: RUNTIME_CONNECTION_TIMEOUT_MS,
     max: 10,
     options: "-c search_path=pg_catalog",
   }));

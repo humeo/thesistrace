@@ -64,7 +64,7 @@ def columnar_fixture(canonical) -> ColumnarResearchData:
         _trading_states=pa.Table.from_pylist(coordinates(canonical["trading_states"])),
         _price_limits=pa.Table.from_pylist(coordinates(canonical["price_limits"])),
         _industries=pa.Table.from_pylist(canonical["industry_membership"]),
-        _financial_values=None,
+        _family_values=None,
         _field_columns=columns,
     )
 
@@ -239,7 +239,7 @@ def test_columnar_tracking_preserves_aligned_financial_missingness_and_updates()
     columnar = replace(
         columnar,
         _field_columns={**columnar._field_columns, field_id: field_id},
-        _financial_values=pa.Table.from_pylist([
+        _family_values=pa.Table.from_pylist([
             {"session": session, "instrument_id": instrument, field_id: value}
             for (session, instrument), value in sorted(values.items())
         ]),
@@ -285,3 +285,94 @@ def test_columnar_tracking_advances_through_an_empty_universe_then_recovers() ->
         assert actual == expected
     assert actual["pending_alpha"][0]["values"] == []
     assert actual["pending_alpha"][1]["values"]
+
+
+def test_mounted_daily_fields_match_single_run_and_tracking_without_source_access(
+    tmp_path, monkeypatch,
+) -> None:
+    from datetime import UTC, datetime
+
+    from thesistrace.adapters.tushare_provider import TushareAdapter
+    from thesistrace.data import MountedGenerationStore
+    from thesistrace.data.canonical_mapping import daily_basic_field_catalog, field_catalog
+    from thesistrace.data.fields import DAILY_BASIC_FIELDS
+
+    _, canonical = build_fixture(session_count=65)
+    calendar = canonical["research_calendar"]
+    instruments = sorted(row["instrument_id"] for row in canonical["instruments"])
+    pe_id = "market.valuation.pe"
+    turnover_id = "market.turnover.float_ratio"
+    pe_values = {}
+    turnover_values = {}
+    observations = []
+    for day, session in enumerate(calendar):
+        for index, instrument in enumerate(instruments):
+            # An entire collected date without observations must remain missing.
+            if day == 40:
+                continue
+            pe = Decimal(10 + index + day % 3)
+            turnover = Decimal("0.025")
+            pe_values[session, instrument] = pe
+            turnover_values[session, instrument] = turnover
+            observations.append({
+                **dict.fromkeys(field.source_column for field in DAILY_BASIC_FIELDS),
+                "session": session, "instrument_id": instrument,
+                "source_close": "999", "pe": str(pe), "turnover_rate": str(turnover),
+            })
+    canonical["daily_basic"] = observations
+    canonical["daily_basic_sessions"] = [{"session": session} for session in calendar]
+    canonical["field_catalog"] = [
+        *field_catalog(calendar[-1]), *daily_basic_field_catalog(calendar[-1]),
+    ]
+    store = MountedGenerationStore(tmp_path)
+    generation = store.materialize(
+        canonical, prepared_at=datetime(2026, 9, 13, tzinfo=UTC),
+        source_name="deterministic-test", source_lineage={},
+    )
+
+    def reject_source(*_args, **_kwargs):
+        raise AssertionError("Research must use its mounted Generation")
+
+    monkeypatch.setattr(TushareAdapter, "query_raw", reject_source)
+    source = "rank(close_raw / pe + turnover_rate)"
+    compiled = alpha_language.compile(source)
+    bindings = {value: key for key, value in compiled.field_ids_by_identifier.items()}
+    columnar = MountedGenerationStore(tmp_path).read_columnar_slice(
+        generation.manifest_sha256, sessions=calendar, universe_name="top300",
+        neutralization="none", field_bindings=bindings, fact_instrument_ids=frozenset(instruments),
+    )
+    row = aligned_market_data(canonical)
+    row = replace(row, fields={
+        **row.fields,
+        pe_id: pe_values, turnover_id: turnover_values,
+        "price.close.raw": {
+            (price["session"], price["instrument_id"]): Decimal(str(price["close_raw"]))
+            for price in canonical["prices"]
+        },
+    })
+    value = run_input(row, source, "none")
+    expected = run(value).track_state.output_snapshot()
+    mounted_row = store.read_composite_slice(
+        generation.manifest_sha256, sessions=calendar, universe_name="top300",
+        neutralization="none", field_bindings=bindings,
+    ).research_data
+    actual = run(run_input(mounted_row, source, "none")).track_state.output_snapshot()
+    assert actual == expected
+    missing_day = next(item for item in actual["alpha_matrix"]["sessions"]
+                       if item["session"] == calendar[40])
+    assert missing_day["values"] == []
+    expected_continuation, actual_continuation = empty_continuation(), empty_continuation()
+    for start, end in ((20, 40), (40, 41), (41, 65)):
+        sessions = calendar[max(0, start - 21):end]
+        appended = calendar[start:end]
+        expected_continuation = advance_continuation(
+            run_input=value, prior_continuation=expected_continuation,
+            target_research_data=slice_research_sessions(row, sessions),
+            appended_sessions=appended,
+        )
+        actual_continuation = advance_tracking_continuation(
+            run_input=value, prior_continuation=actual_continuation,
+            target_research_data=slice_research_sessions(columnar, sessions),
+            appended_sessions=appended,
+        )
+        assert actual_continuation == expected_continuation

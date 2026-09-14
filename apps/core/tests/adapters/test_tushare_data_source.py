@@ -7,6 +7,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from thesistrace.adapters.tushare_daily_basic import DAILY_BASIC_SOURCE_FIELDS
 from thesistrace.adapters.tushare_data import TushareDataSource, _materialize_increment
 from thesistrace.adapters.tushare_provider import (
     TushareAdapter,
@@ -18,7 +19,11 @@ from thesistrace.adapters.tushare_provider import (
     normalize_tushare_snapshot,
 )
 from thesistrace.data import BootstrapCollectionPlan, CollectionPlan, DataSourceError
-from thesistrace.data.source import CanonicalBootstrapStream, refresh_collection_plan
+from thesistrace.data.source import (
+    CanonicalBootstrapStream,
+    RawSourceResponse,
+    refresh_collection_plan,
+)
 from thesistrace.data.validation import validate_release_batch
 from thesistrace.fixture import build_fixture
 
@@ -115,6 +120,14 @@ def normalizer_bootstrap_sessions() -> list[str]:
 
 
 class RecordedProvider:
+    def select_market_window(self, *, last_session: str, as_of: date) -> None:
+        """This provider has no per-window replay selection."""
+
+    def query_raw(self, api_name, *, params, fields):
+        assert api_name == "daily_basic"
+        assert tuple(fields) == DAILY_BASIC_SOURCE_FIELDS
+        return RawSourceResponse(fields=tuple(fields), items=())
+
     def __init__(self) -> None:
         self.bootstrap_windows: list[tuple[date, date]] = []
         self.incremental_calls: list[tuple[str, date]] = []
@@ -126,7 +139,12 @@ class RecordedProvider:
         completed_through_date: date,
     ) -> dict[str, list[dict[str, object]]]:
         self.bootstrap_windows.append((start_date, completed_through_date))
-        return {"recorded": []}
+        return {
+            "recorded": [],
+            "stock_basic": [
+                {"ts_code": row["ts_code"]} for row in build_fixture()[1]["instruments"]
+            ],
+        }
 
     def collect_incremental_snapshot(
         self,
@@ -135,10 +153,16 @@ class RecordedProvider:
         as_of: date,
     ) -> dict[str, list[dict[str, object]]]:
         self.incremental_calls.append((last_session, as_of))
-        return {"recorded": []}
+        return {
+            "recorded": [],
+            "stock_basic": [
+                {"ts_code": row["ts_code"]} for row in build_fixture()[1]["instruments"]
+            ],
+        }
 
 
 def test_tushare_bootstrap_returns_the_canonical_source_batch(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     provider = RecordedProvider()
@@ -153,11 +177,14 @@ def test_tushare_bootstrap_returns_the_canonical_source_batch(
 
     start = date.fromisoformat(str(canonical["research_calendar"][0]))
     end = date.fromisoformat(str(canonical["research_calendar"][-1]))
-    batch = TushareDataSource(provider=provider).collect_bootstrap(
+    batch = TushareDataSource(
+        checkpoint_root=tmp_path / "daily-basic", provider=provider
+    ).collect_bootstrap(
         BootstrapCollectionPlan(
             as_of=datetime(2026, 8, 3, 18, tzinfo=UTC),
             start_date=start,
             completed_through_date=end,
+            collection_key="test-collection",
         )
     )
 
@@ -171,7 +198,9 @@ def test_tushare_bootstrap_returns_the_canonical_source_batch(
     )
 
 
-def test_tushare_bootstrap_stream_matches_whole_snapshot_normalization() -> None:
+def test_tushare_bootstrap_stream_matches_whole_snapshot_normalization(
+    tmp_path: Path,
+) -> None:
     sessions = normalizer_bootstrap_sessions()
     snapshot = normalizer_snapshot(sessions)
     lineage, expected = normalize_tushare_snapshot(snapshot)
@@ -187,8 +216,7 @@ def test_tushare_bootstrap_stream_matches_whole_snapshot_normalization() -> None
         request_start=date(2026, 8, 3),
         request_end=date(2026, 8, 5),
         foundation={
-            name: snapshot[name]
-            for name in ("calendar_sse", "calendar_szse", "stock_basic")
+            name: snapshot[name] for name in ("calendar_sse", "calendar_szse", "stock_basic")
         },
         sessions=tuple(sessions),
         source_lineage=lineage,
@@ -205,11 +233,14 @@ def test_tushare_bootstrap_stream_matches_whole_snapshot_normalization() -> None
             self.bootstrap_windows.append((start_date, completed_through_date))
             return archive
 
-    stream = TushareDataSource(provider=ArchiveProvider()).collect_bootstrap(
+    stream = TushareDataSource(
+        checkpoint_root=tmp_path / "daily-basic", provider=ArchiveProvider()
+    ).collect_bootstrap(
         BootstrapCollectionPlan(
             as_of=datetime(2026, 8, 6, tzinfo=UTC),
             start_date=date(2026, 8, 3),
             completed_through_date=date(2026, 8, 5),
+            collection_key="test-collection",
         )
     )
 
@@ -221,9 +252,7 @@ def test_tushare_bootstrap_stream_matches_whole_snapshot_normalization() -> None
             "trading_states": [],
             "price_limits": [],
             "base_pool": [],
-            "liquidity_universes": {
-                name: [] for name in expected["liquidity_universes"]
-            },
+            "liquidity_universes": {name: [] for name in expected["liquidity_universes"]},
         }
     )
     for partition in stream.partitions():
@@ -232,15 +261,24 @@ def test_tushare_bootstrap_stream_matches_whole_snapshot_normalization() -> None
         for name, rows in partition.canonical["liquidity_universes"].items():
             actual["liquidity_universes"][name].extend(rows)
 
+    assert actual.pop("daily_basic_sessions") == [
+        {"session": session} for session in expected["research_calendar"]
+    ]
+    added = {row["name"] for row in actual["field_catalog"]} - {
+        row["name"] for row in expected["field_catalog"]
+    }
+    assert len(added) == 15
+    actual["field_catalog"] = [row for row in actual["field_catalog"] if row["name"] not in added]
+    expected["field_catalog"] = sorted(expected["field_catalog"], key=lambda row: row["field_id"])
     assert actual == expected
 
 
-def test_tushare_bootstrap_preserves_an_active_instrument_with_missing_market_data() -> None:
+def test_tushare_bootstrap_preserves_an_active_instrument_with_missing_market_data(
+    tmp_path: Path,
+) -> None:
     sessions = normalizer_bootstrap_sessions()
     snapshot = normalizer_snapshot(sessions)
-    snapshot["daily"] = [
-        row for row in snapshot["daily"] if row["trade_date"] != sessions[0]
-    ]
+    snapshot["daily"] = [row for row in snapshot["daily"] if row["trade_date"] != sessions[0]]
     snapshot["adjustments"] = [
         row for row in snapshot["adjustments"] if row["trade_date"] != sessions[0]
     ]
@@ -258,11 +296,14 @@ def test_tushare_bootstrap_preserves_an_active_instrument_with_missing_market_da
             self.bootstrap_windows.append((start_date, completed_through_date))
             return snapshot
 
-    batch = TushareDataSource(provider=MissingMarketDataProvider()).collect_bootstrap(
+    batch = TushareDataSource(
+        checkpoint_root=tmp_path / "daily-basic", provider=MissingMarketDataProvider()
+    ).collect_bootstrap(
         BootstrapCollectionPlan(
             as_of=datetime(2026, 8, 6, tzinfo=UTC),
             start_date=date(2026, 8, 3),
             completed_through_date=date(2026, 8, 5),
+            collection_key="test-collection",
         )
     )
 
@@ -271,19 +312,14 @@ def test_tushare_bootstrap_preserves_an_active_instrument_with_missing_market_da
         "instrument_id": "equity:600000.SH",
         "state": "data_unavailable",
     }
-    assert all(
-        row["session"] != "2026-08-03" for row in batch.canonical["prices"]
-    )
-    assert all(
-        row["session"] != "2026-08-03" for row in batch.canonical["price_limits"]
-    )
-    assert batch.canonical["base_pool"][0]["instrument_ids"] == [
-        "equity:600000.SH"
-    ]
+    assert all(row["session"] != "2026-08-03" for row in batch.canonical["prices"])
+    assert all(row["session"] != "2026-08-03" for row in batch.canonical["price_limits"])
+    assert batch.canonical["base_pool"][0]["instrument_ids"] == ["equity:600000.SH"]
     validate_release_batch(batch, predecessor_session=None)
 
 
 def test_tushare_increment_uses_only_frontier_and_previous_canonical(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     provider = RecordedProvider()
@@ -309,9 +345,10 @@ def test_tushare_increment_uses_only_frontier_and_previous_canonical(
     )
 
     batch = TushareDataSource(
+        checkpoint_root=tmp_path / "daily-basic",
         provider=provider,
         clock=lambda: date(2026, 8, 4),
-    ).collect(CollectionPlan.incremental(frontier, previous))
+    ).collect(CollectionPlan.incremental(frontier, previous, collection_key="test-collection"))
 
     assert provider.incremental_calls == [(frontier, date(2026, 8, 4))]
     assert batch.canonical["research_calendar"] == [
@@ -326,6 +363,7 @@ def test_tushare_increment_uses_only_frontier_and_previous_canonical(
 
 
 def test_tushare_refresh_reports_source_collection_and_merge_timings(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     provider = RecordedProvider()
@@ -350,14 +388,15 @@ def test_tushare_refresh_reports_source_collection_and_merge_timings(
         ),
     )
     progress: list[dict[str, object]] = []
-    timestamps = iter((10.0, 11.25, 20.0, 23.5))
+    timestamps = iter((10.0, 11.25, 20.0, 23.5, 30.0, 32.0))
 
     TushareDataSource(
+        checkpoint_root=tmp_path / "daily-basic",
         provider=provider,
         clock=lambda: date(2026, 8, 4),
         progress=progress.append,
         monotonic=lambda: next(timestamps),
-    ).collect(CollectionPlan.incremental(frontier, previous))
+    ).collect(CollectionPlan.incremental(frontier, previous, collection_key="test-collection"))
 
     assert progress == [
         {"event": "refresh_timing", "phase": "source_collection", "status": "started"},
@@ -374,10 +413,19 @@ def test_tushare_refresh_reports_source_collection_and_merge_timings(
             "status": "completed",
             "elapsed_seconds": 3.5,
         },
+        {"event": "refresh_timing", "phase": "daily_basic_collection", "status": "started"},
+        {
+            "event": "refresh_timing",
+            "phase": "daily_basic_collection",
+            "status": "completed",
+            "elapsed_seconds": 2.0,
+        },
     ]
 
 
-def test_tushare_refresh_merges_exact_overlap_and_recomputes_derived_data() -> None:
+def test_tushare_refresh_merges_exact_overlap_and_recomputes_derived_data(
+    tmp_path: Path,
+) -> None:
     sessions: list[str] = []
     cursor = date(2026, 7, 1)
     while len(sessions) < 23:
@@ -431,8 +479,12 @@ def test_tushare_refresh_merges_exact_overlap_and_recomputes_derived_data() -> N
             return copy.deepcopy(refresh_snapshot)
 
     provider = RefreshProvider()
-    plan = refresh_collection_plan(datetime(2026, 7, 31, 18, tzinfo=UTC), previous)
-    batch = TushareDataSource(provider=provider).collect(plan)
+    plan = refresh_collection_plan(
+        datetime(2026, 7, 31, 18, tzinfo=UTC), previous, collection_key="test-collection"
+    )
+    batch = TushareDataSource(checkpoint_root=tmp_path / "daily-basic", provider=provider).collect(
+        plan
+    )
 
     assert previous == previous_before_refresh
     assert "responses" not in batch.source_lineage
@@ -486,7 +538,9 @@ def test_tushare_refresh_merges_exact_overlap_and_recomputes_derived_data() -> N
     validate_release_batch(batch, predecessor_session=previous["research_calendar"][-1])
 
 
-def test_tushare_refresh_applies_an_overlap_only_correction_and_delisting() -> None:
+def test_tushare_refresh_applies_an_overlap_only_correction_and_delisting(
+    tmp_path: Path,
+) -> None:
     sessions = ["20260803", "20260804", "20260805"]
     _source, previous = normalize_tushare_snapshot(normalizer_snapshot(sessions))
     snapshot = normalizer_snapshot(sessions)
@@ -502,8 +556,12 @@ def test_tushare_refresh_applies_an_overlap_only_correction_and_delisting() -> N
         ) -> dict[str, list[dict[str, object]]]:
             return copy.deepcopy(snapshot)
 
-    batch = TushareDataSource(provider=CorrectionProvider()).collect(
-        refresh_collection_plan(datetime(2026, 8, 5, 18, tzinfo=UTC), previous)
+    batch = TushareDataSource(
+        checkpoint_root=tmp_path / "daily-basic", provider=CorrectionProvider()
+    ).collect(
+        refresh_collection_plan(
+            datetime(2026, 8, 5, 18, tzinfo=UTC), previous, collection_key="test-collection"
+        )
     )
 
     assert batch.canonical["research_calendar"][-1] == previous["research_calendar"][-1]
@@ -519,7 +577,9 @@ def test_tushare_refresh_applies_an_overlap_only_correction_and_delisting() -> N
     validate_release_batch(batch, predecessor_session=previous["research_calendar"][-1])
 
 
-def test_tushare_refresh_preserves_a_known_data_unavailable_overlap() -> None:
+def test_tushare_refresh_preserves_a_known_data_unavailable_overlap(
+    tmp_path: Path,
+) -> None:
     sessions = ["20260803", "20260804", "20260805", "20260806"]
     previous_snapshot = normalizer_snapshot(sessions[:3])
     previous_snapshot["daily"] = [
@@ -527,9 +587,7 @@ def test_tushare_refresh_preserves_a_known_data_unavailable_overlap() -> None:
     ]
     _source, previous = normalize_tushare_snapshot(previous_snapshot)
     snapshot = normalizer_snapshot(sessions)
-    snapshot["daily"] = [
-        row for row in snapshot["daily"] if row["trade_date"] != sessions[0]
-    ]
+    snapshot["daily"] = [row for row in snapshot["daily"] if row["trade_date"] != sessions[0]]
 
     class MissingOverlapProvider(RecordedProvider):
         def collect_incremental_snapshot(
@@ -540,14 +598,16 @@ def test_tushare_refresh_preserves_a_known_data_unavailable_overlap() -> None:
         ) -> dict[str, list[dict[str, object]]]:
             return copy.deepcopy(snapshot)
 
-    batch = TushareDataSource(provider=MissingOverlapProvider()).collect(
-        refresh_collection_plan(datetime(2026, 8, 6, 18, tzinfo=UTC), previous)
+    batch = TushareDataSource(
+        checkpoint_root=tmp_path / "daily-basic", provider=MissingOverlapProvider()
+    ).collect(
+        refresh_collection_plan(
+            datetime(2026, 8, 6, 18, tzinfo=UTC), previous, collection_key="test-collection"
+        )
     )
 
     assert batch.canonical["trading_states"][0]["state"] == "data_unavailable"
-    assert all(
-        row["session"] != "2026-08-03" for row in batch.canonical["prices"]
-    )
+    assert all(row["session"] != "2026-08-03" for row in batch.canonical["prices"])
 
 
 @pytest.mark.parametrize(
@@ -560,6 +620,7 @@ def test_tushare_refresh_preserves_a_known_data_unavailable_overlap() -> None:
     ),
 )
 def test_tushare_refresh_rejects_an_incomplete_new_session(
+    tmp_path: Path,
     missing_fact: str,
     detail_code: str,
 ) -> None:
@@ -579,14 +640,28 @@ def test_tushare_refresh_rejects_an_incomplete_new_session(
             return copy.deepcopy(snapshot)
 
     with pytest.raises(DataSourceError) as failure:
-        TushareDataSource(provider=IncompleteProvider()).collect(
-            refresh_collection_plan(datetime(2026, 8, 6, 18, tzinfo=UTC), previous)
+        TushareDataSource(
+            checkpoint_root=tmp_path / "daily-basic", provider=IncompleteProvider()
+        ).collect(
+            refresh_collection_plan(
+                datetime(2026, 8, 6, 18, tzinfo=UTC), previous, collection_key="test-collection"
+            )
         )
 
     assert failure.value.detail_code == detail_code
+    assert not tuple((tmp_path / "daily-basic" / "price").glob("*/*.json"))
+    snapshot = normalizer_snapshot(sessions)
+    recovered = TushareDataSource(
+        checkpoint_root=tmp_path / "daily-basic", provider=IncompleteProvider(),
+    ).collect(refresh_collection_plan(
+        datetime(2026, 8, 6, 18, tzinfo=UTC), previous, collection_key="test-collection",
+    ))
+    assert recovered.covered_session_range[1] == "2026-08-06"
 
 
-def test_tushare_refresh_rejects_a_new_date_missing_from_both_calendars() -> None:
+def test_tushare_refresh_rejects_a_new_date_missing_from_both_calendars(
+    tmp_path: Path,
+) -> None:
     sessions = ["20260803", "20260804", "20260805", "20260806"]
     _source, previous = normalize_tushare_snapshot(normalizer_snapshot(sessions[:3]))
     snapshot = normalizer_snapshot(sessions)
@@ -603,8 +678,12 @@ def test_tushare_refresh_rejects_a_new_date_missing_from_both_calendars() -> Non
             return copy.deepcopy(snapshot)
 
     with pytest.raises(DataSourceError) as failure:
-        TushareDataSource(provider=MissingCalendarProvider()).collect(
-            refresh_collection_plan(datetime(2026, 8, 6, 18, tzinfo=UTC), previous)
+        TushareDataSource(
+            checkpoint_root=tmp_path / "daily-basic", provider=MissingCalendarProvider()
+        ).collect(
+            refresh_collection_plan(
+                datetime(2026, 8, 6, 18, tzinfo=UTC), previous, collection_key="test-collection"
+            )
         )
 
     assert failure.value.detail_code == "INCOMPLETE_NEW_SESSION_CALENDAR"
@@ -612,15 +691,20 @@ def test_tushare_refresh_rejects_a_new_date_missing_from_both_calendars() -> Non
 
 @pytest.mark.parametrize("market_fact", ("daily", "adjustments", "suspensions"))
 def test_tushare_refresh_rejects_market_facts_for_an_unknown_new_instrument(
+    tmp_path: Path,
     market_fact: str,
 ) -> None:
     sessions = ["20260803", "20260804", "20260805", "20260806"]
     _source, previous = normalize_tushare_snapshot(normalizer_snapshot(sessions[:3]))
     snapshot = normalizer_snapshot(sessions)
-    source_row = snapshot[market_fact][-1] if snapshot[market_fact] else {
-        "trade_date": sessions[-1],
-        "suspend_type": "S",
-    }
+    source_row = (
+        snapshot[market_fact][-1]
+        if snapshot[market_fact]
+        else {
+            "trade_date": sessions[-1],
+            "suspend_type": "S",
+        }
+    )
     unknown_fact = copy.deepcopy(source_row)
     unknown_fact["ts_code"] = "000001.SZ"
     snapshot[market_fact].append(unknown_fact)
@@ -635,14 +719,20 @@ def test_tushare_refresh_rejects_market_facts_for_an_unknown_new_instrument(
             return copy.deepcopy(snapshot)
 
     with pytest.raises(DataSourceError) as failure:
-        TushareDataSource(provider=MissingInstrumentProvider()).collect(
-            refresh_collection_plan(datetime(2026, 8, 6, 18, tzinfo=UTC), previous)
+        TushareDataSource(
+            checkpoint_root=tmp_path / "daily-basic", provider=MissingInstrumentProvider()
+        ).collect(
+            refresh_collection_plan(
+                datetime(2026, 8, 6, 18, tzinfo=UTC), previous, collection_key="test-collection"
+            )
         )
 
     assert failure.value.detail_code == "INCOMPLETE_NEW_SESSION_INSTRUMENT"
 
 
-def test_tushare_refresh_filters_price_limits_outside_the_stock_universe() -> None:
+def test_tushare_refresh_filters_price_limits_outside_the_stock_universe(
+    tmp_path: Path,
+) -> None:
     sessions = ["20260803", "20260804", "20260805", "20260806"]
     _source, previous = normalize_tushare_snapshot(normalizer_snapshot(sessions[:3]))
     snapshot = normalizer_snapshot(sessions)
@@ -660,16 +750,20 @@ def test_tushare_refresh_filters_price_limits_outside_the_stock_universe() -> No
         ) -> dict[str, list[dict[str, object]]]:
             return copy.deepcopy(snapshot)
 
-    batch = TushareDataSource(provider=BroadPriceLimitProvider()).collect(
-        refresh_collection_plan(datetime(2026, 8, 6, 18, tzinfo=UTC), previous)
+    batch = TushareDataSource(
+        checkpoint_root=tmp_path / "daily-basic", provider=BroadPriceLimitProvider()
+    ).collect(
+        refresh_collection_plan(
+            datetime(2026, 8, 6, 18, tzinfo=UTC), previous, collection_key="test-collection"
+        )
     )
 
-    assert {
-        row["instrument_id"] for row in batch.canonical["price_limits"]
-    } == {"equity:600000.SH"}
+    assert {row["instrument_id"] for row in batch.canonical["price_limits"]} == {"equity:600000.SH"}
 
 
-def test_tushare_refresh_rejects_a_session_after_the_completed_boundary() -> None:
+def test_tushare_refresh_rejects_a_session_after_the_completed_boundary(
+    tmp_path: Path,
+) -> None:
     sessions = ["20260803", "20260804", "20260805", "20260806"]
     _source, previous = normalize_tushare_snapshot(normalizer_snapshot(sessions[:3]))
     snapshot = normalizer_snapshot(sessions)
@@ -684,14 +778,20 @@ def test_tushare_refresh_rejects_a_session_after_the_completed_boundary() -> Non
             return copy.deepcopy(snapshot)
 
     with pytest.raises(DataSourceError) as failure:
-        TushareDataSource(provider=FutureSessionProvider()).collect(
-            refresh_collection_plan(datetime(2026, 8, 5, 18, tzinfo=UTC), previous)
+        TushareDataSource(
+            checkpoint_root=tmp_path / "daily-basic", provider=FutureSessionProvider()
+        ).collect(
+            refresh_collection_plan(
+                datetime(2026, 8, 5, 18, tzinfo=UTC), previous, collection_key="test-collection"
+            )
         )
 
     assert failure.value.detail_code == "REFRESH_WINDOW_VIOLATION"
 
 
-def test_tushare_refresh_supports_coverage_shorter_than_the_overlap_window() -> None:
+def test_tushare_refresh_supports_coverage_shorter_than_the_overlap_window(
+    tmp_path: Path,
+) -> None:
     _source, previous = normalize_tushare_snapshot(normalizer_snapshot(["20260701"]))
     snapshot = normalizer_snapshot(["20260701", "20260702"])
 
@@ -705,8 +805,12 @@ def test_tushare_refresh_supports_coverage_shorter_than_the_overlap_window() -> 
             self.incremental_calls.append((last_session, as_of))
             return copy.deepcopy(snapshot)
 
-    plan = refresh_collection_plan(datetime(2026, 7, 2, 18, tzinfo=UTC), previous)
-    batch = TushareDataSource(provider=ShortCoverageProvider()).collect(plan)
+    plan = refresh_collection_plan(
+        datetime(2026, 7, 2, 18, tzinfo=UTC), previous, collection_key="test-collection"
+    )
+    batch = TushareDataSource(
+        checkpoint_root=tmp_path / "daily-basic", provider=ShortCoverageProvider()
+    ).collect(plan)
 
     assert batch.canonical["research_calendar"] == ["2026-07-01", "2026-07-02"]
     assert len(batch.canonical["prices"]) == 2
@@ -729,6 +833,7 @@ def test_tushare_refresh_supports_coverage_shorter_than_the_overlap_window() -> 
     ),
 )
 def test_tushare_maps_provider_failures_to_data_source_categories(
+    tmp_path: Path,
     reason_code: str,
     category: str,
 ) -> None:
@@ -742,11 +847,14 @@ def test_tushare_maps_provider_failures_to_data_source_categories(
             raise TushareSourceError(reason_code, source_code=None)
 
     with pytest.raises(DataSourceError) as failure:
-        TushareDataSource(provider=FailingProvider()).collect_bootstrap(
+        TushareDataSource(
+            checkpoint_root=tmp_path / "daily-basic", provider=FailingProvider()
+        ).collect_bootstrap(
             BootstrapCollectionPlan(
                 as_of=datetime(2026, 8, 3, 18, tzinfo=UTC),
                 start_date=date(2025, 8, 3),
                 completed_through_date=date(2026, 8, 3),
+                collection_key="test-collection",
             )
         )
 
@@ -754,23 +862,30 @@ def test_tushare_maps_provider_failures_to_data_source_categories(
     assert failure.value.detail_code == reason_code
 
 
-def test_tushare_increment_requires_previous_canonical() -> None:
+def test_tushare_increment_requires_previous_canonical(
+    tmp_path: Path,
+) -> None:
     with pytest.raises(DataSourceError) as failure:
-        TushareDataSource(provider=RecordedProvider()).collect(
-            CollectionPlan.incremental("2026-08-03")
-        )
+        TushareDataSource(
+            checkpoint_root=tmp_path / "daily-basic", provider=RecordedProvider()
+        ).collect(CollectionPlan.incremental("2026-08-03", collection_key="test-collection"))
 
     assert failure.value.category == "invalid_source_data"
     assert failure.value.detail_code == "PREVIOUS_CANONICAL_REQUIRED"
 
 
-def test_tushare_rejects_malformed_provider_snapshots_as_source_data() -> None:
+def test_tushare_rejects_malformed_provider_snapshots_as_source_data(
+    tmp_path: Path,
+) -> None:
     with pytest.raises(DataSourceError) as failure:
-        TushareDataSource(provider=RecordedProvider()).collect_bootstrap(
+        TushareDataSource(
+            checkpoint_root=tmp_path / "daily-basic", provider=RecordedProvider()
+        ).collect_bootstrap(
             BootstrapCollectionPlan(
                 as_of=datetime(2026, 8, 3, 18, tzinfo=UTC),
                 start_date=date(2025, 8, 3),
                 completed_through_date=date(2026, 8, 3),
+                collection_key="test-collection",
             )
         )
 
@@ -1961,6 +2076,7 @@ def test_tushare_provider_retries_transient_http_statuses() -> None:
 
 
 def test_tushare_materializes_price_corrections_by_field(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     provider = RecordedProvider()
@@ -1992,8 +2108,8 @@ def test_tushare_materializes_price_corrections_by_field(
         ),
     )
 
-    batch = TushareDataSource(provider=provider).collect(
-        CollectionPlan.incremental(frontier, previous)
+    batch = TushareDataSource(checkpoint_root=tmp_path / "daily-basic", provider=provider).collect(
+        CollectionPlan.incremental(frontier, previous, collection_key="test-collection")
     )
     corrected = batch.canonical["prices"][0]
 
@@ -2076,3 +2192,273 @@ def test_tushare_pacing_counts_response_time_and_preserves_results(response_seco
     assert starts[1] == pytest.approx(max(1 / 3, response_seconds))
     assert starts[-1] == pytest.approx(180 * max(1 / 3, response_seconds))
     assert starts[180] - starts[0] >= 60 - 1e-9
+
+
+def test_daily_basic_source_bootstrap_refresh_and_retry_keep_observed_values(
+    tmp_path: Path,
+) -> None:
+    class DailyProvider(RecordedProvider):
+        def __init__(self):
+            super().__init__()
+            self.pe = "15"
+            self.fail = False
+
+        def collect_bootstrap_snapshot(self, **_kwargs):
+            return normalizer_snapshot(["20260803", "20260804", "20260805"])
+
+        def collect_incremental_snapshot(self, **_kwargs):
+            return normalizer_snapshot(["20260803", "20260804", "20260805", "20260806"])
+
+        def query_raw(self, api_name, *, params, fields):
+            assert api_name == "daily_basic"
+            if self.fail:
+                raise AssertionError("Completed daily observations must resume without requests")
+            row = dict.fromkeys(fields)
+            row.update(
+                ts_code="600000.SH",
+                trade_date=params["trade_date"],
+                pe=self.pe,
+                turnover_rate="2.5",
+                total_mv="123",
+                close="999",
+            )
+            return RawSourceResponse(fields=tuple(fields), items=(tuple(row[k] for k in fields),))
+
+    provider = DailyProvider()
+    source = TushareDataSource(
+        provider=provider,
+        checkpoint_root=tmp_path / "data" / ".operator" / "market-source-receipts",
+    )
+    batch = source.collect_bootstrap(
+        BootstrapCollectionPlan(
+            collection_key="bootstrap:daily",
+            as_of=datetime(2026, 8, 6, tzinfo=UTC),
+            start_date=date(2026, 8, 3),
+            completed_through_date=date(2026, 8, 5),
+        )
+    )
+    assert len(batch.canonical["daily_basic"]) == 3
+    first = batch.canonical["daily_basic"][0]
+    assert first["pe"] == "15"
+    assert first["turnover_rate"] == "0.025"
+    assert first["total_mv"] == "1230000"
+    assert first["pb"] is None
+    assert batch.canonical["prices"][0]["close_raw"] != first["source_close"]
+    assert batch.source_lineage["daily_basic_collection_key"] == "bootstrap:daily"
+    from thesistrace.adapters.tushare_daily_basic import DailyBasicCheckpoint
+
+    assert DailyBasicCheckpoint(
+        tmp_path / "data" / ".operator" / "market-source-receipts",
+        collection_key="bootstrap:daily",
+    ).verify_evidence(batch.source_lineage["daily_basic_evidence"]) == (
+        "2026-08-03",
+        "2026-08-04",
+        "2026-08-05",
+    )
+
+    from thesistrace.data.generation_store import MountedGenerationStore
+
+    class ArchiveDailyProvider(DailyProvider):
+        def collect_bootstrap_snapshot(self, **kwargs):
+            snapshot = super().collect_bootstrap_snapshot(**kwargs)
+            lineage, _ = normalize_tushare_snapshot(snapshot)
+            names = ("daily", "adjustments", "suspensions", "price_limits")
+            return TushareBootstrapArchive(
+                request_start=kwargs["start_date"],
+                request_end=kwargs["completed_through_date"],
+                foundation={
+                    key: snapshot[key]
+                    for key in (
+                        "calendar_sse",
+                        "calendar_szse",
+                        "stock_basic",
+                    )
+                },
+                sessions=("20260803", "20260804", "20260805"),
+                source_lineage=lineage,
+                _load_session=lambda session: {
+                    name: [row for row in snapshot[name] if row["trade_date"] == session]
+                    for name in names
+                },
+            )
+
+    stream = TushareDataSource(
+        provider=ArchiveDailyProvider(),
+        checkpoint_root=tmp_path / "data" / ".operator" / "market-source-receipts",
+    ).collect_bootstrap(
+        BootstrapCollectionPlan(
+            collection_key="bootstrap:stream",
+            as_of=datetime(2026, 8, 6, tzinfo=UTC),
+            start_date=date(2026, 8, 3),
+            completed_through_date=date(2026, 8, 5),
+        )
+    )
+    assert isinstance(stream, CanonicalBootstrapStream)
+    store = MountedGenerationStore(tmp_path / "data")
+    prepared = datetime(2026, 8, 6, tzinfo=UTC)
+    direct = store.materialize(
+        batch.canonical,
+        prepared_at=prepared,
+        source_name="tushare",
+        source_lineage=batch.source_lineage,
+    )
+    streamed = store.materialize_bootstrap_stream(stream, prepared_at=prepared)
+    assert DailyBasicCheckpoint(
+        tmp_path / "data" / ".operator" / "market-source-receipts",
+        collection_key="bootstrap:stream",
+    ).verify_evidence(stream.source_lineage["daily_basic_evidence"]) == (
+        "2026-08-03",
+        "2026-08-04",
+        "2026-08-05",
+    )
+    assert direct.field_availability == streamed.field_availability
+    assert store.open_refresh_base(direct.manifest_sha256).canonical == (
+        store.open_refresh_base(streamed.manifest_sha256).canonical
+    )
+    assert len(store.daily_basic_source_evidence(direct.manifest_sha256)) == 1
+    assert store.daily_basic_source_evidence(streamed.manifest_sha256)[0]["collection_key"] == (
+        "bootstrap:stream"
+    )
+    store.validate_generation(direct.manifest_sha256)
+
+    provider.pe = None
+    plan = refresh_collection_plan(
+        datetime(2026, 8, 6, 18, tzinfo=UTC),
+        batch.canonical,
+        collection_key="refresh:daily",
+    )
+    refreshed = source.collect(plan)
+    assert len(refreshed.canonical["daily_basic"]) == 4
+    assert all(row["pe"] is None for row in refreshed.canonical["daily_basic"])
+    assert first["pe"] == "15"
+    provider.fail = True
+    resumed = TushareDataSource(
+        provider=provider,
+        checkpoint_root=tmp_path / "data" / ".operator" / "market-source-receipts",
+    ).collect(plan)
+    assert resumed.canonical == refreshed.canonical
+
+    updated = store.materialize_refresh(
+        predecessor_manifest_sha256=direct.manifest_sha256,
+        replacement_canonical=refreshed.canonical,
+        replace_from_session="2026-08-03",
+        prepared_at=prepared,
+        source_name="tushare",
+        source_lineage=refreshed.source_lineage,
+    )
+    evidence = store.daily_basic_source_evidence(updated.manifest_sha256)
+    assert {item["collection_key"] for item in evidence} == {"bootstrap:daily", "refresh:daily"}
+    store.validate_generation(updated.manifest_sha256)
+    price_lineage, price_only = normalize_tushare_snapshot(
+        normalizer_snapshot(["20260803", "20260804", "20260805", "20260806"])
+    )
+    price_refreshed = store.materialize_refresh(
+        predecessor_manifest_sha256=updated.manifest_sha256,
+        replacement_canonical=price_only,
+        replace_from_session="2026-08-03",
+        prepared_at=prepared,
+        source_name="tushare",
+        source_lineage=price_lineage,
+    )
+    assert store.daily_basic_source_evidence(price_refreshed.manifest_sha256) == evidence
+    store.validate_generation(price_refreshed.manifest_sha256)
+    raw_root = tmp_path / "data" / ".operator" / "market-source-receipts"
+    raw_files = tuple(raw_root.glob("*/*/*.json"))
+    assert raw_files
+    # Source history is retained independently of the collected Generation object inventory.
+    assert not {path.stem for path in raw_files} & {item.sha256 for item in store.inventory()}
+    bootstrap_checkpoint = DailyBasicCheckpoint(
+        tmp_path / "data" / ".operator" / "market-source-receipts",
+        collection_key="bootstrap:daily",
+    )
+    (
+        tmp_path
+        / "data"
+        / ".operator"
+        / "market-source-receipts"
+        / bootstrap_checkpoint.evidence()[0]["path"]
+    ).unlink()
+    from thesistrace.data.generation_store import GenerationStoreError
+
+    with pytest.raises(GenerationStoreError, match="source evidence"):
+        store.validate_generation(updated.manifest_sha256)
+
+
+@pytest.mark.parametrize("reason,category", [
+    ("UPSTREAM_RATE_LIMITED", "unavailable"),
+    ("MISSING_PERMISSION", "authorization"),
+])
+def test_daily_basic_refresh_failure_resumes_only_unfinished_dates(
+    tmp_path: Path, reason: str, category: str,
+) -> None:
+    from thesistrace.data.daily_basic_evidence import DailyBasicCheckpoint
+
+    class InterruptedProvider(RecordedProvider):
+        def __init__(self):
+            super().__init__()
+            self.interrupted = True
+            self.daily_requests = []
+            self.price_requests = 0
+
+        def collect_incremental_snapshot(self, **_kwargs):
+            self.price_requests += 1
+            return normalizer_snapshot(["20260803", "20260804", "20260805"])
+
+        def query_raw(self, api_name, *, params, fields):
+            assert api_name == "daily_basic"
+            session = params["trade_date"]
+            self.daily_requests.append(session)
+            if self.interrupted and session == "20260804":
+                raise TushareSourceError(reason, source_code=-1)
+            row = dict.fromkeys(fields)
+            row.update(ts_code="600000.SH", trade_date=session, pe="15")
+            return RawSourceResponse(tuple(fields), (tuple(row[field] for field in fields),))
+
+    _, previous = normalize_tushare_snapshot(normalizer_snapshot(["20260803", "20260804"]))
+    original = copy.deepcopy(previous)
+    plan = refresh_collection_plan(
+        datetime(2026, 8, 5, 18, tzinfo=UTC), previous, collection_key="refresh:interrupted",
+    )
+    provider = InterruptedProvider()
+    progress = []
+    with pytest.raises(DataSourceError) as failed:
+        TushareDataSource(
+            provider=provider, checkpoint_root=tmp_path, progress=progress.append,
+        ).collect(plan)
+    assert failed.value.category == category
+    assert provider.daily_requests == ["20260803", "20260804"]
+    assert previous == original
+    assert any(event["phase"] == "source_collection" and event["status"] == "completed"
+               for event in progress)
+    assert any(event["phase"] == "daily_basic_collection" and event["status"] == "failed"
+               for event in progress)
+    assert not tuple(tmp_path.glob("*/evidence/sha256/*.json"))
+
+    assert provider.price_requests == 1
+    provider = InterruptedProvider()
+    provider.interrupted = False
+    result = TushareDataSource(provider=provider, checkpoint_root=tmp_path).collect(plan)
+    assert provider.daily_requests == ["20260804", "20260805"]
+    assert provider.price_requests == 0
+    assert [row["session"] for row in result.canonical["daily_basic"]] == [
+        "2026-08-03", "2026-08-04", "2026-08-05",
+    ]
+    assert DailyBasicCheckpoint(tmp_path, collection_key=plan.collection_key).verify_evidence(
+        result.source_lineage["daily_basic_evidence"],
+    ) == ("2026-08-03", "2026-08-04", "2026-08-05")
+
+    # A new operation observes both sources again, rather than reusing the prior refresh.
+    new_plan = refresh_collection_plan(
+        datetime(2026, 8, 5, 18, tzinfo=UTC), previous, collection_key="refresh:next",
+    )
+    provider.daily_requests.clear()
+    TushareDataSource(provider=provider, checkpoint_root=tmp_path).collect(new_plan)
+    assert provider.price_requests == 1
+    assert provider.daily_requests == ["20260803", "20260804", "20260805"]
+    # Damaged retained bytes must fail closed instead of silently consulting upstream.
+    for path in (tmp_path / "price").glob("*/*.json"):
+        path.write_text("{}")
+    with pytest.raises(DataSourceError) as corrupted:
+        TushareDataSource(provider=provider, checkpoint_root=tmp_path).collect(plan)
+    assert corrupted.value.detail_code == "PRICE_CHECKPOINT_INVALID"
+    assert provider.price_requests == 1

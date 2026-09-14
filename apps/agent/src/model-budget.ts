@@ -23,11 +23,12 @@ export class ModelBudget {
 
   async reserve(researcherId: string, amount: number): Promise<ModelReservation> {
     exactAmount(amount);
+    // Remote policy lookup must not hold a pooled connection or the budget lock.
+    const policy = await this.policy(researcherId);
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
       await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`model-budget:${researcherId}`]);
-      const policy = await this.policy(researcherId);
       const day = await client.query<{ day: string }>("SELECT (clock_timestamp() AT TIME ZONE $1)::date::text AS day", [policy.timezone]);
       const date = day.rows[0]!.day;
       const result = await client.query<{ used: string }>(`

@@ -25,6 +25,7 @@ from thesistrace.data.financial_collection import (
     FinancialDateShard,
     FinancialShardCheckpoint,
 )
+from thesistrace.data.financial_indicator_progress import FinancialIndicatorProgressStore
 from thesistrace.data.financial_progress import read_financial_progress
 from thesistrace.data.generation_store import HistoricalInstrumentIdentity
 from thesistrace.data.source import RawSourceError, RawSourceResponse
@@ -107,6 +108,10 @@ def test_financial_progress_reads_partial_checkpoints_and_preserves_historical_g
             identities=identities,
             recorded_at=started,
         )
+        indicator_progress = FinancialIndicatorProgressStore(database)
+        assert indicator_progress.pending(identities[0].instrument_id) == (
+            ("2026-06-30", "2026-08-14"),
+        )
         assert inspect().discovered_announcement_count == 3
         assert inspect().phase == "collection"
         store.record_instrument_attempt(
@@ -118,6 +123,9 @@ def test_financial_progress_reads_partial_checkpoints_and_preserves_historical_g
             failure_code=None,
             failure_endpoint=None,
             attempted_at=started,
+        )
+        assert indicator_progress.pending(identities[0].instrument_id) == (
+            ("2026-06-30", "2026-08-14"),
         )
         partial = inspect()
         assert partial.processed_company_count == partial.updated_company_count == 1

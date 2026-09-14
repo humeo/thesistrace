@@ -1,0 +1,47 @@
+{
+  "scope": "user_confirmed_226_target_additional_3_ttm_fields",
+  "fields": [
+    {
+      "status": "拟新增",
+      "group": "核心流量：TTM",
+      "dsl_identifier": "revenue_ttm",
+      "label": "营业总收入 TTM",
+      "source_endpoint": "income",
+      "source_column": "total_revenue",
+      "proposed_field_id": "financial.income.total_revenue.ttm",
+      "period_kind": "flow",
+      "report_period_selection": "latest_visible_ttm",
+      "reporting_scope": "report_type_1_consolidated",
+      "target_unit": "CNY",
+      "note": "匹配可见报告重构 TTM；与 revenue 使用同一收入范围，期间改为最近十二个月；不同于 operating_revenue_ttm 的营业收入。"
+    },
+    {
+      "status": "拟新增",
+      "group": "核心流量：TTM",
+      "dsl_identifier": "net_profit_ttm",
+      "label": "归母净利润 TTM",
+      "source_endpoint": "income",
+      "source_column": "n_income_attr_p",
+      "proposed_field_id": "financial.income.net_profit_parent.ttm",
+      "period_kind": "flow",
+      "report_period_selection": "latest_visible_ttm",
+      "reporting_scope": "report_type_1_consolidated",
+      "target_unit": "CNY",
+      "note": "匹配可见报告重构 TTM；归母口径；与 consolidated_net_profit_ttm 的合并净利润分开。"
+    },
+    {
+      "status": "拟新增",
+      "group": "核心流量：TTM",
+      "dsl_identifier": "operating_cash_flow_ttm",
+      "label": "经营现金流净额 TTM",
+      "source_endpoint": "cashflow",
+      "source_column": "n_cashflow_act",
+      "proposed_field_id": "financial.cashflow.operating_cash_flow.ttm",
+      "period_kind": "flow",
+      "report_period_selection": "latest_visible_ttm",
+      "reporting_scope": "report_type_1_consolidated",
+      "target_unit": "CNY",
+      "note": "匹配可见报告重构 TTM；与 operating_cash_flow 使用同一合并现金流口径，期间为最近十二个月。"
+    }
+  ]
+}

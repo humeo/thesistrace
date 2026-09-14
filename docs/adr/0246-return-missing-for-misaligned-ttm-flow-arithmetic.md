@@ -1,0 +1,3 @@
+# Return missing for misaligned TTM flow arithmetic
+
+Direct arithmetic between two TTM flows requires valid values covering the same twelve-month window; otherwise the operation returns missing for that Instrument and Research Session, without selecting older reports to align the inputs. This accepts lower sample coverage in exchange for avoiding mixed-window financial results and an additional period-difference UI, while reusing existing missing-value propagation, coverage reporting, and rebalancing behavior. The rule does not reinterpret existing Fields or impose a shared reporting date on constants, market values, period-end stocks, or deliberate cross-period operations.

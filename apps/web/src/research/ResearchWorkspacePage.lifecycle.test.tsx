@@ -17,8 +17,7 @@ test.each(["success", "failure"])("a late Folder A %s cannot replace the loaded 
       if (++folderReads === 1) return slow; // Deliberately ignores cancellation.
       return Response.json({ items: folders, next_cursor: null });
     }
-    if (input === "/api/alpha/catalog") return Response.json({ fields: [], industries: [], builtins: [] });
-    if (input === "/api/data") return Response.json({ market_research_readiness: false });
+    if (input === "/api/data") return Response.json({ market_research_readiness: false, catalog: { fields: [], industries: [], builtins: [], generation_manifest_sha256: null } });
     throw new Error("Unexpected test request");
   }));
   const container = document.createElement("div");

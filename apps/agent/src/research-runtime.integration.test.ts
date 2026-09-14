@@ -448,10 +448,18 @@ describe.sequential("durable Research Agent runtime", () => {
     // A candidate that failed before publication leaves the previous revision untouched.
     await expect(repository.commitContextCycle(cycle, { ...snapshot, summary: "" }, signal)).rejects.toThrow();
     expect(await repository.contextCheckpoint(threadId, primaryResearcher.researcher_id)).toBeNull();
+    await expect(repository.contextInput(threadId, foreignResearcher.researcher_id))
+      .rejects.toBeInstanceOf(SessionNotFoundError);
+    expect(await repository.contextInput(threadId, primaryResearcher.researcher_id))
+      .toMatchObject({ checkpoint: null, recoveries: [] });
     const appendedId = randomUUID();
     await seedAssistantMessage(threadId, appendedId);
     const published = await repository.commitContextCycle(cycle, snapshot, signal);
     expect(published).toEqual({ revision: 1, snapshot });
+    const contextInput = await repository.contextInput(threadId, primaryResearcher.researcher_id);
+    expect(contextInput.checkpoint).toEqual(published);
+    expect(contextInput.messages.some(message => message.id === appendedId)).toBe(true);
+    expect(contextInput.recoveries).toEqual([]);
     expect((await repository.rawContextMessages(threadId, primaryResearcher.researcher_id)).some((m) => m.id === appendedId)).toBe(true);
     await expect(repository.commitContextCycle(cycle, snapshot, signal)).rejects.toBeInstanceOf(ContextCheckpointConflictError);
     const next = await repository.beginContextCycle(threadId, primaryResearcher.researcher_id, runId);
@@ -1597,7 +1605,7 @@ describe.sequential("durable Research Agent runtime", () => {
       threadId,
     }), primaryResearcher);
     try {
-      await vi.waitFor(() => expect(toolRuns).toEqual([runId]));
+      await vi.waitFor(() => expect(toolRuns).toEqual([runId]), { timeout: 5_000 });
       const attached = connect(runtime, threadId, primaryResearcher);
       await expect(runtime.deleteSession(threadId, primaryResearcher))
         .rejects.toBeInstanceOf(SessionActiveRunError);
@@ -1618,7 +1626,7 @@ describe.sequential("durable Research Agent runtime", () => {
         runId: secondRunId,
         threadId: secondThreadId,
       }), primaryResearcher);
-      await vi.waitFor(() => expect(toolRuns).toEqual([runId, secondRunId]));
+      await vi.waitFor(() => expect(toolRuns).toEqual([runId, secondRunId]), { timeout: 5_000 });
       const active = await owner.query<{ id: string; status: string }>(`
         SELECT id::text, status FROM agent.agent_run
         WHERE thread_id = ANY($1::uuid[]) ORDER BY id
@@ -1660,7 +1668,7 @@ describe.sequential("durable Research Agent runtime", () => {
       await first;
       await runtime.close();
     }
-  });
+  }, 15_000);
 
   it("rejects global saturation before persistence and accepts an explicit retry after capacity returns", async () => {
     const barrier = toolBarrier();
@@ -2849,7 +2857,7 @@ describe.sequential("durable Research Agent runtime", () => {
       // authoritative Result surface; a stale progress surface would make a
       // fast Batch render differently from the same terminal Batch on Resume.
       expect(surfaces).toHaveLength(1);
-      expect(surfaces[0].content).toMatchObject({
+      expect(surfaces[0]?.content).toMatchObject({
         a2ui_operations: expect.arrayContaining([expect.objectContaining({
           updateComponents: expect.objectContaining({
             components: expect.arrayContaining([expect.objectContaining({

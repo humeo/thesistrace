@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import date, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import Protocol
 
+from thesistrace.adapters.tushare_daily_basic import (
+    DailyBasicCheckpoint,
+    TushareDailyBasicSource,
+    normalize_daily_basic,
+)
 from thesistrace.adapters.tushare_provider import (
     SOURCE_CONTRACT_VERSION,
     TushareBootstrapArchive,
@@ -19,10 +25,12 @@ from thesistrace.adapters.tushare_provider import (
 )
 from thesistrace.data.canonical_mapping import (
     SOURCE_CORRECTABLE_PRICE_FIELDS,
+    daily_basic_field_catalog,
     field_catalog,
     liquidity_universes,
 )
 from thesistrace.data.generation_schema import GENERATION_SESSION_PARTITION_COUNT
+from thesistrace.data.market_source_checkpoint import MarketSourceCheckpoint
 from thesistrace.data.source import (
     BootstrapCollectionPlan,
     CanonicalBootstrapStream,
@@ -30,10 +38,17 @@ from thesistrace.data.source import (
     CanonicalSourceBatch,
     CollectionPlan,
     DataSourceError,
+    RawSourceResponse,
 )
 
 
 class TushareProvider(Protocol):
+    def select_market_window(self, *, last_session: str, as_of: date) -> None: ...
+
+    def query_raw(
+        self, api_name: str, *, params: Mapping[str, object], fields: Sequence[str],
+    ) -> RawSourceResponse: ...
+
     def collect_bootstrap_snapshot(
         self,
         *,
@@ -54,14 +69,41 @@ class TushareDataSource:
         self,
         *,
         provider: TushareProvider,
+        checkpoint_root: Path,
         clock: Callable[[], date] = date.today,
         progress: Callable[[dict[str, object]], None] | None = None,
         monotonic: Callable[[], float] = time.perf_counter,
     ) -> None:
         self._provider = provider
+        self._checkpoint_root = checkpoint_root
+        self._daily_basic = TushareDailyBasicSource(provider)
         self._clock = clock
         self._progress = progress or (lambda _event: None)
         self._monotonic = monotonic
+
+    def _daily_session_collector(
+        self, *, collection_key: str, stock_basic: list[dict[str, object]],
+        instruments: list[dict[str, object]],
+    ) -> tuple[Callable[[str], list[dict[str, object]]], DailyBasicCheckpoint]:
+        codes = tuple(str(row["ts_code"]) for row in stock_basic)
+        instrument_ids = {
+            str(row["ts_code"]): str(row["instrument_id"]) for row in instruments
+        }
+        checkpoint = DailyBasicCheckpoint(self._checkpoint_root, collection_key=collection_key)
+
+        def collect(session: str) -> list[dict[str, object]]:
+            raw = self._daily_basic.collect_session(
+                session=session, instrument_codes=codes, checkpoint=checkpoint,
+            )
+            code_index = raw.fields.index("ts_code")
+            # Validate against the full historical identities before selecting research stocks.
+            selected = RawSourceResponse(
+                fields=raw.fields,
+                items=tuple(row for row in raw.items if row[code_index] in instrument_ids),
+            )
+            return list(normalize_daily_basic(selected, instrument_ids=instrument_ids))
+
+        return collect, checkpoint
 
     @contextmanager
     def _timed_phase(self, phase: str) -> Iterator[None]:
@@ -108,11 +150,19 @@ class TushareDataSource:
             )
             assert request_start is not None
             request_end = plan.completed_through_date or self._clock()
+            self._provider.select_market_window(last_session=request_start, as_of=request_end)
+            price_checkpoint = MarketSourceCheckpoint(self._checkpoint_root, request={
+                "collection_key": plan.collection_key, "kind": plan.kind,
+                "start": request_start, "end": request_end.isoformat(),
+            })
             with self._timed_phase("source_collection"):
-                snapshot = self._provider.collect_incremental_snapshot(
-                    last_session=request_start,
-                    as_of=request_end,
-                )
+                raw_snapshot = price_checkpoint.load()
+                price_cached = raw_snapshot is not None
+                if raw_snapshot is None:
+                    raw_snapshot = self._provider.collect_incremental_snapshot(
+                        last_session=request_start, as_of=request_end,
+                    )
+                snapshot = raw_snapshot
             with self._timed_phase("merge"):
                 normalization_previous = previous
                 if plan.kind == "refresh":
@@ -174,6 +224,35 @@ class TushareDataSource:
                 "invalid_source_data",
                 detail_code="REFRESH_WINDOW_VIOLATION",
             )
+        if not price_cached:
+            price_checkpoint.save(raw_snapshot)
+        collect_daily, checkpoint = self._daily_session_collector(
+            collection_key=plan.collection_key, stock_basic=snapshot["stock_basic"],
+            instruments=canonical["instruments"],
+        )
+        selected_sessions = [
+            str(session) for session in calendar
+            if (str(session) >= request_start if plan.kind == "refresh"
+                else str(session) > request_start)
+        ]
+        if selected_sessions:
+            with self._timed_phase("daily_basic_collection"):
+                rows = [row for session in selected_sessions for row in collect_daily(session)]
+            prefix = [
+                row for row in previous.get("daily_basic", [])
+                if str(row["session"]) < selected_sessions[0]
+            ]
+            dates = [
+                row for row in previous.get("daily_basic_sessions", [])
+                if str(row["session"]) < selected_sessions[0]
+            ]
+            canonical["daily_basic"] = [*prefix, *rows]
+            canonical["daily_basic_sessions"] = [
+                *dates, *({"session": session} for session in selected_sessions),
+            ]
+            _declare_daily_basic(canonical)
+            lineage["daily_basic_collection_key"] = plan.collection_key
+            lineage["daily_basic_evidence"] = checkpoint.seal(selected_sessions)
         return CanonicalSourceBatch(
             source_name="tushare",
             collection_kind=plan.kind,
@@ -192,7 +271,14 @@ class TushareDataSource:
                 completed_through_date=plan.completed_through_date,
             )
             if isinstance(snapshot, TushareBootstrapArchive):
-                return _stream_bootstrap_archive(snapshot, plan)
+                collect_daily, checkpoint = self._daily_session_collector(
+                    collection_key=plan.collection_key,
+                    stock_basic=snapshot.foundation["stock_basic"],
+                    instruments=normalize_instruments(snapshot.foundation["stock_basic"]),
+                )
+                return _stream_bootstrap_archive(
+                    snapshot, plan, collect_daily=collect_daily, checkpoint=checkpoint,
+                )
             lineage, canonical = normalize_tushare_snapshot(snapshot)
         except TushareSourceError as error:
             raise DataSourceError(
@@ -217,6 +303,18 @@ class TushareDataSource:
                 "invalid_source_data",
                 detail_code="BOOTSTRAP_WINDOW_VIOLATION",
             )
+        collect_daily, checkpoint = self._daily_session_collector(
+            collection_key=plan.collection_key, stock_basic=snapshot["stock_basic"],
+            instruments=canonical["instruments"],
+        )
+        with self._timed_phase("daily_basic_collection"):
+            canonical["daily_basic"] = [
+                row for session in calendar for row in collect_daily(str(session))
+            ]
+        canonical["daily_basic_sessions"] = [{"session": str(session)} for session in calendar]
+        _declare_daily_basic(canonical)
+        lineage["daily_basic_collection_key"] = plan.collection_key
+        lineage["daily_basic_evidence"] = checkpoint.seal(tuple(str(value) for value in calendar))
         return CanonicalSourceBatch(
             source_name="tushare",
             collection_kind="bootstrap",
@@ -229,6 +327,9 @@ class TushareDataSource:
 def _stream_bootstrap_archive(
     archive: TushareBootstrapArchive,
     plan: BootstrapCollectionPlan,
+    *,
+    collect_daily: Callable[[str], list[dict[str, object]]],
+    checkpoint: DailyBasicCheckpoint,
 ) -> CanonicalBootstrapStream:
     if (archive.request_start, archive.request_end) != (
         plan.start_date,
@@ -263,7 +364,10 @@ def _stream_bootstrap_archive(
         "research_calendar": iso_sessions,
         "instruments": instruments,
         "field_catalog": field_catalog(iso_sessions[-1]),
+        "daily_basic_sessions": [{"session": session} for session in iso_sessions],
     }
+    _declare_daily_basic(static)
+    lineage = {**archive.source_lineage, "daily_basic_collection_key": plan.collection_key}
 
     def partitions() -> Iterator[CanonicalSessionPartition]:
         normalizer = TushareSessionNormalizer(instruments)
@@ -323,6 +427,12 @@ def _stream_bootstrap_archive(
                     "price_limits": block_limits,
                     "base_pool": block_base_pool,
                     "liquidity_universes": block_universes,
+                    "daily_basic": [
+                        row for session in block_iso_sessions for row in collect_daily(session)
+                    ],
+                    "daily_basic_sessions": [
+                        {"session": session} for session in block_iso_sessions
+                    ],
                 },
             )
             retained = set(combined_sessions[-19:])
@@ -336,14 +446,25 @@ def _stream_bootstrap_archive(
             prior_base_pool = [
                 row for row in combined_base_pool if str(row["session"]) in retained
             ]
+        # Only a fully consumed stream can bind complete source evidence to its candidate.
+        lineage["daily_basic_evidence"] = checkpoint.seal(iso_sessions)
 
     return CanonicalBootstrapStream(
         source_name="tushare",
-        source_lineage=archive.source_lineage,
+        source_lineage=lineage,
         static=static,
         covered_session_range=(iso_sessions[0], iso_sessions[-1]),
         partitions=partitions,
     )
+
+
+def _declare_daily_basic(canonical: dict[str, object]) -> None:
+    entries = {
+        str(row["field_id"]): row for row in canonical["field_catalog"]
+    }
+    for row in daily_basic_field_catalog(str(canonical["research_calendar"][0])):
+        entries[str(row["field_id"])] = row
+    canonical["field_catalog"] = [entries[key] for key in sorted(entries)]
 
 
 def _materialize_increment(
@@ -564,7 +685,7 @@ def _preserve_ordinary_overlap_absence(
     *,
     overlap_start_session: str,
 ) -> dict[str, list[dict[str, object]]]:
-    supplemented = dict(snapshot)
+    supplemented = {name: list(rows) for name, rows in snapshot.items()}
     calendar_sse = supplemented.get("calendar_sse", [])
     calendar_szse = supplemented.get("calendar_szse", [])
     stock_basic = supplemented.get("stock_basic", [])

@@ -63,8 +63,16 @@ class AlphaFieldCatalogEntry(BaseModel):
     field_id: Annotated[str, Field(max_length=200)]
     value_type: Literal[ValueType.NUMERIC_SERIES] = ValueType.NUMERIC_SERIES
     description: Annotated[str, Field(max_length=384)]
-    unit: Annotated[str, Field(max_length=384)]
-    family_id: Annotated[str, Field(max_length=384)]
+    unit: Annotated[str, Field(max_length=64)]
+    family_id: Annotated[str, Field(max_length=128)]
+    research_category: Literal["market", "financial"]
+    display_name: Annotated[str, Field(max_length=128)]
+    research_purpose: Annotated[str, Field(max_length=64)]
+    source_unit: Annotated[str, Field(max_length=64)]
+    source_endpoint: Annotated[str, Field(max_length=64)]
+    source_column: Annotated[str, Field(max_length=100)]
+    source_lineage: Annotated[str, Field(max_length=256)]
+    reporting_scope: Annotated[str, Field(max_length=128)]
     availability: Annotated[str, Field(max_length=384)]
     report_period_selection: Annotated[str, Field(max_length=384)]
     applicable_company_types: Annotated[
@@ -115,6 +123,9 @@ class AlphaIndustryCatalogEntry(BaseModel):
 class AlphaAuthoringCatalog(BaseModel):
     model_config = ConfigDict(frozen=True)
 
+    generation_manifest_sha256: Annotated[
+        str, Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+    ] | None = None
     fields: list[AlphaFieldCatalogEntry]
     builtins: list[AlphaBuiltinCatalogEntry]
     industries: Annotated[list[AlphaIndustryCatalogEntry], Field(max_length=31)]

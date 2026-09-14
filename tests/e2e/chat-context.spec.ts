@@ -91,9 +91,15 @@ for (const variant of ["single", "batch"] as const) {
     expect(checkpoint.revision).toBe(1);
     expect(checkpoint.recoveries).toHaveLength(0);
     expect(hasFrozenTool(threadId, "get_research_context")).toBe(true);
-    const activities = sql(`SELECT count(*) FROM agent.chat_timeline_entry
-      WHERE thread_id = '${threadId}'::uuid AND turn_id = '${runId}'::uuid AND kind = 'tool_activity';`).trim();
-    expect(activities).toBe(variant === "single" ? "1" : "4");
+    const activities = JSON.parse(sql(`SELECT json_agg(payload ORDER BY created_at, entry_id) FROM agent.chat_timeline_entry
+      WHERE thread_id = '${threadId}'::uuid AND turn_id = '${runId}'::uuid AND kind = 'tool_activity';`).trim());
+    expect(activities).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "get_research_context", status: "complete" }),
+    ]));
+    expect(activities.every((activity: { status: string }) => activity.status === "complete")).toBe(true);
+    if (variant === "batch") expect(activities).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "get_alpha_catalog", status: "complete" }),
+    ]));
     if (variant === "batch") expect(hasFrozenTool(threadId, "get_alpha_catalog")).toBe(true);
     await expect((await revealToolActivity(page, "get_research_context", "complete")).first()).toBeVisible();
     await expect(page.getByText(variant === "single" ? "I continued after compaction and read the current Core research context." : "I read bounded Core folder and catalog pages, continued their cursors after compaction, and retained any further-page indicators.", { exact: true })).toBeVisible();

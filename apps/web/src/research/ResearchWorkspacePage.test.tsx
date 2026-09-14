@@ -37,6 +37,7 @@ class MemoryStorage implements Storage {
 const folder = { id: "folder_default", name: "Default", is_default: true, created_at: "2026-08-13T00:00:00Z" };
 const researcherId = "00000000-0000-4000-8000-000000000001";
 const catalog = {
+  generation_manifest_sha256: "a".repeat(64),
   fields: [
     {
       identifier: "close",
@@ -45,6 +46,14 @@ const catalog = {
       description: "Adjusted close",
       unit: "CNY",
       family_id: "equity.eod_price",
+      research_category: "market" as const,
+      display_name: "复权收盘价",
+      research_purpose: "行情",
+      source_unit: "CNY/share",
+      source_endpoint: "daily",
+      source_column: "close",
+      source_lineage: "tushare.daily",
+      reporting_scope: "market-observation",
       availability: "after_close",
       report_period_selection: "research-session",
       applicable_company_types: [],
@@ -58,6 +67,14 @@ const catalog = {
       description: "Latest visible full-year consolidated total revenue",
       unit: "CNY",
       family_id: "equity.financial_pit",
+      research_category: "financial" as const,
+      display_name: "营业总收入",
+      research_purpose: "盈利",
+      source_unit: "CNY",
+      source_endpoint: "income",
+      source_column: "total_revenue",
+      source_lineage: "tushare.income.total_revenue",
+      reporting_scope: "report_type_1_consolidated",
       availability: "next_research_session_after_source_publication",
       report_period_selection: "latest_visible_full_year",
       applicable_company_types: ["1", "2", "3", "4"],
@@ -76,6 +93,9 @@ const catalog = {
   }],
 };
 const data = {
+  generation_manifest_sha256: "a".repeat(64),
+  available_field_ids: ["price.close.adjusted"],
+  field_families: [],
   market_coverage: { start: "2025-01-01", end: "2026-08-12" },
   financial_coverage: null,
   industry_coverage: null,

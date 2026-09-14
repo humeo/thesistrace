@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
 from thesistrace._postgres import PostgresDatabase
+from thesistrace.data.dependencies import generation_family_coverage
 from thesistrace.data.generation_store import MountedGenerationStore
 from thesistrace.data.lifecycle import DatasetLifecycle
-from thesistrace.data.models import FinancialResearchReadiness
+from thesistrace.data.models import DatasetCoverage, FinancialResearchReadiness
 
 type MaximumUniverseCardinality = Callable[[str, date, date], int]
 type UniverseMemberUnionCardinalities = Callable[
@@ -32,10 +33,7 @@ class DatasetAdmissionSnapshot:
     maximum_universe_cardinality: MaximumUniverseCardinality
     universe_member_union_cardinalities: UniverseMemberUnionCardinalities
     financial_research_readiness: FinancialResearchReadiness
-    financial_coverage_start: date | None = None
-    financial_coverage_end: date | None = None
-    industry_coverage_start: date | None = None
-    industry_coverage_end: date | None = None
+    family_coverage: Mapping[str, DatasetCoverage]
 
     def research_period(self, start: date, end: date) -> tuple[date, ...]:
         if start > end:
@@ -79,22 +77,6 @@ class DatasetAdmissionService:
         if admission is None:
             return None
         sessions = tuple(date.fromisoformat(value) for value in admission.research_calendar)
-        financial_start: date | None = None
-        if admission.financial_observation_through_session is not None:
-            financial_family = next(
-                family
-                for family in admission.generation.families
-                if family.family_id == "equity.financial_pit"
-            )
-            financial_start = date.fromisoformat(str(financial_family.dataset_coverage["start"]))
-        industry_family = next(
-            (
-                family
-                for family in admission.generation.families
-                if family.family_id == "equity.industry_membership"
-            ),
-            None,
-        )
         return DatasetAdmissionSnapshot(
             generation_manifest_sha256=admission.generation.manifest_sha256,
             data_through_session=date.fromisoformat(
@@ -126,20 +108,5 @@ class DatasetAdmissionService:
                 if admission.financial_research_readiness is None
                 else admission.financial_research_readiness
             ),
-            financial_coverage_start=financial_start,
-            financial_coverage_end=(
-                None
-                if admission.financial_observation_through_session is None
-                else date.fromisoformat(admission.financial_observation_through_session)
-            ),
-            industry_coverage_start=(
-                None
-                if industry_family is None
-                else date.fromisoformat(str(industry_family.dataset_coverage["start"]))
-            ),
-            industry_coverage_end=(
-                None
-                if industry_family is None
-                else date.fromisoformat(str(industry_family.dataset_coverage["end"]))
-            ),
+            family_coverage=generation_family_coverage(admission.generation),
         )

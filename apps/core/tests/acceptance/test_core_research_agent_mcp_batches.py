@@ -598,3 +598,85 @@ def _admission_receipt_count(settings: CoreSettings, request_id: str) -> int:
         return int(row["count"])
     finally:
         database.close()
+
+
+def test_indicator_batch_matches_single_run_and_daily_track_advances(tmp_path: Path) -> None:
+    settings = isolated_core_settings(tmp_path / "indicator-data")
+    settings.data_mount.mkdir(parents=True)
+    settings.batch_attempt_control_directory.mkdir(parents=True)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    try:
+        sessions = publish_current_data(settings, indicator_fields=True)
+        anyio.run(_exercise_indicator_consumers, settings, tmp_path, sessions)
+    finally:
+        drop_product_schemas(settings)
+
+
+async def _exercise_indicator_consumers(settings, tmp_path, sessions):
+    from test_core_research_agent_mcp_daily_tracks import _run_tracking_worker_once
+    from test_core_research_agent_mcp_runs import _command
+
+    formula = "rank(roe + debt_to_assets + q_ocf_to_sales + equity_parent_ytd_growth)"
+    end = sessions[20]
+    batch_command = _strategy_batch_command("indicator-batch", end_date=end)
+    batch_command["alpha"] = {"formula": formula, "hypothesis": "Indicator consumer equivalence."}
+    async with _mcp_client(settings, tmp_path / "indicator-submit.stderr.log") as client:
+        single = await client.call_tool("submit_research_run", {
+            **_command("indicator-single"), "formula": formula, "end_date": end,
+        })
+        batch = await client.call_tool("submit_research_batch", batch_command)
+        for response in (single, batch):
+            assert response.is_error is False
+            assert response.structured_content["outcome"] == "accepted", response.structured_content
+        single_id = single.structured_content["run_id"]
+        batch_id = batch.structured_content["batch_id"]
+    assert_worker_succeeded(await anyio.to_thread.run_sync(run_research_worker_once, settings))
+    assert_worker_succeeded(await anyio.to_thread.run_sync(
+        _run_batch_worker_once, settings, "batch-research",
+    ))
+    async with _mcp_client(settings, tmp_path / "indicator-results.stderr.log") as client:
+        batch = await client.call_tool("get_research_batch", {"batch_id": batch_id})
+        assert batch.is_error is False
+        assert batch.structured_content["status"] == "succeeded"
+        child = batch.structured_content["items"][0]["research_run_id"]
+        metrics, provenance = [], []
+        for run_id in (single_id, child):
+            result = await client.call_tool("get_research_run_result", {
+                "run_id": run_id, "section": "strategy_summary",
+            })
+            assert result.is_error is False
+            metrics.append(result.structured_content["metrics"])
+            result = await client.call_tool("get_research_run_result", {
+                "run_id": run_id, "section": "provenance",
+            })
+            assert result.is_error is False
+            provenance.append(result.structured_content["data"])
+        assert metrics[0] == metrics[1]
+        assert provenance[0] == provenance[1]
+        started = await client.call_tool("start_daily_track", {
+            "run_id": child, "request_id": "indicator-track-start",
+        })
+        assert started.is_error is False
+        track_id = started.structured_content["track_id"]
+        for index in range(6):
+            assert_worker_succeeded(await anyio.to_thread.run_sync(
+                _run_tracking_worker_once, settings,
+            ))
+            detail = await client.call_tool("get_daily_track", {"track_id": track_id})
+            assert detail.is_error is False
+            if detail.structured_content["progress"]["lag_sessions"] == 0:
+                break
+            refresh = await client.call_tool("refresh_daily_track", {
+                "track_id": track_id, "request_id": f"indicator-refresh-{index}",
+            })
+            assert refresh.is_error is False
+        else:
+            raise AssertionError("Indicator DailyTrack did not catch up within six refreshes")
+        assert detail.structured_content["progress"]["head_session"] == sessions[-1]
+        summary = await client.call_tool("get_daily_track_result", {
+            "track_id": track_id, "section": "strategy_summary",
+        })
+        assert summary.is_error is False
+        assert summary.structured_content["origin_session"] == end
+        assert summary.structured_content["strategy_session"] == sessions[-1]

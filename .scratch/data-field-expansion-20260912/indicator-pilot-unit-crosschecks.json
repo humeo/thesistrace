@@ -1,0 +1,1006 @@
+{
+  "source": "indicator-pilot-source-observations.json",
+  "scope": "independent sample unit comparisons, not production fallback formulas or universal definitions",
+  "checks": [
+    {
+      "security": "600519.SH",
+      "period": "20240331",
+      "field": "eps",
+      "formula": "income.basic_eps",
+      "operands": [
+        "19.16"
+      ],
+      "supplier_value": "19.16",
+      "computed": "19.16",
+      "absolute_difference": "0.00",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "600519.SH",
+      "period": "20240331",
+      "field": "bps",
+      "formula": "parent_equity / shares (industrial sample only)",
+      "operands": [
+        "239731785910.55",
+        "1256197800.0"
+      ],
+      "supplier_value": "190.8392",
+      "computed": "190.8392021627087708639515210",
+      "absolute_difference": "0.0000021627087708639515210",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "600519.SH",
+      "period": "20240331",
+      "field": "current_ratio",
+      "formula": "current_assets / current_liabilities",
+      "operands": [
+        "237376996384.72",
+        "36626674015.39"
+      ],
+      "supplier_value": "6.481",
+      "computed": "6.480986951885874508028667613",
+      "absolute_difference": "0.000013048114125491971332387",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "600519.SH",
+      "period": "20240331",
+      "field": "roe",
+      "formula": "cumulative_parent_profit / mean(start_year_equity,end_equity) * 100",
+      "operands": [
+        "24065262374.15",
+        "215668571607.43",
+        "239731785910.55"
+      ],
+      "supplier_value": "10.5688",
+      "computed": "10.56883771690928524984737424",
+      "absolute_difference": "0.00003771690928524984737424",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "600519.SH",
+      "period": "20240331",
+      "field": "q_roe",
+      "formula": "quarter_parent_profit / mean(prior_quarter_equity,end_equity) * 100",
+      "operands": [
+        "24065262374.15",
+        "0",
+        "215668571607.43",
+        "239731785910.55"
+      ],
+      "supplier_value": "10.5688",
+      "computed": "10.56883771690928524984737424",
+      "absolute_difference": "0.00003771690928524984737424",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "600519.SH",
+      "period": "20240331",
+      "field": "netprofit_yoy",
+      "formula": "(parent_profit / prior_year_same_period_profit - 1) * 100",
+      "operands": [
+        "24065262374.15",
+        "20794882754.55"
+      ],
+      "supplier_value": "15.7268",
+      "computed": "15.72684808181680376282638780",
+      "absolute_difference": "0.00004808181680376282638780",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "600519.SH",
+      "period": "20240630",
+      "field": "eps",
+      "formula": "income.basic_eps",
+      "operands": [
+        "33.19"
+      ],
+      "supplier_value": "33.19",
+      "computed": "33.19",
+      "absolute_difference": "0.00",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "600519.SH",
+      "period": "20240630",
+      "field": "bps",
+      "formula": "parent_equity / shares (industrial sample only)",
+      "operands": [
+        "218575608600.14",
+        "1256197800.0"
+      ],
+      "supplier_value": "173.9978",
+      "computed": "173.9977642057166474897504199",
+      "absolute_difference": "0.0000357942833525102495801",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "600519.SH",
+      "period": "20240630",
+      "field": "current_ratio",
+      "formula": "current_assets / current_liabilities",
+      "operands": [
+        "232257040097.43",
+        "50806881664.47"
+      ],
+      "supplier_value": "4.5714",
+      "computed": "4.571369713875802890182242314",
+      "absolute_difference": "0.000030286124197109817757686",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "600519.SH",
+      "period": "20240630",
+      "field": "roe",
+      "formula": "cumulative_parent_profit / mean(start_year_equity,end_equity) * 100",
+      "operands": [
+        "41695610983.37",
+        "215668571607.43",
+        "218575608600.14"
+      ],
+      "supplier_value": "19.2038",
+      "computed": "19.20376271407454435759978828",
+      "absolute_difference": "0.00003728592545564240021172",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "600519.SH",
+      "period": "20240630",
+      "field": "q_roe",
+      "formula": "quarter_parent_profit / mean(prior_quarter_equity,end_equity) * 100",
+      "operands": [
+        "41695610983.37",
+        "24065262374.15",
+        "239731785910.55",
+        "218575608600.14"
+      ],
+      "supplier_value": "7.6937",
+      "computed": "7.693678443937379189360448812",
+      "absolute_difference": "0.000021556062620810639551188",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "600519.SH",
+      "period": "20240630",
+      "field": "netprofit_yoy",
+      "formula": "(parent_profit / prior_year_same_period_profit - 1) * 100",
+      "operands": [
+        "41695610983.37",
+        "35980415090.77"
+      ],
+      "supplier_value": "15.8842",
+      "computed": "15.88418554422433643833060240",
+      "absolute_difference": "0.00001445577566356166939760",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "600519.SH",
+      "period": "20240930",
+      "field": "eps",
+      "formula": "income.basic_eps",
+      "operands": [
+        "48.42"
+      ],
+      "supplier_value": "48.42",
+      "computed": "48.42",
+      "absolute_difference": "0.00",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "600519.SH",
+      "period": "20240930",
+      "field": "bps",
+      "formula": "parent_equity / shares (industrial sample only)",
+      "operands": [
+        "237709455000.28",
+        "1256197800.0"
+      ],
+      "supplier_value": "189.2293",
+      "computed": "189.2293196185186759601075563",
+      "absolute_difference": "0.0000196185186759601075563",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "600519.SH",
+      "period": "20240930",
+      "field": "current_ratio",
+      "formula": "current_assets / current_liabilities",
+      "operands": [
+        "238419577361.93",
+        "38723890549.12"
+      ],
+      "supplier_value": "6.1569",
+      "computed": "6.156911766381079247070006754",
+      "absolute_difference": "0.000011766381079247070006754",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "600519.SH",
+      "period": "20240930",
+      "field": "roe",
+      "formula": "cumulative_parent_profit / mean(start_year_equity,end_equity) * 100",
+      "operands": [
+        "60827552118.51",
+        "215668571607.43",
+        "237709455000.28"
+      ],
+      "supplier_value": "26.833",
+      "computed": "26.83303933965977800365506975",
+      "absolute_difference": "0.00003933965977800365506975",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "600519.SH",
+      "period": "20240930",
+      "field": "q_roe",
+      "formula": "quarter_parent_profit / mean(prior_quarter_equity,end_equity) * 100",
+      "operands": [
+        "60827552118.51",
+        "41695610983.37",
+        "218575608600.14",
+        "237709455000.28"
+      ],
+      "supplier_value": "8.386",
+      "computed": "8.385959857714873261654054619",
+      "absolute_difference": "0.000040142285126738345945381",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "600519.SH",
+      "period": "20240930",
+      "field": "netprofit_yoy",
+      "formula": "(parent_profit / prior_year_same_period_profit - 1) * 100",
+      "operands": [
+        "60827552118.51",
+        "52876217064.12"
+      ],
+      "supplier_value": "15.0376",
+      "computed": "15.03763978566746817275150260",
+      "absolute_difference": "0.00003978566746817275150260",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "600519.SH",
+      "period": "20241231",
+      "field": "eps",
+      "formula": "income.basic_eps",
+      "operands": [
+        "68.64"
+      ],
+      "supplier_value": "68.64",
+      "computed": "68.64",
+      "absolute_difference": "0.00",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "600519.SH",
+      "period": "20241231",
+      "field": "bps",
+      "formula": "parent_equity / shares (industrial sample only)",
+      "operands": [
+        "233105984399.47",
+        "1256197800.0"
+      ],
+      "supplier_value": "185.5647",
+      "computed": "185.5647131363149975266633965",
+      "absolute_difference": "0.0000131363149975266633965",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "600519.SH",
+      "period": "20241231",
+      "field": "current_ratio",
+      "formula": "current_assets / current_liabilities",
+      "operands": [
+        "251726674636.66",
+        "56515990618.96"
+      ],
+      "supplier_value": "4.4541",
+      "computed": "4.454078781593729444441214302",
+      "absolute_difference": "0.000021218406270555558785698",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "600519.SH",
+      "period": "20241231",
+      "field": "roe",
+      "formula": "cumulative_parent_profit / mean(start_year_equity,end_equity) * 100",
+      "operands": [
+        "86228146421.62",
+        "215668571607.43",
+        "233105984399.47"
+      ],
+      "supplier_value": "38.4283",
+      "computed": "38.42826883451664524635357257",
+      "absolute_difference": "0.00003116548335475364642743",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "600519.SH",
+      "period": "20241231",
+      "field": "q_roe",
+      "formula": "quarter_parent_profit / mean(prior_quarter_equity,end_equity) * 100",
+      "operands": [
+        "86228146421.62",
+        "60827552118.51",
+        "237709455000.28",
+        "233105984399.47"
+      ],
+      "supplier_value": "10.79",
+      "computed": "10.79004305189889979373300629",
+      "absolute_difference": "0.00004305189889979373300629",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "600519.SH",
+      "period": "20241231",
+      "field": "netprofit_yoy",
+      "formula": "(parent_profit / prior_year_same_period_profit - 1) * 100",
+      "operands": [
+        "86228146421.62",
+        "74734071550.75"
+      ],
+      "supplier_value": "15.38",
+      "computed": "15.37996610162563831869509280",
+      "absolute_difference": "0.00003389837436168130490720",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "600519.SH",
+      "period": "20250331",
+      "field": "eps",
+      "formula": "income.basic_eps",
+      "operands": [
+        "21.38"
+      ],
+      "supplier_value": "21.38",
+      "computed": "21.38",
+      "absolute_difference": "0.00",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "600519.SH",
+      "period": "20250331",
+      "field": "bps",
+      "formula": "parent_equity / shares (industrial sample only)",
+      "operands": [
+        "258357842676.41",
+        "1256197800.0"
+      ],
+      "supplier_value": "205.6665",
+      "computed": "205.6665301248020017229770662",
+      "absolute_difference": "0.0000301248020017229770662",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "600519.SH",
+      "period": "20250331",
+      "field": "current_ratio",
+      "formula": "current_assets / current_liabilities",
+      "operands": [
+        "266506714239.54",
+        "43870177560.85"
+      ],
+      "supplier_value": "6.0749",
+      "computed": "6.074894815957438295046558217",
+      "absolute_difference": "0.000005184042561704953441783",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "600519.SH",
+      "period": "20250331",
+      "field": "roe",
+      "formula": "cumulative_parent_profit / mean(start_year_equity,end_equity) * 100",
+      "operands": [
+        "26847474238.76",
+        "233105984399.47",
+        "258357842676.41"
+      ],
+      "supplier_value": "10.9255",
+      "computed": "10.92551384646050869849791936",
+      "absolute_difference": "0.00001384646050869849791936",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "600519.SH",
+      "period": "20250331",
+      "field": "q_roe",
+      "formula": "quarter_parent_profit / mean(prior_quarter_equity,end_equity) * 100",
+      "operands": [
+        "26847474238.76",
+        "0",
+        "233105984399.47",
+        "258357842676.41"
+      ],
+      "supplier_value": "10.9255",
+      "computed": "10.92551384646050869849791936",
+      "absolute_difference": "0.00001384646050869849791936",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "600519.SH",
+      "period": "20250331",
+      "field": "netprofit_yoy",
+      "formula": "(parent_profit / prior_year_same_period_profit - 1) * 100",
+      "operands": [
+        "26847474238.76",
+        "24065262374.15"
+      ],
+      "supplier_value": "11.5611",
+      "computed": "11.56111170264466916900788490",
+      "absolute_difference": "0.00001170264466916900788490",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "600519.SH",
+      "period": "20250630",
+      "field": "eps",
+      "formula": "income.basic_eps",
+      "operands": [
+        "36.18"
+      ],
+      "supplier_value": "36.18",
+      "computed": "36.18",
+      "absolute_difference": "0.00",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "600519.SH",
+      "period": "20250630",
+      "field": "bps",
+      "formula": "parent_equity / shares (industrial sample only)",
+      "operands": [
+        "238646536390.48",
+        "1256197800.0"
+      ],
+      "supplier_value": "189.9753",
+      "computed": "189.9752860500790560212730829",
+      "absolute_difference": "0.0000139499209439787269171",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "600519.SH",
+      "period": "20250630",
+      "field": "current_ratio",
+      "formula": "current_assets / current_liabilities",
+      "operands": [
+        "245478396729.47",
+        "42842853450.65"
+      ],
+      "supplier_value": "5.7297",
+      "computed": "5.729739663867922625925978100",
+      "absolute_difference": "0.000039663867922625925978100",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "600519.SH",
+      "period": "20250630",
+      "field": "roe",
+      "formula": "cumulative_parent_profit / mean(start_year_equity,end_equity) * 100",
+      "operands": [
+        "45402962298.1",
+        "233105984399.47",
+        "238646536390.48"
+      ],
+      "supplier_value": "19.2486",
+      "computed": "19.24863579830912223028656825",
+      "absolute_difference": "0.00003579830912223028656825",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "600519.SH",
+      "period": "20250630",
+      "field": "q_roe",
+      "formula": "quarter_parent_profit / mean(prior_quarter_equity,end_equity) * 100",
+      "operands": [
+        "45402962298.1",
+        "26847474238.76",
+        "258357842676.41",
+        "238646536390.48"
+      ],
+      "supplier_value": "7.4669",
+      "computed": "7.466931415846814817689979663",
+      "absolute_difference": "0.000031415846814817689979663",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "600519.SH",
+      "period": "20250630",
+      "field": "netprofit_yoy",
+      "formula": "(parent_profit / prior_year_same_period_profit - 1) * 100",
+      "operands": [
+        "45402962298.1",
+        "41695610983.37"
+      ],
+      "supplier_value": "8.8915",
+      "computed": "8.891466577162404195928698100",
+      "absolute_difference": "0.000033422837595804071301900",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "000001.SZ",
+      "period": "20240331",
+      "field": "eps",
+      "formula": "income.basic_eps",
+      "operands": [
+        "0.66"
+      ],
+      "supplier_value": "0.66",
+      "computed": "0.66",
+      "absolute_difference": "0.00",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "000001.SZ",
+      "period": "20240331",
+      "field": "bps",
+      "formula": "parent_equity / shares (industrial sample only)",
+      "operands": [
+        null
+      ],
+      "supplier_value": "21.4178",
+      "status": "missing_or_ambiguous_operand"
+    },
+    {
+      "security": "000001.SZ",
+      "period": "20240331",
+      "field": "current_ratio",
+      "formula": "current_assets / current_liabilities",
+      "operands": [
+        null,
+        null
+      ],
+      "supplier_value": null,
+      "status": "missing_or_ambiguous_operand"
+    },
+    {
+      "security": "000001.SZ",
+      "period": "20240331",
+      "field": "roe",
+      "formula": "cumulative_parent_profit / mean(start_year_equity,end_equity) * 100",
+      "operands": [
+        "14932000000.0",
+        "472328000000.0",
+        "485576000000.0"
+      ],
+      "supplier_value": "3.1176",
+      "computed": "3.117640181061985334647313301",
+      "absolute_difference": "0.000040181061985334647313301",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "000001.SZ",
+      "period": "20240331",
+      "field": "q_roe",
+      "formula": "quarter_parent_profit / mean(prior_quarter_equity,end_equity) * 100",
+      "operands": [
+        "14932000000.0",
+        "0",
+        "472328000000.0",
+        "485576000000.0"
+      ],
+      "supplier_value": "3.1176",
+      "computed": "3.117640181061985334647313301",
+      "absolute_difference": "0.000040181061985334647313301",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "000001.SZ",
+      "period": "20240331",
+      "field": "netprofit_yoy",
+      "formula": "(parent_profit / prior_year_same_period_profit - 1) * 100",
+      "operands": [
+        "14932000000.0",
+        "14602000000.0"
+      ],
+      "supplier_value": "2.26",
+      "computed": "2.259964388439939734282974900",
+      "absolute_difference": "0.000035611560060265717025100",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "000001.SZ",
+      "period": "20240630",
+      "field": "eps",
+      "formula": "income.basic_eps",
+      "operands": [
+        "1.23"
+      ],
+      "supplier_value": null,
+      "status": "missing_or_ambiguous_operand"
+    },
+    {
+      "security": "000001.SZ",
+      "period": "20240630",
+      "field": "bps",
+      "formula": "parent_equity / shares (industrial sample only)",
+      "operands": [
+        null
+      ],
+      "supplier_value": "21.2268",
+      "status": "missing_or_ambiguous_operand"
+    },
+    {
+      "security": "000001.SZ",
+      "period": "20240630",
+      "field": "current_ratio",
+      "formula": "current_assets / current_liabilities",
+      "operands": [
+        null,
+        null
+      ],
+      "supplier_value": null,
+      "status": "missing_or_ambiguous_operand"
+    },
+    {
+      "security": "000001.SZ",
+      "period": "20240630",
+      "field": "roe",
+      "formula": "cumulative_parent_profit / mean(start_year_equity,end_equity) * 100",
+      "operands": [
+        "25879000000.0",
+        "472328000000.0",
+        "481869000000.0"
+      ],
+      "supplier_value": "5.4242",
+      "computed": "5.424246775037020657159894655",
+      "absolute_difference": "0.000046775037020657159894655",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "000001.SZ",
+      "period": "20240630",
+      "field": "q_roe",
+      "formula": "quarter_parent_profit / mean(prior_quarter_equity,end_equity) * 100",
+      "operands": [
+        "25879000000.0",
+        "14932000000.0",
+        "485576000000.0",
+        "481869000000.0"
+      ],
+      "supplier_value": "2.2631",
+      "computed": "2.263074386657639452371969466",
+      "absolute_difference": "0.000025613342360547628030534",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "000001.SZ",
+      "period": "20240630",
+      "field": "netprofit_yoy",
+      "formula": "(parent_profit / prior_year_same_period_profit - 1) * 100",
+      "operands": [
+        "25879000000.0",
+        "25387000000.0"
+      ],
+      "supplier_value": "1.938",
+      "computed": "1.937999763658565407492023500",
+      "absolute_difference": "2.36341434592507976500E-7",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "000001.SZ",
+      "period": "20240930",
+      "field": "eps",
+      "formula": "income.basic_eps",
+      "operands": [
+        "1.94"
+      ],
+      "supplier_value": "1.94",
+      "computed": "1.94",
+      "absolute_difference": "0.00",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "000001.SZ",
+      "period": "20240930",
+      "field": "bps",
+      "formula": "parent_equity / shares (industrial sample only)",
+      "operands": [
+        null
+      ],
+      "supplier_value": "21.6699",
+      "status": "missing_or_ambiguous_operand"
+    },
+    {
+      "security": "000001.SZ",
+      "period": "20240930",
+      "field": "current_ratio",
+      "formula": "current_assets / current_liabilities",
+      "operands": [
+        null,
+        null
+      ],
+      "supplier_value": null,
+      "status": "missing_or_ambiguous_operand"
+    },
+    {
+      "security": "000001.SZ",
+      "period": "20240930",
+      "field": "roe",
+      "formula": "cumulative_parent_profit / mean(start_year_equity,end_equity) * 100",
+      "operands": [
+        "39729000000.0",
+        "472328000000.0",
+        "490469000000.0"
+      ],
+      "supplier_value": "8.2528",
+      "computed": "8.252830035822712368235463966",
+      "absolute_difference": "0.000030035822712368235463966",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "000001.SZ",
+      "period": "20240930",
+      "field": "q_roe",
+      "formula": "quarter_parent_profit / mean(prior_quarter_equity,end_equity) * 100",
+      "operands": [
+        "39729000000.0",
+        "25879000000.0",
+        "481869000000.0",
+        "490469000000.0"
+      ],
+      "supplier_value": "2.8488",
+      "computed": "2.848803605330656623519804842",
+      "absolute_difference": "0.000003605330656623519804842",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "000001.SZ",
+      "period": "20240930",
+      "field": "netprofit_yoy",
+      "formula": "(parent_profit / prior_year_same_period_profit - 1) * 100",
+      "operands": [
+        "39729000000.0",
+        "39635000000.0"
+      ],
+      "supplier_value": "0.2372",
+      "computed": "0.237164122618897439132080200",
+      "absolute_difference": "0.000035877381102560867919800",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "000001.SZ",
+      "period": "20241231",
+      "field": "eps",
+      "formula": "income.basic_eps",
+      "operands": [
+        "2.15"
+      ],
+      "supplier_value": "2.15",
+      "computed": "2.15",
+      "absolute_difference": "0.00",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "000001.SZ",
+      "period": "20241231",
+      "field": "bps",
+      "formula": "parent_equity / shares (industrial sample only)",
+      "operands": [
+        null
+      ],
+      "supplier_value": "21.8951",
+      "status": "missing_or_ambiguous_operand"
+    },
+    {
+      "security": "000001.SZ",
+      "period": "20241231",
+      "field": "current_ratio",
+      "formula": "current_assets / current_liabilities",
+      "operands": [
+        null,
+        null
+      ],
+      "supplier_value": null,
+      "status": "missing_or_ambiguous_operand"
+    },
+    {
+      "security": "000001.SZ",
+      "period": "20241231",
+      "field": "roe",
+      "formula": "cumulative_parent_profit / mean(start_year_equity,end_equity) * 100",
+      "operands": [
+        "44508000000.0",
+        "472328000000.0",
+        "494842000000.0"
+      ],
+      "supplier_value": "9.2038",
+      "computed": "9.203759421818294612115760414",
+      "absolute_difference": "0.000040578181705387884239586",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "000001.SZ",
+      "period": "20241231",
+      "field": "q_roe",
+      "formula": "quarter_parent_profit / mean(prior_quarter_equity,end_equity) * 100",
+      "operands": [
+        "44508000000.0",
+        "39729000000.0",
+        "490469000000.0",
+        "494842000000.0"
+      ],
+      "supplier_value": "0.97",
+      "computed": "0.9700490505028361603595210040",
+      "absolute_difference": "0.0000490505028361603595210040",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "000001.SZ",
+      "period": "20241231",
+      "field": "netprofit_yoy",
+      "formula": "(parent_profit / prior_year_same_period_profit - 1) * 100",
+      "operands": [
+        "44508000000.0",
+        "46455000000.0"
+      ],
+      "supplier_value": "-4.1912",
+      "computed": "-4.191152728446884081369066840",
+      "absolute_difference": "0.000047271553115918630933160",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "000001.SZ",
+      "period": "20250331",
+      "field": "eps",
+      "formula": "income.basic_eps",
+      "operands": [
+        "0.62"
+      ],
+      "supplier_value": "0.62",
+      "computed": "0.62",
+      "absolute_difference": "0.00",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "000001.SZ",
+      "period": "20250331",
+      "field": "bps",
+      "formula": "parent_equity / shares (industrial sample only)",
+      "operands": [
+        null
+      ],
+      "supplier_value": null,
+      "status": "missing_or_ambiguous_operand"
+    },
+    {
+      "security": "000001.SZ",
+      "period": "20250331",
+      "field": "current_ratio",
+      "formula": "current_assets / current_liabilities",
+      "operands": [
+        null,
+        null
+      ],
+      "supplier_value": null,
+      "status": "missing_or_ambiguous_operand"
+    },
+    {
+      "security": "000001.SZ",
+      "period": "20250331",
+      "field": "roe",
+      "formula": "cumulative_parent_profit / mean(start_year_equity,end_equity) * 100",
+      "operands": [
+        "14096000000.0",
+        "494842000000.0",
+        "506112000000.0"
+      ],
+      "supplier_value": "2.8165",
+      "computed": "2.816513046553587877165184414",
+      "absolute_difference": "0.000013046553587877165184414",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "000001.SZ",
+      "period": "20250331",
+      "field": "q_roe",
+      "formula": "quarter_parent_profit / mean(prior_quarter_equity,end_equity) * 100",
+      "operands": [
+        "14096000000.0",
+        "0",
+        "494842000000.0",
+        "506112000000.0"
+      ],
+      "supplier_value": "2.8165",
+      "computed": "2.816513046553587877165184414",
+      "absolute_difference": "0.000013046553587877165184414",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "000001.SZ",
+      "period": "20250331",
+      "field": "netprofit_yoy",
+      "formula": "(parent_profit / prior_year_same_period_profit - 1) * 100",
+      "operands": [
+        "14096000000.0",
+        "14932000000.0"
+      ],
+      "supplier_value": "-5.5987",
+      "computed": "-5.598714170908116796142512720",
+      "absolute_difference": "0.000014170908116796142512720",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "000001.SZ",
+      "period": "20250630",
+      "field": "eps",
+      "formula": "income.basic_eps",
+      "operands": [
+        "1.18"
+      ],
+      "supplier_value": "1.18",
+      "computed": "1.18",
+      "absolute_difference": "0.00",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "000001.SZ",
+      "period": "20250630",
+      "field": "bps",
+      "formula": "parent_equity / shares (industrial sample only)",
+      "operands": [
+        null
+      ],
+      "supplier_value": "22.6791",
+      "status": "missing_or_ambiguous_operand"
+    },
+    {
+      "security": "000001.SZ",
+      "period": "20250630",
+      "field": "current_ratio",
+      "formula": "current_assets / current_liabilities",
+      "operands": [
+        null,
+        null
+      ],
+      "supplier_value": null,
+      "status": "missing_or_ambiguous_operand"
+    },
+    {
+      "security": "000001.SZ",
+      "period": "20250630",
+      "field": "roe",
+      "formula": "cumulative_parent_profit / mean(start_year_equity,end_equity) * 100",
+      "operands": [
+        "24870000000.0",
+        "494842000000.0",
+        "510062000000.0"
+      ],
+      "supplier_value": "4.9497",
+      "computed": "4.949726541042726469394091376",
+      "absolute_difference": "0.000026541042726469394091376",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "000001.SZ",
+      "period": "20250630",
+      "field": "q_roe",
+      "formula": "quarter_parent_profit / mean(prior_quarter_equity,end_equity) * 100",
+      "operands": [
+        "24870000000.0",
+        "14096000000.0",
+        "506112000000.0",
+        "510062000000.0"
+      ],
+      "supplier_value": "2.1205",
+      "computed": "2.120502984725056929226687555",
+      "absolute_difference": "0.000002984725056929226687555",
+      "status": "matches_within_0.0001"
+    },
+    {
+      "security": "000001.SZ",
+      "period": "20250630",
+      "field": "netprofit_yoy",
+      "formula": "(parent_profit / prior_year_same_period_profit - 1) * 100",
+      "operands": [
+        "24870000000.0",
+        "25879000000.0"
+      ],
+      "supplier_value": "-3.8989",
+      "computed": "-3.898914177518451253912438660",
+      "absolute_difference": "0.000014177518451253912438660",
+      "status": "matches_within_0.0001"
+    }
+  ]
+}

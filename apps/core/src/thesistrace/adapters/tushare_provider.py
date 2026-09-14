@@ -325,6 +325,9 @@ def permission_probes(reference_date: date | None = None) -> tuple[PermissionPro
 
 
 class TushareAdapter:
+    def select_market_window(self, *, last_session: str, as_of: date) -> None:
+        """This provider has no per-window replay selection."""
+
     def __init__(
         self,
         *,

@@ -199,6 +199,9 @@ CREATE TABLE data.financial_daily_refresh_operations (
     discovery_start_date date,
     discovery_end_date date,
     discovery_evidence jsonb,
+    indicator_collection jsonb,
+    indicator_candidate_manifest_sha256 text
+        CHECK (indicator_candidate_manifest_sha256 ~ '^[0-9a-f]{64}$'),
     source_lineage_sha256 text,
     status text NOT NULL,
     candidate_manifest_sha256 text,
@@ -848,3 +851,25 @@ ALTER TABLE ONLY data.financial_collection_shards
 
 ALTER TABLE ONLY data.financial_collection_shards
     ADD CONSTRAINT financial_collection_shards_batch_fkey FOREIGN KEY (batch_sha256) REFERENCES data.financial_raw_batches(batch_sha256);
+
+CREATE TABLE data.financial_indicator_report_targets (
+    instrument_id text NOT NULL CHECK (instrument_id <> '' AND instrument_id = btrim(instrument_id)),
+    report_period date,
+    announced_on date NOT NULL,
+    resolved_observation_sha256 text CHECK (resolved_observation_sha256 ~ '^[0-9a-f]{64}$'),
+    UNIQUE NULLS NOT DISTINCT (instrument_id, report_period, announced_on),
+    CHECK (report_period <= announced_on)
+);
+
+CREATE TABLE data.financial_indicator_reconciliation (
+    instrument_id text PRIMARY KEY CHECK (instrument_id <> '' AND instrument_id = btrim(instrument_id)),
+    checked_through date NOT NULL,
+    observation_sha256 text NOT NULL CHECK (observation_sha256 ~ '^[0-9a-f]{64}$')
+);
+
+CREATE TABLE data.financial_indicator_collections (
+    observation_sha256 text PRIMARY KEY CHECK (observation_sha256 ~ '^[0-9a-f]{64}$'),
+    instrument_id text NOT NULL REFERENCES data.financial_indicator_reconciliation(instrument_id)
+        ON DELETE CASCADE,
+    checked_through date NOT NULL
+);

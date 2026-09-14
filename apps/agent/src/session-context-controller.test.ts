@@ -41,8 +41,7 @@ async function fixture() {
   let claimed = false;
   const recoveries: ModelStepRecovery[] = [];
   const repository = {
-    modelStepRecoveries: async () => recoveries,
-    contextCheckpoint: async () => checkpoint,
+    contextInput: async () => ({ checkpoint, messages: structuredClone(raw), recoveries }),
     rawContextMessages: async () => structuredClone(raw),
     beginContextCycle: async (): Promise<SessionContextCycle> => {
       if (claimed) throw new Error("Concurrent claim"); claimed = true;

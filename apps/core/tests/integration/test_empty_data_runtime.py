@@ -28,6 +28,31 @@ def _isolated_settings(core_settings: CoreSettings, data_mount: Path) -> CoreSet
     )
 
 
+def _data_overview_response(
+    client: TestClient, generation_manifest_sha256: str | None,
+) -> dict[str, object]:
+    response = client.get("/api/data")
+    assert response.status_code == 200
+    payload = response.json()
+    catalog = payload.pop("catalog")
+    assert payload.pop("generation_manifest_sha256") == generation_manifest_sha256
+    assert catalog["generation_manifest_sha256"] == generation_manifest_sha256
+    expected_fields = set() if generation_manifest_sha256 is None else {
+        "price.close.adjusted",
+    }
+    assert set(payload.pop("available_field_ids")) == expected_fields
+    assert {field["field_id"] for field in catalog["fields"]} == expected_fields
+    families = {family["family_id"]: family for family in payload.pop("field_families")}
+    assert set(families["equity.eod_price"]["available_field_ids"]) == expected_fields
+    assert families["equity.eod_price"]["readiness"] == (
+        "not_ready" if generation_manifest_sha256 is None else "partial"
+    )
+    assert families["equity.financial_pit"]["available_field_ids"] == []
+    assert families["equity.financial_pit"]["readiness"] == "not_ready"
+    assert "rank" in {builtin["identifier"] for builtin in catalog["builtins"]}
+    return payload
+
+
 def test_api_exposes_a_dedicated_liveness_endpoint(
     core_settings: CoreSettings,
     tmp_path: Path,
@@ -94,7 +119,7 @@ def test_empty_and_prepared_data_overview_survive_real_http_restart(
     }
 
     with TestClient(create_app(settings)) as client:
-        assert client.get("/api/data").json() == empty
+        assert _data_overview_response(client, None) == empty
         assert client.post("/api/data/update").status_code == 404
         assert client.get("/api/data/releases").status_code == 404
         assert client.get("/api/data/releases/anything").status_code == 404
@@ -142,7 +167,7 @@ def test_empty_and_prepared_data_overview_survive_real_http_restart(
     }
     for _ in range(2):
         with TestClient(create_app(settings)) as client:
-            assert client.get("/api/data").json() == expected
+            assert _data_overview_response(client, generation.manifest_sha256) == expected
 
     with open_core_runtime(settings) as runtime:
         with runtime.database.transaction() as transaction:
@@ -154,7 +179,7 @@ def test_empty_and_prepared_data_overview_survive_real_http_restart(
                 """
             )
     with TestClient(create_app(settings)) as client:
-        assert client.get("/api/data").json() == {
+        assert _data_overview_response(client, generation.manifest_sha256) == {
             **expected,
             "last_market_refresh_at": "2026-08-09T01:02:03Z",
         }
@@ -203,7 +228,7 @@ def test_data_overview_does_not_open_generation_parquet(
     assert store.delete_file(parquet) is True
 
     with TestClient(create_app(settings)) as client:
-        assert client.get("/api/data").json() == {
+        assert _data_overview_response(client, generation.manifest_sha256) == {
             "market_coverage": {"start": "2026-08-07", "end": "2026-08-07"},
             "financial_coverage": None,
             "industry_coverage": {

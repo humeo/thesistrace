@@ -19,7 +19,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.responses import Response
 from starlette.routing import Route
 
-from thesistrace.alpha_language import alpha_language
+from thesistrace.alpha_language import AlphaAuthoringCatalog, alpha_language
 from thesistrace.benchmark import (
     INTERNAL_STRATEGY_METRIC_PATH,
     InternalAnnualizedExcessRequest,
@@ -159,6 +159,10 @@ _JSON_CONTENT_TYPE = re.compile(
     r"""^\s*application/json\s*(?:;\s*[!#$%&'*+\-.^_`|~0-9A-Za-z]+\s*=\s*(?:[!#$%&'*+\-.^_`|~0-9A-Za-z]+|"(?:[^"\\\r\n]|\\.)*"))*\s*$""",
     re.ASCII | re.IGNORECASE,
 )
+
+
+class DataView(DataOverview):
+    catalog: AlphaAuthoringCatalog
 
 
 class MarketRefreshSubmission(BaseModel):
@@ -512,12 +516,14 @@ def create_app(
             )
         return await request_validation_exception_handler(request, error)
 
-    install_alpha_http(
-        app,
-        financial_authoring_ready=lambda request: (
-            _data_overview(request).overview().financial_research_readiness != "not_ready"
-        ),
-    )
+    def catalog_snapshot(request: Request) -> AlphaAuthoringCatalog:
+        overview = _data_overview(request).overview()
+        return alpha_language.catalog(
+            available_field_ids=frozenset(overview.available_field_ids),
+            generation_manifest_sha256=overview.generation_manifest_sha256,
+        )
+
+    install_alpha_http(app, catalog_snapshot=catalog_snapshot)
 
     @app.get("/health/live", include_in_schema=False)
     def liveness() -> dict[str, str]:
@@ -560,9 +566,16 @@ def create_app(
             annualized_excess_return=metric,
         )
 
-    @app.get("/api/data", response_model=DataOverview)
-    def data_overview(request: Request) -> DataOverview:
-        return _data_overview(request).overview()
+    @app.get("/api/data", response_model=DataView)
+    def data_overview(request: Request) -> DataView:
+        overview = _data_overview(request).overview()
+        return DataView(
+            **overview.model_dump(),
+            catalog=alpha_language.catalog(
+                available_field_ids=frozenset(overview.available_field_ids),
+                generation_manifest_sha256=overview.generation_manifest_sha256,
+            ),
+        )
 
     @app.get(
         "/api/operator/data/status",

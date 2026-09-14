@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from decimal import ROUND_HALF_EVEN, Decimal
 
-from thesistrace.data.fields import alpha_field_catalog
+from thesistrace.data.fields import DAILY_BASIC_FIELDS, alpha_field_catalog
 
 SOURCE_CORRECTABLE_PRICE_FIELDS = frozenset(
     {
@@ -143,6 +143,7 @@ def field_catalog(available_from: str) -> list[dict[str, object]]:
             "coverage": "canonical EOD price rows",
         }
         for source_name, field_id, definition, unit, semantics in DAILY_FIELDS
+        if field_id not in {item[1] for item in ALPHA_FIELDS}
     ]
     catalog.extend(
         {
@@ -173,3 +174,16 @@ def adjusted_price_string(
     if adjustment_factor <= 0:
         raise CanonicalMappingError("INVALID_ADJUSTMENT_FACTOR")
     return decimal_string(raw_price * adjustment_factor, 8)
+
+
+def daily_basic_field_catalog(available_from: str) -> list[dict[str, object]]:
+    return [{
+        "name": field.alpha.identifier,
+        "field_id": field.field_id,
+        "definition": field.description,
+        "unit": field.unit,
+        "time_semantics": "post-close",
+        "alpha_authorable": True,
+        "release_available_from": available_from,
+        "coverage": "exact collected daily basic sessions",
+    } for field in DAILY_BASIC_FIELDS]

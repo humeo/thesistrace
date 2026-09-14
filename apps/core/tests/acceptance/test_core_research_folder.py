@@ -10,6 +10,7 @@ from pydantic import TypeAdapter
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.alpha_language import alpha_language
 from thesistrace.data import DatasetAdmissionSnapshot
+from thesistrace.data.models import DatasetCoverage
 from thesistrace.entrypoints.quota_policy import quota_policy_lookup
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.research_folder import BATCH_RESEARCH_FOLDER_ID, DEFAULT_FOLDER_ID
@@ -110,6 +111,9 @@ def test_custom_folder_mutations_and_database_guards_are_transactional() -> None
 
         sessions = (date(2026, 8, 3), date(2026, 8, 4))
         snapshot = DatasetAdmissionSnapshot(
+        family_coverage={
+            "equity.eod_price": DatasetCoverage(start=sessions[0], end=sessions[-1]),
+        },
             generation_manifest_sha256="a" * 64,
             data_through_session=sessions[-1],
             coverage_start=sessions[0],

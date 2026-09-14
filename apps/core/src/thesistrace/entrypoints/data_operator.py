@@ -23,6 +23,7 @@ from thesistrace.adapters.cninfo_financial_announcements import (
 from thesistrace.adapters.tushare_benchmark import TushareBenchmarkSource
 from thesistrace.adapters.tushare_data import TushareDataSource
 from thesistrace.adapters.tushare_financial import TushareFinancialSource
+from thesistrace.adapters.tushare_financial_indicator import TushareFinancialIndicatorProvider
 from thesistrace.adapters.tushare_industry import (
     IndustrySourceError,
     TushareIndustrySource,
@@ -65,6 +66,7 @@ from thesistrace.data import (
     validate_industry_refresh_request,
     validate_market_refresh_request,
 )
+from thesistrace.data.daily_basic_evidence import MARKET_SOURCE_RECEIPT_DIRECTORY
 from thesistrace.entrypoints.schema import verify_core_schema
 from thesistrace.operational_events import (
     emit_operational_event_data,
@@ -351,6 +353,7 @@ def _run(
                 "resumed_shard_count": outcome.resumed_shard_count,
             }
         source = TushareDataSource(
+            checkpoint_root=mount_root / MARKET_SOURCE_RECEIPT_DIRECTORY,
             provider=provider,
             progress=_progress if parsed.command == "bootstrap" else None,
         )
@@ -406,6 +409,7 @@ def _run(
                             benchmark_source=benchmark_source,
                             financial_announcement_source=financial_announcement_source,
                             financial_source=financial_source,
+                            indicator_provider=TushareFinancialIndicatorProvider(provider),
                             financial_source_window_selector=financial_source_window_selector,
                             industry_source=industry_source,
                             industry_source_target_selector=industry_source_target_selector,

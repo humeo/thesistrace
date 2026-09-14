@@ -123,13 +123,15 @@ test(`Chat Batch ${mode} preserves ordered child Results independently of its Se
   await expect(page).toHaveURL(new RegExp(`/research-runs/${complete.items[0]!.research_run_id}$`));
   await expect(page.getByRole("heading", { name: mode === "factor_evaluation" ? "Factor Summary" : "Strategy Summary" })).toBeVisible();
   await page.goto(durableUrl);
+  // Restored resource cards load separately from the completed Turn footer.
+  await expect((await comparisonCards(page, runIds)).locator(".chat-a2ui-metrics")).toHaveText(metrics);
   await expect(page.locator(".chat-response-footer time").last()).toBeInViewport();
   await page.locator(".chat-session-row").filter({ has: page.getByRole("button", { name: `Actions for ${renamedTitle}`, exact: true }) }).hover();
   await page.getByRole("button", { name: `Actions for ${renamedTitle}` }).click();
   const deleteMenu = page.getByRole("menuitem", { name: "Delete Chat" });
   await expect(deleteMenu).toBeVisible();
-  const scrollBefore = await transcript.evaluate(element => element.scrollTop);
   await transcript.hover();
+  const scrollBefore = await transcript.evaluate(element => element.scrollTop);
   await page.mouse.wheel(0, -160);
   await expect.poll(() => transcript.evaluate(element => element.scrollTop)).toBeLessThan(scrollBefore);
   await expect(deleteMenu).toBeVisible();

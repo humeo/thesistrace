@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Protocol
 from uuid import UUID
 
@@ -140,7 +142,12 @@ class ResearchFolderReader(Protocol):
 
 
 class AlphaAuthoringLanguage(Protocol):
-    def catalog(self, *, financial_authoring_ready: bool = True) -> AlphaAuthoringCatalog: ...
+    def catalog(
+        self,
+        *,
+        available_field_ids: frozenset[str] | None = None,
+        generation_manifest_sha256: str | None = None,
+    ) -> AlphaAuthoringCatalog: ...
 
     def diagnose(
         self, source: str, *, context: FormulaContext = "signal",
@@ -292,14 +299,18 @@ class ResearchAgentCapability:
     handler: Callable[..., BaseModel]
 
     def input_schema(self) -> dict[str, object]:
-        schema = TypeAdapter(self.input_model).json_schema()
-        schema["type"] = "object"
-        return schema
+        return deepcopy(_model_schema(self.input_model))
 
     def output_schema(self) -> dict[str, object]:
-        schema = TypeAdapter(self.output_model | ResearchAgentToolError).json_schema()  # type: ignore[operator]
-        schema["type"] = "object"
-        return schema
+        return deepcopy(_model_schema(self.output_model | ResearchAgentToolError))  # type: ignore[operator]
+
+
+@lru_cache(maxsize=128)
+def _model_schema(model: object) -> dict[str, object]:
+    # Model contracts are process-static; authority and handlers remain request-local.
+    schema = TypeAdapter(model).json_schema()
+    schema["type"] = "object"
+    return schema
 
 
 @dataclass(frozen=True)
@@ -881,7 +892,8 @@ class ResearchAgentCapabilityRegistry:
         request = GetAlphaCatalogInput(identifiers=identifiers, cursor=cursor, limit=limit)
         overview = self._modules.data_overview.overview()
         catalog = self._modules.alpha_language.catalog(
-            financial_authoring_ready=(overview.financial_research_readiness != "not_ready")
+            available_field_ids=frozenset(overview.available_field_ids),
+            generation_manifest_sha256=overview.generation_manifest_sha256,
         )
         entries = [
             *sorted(catalog.fields, key=lambda item: item.identifier),
@@ -909,6 +921,7 @@ class ResearchAgentCapabilityRegistry:
                 cursor=request.cursor,
                 limit=request.limit,
                 build=lambda kept, next_cursor: AlphaCatalogView(
+                    generation_manifest_sha256=catalog.generation_manifest_sha256,
                     fields=[item for item in kept if isinstance(item, AlphaFieldCatalogEntry)],
                     builtins=[item for item in kept if isinstance(item, AlphaBuiltinCatalogEntry)],
                     industries=list(catalog.industries),

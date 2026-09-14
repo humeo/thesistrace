@@ -1,6 +1,6 @@
 {
   "benchmark_version": "research-agent-mcp-v1",
-  "command": "/usr/bin/time -l uv run --frozen pytest -q tests/architecture/test_research_agent_mcp_contract.py -k 'v1_ingress_limits or rate_limits_each_principal or caps_concurrent_calls_per_principal or v1_inventory'",
+  "command": "/usr/bin/time -lp uv run --project apps/core pytest -q -c apps/core/pyproject.toml --rootdir . apps/core/tests/architecture/test_research_agent_mcp_contract.py -k 'v1_ingress_limits or rate_limits_each_principal or caps_concurrent_calls_per_principal or v1_inventory'",
   "production_envelope": {
     "cpu_count": 2,
     "container_memory_bytes": 2147483648,
@@ -21,26 +21,26 @@
     "cursor_characters": 1024
   },
   "deterministic_payloads": {
-    "v1_contract_sha256": "4d25b5f2a9887b26a666085ef36464a4bdb99d83d89074bf52e2dd9b4a4d0b18",
-    "v1_contract_bytes": 223611,
+    "v1_contract_sha256": "2bb0ae454195187cbb8552e29f2bf98b36396932943d76a342a5f3e3a2ff0c3f",
+    "v1_contract_bytes": 226010,
     "maximum_factor_batch_call_bytes": 84536
   },
   "observed": {
     "tests_passed": 4,
     "tests_deselected": 38,
-    "pytest_seconds": 0.91,
-    "wall_seconds": 1.29,
-    "user_cpu_seconds": 1.17,
-    "system_cpu_seconds": 0.1,
-    "maximum_resident_set_bytes": 157057024,
-    "maximum_resident_set_percent_of_container": 7.31,
+    "pytest_seconds": 2.52,
+    "wall_seconds": 3.55,
+    "user_cpu_seconds": 2.61,
+    "system_cpu_seconds": 0.38,
+    "maximum_resident_set_bytes": 164986880,
+    "maximum_resident_set_percent_of_container": 7.68,
     "swaps": 0
   },
   "measurement_context": {
-    "date": "2026-09-07",
+    "date": "2026-09-12",
     "transport": "in-process deterministic MCP client",
     "network_access": false,
     "real_model": false,
-    "note": "Deterministic payload hash and size refreshed on 2026-09-12 for daily and period Factor sections; observed performance remains the 2026-09-07 measurement. Peak RSS includes the Python interpreter, pytest, plugins, schemas, and fixtures; it is compared conservatively with the current production container envelope. Current pagination and receipt contract; transport and business-page bounds are verified separately."
+    "note": "Deterministic payload hash and size refreshed on 2026-09-14 for the merged field catalog, daily and period Factor sections; observed performance remains the 2026-09-07 measurement. Peak RSS includes the Python interpreter, pytest, plugins, schemas, and fixtures; it is compared conservatively with the current production container envelope. Current pagination and receipt contract; transport and business-page bounds are verified separately."
   }
 }

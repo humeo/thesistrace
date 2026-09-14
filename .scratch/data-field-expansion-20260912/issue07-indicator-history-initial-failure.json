@@ -1,0 +1,23 @@
+{
+  "source_head": "17f5694f6a9d47b915ffde326928b919a55181e75a4908cb661934850ac8c983",
+  "source": "fina_indicator",
+  "status": "incomplete",
+  "report_collection_start": "19900101",
+  "report_collection_end": "2026-09-09",
+  "research_start": "2010-01-04",
+  "expected_instrument_count": 5550,
+  "completed_instrument_count": 0,
+  "collections": [],
+  "failure": {
+    "error_type": "PoolClosed",
+    "reason_code": null,
+    "detail_code": null,
+    "next_identity": {
+      "instrument_id": "equity:000001.SZ",
+      "ts_code": "000001.SZ"
+    }
+  },
+  "observed_at": "2026-09-13T06:57:48.644228+00:00",
+  "elapsed_seconds": 0.00031770800705999136,
+  "scope": "Bounded report-range receipts; historical backfill has limited revision evidence."
+}

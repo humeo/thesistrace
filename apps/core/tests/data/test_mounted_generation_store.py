@@ -7,6 +7,7 @@ import os
 import threading
 from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -17,6 +18,7 @@ import pytest
 
 import thesistrace.data.generation_store as generation_store_module
 import thesistrace.publication.serialization as serialization_module
+from thesistrace.data.canonical_mapping import field_catalog
 from thesistrace.data.generation_files import AddressedFileError, AddressedFileStore
 from thesistrace.data.generation_schema import MARKET_CANDIDATE_TABLE_SPECS
 from thesistrace.data.generation_store import (
@@ -135,6 +137,7 @@ def test_columnar_streaming_bootstrap_materializes_the_same_generation(
                     )
                     for spec in MARKET_CANDIDATE_TABLE_SPECS
                     if spec.session_field is not None and spec.name != "research_calendar"
+                    and spec.name not in {"daily_basic", "daily_basic_sessions"}
                 },
             )
 
@@ -601,6 +604,30 @@ def test_industry_publication_reuses_prevalidated_unchanged_families(
     assert store.validate_generation(composed.manifest_sha256) == composed
 
 
+@pytest.mark.parametrize("include_industry", (True, False))
+def test_registered_optional_family_does_not_invalidate_existing_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, include_industry: bool,
+) -> None:
+    canonical = _canonical()
+    if not include_industry:
+        del canonical["industry_membership"]
+    store = MountedGenerationStore(tmp_path)
+    generation = store.materialize(
+        canonical,
+        prepared_at=datetime(2026, 8, 13, tzinfo=UTC),
+        source_name="existing-families",
+        source_lineage={"snapshot": "fixed"},
+    )
+    supported = generation_store_module.NON_FINANCIAL_FAMILY_SPECS
+    optional = replace(supported[-1], family_id="equity.optional_test")
+    monkeypatch.setattr(
+        generation_store_module, "NON_FINANCIAL_FAMILY_SPECS", (*supported, optional),
+    )
+
+    assert store.validate_generation(generation.manifest_sha256) == generation
+    assert store.open_admission(generation.manifest_sha256).generation == generation
+
+
 def test_industry_candidate_replaces_only_industry_family(tmp_path: Path) -> None:
     canonical = _canonical()
     del canonical["industry_membership"]
@@ -845,8 +872,35 @@ def test_market_slice_skips_unrequested_families_and_session_partitions(
     }
 
 
+@pytest.mark.parametrize(
+    "reader", ("read_market_slice", "read_composite_slice", "read_columnar_slice")
+)
+def test_slice_rejects_fields_absent_from_frozen_generation(tmp_path: Path, reader: str) -> None:
+    store = MountedGenerationStore(tmp_path)
+    generation = store.materialize(
+        _canonical(),
+        prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+        source_name="deterministic-test",
+        source_lineage={"snapshot": "fixed"},
+    )
+    extra = {"fact_instrument_ids": frozenset()} if reader == "read_columnar_slice" else {}
+    with pytest.raises(GenerationStoreError, match="unavailable in Generation"):
+        getattr(store, reader)(
+            generation.manifest_sha256,
+            sessions=[generation.research_sessions[-1]],
+            universe_name="top300",
+            neutralization="none",
+            field_bindings={"price.high.adjusted": "high"},
+            **extra,
+        )
+
+
 def test_columnar_slice_resolves_alpha_names_to_physical_columns(tmp_path: Path) -> None:
     canonical = _canonical()
+    canonical["field_catalog"] = [
+        field for field in field_catalog(str(canonical["research_calendar"][-1]))
+        if field["alpha_authorable"]
+    ]
     store = MountedGenerationStore(tmp_path)
     generation = store.materialize(
         canonical,
@@ -2269,3 +2323,317 @@ def test_common_return_keeps_zero_turnover_members_across_readers_and_slices(tmp
         assert result["sessions"][0]["common_inputs"][0]["exclusions"] == {
             "insufficient_history": 2,
         }
+
+
+@pytest.mark.parametrize("invalid", (None, "missing_partition", "unknown_identity", "duplicate"))
+def test_daily_basic_history_composes_bounded_partitions_and_preserves_source(
+    tmp_path: Path, invalid: str | None,
+) -> None:
+    from thesistrace.adapters.tushare_daily_basic import (
+        DAILY_BASIC_SOURCE_FIELDS,
+        TushareDailyBasicSource,
+        normalize_daily_basic,
+    )
+    from thesistrace.data.daily_basic_evidence import (
+        MARKET_SOURCE_RECEIPT_DIRECTORY,
+        DailyBasicCheckpoint,
+    )
+    from thesistrace.data.fields import DAILY_BASIC_FIELDS
+    from thesistrace.data.source import RawSourceResponse
+
+    canonical = _canonical()
+    store = MountedGenerationStore(tmp_path)
+    prepared_at = datetime(2026, 9, 13, tzinfo=UTC)
+    # The production source retained raw close before it was DSL-authorable.
+    from thesistrace.data.canonical_mapping import field_catalog
+
+    canonical["field_catalog"] = field_catalog(canonical["research_calendar"][-1])
+    next(row for row in canonical["field_catalog"]
+         if row["field_id"] == "price.close.raw")["alpha_authorable"] = False
+    original = store.materialize(canonical, prepared_at=prepared_at,
+                                 source_name="test", source_lineage={})
+    original_files = store.referenced_files(original.manifest_sha256)
+    sessions = original.research_sessions
+
+    class Provider:
+        def query_raw(self, api_name, *, params, fields):
+            row = {name: None for name in DAILY_BASIC_SOURCE_FIELDS}
+            row.update(ts_code="A.SH", trade_date=params["trade_date"], close=10, pe=15)
+            # A fully collected day may legitimately have no source rows.
+            return RawSourceResponse(tuple(fields), () if params["trade_date"] == (
+                sessions[-1].replace("-", "")
+            ) else (tuple(row[name] for name in fields),))
+
+    checkpoint = DailyBasicCheckpoint(
+        tmp_path / MARKET_SOURCE_RECEIPT_DIRECTORY, collection_key="historical-daily",
+    )
+    rows = []
+    for session in sessions:
+        raw = TushareDailyBasicSource(Provider()).collect_session(
+            session=session, instrument_codes=("A.SH", "B.SZ"), checkpoint=checkpoint,
+        )
+        rows.extend(normalize_daily_basic(raw, instrument_ids={"A.SH": "equity:A.SH"}))
+    evidence = [{"collection_key": "historical-daily", **checkpoint.seal(sessions)}]
+    if invalid == "unknown_identity":
+        rows[0]["instrument_id"] = "equity:UNKNOWN.SH"
+    if invalid == "duplicate":
+        rows.append(dict(rows[0]))
+
+    def partitions():
+        for start in range(0, len(sessions), GENERATION_SESSION_PARTITION_COUNT):
+            if invalid == "missing_partition" and start:
+                return
+            block = sessions[start:start + GENERATION_SESSION_PARTITION_COUNT]
+            yield CanonicalSessionPartition(sessions=block, canonical={
+                "daily_basic": [row for row in rows if row["session"] in block],
+                "daily_basic_sessions": [{"session": day} for day in block],
+            })
+
+    if invalid is not None:
+        with pytest.raises(GenerationStoreError):
+            store.materialize_daily_basic_history(
+                original.manifest_sha256, partitions(), source_evidence=evidence,
+                prepared_at=prepared_at,
+            )
+        assert store.validate_generation(original.manifest_sha256) == original
+        return
+    expanded = store.materialize_daily_basic_history(
+        original.manifest_sha256, partitions(), source_evidence=evidence,
+        prepared_at=prepared_at,
+    )
+    reopened = MountedGenerationStore(tmp_path)
+    assert reopened.validate_generation(expanded.manifest_sha256) == expanded
+    assert store.inspect_root(original.manifest_sha256) == original
+    assert store.referenced_files(original.manifest_sha256) == original_files
+    before = {family.family_id: family for family in original.families}
+    after = {family.family_id: family for family in expanded.families}
+    assert all(after[name] == family for name, family in before.items()
+               if name != "data.field_catalog")
+    assert set(expanded.field_availability) - set(original.field_availability) == {
+        field.field_id for field in DAILY_BASIC_FIELDS
+    }
+    pe = next(field.field_id for field in DAILY_BASIC_FIELDS if field.alpha.identifier == "pe")
+    result = reopened.read_composite_slice(
+        expanded.manifest_sha256, sessions=list(sessions[-2:]), universe_name="top300",
+        neutralization="none", field_bindings={pe: "pe"},
+    )
+    assert result.research_data.fields[pe] == {(sessions[-2], "equity:A.SH"): Decimal(15)}
+    assert reopened.daily_basic_source_evidence(expanded.manifest_sha256) == tuple(evidence)
+    refreshed_catalog = reopened.open_refresh_base(expanded.manifest_sha256).canonical[
+        "field_catalog"
+    ]
+    assert next(row for row in refreshed_catalog if row["field_id"] == "price.close.raw")[
+        "alpha_authorable"
+    ] is True
+
+
+def test_daily_basic_family_reads_exact_dates_and_preserves_old_root(tmp_path: Path) -> None:
+    from thesistrace.data.canonical_mapping import daily_basic_field_catalog
+    from thesistrace.data.fields import DAILY_BASIC_FIELDS
+
+    canonical = _canonical()
+    store = MountedGenerationStore(tmp_path)
+    prepared_at = datetime(2026, 9, 12, tzinfo=UTC)
+    original = store.materialize(canonical, prepared_at=prepared_at,
+                                 source_name='test', source_lineage={})
+    sessions = canonical['research_calendar'][-3:]
+    canonical['daily_basic_sessions'] = [{'session': s} for s in sessions]
+    canonical['daily_basic'] = [{
+        'session': sessions[0], 'instrument_id': 'equity:A.SH', 'source_close': '10',
+        **{field.source_column: '15' if field.alpha.identifier == 'pe' else None
+           for field in DAILY_BASIC_FIELDS},
+    }]
+    canonical['field_catalog'] = field_catalog(sessions[-1])
+    canonical['field_catalog'].extend(daily_basic_field_catalog(sessions[-1]))
+    expanded = store.materialize(canonical, prepared_at=prepared_at,
+                                 source_name='test', source_lineage={})
+    pe = next(field for field in DAILY_BASIC_FIELDS if field.alpha.identifier == 'pe')
+    assert pe.field_id not in store.inspect_root(original.manifest_sha256).field_availability
+    assert pe.field_id in expanded.field_availability
+    family = next(f for f in expanded.families if f.family_id == 'equity.daily_basic')
+    assert family.dataset_coverage == {
+        'kind': 'research-session-range', 'start': sessions[0], 'end': sessions[-1],
+        'session_count': 3,
+    }
+    reopened = MountedGenerationStore(tmp_path)
+    assert reopened.validate_generation(expanded.manifest_sha256) == expanded
+    result = reopened.read_composite_slice(
+        expanded.manifest_sha256, sessions=sessions, universe_name='top300',
+        neutralization='none', field_bindings={pe.field_id: 'pe', 'price.close.raw': 'close_raw'},
+    )
+    expected_raw = next(row['close_raw'] for row in canonical['prices']
+                        if row['session'] == sessions[0] and row['instrument_id'] == 'equity:A.SH')
+    assert result.research_data.fields['price.close.raw'][(sessions[0], 'equity:A.SH')] == (
+        Decimal(expected_raw)
+    )
+    # daily_basic.source_close is not a price substitute.
+    assert Decimal(expected_raw) != Decimal('10')
+    assert result.research_data.fields[pe.field_id] == {
+        (sessions[0], 'equity:A.SH'): Decimal('15'),
+    }
+    columnar = reopened.read_columnar_slice(
+        expanded.manifest_sha256, sessions=sessions, universe_name='top300',
+        neutralization='none', field_bindings={pe.field_id: 'pe'}, fact_instrument_ids=frozenset(),
+    )
+    matrix = columnar.numeric_field_matrices((pe.field_id,), ('equity:A.SH',))[pe.field_id]
+    import math
+    assert matrix[0, 0] == 15
+    assert math.isnan(matrix[0, 1]) and math.isnan(matrix[0, 2])
+
+
+    static_names = {"schema_version", "research_calendar", "instruments", "field_catalog",
+                    "industry_membership", "daily_basic_sessions"}
+    full_calendar = canonical["research_calendar"]
+
+    def partitions() -> Iterator[CanonicalSessionPartition]:
+        for start in range(0, len(full_calendar), GENERATION_SESSION_PARTITION_COUNT):
+            block = full_calendar[start:start + GENERATION_SESSION_PARTITION_COUNT]
+            selected = set(block)
+            yield CanonicalSessionPartition(sessions=tuple(block), canonical={
+                **{name: [row for row in canonical[name] if row["session"] in selected]
+                   for name in ("prices", "trading_states", "price_limits", "base_pool",
+                                "daily_basic", "daily_basic_sessions")},
+                "liquidity_universes": {
+                    name: [row for row in rows if row["session"] in selected]
+                    for name, rows in canonical["liquidity_universes"].items()
+                },
+            })
+
+    streamed = reopened.materialize_bootstrap_stream(CanonicalBootstrapStream(
+        source_name="test", source_lineage={},
+        static={name: canonical[name] for name in static_names},
+        covered_session_range=(full_calendar[0], full_calendar[-1]), partitions=partitions,
+    ), prepared_at=prepared_at)
+    assert streamed == expanded
+    assert reopened.validate_generation(streamed.manifest_sha256) == expanded
+
+    first_refresh = reopened.materialize_refresh(
+        predecessor_manifest_sha256=original.manifest_sha256,
+        replacement_canonical=canonical, replace_from_session=sessions[0],
+        prepared_at=prepared_at, source_name='test', source_lineage={},
+    )
+    assert first_refresh == expanded
+
+    price_only = copy.deepcopy(canonical)
+    del price_only['daily_basic']
+    del price_only['daily_basic_sessions']
+    price_only['field_catalog'] = field_catalog(full_calendar[-1])
+    refreshed = reopened.materialize_refresh(
+        predecessor_manifest_sha256=expanded.manifest_sha256,
+        replacement_canonical=price_only, replace_from_session=sessions[-2],
+        prepared_at=prepared_at, source_name='test', source_lineage={},
+    )
+    assert next(f for f in refreshed.families if f.family_id == 'equity.daily_basic') == family
+    assert pe.field_id in refreshed.field_availability
+    assert reopened.validate_generation(refreshed.manifest_sha256) == refreshed
+
+    updated = copy.deepcopy(canonical)
+    updated['daily_basic'][0]['pe'] = None
+    updated['daily_basic'].append({
+        **updated['daily_basic'][0], 'session': sessions[-1], 'pe': '22',
+    })
+    advanced = reopened.materialize_refresh(
+        predecessor_manifest_sha256=expanded.manifest_sha256,
+        replacement_canonical=updated, replace_from_session=sessions[0],
+        prepared_at=prepared_at, source_name='test', source_lineage={},
+    )
+    assert reopened.validate_generation(advanced.manifest_sha256) == advanced
+    values = reopened.read_composite_slice(
+        advanced.manifest_sha256, sessions=sessions, universe_name='top300',
+        neutralization='none', field_bindings={pe.field_id: 'pe'},
+    ).research_data.fields[pe.field_id]
+    assert values == {(sessions[0], 'equity:A.SH'): None,
+                      (sessions[-1], 'equity:A.SH'): Decimal('22')}
+    assert reopened.read_composite_slice(
+        expanded.manifest_sha256, sessions=sessions, universe_name='top300',
+        neutralization='none', field_bindings={pe.field_id: 'pe'},
+    ).research_data.fields[pe.field_id][(sessions[0], 'equity:A.SH')] == Decimal('15')
+
+
+def test_daily_basic_declared_coverage_cannot_skip_uncollected_session(tmp_path: Path) -> None:
+    from thesistrace.data.canonical_mapping import daily_basic_field_catalog
+
+    canonical = _canonical()
+    sessions = canonical['research_calendar'][-3:]
+    canonical['daily_basic_sessions'] = [{'session': sessions[0]}, {'session': sessions[-1]}]
+    canonical['daily_basic'] = []
+    canonical['field_catalog'].extend(daily_basic_field_catalog(sessions[-1]))
+    with pytest.raises(GenerationStoreError, match='[Cc]overage|[Ss]ession'):
+        MountedGenerationStore(tmp_path).materialize(
+            canonical, prepared_at=datetime(2026, 9, 12, tzinfo=UTC),
+            source_name='test', source_lineage={},
+        )
+
+
+def test_price_refresh_crosses_partition_boundary_with_retained_daily_family(
+    tmp_path: Path,
+) -> None:
+    from thesistrace.data.canonical_mapping import daily_basic_field_catalog
+    from thesistrace.data.fields import DAILY_BASIC_FIELDS
+
+    canonical = _canonical(session_count=64)
+    calendar = canonical["research_calendar"]
+    canonical["daily_basic_sessions"] = [{"session": session} for session in calendar]
+    canonical["daily_basic"] = [{
+        **dict.fromkeys(field.source_column for field in DAILY_BASIC_FIELDS),
+        "session": calendar[-1], "instrument_id": "equity:A.SH",
+        "source_close": "999", "pe": "15",
+    }]
+    canonical["field_catalog"].extend(daily_basic_field_catalog(calendar[-1]))
+    store = MountedGenerationStore(tmp_path)
+    prepared_at = datetime(2026, 9, 13, tzinfo=UTC)
+    original = store.materialize(
+        canonical, prepared_at=prepared_at, source_name="test", source_lineage={},
+    )
+    store.validate_generation(original.manifest_sha256)
+    daily = next(f for f in original.families if f.family_id == "equity.daily_basic")
+    advanced = _canonical(session_count=65)
+    refreshed = store.materialize_refresh(
+        predecessor_manifest_sha256=original.manifest_sha256,
+        replacement_canonical=advanced, replace_from_session=calendar[-1],
+        prepared_at=prepared_at, source_name="test", source_lineage={},
+    )
+    assert next(f for f in refreshed.families if f.family_id == "equity.daily_basic") == daily
+    reopened = MountedGenerationStore(tmp_path)
+    assert reopened.validate_generation(refreshed.manifest_sha256) == refreshed
+    sessions = advanced["research_calendar"][-2:]
+    pe_id = "market.valuation.pe"
+    result = reopened.read_columnar_slice(
+        refreshed.manifest_sha256, sessions=sessions, universe_name="top300",
+        neutralization="none", field_bindings={pe_id: "pe"}, fact_instrument_ids=frozenset(),
+    ).numeric_field_matrices((pe_id,), ("equity:A.SH",))[pe_id]
+    import math
+    assert result[0, 0] == 15
+    assert math.isnan(result[0, 1])
+    assert reopened.validate_generation(original.manifest_sha256) == original
+
+
+def test_daily_basic_refresh_base_preserves_normalized_source_values(tmp_path: Path) -> None:
+    from thesistrace.adapters.tushare_daily_basic import (
+        DAILY_BASIC_SOURCE_FIELDS,
+        normalize_daily_basic,
+    )
+    from thesistrace.data.canonical_mapping import daily_basic_field_catalog
+    from thesistrace.data.source import RawSourceResponse
+
+    canonical = _canonical()
+    session = canonical["research_calendar"][-1]
+    values = dict.fromkeys(DAILY_BASIC_SOURCE_FIELDS)
+    values.update(ts_code="A.SH", trade_date=session.replace("-", ""),
+                  close="10", pe="15", turnover_rate="1.25", total_mv="0")
+    raw = RawSourceResponse(
+        DAILY_BASIC_SOURCE_FIELDS,
+        (tuple(values[field] for field in DAILY_BASIC_SOURCE_FIELDS),),
+    )
+    source_rows = list(normalize_daily_basic(raw, instrument_ids={"A.SH": "equity:A.SH"}))
+    canonical["daily_basic"] = source_rows
+    canonical["daily_basic_sessions"] = [{"session": session}]
+    canonical["field_catalog"].extend(daily_basic_field_catalog(session))
+    store = MountedGenerationStore(tmp_path)
+    generation = store.materialize(
+        canonical, prepared_at=datetime(2026, 9, 13, tzinfo=UTC),
+        source_name="test", source_lineage={},
+    )
+
+    reopened = MountedGenerationStore(tmp_path).open_refresh_base(generation.manifest_sha256)
+    assert reopened.canonical["daily_basic"] == source_rows

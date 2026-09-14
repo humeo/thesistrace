@@ -18,7 +18,9 @@ from thesistrace.fixture import build_minimal_canonical_fixture
 from thesistrace.researcher import ResearcherService
 
 
-def publish_current_data(settings: CoreSettings) -> tuple[str, ...]:
+def publish_current_data(
+    settings: CoreSettings, *, daily_fields: bool = False, indicator_fields: bool = False,
+) -> tuple[str, ...]:
     sessions = _weekday_sessions(date(2026, 8, 3), 75)
     BenchmarkSnapshotStore(settings.benchmark_mount).publish(
         (
@@ -102,12 +104,76 @@ def publish_current_data(settings: CoreSettings) -> tuple[str, ...]:
             for instrument_id in instrument_ids
         ],
     }
+    if daily_fields:
+        from thesistrace.data.canonical_mapping import daily_basic_field_catalog
+        from thesistrace.data.fields import DAILY_BASIC_FIELDS
+
+        canonical["field_catalog"] = [
+            *field_catalog(sessions[0]), *daily_basic_field_catalog(sessions[0]),
+        ]
+        canonical["daily_basic_sessions"] = [{"session": session} for session in sessions]
+        canonical["daily_basic"] = [{
+            **dict.fromkeys(field.source_column for field in DAILY_BASIC_FIELDS),
+            "session": row["session"], "instrument_id": row["instrument_id"],
+            "source_close": "999", "pe": "15", "turnover_rate": "0.025",
+        } for row in canonical["prices"]]
     generation = MountedGenerationStore(settings.data_mount).materialize(
         canonical,
         prepared_at=datetime(2026, 9, 11, 12, tzinfo=UTC),
         source_name="research-agent-mcp-acceptance",
         source_lineage={"contract": "research-agent-mcp"},
     )
+    if indicator_fields:
+        from thesistrace.data.financial_collection import RawFinancialBatchStore
+        from thesistrace.data.financial_indicator_candidate import FinancialIndicatorCandidateStore
+        from thesistrace.data.financial_indicator_evidence import FinancialIndicatorObservationStore
+        from thesistrace.data.financial_indicator_source import (
+            FINANCIAL_INDICATOR_SOURCE_FIELDS,
+        )
+        from thesistrace.data.source import RawSourceResponse
+        from thesistrace.publication.serialization import canonical_json_bytes
+
+        raw = RawFinancialBatchStore(settings.data_mount)
+        observations = FinancialIndicatorObservationStore(raw)
+        collections = []
+        identities = {item["ts_code"]: item["instrument_id"] for item in instruments}
+        end = sessions[-1].replace("-", "")
+        for index, (code, instrument) in enumerate(identities.items(), 1):
+            values = {
+                "ts_code": code, "end_date": "20260630", "ann_date": "20260802",
+                "eps": index / 10, "bps": 10 + index, "current_ratio": 2,
+                "roe": 5 + index, "q_roe": 2 + index, "netprofit_yoy": index - 10,
+                "debt_to_assets": 30 + index, "q_ocf_to_sales": 10 + index,
+                "eqt_yoy": index - 5, "gross_margin": 1000 * index,
+                "fcff": 2000 * index, "fcfe": 2500 * index,
+                "ebit_to_interest": 2 + index / 10,
+            }
+            observation = observations.save(
+                RawSourceResponse(
+                    fields=FINANCIAL_INDICATOR_SOURCE_FIELDS,
+                    items=(tuple(values.get(field)
+                                 for field in FINANCIAL_INDICATOR_SOURCE_FIELDS),),
+                ), observed_at=datetime(2026, 8, 3, tzinfo=UTC),
+            )
+            collections.append(raw.store(canonical_json_bytes({
+                "source": "fina_indicator", "collection_key": f"mcp-indicator-{code}",
+                "instrument_id": instrument, "ts_code": code,
+                "start_date": "19900101", "end_date": end, "checked_through": sessions[-1],
+                "completed_requests": [{
+                    "request": {
+                        "api_name": "fina_indicator",
+                        "params": {"ts_code": code, "start_date": "19900101", "end_date": end},
+                        "fields": list(FINANCIAL_INDICATOR_SOURCE_FIELDS),
+                    }, "observation_sha256": observation,
+                }],
+            })))
+        candidate = FinancialIndicatorCandidateStore(settings.data_mount).build(
+            collection_evidence_sha256s=collections, instrument_ids=identities, sessions=sessions,
+        )
+        generation = MountedGenerationStore(settings.data_mount).compose_with_indicator_candidate(
+            generation.manifest_sha256, candidate,
+            prepared_at=datetime(2026, 9, 11, 12, tzinfo=UTC),
+        )
     database = PostgresDatabase(settings.database_url)
     database.open()
     try:

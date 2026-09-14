@@ -11,7 +11,21 @@ type FinancialResearchReadiness =
   | "ready_with_gaps"
   | "not_ready";
 
+export type FieldFamilyAvailability = {
+  family_id: string;
+  research_category: "market" | "financial";
+  source_endpoints: string[];
+  supported_field_ids: string[];
+  available_field_ids: string[];
+  coverage_start: string | null;
+  coverage_end: string | null;
+  readiness: FinancialResearchReadiness | "partial";
+};
+
 export type DataOverview = {
+  generation_manifest_sha256: string | null;
+  available_field_ids: string[];
+  field_families: FieldFamilyAvailability[];
   market_coverage: { start: string; end: string } | null;
   financial_coverage: {
     start: string;
@@ -47,6 +61,8 @@ export type DataOverview = {
   industry_research_readiness: boolean;
 };
 
+export type DataSnapshot = DataOverview & { catalog: AlphaCatalog };
+
 type DataPageResources = {
   overview: DataOverview;
   catalog: AlphaCatalog;
@@ -56,14 +72,14 @@ export type DataPageLoad =
   | { resources: DataPageResources; error: null }
   | { resources: null; error: string };
 
-const DATASET_FAMILIES = [
+const RESEARCH_CATEGORIES = [
   {
-    familyId: "equity.eod_price",
+    category: "market",
     id: "market-data-fields",
     title: "Market data fields",
   },
   {
-    familyId: "equity.financial_pit",
+    category: "financial",
     id: "financial-data-fields",
     title: "Financial data fields",
   },
@@ -73,17 +89,11 @@ export async function loadDataPage(
   request: typeof fetch = coreFetch,
 ): Promise<DataPageLoad> {
   try {
-    const [overviewResponse, catalogResponse] = await Promise.all([
-      request("/api/data"),
-      request("/api/alpha/catalog"),
-    ]);
-    if (!overviewResponse.ok || !catalogResponse.ok) {
+    const response = await request("/api/data");
+    if (!response.ok) {
       throw new Error("Data unavailable");
     }
-    const [overview, catalog] = await Promise.all([
-      overviewResponse.json() as Promise<DataOverview>,
-      catalogResponse.json() as Promise<AlphaCatalog>,
-    ]);
+    const { catalog, ...overview } = await response.json() as DataSnapshot;
     return { resources: { overview, catalog }, error: null };
   } catch {
     return { resources: null, error: "Data unavailable" };
@@ -110,12 +120,16 @@ export function DataOverviewView({
       : industryCoverage === null
         ? "Industry not ready"
         : "Industry stale";
+  const marketFamilies = overview.field_families.filter((family) => family.research_category === "market");
+  const financialFamilies = overview.field_families.filter((family) => family.research_category === "financial");
+  const marketState = categoryReadiness(marketFamilies);
   const financialState = {
     ready: "Finance ready",
     ready_with_pending: "Finance ready with pending instruments",
     ready_with_gaps: "Finance ready with discovery gaps",
     not_ready: "Finance not ready",
-  }[overview.financial_research_readiness];
+    partial: "Finance partially ready",
+  }[categoryReadiness(financialFamilies)];
   return (
     <section aria-label="Data" className="page-section data-page">
       <header className="page-hero">
@@ -130,9 +144,12 @@ export function DataOverviewView({
         </div>
       </header>
       <div className="signal-strip" aria-label="Market data readiness">
-        <span className="signal-strip-label"><span className="health-dot" /> Market data</span>
-        <strong>{overview.market_research_readiness ? "Market ready" : "Market not ready"}</strong>
+        <span className="signal-strip-label"><span className={marketState === "ready"
+          ? "health-dot" : "health-dot health-dot-warning"} /> Market data</span>
+        <strong>{marketState === "ready" ? "Market ready"
+          : marketState === "not_ready" ? "Market not ready" : "Market partially ready"}</strong>
       </div>
+      <FamilyAvailabilityRows families={marketFamilies} />
       <dl className="data-overview-stats" aria-label="Market data coverage">
         <div>
           <dt>Market coverage start</dt>
@@ -187,9 +204,11 @@ export function DataOverviewView({
         </div>
       </dl>
       <div className="signal-strip" aria-label="Financial data readiness">
-        <span className="signal-strip-label"><span className="health-dot" /> Financial data</span>
+        <span className="signal-strip-label"><span className={categoryReadiness(financialFamilies) === "ready"
+          ? "health-dot" : "health-dot health-dot-warning"} /> Financial data</span>
         <strong>{financialState}</strong>
       </div>
+      <FamilyAvailabilityRows families={financialFamilies} />
       <dl className="data-overview-stats" aria-label="Financial data coverage">
         <div>
           <dt>Financial coverage start</dt>
@@ -286,23 +305,82 @@ function CommonInputCatalog({ catalog }: { catalog: AlphaCatalog }) {
   );
 }
 
+function categoryReadiness(families: FieldFamilyAvailability[]): FieldFamilyAvailability["readiness"] {
+  if (!families.some((family) => family.available_field_ids.length > 0)) return "not_ready";
+  if (families.some((family) => family.readiness === "partial" || family.readiness === "not_ready")) return "partial";
+  if (families.some((family) => family.readiness === "ready_with_gaps")) return "ready_with_gaps";
+  if (families.some((family) => family.readiness === "ready_with_pending")) return "ready_with_pending";
+  return "ready";
+}
+
+function FamilyAvailabilityRows({ families }: { families: FieldFamilyAvailability[] }) {
+  return <ul className="data-family-availability">
+    {families.map((family) => <li key={family.family_id}>
+      <span>{family.source_endpoints.join(", ")}</span>
+      <span>{family.available_field_ids.length} / {family.supported_field_ids.length} fields</span>
+      <span>{family.coverage_start ?? "No coverage"} — {family.coverage_end ?? "No coverage"}</span>
+      <span>{humanizeContract(family.readiness)}</span>
+    </li>)}
+  </ul>;
+}
+
 function ResearchFieldCatalog({ catalog }: { catalog: AlphaCatalog }) {
+  const [search, setSearch] = useState("");
+  const [filters, setFilters] = useState({
+    research_purpose: "",
+    source_endpoint: "",
+    report_period_selection: "",
+  });
+  const query = search.trim().toLocaleLowerCase();
+  const visible = catalog.fields.filter((field) => (
+    [field.identifier, field.display_name, field.description].some(
+      (value) => value.toLocaleLowerCase().includes(query),
+    ) && Object.entries(filters).every(([key, value]) => (
+      value === "" || field[key as keyof typeof filters] === value
+    ))
+  ));
+  const filterDefinitions = [
+    { key: "research_purpose", label: "Research purpose" },
+    { key: "source_endpoint", label: "Field source" },
+    { key: "report_period_selection", label: "Field period" },
+  ] as const;
   return (
     <section aria-labelledby="research-fields-title" className="data-field-catalog">
       <header>
         <h2 id="research-fields-title">Research fields</h2>
         <span>{catalog.fields.length} available</span>
       </header>
-      {DATASET_FAMILIES.map((dataset) => {
-        const fields = catalog.fields.filter((field) => field.family_id === dataset.familyId);
+      <div className="data-field-filters">
+        <label>
+          <span>Search fields</span>
+          <input aria-label="Search fields" onChange={(event) => setSearch(event.target.value)}
+            placeholder="中文 / DSL name" type="search" value={search} />
+        </label>
+        {filterDefinitions.map(({ key, label }) => (
+          <label key={key}>
+            <span>{label}</span>
+            <select aria-label={label} value={filters[key]}
+              onChange={(event) => setFilters((current) => ({ ...current, [key]: event.target.value }))}>
+              <option value="">All</option>
+              {[...new Set(catalog.fields.map((field) => field[key]))].sort().map((value) => (
+                <option key={value} value={value}>{humanizeContract(value)}</option>
+              ))}
+            </select>
+          </label>
+        ))}
+      </div>
+      {RESEARCH_CATEGORIES.map((dataset) => {
+        const fields = visible.filter((field) => field.research_category === dataset.category);
         return (
-          <section aria-labelledby={dataset.id} className="data-field-dataset" key={dataset.familyId}>
+          <section aria-labelledby={dataset.id} className="data-field-dataset" key={dataset.category}>
             <header>
               <h3 id={dataset.id}>{dataset.title}</h3>
               <span>{fields.length} {fields.length === 1 ? "field" : "fields"}</span>
             </header>
             {fields.length > 0 ? <FieldTable fields={fields} title={dataset.title} /> : (
-              <p className="data-field-empty">No fields are currently available for research.</p>
+              <p className="data-field-empty">{query || Object.values(filters).some(Boolean)
+                ? "No fields match these filters."
+                : "No fields are currently available for research."}</p>
             )}
           </section>
         );
@@ -333,7 +411,9 @@ function FieldTable({ fields, title }: { fields: AlphaCatalogField[]; title: str
                 {field.example !== "" ? <small>Example: <code>{field.example}</code></small> : null}
               </th>
               <td>
+                <strong>{field.display_name}</strong>
                 <span>{field.description}</span>
+                <small>{field.source_endpoint}.{field.source_column} · {field.research_purpose}</small>
                 <small>{humanizeContract(field.missingness)}</small>
               </td>
               <td>
@@ -343,7 +423,11 @@ function FieldTable({ fields, title }: { fields: AlphaCatalogField[]; title: str
                   ? `Company types ${field.applicable_company_types.join(", ")}`
                   : "All supported instruments"}</small>
               </td>
-              <td><code>{field.unit}</code></td>
+              <td>
+                <code>{field.unit}</code>
+                <small>Source unit: {field.source_unit}</small>
+                <small>{humanizeContract(field.reporting_scope)}</small>
+              </td>
             </tr>
           ))}
         </tbody>

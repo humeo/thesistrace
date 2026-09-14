@@ -2,7 +2,7 @@
 
 Applications support one current schema. Initialization creates an empty database
 or verifies the current contract; it never resets data or upgrades an existing
-database automatically. A schema mismatch requires an explicit, numbered migration.
+database automatically. A schema mismatch requires an explicit, release-scoped upgrade.
 Do not change the stored fingerprint to bypass a failed check.
 
 Each migration pins its source and target fingerprints, verifies the affected
@@ -69,3 +69,25 @@ A maintenance-only incident can be contained by stopping
 `publication-maintenance-worker`; product Workers no longer run orphan scans.
 Delayed garbage collection does not prevent reading existing Results. Do not
 change the fingerprint manually or restart old Core code on the new schema.
+
+## Financial indicator ledger for 226 fields
+
+- Source: `6f04fe84573259465442c092856b69714ed339c2093d51dcf67ba4b68aaa359f`
+- Target: `624c319e2f0a11425c5a5219d8125a10234c6885ae66531df57cd384e589a693`
+- Preflight: `python -m thesistrace.migrations.financial_indicator`.
+- Apply: the same command with `--apply`, using the database owner URL.
+
+This explicitly approved upgrade creates the three financial indicator ledger
+tables and adds two nullable columns to financial daily refresh operations.
+It verifies the affected source or target table shapes, performs DDL and records
+its receipt and target contract in one transaction. Existing research, tracking,
+publication and refresh rows are preserved; repeated execution verifies the target
+without clearing the new ledger. Unknown source contracts or structure drift stop
+the operation.
+
+Drain and stop writers first, and verify a restricted PostgreSQL backup can be
+restored before applying. A failure before commit rolls back the complete upgrade.
+Recovery after commit uses that verified backup and its matching application
+images after stopping writers. There is no automatic upgrade, runtime compatibility
+branch, data reset or pointer fallback. Deployment and candidate publication still
+require their separate acceptance and atomic Head checks.

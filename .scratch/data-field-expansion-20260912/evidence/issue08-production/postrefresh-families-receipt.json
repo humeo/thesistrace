@@ -1,0 +1,32 @@
+{
+  "head": {
+    "data_identity": "13677238c1b5af6649ed91be00d6f39729b6161eef9f07ced6a6c07fca5a03ce",
+    "data_through_session": "2026-09-11",
+    "dataset_coverage": {
+      "end": "2026-09-11",
+      "session_count": 4055,
+      "start": "2010-01-04"
+    },
+    "format": "thesistrace-dataset-head",
+    "generation_manifest_sha256": "079283e9858c3c9d1b656e8fd2e1274fa868f0fe24f39636712aff53c1c97e50",
+    "prepared_at": "2026-09-14T04:04:18.873735+00:00",
+    "version": 1
+  },
+  "families": [
+    "data.field_catalog",
+    "equity.adjustment_factor",
+    "equity.base_pool",
+    "equity.daily_basic",
+    "equity.eod_price",
+    "equity.financial_indicator",
+    "equity.financial_pit",
+    "equity.industry_membership",
+    "equity.liquidity_universe",
+    "equity.price_limit",
+    "equity.trading_state",
+    "market.instrument_identity",
+    "market.research_calendar"
+  ],
+  "financial_families_unchanged": true,
+  "source_candidate": "77d45ba1e49444b235308bc05fe1803e4e727532d0a8aec6e30bfe2a3b138e5d"
+}

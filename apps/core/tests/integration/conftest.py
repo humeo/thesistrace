@@ -1,11 +1,31 @@
+import hashlib
+from pathlib import Path
+from zipfile import ZipFile
+
 import boto3
 import pytest
 from botocore.client import BaseClient
 
+from thesistrace._postgres import SchemaDefinition
 from thesistrace.entrypoints.runtime import (
     CoreSettings,
     core_environment_is_configured,
 )
+
+
+@pytest.fixture(scope="session")
+def historical_core_schema() -> tuple[SchemaDefinition, ...]:
+    path = Path(__file__).resolve().parents[1] / "fixtures/historical-core-schema"
+    archive_path = path / "publication-maintenance-release.zip"
+    assert hashlib.sha256(archive_path.read_bytes()).hexdigest() == (
+        "76498ac400bbccbf1a0b406d78ea5bcf6e2a9080eb694c9fe7caa94a10c2994f"
+    )
+    with ZipFile(archive_path) as archive:
+        definitions = tuple(
+            SchemaDefinition(name.removesuffix(".sql"), archive.read(name).decode())
+            for name in archive.namelist()
+        )
+    return definitions
 
 
 @pytest.fixture

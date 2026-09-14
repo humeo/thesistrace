@@ -513,7 +513,7 @@ test("Default Folder retains one local Research Draft with authoritative Formula
   }
 });
 
-test("Financial catalog composes one Formula and starts its DailyTrack", { tag: "@isolated" }, async ({ page }, testInfo) => {
+test("Complete field catalog composes one Formula and starts its DailyTrack", { tag: "@isolated" }, async ({ page }, testInfo) => {
   test.setTimeout(180_000);
   const responses: string[] = [];
   let runId: string | undefined;
@@ -531,12 +531,34 @@ test("Financial catalog composes one Formula and starts its DailyTrack", { tag: 
     workerPaused = true;
     await openDataOverview(page);
     await expect(page.getByRole("heading", { name: "Research fields" })).toBeVisible();
+    await expect(page.getByText("226 available", { exact: true })).toBeVisible();
+    await expect(page.locator(".signal-strip")).toHaveCount(4);
+    await expect(page.locator(".data-field-dataset > header")).toContainText([
+      "22 fields", "204 fields",
+    ]);
+    await page.getByRole("searchbox", { name: "Search fields" }).fill("close_raw");
+    await expect(page.locator(".data-field-dataset .data-field-table tbody tr")).toHaveCount(1);
+    await expect(page.locator(".data-field-dataset .data-field-table tbody tr")).toContainText("未复权收盘价");
+    await page.getByRole("searchbox", { name: "Search fields" }).fill("");
+    await page.getByRole("combobox", { name: "Research purpose" }).selectOption("盈利");
+    await expect(page.locator(".data-field-dataset .data-field-table tbody tr")).toHaveCount(12);
+    await page.getByRole("combobox", { name: "Research purpose" }).selectOption("");
+    await page.getByRole("combobox", { name: "Field source" }).selectOption("fina_indicator");
+    await expect(page.locator(".data-field-dataset .data-field-table tbody tr")).toHaveCount(163);
+    await page.getByRole("searchbox", { name: "Search fields" }).fill("单季净资产收益率");
+    await expect(page.locator(".data-field-dataset .data-field-table tbody tr")).toHaveCount(1);
+    await expect(page.locator(".data-field-dataset .data-field-table tbody tr")).toContainText("q_roe");
+    await page.getByRole("searchbox", { name: "Search fields" }).fill("");
+    await page.getByRole("combobox", { name: "Field source" }).selectOption("");
+    await page.getByRole("combobox", { name: "Field period" }).selectOption("latest_visible_ttm");
+    await expect(page.locator(".data-field-dataset .data-field-table tbody tr")).toHaveCount(19);
+    await page.getByRole("combobox", { name: "Field period" }).selectOption("");
     await expect(page.getByText("revenue", { exact: true })).toBeVisible();
     await expect(page.getByText("Latest full year visible on each Research Session").first()).toBeVisible();
     await page.goto("/research?new");
     await fillCompleteDraft(page, {
       name: "Composite financial browser run",
-      formula: "rank(close) + rank(revenue)",
+      formula: "rank(close_raw) + rank(pe) + rank(roe) + rank(revenue)",
     });
     const runCapture = page.waitForResponse((response) => (
       response.url().endsWith("/api/research-runs")
@@ -995,7 +1017,8 @@ test("Batch children keep ordinary Research organization, reuse, tracking, and d
 });
 
 test("Default and custom Folder Drafts run once, retain edits, reject safely, and publish results", { tag: "@isolated" }, async ({ page, researcher }, testInfo) => {
-  test.setTimeout(120_000);
+  // This includes data publication, several Runs, and a separate 90s Track advance wait.
+  test.setTimeout(240_000);
   const defaultDraftKey = `thesistrace.research-draft.${researcher.id}.folder_default`;
   const responses: string[] = [];
   page.on("response", (response) => {

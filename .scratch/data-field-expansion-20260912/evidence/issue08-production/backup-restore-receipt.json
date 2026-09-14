@@ -1,0 +1,32 @@
+{
+  "source_schema": "6f04fe84573259465442c092856b69714ed339c2093d51dcf67ba4b68aaa359f",
+  "tables": 91,
+  "database_sha256": "c700cee4e81489f014b3e7474b5614cb814d2763b0416c1f1ea767fca126b071",
+  "database_bytes": 4668226,
+  "database_restore_verified": true,
+  "volumes": [
+    {
+      "volume": "canonical-data",
+      "files": 23946,
+      "archive_bytes": 2700165120,
+      "archive_sha256": "eb3a61725bae738bbcb16710309755d6d8d66eaf58b272e26bd48205b3c58765",
+      "restore_verified": true
+    },
+    {
+      "volume": "benchmark-data",
+      "files": 2,
+      "archive_bytes": 204800,
+      "archive_sha256": "f6a6fd1dd74a304b6623d24a073ba0a414eb9af6d9c92349e402eb34e0dd9fe6",
+      "restore_verified": true
+    },
+    {
+      "volume": "rustfs-data",
+      "files": 6651,
+      "archive_bytes": 51937280,
+      "archive_sha256": "4674b4bcfb1da23ca38b3000c6d22d1c3c1a95dc110010d68bf808ce70e45737",
+      "restore_verified": true
+    }
+  ],
+  "writers_stopped": true,
+  "head_unchanged": true
+}

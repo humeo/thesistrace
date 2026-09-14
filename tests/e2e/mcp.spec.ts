@@ -8,11 +8,10 @@ test("MCP product connects an external client through login, consent, discovery 
   const base = process.env.THESISTRACE_TEST_WEB_ORIGIN!;
   await page.goto("/connections/mcp");
   await expect(page.getByRole("heading", { name: "MCP", exact: true })).toBeVisible();
-  await expect(page.getByText("Available", { exact: true })).toBeVisible();
-  await expect(page.getByText(`${base}/mcp`, { exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "QuantTrace MCP", exact: true }).getByRole("status")).toContainText("Service available");
   await expect(page.getByText("No authorized apps yet")).toBeVisible();
   await page.getByText("View setup prompt", { exact: true }).click();
-  await expect(page.locator(".mcp-agent-prompt")).toContainText("Add QuantTrace MCP to Codex");
+  await expect(page.locator(".mcp-agent-prompt")).toContainText(`Add QuantTrace MCP to Codex using ${base}/mcp`);
   await expect(page.locator(".mcp-agent-prompt")).not.toContainText(".example");
   await page.screenshot({ path: testInfo.outputPath("mcp-desktop.png"), fullPage: true, animations: "disabled" });
   await page.setViewportSize({ width: 390, height: 844 });

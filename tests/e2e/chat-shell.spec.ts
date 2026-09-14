@@ -1106,7 +1106,7 @@ test("admitted Research artifacts and a DailyTrack outlive the Chat that created
   const resultCard = resultSurface.getByRole("region", { name: `ResearchRun ${runId}`, exact: true });
   await expect(resultCard).toContainText("succeeded");
   const cardRankIc = factorSummary.rank_ic.mean === null ? "Not available" : factorSummary.rank_ic.mean.toFixed(3);
-  await expect(resultCard.locator(".chat-a2ui-metrics")).toContainText(cardRankIc);
+  await expect(resultCard.locator(".chat-a2ui-metrics div").filter({ has: page.getByText("5S Rank IC", { exact: true }) }).locator("dd")).toHaveText(cardRankIc);
   await expect(resultCard.getByRole("link", { name: runId, exact: true })).toHaveAttribute("href", runHref);
   await expect(page.getByRole("article", { name: "Research surface" })).toHaveCount(3);
   await expect(resultSurface.getByRole("button", {
@@ -1972,6 +1972,7 @@ function serviceLogs(service: "agent", since: string): string {
       killSignal: "SIGKILL",
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 10_000,
+      maxBuffer: 8 * 1024 * 1024,
     },
   );
   if (result.status !== 0) {

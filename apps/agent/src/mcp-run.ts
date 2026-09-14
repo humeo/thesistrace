@@ -5,6 +5,7 @@ import { getMcpCallToolMeta, MCPClient } from "@mastra/mcp";
 import type { AgentSettings } from "./config.js";
 import { toolFailureCode, type AgentFailureCode } from "@thesistrace/contracts/agent-failure";
 import { AGENT_LIMITS } from "./guarded-language-model.js";
+import { McpSchemaValidator } from "./mcp-schema-validator.js";
 import {
   createMcpTokenExchanger,
   McpRunPreparationError,
@@ -14,7 +15,6 @@ import {
   DURABLE_TOOL_OUTCOME_FIELD,
 } from "./tool-outcome.js";
 
-const MCP_CONNECT_TIMEOUT_MS = 2_000;
 const MCP_DISCOVERY_TIMEOUT_MS = 5_000;
 const MCP_SERVER_ID = "thesistrace";
 const MCP_TOOL_OUTCOME_META_KEY = "thesistrace/tool-outcome";
@@ -53,6 +53,7 @@ export function createMcpRunFactory(
   });
   const createClient = dependencies.mcpClient ?? ((options) => new MCPClient(options));
   const mcpUrl = new URL(settings.mcpInternalUrl);
+  const jsonSchemaValidator = new McpSchemaValidator();
 
   return async (headers, runId) => {
     const exchanged = await exchange(headers);
@@ -61,9 +62,10 @@ export function createMcpRunFactory(
       servers: {
         [MCP_SERVER_ID]: {
           allowedHosts: [mcpUrl.host],
-          connectTimeout: MCP_CONNECT_TIMEOUT_MS,
+          connectTimeout: MCP_DISCOVERY_TIMEOUT_MS,
           enableServerLogs: false,
           forwardInstructions: false,
+          jsonSchemaValidator,
           // Core business rejections are ordinary MCP results that the model
           // must be able to inspect and act on. Transport/protocol failures
           // still reject from the MCP client and are tracked below as fatal.

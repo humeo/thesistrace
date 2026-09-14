@@ -44,6 +44,24 @@ class ResearchSessionRangeCoverage:
 
 
 @dataclass(frozen=True)
+class CollectedDailyBasicCoverage:
+    kind: str = "research-session-range"
+
+    def build(self, canonical: Mapping[str, object], calendar: list[object]) -> dict[str, object]:
+        rows = canonical.get("daily_basic_sessions")
+        if not isinstance(rows, list) or not rows:
+            raise FamilyManifestError("Daily basic collected session Coverage is empty")
+        sessions = [str(row["session"]) for row in rows]
+        if sessions != [str(s) for s in calendar if sessions[0] <= str(s) <= sessions[-1]]:
+            raise FamilyManifestError("Daily basic collected session Coverage has gaps")
+        return {"kind": self.kind, "start": sessions[0], "end": sessions[-1],
+                "session_count": len(sessions)}
+
+    def validate(self, coverage: Mapping[str, object]) -> dict[str, object]:
+        return _validated_range_coverage(coverage, self.kind, "session_count")
+
+
+@dataclass(frozen=True)
 class InstrumentSetCoverage:
     kind: str = "instrument-set"
 
@@ -117,6 +135,7 @@ class MountedDatasetFamilyDescriptor:
     validation_summary: dict[str, int | str]
     manifest_sha256: str
     table_names: tuple[str, ...]
+    field_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -212,10 +231,16 @@ CORE_MARKET_FAMILY_SPECS = (
 # The order remains the persisted Generation order used by the immutable
 # 2026-08-13 manifests. Industry is optional, but when present it occupies its
 # established position before the Field Catalog.
+DAILY_BASIC_FAMILY_SPEC = DatasetFamilySpec(
+    "equity.daily_basic", "equity-daily-basic",
+    ("daily_basic", "daily_basic_sessions"), CollectedDailyBasicCoverage(),
+)
+
 NON_FINANCIAL_FAMILY_SPECS = (
     *CORE_MARKET_FAMILY_SPECS[:-1],
     INDUSTRY_FAMILY_SPEC,
     CORE_MARKET_FAMILY_SPECS[-1],
+    DAILY_BASIC_FAMILY_SPEC,
 )
 
 
@@ -322,6 +347,10 @@ def validate_generation_coverages(
             family.dataset_coverage != expected_range
         ):
             raise FamilyManifestError("Dataset Family session Coverage is not synchronized")
+        if isinstance(spec.coverage, CollectedDailyBasicCoverage):
+            coverage = family.dataset_coverage
+            if coverage["start"] < calendar["start"] or coverage["end"] > calendar["end"]:
+                raise FamilyManifestError("Daily basic Coverage exceeds Market Coverage")
         if isinstance(spec.coverage, MembershipRangeCoverage):
             try:
                 market_start = date.fromisoformat(str(calendar["start"]))

@@ -13,6 +13,10 @@ from thesistrace.daily_track.failure_policy import (
 )
 
 _BLOCKED_REASON_CODES = {
+    "Required Data Family does not cover the next calculation period.": (
+        "DATA_FAMILY_COVERAGE_UNAVAILABLE"
+    ),
+    "Industry Coverage ends before the next Research Session.": "INDUSTRY_COVERAGE_UNAVAILABLE",
     "DailyTrack could not process the current dataset.": "TRACKING_FAILED",
     "DailyTrack target exceeds Tracking Worker capacity.": "CAPACITY_EXCEEDED",
     "Financial Coverage ends before the next Research Session.": (

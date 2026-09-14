@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 from threading import Event, Thread
+from typing import TYPE_CHECKING
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.benchmark import (
@@ -51,6 +52,9 @@ from thesistrace.data.source import DataSource, DataSourceError, refresh_collect
 from thesistrace.data.validation import validate_release_batch
 from thesistrace.operational_events import non_blocking_operational_event_sink
 from thesistrace.publication.serialization import canonical_json_bytes
+
+if TYPE_CHECKING:
+    from thesistrace.data.financial_indicator_source import FinancialIndicatorProvider
 
 _REFRESH_LEASE_SECONDS = 900
 _REFRESH_HEARTBEAT_SECONDS = 30
@@ -453,6 +457,7 @@ class DataRefreshService:
         benchmark_source: BenchmarkLevelSource,
         financial_announcement_source: FinancialAnnouncementSource | None = None,
         financial_source: FinancialRawSource | None = None,
+        indicator_provider: FinancialIndicatorProvider | None = None,
         financial_source_window_selector: Callable[[str, str], None] | None = None,
         industry_source: IndustrySource | None = None,
         industry_source_target_selector: Callable[[str], None] | None = None,
@@ -463,6 +468,7 @@ class DataRefreshService:
                 benchmark_source=benchmark_source,
                 financial_announcement_source=financial_announcement_source,
                 financial_source=financial_source,
+                indicator_provider=indicator_provider,
                 financial_source_window_selector=financial_source_window_selector,
                 industry_source=industry_source,
                 industry_source_target_selector=industry_source_target_selector,
@@ -475,6 +481,7 @@ class DataRefreshService:
         benchmark_source: BenchmarkLevelSource,
         financial_announcement_source: FinancialAnnouncementSource | None,
         financial_source: FinancialRawSource | None,
+        indicator_provider: FinancialIndicatorProvider | None,
         financial_source_window_selector: Callable[[str, str], None] | None,
         industry_source: IndustrySource | None,
         industry_source_target_selector: Callable[[str], None] | None,
@@ -489,6 +496,7 @@ class DataRefreshService:
                 claim,
                 announcement_source=financial_announcement_source,
                 financial_source=financial_source,
+                indicator_provider=indicator_provider,
                 financial_source_window_selector=financial_source_window_selector,
             )
         if claim.kind == "industry":
@@ -525,7 +533,10 @@ class DataRefreshService:
                     raise DataRefreshError("DATA_NOT_READY")
                 expected_manifest = head.generation_manifest_sha256
                 self._record_expected_head(claim, expected_manifest)
-                plan = refresh_collection_plan(self._as_of(claim), refresh_base.canonical)
+                plan = refresh_collection_plan(
+                    self._as_of(claim), refresh_base.canonical,
+                    collection_key=f"refresh:{claim.key}",
+                )
                 assert plan.overlap_start_session is not None
                 phase = "market"
                 with self._timed_phase(claim, phase):
@@ -709,6 +720,7 @@ class DataRefreshService:
         *,
         announcement_source: FinancialAnnouncementSource | None,
         financial_source: FinancialRawSource | None,
+        indicator_provider: FinancialIndicatorProvider | None,
         financial_source_window_selector: Callable[[str, str], None] | None,
     ) -> bool:
         operation_id = _operation_id(claim.key, claim.owner_token)
@@ -726,7 +738,11 @@ class DataRefreshService:
             )
         )
         try:
-            if announcement_source is None or financial_source is None:
+            if (
+                announcement_source is None
+                or financial_source is None
+                or indicator_provider is None
+            ):
                 raise DataRefreshError("FINANCIAL_WORKER_SOURCE_MISSING")
             with self._maintain_claim(claim) as heartbeat:
                 target = self._financial_target(claim)
@@ -736,6 +752,7 @@ class DataRefreshService:
                         self._generations.root,
                         announcement_source,
                         financial_source,
+                        indicator_provider=indicator_provider,
                         clock=self._clock,
                         progress=self._lifecycle_event,
                         ownership_guard=heartbeat.assert_owned,

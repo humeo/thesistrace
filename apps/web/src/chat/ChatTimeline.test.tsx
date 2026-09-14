@@ -15,6 +15,7 @@ afterEach(async () => {
   await act(async () => root?.unmount());
   root = undefined;
   document.body.replaceChildren();
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -148,6 +149,7 @@ test("keeps a compact question activity and directs answering to the composer", 
 });
 
 test("copies the complete assistant response once while retaining user Copy", async () => {
+  vi.useFakeTimers();
   const announce = vi.fn();
   const writeText = vi.fn(async () => undefined);
   Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
@@ -163,6 +165,9 @@ test("copies the complete assistant response once while retaining user Copy", as
   expect(writeText).toHaveBeenCalledWith("First\n\nSecond");
   expect(document.querySelector('[aria-label="Copy your message"]')).not.toBeNull();
   expect(announce).toHaveBeenCalledWith("Copied to clipboard.");
+  await act(async () => root?.unmount());
+  root = undefined;
+  expect(vi.getTimerCount()).toBe(0);
 });
 
 test("automatically loads older Turns and preserves the first visible Turn", async () => {
@@ -444,4 +449,38 @@ test("keeps the current tool visible outside folded history and clears running s
   expect(document.querySelector(".chat-current-activity")?.textContent).toContain("Preparing response");
   await mount(controller({ turns: [timelineTurn(entries)] }));
   expect(document.querySelector(".chat-current-activity")).toBeNull();
+});
+
+test("keeps restored history at the bottom as resource cards grow without stealing an upward scroll", async () => {
+  let resized = () => {};
+  class TestResizeObserver {
+    constructor(callback: ResizeObserverCallback) {
+      resized = () => callback([], this as unknown as ResizeObserver);
+    }
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  vi.stubGlobal("ResizeObserver", TestResizeObserver);
+  await mount(controller({ turns: [timelineTurn([
+    entry("assistant_message", "assistant:1", { content: "Restored response", status: "complete" }),
+  ])] }));
+  const viewport = document.querySelector<HTMLElement>('[role="log"]')!;
+  const content = document.querySelector<HTMLElement>(".chat-timeline-content")!;
+  content.style.paddingBottom = "0px";
+  let height = 1000;
+  Object.defineProperty(viewport, "clientHeight", { configurable: true, value: 600 });
+  Object.defineProperty(viewport, "scrollHeight", { configurable: true, get: () => height });
+  await act(async () => resized());
+  expect(viewport.scrollTop + viewport.clientHeight).toBeGreaterThanOrEqual(height);
+
+  height = 2000;
+  await act(async () => resized());
+  expect(viewport.scrollTop + viewport.clientHeight).toBeGreaterThanOrEqual(height);
+
+  await act(async () => viewport.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -100 })));
+  viewport.scrollTop = 300;
+  height = 2400;
+  await act(async () => resized());
+  expect(viewport.scrollTop).toBe(300);
 });

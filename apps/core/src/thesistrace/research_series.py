@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Protocol, TypeVar, runtime_checkable
 
@@ -12,6 +12,10 @@ import numpy as np
 type Coordinate = tuple[str, str]
 type NumericValue = Decimal | int | float | str
 SeriesValue = TypeVar("SeriesValue")
+
+
+def ttm_window_column(field_id: str) -> str:
+    return f"ttm_window_end:{field_id}"
 
 
 def decimal_to_binary64(value: Decimal) -> float:
@@ -54,6 +58,7 @@ class AlignedResearchData:
     execution_prices: dict[Coordinate, ExecutionPrice]
     trading_states: dict[Coordinate, str]
     price_limits: dict[Coordinate, PriceLimit]
+    ttm_windows: dict[str, dict[Coordinate, str]] = field(default_factory=dict)
 
     def snapshot(self) -> AlignedResearchData:
         return deepcopy(self)
@@ -78,6 +83,10 @@ class ColumnarResearchSeries(Protocol):
         self,
         field_ids: tuple[str, ...],
         instruments: tuple[str, ...],
+    ) -> Mapping[str, np.ndarray]: ...
+
+    def ttm_window_matrices(
+        self, field_ids: tuple[str, ...], instruments: tuple[str, ...],
     ) -> Mapping[str, np.ndarray]: ...
 
     def adjusted_open_matrix(self, instruments: tuple[str, ...]) -> np.ndarray: ...
@@ -136,6 +145,7 @@ def slice_research_sessions(
             for coordinate, value in selected_coordinates(data.trading_states).items()
         },
         price_limits=selected_coordinates(data.price_limits),
+        ttm_windows={key: selected_coordinates(values) for key, values in data.ttm_windows.items()},
     )
 
 
@@ -154,6 +164,11 @@ def research_data_identity(data: AlignedResearchData) -> dict[str, object]:
             ]
             for field_id, values in sorted(data.fields.items())
         },
+        **({"ttm_windows": {
+            field_id: [[session, instrument, end] for (session, instrument), end
+                       in sorted(values.items())]
+            for field_id, values in sorted(data.ttm_windows.items())
+        }} if data.ttm_windows else {}),
         "universe_members": {
             session: list(values) for session, values in sorted(data.universe_members.items())
         },

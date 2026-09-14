@@ -32,8 +32,15 @@ test("Chat saturation rejects an unaccepted Session and preserves an explicit br
       // The proxy holds each completed Core response, so every accepted Run remains active.
       await expect.poll(() => proxyState("mcp-fault-proxy", 8150).pending_held_tool_responses, { timeout: 20_000 }).toBe(index + 1);
     }
-    await expect.poll(() => proxyState("mcp-fault-proxy", 8150).pending_held_tool_responses, { timeout: 20_000 }).toBe(activeRunLimit);
+    // Capacity counts accepted active runs, including those still preparing their
+    // first Tool. Held responses prevent completion without requiring all runs
+    // to reach the remote Tool at the same instant.
+    await expect.poll(() => databaseCounts(researcher.id), { timeout: 20_000 }).toEqual({
+      sessions: activeRunLimit, runs: activeRunLimit, running: activeRunLimit,
+    });
+    await expect.poll(() => Number(proxyState("mcp-fault-proxy", 8150).pending_held_tool_responses), { timeout: 20_000 }).toBeGreaterThan(0);
     await page.goto("/chat");
+    await expect(page.getByRole("textbox", { name: "Message", exact: true })).toBeEnabled();
     await page.getByRole("textbox", { name: "Message", exact: true }).fill(prompt);
     await page.getByRole("button", { name: "Send" }).click();
     await expect(page.getByRole("alert")).toHaveAttribute("data-failure-code", "AGENT_CAPACITY");

@@ -1,0 +1,152 @@
+{
+  "source_head": "17f5694f6a9d47b915ffde326928b919a55181e75a4908cb661934850ac8c983",
+  "status": "source_statistics_complete",
+  "collected_sessions": 4053,
+  "coverage_start": "2010-01-04",
+  "coverage_end": "2026-09-09",
+  "historical_instrument_count": 5550,
+  "empty_source_sessions": [],
+  "source_request_failures": null,
+  "company_type": "not_applicable_market_observation",
+  "counting_basis": "Exact-date returned rows inside the pinned SSE/SZSE historical identity scope.",
+  "null_reason": "Value absent in an observed supplier row; no zero fill or older-value substitution.",
+  "scope": "Source statistics; independent candidate validation proves sealed receipts and DSL projections.",
+  "csv": ".scratch/data-field-expansion-20260912/issue07-daily-basic-source-qualification.csv",
+  "fields": [
+    {
+      "field_id": "market.capitalization.total",
+      "identifier": "total_mv",
+      "source_column": "total_mv",
+      "source_unit": "10000 CNY",
+      "unit": "CNY",
+      "non_null_security_sessions": 14007368,
+      "source_status": "non_null_observed"
+    },
+    {
+      "field_id": "market.capitalization.float",
+      "identifier": "circ_mv",
+      "source_column": "circ_mv",
+      "source_unit": "10000 CNY",
+      "unit": "CNY",
+      "non_null_security_sessions": 14007368,
+      "source_status": "non_null_observed"
+    },
+    {
+      "field_id": "market.shares.total",
+      "identifier": "total_share",
+      "source_column": "total_share",
+      "source_unit": "10000 shares",
+      "unit": "shares",
+      "non_null_security_sessions": 14007368,
+      "source_status": "non_null_observed"
+    },
+    {
+      "field_id": "market.shares.float",
+      "identifier": "float_share",
+      "source_column": "float_share",
+      "source_unit": "10000 shares",
+      "unit": "shares",
+      "non_null_security_sessions": 14007368,
+      "source_status": "non_null_observed"
+    },
+    {
+      "field_id": "market.shares.free_float",
+      "identifier": "free_share",
+      "source_column": "free_share",
+      "source_unit": "10000 shares",
+      "unit": "shares",
+      "non_null_security_sessions": 14004866,
+      "source_status": "non_null_observed"
+    },
+    {
+      "field_id": "market.turnover.float_ratio",
+      "identifier": "turnover_rate",
+      "source_column": "turnover_rate",
+      "source_unit": "percent",
+      "unit": "ratio",
+      "non_null_security_sessions": 14007368,
+      "source_status": "non_null_observed"
+    },
+    {
+      "field_id": "market.turnover.free_float_ratio",
+      "identifier": "turnover_rate_f",
+      "source_column": "turnover_rate_f",
+      "source_unit": "percent",
+      "unit": "ratio",
+      "non_null_security_sessions": 14007329,
+      "source_status": "non_null_observed"
+    },
+    {
+      "field_id": "market.volume.ratio",
+      "identifier": "volume_ratio",
+      "source_column": "volume_ratio",
+      "source_unit": "multiple",
+      "unit": "multiple",
+      "non_null_security_sessions": 13987829,
+      "source_status": "non_null_observed"
+    },
+    {
+      "field_id": "market.valuation.pe",
+      "identifier": "pe",
+      "source_column": "pe",
+      "source_unit": "multiple",
+      "unit": "multiple",
+      "non_null_security_sessions": 12109462,
+      "source_status": "non_null_observed"
+    },
+    {
+      "field_id": "market.valuation.pe_ttm",
+      "identifier": "pe_ttm",
+      "source_column": "pe_ttm",
+      "source_unit": "multiple",
+      "unit": "multiple",
+      "non_null_security_sessions": 11589277,
+      "source_status": "non_null_observed"
+    },
+    {
+      "field_id": "market.valuation.pb",
+      "identifier": "pb",
+      "source_column": "pb",
+      "source_unit": "multiple",
+      "unit": "multiple",
+      "non_null_security_sessions": 13905873,
+      "source_status": "non_null_observed"
+    },
+    {
+      "field_id": "market.valuation.ps",
+      "identifier": "ps",
+      "source_column": "ps",
+      "source_unit": "multiple",
+      "unit": "multiple",
+      "non_null_security_sessions": 14000871,
+      "source_status": "non_null_observed"
+    },
+    {
+      "field_id": "market.valuation.ps_ttm",
+      "identifier": "ps_ttm",
+      "source_column": "ps_ttm",
+      "source_unit": "multiple",
+      "unit": "multiple",
+      "non_null_security_sessions": 13995810,
+      "source_status": "non_null_observed"
+    },
+    {
+      "field_id": "market.dividend.yield_annual",
+      "identifier": "dv_ratio",
+      "source_column": "dv_ratio",
+      "source_unit": "percent",
+      "unit": "ratio",
+      "non_null_security_sessions": 12504858,
+      "source_status": "non_null_observed"
+    },
+    {
+      "field_id": "market.dividend.yield_ttm",
+      "identifier": "dv_ttm",
+      "source_column": "dv_ttm",
+      "source_unit": "percent",
+      "unit": "ratio",
+      "non_null_security_sessions": 9403921,
+      "source_status": "non_null_observed"
+    }
+  ]
+}

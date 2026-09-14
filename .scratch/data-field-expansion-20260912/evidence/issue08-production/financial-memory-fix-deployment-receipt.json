@@ -1,0 +1,125 @@
+{
+  "revision": "7b3ce5b6e7f97ef60616667269fbdf2a56b5c424",
+  "config_unchanged": true,
+  "containers": [
+    {
+      "name": "/thesistrace-batch-research-worker-2",
+      "image_id": "sha256:ba893109afe62be75c0f954417d37734a550262034f1cce0a4b6784740e26697",
+      "status": "running",
+      "exit_code": 0,
+      "health": null
+    },
+    {
+      "name": "/thesistrace-batch-research-worker-1",
+      "image_id": "sha256:ba893109afe62be75c0f954417d37734a550262034f1cce0a4b6784740e26697",
+      "status": "running",
+      "exit_code": 0,
+      "health": null
+    },
+    {
+      "name": "/thesistrace-research-worker-3",
+      "image_id": "sha256:5ef4f80677f1731b187c11336ab14bec78a2f7bd02cb7c4756d966e87157303f",
+      "status": "running",
+      "exit_code": 0,
+      "health": null
+    },
+    {
+      "name": "/thesistrace-research-worker-1",
+      "image_id": "sha256:5ef4f80677f1731b187c11336ab14bec78a2f7bd02cb7c4756d966e87157303f",
+      "status": "running",
+      "exit_code": 0,
+      "health": null
+    },
+    {
+      "name": "/thesistrace-research-worker-2",
+      "image_id": "sha256:5ef4f80677f1731b187c11336ab14bec78a2f7bd02cb7c4756d966e87157303f",
+      "status": "running",
+      "exit_code": 0,
+      "health": null
+    },
+    {
+      "name": "/thesistrace-data-operator-worker-1",
+      "image_id": "sha256:8a0bed9c1a912bd70b2fa32f653f4a9b6fb9d99727547e5c88487c6d5f9133d6",
+      "status": "running",
+      "exit_code": 0,
+      "health": null
+    },
+    {
+      "name": "/thesistrace-api-1",
+      "image_id": "sha256:7af735c0b8dac94ebb61acc9b86ff5e0385cd2a52fd41ae79461f0eece73bca4",
+      "status": "running",
+      "exit_code": 0,
+      "health": "healthy"
+    },
+    {
+      "name": "/thesistrace-tracking-worker-1",
+      "image_id": "sha256:df7c7a1f525bc4261bf60af4a0a3c7fd7fbb445914cb9eeed954e1956e146384",
+      "status": "running",
+      "exit_code": 0,
+      "health": null
+    },
+    {
+      "name": "/thesistrace-publication-maintenance-worker-1",
+      "image_id": "sha256:173e775a5876ed8da2ad080e3cde054c21ea17dfba3cc5ad70c2781b8960c3c8",
+      "status": "running",
+      "exit_code": 0,
+      "health": "healthy"
+    },
+    {
+      "name": "/thesistrace-initialize-1",
+      "image_id": "sha256:0282cfbc41a5913fbc6b923c2ea82af9d6d62d855d732568252b16c7ad090144",
+      "status": "exited",
+      "exit_code": 0,
+      "health": null
+    },
+    {
+      "name": "/thesistrace-agent-1",
+      "image_id": "sha256:cca3711376a9bafab84d9090c861222d315a67d160f18924b3bdcf94b9eebf73",
+      "status": "running",
+      "exit_code": 0,
+      "health": "healthy"
+    },
+    {
+      "name": "/thesistrace-auth-1",
+      "image_id": "sha256:000457b4cef1f7042cd63123d2ba43162aeded74d93c78af1b4d84f95ca77b92",
+      "status": "running",
+      "exit_code": 0,
+      "health": "healthy"
+    },
+    {
+      "name": "/thesistrace-web-1",
+      "image_id": "sha256:f0c1674894facb5ec33a538fbb9557da20cf5a4e3525ac7c910adcce61410cfd",
+      "status": "running",
+      "exit_code": 0,
+      "health": "healthy"
+    },
+    {
+      "name": "/thesistrace-agent-initialize-1",
+      "image_id": "sha256:cca3711376a9bafab84d9090c861222d315a67d160f18924b3bdcf94b9eebf73",
+      "status": "exited",
+      "exit_code": 0,
+      "health": null
+    },
+    {
+      "name": "/thesistrace-auth-initialize-1",
+      "image_id": "sha256:000457b4cef1f7042cd63123d2ba43162aeded74d93c78af1b4d84f95ca77b92",
+      "status": "exited",
+      "exit_code": 0,
+      "health": null
+    },
+    {
+      "name": "/thesistrace-postgres-1",
+      "image_id": "sha256:029660641a0cfc575b14f336ba448fb8a75fd595d42e1fa316b9fb4378742297",
+      "status": "running",
+      "exit_code": 0,
+      "health": "healthy"
+    },
+    {
+      "name": "/thesistrace-rustfs-1",
+      "image_id": "sha256:41fe89380f4120a337790c02af192c3fe7bb55c3edc2e6e9357b487b47c6ab21",
+      "status": "running",
+      "exit_code": 0,
+      "health": "healthy"
+    }
+  ]
+}

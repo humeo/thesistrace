@@ -1,0 +1,2227 @@
+{
+  "scope": "user_confirmed_226_target_design",
+  "total": 226,
+  "existing": 12,
+  "additions": 214,
+  "counts": {
+    "existing": 12,
+    "daily_basic": 16,
+    "fina_indicator": 163,
+    "additional_statements": 32,
+    "core_ttm": 3
+  },
+  "new_flow_period": "TTM",
+  "new_percentage_alpha_representation": "decimal_ratio_after_source_unit_verification",
+  "ttm_flow_arithmetic_period_policy": "missing_on_window_mismatch",
+  "fields": [
+    {
+      "status": "现有",
+      "group": "现有字段",
+      "dsl_identifier": "open",
+      "label": "复权开盘价",
+      "source_endpoint": "daily",
+      "source_column": "open",
+      "note": "交易日；结合 adj_factor 得到复权值"
+    },
+    {
+      "status": "现有",
+      "group": "现有字段",
+      "dsl_identifier": "high",
+      "label": "复权最高价",
+      "source_endpoint": "daily",
+      "source_column": "high",
+      "note": "交易日；结合 adj_factor 得到复权值"
+    },
+    {
+      "status": "现有",
+      "group": "现有字段",
+      "dsl_identifier": "low",
+      "label": "复权最低价",
+      "source_endpoint": "daily",
+      "source_column": "low",
+      "note": "交易日；结合 adj_factor 得到复权值"
+    },
+    {
+      "status": "现有",
+      "group": "现有字段",
+      "dsl_identifier": "close",
+      "label": "复权收盘价",
+      "source_endpoint": "daily",
+      "source_column": "close",
+      "note": "交易日；结合 adj_factor 得到复权值，保持原有含义"
+    },
+    {
+      "status": "现有",
+      "group": "现有字段",
+      "dsl_identifier": "volume",
+      "label": "成交股数",
+      "source_endpoint": "daily",
+      "source_column": "vol",
+      "note": "交易日；已规范为股"
+    },
+    {
+      "status": "现有",
+      "group": "现有字段",
+      "dsl_identifier": "amount",
+      "label": "成交金额",
+      "source_endpoint": "daily",
+      "source_column": "amount",
+      "note": "交易日；已规范为人民币元"
+    },
+    {
+      "status": "现有",
+      "group": "现有字段",
+      "dsl_identifier": "revenue",
+      "label": "营业总收入",
+      "source_endpoint": "income",
+      "source_column": "total_revenue",
+      "note": "最新可见年报；不是营业收入列，也不是 TTM"
+    },
+    {
+      "status": "现有",
+      "group": "现有字段",
+      "dsl_identifier": "net_profit",
+      "label": "归母净利润",
+      "source_endpoint": "income",
+      "source_column": "n_income_attr_p",
+      "note": "最新可见年报；不是 TTM"
+    },
+    {
+      "status": "现有",
+      "group": "现有字段",
+      "dsl_identifier": "operating_cash_flow",
+      "label": "经营现金流净额",
+      "source_endpoint": "cashflow",
+      "source_column": "n_cashflow_act",
+      "note": "最新可见年报；不是 TTM"
+    },
+    {
+      "status": "现有",
+      "group": "现有字段",
+      "dsl_identifier": "assets",
+      "label": "总资产",
+      "source_endpoint": "balancesheet",
+      "source_column": "total_assets",
+      "note": "最新可见季度或年度报告"
+    },
+    {
+      "status": "现有",
+      "group": "现有字段",
+      "dsl_identifier": "liabilities",
+      "label": "总负债",
+      "source_endpoint": "balancesheet",
+      "source_column": "total_liab",
+      "note": "最新可见季度或年度报告"
+    },
+    {
+      "status": "现有",
+      "group": "现有字段",
+      "dsl_identifier": "equity",
+      "label": "归母股东权益",
+      "source_endpoint": "balancesheet",
+      "source_column": "total_hldr_eqy_exc_min_int",
+      "note": "最新可见季度或年度报告；不含少数股东权益"
+    },
+    {
+      "status": "拟新增",
+      "group": "每日指标",
+      "dsl_identifier": "close_raw",
+      "label": "未复权收盘价",
+      "source_endpoint": "daily_basic",
+      "source_column": "close",
+      "note": "元/股。已有行情也保存原始价，实施时复用 price.close.raw 身份并核对来源一致性。"
+    },
+    {
+      "status": "拟新增",
+      "group": "每日指标",
+      "dsl_identifier": "total_mv",
+      "label": "总市值",
+      "source_endpoint": "daily_basic",
+      "source_column": "total_mv",
+      "note": "来源万元；DSL 规范为人民币元。"
+    },
+    {
+      "status": "拟新增",
+      "group": "每日指标",
+      "dsl_identifier": "circ_mv",
+      "label": "流通市值",
+      "source_endpoint": "daily_basic",
+      "source_column": "circ_mv",
+      "note": "来源万元；DSL 规范为人民币元。"
+    },
+    {
+      "status": "拟新增",
+      "group": "每日指标",
+      "dsl_identifier": "total_share",
+      "label": "总股本",
+      "source_endpoint": "daily_basic",
+      "source_column": "total_share",
+      "note": "来源万股；DSL 规范为股。"
+    },
+    {
+      "status": "拟新增",
+      "group": "每日指标",
+      "dsl_identifier": "float_share",
+      "label": "无限售流通股本",
+      "source_endpoint": "daily_basic",
+      "source_column": "float_share",
+      "note": "来源万股；DSL 规范为股。"
+    },
+    {
+      "status": "拟新增",
+      "group": "每日指标",
+      "dsl_identifier": "free_share",
+      "label": "自由流通股本",
+      "source_endpoint": "daily_basic",
+      "source_column": "free_share",
+      "note": "来源万股；DSL 规范为股；不同于 float_share。"
+    },
+    {
+      "status": "拟新增",
+      "group": "每日指标",
+      "dsl_identifier": "turnover_rate",
+      "label": "无限售流通股换手率",
+      "source_endpoint": "daily_basic",
+      "source_column": "turnover_rate",
+      "note": "分母为无限售流通股数；比例缩放结合实际量/股本样本锁定。"
+    },
+    {
+      "status": "拟新增",
+      "group": "每日指标",
+      "dsl_identifier": "turnover_rate_f",
+      "label": "自由流通股换手率",
+      "source_endpoint": "daily_basic",
+      "source_column": "turnover_rate_f",
+      "note": "分母为自由流通股数；不与 turnover_rate 合并。"
+    },
+    {
+      "status": "拟新增",
+      "group": "每日指标",
+      "dsl_identifier": "volume_ratio",
+      "label": "供应商量比",
+      "source_endpoint": "daily_basic",
+      "source_column": "volume_ratio",
+      "note": "保留供应商值；文档未明确完整均值窗口。"
+    },
+    {
+      "status": "拟新增",
+      "group": "每日指标",
+      "dsl_identifier": "pe",
+      "label": "供应商年度市盈率",
+      "source_endpoint": "daily_basic",
+      "source_column": "pe",
+      "note": "倍数；亏损时来源可为空。"
+    },
+    {
+      "status": "拟新增",
+      "group": "每日指标",
+      "dsl_identifier": "pe_ttm",
+      "label": "供应商 TTM 市盈率",
+      "source_endpoint": "daily_basic",
+      "source_column": "pe_ttm",
+      "note": "倍数；不等于已提供独立的 net_profit_ttm。"
+    },
+    {
+      "status": "拟新增",
+      "group": "每日指标",
+      "dsl_identifier": "pb",
+      "label": "供应商市净率",
+      "source_endpoint": "daily_basic",
+      "source_column": "pb",
+      "note": "倍数；供应商净资产分母扣除其他权益工具。"
+    },
+    {
+      "status": "拟新增",
+      "group": "每日指标",
+      "dsl_identifier": "ps",
+      "label": "供应商年度市销率",
+      "source_endpoint": "daily_basic",
+      "source_column": "ps",
+      "note": "倍数；分母为最新年度营业收入。"
+    },
+    {
+      "status": "拟新增",
+      "group": "每日指标",
+      "dsl_identifier": "ps_ttm",
+      "label": "供应商 TTM 市销率",
+      "source_endpoint": "daily_basic",
+      "source_column": "ps_ttm",
+      "note": "倍数；保留供应商定义。"
+    },
+    {
+      "status": "拟新增",
+      "group": "每日指标",
+      "dsl_identifier": "dv_ratio",
+      "label": "供应商年度股息率",
+      "source_endpoint": "daily_basic",
+      "source_column": "dv_ratio",
+      "note": "来源百分数，DSL 使用小数比例（15% 为 0.15）；上一年发生除息的派现口径。"
+    },
+    {
+      "status": "拟新增",
+      "group": "每日指标",
+      "dsl_identifier": "dv_ttm",
+      "label": "供应商滚动股息率",
+      "source_endpoint": "daily_basic",
+      "source_column": "dv_ttm",
+      "note": "来源百分数，DSL 使用小数比例（15% 为 0.15）；除息日和分红报告期均有供应商近 12 个月约束。"
+    },
+    {
+      "status": "拟新增",
+      "group": "每股指标",
+      "dsl_identifier": "eps",
+      "label": "基本每股收益",
+      "source_endpoint": "fina_indicator",
+      "source_column": "eps",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "每股指标",
+      "dsl_identifier": "dt_eps",
+      "label": "稀释每股收益",
+      "source_endpoint": "fina_indicator",
+      "source_column": "dt_eps",
+      "note": "与期末摊薄每股收益 diluted2_eps 分开；不自行视为相同口径。"
+    },
+    {
+      "status": "拟新增",
+      "group": "每股指标",
+      "dsl_identifier": "total_revenue_ps",
+      "label": "每股营业总收入",
+      "source_endpoint": "fina_indicator",
+      "source_column": "total_revenue_ps",
+      "note": "营业总收入与 revenue_ps 的营业收入是不同源口径。"
+    },
+    {
+      "status": "拟新增",
+      "group": "每股指标",
+      "dsl_identifier": "revenue_ps",
+      "label": "每股营业收入",
+      "source_endpoint": "fina_indicator",
+      "source_column": "revenue_ps",
+      "note": "不能与 total_revenue_ps 自动互换。"
+    },
+    {
+      "status": "拟新增",
+      "group": "每股指标",
+      "dsl_identifier": "capital_rese_ps",
+      "label": "每股资本公积",
+      "source_endpoint": "fina_indicator",
+      "source_column": "capital_rese_ps",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "每股指标",
+      "dsl_identifier": "surplus_rese_ps",
+      "label": "每股盈余公积",
+      "source_endpoint": "fina_indicator",
+      "source_column": "surplus_rese_ps",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "每股指标",
+      "dsl_identifier": "undist_profit_ps",
+      "label": "每股未分配利润",
+      "source_endpoint": "fina_indicator",
+      "source_column": "undist_profit_ps",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "每股指标",
+      "dsl_identifier": "diluted2_eps",
+      "label": "期末摊薄每股收益",
+      "source_endpoint": "fina_indicator",
+      "source_column": "diluted2_eps",
+      "note": "源说明限定期末摊薄，不是 dt_eps 的稀释口径别名。"
+    },
+    {
+      "status": "拟新增",
+      "group": "每股指标",
+      "dsl_identifier": "bps",
+      "label": "每股净资产",
+      "source_endpoint": "fina_indicator",
+      "source_column": "bps",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "每股指标",
+      "dsl_identifier": "ocfps",
+      "label": "每股经营现金净流量",
+      "source_endpoint": "fina_indicator",
+      "source_column": "ocfps",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "每股指标",
+      "dsl_identifier": "retainedps",
+      "label": "每股留存收益",
+      "source_endpoint": "fina_indicator",
+      "source_column": "retainedps",
+      "note": "保留留存收益口径，不与每股未分配利润合并。"
+    },
+    {
+      "status": "拟新增",
+      "group": "每股指标",
+      "dsl_identifier": "cfps",
+      "label": "每股现金净流量",
+      "source_endpoint": "fina_indicator",
+      "source_column": "cfps",
+      "note": "源说明未限定经营活动；不同于 ocfps。"
+    },
+    {
+      "status": "拟新增",
+      "group": "每股指标",
+      "dsl_identifier": "ebit_ps",
+      "label": "每股息税前利润",
+      "source_endpoint": "fina_indicator",
+      "source_column": "ebit_ps",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "每股指标",
+      "dsl_identifier": "fcff_ps",
+      "label": "每股企业自由现金流",
+      "source_endpoint": "fina_indicator",
+      "source_column": "fcff_ps",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "每股指标",
+      "dsl_identifier": "fcfe_ps",
+      "label": "每股股东自由现金流",
+      "source_endpoint": "fina_indicator",
+      "source_column": "fcfe_ps",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "利润与现金流基础值",
+      "dsl_identifier": "extra_item",
+      "label": "非经常损益额",
+      "source_endpoint": "fina_indicator",
+      "source_column": "extra_item",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "利润与现金流基础值",
+      "dsl_identifier": "profit_dedt",
+      "label": "扣非净利润",
+      "source_endpoint": "fina_indicator",
+      "source_column": "profit_dedt",
+      "note": "官方简述未明确归母范围；不直接命名为归母扣非利润。"
+    },
+    {
+      "status": "拟新增",
+      "group": "利润与现金流基础值",
+      "dsl_identifier": "gross_profit",
+      "label": "毛利额",
+      "source_endpoint": "fina_indicator",
+      "source_column": "gross_margin",
+      "note": "源说明为毛利，不是毛利率；金额单位未由本次探针核验。"
+    },
+    {
+      "status": "拟新增",
+      "group": "利润与现金流基础值",
+      "dsl_identifier": "op_income",
+      "label": "经营活动净收益",
+      "source_endpoint": "fina_indicator",
+      "source_column": "op_income",
+      "note": "与营业利润、经营现金净流量是不同源概念。"
+    },
+    {
+      "status": "拟新增",
+      "group": "利润与现金流基础值",
+      "dsl_identifier": "valuechange_income",
+      "label": "价值变动净收益",
+      "source_endpoint": "fina_indicator",
+      "source_column": "valuechange_income",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "利润与现金流基础值",
+      "dsl_identifier": "interest_expense",
+      "label": "利息费用",
+      "source_endpoint": "fina_indicator",
+      "source_column": "interst_income",
+      "note": "保留供应商列名拼写；官方含义是费用，不能按 income 后缀解释为利息收入。"
+    },
+    {
+      "status": "拟新增",
+      "group": "利润与现金流基础值",
+      "dsl_identifier": "daa",
+      "label": "折旧与摊销",
+      "source_endpoint": "fina_indicator",
+      "source_column": "daa",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "利润与现金流基础值",
+      "dsl_identifier": "ebit",
+      "label": "息税前利润",
+      "source_endpoint": "fina_indicator",
+      "source_column": "ebit",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "利润与现金流基础值",
+      "dsl_identifier": "ebitda",
+      "label": "息税折旧摊销前利润",
+      "source_endpoint": "fina_indicator",
+      "source_column": "ebitda",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "利润与现金流基础值",
+      "dsl_identifier": "fcff",
+      "label": "企业自由现金流",
+      "source_endpoint": "fina_indicator",
+      "source_column": "fcff",
+      "note": "供应商 FCFF 口径，不等同于未经调整的经营现金流减资本支出。"
+    },
+    {
+      "status": "拟新增",
+      "group": "利润与现金流基础值",
+      "dsl_identifier": "fcfe",
+      "label": "股权自由现金流",
+      "source_endpoint": "fina_indicator",
+      "source_column": "fcfe",
+      "note": "供应商 FCFE 口径，不与 FCFF 或经营现金流减资本支出合并。"
+    },
+    {
+      "status": "拟新增",
+      "group": "利润与现金流基础值",
+      "dsl_identifier": "profit_prefin_exp",
+      "label": "扣财务费用前营业利润",
+      "source_endpoint": "fina_indicator",
+      "source_column": "profit_prefin_exp",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "利润与现金流基础值",
+      "dsl_identifier": "non_op_profit",
+      "label": "非营业利润",
+      "source_endpoint": "fina_indicator",
+      "source_column": "non_op_profit",
+      "note": "不按列名自行替换为单独的营业外收入。"
+    },
+    {
+      "status": "拟新增",
+      "group": "利润与现金流基础值",
+      "dsl_identifier": "rd_exp",
+      "label": "研发投入总额",
+      "source_endpoint": "fina_indicator",
+      "source_column": "rd_exp",
+      "note": "本接口说明为研发投入合计；不自动等同于 income.rd_exp 的研发费用。"
+    },
+    {
+      "status": "拟新增",
+      "group": "资产与资本基础值",
+      "dsl_identifier": "current_exint",
+      "label": "无息流动负债",
+      "source_endpoint": "fina_indicator",
+      "source_column": "current_exint",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "资产与资本基础值",
+      "dsl_identifier": "noncurrent_exint",
+      "label": "无息非流动负债",
+      "source_endpoint": "fina_indicator",
+      "source_column": "noncurrent_exint",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "资产与资本基础值",
+      "dsl_identifier": "interestdebt",
+      "label": "有息债务额",
+      "source_endpoint": "fina_indicator",
+      "source_column": "interestdebt",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "资产与资本基础值",
+      "dsl_identifier": "netdebt",
+      "label": "净债务额",
+      "source_endpoint": "fina_indicator",
+      "source_column": "netdebt",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "资产与资本基础值",
+      "dsl_identifier": "tangible_asset",
+      "label": "有形净资产（供应商口径）",
+      "source_endpoint": "fina_indicator",
+      "source_column": "tangible_asset",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "资产与资本基础值",
+      "dsl_identifier": "working_capital",
+      "label": "营运资金额",
+      "source_endpoint": "fina_indicator",
+      "source_column": "working_capital",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "资产与资本基础值",
+      "dsl_identifier": "networking_capital",
+      "label": "营运流动资本",
+      "source_endpoint": "fina_indicator",
+      "source_column": "networking_capital",
+      "note": "供应商与 working_capital 分列；未展开公式，不能擅自合并或改写计算口径。"
+    },
+    {
+      "status": "拟新增",
+      "group": "资产与资本基础值",
+      "dsl_identifier": "invest_capital",
+      "label": "全部投入资本",
+      "source_endpoint": "fina_indicator",
+      "source_column": "invest_capital",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "资产与资本基础值",
+      "dsl_identifier": "retained_earnings",
+      "label": "留存收益额",
+      "source_endpoint": "fina_indicator",
+      "source_column": "retained_earnings",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "资产与资本基础值",
+      "dsl_identifier": "fixed_assets",
+      "label": "固定资产合计",
+      "source_endpoint": "fina_indicator",
+      "source_column": "fixed_assets",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "营运效率",
+      "dsl_identifier": "invturn_days",
+      "label": "存货周转天数",
+      "source_endpoint": "fina_indicator",
+      "source_column": "invturn_days",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "营运效率",
+      "dsl_identifier": "arturn_days",
+      "label": "应收账款周转天数",
+      "source_endpoint": "fina_indicator",
+      "source_column": "arturn_days",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "营运效率",
+      "dsl_identifier": "inv_turn",
+      "label": "存货周转率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "inv_turn",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "营运效率",
+      "dsl_identifier": "ar_turn",
+      "label": "应收账款周转率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "ar_turn",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "营运效率",
+      "dsl_identifier": "ca_turn",
+      "label": "流动资产周转率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "ca_turn",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "营运效率",
+      "dsl_identifier": "fa_turn",
+      "label": "固定资产周转率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "fa_turn",
+      "note": "与 total_fa_trun 的固定资产合计周转率保持不同源身份。"
+    },
+    {
+      "status": "拟新增",
+      "group": "营运效率",
+      "dsl_identifier": "assets_turn",
+      "label": "总资产周转率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "assets_turn",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "营运效率",
+      "dsl_identifier": "turn_days",
+      "label": "营业周转周期",
+      "source_endpoint": "fina_indicator",
+      "source_column": "turn_days",
+      "note": "官方定义为营业周期，不自动解释为已扣除应付账款周期的现金转换周期。"
+    },
+    {
+      "status": "拟新增",
+      "group": "营运效率",
+      "dsl_identifier": "total_fa_trun",
+      "label": "固定资产合计周转率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "total_fa_trun",
+      "note": "保留供应商 trun 拼写；不静默并入 fa_turn。"
+    },
+    {
+      "status": "拟新增",
+      "group": "盈利能力",
+      "dsl_identifier": "net_profit_margin",
+      "label": "销售净利率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "netprofit_margin",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "盈利能力",
+      "dsl_identifier": "gross_profit_margin",
+      "label": "销售毛利率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "grossprofit_margin",
+      "note": "这是比率字段；gross_margin 是毛利额。"
+    },
+    {
+      "status": "拟新增",
+      "group": "盈利能力",
+      "dsl_identifier": "roe",
+      "label": "净资产收益率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "roe",
+      "note": "供应商报告期口径；官方未标 TTM、年化或加权平均，不能自行赋予这些含义。"
+    },
+    {
+      "status": "拟新增",
+      "group": "盈利能力",
+      "dsl_identifier": "roe_waa",
+      "label": "加权平均净资产收益率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "roe_waa",
+      "note": "不以简单期初期末权益平均的自算比率替代。"
+    },
+    {
+      "status": "拟新增",
+      "group": "盈利能力",
+      "dsl_identifier": "roe_dt",
+      "label": "扣非净资产收益率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "roe_dt",
+      "note": "源说明为扣除非经常损益的回报率，未标 TTM。"
+    },
+    {
+      "status": "拟新增",
+      "group": "盈利能力",
+      "dsl_identifier": "roa",
+      "label": "总资产报酬率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "roa",
+      "note": "与总资产净利率、年化总资产收益率分列，不擅自合并。"
+    },
+    {
+      "status": "拟新增",
+      "group": "盈利能力",
+      "dsl_identifier": "npta",
+      "label": "总资产净利润指标",
+      "source_endpoint": "fina_indicator",
+      "source_column": "npta",
+      "note": "官方简述为总资产净利润，未展开公式；不据缩写自动等同于 ROA。"
+    },
+    {
+      "status": "拟新增",
+      "group": "盈利能力",
+      "dsl_identifier": "roic",
+      "label": "投入资本回报率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "roic",
+      "note": "供应商口径，未标 TTM；投入资本和利润构造不由本清单推定。"
+    },
+    {
+      "status": "拟新增",
+      "group": "盈利能力",
+      "dsl_identifier": "roe_yearly",
+      "label": "年化净资产收益率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "roe_yearly",
+      "note": "年化不等于 TTM，保留供应商年化方式。"
+    },
+    {
+      "status": "拟新增",
+      "group": "盈利能力",
+      "dsl_identifier": "roa2_yearly",
+      "label": "年化总资产收益率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "roa2_yearly",
+      "note": "与 roa_yearly 的年化总资产净利率不同。"
+    },
+    {
+      "status": "拟新增",
+      "group": "盈利能力",
+      "dsl_identifier": "roe_avg",
+      "label": "增发条件平均净资产收益率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "roe_avg",
+      "note": "官方说明带有增发条件限定；不是普通两点平均权益 ROE 的别名。"
+    },
+    {
+      "status": "拟新增",
+      "group": "盈利能力",
+      "dsl_identifier": "roa_yearly",
+      "label": "年化总资产净利率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "roa_yearly",
+      "note": "与 roa2_yearly 的年化总资产收益率不同，不能按相近列名合并。"
+    },
+    {
+      "status": "拟新增",
+      "group": "盈利能力",
+      "dsl_identifier": "roa_dp",
+      "label": "杜邦总资产净利率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "roa_dp",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "盈利能力",
+      "dsl_identifier": "roic_yearly",
+      "label": "年化投入资本回报率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "roic_yearly",
+      "note": "年化不等于 TTM，也不与 roic 自动互换。"
+    },
+    {
+      "status": "拟新增",
+      "group": "收入与利润结构",
+      "dsl_identifier": "cogs_of_sales",
+      "label": "销售成本占比",
+      "source_endpoint": "fina_indicator",
+      "source_column": "cogs_of_sales",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "收入与利润结构",
+      "dsl_identifier": "expense_of_sales",
+      "label": "销售期间费用占比",
+      "source_endpoint": "fina_indicator",
+      "source_column": "expense_of_sales",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "收入与利润结构",
+      "dsl_identifier": "profit_to_gr",
+      "label": "净利润/营业总收入",
+      "source_endpoint": "fina_indicator",
+      "source_column": "profit_to_gr",
+      "note": "官方未进一步明确净利润的归属范围，不擅自改为归母净利润。"
+    },
+    {
+      "status": "拟新增",
+      "group": "收入与利润结构",
+      "dsl_identifier": "saleexp_to_gr",
+      "label": "销售费用/营业总收入",
+      "source_endpoint": "fina_indicator",
+      "source_column": "saleexp_to_gr",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "收入与利润结构",
+      "dsl_identifier": "adminexp_of_gr",
+      "label": "管理费用/营业总收入",
+      "source_endpoint": "fina_indicator",
+      "source_column": "adminexp_of_gr",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "收入与利润结构",
+      "dsl_identifier": "finaexp_of_gr",
+      "label": "财务费用/营业总收入",
+      "source_endpoint": "fina_indicator",
+      "source_column": "finaexp_of_gr",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "收入与利润结构",
+      "dsl_identifier": "impai_ttm",
+      "label": "资产减值损失/营业总收入",
+      "source_endpoint": "fina_indicator",
+      "source_column": "impai_ttm",
+      "note": "列名带 ttm，但当前官方描述没有标明 TTM；不靠列名补充时间口径。"
+    },
+    {
+      "status": "拟新增",
+      "group": "收入与利润结构",
+      "dsl_identifier": "gc_of_gr",
+      "label": "营业总成本/营业总收入",
+      "source_endpoint": "fina_indicator",
+      "source_column": "gc_of_gr",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "收入与利润结构",
+      "dsl_identifier": "op_of_gr",
+      "label": "营业利润/营业总收入",
+      "source_endpoint": "fina_indicator",
+      "source_column": "op_of_gr",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "收入与利润结构",
+      "dsl_identifier": "ebit_of_gr",
+      "label": "息税前利润/营业总收入",
+      "source_endpoint": "fina_indicator",
+      "source_column": "ebit_of_gr",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "收入与利润结构",
+      "dsl_identifier": "opincome_of_ebt",
+      "label": "经营活动净收益/利润总额",
+      "source_endpoint": "fina_indicator",
+      "source_column": "opincome_of_ebt",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "收入与利润结构",
+      "dsl_identifier": "investincome_of_ebt",
+      "label": "价值变动净收益/利润总额",
+      "source_endpoint": "fina_indicator",
+      "source_column": "investincome_of_ebt",
+      "note": "官方分子为价值变动净收益，不能按 investincome 名称直接解释为投资收益。"
+    },
+    {
+      "status": "拟新增",
+      "group": "收入与利润结构",
+      "dsl_identifier": "n_op_profit_of_ebt",
+      "label": "营业外收支净额/利润总额",
+      "source_endpoint": "fina_indicator",
+      "source_column": "n_op_profit_of_ebt",
+      "note": "官方与 nop_to_ebt 的非营业利润分别列示，不自行视为相同数值。"
+    },
+    {
+      "status": "拟新增",
+      "group": "收入与利润结构",
+      "dsl_identifier": "tax_to_ebt",
+      "label": "所得税/利润总额",
+      "source_endpoint": "fina_indicator",
+      "source_column": "tax_to_ebt",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "收入与利润结构",
+      "dsl_identifier": "dtprofit_to_profit",
+      "label": "扣非净利润/净利润",
+      "source_endpoint": "fina_indicator",
+      "source_column": "dtprofit_to_profit",
+      "note": "保留供应商利润口径，不自行限定为归母。"
+    },
+    {
+      "status": "拟新增",
+      "group": "收入与利润结构",
+      "dsl_identifier": "op_to_ebt",
+      "label": "营业利润/利润总额",
+      "source_endpoint": "fina_indicator",
+      "source_column": "op_to_ebt",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "收入与利润结构",
+      "dsl_identifier": "nop_to_ebt",
+      "label": "非营业利润/利润总额",
+      "source_endpoint": "fina_indicator",
+      "source_column": "nop_to_ebt",
+      "note": "不静默并入 n_op_profit_of_ebt 的营业外收支净额比率。"
+    },
+    {
+      "status": "拟新增",
+      "group": "收入与利润结构",
+      "dsl_identifier": "profit_to_op",
+      "label": "利润总额/营业收入",
+      "source_endpoint": "fina_indicator",
+      "source_column": "profit_to_op",
+      "note": "官方分母是营业收入，不是按 op 后缀猜测的营业利润。"
+    },
+    {
+      "status": "拟新增",
+      "group": "现金流与资本支出比率",
+      "dsl_identifier": "salescash_to_or",
+      "label": "销售及劳务收现/营业收入",
+      "source_endpoint": "fina_indicator",
+      "source_column": "salescash_to_or",
+      "note": "分子是销售商品、提供劳务收到的现金，不是经营现金流净额。"
+    },
+    {
+      "status": "拟新增",
+      "group": "现金流与资本支出比率",
+      "dsl_identifier": "ocf_to_or",
+      "label": "经营现金净流量/营业收入",
+      "source_endpoint": "fina_indicator",
+      "source_column": "ocf_to_or",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "现金流与资本支出比率",
+      "dsl_identifier": "ocf_to_opincome",
+      "label": "经营现金净流量/经营活动净收益",
+      "source_endpoint": "fina_indicator",
+      "source_column": "ocf_to_opincome",
+      "note": "分母是经营活动净收益，不是营业收入或营业利润。"
+    },
+    {
+      "status": "拟新增",
+      "group": "现金流与资本支出比率",
+      "dsl_identifier": "capitalized_to_da",
+      "label": "资本支出/折旧摊销",
+      "source_endpoint": "fina_indicator",
+      "source_column": "capitalized_to_da",
+      "note": "官方给定资本支出与折旧摊销之比，不是研发资本化率。"
+    },
+    {
+      "status": "拟新增",
+      "group": "现金流与资本支出比率",
+      "dsl_identifier": "ocf_to_profit",
+      "label": "经营现金净流量/营业利润",
+      "source_endpoint": "fina_indicator",
+      "source_column": "ocf_to_profit",
+      "note": "官方分母为营业利润，不是净利润。"
+    },
+    {
+      "status": "拟新增",
+      "group": "财务结构与偿债",
+      "dsl_identifier": "current_ratio",
+      "label": "流动比率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "current_ratio",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "财务结构与偿债",
+      "dsl_identifier": "quick_ratio",
+      "label": "速动比率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "quick_ratio",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "财务结构与偿债",
+      "dsl_identifier": "cash_ratio",
+      "label": "保守速动比率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "cash_ratio",
+      "note": "官方名称为保守速动比率，不据 cash_ratio 自行替换成其他现金比率公式。"
+    },
+    {
+      "status": "拟新增",
+      "group": "财务结构与偿债",
+      "dsl_identifier": "debt_to_assets",
+      "label": "资产负债比率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "debt_to_assets",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "财务结构与偿债",
+      "dsl_identifier": "assets_to_eqt",
+      "label": "权益乘数",
+      "source_endpoint": "fina_indicator",
+      "source_column": "assets_to_eqt",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "财务结构与偿债",
+      "dsl_identifier": "dp_assets_to_eqt",
+      "label": "杜邦权益乘数",
+      "source_endpoint": "fina_indicator",
+      "source_column": "dp_assets_to_eqt",
+      "note": "保留杜邦分析口径，不直接与 assets_to_eqt 合并。"
+    },
+    {
+      "status": "拟新增",
+      "group": "财务结构与偿债",
+      "dsl_identifier": "ca_to_assets",
+      "label": "流动资产占总资产比",
+      "source_endpoint": "fina_indicator",
+      "source_column": "ca_to_assets",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "财务结构与偿债",
+      "dsl_identifier": "nca_to_assets",
+      "label": "非流动资产占总资产比",
+      "source_endpoint": "fina_indicator",
+      "source_column": "nca_to_assets",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "财务结构与偿债",
+      "dsl_identifier": "tbassets_to_totalassets",
+      "label": "有形净资产/总资产（供应商口径）",
+      "source_endpoint": "fina_indicator",
+      "source_column": "tbassets_to_totalassets",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "财务结构与偿债",
+      "dsl_identifier": "int_to_talcap",
+      "label": "有息债务/全部投入资本",
+      "source_endpoint": "fina_indicator",
+      "source_column": "int_to_talcap",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "财务结构与偿债",
+      "dsl_identifier": "eqt_to_talcapital",
+      "label": "归母权益/全部投入资本",
+      "source_endpoint": "fina_indicator",
+      "source_column": "eqt_to_talcapital",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "财务结构与偿债",
+      "dsl_identifier": "currentdebt_to_debt",
+      "label": "流动负债占总负债比",
+      "source_endpoint": "fina_indicator",
+      "source_column": "currentdebt_to_debt",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "财务结构与偿债",
+      "dsl_identifier": "longdeb_to_debt",
+      "label": "非流动负债占总负债比",
+      "source_endpoint": "fina_indicator",
+      "source_column": "longdeb_to_debt",
+      "note": "官方分子为非流动负债，不是仅长期借款或有息长期债务。"
+    },
+    {
+      "status": "拟新增",
+      "group": "财务结构与偿债",
+      "dsl_identifier": "ocf_to_shortdebt",
+      "label": "经营现金净流量/流动负债",
+      "source_endpoint": "fina_indicator",
+      "source_column": "ocf_to_shortdebt",
+      "note": "官方分母是流动负债，不能由 shortdebt 推断为短期借款。"
+    },
+    {
+      "status": "拟新增",
+      "group": "财务结构与偿债",
+      "dsl_identifier": "debt_to_eqt",
+      "label": "产权比率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "debt_to_eqt",
+      "note": "当前官方简述未展开权益范围，本清单不自行指定为归母权益。"
+    },
+    {
+      "status": "拟新增",
+      "group": "财务结构与偿债",
+      "dsl_identifier": "eqt_to_debt",
+      "label": "归母权益/负债合计",
+      "source_endpoint": "fina_indicator",
+      "source_column": "eqt_to_debt",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "财务结构与偿债",
+      "dsl_identifier": "eqt_to_interestdebt",
+      "label": "归母权益/有息债务",
+      "source_endpoint": "fina_indicator",
+      "source_column": "eqt_to_interestdebt",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "财务结构与偿债",
+      "dsl_identifier": "tangibleasset_to_debt",
+      "label": "有形净资产/负债合计（供应商口径）",
+      "source_endpoint": "fina_indicator",
+      "source_column": "tangibleasset_to_debt",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "财务结构与偿债",
+      "dsl_identifier": "tangasset_to_intdebt",
+      "label": "有形净资产/有息债务（供应商口径）",
+      "source_endpoint": "fina_indicator",
+      "source_column": "tangasset_to_intdebt",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "财务结构与偿债",
+      "dsl_identifier": "tangibleasset_to_netdebt",
+      "label": "有形净资产/净债务（供应商口径）",
+      "source_endpoint": "fina_indicator",
+      "source_column": "tangibleasset_to_netdebt",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "财务结构与偿债",
+      "dsl_identifier": "ocf_to_debt",
+      "label": "经营现金净流量/负债合计",
+      "source_endpoint": "fina_indicator",
+      "source_column": "ocf_to_debt",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "财务结构与偿债",
+      "dsl_identifier": "ocf_to_interestdebt",
+      "label": "经营现金净流量/有息债务",
+      "source_endpoint": "fina_indicator",
+      "source_column": "ocf_to_interestdebt",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "财务结构与偿债",
+      "dsl_identifier": "ocf_to_netdebt",
+      "label": "经营现金净流量/净债务",
+      "source_endpoint": "fina_indicator",
+      "source_column": "ocf_to_netdebt",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "财务结构与偿债",
+      "dsl_identifier": "ebit_to_interest",
+      "label": "息税前利润/利息费用",
+      "source_endpoint": "fina_indicator",
+      "source_column": "ebit_to_interest",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "财务结构与偿债",
+      "dsl_identifier": "longdebt_to_workingcapital",
+      "label": "长期债务/营运资金",
+      "source_endpoint": "fina_indicator",
+      "source_column": "longdebt_to_workingcapital",
+      "note": "保留官方长期债务口径，不自行缩窄为长期借款。"
+    },
+    {
+      "status": "拟新增",
+      "group": "财务结构与偿债",
+      "dsl_identifier": "ebitda_to_debt",
+      "label": "息税折旧摊销前利润/负债合计",
+      "source_endpoint": "fina_indicator",
+      "source_column": "ebitda_to_debt",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "财务结构与偿债",
+      "dsl_identifier": "cash_to_liqdebt",
+      "label": "货币资金/流动负债",
+      "source_endpoint": "fina_indicator",
+      "source_column": "cash_to_liqdebt",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "财务结构与偿债",
+      "dsl_identifier": "cash_to_liqdebt_withinterest",
+      "label": "货币资金/有息流动负债",
+      "source_endpoint": "fina_indicator",
+      "source_column": "cash_to_liqdebt_withinterest",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "财务结构与偿债",
+      "dsl_identifier": "op_to_liqdebt",
+      "label": "营业利润/流动负债",
+      "source_endpoint": "fina_indicator",
+      "source_column": "op_to_liqdebt",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "财务结构与偿债",
+      "dsl_identifier": "op_to_debt",
+      "label": "营业利润/负债合计",
+      "source_endpoint": "fina_indicator",
+      "source_column": "op_to_debt",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "单季度指标",
+      "dsl_identifier": "q_opincome",
+      "label": "单季经营活动净收益",
+      "source_endpoint": "fina_indicator",
+      "source_column": "q_opincome",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "单季度指标",
+      "dsl_identifier": "q_investincome",
+      "label": "单季价值变动净收益",
+      "source_endpoint": "fina_indicator",
+      "source_column": "q_investincome",
+      "note": "官方定义是价值变动净收益，不按列名简化为投资收益。"
+    },
+    {
+      "status": "拟新增",
+      "group": "单季度指标",
+      "dsl_identifier": "q_dtprofit",
+      "label": "单季扣非净利润",
+      "source_endpoint": "fina_indicator",
+      "source_column": "q_dtprofit",
+      "note": "官方简述未明确归母范围；不擅自改成归母扣非。"
+    },
+    {
+      "status": "拟新增",
+      "group": "单季度指标",
+      "dsl_identifier": "q_eps",
+      "label": "单季每股收益",
+      "source_endpoint": "fina_indicator",
+      "source_column": "q_eps",
+      "note": "官方未进一步注明基本、稀释或期末摊薄方式，保留源口径。"
+    },
+    {
+      "status": "拟新增",
+      "group": "单季度指标",
+      "dsl_identifier": "q_net_profit_margin",
+      "label": "单季销售净利率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "q_netprofit_margin",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "单季度指标",
+      "dsl_identifier": "q_gross_profit_margin",
+      "label": "单季销售毛利率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "q_gsprofit_margin",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "单季度指标",
+      "dsl_identifier": "q_exp_to_sales",
+      "label": "单季销售期间费用占比",
+      "source_endpoint": "fina_indicator",
+      "source_column": "q_exp_to_sales",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "单季度指标",
+      "dsl_identifier": "q_profit_to_gr",
+      "label": "单季净利润/营业总收入",
+      "source_endpoint": "fina_indicator",
+      "source_column": "q_profit_to_gr",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "单季度指标",
+      "dsl_identifier": "q_saleexp_to_gr",
+      "label": "单季销售费用/营业总收入",
+      "source_endpoint": "fina_indicator",
+      "source_column": "q_saleexp_to_gr",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "单季度指标",
+      "dsl_identifier": "q_adminexp_to_gr",
+      "label": "单季管理费用/营业总收入",
+      "source_endpoint": "fina_indicator",
+      "source_column": "q_adminexp_to_gr",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "单季度指标",
+      "dsl_identifier": "q_finaexp_to_gr",
+      "label": "单季财务费用/营业总收入",
+      "source_endpoint": "fina_indicator",
+      "source_column": "q_finaexp_to_gr",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "单季度指标",
+      "dsl_identifier": "q_impair_to_gr_ttm",
+      "label": "单季资产减值损失/营业总收入",
+      "source_endpoint": "fina_indicator",
+      "source_column": "q_impair_to_gr_ttm",
+      "note": "官方明确为单季度，不能因列名 ttm 后缀标成 TTM。"
+    },
+    {
+      "status": "拟新增",
+      "group": "单季度指标",
+      "dsl_identifier": "q_gc_to_gr",
+      "label": "单季营业总成本/营业总收入",
+      "source_endpoint": "fina_indicator",
+      "source_column": "q_gc_to_gr",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "单季度指标",
+      "dsl_identifier": "q_op_to_gr",
+      "label": "单季营业利润/营业总收入",
+      "source_endpoint": "fina_indicator",
+      "source_column": "q_op_to_gr",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "单季度指标",
+      "dsl_identifier": "q_roe",
+      "label": "单季净资产收益率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "q_roe",
+      "note": "单季度源指标，不是 TTM，也不自动年化。"
+    },
+    {
+      "status": "拟新增",
+      "group": "单季度指标",
+      "dsl_identifier": "q_dt_roe",
+      "label": "单季扣非净资产收益率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "q_dt_roe",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "单季度指标",
+      "dsl_identifier": "q_npta",
+      "label": "单季总资产净利润指标",
+      "source_endpoint": "fina_indicator",
+      "source_column": "q_npta",
+      "note": "官方简述未展开公式；不自动等同于单季 ROA。"
+    },
+    {
+      "status": "拟新增",
+      "group": "单季度指标",
+      "dsl_identifier": "q_opincome_to_ebt",
+      "label": "单季经营活动净收益/利润总额",
+      "source_endpoint": "fina_indicator",
+      "source_column": "q_opincome_to_ebt",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "单季度指标",
+      "dsl_identifier": "q_investincome_to_ebt",
+      "label": "单季价值变动净收益/利润总额",
+      "source_endpoint": "fina_indicator",
+      "source_column": "q_investincome_to_ebt",
+      "note": "分子按官方价值变动净收益解释，不直接改成投资收益。"
+    },
+    {
+      "status": "拟新增",
+      "group": "单季度指标",
+      "dsl_identifier": "q_dtprofit_to_profit",
+      "label": "单季扣非净利润/净利润",
+      "source_endpoint": "fina_indicator",
+      "source_column": "q_dtprofit_to_profit",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "单季度指标",
+      "dsl_identifier": "q_salescash_to_or",
+      "label": "单季销售及劳务收现/营业收入",
+      "source_endpoint": "fina_indicator",
+      "source_column": "q_salescash_to_or",
+      "note": "分子是销售商品、提供劳务收到的现金，不是经营现金流净额。"
+    },
+    {
+      "status": "拟新增",
+      "group": "单季度指标",
+      "dsl_identifier": "q_ocf_to_sales",
+      "label": "单季经营现金净流量/营业收入",
+      "source_endpoint": "fina_indicator",
+      "source_column": "q_ocf_to_sales",
+      "note": "官方分母为营业收入；不是 q_ocf_to_or 的同义字段。"
+    },
+    {
+      "status": "拟新增",
+      "group": "单季度指标",
+      "dsl_identifier": "q_ocf_to_or",
+      "label": "单季经营现金净流量/经营活动净收益",
+      "source_endpoint": "fina_indicator",
+      "source_column": "q_ocf_to_or",
+      "note": "官方分母为经营活动净收益；与 q_ocf_to_sales 的营业收入分母不同，也不同于非单季 ocf_to_or 的命名对应。"
+    },
+    {
+      "status": "拟新增",
+      "group": "同比增长",
+      "dsl_identifier": "basic_eps_yoy",
+      "label": "基本每股收益同比增长率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "basic_eps_yoy",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "同比增长",
+      "dsl_identifier": "dt_eps_yoy",
+      "label": "稀释每股收益同比增长率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "dt_eps_yoy",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "同比增长",
+      "dsl_identifier": "ocfps_yoy",
+      "label": "每股经营现金净流量同比增长率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "cfps_yoy",
+      "note": "官方说明指每股经营活动现金净流量，不能按前缀认定为 cfps 的一般现金净流量同比。"
+    },
+    {
+      "status": "拟新增",
+      "group": "同比增长",
+      "dsl_identifier": "op_yoy",
+      "label": "营业利润同比增长率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "op_yoy",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "同比增长",
+      "dsl_identifier": "ebt_yoy",
+      "label": "利润总额同比增长率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "ebt_yoy",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "同比增长",
+      "dsl_identifier": "netprofit_yoy",
+      "label": "归母净利润同比增长率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "netprofit_yoy",
+      "note": "官方明确归属于母公司股东，不是未限定归属的净利润。"
+    },
+    {
+      "status": "拟新增",
+      "group": "同比增长",
+      "dsl_identifier": "dt_netprofit_yoy",
+      "label": "归母扣非净利润同比增长率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "dt_netprofit_yoy",
+      "note": "官方明确归母和扣非范围；不能倒推 profit_dedt 的未说明范围也一定相同。"
+    },
+    {
+      "status": "拟新增",
+      "group": "同比增长",
+      "dsl_identifier": "ocf_yoy",
+      "label": "经营现金净流量同比增长率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "ocf_yoy",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "同比增长",
+      "dsl_identifier": "roe_yoy",
+      "label": "摊薄净资产收益率同比增长率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "roe_yoy",
+      "note": "官方为摊薄 ROE 的同比增长率，不是 ROE 的百分点变化，也不证明分子等于 roe。"
+    },
+    {
+      "status": "拟新增",
+      "group": "同比增长",
+      "dsl_identifier": "tr_yoy",
+      "label": "营业总收入同比增长率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "tr_yoy",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "同比增长",
+      "dsl_identifier": "or_yoy",
+      "label": "营业收入同比增长率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "or_yoy",
+      "note": "营业收入与 tr_yoy 的营业总收入范围不同。"
+    },
+    {
+      "status": "拟新增",
+      "group": "同比增长",
+      "dsl_identifier": "equity_yoy",
+      "label": "净资产同比增长率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "equity_yoy",
+      "note": "官方为同比，未进一步说明归母范围；不要与 eqt_yoy 的归母权益较年初增长合并。"
+    },
+    {
+      "status": "拟新增",
+      "group": "较年初增长",
+      "dsl_identifier": "bps_ytd_growth",
+      "label": "每股净资产较年初增长率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "bps_yoy",
+      "note": "虽名为 yoy，官方比较基点是年初，不是上年同期。"
+    },
+    {
+      "status": "拟新增",
+      "group": "较年初增长",
+      "dsl_identifier": "assets_ytd_growth",
+      "label": "总资产较年初增长率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "assets_yoy",
+      "note": "虽名为 yoy，官方比较基点是年初，不是上年同期。"
+    },
+    {
+      "status": "拟新增",
+      "group": "较年初增长",
+      "dsl_identifier": "equity_parent_ytd_growth",
+      "label": "归母权益较年初增长率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "eqt_yoy",
+      "note": "官方说明为归母权益相对年初增长，与 equity_yoy 的净资产同比不同。"
+    },
+    {
+      "status": "拟新增",
+      "group": "单季度增长",
+      "dsl_identifier": "q_gr_yoy",
+      "label": "单季营业总收入同比增长率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "q_gr_yoy",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "单季度增长",
+      "dsl_identifier": "q_gr_qoq",
+      "label": "单季营业总收入环比增长率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "q_gr_qoq",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "单季度增长",
+      "dsl_identifier": "q_sales_yoy",
+      "label": "单季营业收入同比增长率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "q_sales_yoy",
+      "note": "与 q_gr_yoy 的营业总收入范围分开。"
+    },
+    {
+      "status": "拟新增",
+      "group": "单季度增长",
+      "dsl_identifier": "q_sales_qoq",
+      "label": "单季营业收入环比增长率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "q_sales_qoq",
+      "note": "与 q_gr_qoq 的营业总收入范围分开。"
+    },
+    {
+      "status": "拟新增",
+      "group": "单季度增长",
+      "dsl_identifier": "q_op_yoy",
+      "label": "单季营业利润同比增长率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "q_op_yoy",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "单季度增长",
+      "dsl_identifier": "q_op_qoq",
+      "label": "单季营业利润环比增长率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "q_op_qoq",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "单季度增长",
+      "dsl_identifier": "q_profit_yoy",
+      "label": "单季净利润同比增长率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "q_profit_yoy",
+      "note": "官方未进一步注明归属范围；与明确归母的 q_netprofit_yoy 分开。"
+    },
+    {
+      "status": "拟新增",
+      "group": "单季度增长",
+      "dsl_identifier": "q_profit_qoq",
+      "label": "单季净利润环比增长率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "q_profit_qoq",
+      "note": "官方未进一步注明归属范围；与明确归母的 q_netprofit_qoq 分开。"
+    },
+    {
+      "status": "拟新增",
+      "group": "单季度增长",
+      "dsl_identifier": "q_netprofit_yoy",
+      "label": "单季归母净利润同比增长率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "q_netprofit_yoy",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "单季度增长",
+      "dsl_identifier": "q_netprofit_qoq",
+      "label": "单季归母净利润环比增长率",
+      "source_endpoint": "fina_indicator",
+      "source_column": "q_netprofit_qoq",
+      "note": ""
+    },
+    {
+      "status": "拟新增",
+      "group": "三表扩展：报告期存量",
+      "dsl_identifier": "monetary_funds",
+      "label": "货币资金",
+      "source_endpoint": "balancesheet",
+      "source_column": "money_cap",
+      "proposed_field_id": "financial.balance_sheet.monetary_funds.latest_reported",
+      "period_kind": "stock",
+      "report_period_selection": "latest_visible_quarterly_or_annual",
+      "reporting_scope": "report_type_1_consolidated",
+      "target_unit": "CNY",
+      "note": "最新可见报告期的期末存量；不自动等于无限制可用现金。"
+    },
+    {
+      "status": "拟新增",
+      "group": "三表扩展：报告期存量",
+      "dsl_identifier": "accounts_receivable",
+      "label": "应收账款",
+      "source_endpoint": "balancesheet",
+      "source_column": "accounts_receiv",
+      "proposed_field_id": "financial.balance_sheet.accounts_receivable.latest_reported",
+      "period_kind": "stock",
+      "report_period_selection": "latest_visible_quarterly_or_annual",
+      "reporting_scope": "report_type_1_consolidated",
+      "target_unit": "CNY",
+      "note": "最新可见报告期的期末存量；不同于应收票据及应收账款合计。"
+    },
+    {
+      "status": "拟新增",
+      "group": "三表扩展：报告期存量",
+      "dsl_identifier": "notes_receivable",
+      "label": "应收票据",
+      "source_endpoint": "balancesheet",
+      "source_column": "notes_receiv",
+      "proposed_field_id": "financial.balance_sheet.notes_receivable.latest_reported",
+      "period_kind": "stock",
+      "report_period_selection": "latest_visible_quarterly_or_annual",
+      "reporting_scope": "report_type_1_consolidated",
+      "target_unit": "CNY",
+      "note": "最新可见报告期的期末存量；不以应收融资等相近科目替代。"
+    },
+    {
+      "status": "拟新增",
+      "group": "三表扩展：报告期存量",
+      "dsl_identifier": "other_receivables",
+      "label": "其他应收款",
+      "source_endpoint": "balancesheet",
+      "source_column": "oth_receiv",
+      "proposed_field_id": "financial.balance_sheet.other_receivables.latest_reported",
+      "period_kind": "stock",
+      "report_period_selection": "latest_visible_quarterly_or_annual",
+      "reporting_scope": "report_type_1_consolidated",
+      "target_unit": "CNY",
+      "note": "最新可见报告期的期末存量；不同于其他应收款合计列。"
+    },
+    {
+      "status": "拟新增",
+      "group": "三表扩展：报告期存量",
+      "dsl_identifier": "prepayments",
+      "label": "预付款项",
+      "source_endpoint": "balancesheet",
+      "source_column": "prepayment",
+      "proposed_field_id": "financial.balance_sheet.prepayments.latest_reported",
+      "period_kind": "stock",
+      "report_period_selection": "latest_visible_quarterly_or_annual",
+      "reporting_scope": "report_type_1_consolidated",
+      "target_unit": "CNY",
+      "note": "最新可见报告期的期末存量；报告期余额，不是当期采购现金。"
+    },
+    {
+      "status": "拟新增",
+      "group": "三表扩展：报告期存量",
+      "dsl_identifier": "inventories",
+      "label": "存货",
+      "source_endpoint": "balancesheet",
+      "source_column": "inventories",
+      "proposed_field_id": "financial.balance_sheet.inventories.latest_reported",
+      "period_kind": "stock",
+      "report_period_selection": "latest_visible_quarterly_or_annual",
+      "reporting_scope": "report_type_1_consolidated",
+      "target_unit": "CNY",
+      "note": "最新可见报告期的期末存量；行业适用性与源非空覆盖需分别核验。"
+    },
+    {
+      "status": "拟新增",
+      "group": "三表扩展：报告期存量",
+      "dsl_identifier": "accounts_payable",
+      "label": "应付账款",
+      "source_endpoint": "balancesheet",
+      "source_column": "acct_payable",
+      "proposed_field_id": "financial.balance_sheet.accounts_payable.latest_reported",
+      "period_kind": "stock",
+      "report_period_selection": "latest_visible_quarterly_or_annual",
+      "reporting_scope": "report_type_1_consolidated",
+      "target_unit": "CNY",
+      "note": "最新可见报告期的期末存量；不同于应付票据及应付账款合计。"
+    },
+    {
+      "status": "拟新增",
+      "group": "三表扩展：报告期存量",
+      "dsl_identifier": "contract_assets",
+      "label": "合同资产",
+      "source_endpoint": "balancesheet",
+      "source_column": "contract_assets",
+      "proposed_field_id": "financial.balance_sheet.contract_assets.latest_reported",
+      "period_kind": "stock",
+      "report_period_selection": "latest_visible_quarterly_or_annual",
+      "reporting_scope": "report_type_1_consolidated",
+      "target_unit": "CNY",
+      "note": "最新可见报告期的期末存量；不自动并入应收账款；科目出现前缺失不填零。"
+    },
+    {
+      "status": "拟新增",
+      "group": "三表扩展：报告期存量",
+      "dsl_identifier": "contract_liabilities",
+      "label": "合同负债",
+      "source_endpoint": "balancesheet",
+      "source_column": "contract_liab",
+      "proposed_field_id": "financial.balance_sheet.contract_liabilities.latest_reported",
+      "period_kind": "stock",
+      "report_period_selection": "latest_visible_quarterly_or_annual",
+      "reporting_scope": "report_type_1_consolidated",
+      "target_unit": "CNY",
+      "note": "最新可见报告期的收入合同负债；不是订单总额或必然实现的收入。不适用于保险公司，来源列可能表示保险合同负债。"
+    },
+    {
+      "status": "拟新增",
+      "group": "三表扩展：报告期存量",
+      "dsl_identifier": "goodwill",
+      "label": "商誉",
+      "source_endpoint": "balancesheet",
+      "source_column": "goodwill",
+      "proposed_field_id": "financial.balance_sheet.goodwill.latest_reported",
+      "period_kind": "stock",
+      "report_period_selection": "latest_visible_quarterly_or_annual",
+      "reporting_scope": "report_type_1_consolidated",
+      "target_unit": "CNY",
+      "note": "最新可见报告期的期末存量；余额不同于当期减值损失。"
+    },
+    {
+      "status": "拟新增",
+      "group": "三表扩展：报告期存量",
+      "dsl_identifier": "short_term_borrowings",
+      "label": "短期借款",
+      "source_endpoint": "balancesheet",
+      "source_column": "st_borr",
+      "proposed_field_id": "financial.balance_sheet.short_term_borrowings.latest_reported",
+      "period_kind": "stock",
+      "report_period_selection": "latest_visible_quarterly_or_annual",
+      "reporting_scope": "report_type_1_consolidated",
+      "target_unit": "CNY",
+      "note": "最新可见报告期的期末存量；不是全部短期到期债务。"
+    },
+    {
+      "status": "拟新增",
+      "group": "三表扩展：报告期存量",
+      "dsl_identifier": "long_term_borrowings",
+      "label": "长期借款",
+      "source_endpoint": "balancesheet",
+      "source_column": "lt_borr",
+      "proposed_field_id": "financial.balance_sheet.long_term_borrowings.latest_reported",
+      "period_kind": "stock",
+      "report_period_selection": "latest_visible_quarterly_or_annual",
+      "reporting_scope": "report_type_1_consolidated",
+      "target_unit": "CNY",
+      "note": "最新可见报告期的期末存量；不是全部非流动负债。"
+    },
+    {
+      "status": "拟新增",
+      "group": "三表扩展：报告期存量",
+      "dsl_identifier": "bonds_payable",
+      "label": "应付债券",
+      "source_endpoint": "balancesheet",
+      "source_column": "bond_payable",
+      "proposed_field_id": "financial.balance_sheet.bonds_payable.latest_reported",
+      "period_kind": "stock",
+      "report_period_selection": "latest_visible_quarterly_or_annual",
+      "reporting_scope": "report_type_1_consolidated",
+      "target_unit": "CNY",
+      "note": "最新可见报告期的期末存量；报告期余额，不含逐笔到期日。"
+    },
+    {
+      "status": "拟新增",
+      "group": "三表扩展：报告期存量",
+      "dsl_identifier": "noncurrent_liabilities_due_1y",
+      "label": "一年内到期的非流动负债",
+      "source_endpoint": "balancesheet",
+      "source_column": "non_cur_liab_due_1y",
+      "proposed_field_id": "financial.balance_sheet.noncurrent_liabilities_due_1y.latest_reported",
+      "period_kind": "stock",
+      "report_period_selection": "latest_visible_quarterly_or_annual",
+      "reporting_scope": "report_type_1_consolidated",
+      "target_unit": "CNY",
+      "note": "最新可见报告期的期末存量；不能全部当作有息借款。"
+    },
+    {
+      "status": "拟新增",
+      "group": "三表扩展：报告期存量",
+      "dsl_identifier": "other_equity_instruments",
+      "label": "其他权益工具",
+      "source_endpoint": "balancesheet",
+      "source_column": "oth_eqt_tools",
+      "proposed_field_id": "financial.balance_sheet.other_equity_instruments.latest_reported",
+      "period_kind": "stock",
+      "report_period_selection": "latest_visible_quarterly_or_annual",
+      "reporting_scope": "report_type_1_consolidated",
+      "target_unit": "CNY",
+      "note": "最新可见报告期的期末存量；不同于其他权益工具投资，且不只包含优先股。"
+    },
+    {
+      "status": "拟新增",
+      "group": "三表扩展：报告期存量",
+      "dsl_identifier": "cash_equivalents",
+      "label": "期末现金及现金等价物",
+      "source_endpoint": "cashflow",
+      "source_column": "c_cash_equ_end_period",
+      "proposed_field_id": "financial.cashflow.cash_equivalents.latest_reported",
+      "period_kind": "stock",
+      "report_period_selection": "latest_visible_quarterly_or_annual",
+      "reporting_scope": "report_type_1_consolidated",
+      "target_unit": "CNY",
+      "note": "最新可见报告期的期末存量；现金流量表中的期末存量，仍选最新季报或年报。"
+    },
+    {
+      "status": "拟新增",
+      "group": "三表扩展：TTM 流量",
+      "dsl_identifier": "cash_paid_capex_ttm",
+      "label": "购建长期资产付现",
+      "source_endpoint": "cashflow",
+      "source_column": "c_pay_acq_const_fiolta",
+      "proposed_field_id": "financial.cashflow.cash_paid_capex.ttm",
+      "period_kind": "flow",
+      "report_period_selection": "latest_visible_ttm",
+      "reporting_scope": "report_type_1_consolidated",
+      "target_unit": "CNY",
+      "note": "截至最新可见报告期的最近十二个月流量；含固定、无形及其他长期资产；经营现金流减它不直接称 FCFF/FCFE。"
+    },
+    {
+      "status": "拟新增",
+      "group": "三表扩展：TTM 流量",
+      "dsl_identifier": "cash_received_sales_ttm",
+      "label": "销售商品及劳务收现",
+      "source_endpoint": "cashflow",
+      "source_column": "c_fr_sale_sg",
+      "proposed_field_id": "financial.cashflow.cash_received_sales.ttm",
+      "period_kind": "flow",
+      "report_period_selection": "latest_visible_ttm",
+      "reporting_scope": "report_type_1_consolidated",
+      "target_unit": "CNY",
+      "note": "截至最新可见报告期的最近十二个月流量；是收现总额，不是经营现金净流量。"
+    },
+    {
+      "status": "拟新增",
+      "group": "三表扩展：TTM 流量",
+      "dsl_identifier": "cash_paid_goods_ttm",
+      "label": "购买商品及劳务付现",
+      "source_endpoint": "cashflow",
+      "source_column": "c_paid_goods_s",
+      "proposed_field_id": "financial.cashflow.cash_paid_goods.ttm",
+      "period_kind": "flow",
+      "report_period_selection": "latest_visible_ttm",
+      "reporting_scope": "report_type_1_consolidated",
+      "target_unit": "CNY",
+      "note": "截至最新可见报告期的最近十二个月流量；不同于营业成本。"
+    },
+    {
+      "status": "拟新增",
+      "group": "三表扩展：TTM 流量",
+      "dsl_identifier": "cash_received_asset_disposals_ttm",
+      "label": "处置长期资产收现净额",
+      "source_endpoint": "cashflow",
+      "source_column": "n_recp_disp_fiolta",
+      "proposed_field_id": "financial.cashflow.cash_received_asset_disposals.ttm",
+      "period_kind": "flow",
+      "report_period_selection": "latest_visible_ttm",
+      "reporting_scope": "report_type_1_consolidated",
+      "target_unit": "CNY",
+      "note": "截至最新可见报告期的最近十二个月流量；是现金净额，不是处置利润。"
+    },
+    {
+      "status": "拟新增",
+      "group": "三表扩展：TTM 流量",
+      "dsl_identifier": "cash_paid_acquisitions_ttm",
+      "label": "取得子公司等付现净额",
+      "source_endpoint": "cashflow",
+      "source_column": "n_disp_subs_oth_biz",
+      "proposed_field_id": "financial.cashflow.cash_paid_acquisitions.ttm",
+      "period_kind": "flow",
+      "report_period_selection": "latest_visible_ttm",
+      "reporting_scope": "report_type_1_consolidated",
+      "target_unit": "CNY",
+      "note": "截至最新可见报告期的最近十二个月流量；源列含义为取得子公司及其他营业单位的现金净支出。"
+    },
+    {
+      "status": "拟新增",
+      "group": "三表扩展：TTM 流量",
+      "dsl_identifier": "cash_paid_investments_ttm",
+      "label": "投资付现",
+      "source_endpoint": "cashflow",
+      "source_column": "c_paid_invest",
+      "proposed_field_id": "financial.cashflow.cash_paid_investments.ttm",
+      "period_kind": "flow",
+      "report_period_selection": "latest_visible_ttm",
+      "reporting_scope": "report_type_1_consolidated",
+      "target_unit": "CNY",
+      "note": "截至最新可见报告期的最近十二个月流量；不同于全部投资现金流出。"
+    },
+    {
+      "status": "拟新增",
+      "group": "三表扩展：TTM 流量",
+      "dsl_identifier": "cash_received_borrowing_ttm",
+      "label": "借款收现",
+      "source_endpoint": "cashflow",
+      "source_column": "c_recp_borrow",
+      "proposed_field_id": "financial.cashflow.cash_received_borrowing.ttm",
+      "period_kind": "flow",
+      "report_period_selection": "latest_visible_ttm",
+      "reporting_scope": "report_type_1_consolidated",
+      "target_unit": "CNY",
+      "note": "截至最新可见报告期的最近十二个月流量；不包含全部融资来源。"
+    },
+    {
+      "status": "拟新增",
+      "group": "三表扩展：TTM 流量",
+      "dsl_identifier": "cash_paid_debt_repayment_ttm",
+      "label": "偿债付现",
+      "source_endpoint": "cashflow",
+      "source_column": "c_prepay_amt_borr",
+      "proposed_field_id": "financial.cashflow.cash_paid_debt_repayment.ttm",
+      "period_kind": "flow",
+      "report_period_selection": "latest_visible_ttm",
+      "reporting_scope": "report_type_1_consolidated",
+      "target_unit": "CNY",
+      "note": "截至最新可见报告期的最近十二个月流量；不按 prepay 拼写解释为提前还款。"
+    },
+    {
+      "status": "拟新增",
+      "group": "三表扩展：TTM 流量",
+      "dsl_identifier": "operating_revenue_ttm",
+      "label": "营业收入",
+      "source_endpoint": "income",
+      "source_column": "revenue",
+      "proposed_field_id": "financial.income.operating_revenue.ttm",
+      "period_kind": "flow",
+      "report_period_selection": "latest_visible_ttm",
+      "reporting_scope": "report_type_1_consolidated",
+      "target_unit": "CNY",
+      "note": "截至最新可见报告期的最近十二个月流量；与现有 revenue 的营业总收入分开。"
+    },
+    {
+      "status": "拟新增",
+      "group": "三表扩展：TTM 流量",
+      "dsl_identifier": "consolidated_net_profit_ttm",
+      "label": "合并净利润",
+      "source_endpoint": "income",
+      "source_column": "n_income",
+      "proposed_field_id": "financial.income.consolidated_net_profit.ttm",
+      "period_kind": "flow",
+      "report_period_selection": "latest_visible_ttm",
+      "reporting_scope": "report_type_1_consolidated",
+      "target_unit": "CNY",
+      "note": "截至最新可见报告期的最近十二个月流量；包含少数股东损益，与现有 net_profit 的归母口径分开。"
+    },
+    {
+      "status": "拟新增",
+      "group": "三表扩展：TTM 流量",
+      "dsl_identifier": "operating_cost_ttm",
+      "label": "营业成本",
+      "source_endpoint": "income",
+      "source_column": "oper_cost",
+      "proposed_field_id": "financial.income.operating_cost.ttm",
+      "period_kind": "flow",
+      "report_period_selection": "latest_visible_ttm",
+      "reporting_scope": "report_type_1_consolidated",
+      "target_unit": "CNY",
+      "note": "截至最新可见报告期的最近十二个月流量；不同于营业总成本。"
+    },
+    {
+      "status": "拟新增",
+      "group": "三表扩展：TTM 流量",
+      "dsl_identifier": "rd_expense_ttm",
+      "label": "研发费用",
+      "source_endpoint": "income",
+      "source_column": "rd_exp",
+      "proposed_field_id": "financial.income.rd_expense.ttm",
+      "period_kind": "flow",
+      "report_period_selection": "latest_visible_ttm",
+      "reporting_scope": "report_type_1_consolidated",
+      "target_unit": "CNY",
+      "note": "截至最新可见报告期的最近十二个月流量；与 fina_indicator.rd_exp 的研发投入合计分开。"
+    },
+    {
+      "status": "拟新增",
+      "group": "三表扩展：TTM 流量",
+      "dsl_identifier": "investment_income_ttm",
+      "label": "投资净收益",
+      "source_endpoint": "income",
+      "source_column": "invest_income",
+      "proposed_field_id": "financial.income.investment_income.ttm",
+      "period_kind": "flow",
+      "report_period_selection": "latest_visible_ttm",
+      "reporting_scope": "report_type_1_consolidated",
+      "target_unit": "CNY",
+      "note": "截至最新可见报告期的最近十二个月流量；不自动认定为非经常性损益。"
+    },
+    {
+      "status": "拟新增",
+      "group": "三表扩展：TTM 流量",
+      "dsl_identifier": "fair_value_gain_ttm",
+      "label": "公允价值变动净收益",
+      "source_endpoint": "income",
+      "source_column": "fv_value_chg_gain",
+      "proposed_field_id": "financial.income.fair_value_gain.ttm",
+      "period_kind": "flow",
+      "report_period_selection": "latest_visible_ttm",
+      "reporting_scope": "report_type_1_consolidated",
+      "target_unit": "CNY",
+      "note": "截至最新可见报告期的最近十二个月流量；是损益组成项，不是现金流。"
+    },
+    {
+      "status": "拟新增",
+      "group": "三表扩展：TTM 流量",
+      "dsl_identifier": "nonoperating_income_ttm",
+      "label": "营业外收入",
+      "source_endpoint": "income",
+      "source_column": "non_oper_income",
+      "proposed_field_id": "financial.income.nonoperating_income.ttm",
+      "period_kind": "flow",
+      "report_period_selection": "latest_visible_ttm",
+      "reporting_scope": "report_type_1_consolidated",
+      "target_unit": "CNY",
+      "note": "截至最新可见报告期的最近十二个月流量；不能全部等同于扣非事项。"
+    },
+    {
+      "status": "拟新增",
+      "group": "三表扩展：TTM 流量",
+      "dsl_identifier": "nonoperating_expense_ttm",
+      "label": "营业外支出",
+      "source_endpoint": "income",
+      "source_column": "non_oper_exp",
+      "proposed_field_id": "financial.income.nonoperating_expense.ttm",
+      "period_kind": "flow",
+      "report_period_selection": "latest_visible_ttm",
+      "reporting_scope": "report_type_1_consolidated",
+      "target_unit": "CNY",
+      "note": "截至最新可见报告期的最近十二个月流量；与净营业外收支及扣非计算分开。"
+    },
+    {
+      "status": "拟新增",
+      "group": "核心流量：TTM",
+      "dsl_identifier": "revenue_ttm",
+      "label": "营业总收入 TTM",
+      "source_endpoint": "income",
+      "source_column": "total_revenue",
+      "proposed_field_id": "financial.income.total_revenue.ttm",
+      "period_kind": "flow",
+      "report_period_selection": "latest_visible_ttm",
+      "reporting_scope": "report_type_1_consolidated",
+      "target_unit": "CNY",
+      "note": "匹配可见报告重构 TTM；与 revenue 使用同一收入范围，期间改为最近十二个月；不同于 operating_revenue_ttm 的营业收入。"
+    },
+    {
+      "status": "拟新增",
+      "group": "核心流量：TTM",
+      "dsl_identifier": "net_profit_ttm",
+      "label": "归母净利润 TTM",
+      "source_endpoint": "income",
+      "source_column": "n_income_attr_p",
+      "proposed_field_id": "financial.income.net_profit_parent.ttm",
+      "period_kind": "flow",
+      "report_period_selection": "latest_visible_ttm",
+      "reporting_scope": "report_type_1_consolidated",
+      "target_unit": "CNY",
+      "note": "匹配可见报告重构 TTM；归母口径；与 consolidated_net_profit_ttm 的合并净利润分开。"
+    },
+    {
+      "status": "拟新增",
+      "group": "核心流量：TTM",
+      "dsl_identifier": "operating_cash_flow_ttm",
+      "label": "经营现金流净额 TTM",
+      "source_endpoint": "cashflow",
+      "source_column": "n_cashflow_act",
+      "proposed_field_id": "financial.cashflow.operating_cash_flow.ttm",
+      "period_kind": "flow",
+      "report_period_selection": "latest_visible_ttm",
+      "reporting_scope": "report_type_1_consolidated",
+      "target_unit": "CNY",
+      "note": "匹配可见报告重构 TTM；与 operating_cash_flow 使用同一合并现金流口径，期间为最近十二个月。"
+    }
+  ]
+}
