@@ -1,0 +1,18 @@
+{
+  "baseline_revision": "4083a2bac1b406be63b2b4e6f66ee678fdf643ae",
+  "candidate_manifest_sha256": "a1a8b35e1ff966431ebe75f414bbc7c3d57897320c11ff5bff2b561c11e869ae",
+  "memory_limit_mib": 1024,
+  "exit_code": 42,
+  "last_observation": {
+    "event": "FAIL_MEMORY_BUDGET",
+    "phase": "_canonical_versions",
+    "elapsed_seconds": 366.78,
+    "peak_mib": 1147.88
+  },
+  "unit_red_peak_python_bytes": 28823459,
+  "unit_budget_bytes": 16777216,
+  "targeted_unit_tests": {
+    "passed": 69,
+    "seconds": 34.97
+  }
+}

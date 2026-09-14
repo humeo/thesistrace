@@ -1,0 +1,138 @@
+{
+  "revision": "142579e745d42beed2c4af4e14d24109d0466d71",
+  "config_sha256": "a455d78fd75d93e09daceb767eab29c20c851f70faf60a446e99c13b35cc22c7",
+  "head": {
+    "data_identity": "e42809eec3faf8157ed0cb9f1000ee9ef61abcb4cab8b44f3633b55baefe0840",
+    "data_through_session": "2026-09-09",
+    "dataset_coverage": {
+      "end": "2026-09-09",
+      "session_count": 4053,
+      "start": "2010-01-04"
+    },
+    "format": "thesistrace-dataset-head",
+    "generation_manifest_sha256": "77d45ba1e49444b235308bc05fe1803e4e727532d0a8aec6e30bfe2a3b138e5d",
+    "prepared_at": "2026-09-13T10:11:09.189908+00:00",
+    "version": 1
+  },
+  "containers": [
+    {
+      "name": "/thesistrace-batch-research-worker-2",
+      "image_id": "sha256:910a3c0a1fb16ae096e292b65325babf49aece676335fc79fee0ecb5c85238ea",
+      "status": "running",
+      "exit_code": 0,
+      "health": null
+    },
+    {
+      "name": "/thesistrace-batch-research-worker-1",
+      "image_id": "sha256:910a3c0a1fb16ae096e292b65325babf49aece676335fc79fee0ecb5c85238ea",
+      "status": "running",
+      "exit_code": 0,
+      "health": null
+    },
+    {
+      "name": "/thesistrace-research-worker-3",
+      "image_id": "sha256:8c887f2380aed9a07064cef1d1c86885bec6368df75918b8f2d7cebea3602a5b",
+      "status": "running",
+      "exit_code": 0,
+      "health": null
+    },
+    {
+      "name": "/thesistrace-research-worker-2",
+      "image_id": "sha256:8c887f2380aed9a07064cef1d1c86885bec6368df75918b8f2d7cebea3602a5b",
+      "status": "running",
+      "exit_code": 0,
+      "health": null
+    },
+    {
+      "name": "/thesistrace-research-worker-1",
+      "image_id": "sha256:8c887f2380aed9a07064cef1d1c86885bec6368df75918b8f2d7cebea3602a5b",
+      "status": "running",
+      "exit_code": 0,
+      "health": null
+    },
+    {
+      "name": "/thesistrace-api-1",
+      "image_id": "sha256:68ad0a8f9df5f5f152aa3cd521c88fa5893968357e172a1e0a65379fd1279e01",
+      "status": "running",
+      "exit_code": 0,
+      "health": "healthy"
+    },
+    {
+      "name": "/thesistrace-data-operator-worker-1",
+      "image_id": "sha256:954ee26e2dd97964471e8c65c7632e4c80de03e55b8efd1a5add0e9766130e0d",
+      "status": "running",
+      "exit_code": 0,
+      "health": null
+    },
+    {
+      "name": "/thesistrace-tracking-worker-1",
+      "image_id": "sha256:ef90e5890b1382003e7e44a2819a1b8c88c949563cfe0137ed53f9b36d88db26",
+      "status": "running",
+      "exit_code": 0,
+      "health": null
+    },
+    {
+      "name": "/thesistrace-agent-1",
+      "image_id": "sha256:cca3711376a9bafab84d9090c861222d315a67d160f18924b3bdcf94b9eebf73",
+      "status": "running",
+      "exit_code": 0,
+      "health": "healthy"
+    },
+    {
+      "name": "/thesistrace-publication-maintenance-worker-1",
+      "image_id": "sha256:94ad0f32c476fa62395955d23a1b3d243cf627448008a385f2b0143bac50d8b3",
+      "status": "running",
+      "exit_code": 0,
+      "health": "healthy"
+    },
+    {
+      "name": "/thesistrace-auth-1",
+      "image_id": "sha256:000457b4cef1f7042cd63123d2ba43162aeded74d93c78af1b4d84f95ca77b92",
+      "status": "running",
+      "exit_code": 0,
+      "health": "healthy"
+    },
+    {
+      "name": "/thesistrace-web-1",
+      "image_id": "sha256:f0c1674894facb5ec33a538fbb9557da20cf5a4e3525ac7c910adcce61410cfd",
+      "status": "running",
+      "exit_code": 0,
+      "health": "healthy"
+    },
+    {
+      "name": "/thesistrace-initialize-1",
+      "image_id": "sha256:ff132d2cc537eea3110cc5c24f637854ce060cf6b403f80e30ef484ab73a9b9d",
+      "status": "exited",
+      "exit_code": 0,
+      "health": null
+    },
+    {
+      "name": "/thesistrace-agent-initialize-1",
+      "image_id": "sha256:cca3711376a9bafab84d9090c861222d315a67d160f18924b3bdcf94b9eebf73",
+      "status": "exited",
+      "exit_code": 0,
+      "health": null
+    },
+    {
+      "name": "/thesistrace-auth-initialize-1",
+      "image_id": "sha256:000457b4cef1f7042cd63123d2ba43162aeded74d93c78af1b4d84f95ca77b92",
+      "status": "exited",
+      "exit_code": 0,
+      "health": null
+    },
+    {
+      "name": "/thesistrace-postgres-1",
+      "image_id": "sha256:029660641a0cfc575b14f336ba448fb8a75fd595d42e1fa316b9fb4378742297",
+      "status": "running",
+      "exit_code": 0,
+      "health": "healthy"
+    },
+    {
+      "name": "/thesistrace-rustfs-1",
+      "image_id": "sha256:41fe89380f4120a337790c02af192c3fe7bb55c3edc2e6e9357b487b47c6ab21",
+      "status": "running",
+      "exit_code": 0,
+      "health": "healthy"
+    }
+  ]
+}
