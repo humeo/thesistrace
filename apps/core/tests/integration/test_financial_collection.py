@@ -4550,3 +4550,88 @@ def test_daily_indicator_coverage_advances_across_rotating_publications(
     finally:
         database.close()
         drop_product_schemas(core_settings)
+
+
+def test_daily_indicator_refresh_seeds_new_market_identity_before_rotation(
+    core_settings: CoreSettings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import thesistrace.data.financial_indicator_collection as indicator_collection
+
+    class Announcements:
+        def discover(self, *, start_date, end_date, allowed_ts_codes):
+            return FinancialAnnouncementDiscovery(
+                start_date=start_date, end_date=end_date,
+                completed_categories=FINANCIAL_ANNOUNCEMENT_CATEGORIES,
+                announcements=(), gaps=(), source_lineage_sha256="e" * 64,
+            )
+
+    class Provider(FixtureIndicatorProvider):
+        def __init__(self):
+            self.requested = []
+
+        def query_raw(self, api_name, *, params, fields):
+            self.requested.append(params["ts_code"])
+            return super().query_raw(api_name, params=params, fields=fields)
+
+    class OneSecurityPerDay(indicator_collection.FinancialIndicatorDailyCollector):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, reconciliation_limit=1, **kwargs)
+
+    drop_product_schemas(core_settings)
+    database = _database(core_settings)
+    try:
+        sessions = ("2010-01-04", "2026-08-07", "2026-08-13", "2026-08-14", "2026-08-17")
+        market = _market_generation(tmp_path, sessions=sessions)
+        _establish_head(database, tmp_path, market, operation_id="new-identity-market")
+        prior = _initial_candidate(
+            database, tmp_path, ExecutableStatementSource(), market,
+            idempotency_key="new-identity-prior", contract=_executable_contract(),
+        )
+        source = _financial_generation(tmp_path, market, prior)
+        _establish_head(
+            database, tmp_path, source, operation_id="new-identity-source", expected=market,
+        )
+        provider = Provider()
+        daily = DailyFinancialRefreshService(
+            database, tmp_path, Announcements(), ExecutableStatementSource(),
+            indicator_provider=TushareFinancialIndicatorProvider(provider),
+            clock=lambda: datetime(2026, 8, 18, 10, tzinfo=UTC),
+        )
+        first = daily.publish(
+            idempotency_key="new-identity-first", observation_through_session="2026-08-14",
+        )
+        store = MountedGenerationStore(tmp_path)
+        replacement = dict(store.open_refresh_base(
+            first.generation_manifest_sha256, overlap_session_count=len(sessions),
+            universe_lookback_session_count=0,
+        ).canonical)
+        replacement["instruments"] = [*replacement["instruments"], {
+            "instrument_id": "equity:000003.SZ", "ts_code": "000003.SZ",
+            "asset_type": "ordinary_a_share", "exchange": "SZSE", "board": "main",
+            "listed_from": "2026-08-17", "listed_to": "",
+        }]
+        grown = store.materialize_refresh(
+            predecessor_manifest_sha256=first.generation_manifest_sha256,
+            replacement_canonical=replacement, replace_from_session=sessions[0],
+            prepared_at=datetime(2026, 8, 18, 11, tzinfo=UTC),
+            source_name="new-identity-market", source_lineage={"fixture": "new-listing"},
+        )
+        _establish_head(
+            database, tmp_path, grown.manifest_sha256,
+            operation_id="new-identity-grown", expected=first.generation_manifest_sha256,
+        )
+        monkeypatch.setattr(
+            indicator_collection, "FinancialIndicatorDailyCollector", OneSecurityPerDay,
+        )
+        provider.requested.clear()
+        second = daily.publish(
+            idempotency_key="new-identity-next", observation_through_session="2026-08-17",
+        )
+        assert "000003.SZ" in provider.requested
+        updated = store.validate_generation(second.generation_manifest_sha256)
+        family = next(f for f in updated.families if f.family_id == "equity.financial_indicator")
+        assert family.dataset_coverage["complete_through_session"] == "2026-08-17"
+        assert family.dataset_coverage["instrument_count"] == 3
+    finally:
+        database.close()
+        drop_product_schemas(core_settings)

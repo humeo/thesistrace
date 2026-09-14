@@ -289,6 +289,7 @@ def test_daily_indicator_dispatch_retries_frozen_work_and_keeps_source_failures(
             identities=identities,
             checked_through="2020-05-01",
             research_session_index=1,
+            initial_instrument_ids=(),
         )
         assert len(result.scheduled_instrument_ids) == 2
         assert result.failed_instrument_ids == (identities[0].instrument_id,)
@@ -298,6 +299,7 @@ def test_daily_indicator_dispatch_retries_frozen_work_and_keeps_source_failures(
             identities=identities,
             checked_through="2020-05-04",
             research_session_index=2,
+            initial_instrument_ids=(),
         )
         assert next_day.scheduled_instrument_ids == (
             identities[0].instrument_id,
@@ -310,6 +312,7 @@ def test_daily_indicator_dispatch_retries_frozen_work_and_keeps_source_failures(
                 identities=identities,
                 checked_through="2020-05-04",
                 research_session_index=2,
+                initial_instrument_ids=(),
             )
         provider.failing = False
         retried = collector.collect(
@@ -317,6 +320,7 @@ def test_daily_indicator_dispatch_retries_frozen_work_and_keeps_source_failures(
             identities=identities,
             checked_through="2020-05-01",
             research_session_index=1,
+            initial_instrument_ids=(),
         )
         assert retried.scheduled_instrument_ids == result.scheduled_instrument_ids
         assert retried.failed_instrument_ids == ()
@@ -329,6 +333,7 @@ def test_daily_indicator_dispatch_retries_frozen_work_and_keeps_source_failures(
                 identities=identities,
                 checked_through="2020-05-01",
                 research_session_index=1,
+                initial_instrument_ids=(),
             )
             == retried
         )

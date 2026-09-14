@@ -173,6 +173,7 @@ class FinancialIndicatorDailyCollector:
         identities: Sequence[HistoricalInstrumentIdentity],
         checked_through: str,
         research_session_index: int,
+        initial_instrument_ids: Sequence[str],
     ) -> DailyIndicatorCollection:
         from thesistrace.data.financial_collection import FINANCIAL_HISTORY_FLOOR
         from thesistrace.data.source import DataSourceError
@@ -190,11 +191,16 @@ class FinancialIndicatorDailyCollector:
             identities
         ):
             raise ValueError("Indicator dispatch requires unique historical identities")
+        initial = tuple(sorted(initial_instrument_ids))
+        if len(initial) != len(set(initial)) or not set(initial) <= set(by_id):
+            raise ValueError("Initial indicator identities fall outside dispatch scope")
         with mounted_data_mutation_lock(
             self._database, exclusive_name="indicator-daily-dispatch",
         ):
             self._guard()
-            plan = self._plan(operation_key, by_id, checked_through, research_session_index)
+            plan = self._plan(
+                operation_key, by_id, checked_through, research_session_index, initial,
+            )
         completed, failures, pending = [], [], []
         for instrument in plan["selected"]:
             self._guard()
@@ -242,6 +248,7 @@ class FinancialIndicatorDailyCollector:
         by_id: Mapping[str, HistoricalInstrumentIdentity],
         target: str,
         session_index: int,
+        initial_instrument_ids: tuple[str, ...],
     ) -> dict[str, object]:
         import json
 
@@ -253,6 +260,7 @@ class FinancialIndicatorDailyCollector:
             "research_session_index": session_index,
             "reconciliation_limit": self._limit,
             "identities": {key: by_id[key].ts_code for key in sorted(by_id)},
+            "initial_instrument_ids": list(initial_instrument_ids),
         }
         directory = (
             self._root
@@ -291,7 +299,9 @@ class FinancialIndicatorDailyCollector:
         rotated = ordered[start:] + ordered[:start]
         # Rotate over the entire frozen universe: persistent pending/failure rows cannot
         # change the background cycle or starve the other historical securities.
-        selected = list(dict.fromkeys([*pending, *rotated[: self._limit]]))
+        selected = list(dict.fromkeys([
+            *initial_instrument_ids, *pending, *rotated[: self._limit],
+        ]))
         plan = {"scope": scope, "selected": selected}
         content = canonical_json_bytes(plan)
         digest = hashlib.sha256(content).hexdigest()

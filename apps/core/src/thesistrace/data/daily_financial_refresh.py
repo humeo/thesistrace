@@ -1133,13 +1133,30 @@ class DailyFinancialRefreshService:
             self._ownership_guard()
             operation = self._store.operation(idempotency_key)
         if operation["indicator_collection"] is None:
+            from thesistrace.data.financial_indicator_candidate import (
+                FinancialIndicatorCandidateStore,
+            )
             from thesistrace.data.financial_indicator_collection import (
                 FinancialIndicatorDailyCollector,
             )
 
-            calendar = self._generations.inspect_root(source_generation).research_sessions
+            generation = self._generations.inspect_root(source_generation)
+            calendar = generation.research_sessions
             if target not in calendar:
                 raise FinancialDailyRefreshError("FINANCIAL_TARGET_NOT_IN_CALENDAR")
+            indicator_family = next(
+                (family for family in generation.families
+                 if family.family_id == "equity.financial_indicator"), None,
+            )
+            initial_instrument_ids = ()
+            if indicator_family is not None:
+                covered = FinancialIndicatorCandidateStore(self._root).reopen(
+                    indicator_family.manifest_sha256,
+                )["instrument_ids"]
+                initial_instrument_ids = tuple(
+                    item.instrument_id for item in lifecycles
+                    if item.listed_from <= target and item.ts_code not in covered
+                )
             indicator_result = FinancialIndicatorDailyCollector(
                 self._database, self._root, self._indicator_provider,
                 clock=self._clock, ownership_guard=self._ownership_guard,
@@ -1149,6 +1166,7 @@ class DailyFinancialRefreshService:
                                  for item in lifecycles if item.listed_from <= target),
                 checked_through=target,
                 research_session_index=calendar.index(target),
+                initial_instrument_ids=initial_instrument_ids,
             )
             self._store.record_indicator_collection(
                 idempotency_key, indicator_result, self._validated_clock(),
