@@ -1315,6 +1315,7 @@ class DailyFinancialRefreshService:
                 discoveries_rows = transaction.execute(
                     """SELECT discovery_evidence FROM data.financial_daily_refresh_operations
                        WHERE discovery_evidence IS NOT NULL AND target_session<=%s
+                         AND indicator_collection IS NOT NULL
                          AND (%s::date IS NULL OR target_session>=%s::date)""",
                     (operation["target_session"], previous_end, previous_end),
                 ).fetchall()

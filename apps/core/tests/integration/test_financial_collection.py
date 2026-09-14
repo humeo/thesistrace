@@ -37,6 +37,7 @@ from thesistrace.data import (
 from thesistrace.data.daily_financial_refresh import (
     DailyFinancialRefreshService,
     FinancialDailyRefreshError,
+    FinancialDailyRefreshStore,
 )
 from thesistrace.data.financial_announcements import (
     FINANCIAL_ANNOUNCEMENT_CATEGORIES,
@@ -4419,9 +4420,10 @@ class FixtureIndicatorProvider:
 
 
 @pytest.mark.parametrize("delayed_bootstrap", [False, True])
+@pytest.mark.parametrize("statement_only_history", [False, True])
 def test_daily_indicator_coverage_advances_across_rotating_publications(
     core_settings: CoreSettings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-    delayed_bootstrap: bool,
+    delayed_bootstrap: bool, statement_only_history: bool,
 ) -> None:
     import thesistrace.data.financial_indicator_collection as indicator_collection
     from thesistrace.data.financial_indicator_progress import FinancialIndicatorProgressStore
@@ -4470,6 +4472,37 @@ def test_daily_indicator_coverage_advances_across_rotating_publications(
         source = _financial_generation(tmp_path, market, prior)
         _establish_head(database, tmp_path, source, operation_id="rotation-source", expected=market)
         provider = Provider()
+        if statement_only_history:
+            history = FinancialDailyRefreshStore(database)
+            history.begin(
+                idempotency_key="statement-only-history",
+                source_generation_manifest_sha256=source,
+                prior_financial_manifest_sha256=prior.manifest_sha256,
+                discovery_baseline_session="2026-08-13",
+                prior_attempted_through_session="2026-08-13",
+                prior_complete_through_session="2026-08-13",
+                target_session=targets[0],
+                started_at=datetime(2026, 8, 14, 9, tzinfo=UTC),
+            )
+            # A retained statement refresh predates indicator collection. Its
+            # discovery is not evidence that indicators were reconciled.
+            history.record_discovery(
+                idempotency_key="statement-only-history",
+                discovery=Announcements().discover(
+                    start_date="2026-08-07", end_date=targets[0],
+                    allowed_ts_codes={"000001.SZ", "000002.SZ"},
+                ),
+                identities=MountedGenerationStore(tmp_path)
+                .read_historical_ordinary_a_share_identities(source),
+                recorded_at=datetime(2026, 8, 14, 9, tzinfo=UTC),
+            )
+            with database.transaction() as transaction:
+                transaction.execute(
+                    "UPDATE data.financial_daily_refresh_operations "
+                    "SET discovery_evidence = discovery_evidence - 'instrument_ids' "
+                    "WHERE idempotency_key = %s",
+                    ("statement-only-history",),
+                )
         store = MountedGenerationStore(tmp_path)
         evidence = set()
         rotated = []
