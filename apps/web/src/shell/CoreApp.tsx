@@ -31,6 +31,9 @@ const ResearchRunsPage = lazy(() =>
     default: ResearchRunsPage,
   })),
 );
+const ResearchBatchesPage = lazy(() =>
+  import("../research-runs/ResearchBatchesPage").then(({ ResearchBatchesPage }) => ({ default: ResearchBatchesPage })),
+);
 const OperatorResearchersPage = lazy(() =>
   import("../operator/OperatorResearchersPage").then(({ OperatorResearchersPage }) => ({
     default: OperatorResearchersPage,
@@ -54,6 +57,7 @@ export function CoreApp({ location, navigate, isOperator, researcherId }: {
     ? readBrowserChatThread(location.search) : null, [currentPath, location]);
   useEffect(() => { window.scrollTo(0, 0); }, [currentPath]);
   const researchRunMatch = currentPath.match(/^\/research-runs\/(run_[a-f0-9]+)$/);
+  const researchBatchMatch = currentPath.match(/^\/research-runs\/batches\/(batch_[a-f0-9]+)$/);
   const dailyTrackMatch = currentPath.match(/^\/daily-tracks\/(track_[a-f0-9]+)$/);
   return (
     <AppShell
@@ -78,6 +82,9 @@ export function CoreApp({ location, navigate, isOperator, researcherId }: {
         ) : null}
         {currentPath === "/research-runs" || researchRunMatch ? (
           <ResearchRunsPage researcherId={researcherId} runId={researchRunMatch?.[1]} />
+        ) : null}
+        {currentPath === "/research-runs/batches" || researchBatchMatch ? (
+          <ResearchBatchesPage key={researchBatchMatch?.[1] ?? "list"} batchId={researchBatchMatch?.[1]} />
         ) : null}
         {currentPath === "/daily-tracks" || dailyTrackMatch ? (
           <DailyTracksPage trackId={dailyTrackMatch?.[1]} />

@@ -131,7 +131,7 @@ def test_strategy_sweep_has_one_shared_alpha_and_one_to_twenty_parameter_items()
         )
 
 
-def test_batch_backend_surface_has_no_delete_or_frontend_route() -> None:
+def test_batch_http_surface_supports_inspection_and_cancellation_without_deletion() -> None:
     routes = {
         (method.lower(), route.path)
         for route in create_app().routes
@@ -140,11 +140,9 @@ def test_batch_backend_surface_has_no_delete_or_frontend_route() -> None:
     assert ("post", "/api/research-batches") in routes
     assert ("get", "/api/research-batches") in routes
     assert ("get", "/api/research-batches/{batch_id}") in routes
+    assert ("post", "/api/research-batches/{batch_id}/cancel") in routes
     assert not any(
         method == "delete" and path.startswith("/api/research-batches") for method, path in routes
-    )
-    assert "research-batches" not in "\n".join(
-        path.read_text() for path in (ROOT / "apps/web" / "src").rglob("*") if path.is_file()
     )
 
 

@@ -1042,11 +1042,12 @@ def create_app(
     def list_research_batches(
         request: Request,
         cursor: str | None = None,
-        limit: int = Query(default=50, ge=1, le=100),
+        limit: int = Query(default=50, ge=1, le=50),
+        active_only: bool = False,
     ) -> ResearchBatchList:
         try:
             return _runtime(request).research_batches.list(
-                _researcher_id(request), cursor=cursor, limit=limit
+                _researcher_id(request), cursor=cursor, limit=limit, active_only=active_only
             )
         except ResearchBatchInvalidCursor as error:
             raise HTTPException(status_code=400, detail=str(error)) from error

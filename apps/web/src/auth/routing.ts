@@ -19,6 +19,7 @@ const PRODUCT_ROOTS = new Set([
   "/data",
   "/research",
   "/research-runs",
+  "/research-runs/batches",
   "/daily-tracks",
   "/connections/mcp",
   "/connections/mcp/authorize",
@@ -37,6 +38,7 @@ export function isProductPath(pathname: string): boolean {
     || pathname === "/operator/researchers"
     || pathname === "/operator/data"
     || /^\/research-runs\/run_[a-f0-9]+$/.test(pathname)
+    || /^\/research-runs\/batches\/batch_[a-f0-9]+$/.test(pathname)
     || /^\/daily-tracks\/track_[a-f0-9]+$/.test(pathname);
 }
 

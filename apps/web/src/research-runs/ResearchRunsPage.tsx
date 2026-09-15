@@ -24,6 +24,8 @@ import {
 } from "../research/draft";
 import { followCoreLink, navigateCorePath } from "../shell/navigation";
 import { factorMetricHelp, strategyMetricHelp } from "./metricHelp";
+import { ResearchBatchCancelButton } from "./ResearchBatchesPage";
+import { ResearchRunsNavigation } from "./ResearchRunsNavigation";
 
 type CorrelationSummary = {
   mean: number | null;
@@ -158,6 +160,7 @@ export type ResearchRunExecutionTiming = {
 };
 
 export type ResearchRun = {
+  batch_id?: string | null;
   rerun_origin?: RerunOrigin;
   id: string;
   status: "queued" | "running" | "cancelling" | "succeeded" | "failed" | "cancelled";
@@ -202,6 +205,10 @@ const FACTOR_HORIZONS = ["1", "5", "20"] as const;
 const ACTIVE_TRACK_LIMIT_DETAIL = "Active DailyTrack limit of 3 reached";
 const ACTIVE_TRACK_LIMIT_MESSAGE =
   "3 active, blocked, or stopping DailyTracks already exist. Stop one before starting another.";
+const BATCH_CANCELLATION_DETAIL =
+  "Batch-owned ResearchRun cancellation is controlled by its Research Batch";
+const BATCH_CANCELLATION_MESSAGE =
+  "This research is part of a batch. Cancel the research batch to stop its unfinished runs.";
 const RESEARCH_RUN_PAGE_SIZE = 20;
 type ResearchKindFilter = "" | ResearchRun["research_kind"];
 
@@ -222,6 +229,7 @@ export function ResearchRunsPage({ researcherId, runId }: {
   const [error, setError] = useState<string | null>(null);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [canceling, setCanceling] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
   const [startingTracking, setStartingTracking] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -280,6 +288,7 @@ export function ResearchRunsPage({ researcherId, runId }: {
           const nextRun = (await response.json()) as ResearchRun;
           if (generation !== loadGeneration.current) return;
           setRun(nextRun);
+          if (isTerminalResearch(nextRun.status)) setCancelError(null);
           if (
             nextRun.status === "queued" ||
             nextRun.status === "running" ||
@@ -323,18 +332,22 @@ export function ResearchRunsPage({ researcherId, runId }: {
     };
   }, [pageIndex, folderFilter, refreshGeneration, researchKindFilter, runId, sort, metricFilters]);
 
-  useEffect(() => () => {
-    cancelGeneration.current += 1;
-    cancelController.current?.abort();
-    cancelController.current = null;
-    cancelRequest.current = null;
-    trackingGeneration.current += 1;
-    trackingController.current?.abort();
-    trackingController.current = null;
-    trackingRequest.current = null;
-    deleteGeneration.current += 1;
-    deleteController.current?.abort();
-    deleteController.current = null;
+  useEffect(() => {
+    setCancelError(null);
+    setCanceling(false);
+    return () => {
+      cancelGeneration.current += 1;
+      cancelController.current?.abort();
+      cancelController.current = null;
+      cancelRequest.current = null;
+      trackingGeneration.current += 1;
+      trackingController.current?.abort();
+      trackingController.current = null;
+      trackingRequest.current = null;
+      deleteGeneration.current += 1;
+      deleteController.current?.abort();
+      deleteController.current = null;
+    };
   }, [runId]);
 
   function refresh() {
@@ -384,7 +397,7 @@ export function ResearchRunsPage({ researcherId, runId }: {
   }
 
   async function cancel() {
-    if (run === null || !["queued", "running"].includes(run.status)) return;
+    if (run === null || run.batch_id || canceling || !["queued", "running"].includes(run.status)) return;
     const targetRun = run;
     const generation = ++cancelGeneration.current;
     loadGeneration.current += 1;
@@ -393,12 +406,13 @@ export function ResearchRunsPage({ researcherId, runId }: {
     const controller = new AbortController();
     cancelController.current = controller;
     setCanceling(true);
-    setError(null);
+    setCancelError(null);
     const pending = cancelRequest.current;
     const requestId = pending?.runId === targetRun.id
       ? pending.requestId
       : `cancel_${crypto.randomUUID()}`;
     cancelRequest.current = { runId: targetRun.id, requestId };
+    let failureMessage = "ResearchRun cancellation failed. Try again.";
     try {
       const response = await coreFetch(`/api/research-runs/${targetRun.id}/cancel`, {
         method: "POST",
@@ -406,22 +420,28 @@ export function ResearchRunsPage({ researcherId, runId }: {
         body: JSON.stringify({ request_id: requestId }),
         signal: controller.signal,
       });
-      if (!response.ok) throw new Error("ResearchRun cancellation failed");
-      if (generation !== cancelGeneration.current) return;
-      const nextRun = (await response.json()) as ResearchRun;
-      setRun(nextRun);
-      if (nextRun.status === "cancelling") {
-        setRefreshGeneration((current) => current + 1);
+      if (!response.ok) {
+        const body = (await response.json().catch(() => ({}))) as { detail?: unknown };
+        if (typeof body.detail === "string" && body.detail.trim()) {
+          failureMessage = body.detail === BATCH_CANCELLATION_DETAIL
+            ? BATCH_CANCELLATION_MESSAGE
+            : body.detail;
+        }
+        throw new Error(failureMessage);
       }
+      const nextRun = (await response.json()) as ResearchRun;
+      if (generation !== cancelGeneration.current) return;
+      setRun((current) => current?.id === targetRun.id ? { ...current, ...nextRun } : current);
       cancelRequest.current = null;
     } catch (reason: unknown) {
       if (reason instanceof DOMException && reason.name === "AbortError") return;
       if (generation !== cancelGeneration.current) return;
-      setError("ResearchRun cancellation failed");
+      setCancelError(failureMessage);
     } finally {
       if (generation === cancelGeneration.current) {
         cancelController.current = null;
         setCanceling(false);
+        setRefreshGeneration((current) => current + 1);
       }
     }
   }
@@ -555,7 +575,11 @@ export function ResearchRunsPage({ researcherId, runId }: {
           </div>
           <div>
             <ResearchRunBackLink />
-            {run.status === "queued" || run.status === "running" ? (
+            {run.batch_id ? <a className="button button-quiet" href={`/research-runs/batches/${encodeURIComponent(run.batch_id)}`} onClick={followCoreLink}>View batch</a> : null}
+            {run.batch_id && ["queued", "running", "cancelling"].includes(run.status) ? (
+              <ResearchBatchCancelButton key={run.batch_id} batchId={run.batch_id} status={run.status} />
+            ) : null}
+            {!run.batch_id && (run.status === "queued" || run.status === "running") ? (
               <button disabled={canceling} onClick={() => void cancel()}>
                 {canceling ? "Cancelling…" : "Cancel"}
               </button>
@@ -582,6 +606,9 @@ export function ResearchRunsPage({ researcherId, runId }: {
             ) : null}
           </div>
         </header>
+        {cancelError !== null ? (
+          <p className="inline-status inline-status-error" role="alert">{cancelError}</p>
+        ) : null}
         <ResearchDeleteDialog
           deleting={deleting}
           error={deleteError}
@@ -639,6 +666,7 @@ export function ResearchRunsPage({ researcherId, runId }: {
       <header className="page-header">
         <h1>Research Runs</h1>
       </header>
+      <ResearchRunsNavigation active="runs" />
       <div className="research-run-list-toolbar">
         <div className="research-run-filters">
           {folderError !== null ? (

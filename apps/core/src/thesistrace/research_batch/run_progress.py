@@ -14,7 +14,7 @@ def project_batch_run_execution(
     run_id: str,
     run_status: str,
     progress: ResearchRunProgress,
-) -> tuple[ResearchRunProgress, ResearchRunExecutionTiming]:
+) -> tuple[str, ResearchRunProgress, ResearchRunExecutionTiming]:
     """Project Batch-owned work without making live slices recovery checkpoints."""
     item = transaction.execute(
         """
@@ -61,7 +61,7 @@ def project_batch_run_execution(
         is_final=terminal,
     )
     if item["outcome"] == "succeeded":
-        return progress.model_copy(update={
+        return str(item["batch_id"]), progress.model_copy(update={
             "phase": "succeeded",
             "completed_warmup_sessions": progress.total_warmup_sessions,
             "completed_research_sessions": progress.total_research_sessions,
@@ -69,7 +69,7 @@ def project_batch_run_execution(
             "duration_is_estimate": False,
         }), timing
     if terminal or run_status == "queued":
-        return progress, timing
+        return str(item["batch_id"]), progress, timing
 
     attempt = transaction.execute(
         """
@@ -115,4 +115,4 @@ def project_batch_run_execution(
         "completed_research_sessions": completed,
         "remaining_duration_estimate_seconds": remaining,
     })
-    return projected, timing
+    return str(item["batch_id"]), projected, timing

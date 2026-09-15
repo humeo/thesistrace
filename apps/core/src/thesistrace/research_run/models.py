@@ -1158,6 +1158,7 @@ class ResearchRunPollingDetail(ResearchRunSummary):
 
 
 class ResearchRunDetail(ResearchRunSummary):
+    batch_id: str | None = None
     input: ResearchRunAuthorableInput
     progress: ResearchRunProgress
     execution_timing: ResearchRunExecutionTiming

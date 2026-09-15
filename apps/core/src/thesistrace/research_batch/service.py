@@ -980,11 +980,12 @@ class ResearchBatchService:
         *,
         cursor: str | None,
         limit: int,
+        active_only: bool = False,
     ) -> ResearchBatchList:
         if isinstance(limit, bool) or not 1 <= limit <= 50:
             raise ValueError("List limit must be between 1 and 50")
         try:
-            return self._list(researcher_id, cursor=cursor, limit=limit)
+            return self._list(researcher_id, cursor=cursor, limit=limit, active_only=active_only)
         except (OperationalError, PoolTimeout) as error:
             raise ResearchBatchTemporarilyUnavailable(
                 "Research Batch listing is temporarily unavailable"
@@ -996,6 +997,7 @@ class ResearchBatchService:
         *,
         cursor: str | None,
         limit: int,
+        active_only: bool,
     ) -> ResearchBatchList:
         with self._database.transaction() as transaction:
             secret = _cursor_secret(transaction)
@@ -1023,6 +1025,7 @@ class ResearchBatchService:
                     WHERE attempt.batch_id = batch.id
                 ) AS timing ON true
                 WHERE batch.researcher_id = %s
+                  AND (NOT %s OR batch.status IN ('queued', 'running', 'cancelling'))
                   AND (
                     %s::timestamptz IS NULL
                     OR batch.created_at < %s::timestamptz
@@ -1036,6 +1039,7 @@ class ResearchBatchService:
                 """,
                 (
                     researcher_id,
+                    active_only,
                     cursor_created_at,
                     cursor_created_at,
                     cursor_created_at,

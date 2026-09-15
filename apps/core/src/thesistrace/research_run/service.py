@@ -234,7 +234,7 @@ TrackReferencesResult = Callable[[PostgresTransaction, str], bool]
 PreserveDependentRunHistory = Callable[[PostgresTransaction, UUID, str], None]
 ProjectBatchRunExecution = Callable[
     [PostgresTransaction, UUID, str, str, ResearchRunProgress],
-    tuple[ResearchRunProgress, ResearchRunExecutionTiming],
+    tuple[str, ResearchRunProgress, ResearchRunExecutionTiming],
 ]
 BatchExecutionAuthorization = Callable[[PostgresTransaction], None]
 BatchItemCompletion = Callable[[PostgresTransaction, str, str | None], None]
@@ -2408,6 +2408,7 @@ class ResearchRunService:
         if summary.status != "succeeded":
             return ResearchRunDetail(
                 **summary.model_dump(),
+                batch_id=row.get("batch_id"),
                 input=authorable_input,
                 progress=_research_progress(row),
                 execution_timing=_research_execution_timing(row, summary.status),
@@ -2456,6 +2457,7 @@ class ResearchRunService:
             raise ResearchRunResultUnavailable from error
         return ResearchRunDetail(
             **summary.model_dump(),
+            batch_id=row.get("batch_id"),
             input=authorable_input,
             progress=_research_progress(row),
             execution_timing=_research_execution_timing(row, summary.status),
@@ -2504,10 +2506,11 @@ class ResearchRunService:
             if row is not None and row["execution_owner"] == "research_batch":
                 if self._project_batch_run_execution is None:
                     raise RuntimeError("Batch-owned Run execution projection is not configured")
-                progress, timing = self._project_batch_run_execution(
+                batch_id, progress, timing = self._project_batch_run_execution(
                     transaction, researcher_id, run_id, str(row["status"]),
                     _research_progress(row),
                 )
+                row["batch_id"] = batch_id
                 row.update(progress.model_dump())
                 row["progress_phase"] = progress.phase
                 row["execution_started_at"] = timing.started_at
