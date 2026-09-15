@@ -85,7 +85,7 @@ export function emptyResearchDraft(): ResearchDraft {
     startDate: "",
     endDate: "",
     universe: "",
-    neutralization: "",
+    neutralization: "none",
     initialCashCny: "",
     holdingsCount: "",
     selectionEverySessions: "",
@@ -158,6 +158,9 @@ export function selectResearchKind(
   } : {
     ...draft,
     researchKind,
+    initialCashCny: draft.researchKind === "factor_evaluation" ? "100000" : draft.initialCashCny,
+    holdingsCount: draft.researchKind === "factor_evaluation" ? "10" : draft.holdingsCount,
+    selectionEverySessions: draft.researchKind === "factor_evaluation" ? "5" : draft.selectionEverySessions,
   };
 }
 
@@ -218,18 +221,6 @@ export function researchSpec(inputs: ResearchInputs): ResearchSpec {
   };
 }
 
-export function exposurePercentage(source: string): string {
-  if (!/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(source.trim())) return "";
-  const value = Number(source);
-  return Number.isFinite(value) ? String(Number((value * 100).toPrecision(12))) : "";
-}
-
-export function percentageExposureSource(percentage: string): string {
-  if (percentage.trim() === "") return "";
-  const value = Number(percentage);
-  return Number.isFinite(value) ? String(value / 100) : "";
-}
-
 export function acceptPendingResearchRun(
   draft: ResearchDraft,
   requestId: string,
@@ -266,24 +257,32 @@ export function isValidInitialCash(value: string): boolean {
   return BigInt(whole + fraction.padEnd(2, "0")) <= 100000000000n;
 }
 
+export type ResearchInputField = "formula" | "hypothesis" | "startDate" | "endDate" | "universe" | "neutralization" | "initialCashCny" | "holdingsCount" | "selectionEverySessions" | "exposureExpression" | "volatilityWindow";
+export type ResearchInputIssue = { field: ResearchInputField; message: string };
+
+export function researchInputIssues(inputs: ResearchInputs): ResearchInputIssue[] {
+  const issues: ResearchInputIssue[] = [];
+  if (!inputs.formula.trim()) issues.push({ field: "formula", message: "Enter an Alpha formula." });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(inputs.startDate)) issues.push({ field: "startDate", message: "Choose a start date." });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(inputs.endDate)) issues.push({ field: "endDate", message: "Choose an end date." });
+  else if (inputs.startDate > inputs.endDate) issues.push({ field: "endDate", message: "End date must be on or after start date." });
+  if (!["top300", "top1000", "top2000", "top3000"].includes(inputs.universe)) issues.push({ field: "universe", message: "Choose a stock universe." });
+  if (!["none", "industry"].includes(inputs.neutralization)) issues.push({ field: "neutralization", message: "Choose a neutralization method." });
+  if (inputs.researchKind === "strategy_backtest") {
+    const holdings = Number(inputs.holdingsCount), interval = Number(inputs.selectionEverySessions);
+    if (!Number.isInteger(holdings) || holdings < 1 || holdings > 100) issues.push({ field: "holdingsCount", message: "Holdings count must be a whole number from 1 to 100." });
+    if (!Number.isInteger(interval) || interval < 1 || interval > 20) issues.push({ field: "selectionEverySessions", message: "Selection interval must be a whole number from 1 to 20 trading days." });
+    if (!isValidInitialCash(inputs.initialCashCny)) issues.push({ field: "initialCashCny", message: "Initial cash must be 0.01–1,000,000,000 CNY, with up to two decimal places." });
+    if (!isValidVolatilityWindow(inputs.volatilityWindow)) issues.push({ field: "volatilityWindow", message: "Volatility window must be a whole number from 1 to 252." });
+    if (!inputs.exposureExpression.trim()) issues.push({ field: "exposureExpression", message: "Enter a position sizing formula." });
+    else if (Number(inputs.exposureExpression) < 0 || Number(inputs.exposureExpression) > 1) issues.push({ field: "exposureExpression", message: "Position sizing formula must return a value between 0 and 1." });
+  }
+  if (Array.from(inputs.hypothesis).length > MAX_HYPOTHESIS_LENGTH) issues.push({ field: "hypothesis", message: "Keep notes within 1,024 characters." });
+  return issues;
+}
+
 export function isCompleteResearchInputs(inputs: ResearchInputs): boolean {
-  const holdingsCount = Number(inputs.holdingsCount);
-  const selectionEverySessions = Number(inputs.selectionEverySessions);
-  const commonComplete = inputs.formula.trim() !== "" &&
-    Array.from(inputs.hypothesis).length <= MAX_HYPOTHESIS_LENGTH &&
-    /^\d{4}-\d{2}-\d{2}$/.test(inputs.startDate) &&
-    /^\d{4}-\d{2}-\d{2}$/.test(inputs.endDate) &&
-    inputs.startDate <= inputs.endDate &&
-    ["top300", "top1000", "top2000", "top3000"].includes(inputs.universe) &&
-    ["none", "industry"].includes(inputs.neutralization);
-  return commonComplete && (inputs.researchKind === "factor_evaluation" || (
-    inputs.exposureExpression.trim() !== "" &&
-    isValidInitialCash(inputs.initialCashCny) &&
-    isValidVolatilityWindow(inputs.volatilityWindow) &&
-    Number.isInteger(holdingsCount) && holdingsCount >= 1 && holdingsCount <= 100 &&
-    Number.isInteger(selectionEverySessions) &&
-    selectionEverySessions >= 1 && selectionEverySessions <= 20
-  ));
+  return researchInputIssues(inputs).length === 0;
 }
 
 export function hasUnexecutedChanges(draft: ResearchDraft): boolean {

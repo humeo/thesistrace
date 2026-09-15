@@ -108,53 +108,20 @@ describe("DataOverviewView", () => {
       onRefresh: vi.fn(),
     }));
 
-    expect(markup).toContain("Market coverage start");
+    expect(markup).toContain("Data coverage");
     expect(markup).toContain("2025-08-08");
-    expect(markup).toContain("Market coverage end");
-    expect(markup).toContain("Data through");
-    expect(markup).toContain("Last market refresh");
-    expect(markup).toContain("Market data");
-    expect(markup).toContain("Market ready");
-    expect(markup).toContain("Strategy Benchmark");
-    expect(markup).toContain("CSI 300 ready");
-    expect(markup).toContain(
-      'aria-hidden="true" class="health-dot"></span> Strategy Benchmark',
-    );
-    expect(markup).toContain("Benchmark coverage start");
-    expect(markup).toContain("Snapshot SHA-256");
-    expect(markup).toContain("a".repeat(64));
-    expect(markup).toContain("2026-08-07T05:00:00Z");
-    expect(markup).toContain("Financial coverage start");
     expect(markup).toContain("2010-01-04");
-    expect(markup).toContain("Discovery baseline");
-    expect(markup).toContain("Attempted through");
-    expect(markup).toContain("Complete through");
     expect(markup).toContain("2026-08-07");
-    expect(markup).toContain("Pending instruments");
-    expect(markup).toContain("Discovery gaps");
-    expect(markup).toContain("Earliest unresolved");
-    expect(markup).toContain("Last financial refresh");
-    expect(markup).toContain("Finance ready");
-    expect(markup).toContain("Industry ready");
+    expect(markup).toContain("CSI 300");
     expect(markup).toContain("SW2021");
-    expect(markup).toContain("2026-08-07T04:00:00Z");
+    expect(markup).toContain("Available");
     expect(markup).toContain("Research fields");
-    expect(markup).toContain("Market data fields");
-    expect(markup).toContain("Financial data fields");
     expect(markup).toContain("close");
     expect(markup).toContain("revenue");
-    expect(markup).toContain("Latest full year visible on each Research Session");
-    expect(markup).toContain("Company types 1, 2, 3, 4");
-    expect(markup).toContain("Missing when no visible eligible fact");
-    expect(markup).toContain("rank(revenue)");
-    expect(markup).toContain("Reload");
-    expect(markup).not.toContain("Current research data");
-    expect(markup).not.toContain("Canonical data");
-    expect(markup).not.toContain("Identifiers accepted by the Alpha formula editor");
-    expect(markup).not.toContain("Adjusted prices and trading activity");
-    expect(markup).not.toContain("Point-in-time financial facts limited to information visible");
-    expect(markup).not.toContain("Financial coverage explanation");
-    expect(markup).not.toMatch(/Update data|Release|Generation|history|operator/i);
+    expect(markup).toContain("Reload status");
+    expect(markup).not.toContain("Snapshot SHA-256");
+    expect(markup).not.toContain("Discovery baseline");
+    expect(markup).not.toContain("Last market refresh");
   });
 
   it("does not fabricate coverage or unavailable dataset fields", () => {
@@ -184,15 +151,9 @@ describe("DataOverviewView", () => {
       onRefresh: vi.fn(),
     }));
 
-    expect(markup).toContain("Market not ready");
-    expect(markup).toContain("CSI 300 not ready");
-    expect(markup).toContain(
-      'aria-hidden="true" class="health-dot health-dot-warning"></span> Strategy Benchmark',
-    );
-    expect(markup).toContain("Finance not ready");
-    expect(markup).toContain("Industry not ready");
-    expect(markup.match(/<dd>Not available<\/dd>/g)).toHaveLength(20);
-    expect(markup).toContain("No fields are currently available for research.");
+    expect(markup.match(/No published coverage/g)).toHaveLength(4);
+    expect(markup.match(/health-dot health-dot-warning/g)).toHaveLength(4);
+    expect(markup).not.toContain("2026-08-07");
   });
 
   it.each([
@@ -200,13 +161,13 @@ describe("DataOverviewView", () => {
       readiness: "ready_with_pending" as const,
       pending: 2,
       gaps: 0,
-      expected: "Finance ready with pending instruments",
+      expected: "2 instruments awaiting verification and 0 gaps",
     },
     {
       readiness: "ready_with_gaps" as const,
       pending: 1,
       gaps: 2,
-      expected: "Finance ready with discovery gaps",
+      expected: "1 instruments awaiting verification and 2 gaps",
     },
   ])("renders $readiness as usable degraded data", ({ readiness, pending, gaps, expected }) => {
     const markup = renderToStaticMarkup(createElement(DataOverviewView, {
@@ -231,8 +192,7 @@ describe("DataOverviewView", () => {
     }));
 
     expect(markup).toContain(expected);
-    expect(markup).toContain(`<dd>${pending}</dd>`);
-    expect(markup).toContain(`<dd>${gaps}</dd>`);
+    expect(markup).toContain("Limited coverage");
     expect(markup).toContain("2026-08-14");
     expect(markup).not.toContain("Finance not ready");
   });
@@ -257,7 +217,8 @@ describe("DataOverviewView", () => {
       overview: staleOverview,
       onRefresh: vi.fn(),
     }));
-    expect(stale).toContain("Industry stale");
+    expect(stale).toContain("Limited coverage");
+    expect(stale).toContain("health-dot health-dot-warning");
     expect(stale).not.toContain("Last refresh failed");
 
     const failed = renderToStaticMarkup(createElement(DataOverviewView, {
@@ -269,8 +230,8 @@ describe("DataOverviewView", () => {
       },
       onRefresh: vi.fn(),
     }));
-    expect(failed).toContain("Last refresh failed");
-    expect(failed).toContain("OVERLAPPING_PRIMARY_INDUSTRY_CLASSIFICATION");
+    expect(failed).toContain("Limited coverage");
+    expect(failed).not.toContain("OVERLAPPING_PRIMARY_INDUSTRY_CLASSIFICATION");
   });
 
   it("loads coverage and fields together and turns either failure into visible state", async () => {
@@ -334,9 +295,12 @@ it("groups fields by research category across different source families", () => 
     },
   }));
   expect(markup).toContain("净资产收益率");
-  expect(markup).toContain("2 fields");
-  expect(markup).toContain('aria-label="Search fields"');
-  expect(markup).toContain('aria-label="Research purpose"');
-  expect(markup).toContain('aria-label="Field source"');
-  expect(markup).toContain('aria-label="Field period"');
+  expect(markup).toContain("3 fields");
+  expect(markup).toContain("Search fields");
+  expect(markup).toContain("Research purpose");
+  expect(markup).toContain("All purposes");
+  expect(markup).not.toContain("Field source");
+  expect(markup).not.toContain("Field period");
+  expect(markup).not.toContain("More filters");
+  expect(markup).not.toContain("Source &amp; calculation");
 });

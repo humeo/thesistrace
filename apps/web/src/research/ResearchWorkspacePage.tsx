@@ -5,14 +5,17 @@ import {
   Minus,
   Play,
   Plus,
+  SlidersHorizontal,
+  Info,
+  X,
 } from "@phosphor-icons/react";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode, type Ref } from "react";
 
 import type { AlphaCatalog } from "../alphaCatalog";
 import { coreFetch } from "../auth/coreFetch";
 import type { BrowserLocation } from "../auth/routing";
-import type { DataOverview } from "../data/DataPage";
-import { AlphaFormulaEditor } from "./AlphaFormulaEditor";
+import { ResearchFieldCatalog, type DataOverview } from "../data/DataPage";
+import { AlphaFormulaEditor, type AlphaFormulaEditorHandle } from "./AlphaFormulaEditor";
 import { buildResearchDatePresets } from "./dateRange";
 import {
   createDiagnosticsScheduler,
@@ -22,12 +25,11 @@ import {
 import {
   beginResearchRun,
   emptyResearchDraft,
-  exposurePercentage,
-  percentageExposureSource,
   researchSpec,
   finishResearchRun,
   hasUnexecutedChanges,
-  isCompleteResearchInputs,
+  researchInputIssues,
+  type ResearchInputField,
   isValidInitialCash,
   isValidVolatilityWindow,
   MAX_HYPOTHESIS_LENGTH,
@@ -308,7 +310,9 @@ function ResearchNumberStepper({
   minimum,
   onChange,
   value,
+  error,
 }: {
+  error?: string;
   actionLabel: string;
   id: string;
   label: string;
@@ -337,6 +341,8 @@ function ResearchNumberStepper({
         </button>
         <input
           id={id}
+          aria-invalid={Boolean(error)}
+          aria-describedby={error ? `${id}-error` : undefined}
           inputMode="numeric"
           max={maximum}
           min={minimum}
@@ -356,6 +362,7 @@ function ResearchNumberStepper({
           <Plus aria-hidden="true" size={16} weight="regular" />
         </button>
       </div>
+      {error && <small id={`${id}-error`} className="inline-status-error">{error}</small>}
     </div>
   );
 }
@@ -382,7 +389,42 @@ export function ResearchDraftWorkspace({
   const [diagnosticState, setDiagnosticState] = useState<DiagnosticState>({ kind: "idle", result: null });
   const [admissionFeedback, setAdmissionFeedback] = useState<AdmissionFeedback | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [exposureSelection, setExposureSelection] = useState({ anchor: 0, head: 0 });
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const workspace = useRef<HTMLElement>(null);
+  const alphaEditor = useRef<AlphaFormulaEditorHandle>(null);
+  const exposureEditor = useRef<AlphaFormulaEditorHandle>(null);
+  const [validationAttempted, setValidationAttempted] = useState(false);
+  const [pendingInput, setPendingInput] = useState<ResearchInputField | null>(null);
+  const inputIssues = validationAttempted ? researchInputIssues(researchInputs(draft)) : [];
+  const inputError = (field: ResearchInputField) => inputIssues.find((issue) => issue.field === field)?.message;
+  useEffect(() => {
+    if (pendingInput === null) return;
+    if (pendingInput === "formula") alphaEditor.current?.focus();
+    else if (pendingInput === "exposureExpression") exposureEditor.current?.focus();
+    else workspace.current?.querySelector<HTMLElement>(INPUT_SELECTORS[pendingInput])?.focus();
+    setPendingInput(null);
+  }, [pendingInput, settingsOpen]);
+  function focusInput(field: ResearchInputField) {
+    if (["neutralization", "initialCashCny", "volatilityWindow", "exposureExpression"].includes(field)) setSettingsOpen(true);
+    setPendingInput(field);
+  }
+  function validateInputs(): boolean {
+    setValidationAttempted(true);
+    const issues = researchInputIssues(researchInputs(draft));
+    if (issues.length === 0) return true;
+    focusInput(issues[0].field);
+    return false;
+  }
+  const [fieldsOpen, setFieldsOpen] = useState(false);
+  const fieldsTrigger = useRef<HTMLButtonElement>(null);
+  const fieldsPanel = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (fieldsOpen) fieldsPanel.current?.querySelector<HTMLInputElement>('input[role="searchbox"]')?.focus();
+  }, [fieldsOpen]);
+  function closeFields() {
+    setFieldsOpen(false);
+    fieldsTrigger.current?.focus();
+  }
   const [exposureDiagnosticState, setExposureDiagnosticState] = useState<DiagnosticState>({ kind: "idle", result: null });
   const exposureDiagnostics = useRef(createDiagnosticsScheduler(coreFetch, 300, "exposure"));
   const [specFeedback, setSpecFeedback] = useState<{
@@ -441,12 +483,14 @@ export function ResearchDraftWorkspace({
     ) return;
     storage.removeItem(researchDraftKey(researcherId, folder.id));
     setDraft(emptyResearchDraft());
+    setValidationAttempted(false);
+    setSettingsOpen(false);
     setStorageError(null);
     setAdmissionFeedback(null);
   }
 
   async function checkConfiguration(): Promise<void> {
-    if (!isCompleteResearchInputs(researchInputs(draft))) return;
+    if (!validateInputs()) return;
     specController.current?.abort();
     const controller = new AbortController();
     specController.current = controller;
@@ -471,8 +515,7 @@ export function ResearchDraftWorkspace({
   }
 
   async function runResearch(): Promise<void> {
-    const inputs = researchInputs(draft);
-    if (!isCompleteResearchInputs(inputs) || submitting) return;
+    if (submitting || !validateInputs()) return;
     const begun = beginResearchRun(
       draft,
       folder.id,
@@ -560,11 +603,11 @@ export function ResearchDraftWorkspace({
     ? admissionFeedback.issues
     : [];
   return (
-    <section aria-label="Research" className="page-section research-workspace">
+    <section ref={workspace} aria-label="Research" className="page-section research-workspace">
       <header className="research-workspace-header">
         {folderNavigation}
         <label className="research-name-field" htmlFor="research-name">
-          <span className="research-control-label">Draft name</span>
+          <span className="visually-hidden">Draft name</span>
           <input
             aria-label="Research name"
             autoComplete="off"
@@ -582,20 +625,85 @@ export function ResearchDraftWorkspace({
         </button>
       </header>
 
+      <section className="research-setup" aria-label="Research setup">
+            <fieldset className="research-kind-control">
+              <legend className="visually-hidden">Research type</legend>
+              <label className="research-kind-option">
+                <input
+                  checked={draft.researchKind === "factor_evaluation"}
+                  name="research-kind"
+                  onChange={() => updateDraft((current) => selectResearchKind(current, "factor_evaluation"))}
+                  type="radio"
+                  value="factor_evaluation"
+                />
+                <span>
+                  <strong>Factor Evaluation</strong>
+
+                </span>
+              </label>
+              <label className="research-kind-option">
+                <input
+                  checked={draft.researchKind === "strategy_backtest"}
+                  name="research-kind"
+                  onChange={() => updateDraft((current) => selectResearchKind(current, "strategy_backtest"))}
+                  type="radio"
+                  value="strategy_backtest"
+                />
+                <span>
+                  <strong>Strategy Backtest</strong>
+
+                </span>
+              </label>
+            </fieldset>
+        <div className="research-quick-settings">
+            <ResearchDateFields
+              startError={inputError("startDate")} endError={inputError("endDate")}
+              coverageEnd={coverage?.end ?? null}
+              coverageStart={coverage?.start ?? null}
+              endDate={draft.endDate}
+              onChange={({ startDate, endDate }) => updateDraft((current) => ({
+                ...current,
+                startDate,
+                endDate,
+              }))}
+              startDate={draft.startDate}
+            />
+            <div className="research-parameter-field research-universe-field">
+              <div className="research-parameter-heading"><label htmlFor="research-universe">Universe</label><ResearchParameterHelp label="Universe" text="Top stocks ranked by average traded value over the latest 20 trading days. Membership changes over time. These are liquidity rankings, not index constituents." /></div>
+              <select id="research-universe" aria-invalid={Boolean(inputError("universe"))} aria-describedby={inputError("universe") ? "universe-error" : undefined} onChange={(event) => updateDraft((current) => ({ ...current, universe: event.target.value }))} value={draft.universe}>
+                <option value="">Not selected</option>
+                <option value="top300">Top 300</option>
+                <option value="top1000">Top 1000</option>
+                <option value="top2000">Top 2000</option>
+                <option value="top3000">Top 3000</option>
+              </select>
+              {inputError("universe") && <small id="universe-error" className="inline-status-error">{inputError("universe")}</small>}
+            </div>
+
+        </div>
+      </section>
+
+      <aside ref={fieldsPanel} id="research-fields-panel" className="research-fields-panel" aria-label="Field browser" hidden={!fieldsOpen}
+        onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); closeFields(); } }}>
+        <header><h2>Browse fields</h2><button className="button button-quiet" type="button" aria-label="Close field browser" onClick={closeFields}><X aria-hidden="true" size={18} /></button></header>
+        {fieldsOpen && <ResearchFieldCatalog catalog={catalog} />}
+      </aside>
       <section className="research-editor-panel" aria-label="Alpha authoring">
         <div className="formula-workbench">
           <header className="formula-heading">
-            <span aria-hidden="true" className="formula-heading-symbol">α</span>
             <h2 id="alpha-formula-title">Alpha formula</h2>
+            <button className="button button-quiet" type="button" ref={fieldsTrigger} aria-expanded={fieldsOpen} aria-controls="research-fields-panel" onClick={() => setFieldsOpen((open) => !open)}>Browse fields</button>
           </header>
+          {inputError("formula") && <p className="research-formula-error inline-status-error">{inputError("formula")}</p>}
           <AlphaFormulaEditor
+            ref={alphaEditor}
             catalog={catalog}
             diagnostics={serverDiagnostics}
             formula={draft.formula}
             onChange={(formula, editor) => updateDraft((current) => ({ ...current, formula, editor }))}
             selection={draft.editor}
           />
-          <footer className="formula-status"><span>Alpha expression</span><span>Ctrl + Space to autocomplete</span></footer>
+          <footer className="formula-status"><span>Ctrl + Space to autocomplete</span><span>{coverage ? `Market data through ${coverage.end}` : "Market data not ready for research"}</span></footer>
         </div>
         {diagnosticState.kind === "complete" && diagnosticState.result.diagnostics.length > 0 ? (
           <ul aria-label="Formula diagnostics" className="formula-diagnostics">
@@ -617,113 +725,67 @@ export function ResearchDraftWorkspace({
             ))}
           </ul>
         ) : null}
-        <div className="research-editor-context">
-          <span>Market data</span>
-          <span>{coverage ? `${coverage.start} — ${coverage.end}` : "Not ready for research"}</span>
+        <div className="research-selection-settings">
+          {draft.researchKind === "strategy_backtest" && <>
+                <ResearchNumberStepper
+                  actionLabel="number of holdings"
+                  id="research-holdings-count"
+                  label="Holdings count"
+                  error={inputError("holdingsCount")}
+                  maximum={100}
+                  minimum={1}
+                  onChange={(value) => updateDraft((current) => ({ ...current, holdingsCount: value }))}
+                  value={draft.holdingsCount}
+                />
+                <ResearchNumberStepper
+                  actionLabel="selection interval"
+                  id="research-selection-sessions"
+                  label="Selection interval (trading days)"
+                  error={inputError("selectionEverySessions")}
+                  maximum={20}
+                  minimum={1}
+                  onChange={(value) => updateDraft((current) => ({ ...current, selectionEverySessions: value }))}
+                  value={draft.selectionEverySessions}
+                />
+          </>}
+          <button className="button" type="button"
+            aria-expanded={settingsOpen} aria-controls="research-parameters" onClick={() => setSettingsOpen((open) => !open)}>
+            <SlidersHorizontal aria-hidden="true" size={18} /> Run settings
+          </button>
         </div>
-        <div className="research-notes">
-          <label htmlFor="research-notes">Notes</label>
-          <textarea
-            aria-describedby="research-notes-limit"
-            aria-invalid={Array.from(draft.hypothesis).length > MAX_HYPOTHESIS_LENGTH}
-            id="research-notes"
-            onChange={(event) => updateDraft((current) => ({ ...current, hypothesis: event.target.value }))}
-            placeholder="Optional context for this research"
-            rows={3}
-            value={draft.hypothesis}
-          />
-          <p id="research-notes-limit">
-            {Array.from(draft.hypothesis).length} / {MAX_HYPOTHESIS_LENGTH} characters
-          </p>
-        </div>
-      </section>
-
-      <section className="research-run-settings" id="research-parameters" aria-label="Research parameters">
-          <header><h2>Research parameters</h2><p>Configure your next run.</p></header>
+      <section className="research-run-settings research-inline-settings" id="research-parameters" aria-label="Run settings" hidden={!settingsOpen}>
           <div className="run-configuration-grid">
-            <fieldset className="research-kind-control">
-              <legend>Research type</legend>
-              <label className="research-kind-option">
-                <input
-                  checked={draft.researchKind === "factor_evaluation"}
-                  name="research-kind"
-                  onChange={() => updateDraft((current) => selectResearchKind(current, "factor_evaluation"))}
-                  type="radio"
-                  value="factor_evaluation"
-                />
-                <span>
-                  <strong>Factor Evaluation</strong>
-                  <small>Measure predictive strength without constructing a portfolio.</small>
-                </span>
-              </label>
-              <label className="research-kind-option">
-                <input
-                  checked={draft.researchKind === "strategy_backtest"}
-                  name="research-kind"
-                  onChange={() => updateDraft((current) => selectResearchKind(current, "strategy_backtest"))}
-                  type="radio"
-                  value="strategy_backtest"
-                />
-                <span>
-                  <strong>Strategy Backtest</strong>
-                  <small>Simulate the strategy, trading costs and account returns.</small>
-                </span>
-              </label>
-            </fieldset>
-            <ResearchDateFields
-              coverageEnd={coverage?.end ?? null}
-              coverageStart={coverage?.start ?? null}
-              endDate={draft.endDate}
-              onChange={({ startDate, endDate }) => updateDraft((current) => ({
-                ...current,
-                startDate,
-                endDate,
-              }))}
-              startDate={draft.startDate}
-            />
-            <label>Universe
-              <select onChange={(event) => updateDraft((current) => ({ ...current, universe: event.target.value }))} value={draft.universe}>
-                <option value="">Not selected</option>
-                <option value="top300">Top 300</option>
-                <option value="top1000">Top 1000</option>
-                <option value="top2000">Top 2000</option>
-                <option value="top3000">Top 3000</option>
-              </select>
-            </label>
-            <label>Neutralization
-              <select onChange={(event) => updateDraft((current) => ({ ...current, neutralization: event.target.value }))} value={draft.neutralization}>
-                <option value="">Not selected</option>
-                <option value="none">None</option>
-                <option value="industry">Industry</option>
-              </select>
-            </label>
-            {draft.researchKind === "strategy_backtest" ? (
-              <>
-                <label>Initial cash (CNY)
-                  <input
-                    aria-describedby="initial-cash-help"
-                    aria-invalid={draft.initialCashCny !== "" && !isValidInitialCash(draft.initialCashCny)}
+            {draft.researchKind === "strategy_backtest" && <>
+                <div className="research-parameter-field">
+                  <div className="research-parameter-heading"><label htmlFor="initial-cash">Initial cash (CNY)</label><ResearchParameterHelp label="Initial cash (CNY)" text="0.01–1,000,000,000 CNY, up to two decimal places." /></div>
+                  <input id="initial-cash"
+                    aria-describedby={(validationAttempted || draft.initialCashCny !== "") && !isValidInitialCash(draft.initialCashCny) ? "initial-cash-help" : undefined}
+                    aria-invalid={(validationAttempted || draft.initialCashCny !== "") && !isValidInitialCash(draft.initialCashCny)}
                     inputMode="decimal"
                     onChange={(event) => updateDraft((current) => ({ ...current, initialCashCny: event.target.value }))}
                     placeholder="100000.00"
                     type="text"
                     value={draft.initialCashCny}
                   />
-                  <small id="initial-cash-help">{draft.initialCashCny !== "" && !isValidInitialCash(draft.initialCashCny)
-                    ? "Enter 0.01–1,000,000,000 CNY, with up to two decimal places."
-                    : "0.01–1,000,000,000 CNY, up to two decimal places."}</small>
-                </label>
-                <label>Fixed exposure (%)
-                  <input
-                    aria-label="Fixed exposure (%)" inputMode="decimal" type="number" min={0} max={100} step="any"
-                    value={exposurePercentage(draft.exposureExpression)}
-                    placeholder="Custom expression"
-                    onChange={(event) => updateDraft((current) => ({ ...current, exposureExpression: percentageExposureSource(event.target.value) }))}
-                  />
-                  <small>Share of account equity invested; remaining equity stays in cash.</small>
-                </label>
-                <label className="research-weighting-field">Portfolio weighting
-                  <select
+
+                  {(validationAttempted || draft.initialCashCny !== "") && !isValidInitialCash(draft.initialCashCny) && <small id="initial-cash-help" className="inline-status-error">Enter 0.01–1,000,000,000 CNY, with up to two decimal places.</small>}
+                </div>
+            </>}
+            <div className="research-parameter-field">
+              <div className="research-parameter-heading"><label htmlFor="research-neutralization">Neutralization</label></div>
+              <select id="research-neutralization" aria-invalid={Boolean(inputError("neutralization"))} aria-describedby={inputError("neutralization") ? "neutralization-error" : undefined} onChange={(event) => updateDraft((current) => ({ ...current, neutralization: event.target.value }))} value={draft.neutralization}>
+                <option value="">Not selected</option>
+                <option value="none">None</option>
+                <option value="industry">Industry</option>
+              </select>
+              {inputError("neutralization") && <small id="neutralization-error" className="inline-status-error">{inputError("neutralization")}</small>}
+            </div>
+
+            {draft.researchKind === "strategy_backtest" ? (
+              <>
+                <div className="research-parameter-field research-weighting-field">
+                  <div className="research-parameter-heading"><label htmlFor="portfolio-weighting">Portfolio weighting</label><ResearchParameterHelp label="Portfolio weighting" text={draft.weighting === "inverse_volatility" ? "Lower-volatility selected stocks receive more weight." : draft.weighting === "rank_weight" ? "Higher-ranked selected stocks receive more weight; tied scores share rank weight." : "Selected stocks receive equal relative weights."} /></div>
+                  <select id="portfolio-weighting"
                     value={draft.weighting}
                     onChange={(event) => {
                       const weighting = event.target.value;
@@ -740,38 +802,24 @@ export function ResearchDraftWorkspace({
                     <option value="rank_weight">Rank weight</option>
                     <option value="inverse_volatility">Inverse volatility</option>
                   </select>
-                  <small>{draft.weighting === "inverse_volatility"
-                    ? "Lower-volatility selected stocks receive more weight."
-                    : draft.weighting === "rank_weight"
-                      ? "Higher-ranked selected stocks receive more weight; tied scores share rank weight."
-                      : "Selected stocks receive equal relative weights."}</small>
-                </label>
+
+                </div>
                 {draft.weighting === "inverse_volatility" && (
-                  <label className="research-weighting-field">Volatility window (sessions)
-                    <input type="number" min={1} max={252} step={1}
+                  <div className="research-parameter-field research-weighting-field">
+                  <div className="research-parameter-heading"><label htmlFor="volatility-window">Volatility window (sessions)</label><ResearchParameterHelp label="Volatility window (sessions)" text="Default 20, range 1–252. Uses adjusted Close returns through selection Close and population standard deviation. Zero volatility, insufficient history and unavailable returns are excluded; the next eligible stock is selected." /></div>
+                    <input id="volatility-window" type="number" min={1} max={252} step={1}
                       aria-invalid={!isValidVolatilityWindow(draft.volatilityWindow)}
-                      aria-describedby="volatility-window-help"
+                      aria-describedby={!isValidVolatilityWindow(draft.volatilityWindow) ? "volatility-window-help" : undefined}
                       value={draft.volatilityWindow}
                       onChange={(event) => updateDraft((current) => ({ ...current, volatilityWindow: event.target.value }))}
                     />
-                    <small id="volatility-window-help">{!isValidVolatilityWindow(draft.volatilityWindow) ? "Enter a whole number from 1 to 252. " : "Default 20, range 1–252. "}Uses adjusted Close returns through selection Close and population standard deviation. Zero volatility, insufficient history and unavailable returns are excluded; the next eligible stock is selected.</small>
-                  </label>
-                )}
-                <div className="research-exposure-expression">
-                  <h3>Exposure expression</h3>
-                  <AlphaFormulaEditor
-                    catalog={catalog}
-                    context="exposure"
-                    diagnostics={exposureDiagnosticState.kind === "complete" ? exposureDiagnosticState.result.diagnostics : []}
-                    formula={draft.exposureExpression}
-                    selection={exposureSelection}
-                    onChange={(exposureExpression, selection) => {
-                      setExposureSelection(selection);
-                      updateDraft((current) => ({ ...current, exposureExpression }));
-                    }}
-                  />
-                  <small>Constants and common market or industry inputs; output 0–1. Calculated each Close, changes trade at the next Open. Stock allocation follows the selected portfolio weighting.</small>
+
+                  {!isValidVolatilityWindow(draft.volatilityWindow) && <small id="volatility-window-help" className="inline-status-error">Enter a whole number from 1 to 252.</small>}
                 </div>
+                )}
+                <ResearchPositionSizing ref={exposureEditor} catalog={catalog} expression={draft.exposureExpression} error={inputError("exposureExpression")}
+                  diagnostics={exposureDiagnosticState.kind === "complete" ? exposureDiagnosticState.result.diagnostics : []}
+                  onChange={(exposureExpression) => updateDraft((current) => ({ ...current, exposureExpression }))} />
                 {exposureDiagnosticState.kind === "complete" && !exposureDiagnosticState.result.valid ? (
                   <ul aria-label="Exposure diagnostics" className="formula-diagnostics research-spec-feedback">
                     {exposureDiagnosticState.result.diagnostics.map((issue) => (
@@ -780,26 +828,28 @@ export function ResearchDraftWorkspace({
                   </ul>
                 ) : null}
                 {exposureDiagnosticState.kind === "unavailable" ? <p className="research-spec-feedback">Exposure check is unavailable.</p> : null}
-                <ResearchNumberStepper
-                  actionLabel="number of holdings"
-                  id="research-holdings-count"
-                  label="Holdings count"
-                  maximum={100}
-                  minimum={1}
-                  onChange={(value) => updateDraft((current) => ({ ...current, holdingsCount: value }))}
-                  value={draft.holdingsCount}
-                />
-                <ResearchNumberStepper
-                  actionLabel="selection interval"
-                  id="research-selection-sessions"
-                  label="Selection sessions"
-                  maximum={20}
-                  minimum={1}
-                  onChange={(value) => updateDraft((current) => ({ ...current, selectionEverySessions: value }))}
-                  value={draft.selectionEverySessions}
-                />
               </>
             ) : null}
+          </div>
+      </section>
+
+        <div className="research-notes">
+          <label htmlFor="research-notes">Notes</label>
+          <textarea
+            aria-describedby="research-notes-limit"
+            aria-invalid={Array.from(draft.hypothesis).length > MAX_HYPOTHESIS_LENGTH}
+            id="research-notes"
+            onChange={(event) => updateDraft((current) => ({ ...current, hypothesis: event.target.value }))}
+            placeholder="Optional context for this research"
+            rows={2}
+            value={draft.hypothesis}
+          />
+          <p id="research-notes-limit">
+            {Array.from(draft.hypothesis).length} / {MAX_HYPOTHESIS_LENGTH} characters
+          </p>
+        </div>
+      </section>
+
             {specFeedback?.key === specKey ? (
               <div className="research-spec-feedback" role="status">
                 <p>{specFeedback.message}</p>
@@ -808,25 +858,26 @@ export function ResearchDraftWorkspace({
                 </ul> : null}
               </div>
             ) : null}
-            <footer>
+            {inputIssues.length > 0 && <div className="research-input-issues" role="alert">
+              <p>Complete these settings to continue:</p>
+              <ul>{inputIssues.map((issue) => <li key={issue.field}><button type="button" onClick={() => focusInput(issue.field)}>{issue.message}</button></li>)}</ul>
+            </div>}
+            <footer className="research-action-bar">
               <button
                 className="button" type="button"
-                disabled={!isCompleteResearchInputs(researchInputs(draft)) || submitting || (specFeedback?.key === specKey && specFeedback.checking)}
+                disabled={submitting || (specFeedback?.key === specKey && specFeedback.checking)}
                 onClick={() => void checkConfiguration()}
               >Check configuration</button>
-              <p>{isCompleteResearchInputs(researchInputs(draft)) ? "Ready to run." : "Complete the formula and research parameters to start a run."}</p>
               <button
                 className="button button-primary"
-                disabled={!isCompleteResearchInputs(researchInputs(draft)) || submitting}
+                disabled={submitting}
                 onClick={() => void runResearch()}
                 type="button"
               >
                 <Play aria-hidden="true" size={17} weight="fill" />
-                {submitting ? "Running…" : "Run research"}
+                {submitting ? "Running…" : draft.researchKind === "strategy_backtest" ? "Run backtest" : "Run evaluation"}
               </button>
             </footer>
-          </div>
-      </section>
     </section>
   );
 }
@@ -856,7 +907,11 @@ export function ResearchDateFields({
   startDate,
   endDate,
   onChange,
+  startError,
+  endError,
 }: {
+  startError?: string;
+  endError?: string;
   coverageStart: string | null;
   coverageEnd: string | null;
   startDate: string;
@@ -875,20 +930,22 @@ export function ResearchDateFields({
       <div className="research-date-field">
         <label htmlFor="research-start-date">Start date</label>
         <div className="research-date-control">
-          <input id="research-start-date" ref={startDateInput} aria-label="Research start date" max={endDate || coverageEnd || undefined} min={coverageStart ?? undefined} onBlur={commitDateRange} onChange={commitDateRange} onClick={() => startDateInput.current?.showPicker()} type="date" value={startDate} />
+          <input id="research-start-date" aria-invalid={Boolean(startError)} aria-describedby={startError ? "start-date-error" : undefined} ref={startDateInput} aria-label="Research start date" max={endDate || coverageEnd || undefined} min={coverageStart ?? undefined} onBlur={commitDateRange} onChange={commitDateRange} onClick={() => startDateInput.current?.showPicker()} type="date" value={startDate} />
           <button aria-label="Open start date calendar" onClick={() => startDateInput.current?.showPicker()} type="button">
             <CalendarBlank aria-hidden="true" size={18} weight="regular" />
           </button>
         </div>
+        {startError && <small id="start-date-error" className="inline-status-error">{startError}</small>}
       </div>
       <div className="research-date-field">
         <label htmlFor="research-end-date">End date</label>
         <div className="research-date-control">
-          <input id="research-end-date" ref={endDateInput} aria-label="Research end date" max={coverageEnd ?? undefined} min={startDate || coverageStart || undefined} onBlur={commitDateRange} onChange={commitDateRange} onClick={() => endDateInput.current?.showPicker()} type="date" value={endDate} />
+          <input id="research-end-date" aria-invalid={Boolean(endError)} aria-describedby={endError ? "end-date-error" : undefined} ref={endDateInput} aria-label="Research end date" max={coverageEnd ?? undefined} min={startDate || coverageStart || undefined} onBlur={commitDateRange} onChange={commitDateRange} onClick={() => endDateInput.current?.showPicker()} type="date" value={endDate} />
           <button aria-label="Open end date calendar" onClick={() => endDateInput.current?.showPicker()} type="button">
             <CalendarBlank aria-hidden="true" size={18} weight="regular" />
           </button>
         </div>
+        {endError && <small id="end-date-error" className="inline-status-error">{endError}</small>}
       </div>
       <div aria-label="Quick date ranges" className="research-date-presets" role="group">
         {presets.map((preset) => {
@@ -914,4 +971,38 @@ export function ResearchDateFields({
       </div>
     </div>
   );
+}
+
+function ResearchParameterHelp({ label, text }: { label: string; text: string }) {
+  const id = useId();
+  const [open, setOpen] = useState(false);
+  return <span className="research-parameter-help" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
+    <button type="button" aria-label={{ "Initial cash (CNY)": "Cash requirements", "Portfolio weighting": "Weighting help", "Volatility window (sessions)": "Volatility calculation help", "Exposure expression": "Exposure formula help", "Universe": "Stock universe help" }[label]} aria-describedby={open ? id : undefined}
+      onFocus={() => setOpen(true)} onBlur={() => setOpen(false)}
+      onClick={() => setOpen(true)} onKeyDown={(event) => {
+        if (event.key === "Escape") { event.preventDefault(); setOpen(false); }
+      }}><Info aria-hidden="true" size={16} /></button>
+    {open && <span role="tooltip" id={id}>{text}</span>}
+  </span>;
+}
+
+const INPUT_SELECTORS: Record<Exclude<ResearchInputField, "formula" | "exposureExpression">, string> = {
+  hypothesis: "#research-notes", startDate: "#research-start-date", endDate: "#research-end-date",
+  universe: "#research-universe", neutralization: "#research-neutralization", initialCashCny: "#initial-cash",
+  holdingsCount: "#research-holdings-count", selectionEverySessions: "#research-selection-sessions",
+  volatilityWindow: "#volatility-window",
+};
+
+function ResearchPositionSizing({ ref, catalog, expression, diagnostics, onChange, error }: {
+  ref: Ref<AlphaFormulaEditorHandle>;
+  error?: string;
+  catalog: AlphaCatalog; expression: string; diagnostics: FormulaDiagnostic[]; onChange: (expression: string) => void;
+}) {
+  const [selection, setSelection] = useState({ anchor: 0, head: 0 });
+  return <div className="research-exposure-expression">
+    <div className="research-parameter-heading"><h3>Position sizing formula</h3><ResearchParameterHelp label="Exposure expression" text="Output 0–1: 1 invests 100%, 0.8 invests 80%, and 0 stays in cash. Use a constant for fixed exposure or a formula with common market or industry inputs for variable exposure. Calculated each Close; changes trade at the next Open. Stock allocation follows portfolio weighting." /></div>
+    <AlphaFormulaEditor ref={ref} catalog={catalog} context="exposure" diagnostics={diagnostics} formula={expression} selection={selection}
+      onChange={(value, nextSelection) => { setSelection(nextSelection); onChange(value); }} />
+    {error && <small id="position-sizing-error" className="inline-status-error">{error}</small>}
+  </div>;
 }

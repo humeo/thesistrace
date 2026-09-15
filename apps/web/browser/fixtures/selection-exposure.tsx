@@ -14,7 +14,7 @@ if (localStorage.getItem(researchDraftKey(researcherId, folder.id)) === null) {
 createRoot(document.getElementById("root")!).render(<ResearchDraftWorkspace
   researcherId={researcherId} folder={folder} catalog={{
     fields: [{ identifier: "close", field_id: "price.close.adjusted", value_type: "numeric_series",
-      description: "Adjusted Close", unit: "CNY", family_id: "price", availability: "ready",
+      display_name: "复权收盘价", research_category: "market", research_purpose: "行情", description: "Adjusted Close", unit: "CNY", family_id: "price", availability: "ready",
       report_period_selection: "", applicable_company_types: [], missingness: "", example: "close" }],
     builtins: [
       { identifier: "rank", result_type: "numeric_series", description: "Stock cross-sectional rank", parameters: [], examples: [], missing_value_behavior: "", numeric_behavior: "" },

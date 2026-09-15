@@ -163,9 +163,9 @@ describe("browser Research Draft", () => {
     });
     expect(selectResearchKind(emptyResearchDraft(), "strategy_backtest")).toMatchObject({
       researchKind: "strategy_backtest",
-      holdingsCount: "",
-      initialCashCny: "",
-      selectionEverySessions: "",
+      holdingsCount: "10",
+      initialCashCny: "100000",
+      selectionEverySessions: "5",
     });
   });
 
@@ -179,7 +179,9 @@ describe("browser Research Draft", () => {
       neutralization: "none",
     };
     const factor = beginResearchRun(common, folder.id, () => "factor-request");
-    const incompleteStrategy = selectResearchKind(factor.draft, "strategy_backtest");
+    const defaultStrategy = selectResearchKind(factor.draft, "strategy_backtest");
+    expect(isCompleteResearchInputs(defaultStrategy)).toBe(true);
+    const incompleteStrategy = { ...defaultStrategy, initialCashCny: "" };
     expect(isCompleteResearchInputs(incompleteStrategy)).toBe(false);
     const strategy = {
       ...incompleteStrategy,
@@ -476,7 +478,7 @@ describe("browser Research Draft", () => {
     expect(hasUnexecutedChanges({ ...emptyResearchDraft(), formula: "close" })).toBe(true);
     const admitted = { ...emptyResearchDraft(), formula: "close" };
     expect(hasUnexecutedChanges({ ...admitted, lastAdmittedBaseline: {
-      researchKind: "factor_evaluation", name: "", formula: "close", hypothesis: "", startDate: "", endDate: "", universe: "", neutralization: "", initialCashCny: "", holdingsCount: "", selectionEverySessions: "", exposureExpression: "1", weighting: "equal_weight", volatilityWindow: "20",
+      researchKind: "factor_evaluation", name: "", formula: "close", hypothesis: "", startDate: "", endDate: "", universe: "", neutralization: "none", initialCashCny: "", holdingsCount: "", selectionEverySessions: "", exposureExpression: "1", weighting: "equal_weight", volatilityWindow: "20",
     } })).toBe(false);
   });
 
@@ -488,17 +490,17 @@ describe("browser Research Draft", () => {
     expect(markup).toContain("Draft name");
     expect(markup).toContain("New research");
     expect(markup).toContain('autoComplete="off"');
-    expect(markup).toContain('disabled="" type="button"><svg');
-    expect(markup).toContain("Run research");
-    expect(markup).toContain("Research parameters");
-    expect(markup).toContain("<legend>Research type</legend>");
+
+    expect(markup).toContain("Run evaluation");
+    expect(markup).toContain('aria-controls="research-parameters"');
+    expect(markup).toContain('class="visually-hidden">Research type</legend>');
     expect(markup).not.toContain("Research period");
     expect(markup).toContain('name="research-kind"');
     expect(markup).toMatch(/<input[^>]*checked=""[^>]*value="factor_evaluation"/);
     expect(markup).toContain("Factor Evaluation");
     expect(markup).toContain("Strategy Backtest");
     expect(markup).not.toContain("Holdings count");
-    expect(markup).not.toContain("Selection sessions");
+    expect(markup).not.toContain("Selection interval (trading days)");
     expect(markup).toContain('aria-label="Open start date calendar"');
     expect(markup).toContain('aria-label="Open end date calendar"');
     expect(markup).toContain('aria-label="Use last 1 year"');
@@ -544,7 +546,7 @@ describe("browser Research Draft", () => {
     );
     expect(markup).toMatch(/<input[^>]*checked=""[^>]*value="strategy_backtest"/);
     expect(markup).toContain("Holdings count");
-    expect(markup).toContain("Selection sessions");
+    expect(markup).toContain("Selection interval (trading days)");
     expect(markup.match(/required="" step="1" type="number"/g)).toHaveLength(2);
     expect(markup).toMatch(/<input[^>]*id="research-holdings-count"[^>]*max="100"[^>]*min="1"[^>]*required=""[^>]*step="1"[^>]*type="number"/);
     expect(markup).toMatch(/<input[^>]*id="research-selection-sessions"[^>]*max="20"[^>]*min="1"[^>]*required=""[^>]*step="1"[^>]*type="number"/);
@@ -571,7 +573,7 @@ describe("browser Research Draft", () => {
     const markup = renderToStaticMarkup(
       <ResearchDraftWorkspace catalog={catalog} data={data} folder={folder} researcherId={researcherId} storage={storage} />,
     );
-    expect(markup).toContain("Run research");
+    expect(markup).toContain("Run evaluation");
     expect(markup).not.toContain('disabled="" type="button"><svg');
   });
 

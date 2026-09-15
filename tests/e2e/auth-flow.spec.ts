@@ -23,7 +23,7 @@ test("Email verification creates one account and preserves the access lifecycle"
   await loginThroughUi(page,email);
   await expect(page).toHaveURL(/\/data$/);
   const first = await (await page.request.get("/api/auth/get-session")).json();
-  await page.reload(); await expect(page.getByRole("heading",{name:"Data overview"})).toBeVisible();
+  await page.reload(); await expect(page.getByRole("heading",{name:"Data",exact:true})).toBeVisible();
   await openAccountMenu(page);
   await expect(page.getByRole("button",{name:"Change password"})).toHaveCount(0);
   await page.getByRole("button",{name:"Log out"}).click();
@@ -107,11 +107,11 @@ test("Bootstrap and Core failures preserve the exact Session boundary", async ({
   await fillPasswordInput(page.getByLabel("Confirm password"));
   await page.getByRole("button", { name: "Accept invitation" }).click();
   await expect(page.getByRole("heading", { name: "Workspace setup unavailable" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Data overview" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Data", exact: true })).toHaveCount(0);
   bootstrapUnavailable = false;
   await page.getByRole("button", { name: "Retry setup" }).click();
   await expect(page).toHaveURL(/\/data$/);
-  await expect(page.getByRole("heading", { name: "Data overview" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Data", exact: true })).toBeVisible();
   await page.unroute("**/api/researcher/bootstrap");
 
   await page.getByRole("link", { name: "Research", exact: true }).click();
@@ -125,7 +125,7 @@ test("Bootstrap and Core failures preserve the exact Session boundary", async ({
   await expect(page.getByLabel("Account menu")).toBeVisible();
   await page.unroute("**/api/data");
   await page.getByRole("button", { name: "Retry" }).click();
-  await expect(page.getByRole("heading", { name: "Data overview" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Data", exact: true })).toBeVisible();
 
   await page.route("**/api/auth/get-session", (route) => route.fulfill({
     json: { code: "AUTH_SERVICE_UNAVAILABLE" },
@@ -136,7 +136,7 @@ test("Bootstrap and Core failures preserve the exact Session boundary", async ({
   await expect(page.getByText("Existing session data has been retained.")).toBeVisible();
   await page.unroute("**/api/auth/get-session");
   await page.getByRole("button", { name: "Retry" }).click();
-  await expect(page.getByRole("heading", { name: "Data overview" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Data", exact: true })).toBeVisible();
 
   await page.getByRole("link", { name: "Research", exact: true }).click();
   await page.route("**/api/data", (route) => route.fulfill({
@@ -168,7 +168,7 @@ test.describe("tablet touch presentation", () => {
     await acceptInvitation.click();
 
     await expect(page).toHaveURL(/\/data$/, { timeout: 15_000 });
-    await expect(page.getByRole("heading", { name: "Data overview" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Data", exact: true })).toBeVisible();
     await openAccountMenu(page);
     const accountMenu = page.getByLabel("Account menu");
     const logOut = page.getByRole("button", { name: "Log out" });

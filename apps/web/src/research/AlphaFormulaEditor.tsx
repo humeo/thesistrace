@@ -10,7 +10,7 @@ import {
   lineNumbers,
   placeholder,
 } from "@codemirror/view";
-import { useEffect, useRef } from "react";
+import { useEffect, useImperativeHandle, useRef, type Ref } from "react";
 
 import type { AlphaCatalog } from "../alphaCatalog";
 import { alphaLanguageExtensions } from "./alpha-language";
@@ -59,7 +59,10 @@ const alphaEditorTheme = EditorView.theme({
   },
 }, { dark: true });
 
+export type AlphaFormulaEditorHandle = { focus: () => void };
+
 export function AlphaFormulaEditor({
+  ref,
   catalog,
   context = "signal",
   diagnostics,
@@ -67,6 +70,7 @@ export function AlphaFormulaEditor({
   selection,
   onChange,
 }: {
+  ref?: Ref<AlphaFormulaEditorHandle>;
   catalog: AlphaCatalog;
   context?: "signal" | "exposure";
   diagnostics: FormulaDiagnostic[];
@@ -76,6 +80,7 @@ export function AlphaFormulaEditor({
 }) {
   const host = useRef<HTMLDivElement | null>(null);
   const view = useRef<EditorView | null>(null);
+  useImperativeHandle(ref, () => ({ focus: () => view.current?.focus() }), []);
   const applyingExternalValue = useRef(false);
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;

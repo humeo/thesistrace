@@ -1,5 +1,5 @@
-import { ArrowClockwise } from "@phosphor-icons/react";
-import { useCallback, useEffect, useState } from "react";
+import { ArrowClockwise, Copy, MagnifyingGlass, X } from "@phosphor-icons/react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { AlphaCatalog, AlphaCatalogField } from "../alphaCatalog";
 import { coreFetch } from "../auth/coreFetch";
@@ -72,19 +72,6 @@ export type DataPageLoad =
   | { resources: DataPageResources; error: null }
   | { resources: null; error: string };
 
-const RESEARCH_CATEGORIES = [
-  {
-    category: "market",
-    id: "market-data-fields",
-    title: "Market data fields",
-  },
-  {
-    category: "financial",
-    id: "financial-data-fields",
-    title: "Financial data fields",
-  },
-] as const;
-
 export async function loadDataPage(
   request: typeof fetch = coreFetch,
 ): Promise<DataPageLoad> {
@@ -109,167 +96,52 @@ export function DataOverviewView({
   overview: DataOverview;
   onRefresh: () => void;
 }) {
-  const marketCoverage = overview.market_coverage;
-  const benchmarkCoverage = overview.benchmark_coverage;
-  const financialCoverage = overview.financial_coverage;
-  const industryCoverage = overview.industry_coverage;
-  const industryState = overview.industry_refresh_status === "failed"
-    ? "Last refresh failed"
-    : overview.industry_research_readiness
-      ? "Industry ready"
-      : industryCoverage === null
-        ? "Industry not ready"
-        : "Industry stale";
+  const financial = overview.financial_coverage;
   const marketFamilies = overview.field_families.filter((family) => family.research_category === "market");
   const financialFamilies = overview.field_families.filter((family) => family.research_category === "financial");
-  const marketState = categoryReadiness(marketFamilies);
-  const financialState = {
-    ready: "Finance ready",
-    ready_with_pending: "Finance ready with pending instruments",
-    ready_with_gaps: "Finance ready with discovery gaps",
-    not_ready: "Finance not ready",
-    partial: "Finance partially ready",
-  }[categoryReadiness(financialFamilies)];
+  const industryState = overview.industry_research_readiness ? "ready"
+    : overview.industry_coverage ? "partial" : "not_ready";
+  const rows = [
+    { name: "Market data", description: "Prices, volume & valuation", coverage: overview.market_coverage,
+      state: categoryReadiness(marketFamilies), families: marketFamilies },
+    { name: "Financial data", description: "Statements & financial indicators",
+      coverage: financial ? { start: financial.start, end: financial.discovery_complete_through_session } : null,
+      state: categoryReadiness(financialFamilies), families: financialFamilies },
+    { name: "Industry data", description: "SW2021 classification",
+      coverage: overview.industry_coverage ? { start: overview.industry_coverage.start,
+        end: overview.industry_coverage.observation_through_session } : null,
+      state: industryState, families: [] },
+    { name: "Strategy benchmark", description: STRATEGY_BENCHMARK_DISPLAY_NAME,
+      coverage: overview.benchmark_coverage,
+      state: overview.benchmark_research_readiness ? "ready" : "not_ready", families: [] },
+  ];
   return (
     <section aria-label="Data" className="page-section data-page">
       <header className="page-hero">
-        <div>
-          <h1>Data overview</h1>
-        </div>
-        <div className="hero-actions">
-          <button className="button button-quiet" onClick={onRefresh} type="button">
-            <ArrowClockwise aria-hidden="true" size={17} weight="regular" />
-            Reload
-          </button>
-        </div>
+        <div><h1>Data</h1><p>Explore available data and find fields for your research.</p></div>
+        <button className="button button-quiet" onClick={onRefresh} type="button">
+          <ArrowClockwise aria-hidden="true" size={17} /> Reload status
+        </button>
       </header>
-      <div className="signal-strip" aria-label="Market data readiness">
-        <span className="signal-strip-label"><span className={marketState === "ready"
-          ? "health-dot" : "health-dot health-dot-warning"} /> Market data</span>
-        <strong>{marketState === "ready" ? "Market ready"
-          : marketState === "not_ready" ? "Market not ready" : "Market partially ready"}</strong>
-      </div>
-      <FamilyAvailabilityRows families={marketFamilies} />
-      <dl className="data-overview-stats" aria-label="Market data coverage">
-        <div>
-          <dt>Market coverage start</dt>
-          <dd>{marketCoverage?.start ?? "Not available"}</dd>
-        </div>
-        <div>
-          <dt>Market coverage end</dt>
-          <dd>{marketCoverage?.end ?? "Not available"}</dd>
-        </div>
-        <div>
-          <dt>Data through</dt>
-          <dd>{overview.data_through_session ?? "Not available"}</dd>
-        </div>
-        <div>
-          <dt>Last market refresh</dt>
-          <dd>{overview.last_market_refresh_at ?? "Not available"}</dd>
-        </div>
-      </dl>
-      <div className="signal-strip" aria-label="Strategy Benchmark readiness">
-        <span className="signal-strip-label">
-          <span
-            aria-hidden="true"
-            className={overview.benchmark_research_readiness
-              ? "health-dot"
-              : "health-dot health-dot-warning"}
-          /> Strategy Benchmark
-        </span>
-        <strong>
-          {overview.benchmark_research_readiness
-            ? `${STRATEGY_BENCHMARK_DISPLAY_NAME} ready`
-            : `${STRATEGY_BENCHMARK_DISPLAY_NAME} not ready`}
-        </strong>
-      </div>
-      <dl className="data-overview-stats" aria-label="Strategy Benchmark snapshot">
-        <div>
-          <dt>Benchmark coverage start</dt>
-          <dd>{benchmarkCoverage?.start ?? "Not available"}</dd>
-        </div>
-        <div>
-          <dt>Benchmark coverage end</dt>
-          <dd>{benchmarkCoverage?.end ?? "Not available"}</dd>
-        </div>
-        <div>
-          <dt>Snapshot SHA-256</dt>
-          <dd>{overview.benchmark_snapshot_sha256 === null
-            ? "Not available"
-            : <code>{overview.benchmark_snapshot_sha256}</code>}</dd>
-        </div>
-        <div>
-          <dt>Last benchmark publication</dt>
-          <dd>{overview.benchmark_last_published_at ?? "Not available"}</dd>
-        </div>
-      </dl>
-      <div className="signal-strip" aria-label="Financial data readiness">
-        <span className="signal-strip-label"><span className={categoryReadiness(financialFamilies) === "ready"
-          ? "health-dot" : "health-dot health-dot-warning"} /> Financial data</span>
-        <strong>{financialState}</strong>
-      </div>
-      <FamilyAvailabilityRows families={financialFamilies} />
-      <dl className="data-overview-stats" aria-label="Financial data coverage">
-        <div>
-          <dt>Financial coverage start</dt>
-          <dd>{financialCoverage?.start ?? "Not available"}</dd>
-        </div>
-        <div>
-          <dt>Discovery baseline</dt>
-          <dd>{financialCoverage?.discovery_baseline_session ?? "Not available"}</dd>
-        </div>
-        <div>
-          <dt>Attempted through</dt>
-          <dd>{financialCoverage?.discovery_attempted_through_session ?? "Not available"}</dd>
-        </div>
-        <div>
-          <dt>Complete through</dt>
-          <dd>{financialCoverage?.discovery_complete_through_session ?? "Not available"}</dd>
-        </div>
-        <div>
-          <dt>Last financial refresh</dt>
-          <dd>{overview.last_financial_refresh_at ?? "Not available"}</dd>
-        </div>
-        <div>
-          <dt>Pending instruments</dt>
-          <dd>{financialCoverage?.pending_instrument_count ?? "Not available"}</dd>
-        </div>
-        <div>
-          <dt>Discovery gaps</dt>
-          <dd>{financialCoverage?.discovery_gap_count ?? "Not available"}</dd>
-        </div>
-        <div>
-          <dt>Earliest unresolved</dt>
-          <dd>{financialCoverage?.earliest_unresolved_date ?? "Not available"}</dd>
-        </div>
-      </dl>
-      <div className="signal-strip" aria-label="Industry data readiness">
-        <span className="signal-strip-label"><span className="health-dot" /> Industry data</span>
-        <strong>{industryState}</strong>
-      </div>
-      <dl className="data-overview-stats" aria-label="Industry data coverage">
-        <div>
-          <dt>Industry coverage start</dt>
-          <dd>{industryCoverage?.start ?? "Not available"}</dd>
-        </div>
-        <div>
-          <dt>Observed through</dt>
-          <dd>{industryCoverage?.observation_through_session ?? "Not available"}</dd>
-        </div>
-        <div>
-          <dt>Classification</dt>
-          <dd>{industryCoverage?.classification_version ?? "Not available"}</dd>
-        </div>
-        <div>
-          <dt>Last industry refresh</dt>
-          <dd>{overview.last_industry_refresh_at ?? "Not available"}</dd>
-        </div>
-      </dl>
-      {overview.industry_refresh_failure_code === null ? null : (
-        <p className="data-coverage-note">
-          Latest Industry Refresh failure: <code>{overview.industry_refresh_failure_code}</code>
-        </p>
-      )}
+      <section className="data-coverage" aria-labelledby="data-coverage-title">
+        <header><h2 id="data-coverage-title">Data coverage</h2>
+          <p>Availability refers to the published data range.</p></header>
+        <div className="data-coverage-head" aria-hidden="true"><span>Dataset</span><span>Available range</span><span>Research availability</span></div>
+        {rows.map((row) => <div className="data-coverage-row" key={row.name}>
+          <div><h3>{row.name}</h3><p>{row.description}</p></div>
+          <div className="data-coverage-range"><span className="visually-hidden">Available range: </span>
+            {row.coverage ? `${row.coverage.start} — ${row.coverage.end}` : "No published coverage"}</div>
+          <div className="data-availability"><span aria-hidden="true" className={row.state === "ready" ? "health-dot" : "health-dot health-dot-warning"} />
+            {row.state === "ready" ? "Available" : row.state === "not_ready" ? "Not available" : "Limited coverage"}</div>
+          {row.state !== "ready" && row.families.length > 0 && <p className="data-coverage-limitation">
+            {row.families.filter((family) => family.readiness !== "ready").map((family) =>
+              `${family.available_field_ids.length} of ${family.supported_field_ids.length} fields available${family.coverage_end ? ` through ${family.coverage_end}` : ""}`).join("; ")}.
+            {row.name === "Financial data" && financial && ` Financial data has ${financial.pending_instrument_count} instruments awaiting verification and ${financial.discovery_gap_count} gaps in publication checks${financial.earliest_unresolved_date ? `, starting ${financial.earliest_unresolved_date}` : ""}. Values may be missing or incomplete.`}
+          </p>}
+        </div>)}
+        <p className="data-coverage-footnote">{overview.data_through_session ? `Data through ${overview.data_through_session}. ` : "No published data date. "}
+          Field availability varies by instrument and date.</p>
+      </section>
       <ResearchFieldCatalog catalog={catalog} />
       <CommonInputCatalog catalog={catalog} />
     </section>
@@ -280,8 +152,8 @@ function CommonInputCatalog({ catalog }: { catalog: AlphaCatalog }) {
   const inputs = catalog.builtins.filter((builtin) => builtin.result_type === "common_series");
   if (inputs.length === 0) return null;
   return (
-    <section aria-labelledby="common-inputs-title" className="data-field-catalog">
-      <header><h2 id="common-inputs-title">Common market inputs</h2><span>{inputs.length} expressions</span></header>
+    <details className="data-field-catalog data-common-inputs">
+      <summary>Common market inputs <span>{inputs.length} expressions</span></summary>
       <p>Calculated from historical members of your selected research Universe. Industry inputs use its SW2021 L1 subset, not a full industry or official index. Selecting an industry here does not change the stock selection Universe.</p>
       <div className="data-field-table-scroll">
         <table className="data-field-table">
@@ -301,7 +173,7 @@ function CommonInputCatalog({ catalog }: { catalog: AlphaCatalog }) {
         <p>These codes identify industries; data coverage is checked for the chosen research period.</p>
         <ul>{catalog.industries.map((industry) => <li key={industry.code}><code>{industry.code}</code> {industry.name}</li>)}</ul>
       </details>
-    </section>
+    </details>
   );
 }
 
@@ -313,127 +185,123 @@ function categoryReadiness(families: FieldFamilyAvailability[]): FieldFamilyAvai
   return "ready";
 }
 
-function FamilyAvailabilityRows({ families }: { families: FieldFamilyAvailability[] }) {
-  return <ul className="data-family-availability">
-    {families.map((family) => <li key={family.family_id}>
-      <span>{family.source_endpoints.join(", ")}</span>
-      <span>{family.available_field_ids.length} / {family.supported_field_ids.length} fields</span>
-      <span>{family.coverage_start ?? "No coverage"} — {family.coverage_end ?? "No coverage"}</span>
-      <span>{humanizeContract(family.readiness)}</span>
-    </li>)}
-  </ul>;
-}
+const PAGE_SIZE = 25;
 
-function ResearchFieldCatalog({ catalog }: { catalog: AlphaCatalog }) {
+const PURPOSE_LABELS: Record<string, string> = {
+  "估值": "Valuation",
+  "利润与现金流基础值": "Earnings & cash flow fundamentals",
+  "利润与现金流金额": "Earnings & cash flow amounts",
+  "单季度增长": "Quarterly growth",
+  "单季度指标": "Quarterly metrics",
+  "同比增长": "Year-over-year growth",
+  "收入与利润结构": "Revenue & earnings composition",
+  "每股指标": "Per-share metrics",
+  "流动性": "Liquidity",
+  "现金流": "Cash flow",
+  "现金流与资本支出比率": "Cash flow & capital expenditure ratios",
+  "盈利": "Earnings",
+  "盈利能力": "Profitability",
+  "股息": "Dividends",
+  "股本": "Share capital",
+  "营运效率": "Operating efficiency",
+  "行情": "Market prices",
+  "财务结构与偿债": "Capital structure & solvency",
+  "资产与资本基础值": "Asset & capital fundamentals",
+  "资产负债": "Balance sheet",
+  "较年初增长": "Year-to-date growth"
+};
+
+export function ResearchFieldCatalog({ catalog }: { catalog: AlphaCatalog }) {
   const [search, setSearch] = useState("");
-  const [filters, setFilters] = useState({
-    research_purpose: "",
-    source_endpoint: "",
-    report_period_selection: "",
-  });
+  const searchInput = useRef<HTMLInputElement>(null);
+  const [category, setCategory] = useState("");
+  const [purpose, setPurpose] = useState("");
+  const [page, setPage] = useState(1);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const query = search.trim().toLocaleLowerCase();
   const visible = catalog.fields.filter((field) => (
-    [field.identifier, field.display_name, field.description].some(
-      (value) => value.toLocaleLowerCase().includes(query),
-    ) && Object.entries(filters).every(([key, value]) => (
-      value === "" || field[key as keyof typeof filters] === value
-    ))
+    (!category || field.research_category === category) &&
+    [field.identifier, field.display_name, field.description].some((value) => value.toLocaleLowerCase().includes(query)) &&
+    (!purpose || field.research_purpose === purpose)
   ));
-  const filterDefinitions = [
-    { key: "research_purpose", label: "Research purpose" },
-    { key: "source_endpoint", label: "Field source" },
-    { key: "report_period_selection", label: "Field period" },
-  ] as const;
-  return (
-    <section aria-labelledby="research-fields-title" className="data-field-catalog">
-      <header>
-        <h2 id="research-fields-title">Research fields</h2>
-        <span>{catalog.fields.length} available</span>
-      </header>
-      <div className="data-field-filters">
-        <label>
-          <span>Search fields</span>
-          <input aria-label="Search fields" onChange={(event) => setSearch(event.target.value)}
-            placeholder="中文 / DSL name" type="search" value={search} />
-        </label>
-        {filterDefinitions.map(({ key, label }) => (
-          <label key={key}>
-            <span>{label}</span>
-            <select aria-label={label} value={filters[key]}
-              onChange={(event) => setFilters((current) => ({ ...current, [key]: event.target.value }))}>
-              <option value="">All</option>
-              {[...new Set(catalog.fields.map((field) => field[key]))].sort().map((value) => (
-                <option key={value} value={value}>{humanizeContract(value)}</option>
-              ))}
-            </select>
-          </label>
-        ))}
+  const pageCount = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+  const currentPage = Math.min(page, pageCount);
+  const pageFields = visible.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+  const selected = pageFields.find((field) => field.field_id === selectedId) ?? pageFields[0];
+  return <section aria-labelledby="research-fields-title" className="data-field-catalog data-explorer">
+    <header><h2 id="research-fields-title">Research fields</h2><span>{catalog.fields.length} fields</span></header>
+    <div className="data-search"><MagnifyingGlass aria-hidden="true" size={20} />
+      <label className="visually-hidden" htmlFor="data-field-search">Search fields</label>
+      <input id="data-field-search" ref={searchInput} onChange={(event) => { setSearch(event.target.value); setPage(1); }}
+        placeholder="Search by name, meaning or formula…" type="text" role="searchbox" value={search} />
+      {search !== "" && <button className="button button-quiet data-search-clear" type="button" aria-label="Clear search"
+        onClick={() => { setSearch(""); setPage(1); searchInput.current?.focus(); }}>
+        <X aria-hidden="true" size={16} />
+      </button>}
+    </div>
+    <div className="data-field-filters">
+      <div className="data-categories" role="group" aria-label="Field category">
+        {[{ value: "", label: "All fields" }, { value: "market", label: "Market" }, { value: "financial", label: "Financial" }].map((item) =>
+          <button className="button button-quiet" type="button" key={item.value} aria-pressed={category === item.value}
+            onClick={() => { setCategory(item.value); setPage(1); }}>
+            {item.label}{item.value && <span>{catalog.fields.filter((field) => field.research_category === item.value).length}</span>}
+          </button>)}
       </div>
-      {RESEARCH_CATEGORIES.map((dataset) => {
-        const fields = visible.filter((field) => field.research_category === dataset.category);
-        return (
-          <section aria-labelledby={dataset.id} className="data-field-dataset" key={dataset.category}>
-            <header>
-              <h3 id={dataset.id}>{dataset.title}</h3>
-              <span>{fields.length} {fields.length === 1 ? "field" : "fields"}</span>
-            </header>
-            {fields.length > 0 ? <FieldTable fields={fields} title={dataset.title} /> : (
-              <p className="data-field-empty">{query || Object.values(filters).some(Boolean)
-                ? "No fields match these filters."
-                : "No fields are currently available for research."}</p>
-            )}
-          </section>
-        );
-      })}
-    </section>
-  );
+      <label>
+        <span className="visually-hidden">Research purpose</span>
+        <select value={purpose} onChange={(event) => { setPurpose(event.target.value); setPage(1); }}>
+          <option value="">All purposes</option>
+          {[...new Set(catalog.fields.map((field) => field.research_purpose))].sort((a, b) => PURPOSE_LABELS[a].localeCompare(PURPOSE_LABELS[b])).map((value) =>
+            <option key={value} value={value}>{PURPOSE_LABELS[value]}</option>)}
+        </select>
+      </label>
+    </div>
+    {pageFields.length ? <div className="data-explorer-layout">
+      <div className="data-field-results">
+        <div className="data-field-dataset data-field-table-scroll">
+          <table className="data-field-table data-explorer-table">
+            <caption className="visually-hidden">Research fields</caption>
+            <thead><tr><th scope="col">Field</th><th scope="col">Formula name</th><th scope="col">Unit</th></tr></thead>
+            <tbody>{pageFields.map((field) => <tr key={field.field_id} onClick={() => setSelectedId(field.field_id)}
+              className={selected?.field_id === field.field_id ? "is-selected" : undefined}>
+              <th scope="row"><button type="button" aria-pressed={selected?.field_id === field.field_id}
+                aria-controls="data-field-detail">
+                <span>{field.display_name}</span></button></th>
+              <td><code>{field.identifier}</code></td><td><code>{field.unit}</code></td>
+            </tr>)}</tbody>
+          </table>
+        </div>
+        <nav className="data-pagination" aria-label="Field pages">
+          <span role="status">Showing {(currentPage - 1) * PAGE_SIZE + 1}–{Math.min(currentPage * PAGE_SIZE, visible.length)} of {visible.length}</span>
+          <div><button className="button button-quiet" type="button" disabled={currentPage === 1} onClick={() => setPage(currentPage - 1)}>Previous</button>
+            <span>{currentPage} / {pageCount}</span>
+            <button className="button button-quiet" type="button" disabled={currentPage === pageCount} onClick={() => setPage(currentPage + 1)}>Next</button></div>
+        </nav>
+      </div>
+      {selected && <FieldDetail key={selected.field_id} field={selected} />}
+    </div> : <p className="data-field-empty" role="status">{catalog.fields.length ? "No fields match these filters." : "No fields are currently available for research."}</p>}
+  </section>;
 }
 
-function FieldTable({ fields, title }: { fields: AlphaCatalogField[]; title: string }) {
-  return (
-    <div className="data-field-table-scroll">
-      <table className="data-field-table">
-        <caption className="visually-hidden">{title}</caption>
-        <thead>
-          <tr>
-            <th scope="col">Formula field</th>
-            <th scope="col">Meaning</th>
-            <th scope="col">Research-time value</th>
-            <th scope="col">Unit</th>
-          </tr>
-        </thead>
-        <tbody>
-          {fields.map((field) => (
-            <tr key={field.field_id}>
-              <th scope="row">
-                <code>{field.identifier}</code>
-                <small>{field.field_id}</small>
-                {field.example !== "" ? <small>Example: <code>{field.example}</code></small> : null}
-              </th>
-              <td>
-                <strong>{field.display_name}</strong>
-                <span>{field.description}</span>
-                <small>{field.source_endpoint}.{field.source_column} · {field.research_purpose}</small>
-                <small>{humanizeContract(field.missingness)}</small>
-              </td>
-              <td>
-                <span>{fieldTimeSemantics(field)}</span>
-                <small>{humanizeContract(field.availability)}</small>
-                <small>{field.applicable_company_types.length > 0
-                  ? `Company types ${field.applicable_company_types.join(", ")}`
-                  : "All supported instruments"}</small>
-              </td>
-              <td>
-                <code>{field.unit}</code>
-                <small>Source unit: {field.source_unit}</small>
-                <small>{humanizeContract(field.reporting_scope)}</small>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
+function FieldDetail({ field }: { field: AlphaCatalogField }) {
+  const [copyStatus, setCopyStatus] = useState("");
+  async function copy(value: string) {
+    try { await navigator.clipboard.writeText(value); setCopyStatus("Copied"); }
+    catch { setCopyStatus("Copy unavailable. Select and copy the text."); }
+  }
+  return <aside id="data-field-detail" aria-label="Field details" className="data-field-detail">
+    <h3>{field.display_name}</h3>
+    <div className="data-copy"><code>{field.identifier}</code><button className="button button-quiet" type="button" aria-label="Copy formula name" onClick={() => void copy(field.identifier)}><Copy aria-hidden="true" size={16} /></button></div>
+    <p>{field.description}</p>
+    <dl><div><dt>Unit</dt><dd>{field.unit}</dd></div>
+      <div><dt>Period</dt><dd>{fieldTimeSemantics(field)}</dd></div>
+      <div><dt>Available at</dt><dd>{humanizeContract(field.availability)}</dd></div>
+      <div><dt>Missing values</dt><dd>{humanizeContract(field.missingness)}</dd></div>
+      <div><dt>Applies to</dt><dd>{field.applicable_company_types.length ? `Company types ${field.applicable_company_types.join(", ")}` : "All supported instruments"}</dd></div></dl>
+    {field.example && <div className="data-example"><span>Example</span><div className="data-copy"><code>{field.example}</code><button className="button button-quiet" type="button" aria-label="Copy example" onClick={() => void copy(field.example)}><Copy aria-hidden="true" size={16} /></button></div></div>}
+    <p role="status" className="data-copy-status">{copyStatus}</p>
+
+  </aside>;
 }
 
 function fieldTimeSemantics(field: AlphaCatalogField): string {

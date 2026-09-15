@@ -126,7 +126,7 @@ export async function openDataOverview(page: Page): Promise<void> {
   expect(overview.status(), "Data overview request").toBe(200);
   const snapshot = await overview.json();
   expect(snapshot.catalog.fields.length, "Data snapshot field catalog").toBeGreaterThan(0);
-  await expect(page.getByRole("heading", { name: "Data overview" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Data", exact: true })).toBeVisible();
 }
 
 export async function issueInvitation(email: string): Promise<string> {

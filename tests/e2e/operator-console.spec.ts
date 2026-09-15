@@ -135,7 +135,7 @@ test("Operator access control and responsive navigation", { tag: "@isolated" }, 
   );
   await bootstrapResearcher(page, deniedResearcher);
   await page.goto("/data");
-  await expect(page.getByRole("heading", { name: "Data overview" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Data", exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "Operator", exact: true })).toHaveCount(0);
 
   const deniedApi = await page.request.get("/api/auth/operator/researchers");
@@ -2272,7 +2272,7 @@ async function prepareOperator(page: Page) {
   const denied = await page.request.get("/api/operator/data/status", { headers: sameOriginHeaders() });
   expect(denied.status()).toBe(404);
   await page.goto("/data");
-  await expect(page.getByRole("heading", { name: "Data overview" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Data", exact: true })).toBeVisible();
   await restoreResearcherSession(page, operator);
   await page.goto("/operator/data");
   await expect(page.getByRole("heading", { name: "Data operations" })).toBeVisible();

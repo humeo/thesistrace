@@ -247,7 +247,9 @@ test("date inputs retain a browser-populated value when focus leaves the field",
   await page.getByRole("textbox", { name: "Alpha formula", exact: true }).click();
   await page.keyboard.type("close");
   await page.getByLabel("Universe").selectOption("top300");
+  await page.getByRole("button", { name: "Run settings", exact: true }).click();
   await page.getByLabel("Neutralization").selectOption("none");
+  await page.getByRole("button", { name: "Run settings", exact: true }).click();
 
   for (const [label, value] of [
     ["Research start date", "2025-08-13"],
@@ -264,7 +266,7 @@ test("date inputs retain a browser-populated value when focus leaves the field",
   await page.getByLabel("Notes").fill("Trigger a controlled React rerender.");
   await expect(page.getByLabel("Research start date")).toHaveValue("2025-08-13");
   await expect(page.getByLabel("Research end date")).toHaveValue("2026-08-13");
-  await expect(page.getByRole("button", { name: "Run research" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: /^Run (backtest|evaluation)$/ })).toBeEnabled();
 });
 
 test("Default Folder retains one local Research Draft with authoritative Formula diagnostics", async ({ page, researcher }, testInfo) => {
@@ -284,9 +286,9 @@ test("Default Folder retains one local Research Draft with authoritative Formula
 
   try {
     await page.goto("/data");
-    await expect(page.getByRole("heading", { name: "Data overview" })).toBeVisible();
-    await expect(page.getByText("Market ready")).toBeVisible();
-    await expect(page.getByText("Finance ready")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Data", exact: true })).toBeVisible();
+    await expect(page.locator(".data-coverage-row").filter({ has: page.getByRole("heading", { name: "Market data", exact: true }) }).getByText("Available", { exact: true })).toBeVisible();
+    await expect(page.locator(".data-coverage-row").filter({ has: page.getByRole("heading", { name: "Financial data", exact: true }) }).getByText("Available", { exact: true })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Research fields" })).toBeVisible();
     await expect(page.getByText("Coverage describes the dataset")).toHaveCount(0);
     await expectRemovedAuthoringControlsToBeAbsent(page);
@@ -306,7 +308,7 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await expect(factorEvaluation).toBeChecked();
     await expect(strategyBacktest).not.toBeChecked();
     await expect(page.getByLabel("Holdings count")).toHaveCount(0);
-    await expect(page.getByLabel("Selection sessions")).toHaveCount(0);
+    await expect(page.getByLabel("Selection interval (trading days)")).toHaveCount(0);
     await page.setViewportSize({ width: 480, height: 900 });
     await expect(factorEvaluation).toBeVisible();
     await expect(strategyBacktest).toBeVisible();
@@ -329,22 +331,26 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await factorEvaluation.focus();
     await page.keyboard.press("ArrowRight");
     await expect(strategyBacktest).toBeChecked();
+    await page.getByRole("button", { name: "Run settings", exact: true }).click();
     const initialCash = page.getByLabel("Initial cash (CNY)");
     await initialCash.fill("0");
     await expect(initialCash).toHaveAttribute("aria-invalid", "true");
-    await expect(page.getByRole("button", { name: "Run research", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: /^Run (backtest|evaluation)$/, exact: true })).toBeEnabled();
     await initialCash.fill("100000.001");
     await expect(initialCash).toHaveAttribute("aria-invalid", "true");
     await initialCash.fill("100000");
     await expect(initialCash).toHaveAttribute("aria-invalid", "false");
     const holdingsCount = page.getByLabel("Holdings count");
     await expect(holdingsCount).toBeVisible();
-    await expect(page.getByLabel("Selection sessions")).toBeVisible();
+    await expect(page.getByLabel("Selection interval (trading days)")).toBeVisible();
     const decreaseHoldings = page.getByRole("button", { name: "Decrease number of holdings" });
     const increaseHoldings = page.getByRole("button", { name: "Increase number of holdings" });
     const decreaseRebalance = page.getByRole("button", { name: "Decrease selection interval" });
     const increaseRebalance = page.getByRole("button", { name: "Increase selection interval" });
+    await expect(holdingsCount).toHaveValue("10");
+    await holdingsCount.fill("1");
     await expect(decreaseHoldings).toBeDisabled();
+    await holdingsCount.fill("");
     for (const stepperButton of [decreaseHoldings, increaseHoldings, decreaseRebalance, increaseRebalance]) {
       await expect(stepperButton).toBeVisible();
       const bounds = await stepperButton.boundingBox();
@@ -363,6 +369,7 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await holdingsCount.press("ArrowDown");
     await expect(holdingsCount).toHaveValue("10");
 
+    await page.getByRole("button", { name: "Run settings", exact: true }).click();
     await page.getByLabel("Research name").fill("Browser Mean Research");
     const editor = page.getByRole("textbox", { name: "Alpha formula", exact: true });
     await editor.click();
@@ -391,21 +398,25 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await page.getByLabel("Research start date").fill("2026-08-03");
     await page.getByLabel("Research end date").fill("2026-08-05");
     await page.getByLabel("Universe").selectOption("top300");
+    await page.getByRole("button", { name: "Run settings", exact: true }).click();
     await page.getByLabel("Neutralization").selectOption("none");
     await page.getByLabel("Initial cash (CNY)").fill("100000");
     await page.getByLabel("Holdings count").fill("10");
-    await page.getByLabel("Selection sessions").fill("2");
+    await page.getByLabel("Selection interval (trading days)").fill("2");
 
+    await page.getByRole("button", { name: "Run settings", exact: true }).click();
     await strategyBacktest.focus();
     await page.keyboard.press("ArrowLeft");
     await expect(factorEvaluation).toBeChecked();
     await expect(page.getByLabel("Holdings count")).toHaveCount(0);
-    await expect(page.getByLabel("Selection sessions")).toHaveCount(0);
+    await expect(page.getByLabel("Selection interval (trading days)")).toHaveCount(0);
     await strategyBacktest.check();
+    await page.getByRole("button", { name: "Run settings", exact: true }).click();
     await page.getByLabel("Initial cash (CNY)").fill("100000");
     await page.getByLabel("Holdings count").fill("10");
-    await page.getByLabel("Selection sessions").fill("2");
+    await page.getByLabel("Selection interval (trading days)").fill("2");
 
+    await page.getByRole("button", { name: "Run settings", exact: true }).click();
     const browserKeys = await page.evaluate(() => Object.keys(localStorage));
     expect(browserKeys).toEqual([defaultDraftKey]);
     const retainedDraft = await page.evaluate((draftKey) => JSON.parse(
@@ -564,7 +575,7 @@ test("Complete field catalog composes one Formula and starts its DailyTrack", { 
       response.url().endsWith("/api/research-runs")
       && response.request().method() === "POST"
     ));
-    await page.getByRole("button", { name: "Run research", exact: true }).click();
+    await page.getByRole("button", { name: /^Run (backtest|evaluation)$/, exact: true }).click();
     const acceptedRun = await runCapture;
     expect(acceptedRun.status()).toBe(202);
     await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
@@ -860,7 +871,7 @@ test("running Research cancellation stays visible until the child exits", async 
       name: "Confirmed browser cancellation",
       formula: "ts_mean(close, 2)",
     });
-    await page.getByRole("button", { name: "Run research", exact: true }).click();
+    await page.getByRole("button", { name: /^Run (backtest|evaluation)$/, exact: true }).click();
     await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
     const runId = page.url().split("/").at(-1);
     if (runId === undefined) throw new Error("ResearchRun route has no identity");
@@ -971,7 +982,7 @@ test("Batch children keep ordinary Research organization, reuse, tracking, and d
   await expect(page.getByRole("textbox", { name: "Alpha formula", exact: true })).toHaveText("close");
   await expect(page.getByLabel("Notes")).toHaveValue("Browser Batch hypothesis");
   await expect(page.getByLabel("Holdings count")).toHaveValue("10");
-  await expect(page.getByLabel("Selection sessions")).toHaveValue("1");
+  await expect(page.getByLabel("Selection interval (trading days)")).toHaveValue("1");
   expect((await page.request.get(`/api/research-runs/${firstRunId}`)).status()).toBe(200);
 
   await page.goto(`/research-runs/${firstRunId}`);
@@ -1057,9 +1068,9 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
       releaseSecond?.(route);
     });
 
-    await page.getByRole("button", { name: "Run research", exact: true }).click();
+    await page.getByRole("button", { name: /^Run (backtest|evaluation)$/, exact: true }).click();
     await expect(page.getByRole("list", { name: "Run issues" })).toContainText("RUN_UNAVAILABLE");
-    await page.getByRole("button", { name: "Run research", exact: true }).click();
+    await page.getByRole("button", { name: /^Run (backtest|evaluation)$/, exact: true }).click();
     const heldRoute = await secondRequest;
     expect(commands).toHaveLength(2);
     expect(commands[1].request_id).toBe(commands[0].request_id);
@@ -1119,7 +1130,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await page.goto("/research");
     await expect(page.getByRole("textbox", { name: "Alpha formula", exact: true })).toHaveText("ts_mean(close, 3)");
     await replaceFormula(page, "unknown_field");
-    await page.getByRole("button", { name: "Run research", exact: true }).click();
+    await page.getByRole("button", { name: /^Run (backtest|evaluation)$/, exact: true }).click();
     await expect(page.getByRole("list", { name: "Run issues" })).toContainText("UNKNOWN_IDENTIFIER");
     await expect(page.locator(".cm-lintRange-error")).toHaveCount(1);
     const rejectedHistory = await page.request.get("/api/research-runs");
@@ -1139,7 +1150,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
       formula: "close",
       researchKind: "factor_evaluation",
     });
-    await page.getByRole("button", { name: "Run research", exact: true }).click();
+    await page.getByRole("button", { name: /^Run (backtest|evaluation)$/, exact: true }).click();
     await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
     const customRunId = page.url().split("/").at(-1);
     if (customRunId === undefined) throw new Error("Custom Research route is missing run id");
@@ -1179,17 +1190,19 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await expect(page).toHaveURL(/\/research$/);
     await expect(page.getByRole("radio", { name: /Factor Evaluation/ })).toBeChecked();
     await expect(page.getByLabel("Holdings count")).toHaveCount(0);
-    await expect(page.getByLabel("Selection sessions")).toHaveCount(0);
+    await expect(page.getByLabel("Selection interval (trading days)")).toHaveCount(0);
     const factorHistoryAfterReuse = await page.request.get("/api/research-runs");
     expect(((await factorHistoryAfterReuse.json()).items as unknown[])).toHaveLength(factorHistoryCount);
 
     await page.getByRole("radio", { name: /Strategy Backtest/ }).check();
-    await expect(page.getByRole("button", { name: "Run research", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: /^Run (backtest|evaluation)$/, exact: true })).toBeDisabled();
     await page.getByLabel("Research name").fill("Converted Factor Strategy");
+    await page.getByRole("button", { name: "Run settings", exact: true }).click();
     await page.getByLabel("Initial cash (CNY)").fill("100000");
     await page.getByLabel("Holdings count").fill("10");
-    await page.getByLabel("Selection sessions").fill("2");
-    await page.getByRole("button", { name: "Run research", exact: true }).click();
+    await page.getByLabel("Selection interval (trading days)").fill("2");
+    await page.getByRole("button", { name: "Run settings", exact: true }).click();
+    await page.getByRole("button", { name: /^Run (backtest|evaluation)$/, exact: true }).click();
     await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
     const convertedRunId = page.url().split("/").at(-1);
     expect(convertedRunId).not.toBe(customRunId);
@@ -1315,12 +1328,12 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await expect(page.getByLabel("Neutralization")).toHaveValue("none");
     await expect(page.getByRole("radio", { name: /Strategy Backtest/ })).toBeChecked();
     await expect(page.getByLabel("Holdings count")).toHaveValue("10");
-    await expect(page.getByLabel("Selection sessions")).toHaveValue("2");
+    await expect(page.getByLabel("Selection interval (trading days)")).toHaveValue("2");
     const historyAfterCopy = await page.request.get("/api/research-runs");
     expect(((await historyAfterCopy.json()).items as unknown[])).toHaveLength(historyCountBeforeReuse);
 
     await replaceFormula(page, "ts_mean(close, 2) + 1");
-    await page.getByRole("button", { name: "Run research", exact: true }).click();
+    await page.getByRole("button", { name: /^Run (backtest|evaluation)$/, exact: true }).click();
     await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
     const reusedRunId = page.url().split("/").at(-1);
     expect(reusedRunId).not.toBe(defaultRunId);
@@ -1497,16 +1510,18 @@ async function fillCompleteDraft(
   await page.getByLabel("Research start date").fill("2026-08-04");
   await page.getByLabel("Research end date").fill("2026-08-05");
   await page.getByLabel("Universe").selectOption("top300");
+  await page.getByRole("button", { name: "Run settings", exact: true }).click();
   await page.getByLabel("Neutralization").selectOption("none");
   if (researchKind === "strategy_backtest") {
     await page.getByLabel("Initial cash (CNY)").fill("100000");
     await page.getByLabel("Holdings count").fill("10");
-    await page.getByLabel("Selection sessions").fill("2");
+    await page.getByLabel("Selection interval (trading days)").fill("2");
   } else {
     await expect(page.getByLabel("Holdings count")).toHaveCount(0);
-    await expect(page.getByLabel("Selection sessions")).toHaveCount(0);
+    await expect(page.getByLabel("Selection interval (trading days)")).toHaveCount(0);
   }
-  await expect(page.getByRole("button", { name: "Run research", exact: true })).toBeEnabled();
+  await page.getByRole("button", { name: "Run settings", exact: true }).click();
+  await expect(page.getByRole("button", { name: /^Run (backtest|evaluation)$/, exact: true })).toBeEnabled();
 }
 
 async function replaceFormula(page: Page, formula: string): Promise<void> {
