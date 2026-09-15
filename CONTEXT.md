@@ -646,7 +646,8 @@ _避免混用_: Financial Coverage Start, oldest retained report
 
 **Financial Seed Fact**:
 A pre-Coverage Financial Fact retained only to resolve a correct
-Session-Aligned Financial Field at Financial Coverage Start.
+Session-Aligned Financial Field within the declared Financial Coverage,
+including prior-period components required by Statement-Derived TTM Fields.
 _避免混用_: Earlier Financial Coverage, invented value
 
 **Financial Research Readiness**:
@@ -769,8 +770,22 @@ _避免混用_: TTM field, latest interim report
 
 **Latest Reported Stock Field**:
 A Session-Aligned Financial Field that selects the latest available
-balance-sheet Financial Fact regardless of report period.
+period-end stock Financial Fact regardless of report period or source statement.
 _避免混用_: Annual-only stock, period average
+
+**Statement-Derived TTM Field**:
+A Session-Aligned Financial Field measuring a trailing twelve-month flow ending
+at a visible report period, reconstructed from period- and scope-matched Source
+Financial Versions available to that Research Session.
+Direct arithmetic between two such flows is missing when their twelve-month
+windows differ.
+_避免混用_: Latest Annual Financial Field, trading-session rolling sum, vendor-defined TTM indicator
+
+**Announcement-Aligned Financial History**:
+Retrospective supplier financial observations placed after their reported
+publication dates for research, with explicit limits on evidence of the values
+originally available and their subsequent revisions.
+_避免混用_: Complete Point-in-Time Financial Data, observed historical version chain
 
 **Financial Field Applicability**:
 The explicit company-type set for which a Session-Aligned Financial Field has a
