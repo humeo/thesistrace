@@ -137,7 +137,7 @@ This direction replaces the previous OpenAI light theme. Do not keep a legacy li
 - Use icons plus labels in the expanded state and icons with accessible tooltips in the collapsed state.
 - Resource pages start directly with their page content, without a shared context bar or Workspace breadcrumb. Keep resource identity in the sidebar and page-specific context and actions in the page itself.
 - Chat fills the viewport, keeps its identity in the sidebar, and places model settings in the composer.
-- The main canvas fills the remaining viewport. Apply a max width to reading-heavy overview pages and the Research draft form; charts and result tables may use the full available width.
+- Resource pages share one centered 1280px maximum-width container and the same responsive main-content padding: Data, Research, Research Runs, Daily Tracks, MCP, and Operator. Reserve a stable scrollbar gutter so short and long pages align. Define this once in the shell styles; do not add page-specific width or outer-padding overrides. Chat keeps its dedicated viewport layout.
 
 ### Resource Structure
 
@@ -149,7 +149,7 @@ This direction replaces the previous OpenAI light theme. Do not keep a legacy li
 
 ### Research Workspace
 
-- Center the draft workbench with a 960px maximum width and natural content height. The formula editor defaults to 280px; optional Notes are collapsed until opened.
+- Use the shared resource-page width for the draft workbench, with natural content height. The formula editor defaults to 280px; optional Notes are collapsed until opened.
 
 - Default to the expanded sidebar on every resource so navigation behavior stays consistent. Users may collapse it manually when they need more editor or result width.
 - Keep Draft identity, validation state, saved state, dataset context, and Run action in a compact workbench header.

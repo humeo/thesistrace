@@ -1,4 +1,3 @@
-.mcp-page { max-width: 1060px; margin-inline: auto; padding-block: 24px; }
 .mcp-page-heading { margin-bottom: 30px; }
 .mcp-page h1 { font-size: 28px; font-weight: 600; letter-spacing: -.04em; margin: 0 0 8px; }
 .mcp-page h2 { font-size: 20px; font-weight: 500; letter-spacing: -.035em; margin: 0; }
@@ -90,7 +89,6 @@
 @media (max-width: 768px) {
   .mcp-server { padding: 16px; }
   .mcp-setup-flow { grid-template-columns: 1fr; gap: 16px; }
-  .mcp-page { padding-block: 20px; }
   .mcp-page button, .mcp-page summary { min-height: 44px; }
   .mcp-service { grid-template-columns: minmax(0,1fr) auto; gap: 16px 8px; }
   .mcp-service-name { grid-column: 1 / -1; }

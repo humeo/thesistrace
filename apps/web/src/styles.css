@@ -27,6 +27,7 @@
   --danger: #df5a4f;
   --danger-action: #a63d34;
   --danger-action-hover: #b4473d;
+  --resource-content-width: 1280px;
   --sidebar-expanded: 224px;
   --sidebar-collapsed: 56px;
   --sidebar-header-height: 48px;
@@ -34,7 +35,7 @@
 }
 
 * { box-sizing: border-box; }
-html { min-width: 320px; overflow-x: clip; background: var(--canvas); }
+html { min-width: 320px; overflow-x: clip; scrollbar-gutter: stable; background: var(--canvas); }
 body {
   margin: 0;
   min-width: 320px;
@@ -1299,9 +1300,8 @@ code { font-family: var(--mono); }
   min-width: 0;
   padding: 32px 36px 88px;
 }
-.page-section:not(.research-workspace),
-.main-content > section:not(.research-folder-layout) {
-  width: min(1280px, 100%);
+.main-content > section {
+  width: min(var(--resource-content-width), 100%);
   margin-inline: auto;
 }
 
@@ -2155,7 +2155,6 @@ select { color-scheme: dark; }
   width: 100%;
   align-items: start;
 }
-.app-shell-research .main-content { padding: 24px; }
 .research-workspace-header {
   display: flex;
   grid-column: 1 / -1;
@@ -2381,11 +2380,6 @@ select { color-scheme: dark; }
 .research-editor-context > span:last-child { font-variant-numeric: tabular-nums; text-align: right; }
 
 /* Run and track lists, details, results */
-.main-content > section[aria-label="Research Runs"]:not(.research-run-page),
-.main-content > section[aria-label="Daily Tracks"] {
-  width: min(1280px, 100%);
-  margin-inline: auto;
-}
 .main-content > section[aria-label="Research Runs"]:not(.research-run-page) > h1,
 .main-content > section[aria-label="Daily Tracks"] > h1 {
   margin-bottom: 24px;
@@ -3091,7 +3085,6 @@ select { color-scheme: dark; }
   .chat-new-chat-start { gap: 20px; padding: 22px 0 12px; }
   .chat-message-user { width: min(82%, 520px); }
   .main-content { padding: 68px 16px 64px; }
-  .app-shell-research .main-content { padding-top: 68px; }
   .auth-page { align-items: start; padding-top: 20px; }
   .auth-panel { padding: 22px 18px; }
   .auth-brand { margin-bottom: 28px; }
@@ -3407,7 +3400,6 @@ select { color-scheme: dark; }
 .research-exposure-expression > small { display: block; margin-top: 6px; font-size: 12px; line-height: 1.5; }
 
 /* Data discovery: coverage first, searchable fields and their research semantics. */
-.data-page { max-width: 1440px; margin-inline: auto; }
 .data-page .page-hero { align-items: flex-start; margin-bottom: 24px; padding-bottom: 0; border-bottom: 0; }
 .data-page .page-hero p { color: var(--ink-soft); margin: 8px 0 0; font-size: 14px; }
 .data-coverage { border: 1px solid var(--line); border-radius: 8px; padding: 16px; background: var(--surface-1); }
@@ -3501,7 +3493,7 @@ select { color-scheme: dark; }
 @media (max-width: 600px) { .data-search-clear { min-width: 44px; min-height: 44px; } }
 
 /* Research: formula first, detailed configuration on demand. */
-.research-workspace { grid-template-columns: minmax(0, 1fr); gap: 24px; width: min(960px, 100%); margin-inline: auto; align-content: start; }
+.research-workspace { grid-template-columns: minmax(0, 1fr); gap: 24px; align-content: start; }
 .research-workspace-header { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 20px; border: 0; padding: 0; }
 .research-workspace-header > .research-folder-navigation { grid-column: 1; }
 .research-name-field { grid-column: 1; grid-row: 2; }
