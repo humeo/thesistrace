@@ -542,7 +542,7 @@ class DatasetLifecycle:
                     status, lease_expires_at
                 ) VALUES (
                     %s, %s, %s, %s, 'active',
-                    now() + make_interval(secs => %s)
+                    clock_timestamp() + make_interval(secs => %s)
                 )
                 RETURNING id, owner_kind, owner_id, generation_manifest_sha256,
                           status, lease_expires_at, heartbeat_at

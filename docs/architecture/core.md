@@ -702,7 +702,15 @@ administration, Auth internals, or deployment modes.
 
 Durable PostgreSQL state is work acceptance. Each Worker process freezes one
 role at startup and has exactly one execution slot. An ordinary Research Worker
-claims only the strict-FIFO ordinary ResearchRun Queue. A Batch Research Worker
+claims only the ordinary ResearchRun Queue. Ordinary claims favor the Researcher
+with the fewest valid leased slots, then the oldest previous execution opportunity
+(first-time participants first), then original admission time and stable identity.
+FIFO applies within each Researcher, including infrastructure retries; a lone
+Researcher can use all idle ordinary Workers. A short per-pool claim transaction
+serializes selection, new authority, and durable Researcher opportunity history.
+History survives task deletion and empty queues; cancellation continues to count
+while its lease remains valid, even after the Run fence changes. Batch child Runs
+never enter the ordinary candidate or occupancy sets. A Batch Research Worker
 claims one complete Research Batch and executes its ordered tasks through one
 supervised child. A Tracking Worker claims only Tracking Advance work. The three
 pools scale independently; a Worker never changes roles or falls back to a

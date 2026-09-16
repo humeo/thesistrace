@@ -130,7 +130,7 @@ Number gaps are intentional and numbers are never reused. When a decision stops 
 - [ADR-0195 — Resume infrastructure retries from private ResearchRun Checkpoints](0195-resume-infrastructure-retries-from-private-researchrun-checkpoints.md)
 - [ADR-0198 — Confirm execution exit before cancellation or Stop completes](0198-confirm-execution-exit-before-cancellation-or-stop-completes.md)
 - [ADR-0200 — Use PyArrow and NumPy as the single columnar Research backend](0200-use-pyarrow-and-numpy-as-the-single-columnar-research-backend.md)
-- [ADR-0202 — Claim ResearchRuns in strict FIFO order](0202-claim-researchruns-in-strict-fifo-order.md)
+- [ADR-0247 — Allocate ordinary Research Execution Opportunities fairly by Researcher](0247-allocate-research-execution-opportunities-fairly.md)
 - [ADR-0206 — Retry only transient ResearchRun infrastructure failures](0206-retry-only-transient-researchrun-infrastructure-failures.md)
 - [ADR-0209 — Recompute failed Tracking Advances from the authoritative Head](0209-recompute-failed-tracking-advances-from-the-authoritative-head.md)
 - [ADR-0217 — Keep operational telemetry diagnostic and Product State authoritative](0217-keep-operational-telemetry-diagnostic-and-product-state-authoritative.md)

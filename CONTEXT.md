@@ -181,6 +181,13 @@ _避免混用_: Published Result, guaranteed completion time
 The completed Research Sessions within a ResearchRun, excluding work whose outcome is still unfinished.
 _避免混用_: Partial Result, guaranteed completion time
 
+**Research Execution Opportunity**:
+One allocation of execution capacity to a Researcher for an ordinary ResearchRun
+or a complete Research Batch, granted independently within each research pool.
+It counts when work is claimed, even if execution subsequently fails; a retry
+requires another opportunity.
+_避免混用_: Research admission, completed Result, Batch Item, Agent Chat Session
+
 **Research Name**:
 The mutable, non-unique display name of one ResearchRun.
 _避免混用_: Alpha name, ResearchRun identity, immutable input

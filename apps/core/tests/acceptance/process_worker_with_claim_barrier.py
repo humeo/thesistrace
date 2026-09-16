@@ -44,6 +44,10 @@ def main() -> None:
                 raise RuntimeError("claim barrier closed before release")
 
     with open_core_runtime(CoreSettings.from_environment()) as runtime:
+        if "--before-claim" in sys.argv[3:]:
+            print(json.dumps({"event": "ready_to_claim"}), flush=True)
+            if not sys.stdin.readline():
+                raise RuntimeError("pre-claim barrier closed before release")
         process_one_poll(runtime, configuration, emit=emit)
 
 

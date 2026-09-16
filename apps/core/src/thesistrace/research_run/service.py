@@ -198,6 +198,7 @@ from thesistrace.researcher.quota import (
     QuotaPolicyUnavailable,
     unavailable_quota_policy,
 )
+from thesistrace.researcher.scheduling import record_execution_opportunity
 from thesistrace.strategy_evidence import (
     StrategyEventQuery,
     StrategyEvidencePublication,
@@ -355,6 +356,9 @@ class ResearchRunExecutionClaim:
     immutable_input: ImmutableRunInput
     attempt_number: int = 1
     previous_status: str = "queued"
+    occupied_slots: int = 0
+    opportunity_sequence: int | None = None
+    queue_wait_seconds: float = 0
 
 
 @dataclass(frozen=True)
@@ -1454,34 +1458,39 @@ class ResearchRunService:
                 )
             )
             return True
-        claim_result = self._claim_next()
-        if claim_result.worker_loss is not None:
-            recovery = claim_result.worker_loss
-            level = "WARNING" if recovery.retry else "ERROR"
-            emit(
-                _research_event(
-                    "research_attempt_failed",
-                    level=level,
-                    run_id=recovery.run_id,
-                    attempt_id=recovery.attempt_id,
-                    attempt_number=recovery.attempt_number,
-                    status="failed",
-                    failure_code=attempt_failure_code(WORKER_LOST_FAILURE)
-                    or "UNCLASSIFIED_FAILURE",
+        while True:
+            claim_result = self._claim_next()
+            if claim_result.worker_loss is not None:
+                recovery = claim_result.worker_loss
+                if not recovery.retry and not self._finish_exhausted_worker_loss(recovery):
+                    continue
+                level = "WARNING" if recovery.retry else "ERROR"
+                emit(
+                    _research_event(
+                        "research_attempt_failed",
+                        level=level,
+                        run_id=recovery.run_id,
+                        attempt_id=recovery.attempt_id,
+                        attempt_number=recovery.attempt_number,
+                        status="failed",
+                        failure_code=attempt_failure_code(WORKER_LOST_FAILURE)
+                        or "UNCLASSIFIED_FAILURE",
+                    )
                 )
-            )
-            emit(
-                _research_event(
-                    "research_retry_scheduled" if recovery.retry else "research_run_failed",
-                    level=level,
-                    run_id=recovery.run_id,
-                    attempt_id=recovery.attempt_id,
-                    attempt_number=recovery.attempt_number,
-                    status="running" if recovery.retry else "failed",
-                    failure_code=attempt_failure_code(WORKER_LOST_FAILURE)
-                    or "UNCLASSIFIED_FAILURE",
+                emit(
+                    _research_event(
+                        "research_retry_scheduled" if recovery.retry else "research_run_failed",
+                        level=level,
+                        run_id=recovery.run_id,
+                        attempt_id=recovery.attempt_id,
+                        attempt_number=recovery.attempt_number,
+                        status="running" if recovery.retry else "failed",
+                        failure_code=attempt_failure_code(WORKER_LOST_FAILURE)
+                        or "UNCLASSIFIED_FAILURE",
+                    )
                 )
-            )
+            if claim_result.claim is not None or claim_result.worker_loss is None:
+                break
         claim = claim_result.claim
         if claim is None:
             return False
@@ -1493,6 +1502,10 @@ class ResearchRunService:
         emit(
             _research_event(
                 "research_attempt_started",
+                pool="research",
+                occupied_slots=claim.occupied_slots,
+                opportunity_sequence=claim.opportunity_sequence,
+                queue_wait_seconds=claim.queue_wait_seconds,
                 run_id=claim.run_id,
                 attempt_id=claim.attempt_id,
                 attempt_number=claim.attempt_number,
@@ -2895,10 +2908,15 @@ class ResearchRunService:
     def _claim_next(self) -> _ClaimResult:
         assert self._dataset_lifecycle is not None
         with self._database.transaction() as transaction:
+            transaction.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended('research_runs.claim_fair', 0))"
+            )
             row = transaction.execute(
                 """
                 SELECT run.researcher_id, run.id, run.status, run.immutable_input,
-                       run.execution_fence,
+                       run.execution_fence, coalesce(occupied.slots, 0) AS occupied_slots,
+                       greatest(0, extract(epoch FROM statement_timestamp() - run.created_at))
+                           AS queue_wait_seconds,
                        attempt.id AS latest_attempt_id,
                        attempt.ordinal AS latest_attempt_ordinal,
                        attempt.status AS latest_attempt_status,
@@ -2912,6 +2930,21 @@ class ResearchRunService:
                     ORDER BY ordinal DESC
                     LIMIT 1
                 ) AS attempt ON true
+                LEFT JOIN researchers.execution_opportunities AS history
+                  ON history.pool = 'research' AND history.researcher_id = run.researcher_id
+                LEFT JOIN (
+                    SELECT owning.researcher_id, count(*) AS slots
+                    FROM research_runs.attempts AS held
+                    JOIN research_runs.runs AS owning ON owning.id = held.run_id
+                    WHERE owning.execution_owner = 'ordinary'
+                      AND held.lease_expires_at > statement_timestamp()
+                      AND (
+                        (held.status = 'running' AND owning.status = 'running'
+                         AND held.fence = owning.execution_fence)
+                        OR (held.status = 'cancelling' AND owning.status = 'cancelling')
+                      )
+                    GROUP BY owning.researcher_id
+                ) AS occupied ON occupied.researcher_id = run.researcher_id
                 WHERE run.execution_owner = 'ordinary'
                   AND (
                     run.status = 'queued'
@@ -2920,7 +2953,7 @@ class ResearchRunService:
                         AND (
                             (
                                 attempt.status = 'running'
-                                AND attempt.lease_expires_at <= now()
+                                AND attempt.lease_expires_at <= statement_timestamp()
                             )
                             OR (
                                 attempt.status = 'failed'
@@ -2929,7 +2962,8 @@ class ResearchRunService:
                         )
                     )
                   )
-                ORDER BY run.created_at, run.id
+                ORDER BY occupied_slots, history.last_sequence NULLS FIRST,
+                         run.created_at, run.id, run.researcher_id
                 FOR UPDATE OF run SKIP LOCKED
                 LIMIT 1
                 """,
@@ -2941,6 +2975,17 @@ class ResearchRunService:
             run_id = str(row["id"])
             worker_loss: _WorkerLossRecovery | None = None
             if row["latest_attempt_status"] == "running":
+                attempt_number = int(row["latest_attempt_ordinal"])
+                retry = attempt_retry_eligible(WORKER_LOST_FAILURE, attempt_number)
+                worker_loss = _WorkerLossRecovery(
+                    run_id=run_id,
+                    attempt_id=str(row["latest_attempt_id"]),
+                    attempt_number=attempt_number,
+                    retry=retry,
+                )
+                if not retry:
+                    # Terminal cleanup needs Publication before Run/Data locks.
+                    return _ClaimResult(claim=None, worker_loss=worker_loss)
                 recovered = transaction.execute(
                     """
                     UPDATE research_runs.attempts
@@ -2948,7 +2993,7 @@ class ResearchRunService:
                         lease_expires_at = now(), finished_at = now(),
                         failure_reason = %s
                     WHERE id = %s AND run_id = %s AND status = 'running'
-                      AND lease_expires_at <= now()
+                      AND lease_expires_at <= clock_timestamp()
                     """,
                     (WORKER_LOST_FAILURE, row["latest_attempt_id"], run_id),
                 )
@@ -2959,32 +3004,6 @@ class ResearchRunService:
                     str(row["latest_generation_pin_id"]),
                     owner_id=str(row["latest_attempt_id"]),
                 )
-                attempt_number = int(row["latest_attempt_ordinal"])
-                retry = attempt_retry_eligible(WORKER_LOST_FAILURE, attempt_number)
-                worker_loss = _WorkerLossRecovery(
-                    run_id=run_id,
-                    attempt_id=str(row["latest_attempt_id"]),
-                    attempt_number=attempt_number,
-                    retry=retry,
-                )
-                if not retry:
-                    transaction.execute(
-                        """
-                        UPDATE research_runs.runs
-                        SET status = 'failed',
-                            failure_reason = %s, updated_at = now()
-                        WHERE researcher_id = %s AND id = %s AND status = 'running'
-                          AND execution_fence = %s
-                        """,
-                        (
-                            AUTOMATIC_RETRIES_PUBLIC_REASON,
-                            researcher_id,
-                            run_id,
-                            row["execution_fence"],
-                        ),
-                    )
-                    self._release_execution_checkpoints(transaction, run_id)
-                    return _ClaimResult(claim=None, worker_loss=worker_loss)
             fence = int(row["execution_fence"]) + 1
             ordinal_row = transaction.execute(
                 """
@@ -3040,7 +3059,7 @@ class ResearchRunService:
                     status, lease_expires_at
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s, %s, 'running',
-                    now() + make_interval(secs => %s)
+                    %s
                 )
                 """,
                 (
@@ -3051,8 +3070,11 @@ class ResearchRunService:
                     pin.id,
                     generation.manifest_sha256,
                     generation.data_through_session,
-                    self._lease_seconds,
+                    pin.lease_expires_at,
                 ),
+            )
+            opportunity_sequence = record_execution_opportunity(
+                transaction, pool="research", researcher_id=researcher_id,
             )
         return _ClaimResult(
             claim=ResearchRunExecutionClaim(
@@ -3061,6 +3083,9 @@ class ResearchRunService:
                 attempt_id=attempt_id,
                 attempt_number=int(ordinal_row["ordinal"]),
                 previous_status=str(row["status"]),
+                occupied_slots=int(row["occupied_slots"]),
+                opportunity_sequence=opportunity_sequence,
+                queue_wait_seconds=float(row["queue_wait_seconds"]),
                 fence=fence,
                 generation_pin_id=pin.id,
                 data_generation_id=generation.manifest_sha256,
@@ -3069,6 +3094,54 @@ class ResearchRunService:
             ),
             worker_loss=worker_loss,
         )
+
+    def _finish_exhausted_worker_loss(self, recovery: _WorkerLossRecovery) -> bool:
+        """Clean terminal work outside the claim lock, using publication lock order."""
+        assert self._dataset_lifecycle is not None
+        with self._database.transaction() as transaction:
+            lock_publication_mutation(transaction)
+            row = transaction.execute(
+                """
+                SELECT attempt.generation_pin_id
+                FROM research_runs.runs AS run
+                JOIN research_runs.attempts AS attempt ON attempt.run_id = run.id
+                WHERE run.id = %s AND attempt.id = %s
+                  AND run.execution_owner = 'ordinary'
+                  AND run.status = 'running' AND attempt.status = 'running'
+                  AND run.execution_fence = attempt.fence
+                  AND attempt.lease_expires_at <= clock_timestamp()
+                FOR UPDATE OF run
+                """,
+                (recovery.run_id, recovery.attempt_id),
+            ).fetchone()
+            if row is None:
+                return False
+            updated = transaction.execute(
+                """
+                UPDATE research_runs.attempts
+                SET status = 'failed', heartbeat_at = clock_timestamp(),
+                    lease_expires_at = clock_timestamp(), finished_at = clock_timestamp(),
+                    failure_reason = %s
+                WHERE id = %s AND status = 'running'
+                  AND lease_expires_at <= clock_timestamp()
+                """,
+                (WORKER_LOST_FAILURE, recovery.attempt_id),
+            )
+            if updated.rowcount != 1:
+                return False
+            transaction.execute(
+                """
+                UPDATE research_runs.runs
+                SET status = 'failed', failure_reason = %s, updated_at = clock_timestamp()
+                WHERE id = %s
+                """,
+                (AUTOMATIC_RETRIES_PUBLIC_REASON, recovery.run_id),
+            )
+            self._dataset_lifecycle.release_pin_in_transaction(
+                transaction, str(row["generation_pin_id"]), owner_id=recovery.attempt_id,
+            )
+            self._release_execution_checkpoints(transaction, recovery.run_id)
+        return True
 
     @contextmanager
     def _maintain_claim(

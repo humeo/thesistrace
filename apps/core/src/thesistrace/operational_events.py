@@ -57,6 +57,7 @@ _ENUM_FIELDS = frozenset(
 _TIMESTAMP_FIELDS = frozenset({"retry_at", "lease_expires_at"})
 _STRING_FIELDS = frozenset(
     {
+        "pool",
         "operation_id",
         "run_id",
         "batch_id",
@@ -83,6 +84,8 @@ _STRING_FIELDS = frozenset(
 )
 _INTEGER_FIELDS = frozenset(
     {
+        "occupied_slots",
+        "opportunity_sequence",
         "full_sweep_age_seconds",
         "oldest_deletion_age_seconds",
         "listed_count",
@@ -105,6 +108,7 @@ _INTEGER_FIELDS = frozenset(
 _SIGNED_INTEGER_FIELDS = frozenset({"exit_code"})
 _NONNEGATIVE_NUMBER_FIELDS = frozenset(
     {
+        "queue_wait_seconds",
         "child_chunk_seconds",
         "child_data_read_seconds",
         "child_calculation_seconds",
@@ -278,6 +282,8 @@ def _is_safe_string(name: str, value: object) -> bool:
         return _SAFE_OPERATION_ID_PATTERN.fullmatch(value) is not None
     if name in _ID_FIELDS:
         return _SAFE_ID_PATTERN.fullmatch(value) is not None
+    if name == "pool":
+        return value in {"research", "batch-research"}
     if name == "worker_role":
         return value in {"research", "batch-research", "tracking"}
     if name in _ENUM_FIELDS:

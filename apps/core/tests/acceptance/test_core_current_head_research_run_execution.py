@@ -6761,10 +6761,17 @@ def _wait_for_worker_event(
     try:
         deadline = monotonic() + 30
         while monotonic() < deadline:
-            assert selector.select(timeout=max(0.01, deadline - monotonic())), (
-                f"Worker did not emit {event_name}"
-            )
-            line = process.stdout.readline()
+            # TextIO.readline can buffer the next event while the descriptor is
+            # no longer readable. Read only this line when combining with select.
+            line = bytearray()
+            while not line.endswith(b"\n"):
+                assert selector.select(timeout=max(0.01, deadline - monotonic())), (
+                    f"Worker did not emit {event_name}"
+                )
+                character = os.read(process.stdout.fileno(), 1)
+                if not character:
+                    break
+                line.extend(character)
             assert line, (
                 f"Worker exited before {event_name}: "
                 f"{process.stderr.read() if process.stderr else ''}"
