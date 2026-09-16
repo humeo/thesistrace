@@ -23,3 +23,12 @@ confirmed exit is skipped only for the current poll, without consuming an opport
 so other eligible work can proceed. Complete Batches remain indivisible; no child
 task yielding, shared-computation change, or fine-grained recovery is introduced.
 Independent single-slot Worker pools and complete Batch recovery boundaries remain unchanged.
+
+Current-contract initialization is idempotent: existing admissions, frozen inputs,
+Results and per-pool history remain intact when initialization is repeated and
+new API runtimes or Worker processes open the same database. There is no historical
+opportunity backfill. The combined acceptance scenario in
+`test_core_dual_pool_fair_scheduling.py` exercises three ordinary and two Batch
+Workers against two Researchers, including private Result access and retained data.
+Access revocation still blocks user requests without cancelling already accepted
+work; Tracking retains its existing independent scheduling policy.
