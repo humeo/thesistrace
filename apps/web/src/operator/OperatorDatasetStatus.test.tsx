@@ -21,6 +21,28 @@ import type {
 } from "./operatorDataStatusClient";
 
 describe("Operator Dataset status", () => {
+  it("recovers Worker availability after a restart even when all operations are terminal", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.useFakeTimers();
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    vi.spyOn(statusClient, "loadDatasetOperationalStatus")
+      .mockResolvedValueOnce(statusPage({ worker: { available: false, lastHeartbeatAt: null } }))
+      .mockResolvedValue(statusPage());
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(<OperatorDatasetStatus onAccessNotFound={() => { throw new Error("Unexpected access rejection"); }} reloadGeneration={0} />));
+      expect(host.textContent).toContain("Data Operator Worker unavailable");
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+      expect(host.textContent).toContain("Data Operator Worker available");
+      expect(host.textContent).not.toContain("Data Operator Worker unavailable");
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+      vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers();
+    }
+  });
   it("pauses polling while hidden, stops at terminal status, and reloads on recovery events", async () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     vi.useFakeTimers();
@@ -339,7 +361,7 @@ describe("Operator Dataset status", () => {
     expect(markup).toContain("accepted into the FIFO as new queued work");
   });
 
-  it("polls only while latest or visible history contains non-terminal work", () => {
+  it("polls for non-terminal work or an unavailable Worker", () => {
     expect(datasetStatusNeedsPolling(statusPage({
       latestByKind: [operation({ status: "accepted" })],
       operations: [],

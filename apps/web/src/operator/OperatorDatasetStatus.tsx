@@ -637,7 +637,7 @@ function Detail({
 }
 
 export function datasetStatusNeedsPolling(data: DatasetOperationalStatus): boolean {
-  return [...data.latestByKind, ...data.operations].some(
+  return !data.worker.available || [...data.latestByKind, ...data.operations].some(
     (operation) => operation.status === "accepted" || operation.status === "running",
   );
 }

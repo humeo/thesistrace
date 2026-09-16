@@ -1794,6 +1794,8 @@ select { color-scheme: dark; }
 .operator-operation-state-running::before { background: var(--primary-hover); }
 .operator-operation-state-succeeded::before { background: var(--success); }
 .operator-operation-state-degraded::before { background: var(--warning); }
+.operator-latest-refresh-table .operator-state,
+.operator-data-operation-table .operator-state { max-width: 100%; white-space: normal; }
 .operator-operation-state-failed::before { background: var(--danger); }
 .operator-operation-state-cancelled::before { background: var(--ink-faint); }
 .operator-data-operation-drawer {
