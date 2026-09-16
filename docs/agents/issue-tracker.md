@@ -2,6 +2,8 @@
 
 Issues and specs (you may know a spec as a PRD) for this repo live as markdown files in `.scratch/`.
 
+The entire `.scratch/` directory is local-only and ignored by Git. Do not commit its files, including specs, tickets, scripts, reports, or generated data.
+
 ## Conventions
 
 - One feature per directory: `.scratch/<feature-slug>/`
