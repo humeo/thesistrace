@@ -23,6 +23,7 @@ from thesistrace._paging import fit_page
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.daily_holding_evidence import HoldingEvidencePublication
 from thesistrace.data import DatasetLifecycle
+from thesistrace.data.lifecycle import lock_data_lifecycle
 from thesistrace.publication import (
     Publication,
     PublicationNotFoundError,
@@ -107,6 +108,7 @@ from thesistrace.research_run.service import (
     ResearchRunService,
 )
 from thesistrace.researcher.quota import QuotaPolicyUnavailable
+from thesistrace.researcher.scheduling import record_execution_opportunity
 from thesistrace.strategy_evidence import (
     StrategyEvidencePublication,
     append_staged_strategy_evidence,
@@ -228,6 +230,9 @@ class _ResearchBatchClaim:
     items: tuple[tuple[int, str, ResearchRunExecutionClaim], ...]
     child_control_path: str
     starting_guard: _StartingGuard
+    occupied_slots: int
+    opportunity_sequence: int
+    queue_wait_seconds: float
 
 
 def _batch_failure_event(
@@ -328,8 +333,8 @@ class ResearchBatchService:
         if self._execution is None:
             raise RuntimeError("Research Batch execution is not configured")
         cancelling = self._reconcile_cancelling_batch()
-        if cancelling is not None:
-            return cancelling
+        if cancelling:
+            return True
         claim = self._claim_next()
         if claim is None:
             return False
@@ -367,6 +372,10 @@ class ResearchBatchService:
                         "claim_order": {
                             "admitted_at": claim.admitted_at.isoformat(),
                             "batch_id": claim.batch_id,
+                            "pool": "batch-research",
+                            "occupied_slots": claim.occupied_slots,
+                            "opportunity_sequence": claim.opportunity_sequence,
+                            "queue_wait_seconds": claim.queue_wait_seconds,
                         },
                         "owner_kind": "research_batch_attempt",
                         "owner_id": claim.attempt_id,
@@ -739,11 +748,11 @@ class ResearchBatchService:
                     """
                     SELECT 1
                     FROM research_batches.starting_claims
-                    WHERE id = %s AND lease_expires_at > now()
+                    WHERE id = %s AND lease_expires_at > clock_timestamp()
                     UNION ALL
                     SELECT 1
                     FROM research_batches.attempts
-                    WHERE id = %s AND status = 'running' AND lease_expires_at > now()
+                    WHERE id = %s AND status = 'running' AND lease_expires_at > clock_timestamp()
                     LIMIT 1
                     """,
                     (attempt_id, attempt_id),
@@ -1497,11 +1506,15 @@ class ResearchBatchService:
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
                 ("research_batches.claim_fifo",),
             ).fetchone()
+            deferred_batch_ids: list[str] = []
             while True:
                 row = transaction.execute(
                     """
                     SELECT batch.researcher_id, batch.id, batch.batch_kind, batch.created_at,
                            batch.execution_fence, batch.scope, batch.status,
+                           coalesce(occupied.slots, 0) AS occupied_slots,
+                           greatest(0, extract(epoch FROM statement_timestamp() - batch.created_at))
+                               AS queue_wait_seconds,
                            expired.id AS expired_attempt_id,
                            expired.fence AS expired_attempt_fence,
                            expired.generation_pin_id AS expired_generation_pin_id,
@@ -1525,20 +1538,47 @@ class ResearchBatchService:
                     ) AS expired ON true
                     LEFT JOIN research_batches.starting_claims AS starting
                       ON starting.batch_id = batch.id
-                    WHERE batch.status = 'queued'
+                    LEFT JOIN researchers.execution_opportunities AS history
+                      ON history.pool = 'batch-research'
+                     AND history.researcher_id = batch.researcher_id
+                    LEFT JOIN (
+                        SELECT owning.researcher_id, count(*) AS slots
+                        FROM research_batches.batches AS owning
+                        WHERE owning.status IN ('running', 'cancelling')
+                          AND (
+                            EXISTS (
+                                SELECT 1 FROM research_batches.starting_claims AS held
+                                WHERE held.batch_id = owning.id
+                                  AND held.lease_expires_at > statement_timestamp()
+                                  AND (owning.status = 'cancelling'
+                                       OR held.fence = owning.execution_fence)
+                            ) OR EXISTS (
+                                SELECT 1 FROM research_batches.attempts AS held
+                                WHERE held.batch_id = owning.id AND held.status = 'running'
+                                  AND held.lease_expires_at > statement_timestamp()
+                                  AND (owning.status = 'cancelling'
+                                       OR held.fence = owning.execution_fence)
+                            )
+                          )
+                        GROUP BY owning.researcher_id
+                    ) AS occupied ON occupied.researcher_id = batch.researcher_id
+                    WHERE batch.id <> ALL(%s) AND (batch.status = 'queued'
                        OR (
                            batch.status = 'running'
                            AND (
-                               starting.lease_expires_at <= now()
+                               starting.lease_expires_at <= statement_timestamp()
                                OR (
-                                   expired.lease_expires_at <= now()
+                                   expired.lease_expires_at <= clock_timestamp()
                                )
                            )
                        )
-                    ORDER BY batch.created_at, batch.id
+                    )
+                    ORDER BY occupied_slots, history.last_sequence NULLS FIRST,
+                             batch.created_at, batch.id, batch.researcher_id
                     FOR UPDATE OF batch SKIP LOCKED
                     LIMIT 1
-                    """
+                    """,
+                    (deferred_batch_ids,),
                 ).fetchone()
                 if row is None:
                     return None
@@ -1560,7 +1600,8 @@ class ResearchBatchService:
                             )
                         )
                     if not recovered:
-                        return None
+                        deferred_batch_ids.append(str(row["id"]))
+                        continue
                     refreshed = transaction.execute(
                         """
                         SELECT researcher_id, id, batch_kind, created_at, execution_fence,
@@ -1573,7 +1614,7 @@ class ResearchBatchService:
                     ).fetchone()
                     if refreshed is None or refreshed["status"] != "queued":
                         continue
-                    row = refreshed
+                    row = {**row, **refreshed}
                 break
             batch_id = str(row["id"])
             researcher_id = row["researcher_id"]
@@ -1663,7 +1704,7 @@ class ResearchBatchService:
                     child_control_path, lease_expires_at
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s, %s, %s,
-                    now() + make_interval(secs => %s)
+                    %s
                 )
                 """,
                 (
@@ -1675,12 +1716,15 @@ class ResearchBatchService:
                     pinned.descriptor.manifest_sha256,
                     pinned.descriptor.data_through_session,
                     child_control_path,
-                    self._lease_seconds,
+                    pinned.pin.lease_expires_at,
                 ),
             )
             self._dataset_lifecycle.release_retention_in_transaction(
                 transaction,
                 retention_id=f"research-batch:{batch_id}",
+            )
+            opportunity_sequence = record_execution_opportunity(
+                transaction, pool="batch-research", researcher_id=researcher_id,
             )
         return _ResearchBatchClaim(
             researcher_id=researcher_id,
@@ -1694,6 +1738,9 @@ class ResearchBatchService:
             items=claimed_items,
             child_control_path=child_control_path,
             starting_guard=starting_guard,
+            occupied_slots=int(row["occupied_slots"]),
+            opportunity_sequence=opportunity_sequence,
+            queue_wait_seconds=float(row["queue_wait_seconds"]),
         )
 
     def _recover_expired_factor_attempt_in_transaction(
@@ -1838,7 +1885,7 @@ class ResearchBatchService:
             """
             DELETE FROM research_batches.starting_claims
             WHERE id = %s AND batch_id = %s AND fence = %s
-              AND lease_expires_at <= now()
+              AND lease_expires_at <= clock_timestamp()
             """,
             (claim_id, batch_id, fence),
         )
@@ -1956,18 +2003,28 @@ class ResearchBatchService:
         while not stopped.wait(self._heartbeat_seconds):
             try:
                 with self._database.transaction() as transaction:
+                    # Starting activation takes its row before inserting an Attempt.
+                    transaction.execute(
+                        "SELECT id FROM research_batches.starting_claims WHERE id = %s FOR UPDATE",
+                        (claim.attempt_id,),
+                    ).fetchone()
+                    transaction.execute(
+                        "SELECT id FROM research_batches.attempts WHERE id = %s FOR UPDATE",
+                        (claim.attempt_id,),
+                    ).fetchone()
+                    lock_data_lifecycle(transaction)
                     renewed = transaction.execute(
                         """
                         UPDATE research_batches.attempts AS attempt
-                        SET heartbeat_at = now(),
-                            lease_expires_at = now() + make_interval(secs => %s),
+                        SET heartbeat_at = clock_timestamp(),
+                            lease_expires_at = clock_timestamp() + make_interval(secs => %s),
                             live_progress_updated_at = CASE
                                 WHEN current_task_role IS NOT NULL THEN now()
                                 ELSE live_progress_updated_at
                             END
                         WHERE attempt.id = %s AND attempt.batch_id = %s
                           AND attempt.fence = %s AND attempt.status = 'running'
-                          AND attempt.lease_expires_at > now()
+                          AND attempt.lease_expires_at > clock_timestamp()
                           AND EXISTS (
                               SELECT 1
                               FROM research_batches.batches AS batch
@@ -1987,11 +2044,11 @@ class ResearchBatchService:
                         renewed = transaction.execute(
                             """
                             UPDATE research_batches.starting_claims AS claim
-                            SET heartbeat_at = now(),
-                                lease_expires_at = now() + make_interval(secs => %s)
+                            SET heartbeat_at = clock_timestamp(),
+                                lease_expires_at = clock_timestamp() + make_interval(secs => %s)
                             WHERE claim.id = %s AND claim.batch_id = %s
                               AND claim.fence = %s
-                              AND claim.lease_expires_at > now()
+                              AND claim.lease_expires_at > clock_timestamp()
                               AND EXISTS (
                                   SELECT 1
                                   FROM research_batches.batches AS batch
@@ -2045,12 +2102,16 @@ class ResearchBatchService:
             JOIN research_batches.attempts AS attempt ON attempt.batch_id = batch.id
             WHERE batch.researcher_id = %s AND batch.id = %s
               AND attempt.id = %s AND attempt.fence = %s
-              AND attempt.lease_expires_at > now()
             FOR UPDATE OF batch, attempt
             """,
             (claim.researcher_id, claim.batch_id, claim.attempt_id, claim.fence),
         ).fetchone()
-        if current != {
+        valid = transaction.execute(
+            "SELECT 1 FROM research_batches.attempts "
+            "WHERE id = %s AND lease_expires_at > clock_timestamp()",
+            (claim.attempt_id,),
+        ).fetchone()
+        if valid is None or current != {
             "status": "running",
             "execution_fence": claim.fence,
             "attempt_status": "running",
@@ -2204,7 +2265,7 @@ class ResearchBatchService:
                        completed_research_sessions, total_research_sessions
                 FROM research_batches.attempts
                 WHERE id = %s AND batch_id = %s AND fence = %s
-                  AND status = 'running' AND lease_expires_at > now()
+                  AND status = 'running' AND lease_expires_at > clock_timestamp()
                 FOR UPDATE
                 """,
                 (claim.attempt_id, claim.batch_id, claim.fence),
@@ -2245,7 +2306,7 @@ class ResearchBatchService:
                 FROM research_batches.batches AS batch
                 WHERE attempt.id = %s AND attempt.batch_id = %s
                   AND attempt.fence = %s AND attempt.status = 'running'
-                  AND attempt.lease_expires_at > now()
+                  AND attempt.lease_expires_at > clock_timestamp()
                   AND batch.id = attempt.batch_id AND batch.status = 'running'
                   AND batch.execution_fence = attempt.fence
                 """,
@@ -2301,16 +2362,23 @@ class ResearchBatchService:
         starting = transaction.execute(
             """
             SELECT ordinal, generation_pin_id, data_generation_id,
-                   data_through_session, child_control_path
+                   data_through_session, child_control_path, lease_expires_at
             FROM research_batches.starting_claims
             WHERE id = %s AND batch_id = %s AND fence = %s
-              AND lease_expires_at > now()
             FOR UPDATE
             """,
             (claim.attempt_id, claim.batch_id, claim.fence),
         ).fetchone()
-        if starting is None or starting["child_control_path"] != child_control_path:
-            raise RuntimeError("Research Batch starting claim was fenced")
+        valid = transaction.execute(
+            "SELECT 1 FROM research_batches.starting_claims "
+            "WHERE id = %s AND lease_expires_at > clock_timestamp()",
+            (claim.attempt_id,),
+        ).fetchone()
+        if (
+            valid is None or starting is None
+            or starting["child_control_path"] != child_control_path
+        ):
+            raise ResearchBatchChildLost("Research Batch starting claim was fenced")
         inserted = transaction.execute(
             """
             INSERT INTO research_batches.attempts (
@@ -2319,7 +2387,7 @@ class ResearchBatchService:
                 lease_expires_at, child_pid, child_control_path, child_started_at
             ) VALUES (
                 %s, %s, %s, %s, %s, %s, %s, 'running',
-                now() + make_interval(secs => %s), %s, %s, now()
+                %s, %s, %s, now()
             )
             """,
             (
@@ -2330,7 +2398,7 @@ class ResearchBatchService:
                 starting["generation_pin_id"],
                 starting["data_generation_id"],
                 starting["data_through_session"],
-                self._lease_seconds,
+                starting["lease_expires_at"],
                 child_pid,
                 child_control_path,
             ),
@@ -2651,7 +2719,6 @@ class ResearchBatchService:
                   ON starting.batch_id = batch.id
                 WHERE batch.researcher_id = %s AND batch.id = %s
                   AND starting.id = %s AND starting.fence = %s
-                  AND starting.lease_expires_at > now()
                 FOR UPDATE OF batch, starting
                 """,
                 (
@@ -2661,7 +2728,12 @@ class ResearchBatchService:
                     claim.fence,
                 ),
             ).fetchone()
-            if current != {
+            valid = transaction.execute(
+                "SELECT 1 FROM research_batches.starting_claims "
+                "WHERE id = %s AND lease_expires_at > clock_timestamp()",
+                (claim.attempt_id,),
+            ).fetchone()
+            if valid is None or current != {
                 "status": "running",
                 "execution_fence": claim.fence,
                 "generation_pin_id": claim.generation_pin_id,
@@ -3391,7 +3463,7 @@ class ResearchBatchService:
                 live_progress_updated_at = NULL
             WHERE id = %s AND batch_id = %s AND fence = %s
               AND status = 'running'
-              AND (%s = false OR lease_expires_at <= now())
+              AND (%s = false OR lease_expires_at <= clock_timestamp())
             RETURNING ordinal
             """,
             (

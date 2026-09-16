@@ -712,7 +712,13 @@ History survives task deletion and empty queues; cancellation continues to count
 while its lease remains valid, even after the Run fence changes. Batch child Runs
 never enter the ordinary candidate or occupancy sets. A Batch Research Worker
 claims one complete Research Batch and executes its ordered tasks through one
-supervised child. A Tracking Worker claims only Tracking Advance work. The three
+supervised child. Batch claims use the same fairness order with independent
+occupancy and opportunity history. Each Batch counts once across starting and
+active authorization, including pending cancellation with a valid lease. Recovery
+that cannot yet confirm the old child's exit skips that Batch for the current poll
+and continues selecting other eligible work; it neither grants an opportunity nor
+changes the Batch's complete-task recovery boundary.
+A Tracking Worker claims only Tracking Advance work. The three
 pools scale independently; a Worker never changes roles or falls back to a
 different claim set.
 
