@@ -211,7 +211,12 @@ for (const width of [1280, 390]) {
     const trigger = page.getByRole("button", { name: "Run settings", exact: true });
     await expect(dialog).not.toBeVisible();
     await expect(page.getByRole("button", { name: "Run backtest" })).toBeInViewport();
-    await expect(page.getByLabel("Notes", { exact: true })).toBeVisible();
+    const notes = page.getByLabel("Notes", { exact: true });
+    await expect(notes).not.toBeVisible();
+    const notesDisclosure = page.locator("summary").filter({ hasText: /^Notes$/ });
+    await notesDisclosure.focus();
+    await notesDisclosure.press("Enter");
+    await expect(notes).toBeVisible();
     await trigger.click();
     await expect(dialog).toBeVisible();
     await expect(page.getByRole("tooltip")).toHaveCount(0);

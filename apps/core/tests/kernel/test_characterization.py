@@ -15,7 +15,7 @@ EXPECTED_CHECKSUMS = {
         "5": "c108d8430db5949afce51e5f17a6f88242a15164b834e5358ebb4517880cc691",
         "20": "ba3006a470cefea9bf194baef1328bc4e3343d9f1c32b8ccd14c96fac43c8b5e",
     },
-    "strategy": "4e500b3daa8eff5835da7b8604eb6c0527a9b38f7eb494bf4ced8ef94805282f",
+    "strategy": "d74973adb22ad0efbaa8eb8a219188e2bc70a183f3edef3e7f940e0bf4ae2a85",
 }
 
 
@@ -62,7 +62,18 @@ def test_accepted_quantitative_boundaries_are_frozen(
         for horizon in ("1", "5", "20")
     } == {"1": 42, "5": 38, "20": 23}
 
+    # The accepted payload includes retained execution constraints.
     assert strategy["checksum"] == EXPECTED_CHECKSUMS["strategy"]
+    assert len(strategy["execution_constraints"]) == 50
+    first_constraint = strategy["execution_constraints"][0]
+    assert {key: first_constraint[key] for key in (
+        "session", "instrument_id", "side", "reason", "unrounded_quantity",
+        "legal_quantity", "submitted_quantity", "order_id",
+    )} == {
+        "session": "2026-06-08", "instrument_id": "equity:000001.SZ", "side": "sell",
+        "reason": "below_board_lot", "unrounded_quantity": 82, "legal_quantity": 0,
+        "submitted_quantity": 0, "order_id": None,
+    }
     assert len(strategy["daily"]) == 44
     assert _daily_boundary(strategy["daily"][0]) == {
         "session": "2026-05-29",
