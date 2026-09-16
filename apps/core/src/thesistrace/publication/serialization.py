@@ -159,7 +159,7 @@ def parquet_bytes(
 
 def parquet_table_bytes(table: pa.Table, contract: ParquetWriterContract) -> bytes:
     require_pinned_writer_runtime()
-    _validate_canonical_table(table, contract)
+    validate_parquet_table(table, contract)
     table = table.combine_chunks()
     sorting_columns = pq.SortingColumn.from_ordering(
         contract.schema,
@@ -194,7 +194,8 @@ def parquet_table_bytes(table: pa.Table, contract: ParquetWriterContract) -> byt
     return output.getvalue().to_pybytes()
 
 
-def _validate_canonical_table(table: pa.Table, contract: ParquetWriterContract) -> None:
+def validate_parquet_table(table: pa.Table, contract: ParquetWriterContract) -> None:
+    """Validate canonical schema, values, ordering and unique row identities without encoding."""
     if table.schema != contract.schema:
         raise ParquetContractError("Parquet Table schema does not match the declared schema")
     if any(

@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
+from sys import intern
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -80,6 +81,7 @@ from thesistrace.publication.serialization import (
     canonicalize_parquet_rows,
     parquet_bytes,
     parquet_table_bytes,
+    validate_parquet_table,
 )
 from thesistrace.research_series import AlignedResearchData, ttm_window_column
 
@@ -1648,7 +1650,12 @@ class MountedGenerationStore:
                         start_session=window_start,
                     )
                 )
-        canonical = _validate_candidate_semantics(candidate_tables)
+                if (
+                    {"eod_prices", "adjustment_factors", "trading_states"}
+                    <= candidate_tables.keys()
+                ):
+                    _consume_refresh_prices(candidate_tables)
+        canonical = _validate_refresh_tables(candidate_tables)
         expected_calendar = [str(row["session"]) for row in candidate_tables["research_calendar"]]
         if canonical["research_calendar"] != expected_calendar:
             raise GenerationStoreError("Generation refresh window is invalid")
@@ -2309,7 +2316,7 @@ class MountedGenerationStore:
         manifest = self._read_table_manifest(spec, reference)
         objects = manifest["objects"]
         assert isinstance(objects, list)
-        rows: list[dict[str, object]] = []
+        tables: list[pa.Table] = []
         for ordinal, object_ref in enumerate(objects):
             _validate_object_reference(object_ref, ordinal)
             assert isinstance(object_ref, Mapping)
@@ -2320,14 +2327,50 @@ class MountedGenerationStore:
                 raise GenerationStoreError("Generation table object boundary is invalid")
             if str(last_key[0]) < start_session:
                 continue
-            rows.extend(
-                row
-                for row in self._open_partition(spec, object_ref, ordinal)
-                if str(row[spec.session_field]) >= start_session
-            )
+            # Keep the window columnar through cross-partition validation, so
+            # Python row dictionaries are allocated only once.
+            table = self._open_canonical_partition_table(spec, object_ref, ordinal)
+            session_column = table[spec.session_field]
+            boundary = pa.scalar(start_session).cast(session_column.type)
+            selected = table.filter(pc.greater_equal(session_column, boundary))
+            tables.append(selected)
+            del selected, session_column, table
         try:
-            return canonicalize_parquet_rows(rows, spec.contract)
-        except ParquetContractError as error:
+            if not tables:
+                return []
+            window = pa.concat_tables(tables)
+            del tables
+            window = window.take(pc.sort_indices(
+                window, sort_keys=[(key, "ascending") for key in spec.contract.sort_keys],
+            ))
+            validate_parquet_table(window, spec.contract)
+            if spec.name == "daily_basic":
+                # Refresh consumers use canonical decimal text. Project in Arrow
+                # rather than allocating a full Decimal grid and then copying it.
+                for index, field in enumerate(window.schema):
+                    if pa.types.is_decimal(field.type):
+                        # Arrow's string cast may use scientific notation (0E-10).
+                        # Normalize one column at a time with the canonical formatter.
+                        values = pa.array(
+                            [None if value is None else _daily_basic_decimal_text(value)
+                             for value in window[field.name].to_pylist()],
+                            type=pa.string(),
+                        )
+                        window = window.set_column(index, field.name, values)
+            rows = []
+            for batch in window.to_batches(max_chunksize=4096):
+                for row in batch.to_pylist():
+                    # These bounded domain labels repeat for every session and
+                    # family. Share their strings, not arbitrary financial values.
+                    for name in ("session", "session_date", "instrument_id", "state"):
+                        value = row.get(name)
+                        if isinstance(value, str):
+                            row[name] = intern(value)
+                    if "instrument_ids" in row:
+                        row["instrument_ids"] = [intern(value) for value in row["instrument_ids"]]
+                    rows.append(row)
+            return rows
+        except (ArrowException, ParquetContractError) as error:
             raise GenerationStoreError("Generation refresh window is incompatible") from error
 
     def _open_table_sessions(
@@ -3611,30 +3654,19 @@ def _columnar_keys_cover(
     )
 
 
-def _validate_candidate_semantics(
-    candidate_tables: Mapping[str, list[dict[str, object]]],
-) -> dict[str, object]:
-    required = {
-        table_name for family in CORE_MARKET_FAMILY_SPECS for table_name in family.table_names
-    }
-    if set(candidate_tables) not in (
-        required,
-        {*required, "industry_membership"},
-        {*required, "daily_basic", "daily_basic_sessions"},
-        {*required, "industry_membership", "daily_basic", "daily_basic_sessions"},
-    ):
-        raise GenerationStoreError("Dataset Family table set is incomplete")
+def _consume_refresh_prices(candidate_tables: dict[str, list[dict[str, object]]]) -> None:
+    """Transfer owned prices early, before loading additional wide families."""
     factors = {
         (str(row["session_date"]), str(row["instrument_id"])): row["source_adjustment_factor"]
-        for row in candidate_tables["adjustment_factors"]
+        for row in candidate_tables.pop("adjustment_factors")
     }
     states = {
         (str(row["session"]), str(row["instrument_id"])): row["state"]
         for row in candidate_tables["trading_states"]
     }
-    prices: list[dict[str, object]] = []
-    for row in candidate_tables["eod_prices"]:
-        position = (str(row["session_date"]), str(row["instrument_id"]))
+    prices = candidate_tables.pop("eod_prices")
+    for row in prices:
+        position = (intern(str(row["session_date"])), intern(str(row["instrument_id"])))
         factor = factors.get(position)
         state = states.get(position)
         if (
@@ -3643,36 +3675,51 @@ def _validate_candidate_semantics(
             or Decimal(str(row["adjustment_scale"])) != Decimal(str(factor))
         ):
             raise GenerationStoreError("Market Dataset Families are not synchronized")
-        prices.append(
-            {
-                "session": position[0],
-                "instrument_id": position[1],
-                "open_raw": _decimal_text(row["open_raw"], 4),
-                "high_raw": _decimal_text(row["high_raw"], 4),
-                "low_raw": _decimal_text(row["low_raw"], 4),
-                "close_raw": _decimal_text(row["close_raw"], 4),
-                "pre_close_raw": _decimal_text(row["pre_close_reference_raw"], 4),
-                "change_raw": _decimal_text(row["price_change_raw"], 4),
-                "pct_change_raw": _decimal_text(
-                    Decimal(str(row["pct_change_ratio"])) * Decimal(100), 6
-                ),
-                "volume_shares": str(row["volume_shares"]),
-                "turnover_cny": _decimal_text(row["turnover_amount_cny"], 2),
-                "adjustment_factor": _decimal_text(factor, 6),
-                "open_adj": _decimal_text(row["open_adj"], 8),
-                "high_adj": _decimal_text(row["high_adj"], 8),
-                "low_adj": _decimal_text(row["low_adj"], 8),
-                "close_adj": _decimal_text(row["close_adj"], 8),
-                "trading_state": str(state),
-            }
-        )
-    legacy_tables = {
-        name: rows
-        for name, rows in candidate_tables.items()
-        if name not in {"eod_prices", "adjustment_factors"}
-    }
-    legacy_tables["prices"] = prices
-    canonical = _canonical_from_rows(legacy_tables)
+        projected = {
+            "session": position[0],
+            "instrument_id": position[1],
+            "open_raw": _decimal_text(row["open_raw"], 4),
+            "high_raw": _decimal_text(row["high_raw"], 4),
+            "low_raw": _decimal_text(row["low_raw"], 4),
+            "close_raw": _decimal_text(row["close_raw"], 4),
+            "pre_close_raw": _decimal_text(row["pre_close_reference_raw"], 4),
+            "change_raw": _decimal_text(row["price_change_raw"], 4),
+            "pct_change_raw": _decimal_text(
+                Decimal(str(row["pct_change_ratio"])) * Decimal(100), 6
+            ),
+            "volume_shares": str(row["volume_shares"]),
+            "turnover_cny": _decimal_text(row["turnover_amount_cny"], 2),
+            "adjustment_factor": _decimal_text(factor, 6),
+            "open_adj": _decimal_text(row["open_adj"], 8),
+            "high_adj": _decimal_text(row["high_adj"], 8),
+            "low_adj": _decimal_text(row["low_adj"], 8),
+            "close_adj": _decimal_text(row["close_adj"], 8),
+            "trading_state": str(state),
+        }
+        row.clear()
+        row.update(projected)
+    del factors, states
+    candidate_tables["prices"] = prices
+
+
+def _validate_refresh_tables(
+    candidate_tables: dict[str, list[dict[str, object]]],
+) -> dict[str, object]:
+    required = {
+        table_name for family in CORE_MARKET_FAMILY_SPECS for table_name in family.table_names
+    } - {"eod_prices", "adjustment_factors"} | {"prices"}
+    if set(candidate_tables) not in (
+        required,
+        {*required, "industry_membership"},
+        {*required, "daily_basic", "daily_basic_sessions"},
+        {*required, "industry_membership", "daily_basic", "daily_basic_sessions"},
+    ):
+        raise GenerationStoreError("Dataset Family table set is incomplete")
+    daily_basic = candidate_tables.pop("daily_basic", None)
+    canonical = _canonical_from_rows(candidate_tables)
+    if daily_basic is not None:
+        canonical["daily_basic"] = daily_basic
+        canonical["daily_basic_sessions"] = candidate_tables["daily_basic_sessions"]
     _validate_generation(canonical)
     return canonical
 
