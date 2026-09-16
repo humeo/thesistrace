@@ -113,7 +113,33 @@ def test_financial_progress_reads_partial_checkpoints_and_preserves_historical_g
             ("2026-06-30", "2026-08-14"),
         )
         assert inspect().discovered_announcement_count == 3
+        assert inspect().phase == "indicator_collection"
+        from thesistrace.data.financial_indicator_collection import DailyIndicatorCollection
+
+        collected = DailyIndicatorCollection(
+            tuple(f"stock-{index}" for index in range(65)),
+            tuple(f"{index:064x}" for index in range(65)), (), (),
+        )
+        store.record_indicator_collection(key, collected, started)
+        indicator = inspect()
+        assert indicator.phase == "indicator_candidate"
+        assert indicator.indicator_scheduled_count == indicator.indicator_collected_count == 65
+        assert indicator.indicator_failed_count == indicator.processed_company_count == 0
+        assert indicator.indicator_candidate_status == "building"
+        store.record_indicator_retained(key, started)
+        store.record_indicator_retained(key, started)
+        store.record_indicator_collection(key, collected, started)
+        retained = inspect()
+        assert retained.phase == "collection"
+        assert retained.indicator_candidate_status == "retained"
+        assert retained.indicator_retained_reason == "INDICATOR_COVERAGE_UNAVAILABLE"
+        operation.update(status="succeeded", finished_at=started)
+        assert inspect().indicator_candidate_status == "retained"
+        operation.update(status="running", finished_at=None)
+        store.record_indicator_candidate(key, "e" * 64, started)
         assert inspect().phase == "collection"
+        assert inspect().indicator_candidate_status == "ready"
+        assert inspect().indicator_retained_reason is None
         store.record_instrument_attempt(
             idempotency_key=key,
             instrument_id=identities[0].instrument_id,

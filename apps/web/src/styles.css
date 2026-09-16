@@ -1710,6 +1710,8 @@ select { color-scheme: dark; }
   .operator-data-operation-drawer .operator-financial-telemetry { margin-inline: 16px; }
 }
 .operator-refresh-published { border-left-color: var(--success); }
+.operator-refresh-warning { border-left-color: var(--warning); }
+.operator-refresh-warning .operator-state::before { background: var(--warning); }
 .operator-refresh-failed { border-left-color: var(--danger); }
 .operator-dataset-status { display: grid; gap: 22px; }
 .operator-dataset-status .operator-section-header { padding-bottom: 0; }
@@ -1791,6 +1793,7 @@ select { color-scheme: dark; }
 .operator-operation-state-accepted::before { background: var(--warning); }
 .operator-operation-state-running::before { background: var(--primary-hover); }
 .operator-operation-state-succeeded::before { background: var(--success); }
+.operator-operation-state-degraded::before { background: var(--warning); }
 .operator-operation-state-failed::before { background: var(--danger); }
 .operator-operation-state-cancelled::before { background: var(--ink-faint); }
 .operator-data-operation-drawer {

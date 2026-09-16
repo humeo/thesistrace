@@ -23,7 +23,10 @@ class FinancialRefreshProgress(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    phase: Literal["queued", "preparing", "discovery", "collection", "publication", "finished"]
+    phase: Literal[
+        "queued", "preparing", "discovery", "indicator_collection", "indicator_candidate",
+        "collection", "publication", "finished",
+    ]
     elapsed_seconds: int | None = Field(ge=0)
     last_progress_at: datetime | None
     discovered_announcement_count: int | None = Field(ge=0)
@@ -31,6 +34,11 @@ class FinancialRefreshProgress(BaseModel):
     updated_company_count: int | None = Field(ge=0)
     unchanged_company_count: int | None = Field(ge=0)
     failed_company_count: int | None = Field(ge=0)
+    indicator_scheduled_count: int | None = Field(ge=0)
+    indicator_collected_count: int | None = Field(ge=0)
+    indicator_failed_count: int | None = Field(ge=0)
+    indicator_candidate_status: Literal["not_started", "building", "ready", "retained"]
+    indicator_retained_reason: Literal["INDICATOR_COVERAGE_UNAVAILABLE"] | None
     discovery_gaps: tuple[FinancialDiscoveryGapStatus, ...] | None = Field(max_length=5)
 
 
@@ -55,6 +63,15 @@ def read_financial_progress(
                f.idempotency_key IS NOT NULL AS available,
                f.discovery_evidence IS NOT NULL AS discovered,
                f.candidate_manifest_sha256 IS NOT NULL AS candidate_ready,
+               f.indicator_collection IS NOT NULL AS indicators_collected,
+               f.indicator_candidate_manifest_sha256 IS NOT NULL AS indicator_candidate_ready,
+               f.indicator_collection->'candidate_diagnostic'->>'retained_reason'
+                   AS indicator_retained_reason,
+               jsonb_array_length(f.indicator_collection->'scheduled_instrument_ids')
+                   AS indicator_scheduled,
+               jsonb_array_length(f.indicator_collection->'collection_evidence_sha256s')
+                   AS indicator_collected,
+               jsonb_array_length(f.indicator_collection->'failures') AS indicator_failed,
                greatest(f.updated_at, a.last_checkpoint_at) AS last_progress_at,
                jsonb_array_length(f.discovery_evidence->'announcements') AS announcements,
                f.discovery_evidence->'gaps' AS gaps,
@@ -102,6 +119,11 @@ def read_financial_progress(
             if row["candidate_ready"]
             else "collection"
         )
+        if phase == "collection":
+            if not row["indicators_collected"]:
+                phase = "indicator_collection"
+            elif not row["indicator_candidate_ready"] and row["indicator_retained_reason"] is None:
+                phase = "indicator_candidate"
         progress[str(row["key"])] = FinancialRefreshProgress(
             phase=phase,
             elapsed_seconds=elapsed,
@@ -111,6 +133,15 @@ def read_financial_progress(
             updated_company_count=row["changed"] if row["available"] else None,
             unchanged_company_count=row["unchanged"] if row["available"] else None,
             failed_company_count=row["failed"] if row["available"] else None,
+            indicator_scheduled_count=row["indicator_scheduled"],
+            indicator_collected_count=row["indicator_collected"],
+            indicator_failed_count=row["indicator_failed"],
+            indicator_candidate_status=(
+                "ready" if row["indicator_candidate_ready"] else
+                "retained" if terminal or row["indicator_retained_reason"] is not None else
+                "building" if row["indicators_collected"] else "not_started"
+            ),
+            indicator_retained_reason=row["indicator_retained_reason"],
             discovery_gaps=(
                 tuple(FinancialDiscoveryGapStatus.model_validate(gap) for gap in row["gaps"])
                 if row["gaps"] is not None

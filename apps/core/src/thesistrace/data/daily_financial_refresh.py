@@ -6,6 +6,7 @@ from contextlib import AbstractContextManager
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from time import perf_counter
 from typing import TYPE_CHECKING, Literal, cast
 
 from psycopg.types.json import Jsonb
@@ -666,13 +667,32 @@ class FinancialDailyRefreshStore:
         with self._database.transaction() as transaction:
             changed = transaction.execute(
                 """UPDATE data.financial_daily_refresh_operations
-                   SET indicator_collection=%s, updated_at=%s
+                   SET indicator_collection=COALESCE(indicator_collection, '{}'::jsonb) || %s,
+                       updated_at=%s
                    WHERE idempotency_key=%s AND status='running'
-                     AND (indicator_collection IS NULL OR indicator_collection=%s)""",
+                     AND (indicator_collection IS NULL
+                          OR indicator_collection - 'candidate_diagnostic'=%s)""",
                 (Jsonb(payload), _aware_clock(recorded_at), idempotency_key, Jsonb(payload)),
             ).rowcount
         if changed != 1:
             raise FinancialDailyRefreshError("FINANCIAL_INDICATOR_RESULT_CONFLICT")
+
+    def record_indicator_retained(self, idempotency_key: str, recorded_at: datetime) -> None:
+        """Persist diagnostic outcome without changing the immutable collection facts."""
+        with self._database.transaction() as transaction:
+            changed = transaction.execute(
+                """UPDATE data.financial_daily_refresh_operations
+                   SET indicator_collection=jsonb_set(indicator_collection,
+                       '{candidate_diagnostic}', %s), updated_at=%s
+                   WHERE idempotency_key=%s AND status='running'
+                     AND indicator_collection IS NOT NULL
+                     AND indicator_candidate_manifest_sha256 IS NULL
+                     AND published_generation_manifest_sha256 IS NULL""",
+                (Jsonb({"retained_reason": "INDICATOR_COVERAGE_UNAVAILABLE"}),
+                 _aware_clock(recorded_at), idempotency_key),
+            ).rowcount
+        if changed != 1:
+            raise FinancialDailyRefreshError("FINANCIAL_INDICATOR_CANDIDATE_CONFLICT")
 
     def record_indicator_candidate(
         self, idempotency_key: str, digest: str, recorded_at: datetime,
@@ -681,7 +701,8 @@ class FinancialDailyRefreshStore:
         with self._database.transaction() as transaction:
             changed = transaction.execute(
                 """UPDATE data.financial_daily_refresh_operations
-                   SET indicator_candidate_manifest_sha256=%s, updated_at=%s
+                   SET indicator_candidate_manifest_sha256=%s, updated_at=%s,
+                       indicator_collection=indicator_collection - 'candidate_diagnostic'
                    WHERE idempotency_key=%s AND status='running'
                      AND published_generation_manifest_sha256 IS NULL
                      AND (indicator_candidate_manifest_sha256 IS NULL
@@ -983,6 +1004,13 @@ class DailyFinancialRefreshService:
         self._generations = MountedGenerationStore(self._root)
         self._lifecycle = DatasetLifecycle(database, self._root)
 
+    def _completed_stage(self, key: str, phase: str, started: float, **counts: object) -> None:
+        self._progress({
+            "event": "financial_refresh", "phase": phase, "status": "completed",
+            "idempotency_key": key, "duration_ms": round((perf_counter() - started) * 1000),
+            **counts,
+        })
+
     def publish(
         self,
         *,
@@ -1119,6 +1147,7 @@ class DailyFinancialRefreshService:
                 }
             )
             self._ownership_guard()
+            discovery_started = perf_counter()
             discovery = self._announcement_source.discover(
                 start_date=start,
                 end_date=end,
@@ -1129,6 +1158,10 @@ class DailyFinancialRefreshService:
                 discovery=discovery,
                 identities=discovery_identities,
                 recorded_at=self._validated_clock(),
+            )
+            self._completed_stage(
+                idempotency_key, "discovery", discovery_started,
+                announcement_count=len(discovery.announcements), gap_count=len(discovery.gaps),
             )
             self._ownership_guard()
             operation = self._store.operation(idempotency_key)
@@ -1157,6 +1190,7 @@ class DailyFinancialRefreshService:
                     item.instrument_id for item in lifecycles
                     if item.listed_from <= target and item.ts_code not in covered
                 )
+            indicator_collection_started = perf_counter()
             indicator_result = FinancialIndicatorDailyCollector(
                 self._database, self._root, self._indicator_provider,
                 clock=self._clock, ownership_guard=self._ownership_guard,
@@ -1170,6 +1204,12 @@ class DailyFinancialRefreshService:
             )
             self._store.record_indicator_collection(
                 idempotency_key, indicator_result, self._validated_clock(),
+            )
+            self._completed_stage(
+                idempotency_key, "indicator_collection", indicator_collection_started,
+                scheduled_count=len(indicator_result.scheduled_instrument_ids),
+                collected_count=len(indicator_result.collection_evidence_sha256s),
+                failed_count=len(indicator_result.failures),
             )
             operation = self._store.operation(idempotency_key)
         if operation["indicator_candidate_manifest_sha256"] is None:
@@ -1203,6 +1243,7 @@ class DailyFinancialRefreshService:
             self._financial_source,
             clock=self._clock,
         )
+        statements_started = perf_counter()
         for identity in remaining:
             self._ownership_guard()
             collection = collector.collect(
@@ -1276,6 +1317,9 @@ class DailyFinancialRefreshService:
                 }
             )
             self._ownership_guard()
+        self._completed_stage(
+            idempotency_key, "statements", statements_started, scheduled_count=len(remaining),
+        )
         checkpoints = self._store.accepted_checkpoints(idempotency_key)
         inspection = self._store.inspect(idempotency_key)
         finished_at = self._validated_clock()
@@ -1289,6 +1333,7 @@ class DailyFinancialRefreshService:
         )
         publication = self._store.publication_state(idempotency_key)
         self._ownership_guard()
+        candidate_started = perf_counter()
         candidate = self._candidates.rebuild_daily(
             snapshot,
             prior_candidate_manifest_sha256=prior_manifest,
@@ -1304,6 +1349,7 @@ class DailyFinancialRefreshService:
             {
                 "event": "financial_refresh",
                 "phase": "candidate",
+                "duration_ms": round((perf_counter() - candidate_started) * 1000),
                 "status": "completed",
                 "idempotency_key": idempotency_key,
                 "candidate_manifest_sha256": candidate.manifest_sha256,
@@ -1318,17 +1364,24 @@ class DailyFinancialRefreshService:
 
         source = str(operation["source_generation_manifest_sha256"])
         descriptor = self._generations.inspect_root(source)
+        target = operation["target_session"].isoformat()
         identities = {
             item.ts_code: item.instrument_id
-            for item in self._generations.read_historical_ordinary_a_share_identities(source)
+            for item in self._generations.read_financial_indicator_identities(
+                source, through_session=target
+            )
         }
-        target = operation["target_session"].isoformat()
-        candidates = FinancialIndicatorCandidateStore(self._root)
+        candidates = FinancialIndicatorCandidateStore(
+            self._root, progress=lambda event: self._progress({
+                "event": "financial_refresh", "idempotency_key": key, **event,
+            }),
+        )
         previous_end = next(
             (family.dataset_coverage["end"] for family in descriptor.families
              if family.family_id == "equity.financial_indicator"), None,
         )
         with mounted_data_mutation_lock(self._database):
+            preflight_started = perf_counter()
             with self._database.transaction() as transaction:
                 discoveries_rows = transaction.execute(
                     """SELECT discovery_evidence FROM data.financial_daily_refresh_operations
@@ -1356,7 +1409,10 @@ class DailyFinancialRefreshService:
                 })))
             for family in descriptor.families:
                 if family.family_id == "equity.financial_indicator":
-                    previous = candidates.validate(family.manifest_sha256)
+                    # Read the addressed manifest to establish coverage before replaying
+                    # its complete source history. Incremental build validates the
+                    # old candidate before reusing its partitions.
+                    previous = candidates.reopen(family.manifest_sha256)
                     evidence.update(previous["collection_evidence_sha256s"])
                     discoveries.update(previous["discovery_evidence_sha256s"])
             sessions = candidates.available_sessions(
@@ -1364,7 +1420,15 @@ class DailyFinancialRefreshService:
                 sessions=tuple(day for day in descriptor.research_sessions if day <= target),
                 discovery_evidence_sha256s=sorted(discoveries),
             )
+            self._progress({
+                "event": "financial_refresh", "phase": "indicator_coverage",
+                "status": "completed", "idempotency_key": key,
+                "duration_ms": round((perf_counter() - preflight_started) * 1000),
+                "outcome": "available" if sessions else "retained",
+                "failure_code": None if sessions else "INDICATOR_COVERAGE_UNAVAILABLE",
+            })
             if not sessions:
+                self._store.record_indicator_retained(key, self._validated_clock())
                 return
             with self._database.transaction() as transaction:
                 unresolved_rows = transaction.execute(
@@ -1379,11 +1443,18 @@ class DailyFinancialRefreshService:
             }
             for instrument, _code in operation["indicator_collection"]["failures"]:
                 unresolved.setdefault(instrument, target)
+            build_started = perf_counter()
             digest = candidates.build(
                 collection_evidence_sha256s=sorted(evidence), instrument_ids=identities,
                 sessions=sessions, unresolved_sources=unresolved,
                 discovery_evidence_sha256s=sorted(discoveries),
+                published_base_reference=self._generations.published_indicator_reference(source),
             )
+            self._progress({
+                "event": "financial_refresh", "phase": "indicator_build",
+                "status": "completed", "idempotency_key": key,
+                "duration_ms": round((perf_counter() - build_started) * 1000),
+            })
             self._store.record_indicator_candidate(key, digest, self._validated_clock())
 
     def _publish_candidate(
@@ -1441,6 +1512,7 @@ class DailyFinancialRefreshService:
                 else f"{self._publication_operation_id}:{attempt}"
             )
             with mounted_data_mutation_lock(self._database):
+                composition_started = perf_counter()
                 composed = self._generations._compose_prevalidated_financial_candidate(
                     current.generation_manifest_sha256,
                     candidate.manifest_sha256,
@@ -1448,9 +1520,13 @@ class DailyFinancialRefreshService:
                     publication_coordinate=fingerprint,
                 )
                 if indicator_candidate is not None:
-                    composed = self._generations.compose_with_indicator_candidate(
-                        composed.manifest_sha256, str(indicator_candidate), prepared_at=prepared_at,
+                    composed = self._generations._compose_incremental_indicator_candidate(
+                        composed.manifest_sha256, str(indicator_candidate),
+                        published_generation_sha256=current.generation_manifest_sha256,
+                        prepared_at=prepared_at,
                     )
+                self._completed_stage(idempotency_key, "composition", composition_started)
+                publication_started = perf_counter()
                 self._store.record_composed_generation(
                     idempotency_key,
                     composed.manifest_sha256,
@@ -1513,6 +1589,7 @@ class DailyFinancialRefreshService:
                         "FINANCIAL_PUBLICATION_COMPLETION_PENDING"
                     ) from error
                 raise
+            self._completed_stage(idempotency_key, "publication", publication_started)
             return self._outcome(
                 idempotency_key,
                 status,

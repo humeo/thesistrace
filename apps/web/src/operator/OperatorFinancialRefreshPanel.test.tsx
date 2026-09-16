@@ -21,6 +21,9 @@ test("polls company checkpoints, preserves stale counts, and stops at a terminal
   const running = financialOperation({
     status: "running", outcome: null,
     progress: {phase: "collection", elapsedSeconds: 5, lastProgressAt: null,
+      indicatorScheduledCount: 65, indicatorCollectedCount: 65, indicatorFailedCount: 0,
+      indicatorCandidateStatus: "ready",
+    indicatorRetainedReason: null,
       discoveredAnnouncementCount: 10, processedCompanyCount: 1, updatedCompanyCount: 1,
       unchangedCompanyCount: 0, failedCompanyCount: 0, discoveryGaps: []},
   });
@@ -110,6 +113,9 @@ test("shows checkpoint telemetry while collection is running, without claiming p
         outcome: null,
         progress: {
           phase: "collection",
+          indicatorScheduledCount: 65, indicatorCollectedCount: 65, indicatorFailedCount: 0,
+          indicatorCandidateStatus: "ready",
+    indicatorRetainedReason: null,
           elapsedSeconds: 12,
           lastProgressAt: "2026-08-17T08:00:12Z",
           discoveredAnnouncementCount: 10,
@@ -129,6 +135,7 @@ test("shows checkpoint telemetry while collection is running, without claiming p
 
   expect(markup).toContain("Collecting company statements");
   expect(markup).toContain("<dt>Companies processed</dt><dd>3</dd>");
+  expect(markup).toContain("<dt>Indicator companies collected</dt><dd>65</dd>");
   expect(markup).toContain("<dt>With data changes</dt><dd>1</dd>");
   expect(markup).toContain("<dt>Without data changes</dt><dd>1</dd>");
   expect(markup).toContain("<dt>Companies failed</dt><dd>1</dd>");
@@ -152,7 +159,8 @@ test("shows discovery gaps and their complete-through consequence", () => {
     />,
   );
 
-  expect(markup).toContain("Degraded success");
+  expect(markup).toContain("Published · incomplete coverage");
+  expect(markup).toContain("operator-refresh-warning");
   expect(markup).toContain("discovery gaps remain");
   expect(markup).toContain("complete-through may lag");
   expect(markup).toContain("<dt>Discovery gaps</dt><dd>1</dd>");
@@ -161,6 +169,9 @@ test("shows discovery gaps and their complete-through consequence", () => {
 
 test("keeps unknown discovery distinct from zero and publication distinct from finished", () => {
   const base = {
+    indicatorScheduledCount: null, indicatorCollectedCount: null, indicatorFailedCount: null,
+    indicatorCandidateStatus: "not_started" as const,
+    indicatorRetainedReason: null,
     elapsedSeconds: 30, lastProgressAt: null, discoveredAnnouncementCount: null,
     processedCompanyCount: 0, updatedCompanyCount: 0, unchangedCompanyCount: 0,
     failedCompanyCount: 0, discoveryGaps: null,
@@ -317,4 +328,22 @@ test("automatically keeps a submission key across confirmation retries and chang
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   }
+});
+
+
+test("explains retained indicator coverage while statements continue", () => {
+  const base = financialOperation({});
+  const markup = renderToStaticMarkup(<FinancialRefreshReceipt pollError={false} operation={{
+    ...base, status: "running", outcome: null,
+    progress: {
+      phase: "collection", elapsedSeconds: 12, lastProgressAt: null,
+      discoveredAnnouncementCount: 0, processedCompanyCount: 0, updatedCompanyCount: 0,
+      unchangedCompanyCount: 0, failedCompanyCount: 0,
+      indicatorScheduledCount: 1, indicatorCollectedCount: 0, indicatorFailedCount: 1,
+      indicatorCandidateStatus: "retained",
+      indicatorRetainedReason: "INDICATOR_COVERAGE_UNAVAILABLE", discoveryGaps: [],
+    },
+  }} />);
+  expect(markup).toContain("Collecting company statements");
+  expect(markup).toContain("Indicator coverage could not reach a publishable date");
 });

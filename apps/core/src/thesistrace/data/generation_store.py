@@ -404,6 +404,16 @@ class MountedGenerationStore:
         root = self._read_family_generation_root(manifest_sha256)
         return _family_generation_descriptor_from_root(manifest_sha256, root)
 
+    def published_indicator_reference(self, manifest_sha256: str) -> dict[str, object] | None:
+        """Read a Family reference from the caller's accepted published Generation.
+
+        The caller owns publication authority (Head or a persisted refresh source).
+        Reading an arbitrary candidate root does not confer that authority.
+        """
+        root = self._read_family_generation_root(manifest_sha256)
+        reference = _family_reference(root, "equity.financial_indicator")
+        return None if reference is None else dict(reference)
+
     def validate_generation(
         self,
         manifest_sha256: str,
@@ -733,16 +743,47 @@ class MountedGenerationStore:
 
         market = self.validate_generation(market_manifest_sha256)
         store = FinancialIndicatorCandidateStore(self._root)
-        candidate = store.validate(candidate_sha256)
+        candidate, reference = store.validate_with_reference(candidate_sha256)
+        return self._compose_validated_indicator(
+            market, candidate_sha256, candidate, reference, prepared_at=prepared_at,
+        )
+
+    def _compose_incremental_indicator_candidate(
+        self, prevalidated_generation_sha256: str, candidate_sha256: str, *,
+        published_generation_sha256: str, prepared_at: datetime,
+    ) -> MountedFamilyGenerationDescriptor:
+        from thesistrace.data.financial_indicator_candidate import FinancialIndicatorCandidateStore
+
+        # The financial refresh owns both authorities: a Head read and a market
+        # Generation already composed/checked against that same Head.
+        published = self.published_indicator_reference(published_generation_sha256)
+        if self.published_indicator_reference(prevalidated_generation_sha256) != published:
+            raise GenerationStoreError("Indicator composition predecessor differs from Head")
+        store = FinancialIndicatorCandidateStore(self._root)
+        candidate, reference = store.validate_incremental_with_reference(
+            candidate_sha256, published_base_reference=published,
+        )
+        return self._compose_validated_indicator(
+            self.inspect_root(prevalidated_generation_sha256), candidate_sha256,
+            candidate, reference, prepared_at=prepared_at,
+        )
+
+    def _compose_validated_indicator(
+        self, market, candidate_sha256, candidate, reference, *, prepared_at,
+    ) -> MountedFamilyGenerationDescriptor:
+        from thesistrace.data.financial_indicator_candidate import FinancialIndicatorCandidateStore
+
+        market_manifest_sha256 = market.manifest_sha256
+        store = FinancialIndicatorCandidateStore(self._root)
+        sessions = candidate["research_sessions"]
         identities = {
             item.ts_code: item.instrument_id
-            for item in self.read_historical_ordinary_a_share_identities(
-                market_manifest_sha256
+            for item in self.read_financial_indicator_identities(
+                market_manifest_sha256, through_session=sessions[-1]
             )
         }
         if candidate["instrument_ids"] != identities:
             raise GenerationStoreError("Indicator candidate historical identities differ")
-        sessions = candidate["research_sessions"]
         if sessions != [
             day for day in market.research_sessions if sessions[0] <= day <= sessions[-1]
         ]:
@@ -761,7 +802,6 @@ class MountedGenerationStore:
                 candidate["discovery_evidence_sha256s"]
             ):
                 raise GenerationStoreError("Indicator candidate drops retained discovery evidence")
-        reference = store.family_reference(candidate_sha256)
         identity = {
             key: root[key]
             for key in (
@@ -1045,6 +1085,19 @@ class MountedGenerationStore:
         return tuple(
             HistoricalInstrumentIdentity(item.instrument_id, item.ts_code)
             for item in self.read_historical_ordinary_a_share_lifecycles(manifest_sha256)
+        )
+
+    def read_financial_indicator_identities(
+        self,
+        manifest_sha256: str,
+        *,
+        through_session: str,
+    ) -> tuple[HistoricalInstrumentIdentity, ...]:
+        """Require stocks listed by the coverage boundary, including delisted stocks."""
+        return tuple(
+            HistoricalInstrumentIdentity(item.instrument_id, item.ts_code)
+            for item in self.read_historical_ordinary_a_share_lifecycles(manifest_sha256)
+            if item.listed_from <= through_session
         )
 
     def read_historical_ordinary_a_share_lifecycles(

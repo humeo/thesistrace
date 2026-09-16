@@ -28,6 +28,9 @@ const progress = {
   phase: "collection", elapsed_seconds: 12, last_progress_at: "2026-08-17T08:00:12Z",
   discovered_announcement_count: 15, processed_company_count: 3,
   updated_company_count: 1, unchanged_company_count: 1, failed_company_count: 1,
+  indicator_scheduled_count: 65, indicator_collected_count: 65, indicator_failed_count: 0,
+  indicator_candidate_status: "building",
+  indicator_retained_reason: null,
   discovery_gaps: [{category: "半年报", start_date: "2026-08-08", end_date: "2026-08-17",
     failure_code: "CNINFO_DISCOVERY_UNAVAILABLE"}],
 };
@@ -36,12 +39,16 @@ it("strictly decodes bounded company progress and rejects impossible or private 
   expect(decodeFinancialRefreshProgress(progress)).toMatchObject({
     processedCompanyCount: 3, updatedCompanyCount: 1, unchangedCompanyCount: 1,
     failedCompanyCount: 1, discoveredAnnouncementCount: 15,
+    indicatorScheduledCount: 65, indicatorCollectedCount: 65, indicatorFailedCount: 0,
+    indicatorCandidateStatus: "building",
+    indicatorRetainedReason: null,
   });
   for (const invalid of [
     undefined,
     {...progress, owner_token: "private"},
     {...progress, processed_company_count: 4},
     {...progress, failed_company_count: -1},
+    {...progress, indicator_scheduled_count: 64},
     {...progress, elapsed_seconds: 0.5},
     {...progress, discovery_gaps: Array(6).fill(progress.discovery_gaps[0])},
     {...progress, discovery_gaps: [{...progress.discovery_gaps[0], source_url: "private"}]},

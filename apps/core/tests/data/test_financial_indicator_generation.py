@@ -1,5 +1,7 @@
 from datetime import UTC, datetime
 
+import pytest
+
 from thesistrace.data.financial_collection import RawFinancialBatchStore
 from thesistrace.data.financial_indicator_candidate import FinancialIndicatorCandidateStore
 from thesistrace.data.financial_indicator_evidence import FinancialIndicatorObservationStore
@@ -10,11 +12,24 @@ from thesistrace.fixture import build_minimal_canonical_fixture
 from thesistrace.publication.serialization import canonical_json_bytes
 
 
-def test_generation_composes_indicator_without_changing_original_root(tmp_path):
+@pytest.mark.parametrize("include_future_listings", [False, True])
+@pytest.mark.parametrize("listed_from", ["1991-04-03", "2026-08-07"])
+def test_generation_composes_indicator_without_changing_original_root(
+    tmp_path, include_future_listings, listed_from
+):
     market_store = MountedGenerationStore(tmp_path)
     prepared = datetime(2026, 8, 8, tzinfo=UTC)
+    fixture = build_minimal_canonical_fixture()
+    fixture["instruments"][0]["listed_from"] = listed_from
+    if include_future_listings:
+        for code, listed_from in (("688801.SH", "2026-09-11"), ("688837.SH", "2026-09-16")):
+            fixture["instruments"].append({
+                "instrument_id": f"equity:{code}", "ts_code": code,
+                "asset_type": "ordinary_a_share", "exchange": "SSE", "board": "star",
+                "listed_from": listed_from, "listed_to": "",
+            })
     market = market_store.materialize(
-        build_minimal_canonical_fixture(),
+        fixture,
         prepared_at=prepared,
         source_name="deterministic-test",
         source_lineage={"test": "indicator"},
@@ -65,6 +80,11 @@ def test_generation_composes_indicator_without_changing_original_root(tmp_path):
     )
     assert "financial.indicator.roe" in combined.field_availability
     assert market_store.inspect_root(market.manifest_sha256) == market
+    assert {
+        item.ts_code for item in market_store.read_historical_ordinary_a_share_identities(
+            combined.manifest_sha256
+        )
+    } == ({"000001.SZ", "688801.SH", "688837.SH"} if include_future_listings else {"000001.SZ"})
     assert market_store.validate_generation(combined.manifest_sha256) == combined
     result = market_store.read_composite_slice(
         combined.manifest_sha256,

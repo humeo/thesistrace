@@ -526,7 +526,8 @@ function OperationHistoryTable({
 
 function OperationState({ operation }: Readonly<{ operation: DataRefreshOperationalStatus }>) {
   const state = operationStateText(operation);
-  return <span className={`operator-state operator-operation-state-${operation.status}`}>{state}</span>;
+  const tone = operation.outcome === "degraded" ? "degraded" : operation.status;
+  return <span className={`operator-state operator-operation-state-${tone}`}>{state}</span>;
 }
 
 export function OperatorDataStatusDrawer({
@@ -577,6 +578,8 @@ export function OperatorDataStatusDrawer({
           <Detail label="Created" value={operation.createdAt} />
           <Detail label="Started" value={operation.startedAt ?? "Not started"} />
           <Detail label="Finished" value={operation.finishedAt ?? "Not finished"} />
+          <Detail label="Queue wait" value={durationText(operation.createdAt, operation.startedAt ?? operation.finishedAt)} />
+          <Detail label="Execution" value={operation.startedAt === null ? "Not started" : durationText(operation.startedAt, operation.finishedAt)} />
           <Detail label="Updated" value={operation.updatedAt} />
           <Detail label="Data through" value={operation.dataThroughSession ?? "Not published"} />
           <Detail label="Last refresh" value={operation.lastRefreshAt ?? "Not completed"} />
@@ -652,7 +655,7 @@ function operationStateText(operation: DataRefreshOperationalStatus): string {
   }
   if (operation.outcome === "published") return "Published";
   if (operation.outcome === "no_change") return "No change";
-  return "Degraded success";
+  return "Published · incomplete coverage";
 }
 
 function kindText(kind: DataRefreshKind): string {
@@ -693,7 +696,7 @@ function financialReadinessText(
 function outcomeText(outcome: NonNullable<DataRefreshOperationalStatus["outcome"]>): string {
   if (outcome === "published") return "Published";
   if (outcome === "no_change") return "No change";
-  if (outcome === "degraded") return "Degraded success";
+  if (outcome === "degraded") return "Published · incomplete coverage";
   if (outcome === "business_rejected") return "Business rejected";
   return "Infrastructure failed";
 }
@@ -706,4 +709,9 @@ function timestamp(value: string | null): React.ReactNode {
 
 function countText(value: number | null): string {
   return value === null ? "Not applicable" : String(value);
+}
+
+function durationText(start: string, end: string | null): string {
+  const seconds = Math.max(0, Math.floor(((end === null ? Date.now() : Date.parse(end)) - Date.parse(start)) / 1000));
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }

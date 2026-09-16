@@ -567,9 +567,9 @@ function financialPresentation(operation: FinancialRefreshOperation): Readonly<{
     description: operation.discoveryGapCount !== null && operation.discoveryGapCount > 0
       ? "A usable Dataset was published, but discovery gaps remain; complete-through may lag the requested Session."
       : "A usable Dataset was published, but some instruments remain pending and may require a later Refresh.",
-    label: "Degraded success",
+    label: "Published · incomplete coverage",
     title: "Financial data published with unresolved coverage",
-    tone: "unchanged",
+    tone: "warning",
   };
   if (operation.outcome === "published") return {
     description: "Financial Canonical data changed and a new immutable Dataset Generation was published.",

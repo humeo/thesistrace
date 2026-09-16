@@ -673,6 +673,10 @@ def test_operator_financial_inspection_exposes_progress_before_publication() -> 
         updated_company_count=1,
         unchanged_company_count=1,
         failed_company_count=1,
+        indicator_scheduled_count=65,
+        indicator_collected_count=65,
+        indicator_failed_count=0,
+        indicator_candidate_status="ready", indicator_retained_reason=None,
         discovery_gaps=(),
     )
     response = _client(OperatorAuthorizer(), refreshes).get(

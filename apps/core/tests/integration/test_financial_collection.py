@@ -4552,8 +4552,10 @@ def test_daily_indicator_coverage_advances_across_rotating_publications(
         drop_product_schemas(core_settings)
 
 
+@pytest.mark.parametrize("future_listings", [False, True])
 def test_daily_indicator_refresh_seeds_new_market_identity_before_rotation(
     core_settings: CoreSettings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    future_listings: bool,
 ) -> None:
     import thesistrace.data.financial_indicator_collection as indicator_collection
 
@@ -4580,7 +4582,8 @@ def test_daily_indicator_refresh_seeds_new_market_identity_before_rotation(
     drop_product_schemas(core_settings)
     database = _database(core_settings)
     try:
-        sessions = ("2010-01-04", "2026-08-07", "2026-08-13", "2026-08-14", "2026-08-17")
+        sessions = ("2010-01-04", "2026-08-07", "2026-08-13", "2026-08-14",
+                    "2026-08-17", "2026-09-10")
         market = _market_generation(tmp_path, sessions=sessions)
         _establish_head(database, tmp_path, market, operation_id="new-identity-market")
         prior = _initial_candidate(
@@ -4592,13 +4595,28 @@ def test_daily_indicator_refresh_seeds_new_market_identity_before_rotation(
             database, tmp_path, source, operation_id="new-identity-source", expected=market,
         )
         provider = Provider()
+        events = []
+        interrupted = False
+
+        def record_progress(event):
+            nonlocal interrupted
+            events.append(event)
+            if (
+                future_listings and not interrupted
+                and event.get("idempotency_key") == "new-identity-next"
+                and event.get("phase") == "statements"
+                and event.get("status") == "completed"
+            ):
+                interrupted = True
+                raise RuntimeError("interrupt after indicator candidate checkpoint")
+
         daily = DailyFinancialRefreshService(
             database, tmp_path, Announcements(), ExecutableStatementSource(),
             indicator_provider=TushareFinancialIndicatorProvider(provider),
-            clock=lambda: datetime(2026, 8, 18, 10, tzinfo=UTC),
+            clock=lambda: datetime(2026, 9, 16, 10, tzinfo=UTC), progress=record_progress,
         )
         first = daily.publish(
-            idempotency_key="new-identity-first", observation_through_session="2026-08-14",
+            idempotency_key="new-identity-first", observation_through_session="2026-08-17",
         )
         store = MountedGenerationStore(tmp_path)
         replacement = dict(store.open_refresh_base(
@@ -4606,14 +4624,21 @@ def test_daily_indicator_refresh_seeds_new_market_identity_before_rotation(
             universe_lookback_session_count=0,
         ).canonical)
         replacement["instruments"] = [*replacement["instruments"], {
-            "instrument_id": "equity:000003.SZ", "ts_code": "000003.SZ",
+            "instrument_id": "equity:301689.SZ", "ts_code": "301689.SZ",
             "asset_type": "ordinary_a_share", "exchange": "SZSE", "board": "main",
-            "listed_from": "2026-08-17", "listed_to": "",
+            "listed_from": "2026-09-10", "listed_to": "",
         }]
+        if future_listings:
+            for code, listed in (("688801.SH", "2026-09-11"), ("688837.SH", "2026-09-16")):
+                replacement["instruments"].append({
+                    "instrument_id": f"equity:{code}", "ts_code": code,
+                    "asset_type": "ordinary_a_share", "exchange": "SSE", "board": "star",
+                    "listed_from": listed, "listed_to": "",
+                })
         grown = store.materialize_refresh(
             predecessor_manifest_sha256=first.generation_manifest_sha256,
             replacement_canonical=replacement, replace_from_session=sessions[0],
-            prepared_at=datetime(2026, 8, 18, 11, tzinfo=UTC),
+            prepared_at=datetime(2026, 9, 16, 11, tzinfo=UTC),
             source_name="new-identity-market", source_lineage={"fixture": "new-listing"},
         )
         _establish_head(
@@ -4624,14 +4649,61 @@ def test_daily_indicator_refresh_seeds_new_market_identity_before_rotation(
             indicator_collection, "FinancialIndicatorDailyCollector", OneSecurityPerDay,
         )
         provider.requested.clear()
-        second = daily.publish(
-            idempotency_key="new-identity-next", observation_through_session="2026-08-17",
-        )
-        assert "000003.SZ" in provider.requested
+        events.clear()
+        from thesistrace.data.io_metrics import measure_data_io
+
+        with measure_data_io() as refresh_work:
+            if future_listings:
+                with pytest.raises(RuntimeError, match="interrupt after indicator candidate"):
+                    daily.publish(
+                        idempotency_key="new-identity-next",
+                        observation_through_session="2026-09-10",
+                    )
+                saved = FinancialDailyRefreshStore(database).operation("new-identity-next")
+                assert saved["indicator_candidate_manifest_sha256"] is not None
+                requests_before_resume = list(provider.requested)
+            second = daily.publish(
+                idempotency_key="new-identity-next", observation_through_session="2026-09-10",
+            )
+            if future_listings:
+                assert provider.requested == requests_before_resume
+        # Only the new IPO needs projection: once to build and once to verify.
+        assert refresh_work.indicator_securities_projected == 2
+        completed = {event["phase"]: event for event in events
+                     if event.get("status") == "completed"}
+        for phase in ("discovery", "indicator_collection", "indicator_coverage",
+                      "indicator_build", "statements", "candidate", "composition", "publication"):
+            assert completed[phase]["duration_ms"] >= 0
+        assert completed["indicator_collection"]["scheduled_count"] == len(set(provider.requested))
+        assert completed["statements"]["scheduled_count"] == 0
+        assert completed["indicator_projection"]["projected_company_count"] == 1
+        assert completed["indicator_projection"]["reused_company_count"] == 2
+        assert completed["indicator_base_validation"]["duration_ms"] >= 0
+        assert completed["indicator_input_validation"]["duration_ms"] >= 0
+        assert "301689.SZ" in provider.requested
+        assert not {"688801.SH", "688837.SH"}.intersection(provider.requested)
         updated = store.validate_generation(second.generation_manifest_sha256)
         family = next(f for f in updated.families if f.family_id == "equity.financial_indicator")
-        assert family.dataset_coverage["complete_through_session"] == "2026-08-17"
+        assert family.dataset_coverage["complete_through_session"] == "2026-09-10"
         assert family.dataset_coverage["instrument_count"] == 3
+        candidate = FinancialIndicatorCandidateStore(tmp_path).validate(family.manifest_sha256)
+        assert set(candidate["instrument_ids"]) == {"000001.SZ", "000002.SZ", "301689.SZ"}
+        old_family = next(
+            f for f in store.inspect_root(first.generation_manifest_sha256).families
+            if f.family_id == "equity.financial_indicator"
+        )
+        assert family.manifest_sha256 != old_family.manifest_sha256
+        new_stock = FinancialIndicatorCandidateStore(tmp_path).read_table(
+            family.manifest_sha256,
+            columns={"instrument_id", "eps", "source_report_period"},
+            instrument_ids=frozenset({"equity:301689.SZ"}), through="2026-09-10",
+        ).to_pylist()
+        assert {row["source_report_period"]: row["eps"] for row in new_stock} == {
+            "20260331": "1", "20260630": "2",
+        }
+        assert len(store.read_historical_ordinary_a_share_identities(
+            second.generation_manifest_sha256,
+        )) == (5 if future_listings else 3)
     finally:
         database.close()
         drop_product_schemas(core_settings)

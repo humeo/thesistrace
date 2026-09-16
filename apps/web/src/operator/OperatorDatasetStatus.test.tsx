@@ -148,7 +148,8 @@ describe("Operator Dataset status", () => {
     expect(markup).toContain("Running · Financial pipeline");
     expect(markup).toContain("Published");
     expect(markup).toContain("No change");
-    expect(markup).toContain("Degraded success");
+    expect(markup).toContain("Published · incomplete coverage");
+    expect(markup).toContain('operator-operation-state-degraded');
     expect(markup).toContain("Failed");
     expect(markup).toContain("Cancelled");
     expect(markup).toContain(">Reload<");
@@ -222,6 +223,8 @@ describe("Operator Dataset status", () => {
     expect(markup).toContain("Last heartbeat");
     expect(markup).toContain("Matched triggers");
     expect(markup).toContain("Discovery gaps");
+    expect(markup).toContain("<dt>Queue wait</dt><dd>1s</dd>");
+    expect(markup).toContain("<dt>Execution</dt><dd>1m 59s</dd>");
     expect(markup).toContain(">Close<");
     expect(markup).not.toMatch(/manifest|owner token|lease|object path|raw response/i);
   });

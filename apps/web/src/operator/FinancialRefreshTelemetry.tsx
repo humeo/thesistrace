@@ -4,9 +4,16 @@ const phaseLabels: Record<FinancialRefreshProgress["phase"], string> = {
   queued: "Waiting for Worker",
   preparing: "Preparing refresh",
   discovery: "Discovering announcements",
+  indicator_collection: "Collecting financial indicators",
+  indicator_candidate: "Preparing financial indicator candidate",
   collection: "Collecting company statements",
   publication: "Preparing Dataset publication",
   finished: "Processing finished",
+};
+
+const candidateLabels: Record<FinancialRefreshProgress["indicatorCandidateStatus"], string> = {
+  not_started: "Not started", building: "Preparing", ready: "Prepared",
+  retained: "Previous version retained; no new candidate prepared",
 };
 
 export function FinancialRefreshTelemetry({
@@ -22,6 +29,7 @@ export function FinancialRefreshTelemetry({
         <span>{elapsed === null ? "Not started" : elapsed < 60
           ? `${elapsed}s` : `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`}</span>
       </header>
+      <p>Statement processing</p>
       <dl>
         <div><dt>Announcements discovered</dt><dd>{progress.discoveredAnnouncementCount ?? "Unknown"}</dd></div>
         <div><dt>Companies processed</dt><dd>{progress.processedCompanyCount ?? "Unknown"}</dd></div>
@@ -33,6 +41,16 @@ export function FinancialRefreshTelemetry({
             {new Date(progress.lastProgressAt).toISOString().slice(0, 19).replace("T", " ")} UTC
           </time>}</dd></div>
       </dl>
+      <p>Financial indicators</p>
+      <dl>
+        <div><dt>Indicator companies scheduled</dt><dd>{progress.indicatorScheduledCount ?? "Unknown"}</dd></div>
+        <div><dt>Indicator companies collected</dt><dd>{progress.indicatorCollectedCount ?? "Unknown"}</dd></div>
+        <div><dt>Indicator companies failed</dt><dd>{progress.indicatorFailedCount ?? "Unknown"}</dd></div>
+        <div><dt>Indicator candidate</dt><dd>{candidateLabels[progress.indicatorCandidateStatus]}</dd></div>
+      </dl>
+      {progress.indicatorRetainedReason === "INDICATOR_COVERAGE_UNAVAILABLE" ? (
+        <p role="status">Indicator coverage could not reach a publishable date. The previous version was retained.</p>
+      ) : null}
       {progress.phase !== "finished" ? (
         <p>Company counts reflect saved processing results; not published yet. Updates every 5 seconds.</p>
       ) : null}
