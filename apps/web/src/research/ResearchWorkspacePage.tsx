@@ -784,7 +784,21 @@ export function ResearchDraftWorkspace({
             {draft.researchKind === "strategy_backtest" ? (
               <>
                 <div className="research-parameter-field research-weighting-field">
-                  <div className="research-parameter-heading"><label htmlFor="portfolio-weighting">Portfolio weighting</label><ResearchParameterHelp label="Portfolio weighting" text={draft.weighting === "inverse_volatility" ? "Lower-volatility selected stocks receive more weight." : draft.weighting === "rank_weight" ? "Higher-ranked selected stocks receive more weight; tied scores share rank weight." : "Selected stocks receive equal relative weights."} /></div>
+                  <div className="research-parameter-heading"><label htmlFor="portfolio-weighting">Portfolio weighting</label>
+                    <ResearchParameterHelp label="Portfolio weighting" text={<span className="research-help-content">
+                      <span>Splits the invested amount across selected stocks. Position sizing formula sets the total amount invested.</span>
+                      <span>{draft.weighting === "inverse_volatility"
+                        ? "Lower-volatility stocks receive more weight."
+                        : draft.weighting === "rank_weight"
+                          ? "Higher-ranked stocks receive more weight; tied scores share rank weight."
+                          : "Equal weight gives every selected stock the same share."}</span>
+                      <span><strong>Example</strong>{draft.weighting === "inverse_volatility"
+                        ? "Two stocks with volatility of 1% and 2% receive about 66.7% and 33.3% of the invested amount."
+                        : draft.weighting === "rank_weight"
+                          ? "Three stocks with distinct scores receive 50%, 33.3% and 16.7% of the invested amount, from highest to lowest rank."
+                          : "A 100,000 CNY account at 50% exposure invests 50,000 CNY. With 10 stocks, each targets 5,000 CNY."}</span>
+                    </span>} />
+                  </div>
                   <select id="portfolio-weighting"
                     value={draft.weighting}
                     onChange={(event) => {
@@ -973,16 +987,27 @@ export function ResearchDateFields({
   );
 }
 
-function ResearchParameterHelp({ label, text }: { label: string; text: string }) {
+function ResearchParameterHelp({ label, text }: { label: string; text: ReactNode }) {
   const id = useId();
+  const button = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
-  return <span className="research-parameter-help" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
-    <button type="button" aria-label={{ "Initial cash (CNY)": "Cash requirements", "Portfolio weighting": "Weighting help", "Volatility window (sessions)": "Volatility calculation help", "Exposure expression": "Exposure formula help", "Universe": "Stock universe help" }[label]} aria-describedby={open ? id : undefined}
-      onFocus={() => setOpen(true)} onBlur={() => setOpen(false)}
-      onClick={() => setOpen(true)} onKeyDown={(event) => {
+  const [placement, setPlacement] = useState({ above: false, maxHeight: 0 });
+  const show = () => {
+    const bounds = button.current?.getBoundingClientRect();
+    if (!bounds) return;
+    const below = window.innerHeight - bounds.bottom;
+    const above = bounds.top > below;
+    setPlacement({ above, maxHeight: Math.max(0, (above ? bounds.top : below) - 16) });
+    setOpen(true);
+  };
+  return <span className="research-parameter-help" onMouseEnter={show} onMouseLeave={() => setOpen(false)}>
+    <button ref={button} type="button" aria-label={{ "Initial cash (CNY)": "Cash requirements", "Portfolio weighting": "Weighting help", "Volatility window (sessions)": "Volatility calculation help", "Exposure expression": "Exposure formula help", "Universe": "Stock universe help" }[label]} aria-describedby={open ? id : undefined}
+      onFocus={show} onBlur={() => setOpen(false)}
+      onClick={show} onKeyDown={(event) => {
         if (event.key === "Escape") { event.preventDefault(); setOpen(false); }
       }}><Info aria-hidden="true" size={16} /></button>
-    {open && <span role="tooltip" id={id}>{text}</span>}
+    {open && <span role="tooltip" id={id} data-placement={placement.above ? "above" : "below"}
+      style={{ maxHeight: placement.maxHeight }}>{text}</span>}
   </span>;
 }
 
@@ -1000,7 +1025,17 @@ function ResearchPositionSizing({ ref, catalog, expression, diagnostics, onChang
 }) {
   const [selection, setSelection] = useState({ anchor: 0, head: 0 });
   return <div className="research-exposure-expression">
-    <div className="research-parameter-heading"><h3>Position sizing formula</h3><ResearchParameterHelp label="Exposure expression" text="Output 0–1: 1 invests 100%, 0.8 invests 80%, and 0 stays in cash. Use a constant for fixed exposure or a formula with common market or industry inputs for variable exposure. Calculated each Close; changes trade at the next Open. Stock allocation follows portfolio weighting." /></div>
+    <div className="research-parameter-heading"><h3>Position sizing formula</h3>
+      <ResearchParameterHelp label="Exposure expression" text={<span className="research-help-content">
+        <span>Sets the fraction of account equity invested. The rest stays in cash; Portfolio weighting divides the invested amount among stocks.</span>
+        <span><strong>Fixed exposure</strong><code>0.5</code> targets 50%: 50,000 CNY in a 100,000 CNY account. Use <code>1</code> for 100% or <code>0</code> to stay in cash.</span>
+        <span><strong>Market-based example</strong>
+          <code className="research-help-formula">{"if_else(\n  universe_advancing_fraction() > 0.5,\n  1, 0.3\n)"}</code>
+          Targets 100% when more than half the valid stocks in your Universe rose that session; otherwise 30%.
+        </span>
+        <span>Output must be 0–1. Calculated each Close; changes trade at the next Open.</span>
+      </span>} />
+    </div>
     <AlphaFormulaEditor ref={ref} catalog={catalog} context="exposure" diagnostics={diagnostics} formula={expression} selection={selection}
       onChange={(value, nextSelection) => { setSelection(nextSelection); onChange(value); }} />
     {error && <small id="position-sizing-error" className="inline-status-error">{error}</small>}

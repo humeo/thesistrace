@@ -225,6 +225,25 @@ for (const width of [1280, 390]) {
     await help.click();
     await expect(page.getByRole("tooltip")).toBeVisible();
 
+    await page.getByLabel("Initial cash (CNY)", { exact: true }).focus();
+    await page.setViewportSize({ width, height: 500 });
+    for (const name of ["Weighting help", "Exposure formula help"]) {
+      const exampleHelp = page.getByRole("button", { name, exact: true });
+      await exampleHelp.evaluate((element) => element.scrollIntoView({ block: "center" }));
+      await exampleHelp.click();
+      const tooltip = page.getByRole("tooltip");
+      await expect(tooltip).toContainText("50,000 CNY");
+      const bounds = await tooltip.boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(bounds!.y).toBeGreaterThanOrEqual(0);
+      expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(500);
+      expect(bounds!.x).toBeGreaterThanOrEqual(0);
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
+      await exampleHelp.press("Escape");
+      await expect(tooltip).toHaveCount(0);
+    }
+    await page.setViewportSize({ width, height: 964 });
+
     await page.getByLabel("Initial cash (CNY)", { exact: false }).fill("250000");
     await trigger.click();
     await expect(dialog).not.toBeVisible();
