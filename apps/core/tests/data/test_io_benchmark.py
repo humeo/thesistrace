@@ -69,6 +69,18 @@ def _long_research_evidence() -> dict[str, object]:
                     "terminal_positions",
                     "terminal_positions.part-000000",
                     "terminal_strategy_state",
+                    "strategy_targets",
+                    "strategy_targets.part-000000",
+                    "strategy_orders",
+                    "strategy_orders.part-000000",
+                    "strategy_child_orders",
+                    "strategy_child_orders.part-000000",
+                    "strategy_fills",
+                    "strategy_fills.part-000000",
+                    "strategy_adjustments",
+                    "strategy_adjustments.part-000000",
+                    "strategy_execution_constraints",
+                    "strategy_execution_constraints.part-000000",
                 ]
                 if strategy
                 else [
@@ -499,3 +511,25 @@ def test_long_research_rejects_missing_or_foreign_factor_evidence(payload_names:
     sample["result_payload_names"] = payload_names
     with pytest.raises(AssertionError, match="Factor Evaluation"):
         assert_long_research_qualification(evidence)
+
+
+@pytest.mark.parametrize("mutation", ["missing_section", "gap", "foreign"])
+def test_long_research_rejects_invalid_strategy_event_inventory(mutation: str) -> None:
+    evidence = _long_research_evidence()
+    sample = _qualification_sample(evidence, "strategy_backtest", "cold", 0)
+    names = sample["result_payload_names"]
+    if mutation == "missing_section":
+        names.remove("strategy_fills")
+    elif mutation == "gap":
+        names[names.index("strategy_orders.part-000000")] = "strategy_orders.part-000001"
+    else:
+        names.append("factor_period_statistics")
+    with pytest.raises(AssertionError, match="journey evidence is incomplete"):
+        assert_long_research_qualification(evidence)
+
+
+def test_long_research_accepts_recorded_strategy_section_without_events() -> None:
+    evidence = _long_research_evidence()
+    sample = _qualification_sample(evidence, "strategy_backtest", "cold", 0)
+    sample["result_payload_names"].remove("strategy_execution_constraints.part-000000")
+    assert_long_research_qualification(evidence)

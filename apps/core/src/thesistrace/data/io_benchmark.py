@@ -528,6 +528,14 @@ def _validate_kind_specific_sample(sample: Mapping[str, object], research_kind: 
         payload_names,
         "terminal_positions.part-",
     )
+    event_sections = {
+        "strategy_targets", "strategy_orders", "strategy_child_orders", "strategy_fills",
+        "strategy_adjustments", "strategy_execution_constraints",
+    }
+    event_partition_names = set().union(*(
+        _contiguous_partition_names(payload_names, f"{section}.part-")
+        for section in event_sections
+    ))
     if (
         _number(timings, "strategy") <= 0
         or _number(timings, "factor") != 0
@@ -542,6 +550,8 @@ def _validate_kind_specific_sample(sample: Mapping[str, object], research_kind: 
             | {"terminal_positions"}
             | partition_names
             | position_partition_names
+            | event_sections
+            | event_partition_names
         )
     ):
         raise AssertionError("Strategy Backtest journey evidence is incomplete")
