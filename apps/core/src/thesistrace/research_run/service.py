@@ -50,6 +50,7 @@ from thesistrace.data import (
     MountedGenerationStore,
 )
 from thesistrace.data.dependencies import resolve_data_dependencies
+from thesistrace.data.lifecycle import lock_data_lifecycle
 from thesistrace.operational_events import non_blocking_operational_event_sink
 from thesistrace.publication import (
     JsonPayload,
@@ -3099,13 +3100,20 @@ class ResearchRunService:
         while not stopped.wait(self._heartbeat_seconds):
             try:
                 with self._database.transaction() as transaction:
+                    # Preserve Attempt -> Data ordering and check expiry after both waits.
+                    transaction.execute(
+                        "SELECT id FROM research_runs.attempts WHERE id = %s FOR UPDATE",
+                        (claim.attempt_id,),
+                    ).fetchone()
+                    lock_data_lifecycle(transaction)
                     renewed = transaction.execute(
                         """
                         UPDATE research_runs.attempts AS attempt
-                        SET heartbeat_at = now(),
-                            lease_expires_at = now() + make_interval(secs => %s)
+                        SET heartbeat_at = clock_timestamp(),
+                            lease_expires_at = clock_timestamp() + make_interval(secs => %s)
                         WHERE attempt.id = %s AND attempt.run_id = %s
                           AND attempt.fence = %s AND attempt.status = 'running'
+                          AND attempt.lease_expires_at > clock_timestamp()
                           AND EXISTS (
                               SELECT 1
                               FROM research_runs.runs AS run
@@ -3843,6 +3851,7 @@ class ResearchRunService:
             staging_authority=lambda: self._authorize_result_staging(claim),
         )
         with self._database.transaction() as transaction:
+            lock_publication_mutation(transaction)
             self._validate_current_execution_in_transaction(transaction, claim)
             prior = transaction.execute(
                 """
@@ -3866,6 +3875,7 @@ class ResearchRunService:
                 transaction,
                 checkpoint_prepared,
             )
+            self._validate_current_execution_in_transaction(transaction, claim)
             transaction.execute(
                 """
                 INSERT INTO research_runs.execution_checkpoints (
@@ -3982,6 +3992,7 @@ class ResearchRunService:
             SELECT 1
             FROM research_runs.attempts
             WHERE id = %s AND run_id = %s AND fence = %s AND status = 'running'
+              AND lease_expires_at > clock_timestamp()
             """,
             (claim.attempt_id, claim.run_id, claim.fence),
         ).fetchone()
@@ -4020,17 +4031,7 @@ class ResearchRunService:
         assert self._dataset_lifecycle is not None
         with self._database.transaction() as transaction:
             lock_publication_mutation(transaction)
-            current = transaction.execute(
-                """
-                SELECT status, execution_fence
-                FROM research_runs.runs
-                WHERE researcher_id = %s AND id = %s
-                FOR UPDATE
-                """,
-                (claim.researcher_id, claim.run_id),
-            ).fetchone()
-            if current != {"status": "running", "execution_fence": claim.fence}:
-                raise ResearchRunFenced
+            self._validate_current_execution_in_transaction(transaction, claim)
             published = self._publication.record(
                 transaction, prepared,
                 expiring_payloads=strategy_event_payload_names(prepared.payload_sha256s),
@@ -4051,6 +4052,7 @@ class ResearchRunService:
                 SET status = 'succeeded', heartbeat_at = now(),
                     finished_at = now()
                 WHERE id = %s AND run_id = %s AND fence = %s AND status = 'running'
+                  AND lease_expires_at > clock_timestamp()
                 """,
                 (claim.attempt_id, claim.run_id, claim.fence),
             )

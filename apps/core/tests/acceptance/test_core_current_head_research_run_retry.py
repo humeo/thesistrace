@@ -12,6 +12,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from threading import Event, Thread
+from time import monotonic
 from uuid import uuid4
 
 import boto3
@@ -31,11 +32,13 @@ from thesistrace.data import (
     MountedGenerationStore,
 )
 from thesistrace.data.canonical_mapping import field_catalog
+from thesistrace.data.lifecycle import lock_data_lifecycle
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.fixture import build_minimal_canonical_fixture
 from thesistrace.publication import Publication, PublishedRef
 from thesistrace.publication.serialization import canonical_json_bytes
+from thesistrace.publication.service import lock_publication_mutation
 from thesistrace.research_kernel import RunInput, StrategyRunInput, run
 from thesistrace.research_kernel.factor import prepare_columnar_forward_labels
 from thesistrace.research_kernel.numeric import NUMERIC_CONTRACT_ID
@@ -1157,6 +1160,256 @@ def _read_result(runtime, stored: dict[str, object]) -> dict[str, object]:
         ),
         research_kind=str(immutable_input["research_kind"]),
     )
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+@pytest.mark.parametrize(
+    "stage", ["claimed", "checkpoint", "prepared", "publication", "checkpoint_publication"],
+)
+@pytest.mark.parametrize("research_kind", ["strategy_backtest", "factor_evaluation"])
+def test_expired_execution_cannot_publish_without_a_replacement_worker(
+    tmp_path: Path, stage: str, research_kind: str,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    head = _publish_head(settings, price_offset=0)
+    expired = Event()
+    publisher: Thread | None = None
+    barrier_errors: list[BaseException] = []
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        run_id = _admit_run(client, request_id="expired-authority", research_kind=research_kind)
+
+        def expire_at_boundary(current_stage: str, current_run_id: str) -> None:
+            nonlocal publisher
+            if (stage == "publication" and current_stage == "prepared") or (
+                stage == "checkpoint_publication" and current_stage == "claimed"
+            ):
+                locked = Event()
+
+                def expire_while_publisher_waits() -> None:
+                    try:
+                        with runtime.database.transaction() as transaction:
+                            lock_publication_mutation(transaction)
+                            owner = transaction.execute("SELECT pg_backend_pid() AS pid").fetchone()
+                            assert owner is not None
+                            locked.set()
+                            with connect(settings.database_url, autocommit=True) as observer:
+                                _wait_for_database_value(
+                                    observer,
+                                    "SELECT pid FROM pg_stat_activity "
+                                    "WHERE %s = ANY(pg_blocking_pids(pid))",
+                                    (owner["pid"],),
+                                )
+                            transaction.execute(
+                                "UPDATE research_runs.attempts SET lease_expires_at = '2000-01-01' "
+                                "WHERE run_id = %s AND status = 'running'", (current_run_id,),
+                            )
+                            expired.set()
+                    except BaseException as error:
+                        barrier_errors.append(error)
+                        locked.set()
+
+                publisher = Thread(target=expire_while_publisher_waits)
+                publisher.start()
+                assert locked.wait(timeout=10)
+            if current_stage == stage and not expired.is_set():
+                _expire_live_attempt(settings, current_run_id)
+                expired.set()
+
+        processor = ResearchRunService(
+            runtime.database,
+            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            generation_store=MountedGenerationStore(settings.data_mount),
+            publication=runtime.publication,
+            execution=SupervisedResearchExecutor(settings.data_mount),
+            annualized_excess_calculator=runtime.annualized_excess_calculator,
+            progress=expire_at_boundary,
+            heartbeat_seconds=60,
+        )
+        events: list[dict[str, object]] = []
+        try:
+            assert processor.process_next(on_execution_event=events.append) is True
+        finally:
+            if publisher is not None:
+                publisher.join(timeout=15)
+                assert not publisher.is_alive()
+        assert barrier_errors == []
+        assert expired.is_set()
+        waiting = client.get(f"/api/research-runs/{run_id}").json()
+        assert waiting["status"] == "running"
+        assert _stored_run(settings, run_id)["result_manifest_sha256"] is None
+        assert _research_result_manifest_count(settings) == 0
+        assert any(event["event"] == "research_attempt_fenced" for event in events)
+        if stage in {"claimed", "checkpoint_publication"}:
+            assert _checkpoint_ordinals(settings, run_id) == []
+            assert waiting["progress"]["completed_research_sessions"] == 0
+
+        assert runtime.research_runs.process_next() is True
+        assert client.get(f"/api/research-runs/{run_id}").json()["status"] == "succeeded"
+        assert [row["status"] for row in _attempts(settings, run_id)] == [
+            "failed", "succeeded",
+        ]
+        assert _stored_run(settings, run_id)["result_provenance"]["data_generation_id"] == head
+        assert _research_result_manifest_count(settings) == 1
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+@pytest.mark.parametrize("expired", [False, True])
+def test_heartbeat_rechecks_lease_after_waiting_for_attempt_lock(
+    tmp_path: Path, expired: bool,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    _publish_head(settings, price_offset=0)
+    checked = Event()
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        run_id = _admit_run(client, request_id="heartbeat-lock", research_kind="factor_evaluation")
+
+        def block_heartbeat(stage: str, current_run_id: str) -> None:
+            if stage != "claimed":
+                return
+            with (
+                connect(settings.database_url) as holder,
+                connect(settings.database_url, autocommit=True) as observer,
+            ):
+                before = holder.execute(
+                    "SELECT heartbeat_at FROM research_runs.attempts "
+                    "WHERE run_id = %s FOR UPDATE", (current_run_id,),
+                ).fetchone()
+                assert before is not None
+                heartbeat_pid = _wait_for_database_value(
+                    observer,
+                    "SELECT pid FROM pg_stat_activity WHERE %s = ANY(pg_blocking_pids(pid))",
+                    (holder.info.backend_pid,),
+                )
+                holder.execute(
+                    "UPDATE research_runs.attempts SET lease_expires_at = %s WHERE run_id = %s",
+                    (datetime(2000 if expired else 2050, 1, 1, tzinfo=UTC), current_run_id),
+                )
+                holder.commit()
+                _wait_for_database_value(
+                    observer,
+                    "SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM pg_stat_activity "
+                    "WHERE pid = %s AND state <> 'idle')",
+                    (heartbeat_pid,),
+                )
+                after = observer.execute(
+                    "SELECT attempt.heartbeat_at, attempt.lease_expires_at > clock_timestamp(), "
+                    "pin.lease_expires_at >= attempt.lease_expires_at "
+                    "FROM research_runs.attempts AS attempt "
+                    "JOIN data.generation_pins AS pin ON pin.owner_id = attempt.id "
+                    "WHERE attempt.run_id = %s", (current_run_id,),
+                ).fetchone()
+                assert after is not None
+                assert after[1] is not expired
+                assert (after[0] == before[0]) if expired else (after[0] > before[0])
+                assert after[2] is True
+                checked.set()
+
+        processor = ResearchRunService(
+            runtime.database,
+            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            generation_store=MountedGenerationStore(settings.data_mount),
+            publication=runtime.publication,
+            execution=SupervisedResearchExecutor(settings.data_mount),
+            progress=block_heartbeat,
+            heartbeat_seconds=0.05,
+        )
+        assert processor.process_next() is True
+        assert checked.is_set()
+        assert client.get(f"/api/research-runs/{run_id}").json()["status"] == (
+            "running" if expired else "succeeded"
+        )
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_heartbeat_cannot_revive_a_lease_while_waiting_for_data_protection(tmp_path: Path) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    _publish_head(settings, price_offset=0)
+    checked = Event()
+    with (
+        TestClient(create_app(settings)) as client,
+        connect(settings.database_url) as holder,
+        connect(settings.database_url, autocommit=True) as observer,
+    ):
+        runtime = client.app.state.core_runtime
+        run_id = _admit_run(
+            client, request_id="heartbeat-data-lock", research_kind="factor_evaluation",
+        )
+
+        def hold_data_protection(current_run_id: str, _attempt_id: str) -> None:
+            lock_data_lifecycle(holder)
+            observer.execute(
+                "UPDATE research_runs.attempts "
+                "SET lease_expires_at = clock_timestamp() + interval '2 seconds' "
+                "WHERE run_id = %s", (current_run_id,),
+            )
+
+        def expire_during_wait(stage: str, current_run_id: str) -> None:
+            if stage != "claimed":
+                return
+            heartbeat_pid = _wait_for_database_value(
+                observer,
+                "SELECT pid FROM pg_stat_activity WHERE %s = ANY(pg_blocking_pids(pid))",
+                (holder.info.backend_pid,),
+            )
+            _wait_for_database_value(
+                observer,
+                "SELECT 1 FROM research_runs.attempts "
+                "WHERE run_id = %s AND lease_expires_at <= clock_timestamp()",
+                (current_run_id,),
+            )
+            holder.commit()
+            _wait_for_database_value(
+                observer,
+                "SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM pg_stat_activity "
+                "WHERE pid = %s AND state <> 'idle')", (heartbeat_pid,),
+            )
+            lease = observer.execute(
+                "SELECT lease_expires_at <= clock_timestamp() FROM research_runs.attempts "
+                "WHERE run_id = %s", (current_run_id,),
+            ).fetchone()
+            assert lease == (True,)
+            checked.set()
+
+        processor = ResearchRunService(
+            runtime.database,
+            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            generation_store=MountedGenerationStore(settings.data_mount),
+            publication=runtime.publication,
+            execution=SupervisedResearchExecutor(settings.data_mount),
+            progress=expire_during_wait,
+            heartbeat_seconds=0.05,
+        )
+        assert processor.process_next(on_claim=hold_data_protection) is True
+        assert checked.is_set()
+        assert client.get(f"/api/research-runs/{run_id}").json()["status"] == "running"
+
+
+def _wait_for_database_value(connection, query: str, parameters: tuple[object, ...]) -> object:
+    deadline = monotonic() + 10
+    poll = Event()
+    while monotonic() < deadline:
+        row = connection.execute(query, parameters).fetchone()
+        if row is not None:
+            return row[0]
+        poll.wait(0.01)
+    raise AssertionError(f"Database condition did not become true: {query}")
 
 
 def _expire_live_attempt(settings: CoreSettings, run_id: str) -> None:

@@ -582,8 +582,8 @@ class DatasetLifecycle:
         row = transaction.execute(
             """
             UPDATE data.generation_pins
-            SET heartbeat_at = now(),
-                lease_expires_at = now() + make_interval(secs => %s)
+            SET heartbeat_at = clock_timestamp(),
+                lease_expires_at = clock_timestamp() + make_interval(secs => %s)
             WHERE id = %s AND owner_id = %s AND status = 'active'
             RETURNING id, owner_kind, owner_id, generation_manifest_sha256,
                       status, lease_expires_at, heartbeat_at

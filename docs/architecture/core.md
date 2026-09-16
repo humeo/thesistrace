@@ -712,7 +712,10 @@ The Research Worker supervisor owns the Attempt lease, fence, Data Generation
 Pin, Checkpoints, and publication. Its execution child can read only the frozen
 mounted Canonical Data Generation and return bounded Chunk data; it has no
 PostgreSQL or RustFS write authority. The supervisor validates every child result
-against current ownership before committing it.
+against current ownership and an unexpired Attempt lease before committing it.
+Lease checks use current database time after lock waits. An expired Attempt
+cannot renew itself or commit new Checkpoints or Results; the existing recovery
+path grants a new Attempt and resumes from verified Checkpoints.
 
 The Batch Research supervisor owns the Batch Attempt, fence, Data Generation
 Pin, complete-task acknowledgements, private shared artifact, cancellation, and
