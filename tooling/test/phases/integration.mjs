@@ -11,7 +11,9 @@ export async function integration(run) {
   run.record(Object.fromEntries(['postgres_port', 's3_port', 'auth_port', 'resend_port'].map(key => [key, run[key]])));
   await run.phase('integration-initialization', () => run.host(['uv', 'run', 'thesistrace-initialize']));
   const pytest = ['uv', 'run', 'pytest', '-c', `${run.repo_root}/apps/core/pyproject.toml`, '--rootdir', run.repo_root, '-q'];
-  await run.phase('integration-pytest', () => run.host([...pytest, 'apps/core/tests/integration', 'apps/core/tests/acceptance', '-m', 'not database_restart and not dependency_restart and not real_codex', `--junitxml=${run.pytest_report}`]));
+  // The combined suite includes long-history and batch recovery acceptance.
+  // Bound the whole suite separately from the default infrastructure phase budget.
+  await run.phase('integration-pytest', () => run.host([...pytest, 'apps/core/tests/integration', 'apps/core/tests/acceptance', '-m', 'not database_restart and not dependency_restart and not real_codex', `--junitxml=${run.pytest_report}`]), { timeoutMs: 60 * 60 * 1000 });
   for (const [phase, target, marker, report] of [
     ['database-restart', 'test_core_direct_research_run_admission.py', 'database_restart', run.database_restart_report],
     ['rustfs-restart', 'test_core_research_batch_factor_recovery.py::test_real_rustfs_loss_retries_the_complete_factor_task', '', run.dependency_restart_report],
