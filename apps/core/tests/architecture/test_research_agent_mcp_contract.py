@@ -1814,9 +1814,9 @@ def test_v1_inventory_scopes_descriptions_annotations_and_schemas_are_exact() ->
     canonical = _canonical_v1_contract()
 
     assert sha256(canonical).hexdigest() == (
-        "2bb0ae454195187cbb8552e29f2bf98b36396932943d76a342a5f3e3a2ff0c3f"
+        "ab3fc1f479b014da17998938bc562bbf9b886314c8b66a778f2b06ebb9d01ca9"
     )
-    assert len(canonical) == 226010
+    assert len(canonical) == 234736
 
 
 def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None:
@@ -2158,7 +2158,7 @@ async def _exercise_in_memory_protocol() -> None:
                 assert tool.annotations.read_only_hint is False
                 assert tool.annotations.idempotent_hint is False
                 assert tool.input_schema["discriminator"]["propertyName"] == "section"
-                expected_section_count = 16 if tool.name == "get_research_run_result" else 12
+                expected_section_count = 17 if tool.name == "get_research_run_result" else 13
                 assert len(tool.input_schema["oneOf"]) == expected_section_count
                 for branch in tool.input_schema["oneOf"]:
                     definition = tool.input_schema["$defs"][branch["$ref"].rsplit("/", 1)[-1]]

@@ -9,6 +9,7 @@ from psycopg.errors import LockNotAvailable
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.publication.holding_retention import HoldingRetention
+from thesistrace.publication.payload_retention import PayloadRetention
 from thesistrace.publication.service import (
     Publication,
     PublicationPreparationError,
@@ -123,6 +124,10 @@ class PublicationMaintenance:
             with connection.transaction():
                 connection.execute("SET LOCAL lock_timeout = '1s'")
                 expired = owner.expire_one_in_transaction(connection)
+                if not expired:
+                    expired = PayloadRetention(
+                        self._database, self._publication,
+                    ).expire_one_in_transaction(connection)
             if not expired:
                 break
             processed += 1

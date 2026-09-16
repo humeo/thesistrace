@@ -91,3 +91,30 @@ Recovery after commit uses that verified backup and its matching application
 images after stopping writers. There is no automatic upgrade, runtime compatibility
 branch, data reset or pointer fallback. Deployment and candidate publication still
 require their separate acceptance and atomic Head checks.
+
+## 0003: Seven-day Trading event retention
+
+- Source: `1dd7bce497ec4421c87f37be66c0defc63f433d7d836e6affb1a925fa6e5b05f`
+- Target: `1bb894bbece0ade8cb122d4054be492fb26ef56d1d9e85237a002f195e386a4f`
+- Preflight: `python -m thesistrace.migrations.payload_retention_0003`.
+- Apply: the same command with `--apply`, using the database owner URL.
+
+Stop Core writers and Publication maintenance, verify a restricted PostgreSQL
+backup, and preserve the referenced object-store bytes before applying. The
+transaction checks the source Publication schema and immutable manifest inventory,
+adds retention and expiry-tombstone tables, enrolls existing event payloads using
+their original publication time, records a receipt and updates the schema contract.
+The migration neither deletes payloads nor changes Result/Checkpoint identities.
+Existing events older than seven days become due when the new maintenance worker
+starts. Historical reads were not timestamped, so they cannot extend that deadline.
+
+New explicit event reads renew the publication's diagnostic payloads for seven
+days after a successful read. Report and metadata reads do not renew. Expiry releases
+live references and uses the existing bounded deletion queue, preserving bytes still
+referenced by other publications. API queries distinguish expired data from unrecorded
+and empty data; Track pages disclose partial expiry and retain available recent rows.
+
+Repeated application verifies the target without extending deadlines. A failed
+migration rolls back tables, data and the schema receipt together. Post-commit
+restoration requires the verified database and object backup with the matching
+old image; do not run old code against the new schema.

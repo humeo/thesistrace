@@ -307,6 +307,84 @@ def test_kernel_ledger_explains_when_minimum_lot_is_not_affordable() -> None:
     _assert_ledger_reconciles(ledger)
 
 
+@pytest.mark.parametrize(
+    "price,reason,requested,legal,submitted",
+    [
+        ("10", "insufficient_cash", 1_000_000, 1_000_000, 999_600),
+        ("100000", "insufficient_cash", 100, 100, 0),
+        ("200000", "below_board_lot", 50, 0, 0),
+        ("20000000", "below_board_lot", 0, 0, 0),
+    ],
+)
+def test_execution_constraints_explain_skipped_and_reduced_buys(
+    price, reason, requested, legal, submitted,
+) -> None:
+    from thesistrace.research_kernel.strategy_events import strategy_event_rows
+
+    canonical = _canonical(opens={session: {A: price, B: price} for session in SESSIONS})
+    matrix = _alpha_matrix({session: ((A, 2), (B, 1)) for session in SESSIONS})
+    result = _run(canonical, matrix, selection_interval=20)
+    evidence = strategy_event_rows(result, sessions=SESSIONS)
+    constraints = evidence["strategy_execution_constraints"]
+    assert len(constraints) == 1
+    row = constraints[0]
+    assert row["decision_session"] == SESSIONS[0]
+    assert row["session"] == SESSIONS[1]
+    assert row["target_id"] == evidence["strategy_targets"][0]["target_id"]
+    assert row["instrument_id"] == A
+    assert row["side"] == "buy"
+    assert row["reason"] == reason
+    assert row["unrounded_quantity"] == requested
+    assert row["legal_quantity"] == legal
+    assert row["submitted_quantity"] == submitted
+    assert Decimal(row["available_cash_cny"]) == Decimal("10000000")
+    assert Decimal(row["intended_value"]) == Decimal("10000000")
+    assert sum(fill["quantity"] for fill in evidence["strategy_fills"]) == submitted
+    assert result["rejections"] == []
+    if submitted:
+        assert row["order_id"] == evidence["strategy_orders"][0]["order_id"]
+    else:
+        assert row["order_id"] is None
+        assert evidence["strategy_orders"] == []
+    repeated = strategy_event_rows(
+        _run(canonical, matrix, selection_interval=20), sessions=SESSIONS,
+    )
+    assert repeated["strategy_execution_constraints"] == constraints
+
+
+def test_execution_constraint_records_a_reduction_too_small_to_sell() -> None:
+    from thesistrace.alpha_language import alpha_language
+    from thesistrace.research_kernel.strategy_events import strategy_event_rows
+
+    canonical = _canonical(opens={session: {A: "10", B: "10"} for session in SESSIONS})
+    _set_alpha_closes(canonical, {
+        SESSIONS[0]: {A: "10", B: "10"}, SESSIONS[1]: {A: "11", B: "11"},
+        SESSIONS[2]: {A: "9", B: "9"}, SESSIONS[3]: {A: "9", B: "9"},
+    })
+    definition = _definition(selection_interval=5)
+    definition["strategy"]["initial_cash_cny"] = "100000"
+    definition["strategy"]["exposure_expression"] = alpha_language.compile(
+        "if_else(universe_return() > 0, 0.5, 0.499)", context="exposure",
+    ).expression
+    definition["costs"] = dict.fromkeys(definition["costs"], "0")
+    result = run_strategy(
+        aligned_market_data(canonical, universe="manual"),
+        _alpha_matrix({session: ((A, 2), (B, 1)) for session in SESSIONS}),
+        definition, origin_session=SESSIONS[1],
+    )
+    evidence = strategy_event_rows(result, sessions=SESSIONS[1:])
+    assert len(evidence["strategy_execution_constraints"]) == 1
+    row = evidence["strategy_execution_constraints"][0]
+    assert (row["session"], row["side"], row["mode"]) == (SESSIONS[3], "sell", "reduce")
+    assert row["reason"] == "below_board_lot"
+    assert Decimal(row["intended_value"]) == 100
+    assert row["unrounded_quantity"] == 10
+    assert row["legal_quantity"] == row["submitted_quantity"] == 0
+    assert row["order_id"] is None
+    assert all(order["side"] == "buy" for order in evidence["strategy_orders"])
+    assert result["rejections"] == []
+
+
 def test_manual_rejections_never_create_false_fills_or_discard_a_holding() -> None:
     upper_limit_buy = _canonical(
         opens={session: {A: "10", B: "20"} for session in SESSIONS},
@@ -1198,7 +1276,9 @@ def test_trade_evidence_uses_research_settlement_and_stable_parent_relationships
         SESSIONS[0]: ((A, 2), (B, 1)), SESSIONS[1]: ((B, 2), (A, 1)),
     }.items()})
     first = _run(prefix, prefix_matrix)
-    for key in ("orders", "child_orders", "fills", "rejections", "target_events"):
+    for key in (
+        "orders", "child_orders", "fills", "rejections", "target_events", "execution_constraints",
+    ):
         first[key] = []
     resumed = run_strategy(
         aligned_market_data(copy.deepcopy(canonical), universe="manual"), matrix,
@@ -1206,6 +1286,9 @@ def test_trade_evidence_uses_research_settlement_and_stable_parent_relationships
     )
     assert resumed["orders"] == [row for row in result["orders"] if row["session"] > SESSIONS[1]]
     assert resumed["fills"] == [row for row in result["fills"] if row["session"] > SESSIONS[1]]
+    assert resumed["execution_constraints"] == [
+        row for row in result["execution_constraints"] if row["session"] > SESSIONS[1]
+    ]
 
 
 def test_split_fill_evidence_reconciles_the_actual_order_mutation() -> None:
@@ -1292,7 +1375,11 @@ def test_publication_rejects_orphaned_or_mismatched_trade_evidence() -> None:
     matrix = _alpha_matrix({session: ((A, 2), (B, 1)) for session in SESSIONS})
     evidence = strategy_event_rows(_run(canonical, matrix), sessions=SESSIONS)
     assert strategy_evidence_payloads(evidence, sessions=SESSIONS)
-    for mutation in ("orphan_fill", "missing_child", "wrong_target", "wrong_quantity"):
+    for mutation in (
+        "orphan_fill", "missing_child", "wrong_target", "wrong_quantity",
+        "constraint_wrong_order", "constraint_wrong_target", "constraint_wrong_quantity",
+        "constraint_skips_existing_order",
+    ):
         broken = copy.deepcopy(evidence)
         if mutation == "orphan_fill":
             broken["strategy_fills"][0]["child_order_id"] = "child_missing"
@@ -1300,8 +1387,18 @@ def test_publication_rejects_orphaned_or_mismatched_trade_evidence() -> None:
             broken["strategy_child_orders"].pop()
         elif mutation == "wrong_target":
             broken["strategy_orders"][0]["target_id"] = "target_missing"
-        else:
+        elif mutation == "wrong_quantity":
             broken["strategy_child_orders"][0]["quantity"] += 100
+        elif mutation == "constraint_wrong_order":
+            broken["strategy_execution_constraints"][0]["order_id"] = "order_missing"
+        elif mutation == "constraint_wrong_target":
+            broken["strategy_execution_constraints"][0]["target_id"] = "target_missing"
+        elif mutation == "constraint_wrong_quantity":
+            broken["strategy_execution_constraints"][0]["submitted_quantity"] -= 100
+        else:
+            broken["strategy_execution_constraints"][0].update({
+                "submitted_quantity": 0, "order_id": None,
+            })
         with pytest.raises(ValueError, match="relationship"):
             strategy_evidence_payloads(broken, sessions=SESSIONS)
 

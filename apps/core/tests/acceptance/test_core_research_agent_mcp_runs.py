@@ -172,7 +172,8 @@ async def _exercise_research_runs(
         assert strategy_detail["result_available"] is True
         assert strategy_detail["available_result_sections"] == [
             "strategy_targets", "strategy_orders", "strategy_child_orders",
-            "strategy_fills", "strategy_adjustments", "daily_holdings_status", "daily_holdings",
+            "strategy_fills", "strategy_adjustments", "strategy_execution_constraints",
+            "daily_holdings_status", "daily_holdings",
             "strategy_summary",
             "strategy_observations",
             "terminal_strategy_state",

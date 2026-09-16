@@ -30,6 +30,8 @@ from thesistrace.strategy_evidence import (
     StrategyAdjustmentsQuery,
     StrategyChildOrdersPage,
     StrategyChildOrdersQuery,
+    StrategyExecutionConstraintsPage,
+    StrategyExecutionConstraintsQuery,
     StrategyFillsPage,
     StrategyFillsQuery,
     StrategyOrdersPage,
@@ -41,7 +43,8 @@ from thesistrace.strategy_evidence import (
 RequestId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
 type DailyTrackResultSection = Literal[
     "strategy_targets", "strategy_orders", "strategy_child_orders",
-    "strategy_fills", "strategy_adjustments", "daily_holdings_status", "daily_holdings",
+    "strategy_fills", "strategy_adjustments", "strategy_execution_constraints",
+    "daily_holdings_status", "daily_holdings",
     "strategy_summary",
     "strategy_observations",
     "origin",
@@ -50,7 +53,8 @@ type DailyTrackResultSection = Literal[
 ]
 DAILY_TRACK_RESULT_SECTIONS: tuple[DailyTrackResultSection, ...] = (
     "strategy_targets", "strategy_orders", "strategy_child_orders",
-    "strategy_fills", "strategy_adjustments", "daily_holdings_status", "daily_holdings",
+    "strategy_fills", "strategy_adjustments", "strategy_execution_constraints",
+    "daily_holdings_status", "daily_holdings",
     "strategy_summary",
     "strategy_observations",
     "origin",
@@ -115,6 +119,12 @@ class TrackStrategyAdjustmentsInput(_DailyTrackResultSectionInput, StrategyAdjus
     pass
 
 
+class TrackStrategyExecutionConstraintsInput(
+    _DailyTrackResultSectionInput, StrategyExecutionConstraintsQuery,
+):
+    pass
+
+
 class TrackHoldingStatusInput(_DailyTrackResultSectionInput, HoldingStatusQuery):
     pass
 
@@ -134,6 +144,7 @@ type DailyTrackResultSectionInput = Annotated[
     | TrackStrategyChildOrdersInput
     | TrackStrategyFillsInput
     | TrackStrategyAdjustmentsInput
+    | TrackStrategyExecutionConstraintsInput
     | TrackHoldingStatusInput
     | TrackHoldingDetailsInput,
     Field(discriminator="section"),
@@ -675,6 +686,7 @@ type DailyTrackResultSectionResponse = Annotated[
     | StrategyChildOrdersPage
     | StrategyFillsPage
     | StrategyAdjustmentsPage
+    | StrategyExecutionConstraintsPage
     | HoldingStatusPage
     | HoldingDetailsPage,
     Field(discriminator="section"),

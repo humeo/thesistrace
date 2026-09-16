@@ -40,6 +40,8 @@ from thesistrace.strategy_evidence import (
     StrategyAdjustmentsQuery,
     StrategyChildOrdersPage,
     StrategyChildOrdersQuery,
+    StrategyExecutionConstraintsPage,
+    StrategyExecutionConstraintsQuery,
     StrategyFillsPage,
     StrategyFillsQuery,
     StrategyOrdersPage,
@@ -126,7 +128,8 @@ type ResearchRunStatus = Literal[
 ]
 type ResearchRunResultSection = Literal[
     "strategy_targets", "strategy_orders", "strategy_child_orders",
-    "strategy_fills", "strategy_adjustments", "daily_holdings_status", "daily_holdings",
+    "strategy_fills", "strategy_adjustments", "strategy_execution_constraints",
+    "daily_holdings_status", "daily_holdings",
     "factor",
     "factor_observations",
     "factor_periods",
@@ -150,7 +153,8 @@ FACTOR_RESULT_SECTIONS: tuple[ResearchRunResultSection, ...] = (
 )
 STRATEGY_RESULT_SECTIONS: tuple[ResearchRunResultSection, ...] = (
     "strategy_targets", "strategy_orders", "strategy_child_orders",
-    "strategy_fills", "strategy_adjustments", "daily_holdings_status", "daily_holdings",
+    "strategy_fills", "strategy_adjustments", "strategy_execution_constraints",
+    "daily_holdings_status", "daily_holdings",
     "strategy_summary",
     "strategy_observations",
     "terminal_strategy_state",
@@ -912,6 +916,12 @@ class RunStrategyAdjustmentsInput(_ResearchRunResultSectionInput, StrategyAdjust
     pass
 
 
+class RunStrategyExecutionConstraintsInput(
+    _ResearchRunResultSectionInput, StrategyExecutionConstraintsQuery,
+):
+    pass
+
+
 class RunHoldingStatusInput(_ResearchRunResultSectionInput, HoldingStatusQuery):
     pass
 
@@ -935,6 +945,7 @@ type ResearchRunResultSectionInput = Annotated[
     | RunStrategyChildOrdersInput
     | RunStrategyFillsInput
     | RunStrategyAdjustmentsInput
+    | RunStrategyExecutionConstraintsInput
     | RunHoldingStatusInput
     | RunHoldingDetailsInput,
     Field(discriminator="section"),
@@ -1103,6 +1114,7 @@ type ResearchRunResultSectionResponse = Annotated[
     | StrategyChildOrdersPage
     | StrategyFillsPage
     | StrategyAdjustmentsPage
+    | StrategyExecutionConstraintsPage
     | HoldingStatusPage
     | HoldingDetailsPage,
     Field(discriminator="section"),

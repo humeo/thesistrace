@@ -15,6 +15,7 @@ _EVENT_SECTIONS = frozenset(
         "strategy_child_orders",
         "strategy_fills",
         "strategy_adjustments",
+        "strategy_execution_constraints",
     }
 )
 

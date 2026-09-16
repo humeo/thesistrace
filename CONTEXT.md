@@ -428,6 +428,11 @@ _避免混用_: Fractional share, universal lot rule
 One exchange-limit-compliant piece of a larger logical Strategy order.
 _避免混用_: Partial fill, replacement order
 
+**Execution Constraint**:
+A quantity or available-cash restriction that reduces an intended Strategy trade
+or prevents a Simulated Order from being submitted at its scheduled Open.
+_避免混用_: Market Rejection, partial fill, infrastructure failure
+
 **Simulated Order**:
 A Strategy buy or sell instruction submitted under the Simulation Conditions,
 whose outcome may be filled or blocked.
@@ -489,6 +494,15 @@ _避免混用_: Factor Evaluation, broker statement
 **Strategy Daily Observation**:
 The minimal retained Strategy result for one Research Session.
 _避免混用_: Position history, order ledger, fill ledger
+
+**Trading Event Retention**:
+The seven-day idle lifetime of the target, order, child order, fill, adjustment,
+and execution constraint payloads of a published Strategy Result or Tracking
+Checkpoint. Successful explicit event queries renew that publication's event
+payloads; report reads do not. Expiry releases only diagnostic object references,
+retaining verified inventory tombstones and the immutable Result identity.
+Charts, performance metrics, Terminal Strategy State, and tracking remain available.
+_避免混用_: Result lifetime, full ResearchRun deletion, daily holding retention
 
 **Daily Holding Observation**:
 The actual per-instrument holdings and valuations at one Research Session's

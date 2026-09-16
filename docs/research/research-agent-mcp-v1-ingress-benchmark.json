@@ -21,8 +21,8 @@
     "cursor_characters": 1024
   },
   "deterministic_payloads": {
-    "v1_contract_sha256": "2bb0ae454195187cbb8552e29f2bf98b36396932943d76a342a5f3e3a2ff0c3f",
-    "v1_contract_bytes": 226010,
+    "v1_contract_sha256": "ab3fc1f479b014da17998938bc562bbf9b886314c8b66a778f2b06ebb9d01ca9",
+    "v1_contract_bytes": 234736,
     "maximum_factor_batch_call_bytes": 84536
   },
   "observed": {
@@ -41,6 +41,6 @@
     "transport": "in-process deterministic MCP client",
     "network_access": false,
     "real_model": false,
-    "note": "Deterministic payload hash and size refreshed on 2026-09-14 for the merged field catalog, daily and period Factor sections; observed performance remains the 2026-09-07 measurement. Peak RSS includes the Python interpreter, pytest, plugins, schemas, and fixtures; it is compared conservatively with the current production container envelope. Current pagination and receipt contract; transport and business-page bounds are verified separately."
+    "note": "Deterministic payload hash and size refreshed on 2026-09-16 for execution constraints in ResearchRun and DailyTrack result queries; observed performance remains the 2026-09-07 measurement. Peak RSS includes the Python interpreter, pytest, plugins, schemas, and fixtures; it is compared conservatively with the current production container envelope. Current pagination and receipt contract; transport and business-page bounds are verified separately."
   }
 }

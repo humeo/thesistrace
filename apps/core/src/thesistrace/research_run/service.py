@@ -201,8 +201,9 @@ from thesistrace.strategy_evidence import (
     StrategyEventQuery,
     StrategyEvidencePublication,
     StrategyEvidenceSource,
-    read_strategy_event_page,
+    read_retained_strategy_events,
     stage_strategy_evidence,
+    strategy_event_payload_names,
     strategy_event_record_count,
     strategy_event_response,
     verified_event_partitions,
@@ -677,7 +678,10 @@ class ResearchRunService:
             lock_publication_mutation(transaction)
             authorize_batch(transaction)
             self._validate_batch_owned_run_in_transaction(transaction, claim)
-            published = self._publication.record(transaction, prepared)
+            published = self._publication.record(
+                transaction, prepared,
+                expiring_payloads=strategy_event_payload_names(prepared.payload_sha256s),
+            )
             updated = transaction.execute(
                 """
                 UPDATE research_runs.runs
@@ -849,7 +853,10 @@ class ResearchRunService:
             lock_publication_mutation(transaction)
             authorize_batch(transaction)
             self._validate_batch_owned_run_in_transaction(transaction, claim)
-            published = self._publication.record(transaction, prepared)
+            published = self._publication.record(
+                transaction, prepared,
+                expiring_payloads=strategy_event_payload_names(prepared.payload_sha256s),
+            )
             HoldingRetention(self._database, self._publication).record(
                 transaction, unit_id=claim.run_id, researcher_id=claim.researcher_id,
                 source_kind="research_run", source_id=claim.run_id, sessions=sessions,
@@ -2622,8 +2629,8 @@ class ResearchRunService:
                 manifest_sha256=manifest_sha256,
             )
             try:
-                read = read_strategy_event_page(
-                    self._publication, published_ref, query=query, after=after,
+                read = read_retained_strategy_events(
+                    self._database, self._publication, published_ref, query=query, after=after,
                 )
                 return strategy_event_response(
                     query, read,
@@ -4024,7 +4031,10 @@ class ResearchRunService:
             ).fetchone()
             if current != {"status": "running", "execution_fence": claim.fence}:
                 raise ResearchRunFenced
-            published = self._publication.record(transaction, prepared)
+            published = self._publication.record(
+                transaction, prepared,
+                expiring_payloads=strategy_event_payload_names(prepared.payload_sha256s),
+            )
             if holding_prepared is not None:
                 HoldingRetention(self._database, self._publication).record(
                     transaction, unit_id=claim.run_id, researcher_id=claim.researcher_id,

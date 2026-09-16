@@ -100,7 +100,45 @@ def test_event_reader_distinguishes_empty_absent_and_corrupt_evidence() -> None:
     assert missing.status == "not_recorded" and missing.rows == [] and missing.next_after is None
 
 
-def _publication():
+def test_execution_constraint_queries_page_and_preserve_unrecorded_history() -> None:
+    from thesistrace.strategy_evidence import (
+        StrategyExecutionConstraintsQuery,
+        read_strategy_event_page,
+    )
+
+    rows = [{
+        "constraint_id": f"constraint_{index}", "target_id": f"target_{index:064x}",
+        "decision_session": "2026-01-05", "session": "2026-01-06",
+        "instrument_id": f"equity:60000{index}.SH", "side": "buy", "mode": "selection",
+        "reason": "below_board_lot", "intended_value": "500", "unrounded_quantity": 50,
+        "legal_quantity": 0, "submitted_quantity": 0, "available_cash_cny": "500",
+        "order_id": None,
+    } for index in range(2)]
+    publication, reference, _ = _publication(constraints=rows)
+    query = StrategyExecutionConstraintsQuery(section="strategy_execution_constraints", limit=1)
+    first = read_strategy_event_page(publication, reference, query=query)
+    second = read_strategy_event_page(publication, reference, query=query, after=first.next_after)
+    assert first.rows + second.rows == rows
+    assert first.next_after is not None and second.next_after is None
+    filtered = read_strategy_event_page(publication, reference, query=query.model_copy(update={
+        "target_id": rows[1]["target_id"], "instrument_id": rows[1]["instrument_id"],
+    }))
+    assert filtered.rows == rows[1:]
+    for name in list(publication.payloads):
+        if name.startswith("strategy_execution_constraints"):
+            del publication.payloads[name]
+    missing = read_strategy_event_page(publication, reference, query=query)
+    assert missing.status == "not_recorded" and missing.rows == []
+    assert read_strategy_event_page(publication, reference, query=StrategyTargetsQuery(
+        section="strategy_targets", limit=1,
+    )).status == "recorded"
+    # An absent descriptor alongside retained parts is corruption, not unrecorded history.
+    publication.payloads["strategy_execution_constraints.part-000000"] = object()
+    with pytest.raises(ValueError, match="incomplete"):
+        read_strategy_event_page(publication, reference, query=query)
+
+
+def _publication(*, constraints=None):
     import json
 
     from thesistrace.publication import JsonPayload, PublishedRef, VerifiedBundle, VerifiedPayload
@@ -124,6 +162,10 @@ def _publication():
         for index, session in enumerate(["2026-01-05"] * 512 + ["2026-01-06"])
     ]
     builder = StrategyEvidencePublication()
+    if constraints:
+        builder.add("strategy_execution_constraints", strategy_event_payload(
+            "strategy_execution_constraints", constraints,
+        ), constraints)
     for part in (rows[:512], rows[512:]):
         builder.add("strategy_targets", strategy_event_payload("strategy_targets", part), part)
     payloads = {}

@@ -341,10 +341,19 @@ class Publication:
         self,
         transaction: PostgresTransaction,
         prepared: PreparedPublication,
+        *, expiring_payloads: frozenset[str] = frozenset(),
     ) -> PublishedRef:
         lock_publication_mutation(transaction)
         manifest = _load_manifest(prepared._manifest_bytes, prepared.manifest_sha256)
         objects = _manifest_objects(manifest)
+
+        if not expiring_payloads <= set(prepared.payload_sha256s):
+            raise PublicationVerificationError("Expiring payload names are not in the manifest")
+        if transaction.execute(
+            "SELECT 1 FROM publication.expired_payloads WHERE manifest_sha256 = %s LIMIT 1",
+            (prepared.manifest_sha256,),
+        ).fetchone():
+            raise PublicationVerificationError("An expired publication cannot be republished")
 
         # Recording verifies each object independently.  It must not retain every
         # object body as verify_prepared() intentionally does for read callers.
@@ -418,6 +427,19 @@ class Publication:
                 (prepared.manifest_sha256, ordinal, name, digest),
             )
         self._verify_recorded_links(transaction, prepared.manifest_sha256, objects)
+        if expiring_payloads:
+            transaction.execute(
+                "INSERT INTO publication.payload_retention(manifest_sha256, payload_names) "
+                "VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                (prepared.manifest_sha256, sorted(expiring_payloads)),
+            )
+            row = transaction.execute(
+                "SELECT payload_names FROM publication.payload_retention "
+                "WHERE manifest_sha256 = %s",
+                (prepared.manifest_sha256,),
+            ).fetchone()
+            if row["payload_names"] != sorted(expiring_payloads):
+                raise PublicationVerificationError("Publication retention scope conflicts")
         return PublishedRef(
             manifest_sha256=prepared.manifest_sha256,
             kind=str(manifest["kind"]),
@@ -469,6 +491,7 @@ class Publication:
             raise PublicationPreparationError("Publication destination scratch already exists")
         with self._database.transaction() as transaction:
             manifest = self._validated_published_manifest(transaction, published_ref)
+            self._require_live_payloads(transaction, published_ref, {payload_name})
         descriptors = {
             name: (digest, expected_bytes, media_type, serialization)
             for name, digest, expected_bytes, media_type, serialization in (
@@ -531,6 +554,7 @@ class Publication:
         selected_names = set(descriptors) if payload_names is None else set(payload_names)
         if not selected_names <= set(descriptors):
             raise PublicationVerificationError("Selected Publication payload does not exist")
+        self._require_live_payloads(transaction, published_ref, selected_names)
         verified_payloads: dict[str, VerifiedPayload] = {}
         for name in sorted(selected_names):
             digest, expected_bytes, media_type, serialization = descriptors[name]
@@ -546,6 +570,16 @@ class Publication:
             provenance=manifest["provenance"],
             payloads=verified_payloads,
         )
+
+    @staticmethod
+    def _require_live_payloads(transaction, published_ref, names):
+        if transaction.execute(
+            "SELECT 1 FROM publication.payload_retention WHERE manifest_sha256 = %s "
+            "AND payload_names && %s "
+            "AND (expired_at IS NOT NULL OR expires_at <= clock_timestamp())",
+            (published_ref.manifest_sha256, sorted(names)),
+        ).fetchone():
+            raise PublicationVerificationError("Selected diagnostic payloads have expired")
 
     def _validated_published_manifest(
         self,
@@ -695,9 +729,12 @@ class Publication:
             FROM publication.manifest_objects AS mo
             JOIN publication.objects AS o ON o.sha256 = mo.object_sha256
             WHERE mo.manifest_sha256 = %s
-            ORDER BY mo.ordinal
+            UNION ALL
+            SELECT ordinal, logical_name, object_sha256, byte_size
+            FROM publication.expired_payloads WHERE manifest_sha256 = %s
+            ORDER BY ordinal
             """,
-            (manifest_sha256,),
+            (manifest_sha256, manifest_sha256),
         ).fetchall()
         expected = []
         for ordinal, item in enumerate(objects):

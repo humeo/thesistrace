@@ -1,4 +1,4 @@
-"""Compressed, bounded partitions for permanent Strategy execution evidence."""
+"""Compressed, bounded partitions for time-limited Strategy execution evidence."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import json
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Annotated, Literal
 
 import pyarrow as pa
@@ -35,6 +35,7 @@ from thesistrace.research_kernel.strategy_events import (
     EVENT_MODELS,
     StrategyAdjustmentEvent,
     StrategyChildOrderEvent,
+    StrategyExecutionConstraintEvent,
     StrategyFillEvent,
     StrategyOrderEvent,
     StrategyTargetEvent,
@@ -48,12 +49,13 @@ _INTEGER_FIELDS = frozenset(
         "legal_quantity",
         "quantity",
         "execution_shares_delta",
+        "submitted_quantity",
     }
 )
 _NULLABLE_FIELDS = frozenset({"unrounded_quantity", "legal_quantity", "rejection_reason"})
 
 
-def _field(name: str) -> pa.Field:
+def _field(name: str, section: str) -> pa.Field:
     if name in _INTEGER_FIELDS:
         data_type = pa.int64()
     elif name == "exposure":
@@ -62,7 +64,10 @@ def _field(name: str) -> pa.Field:
         data_type = pa.list_(pa.string())
     else:
         data_type = pa.string()
-    return pa.field(name, data_type, nullable=name in _NULLABLE_FIELDS)
+    nullable = name in _NULLABLE_FIELDS or (
+        section == "strategy_execution_constraints" and name == "order_id"
+    )
+    return pa.field(name, data_type, nullable=nullable)
 
 
 def event_session_field(section: str) -> str:
@@ -73,11 +78,29 @@ EVENT_CONTRACTS = {
     section: ParquetWriterContract(
         name="research-result-" + section.replace("_", "-"),
         version=1,
-        schema=pa.schema([_field(name) for name in model.model_fields]),
+        schema=pa.schema([_field(name, section) for name in model.model_fields]),
         sort_keys=(event_session_field(section), EVENT_ID_FIELDS[section]),
     )
     for section, model in EVENT_MODELS.items()
 }
+
+
+def strategy_event_payload_names(names) -> frozenset[str]:
+    return frozenset(name for name in names if name in EVENT_MODELS or any(
+        name.startswith(section + ".part-") for section in EVENT_MODELS
+    ))
+
+
+def recorded_event_sections(names: set[str] | frozenset[str]) -> set[str]:
+    """Constraint evidence has independent availability; absent records are never inferred."""
+    present = set(EVENT_MODELS) & names
+    trading = set(EVENT_MODELS) - {"strategy_execution_constraints"}
+    if (present and not trading <= present) or any(
+        section not in present and any(name.startswith(section + ".part-") for name in names)
+        for section in EVENT_MODELS
+    ):
+        raise ValueError("Strategy event publication is incomplete")
+    return present
 
 
 def event_order(section: str, row: Mapping[str, object]) -> tuple[str, str]:
@@ -320,6 +343,24 @@ def _validate_event_relationships(evidence: Mapping, covered: set[str]) -> None:
                 if (target["decision_session"] != order["decision_session"]
                     or target["mode"] != order["reason"]):
                     raise ValueError("Strategy event relationship differs from its target")
+        context = ("target_id", "decision_session", "session", "instrument_id", "side")
+        submitted_orders = {
+            tuple(order[key] for key in context): order for order in orders.values()
+        }
+        for constraint in evidence["strategy_execution_constraints"]:
+            order = submitted_orders.get(tuple(constraint[key] for key in context))
+            if constraint["submitted_quantity"]:
+                if (order is None or order["order_id"] != constraint["order_id"]
+                    or order["legal_quantity"] != constraint["submitted_quantity"]
+                    or order["reason"] != constraint["mode"]):
+                    raise ValueError("Strategy constraint relationship differs from its order")
+            elif order is not None:
+                raise ValueError("Skipped Strategy constraint relationship cannot have an order")
+            if constraint["decision_session"] in covered:
+                target = targets[constraint["target_id"]]
+                if (target["decision_session"] != constraint["decision_session"]
+                    or target["mode"] != constraint["mode"]):
+                    raise ValueError("Strategy constraint relationship differs from its target")
     except (KeyError, TypeError) as error:
         raise ValueError("Strategy event relationship has a missing or invalid parent") from error
 
@@ -501,11 +542,34 @@ class StrategyAdjustmentsQuery(StrategyEventQuery):
     adjustment_id: EventFilterIdentity | None = None
 
 
+class StrategyExecutionConstraintsQuery(StrategyEventQuery):
+    section: Literal["strategy_execution_constraints"]
+    target_id: EventFilterIdentity | None = None
+    order_id: EventFilterIdentity | None = None
+    constraint_id: EventFilterIdentity | None = None
+
+
 @dataclass(frozen=True)
 class StrategyEventPageRead:
-    status: Literal["recorded", "not_recorded"]
+    status: Literal["recorded", "not_recorded", "expired", "partially_expired"]
     rows: list[dict[str, object]]
     next_after: str | None = None
+    expires_at: datetime | None = None
+
+
+def read_retained_strategy_events(database, publication, reference, *, query, after=None):
+    from dataclasses import replace
+
+    from thesistrace.publication.payload_retention import PayloadRetention
+
+    metadata, page = PayloadRetention(database, publication).read_detail(
+        reference, lambda tx: read_strategy_event_page(
+            publication, reference, query=query, after=after, transaction=tx,
+        ), payload_name=query.section,
+    )
+    if page is None:
+        return StrategyEventPageRead(status="expired", rows=[], expires_at=metadata["expires_at"])
+    return replace(page, expires_at=metadata["expires_at"]) if metadata else page
 
 
 def event_cursor_after(section: str, row: Mapping[str, object]) -> str:
@@ -518,6 +582,7 @@ def read_strategy_event_page(
     *,
     query: StrategyEventQuery,
     after: str | None = None,
+    transaction=None,
 ) -> StrategyEventPageRead:
     section = query.section
     if section not in EVENT_MODELS:
@@ -532,18 +597,17 @@ def read_strategy_event_page(
         ):
             raise ValueError("Event cursor position is invalid")
         boundary = tuple(value)
-    inventory = publication.payload_names(published_ref)
-    event_names = {
-        name
-        for name in inventory
-        if name in EVENT_MODELS
-        or any(name.startswith(event_section + ".part-") for event_section in EVENT_MODELS)
-    }
-    if not event_names:
+    inventory = (publication.payload_names(published_ref) if transaction is None else
+                 publication.payload_names_in_transaction(transaction, published_ref))
+    def read_selected(names):
+        if transaction is None:
+            return publication.read_selected(published_ref, names)
+        return publication.read_selected_in_transaction(transaction, published_ref, names)
+
+    present = recorded_event_sections(inventory)
+    if section not in present:
         return StrategyEventPageRead(status="not_recorded", rows=[])
-    if not set(EVENT_MODELS) <= inventory:
-        raise ValueError("Strategy event publication is incomplete")
-    descriptor = publication.read_selected(published_ref, frozenset({section}))
+    descriptor = read_selected(frozenset({section}))
     parts = event_partition_descriptors(descriptor, section)
     partition_names = {part["name"] for part in parts}
     if partition_names != {name for name in inventory if name.startswith(section + ".part-")}:
@@ -557,7 +621,7 @@ def read_strategy_event_page(
             continue
         if query.end_session is not None and part["first"][0] > query.end_session:
             break
-        bundle = publication.read_selected(published_ref, frozenset({part["name"]}))
+        bundle = read_selected(frozenset({part["name"]}))
         payload = bundle.payloads[part["name"]]
         if payload.media_type != "application/vnd.apache.parquet" or payload.serialization != {
             "format": "canonical-parquet",
@@ -602,13 +666,15 @@ class StrategyEvidenceSource(BaseModel):
 class StrategyEventPage[Event](BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
     source: StrategyEvidenceSource
-    status: Literal["recorded", "not_recorded"]
+    status: Literal["recorded", "not_recorded", "expired", "partially_expired"]
     rows: list[Event]
     next_cursor: str | None
+    expires_at: datetime | None = None
 
     @model_validator(mode="after")
     def availability_matches_rows(self):
-        if self.status == "not_recorded" and (self.rows or self.next_cursor is not None):
+        if (self.status in {"not_recorded", "expired"}
+                and (self.rows or self.next_cursor is not None)):
             raise ValueError("Unrecorded evidence cannot contain rows or a continuation")
         if len(self.rows) > 50:
             raise ValueError("Event page exceeds its row limit")
@@ -635,12 +701,17 @@ class StrategyAdjustmentsPage(StrategyEventPage[StrategyAdjustmentEvent]):
     section: Literal["strategy_adjustments"] = "strategy_adjustments"
 
 
+class StrategyExecutionConstraintsPage(StrategyEventPage[StrategyExecutionConstraintEvent]):
+    section: Literal["strategy_execution_constraints"] = "strategy_execution_constraints"
+
+
 EVENT_PAGE_MODELS = {
     "strategy_targets": StrategyTargetsPage,
     "strategy_orders": StrategyOrdersPage,
     "strategy_child_orders": StrategyChildOrdersPage,
     "strategy_fills": StrategyFillsPage,
     "strategy_adjustments": StrategyAdjustmentsPage,
+    "strategy_execution_constraints": StrategyExecutionConstraintsPage,
 }
 
 
@@ -663,6 +734,7 @@ def strategy_event_response(
         return EVENT_PAGE_MODELS[query.section](
             source=source,
             status=read.status,
+            expires_at=read.expires_at,
             rows=rows,
             next_cursor=cursor,
         )
@@ -672,11 +744,11 @@ def strategy_event_response(
 
 type StrategyEventQueryInput = Annotated[
     StrategyTargetsQuery | StrategyOrdersQuery | StrategyChildOrdersQuery
-    | StrategyFillsQuery | StrategyAdjustmentsQuery,
+    | StrategyFillsQuery | StrategyAdjustmentsQuery | StrategyExecutionConstraintsQuery,
     Field(discriminator="section"),
 ]
 type StrategyEventPageResponse = Annotated[
     StrategyTargetsPage | StrategyOrdersPage | StrategyChildOrdersPage
-    | StrategyFillsPage | StrategyAdjustmentsPage,
+    | StrategyFillsPage | StrategyAdjustmentsPage | StrategyExecutionConstraintsPage,
     Field(discriminator="section"),
 ]

@@ -50,7 +50,11 @@ from thesistrace.research_run.result_schema import (
     StrategyDailyObservationsValue,
     StrategySummaryValue,
 )
-from thesistrace.strategy_evidence import EVENT_MODELS, event_partition_descriptors
+from thesistrace.strategy_evidence import (
+    EVENT_MODELS,
+    event_partition_descriptors,
+    recorded_event_sections,
+)
 
 __all__ = (
     "LAST_DAILY_OBSERVATION_KEYS",
@@ -148,9 +152,10 @@ def read_strategy_reporting_bundle(
     """Charts, summaries and Track activation do not consume trade evidence bodies."""
     names = (publication.payload_names(published_ref) if transaction is None else
              publication.payload_names_in_transaction(transaction, published_ref))
-    present = set(EVENT_MODELS) & names
-    if present and present != set(EVENT_MODELS):
-        raise ResearchResultError("Strategy event section set is incomplete")
+    try:
+        recorded_event_sections(names)
+    except ValueError as error:
+        raise ResearchResultError(str(error)) from error
     reporting = frozenset(name for name in names if name not in EVENT_MODELS and not any(
         name.startswith(f"{section}.part-") for section in EVENT_MODELS
     ))
@@ -1016,10 +1021,13 @@ def _require_exact_strategy_payload_names(bundle: VerifiedBundle) -> None:
     if not isinstance(observation_partitions, list):
         raise ResearchResultError("Strategy Daily Observations partitions are invalid")
     expected = set(STRATEGY_RESULT_BASE_PAYLOAD_NAMES) | _common_payload_names(bundle)
-    if any(section in bundle.payloads for section in EVENT_MODELS):
-        for section in EVENT_MODELS:
-            expected.add(section)
-            expected.update(part["name"] for part in event_partition_descriptors(bundle, section))
+    try:
+        sections = recorded_event_sections(set(bundle.payloads))
+    except ValueError as error:
+        raise ResearchResultError(str(error)) from error
+    for section in sections:
+        expected.add(section)
+        expected.update(part["name"] for part in event_partition_descriptors(bundle, section))
     expected.update(str(item["name"]) for item in observation_partitions)
     expected.update(str(item["name"]) for item in position_descriptor["partitions"])
     if set(bundle.payloads) != expected:

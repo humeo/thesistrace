@@ -131,7 +131,8 @@ from thesistrace.strategy_evidence import (
     StrategyEvidencePublication,
     StrategyEvidenceSource,
     event_cursor_after,
-    read_strategy_event_page,
+    read_retained_strategy_events,
+    strategy_event_payload_names,
     strategy_event_response,
     strategy_evidence_payloads,
 )
@@ -537,7 +538,10 @@ class DailyTrackService:
             },
             provenance=provenance,
         )
-        published = self._publication.record(transaction, prepared)
+        published = self._publication.record(
+            transaction, prepared,
+            expiring_payloads=strategy_event_payload_names(prepared.payload_sha256s),
+        )
         row = transaction.execute(
             """
             INSERT INTO daily_tracks.tracks (
@@ -1879,6 +1883,8 @@ class DailyTrackService:
         rows = []
         has_more = False
         status = "recorded"
+        expired = False
+        expires_at = None
         try:
             refs = []
             if lower is None or lower <= origin.initial_strategy_state.session:
@@ -1890,8 +1896,8 @@ class DailyTrackService:
                     provenance=item["provenance"],
                 ) for item in checkpoints)
                 for reference in refs:
-                    read = read_strategy_event_page(
-                        self._publication, reference,
+                    read = read_retained_strategy_events(
+                        self._database, self._publication, reference,
                         query=query.model_copy(update={
                             "limit": min(50, query.limit + 1 - len(rows)),
                         }),
@@ -1900,6 +1906,12 @@ class DailyTrackService:
                     if read.status == "not_recorded":
                         status, rows = "not_recorded", []
                         break
+                    if read.status == "expired":
+                        expired = True
+                        continue
+                    if read.expires_at is not None:
+                        expires_at = (min(expires_at, read.expires_at)
+                                      if expires_at else read.expires_at)
                     rows.extend(read.rows)
                     has_more = len(rows) > query.limit or read.next_after is not None
                     if has_more:
@@ -1918,9 +1930,11 @@ class DailyTrackService:
                     raise DailyTrackResultUnavailable("DailyTrack event snapshot was removed")
                 refs = []
             rows = rows[:query.limit]
+            if expired and status != "not_recorded":
+                status = "partially_expired" if rows else "expired"
             return strategy_event_response(
                 query, StrategyEventPageRead(
-                    status=status, rows=rows,
+                    status=status, rows=rows, expires_at=expires_at,
                     next_after=(event_cursor_after(query.section, rows[-1])
                                 if has_more and rows else None),
                 ),
@@ -3480,7 +3494,10 @@ class DailyTrackService:
                 "current_checkpoint_manifest_sha256": (claim.predecessor_manifest_sha256),
             }:
                 raise DailyTrackFenced
-            published = self._publication.record(transaction, prepared)
+            published = self._publication.record(
+                transaction, prepared,
+                expiring_payloads=strategy_event_payload_names(prepared.payload_sha256s),
+            )
             HoldingRetention(self._database, self._publication).record(
                 transaction, unit_id=f"{claim.track_id}:{claim.target_sessions[-1]}",
                 researcher_id=claim.researcher_id, source_kind="daily_track",

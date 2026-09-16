@@ -31,7 +31,7 @@ PositiveShares = Annotated[StrictInt, Field(gt=0)]
 RejectionReason = Literal["suspension", "data_unavailable", "upper_limit_buy", "lower_limit_sell"]
 StrategyEventSection = Literal[
     "strategy_targets", "strategy_orders", "strategy_child_orders", "strategy_fills",
-    "strategy_adjustments",
+    "strategy_adjustments", "strategy_execution_constraints",
 ]
 
 
@@ -118,17 +118,53 @@ class StrategyAdjustmentEvent(ValuationEvent):
     last_adjusted_price: DecimalEvidence
 
 
+class StrategyExecutionConstraintEvent(TerminalStateModel):
+    constraint_id: StrictStr
+    target_id: StrictStr
+    decision_session: Session
+    session: Session
+    instrument_id: StrictStr
+    side: Literal["buy", "sell"]
+    mode: Literal["selection", "reduce", "increase"]
+    reason: Literal["below_board_lot", "insufficient_cash"]
+    intended_value: DecimalEvidence
+    unrounded_quantity: Annotated[StrictInt, Field(ge=0)]
+    legal_quantity: Annotated[StrictInt, Field(ge=0)]
+    submitted_quantity: Annotated[StrictInt, Field(ge=0)]
+    available_cash_cny: DecimalEvidence
+    order_id: StrictStr | None
+
+    @model_validator(mode="after")
+    def constrained_quantity_matches_reason(self) -> StrategyExecutionConstraintEvent:
+        if self.decision_session >= self.session:
+            raise ValueError("Execution constraint must follow its decision Session")
+        if not self.submitted_quantity <= self.legal_quantity <= self.unrounded_quantity:
+            raise ValueError("Execution constraint quantities must not increase")
+        if (self.order_id is None) != (self.submitted_quantity == 0):
+            raise ValueError("Only a submitted constraint can reference an order")
+        if Decimal(self.intended_value) <= 0 or Decimal(self.available_cash_cny) < 0:
+            raise ValueError("Execution constraint amounts are invalid")
+        if self.reason == "below_board_lot":
+            if self.legal_quantity != 0:
+                raise ValueError("Below-lot constraint cannot submit an order")
+        elif self.side != "buy" or self.submitted_quantity >= self.legal_quantity:
+            raise ValueError("Cash constraint must reduce a legal buy quantity")
+        return self
+
+
 EVENT_MODELS = {
     "strategy_targets": StrategyTargetEvent,
     "strategy_orders": StrategyOrderEvent,
     "strategy_child_orders": StrategyChildOrderEvent,
     "strategy_fills": StrategyFillEvent,
     "strategy_adjustments": StrategyAdjustmentEvent,
+    "strategy_execution_constraints": StrategyExecutionConstraintEvent,
 }
 EVENT_ID_FIELDS = {
     "strategy_targets": "target_id", "strategy_orders": "order_id",
     "strategy_child_orders": "child_order_id", "strategy_fills": "fill_id",
     "strategy_adjustments": "adjustment_id",
+    "strategy_execution_constraints": "constraint_id",
 }
 
 
@@ -142,6 +178,7 @@ def strategy_event_rows(
         "strategy_orders": strategy["orders"],
         "strategy_child_orders": strategy["child_orders"],
         "strategy_fills": strategy["fills"],
+        "strategy_execution_constraints": strategy["execution_constraints"],
         "strategy_adjustments": [
             event for day in strategy["daily"] if day["session"] in covered
             for event in day["valuation_events"]

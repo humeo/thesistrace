@@ -447,6 +447,9 @@ def _execute_strategy(
         else:
             raise StrategyCalculationError("continuation metric state is invalid")
 
+    execution_constraints = ([] if continuation is None else [
+        dict(item) for item in continuation.get("execution_constraints", [])
+    ])
     target_events = ([] if continuation is None else [
         dict(item) for item in continuation.get("target_events", [])
     ])
@@ -550,6 +553,13 @@ def _execute_strategy(
                     }
                 )
                 if quantity <= 0:
+                    execution_constraints.append(_execution_constraint(
+                        target_id=target_id, decision_session=signal_session,
+                        session=session, instrument_id=instrument_id, side="sell", mode=mode,
+                        reason="below_board_lot", intended_value=current_value - desired_value,
+                        unrounded_quantity=unrounded, legal_quantity=0, submitted_quantity=0,
+                        available_cash=net_cash,
+                    ))
                     diagnostics.append(
                         {
                             "session": session,
@@ -695,6 +705,15 @@ def _execute_strategy(
                                 "legal_quantity": legal_quantity,
                             }
                         )
+                if deficit > 0 and (legal_quantity == 0 or quantity < legal_quantity):
+                    execution_constraints.append(_execution_constraint(
+                        target_id=target_id, decision_session=signal_session,
+                        session=session, instrument_id=instrument_id, side="buy", mode=mode,
+                        reason="below_board_lot" if legal_quantity == 0 else "insufficient_cash",
+                        intended_value=deficit, unrounded_quantity=unrounded,
+                        legal_quantity=legal_quantity, submitted_quantity=quantity,
+                        available_cash=net_cash,
+                    ))
                 if quantity <= 0:
                     if legal_quantity <= 0 and unrounded > 0:
                         diagnostics.append(
@@ -927,6 +946,7 @@ def _execute_strategy(
         "rebalance_events": rebalance_events,
         "rejections": rejections,
         "diagnostics": diagnostics,
+        "execution_constraints": execution_constraints,
     }
     return _StrategyExecution(
         payload=payload,
@@ -935,6 +955,26 @@ def _execute_strategy(
         turnover_events=tuple(turnover_events),
         cumulative_cost=cumulative_cost,
     )
+
+
+def _execution_constraint(
+    *, target_id: str, decision_session: str, session: str, instrument_id: str,
+    side: str, mode: str, reason: str, intended_value: Decimal, unrounded_quantity: int,
+    legal_quantity: int, submitted_quantity: int, available_cash: Decimal,
+) -> dict[str, object]:
+    return {
+        "constraint_id": strategy_event_id(
+            "constraint", target_id, session, instrument_id, side, reason,
+        ),
+        "target_id": target_id, "decision_session": decision_session, "session": session,
+        "instrument_id": instrument_id, "side": side, "mode": mode, "reason": reason,
+        "intended_value": canonical_decimal(intended_value),
+        "unrounded_quantity": unrounded_quantity, "legal_quantity": legal_quantity,
+        "submitted_quantity": submitted_quantity,
+        "available_cash_cny": canonical_decimal(available_cash),
+        "order_id": strategy_event_id("order", target_id, session, instrument_id, side)
+        if submitted_quantity else None,
+    }
 
 
 def _strategy_publication_result(execution: _StrategyExecution) -> dict[str, object]:
