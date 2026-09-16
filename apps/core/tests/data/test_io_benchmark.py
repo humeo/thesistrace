@@ -71,7 +71,12 @@ def _long_research_evidence() -> dict[str, object]:
                     "terminal_strategy_state",
                 ]
                 if strategy
-                else ["factor_summary"]
+                else [
+                    "factor_daily_observations",
+                    "factor_daily_observations.part-000000",
+                    "factor_period_statistics",
+                    "factor_summary",
+                ]
             ),
             "phase_timings_seconds": {
                 "data_read": 1.0,
@@ -475,3 +480,22 @@ def test_budget_failure_names_the_exact_regressed_metric() -> None:
 
     with pytest.raises(AssertionError, match=r"descriptor\.cold\.rows_scanned: 1 > 0"):
         assert_benchmark_budgets(results, budgets)
+
+
+@pytest.mark.parametrize(
+    "payload_names",
+    [
+        ["factor_summary"],
+        ["factor_daily_observations", "factor_period_statistics", "factor_summary"],
+        ["factor_daily_observations", "factor_daily_observations.part-000001",
+         "factor_period_statistics", "factor_summary"],
+        ["factor_daily_observations", "factor_daily_observations.part-000000",
+         "factor_period_statistics", "factor_summary", "strategy_summary"],
+    ],
+)
+def test_long_research_rejects_missing_or_foreign_factor_evidence(payload_names: list[str]) -> None:
+    evidence = _long_research_evidence()
+    sample = _qualification_sample(evidence, "factor_evaluation", "cold", 0)
+    sample["result_payload_names"] = payload_names
+    with pytest.raises(AssertionError, match="Factor Evaluation"):
+        assert_long_research_qualification(evidence)

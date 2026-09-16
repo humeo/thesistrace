@@ -497,12 +497,20 @@ def _validate_kind_specific_sample(sample: Mapping[str, object], research_kind: 
     ):
         raise AssertionError("long Research Result payload evidence is invalid")
     if research_kind == "factor_evaluation":
+        partition_names = _contiguous_partition_names(
+            payload_names,
+            "factor_daily_observations.part-",
+            failure_message="Factor Evaluation daily evidence is incomplete",
+        )
         if (
             _number(timings, "strategy") != 0
             or _number(timings, "factor") <= 0
             or sample.get("strategy_continuation_present") is not False
             or sample.get("strategy_observation_count") != 0
-            or payload_names != ["factor_summary"]
+            or not partition_names
+            or set(payload_names) != {
+                "factor_summary", "factor_daily_observations", "factor_period_statistics",
+            } | partition_names
             or object_names != ["factor_summary"]
         ):
             raise AssertionError("Factor Evaluation performed or published Strategy work")
@@ -539,11 +547,16 @@ def _validate_kind_specific_sample(sample: Mapping[str, object], research_kind: 
         raise AssertionError("Strategy Backtest journey evidence is incomplete")
 
 
-def _contiguous_partition_names(payload_names: Sequence[str], prefix: str) -> set[str]:
+def _contiguous_partition_names(
+    payload_names: Sequence[str],
+    prefix: str,
+    *,
+    failure_message: str = "Strategy Backtest journey evidence is incomplete",
+) -> set[str]:
     names = [name for name in payload_names if name.startswith(prefix)]
     expected = [f"{prefix}{index:06d}" for index in range(len(names))]
     if names != expected:
-        raise AssertionError("Strategy Backtest journey evidence is incomplete")
+        raise AssertionError(failure_message)
     return set(names)
 
 
