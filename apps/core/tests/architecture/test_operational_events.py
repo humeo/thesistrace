@@ -21,6 +21,25 @@ from thesistrace.operational_events import (
 _FIXED_OBSERVED_AT = datetime(2026, 8, 24, tzinfo=UTC)
 
 
+def test_financial_stage_counts_survive_the_operational_sink() -> None:
+    output = StringIO()
+    counts = {
+        "announcement_count": 13, "gap_count": 0,
+        "scheduled_count": 76, "collected_count": 76, "failed_count": 0,
+        "collection_count": 5615, "observation_count": 10961,
+        "total_company_count": 5551, "projected_company_count": 65,
+        "reused_company_count": 5486, "partition_count": 5551,
+    }
+    _sink(output)(OperationalEvent(
+        level="INFO", component="data_operator", event="financial_refresh",
+        context={"phase": "indicator_projection", "duration_ms": 123, **counts,
+                 "raw_response": "secret"},
+    ))
+    event = json.loads(output.getvalue())
+    assert {key: event.get(key) for key in counts} == counts
+    assert "raw_response" not in event
+
+
 def test_operational_event_sink_emits_one_allowlisted_json_line() -> None:
     output = StringIO()
     sink = _sink(output)
