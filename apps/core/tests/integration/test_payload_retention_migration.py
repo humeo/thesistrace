@@ -14,7 +14,12 @@ from thesistrace.publication.serialization import canonical_json_bytes
 
 
 @pytest.fixture
-def source_database(core_settings):
+def source_database(core_settings, payload_retention_target_schemas, monkeypatch):
+    from thesistrace.migrations import payload_retention_0003
+
+    monkeypatch.setattr(
+        payload_retention_0003, "CORE_SCHEMA_DEFINITIONS", payload_retention_target_schemas,
+    )
     assert os.environ["THESISTRACE_TEST_PROJECT_NAME"].startswith("thesistrace-test-")
     admin = psycopg.connect(core_settings.database_url, autocommit=True)
     name = "event_retention_" + uuid4().hex

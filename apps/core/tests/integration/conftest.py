@@ -63,3 +63,30 @@ def rank_ic_migration_target_schemas():
     definitions = tuple(SchemaDefinition(**row) for row in fixture["schemas"])
     assert _fingerprint(definitions) == fixture["fingerprint"] == TARGET
     return definitions
+
+
+def _migration_release_schemas(archive_name, fingerprint):
+    from thesistrace._postgres.schema import _fingerprint
+
+    path = Path(__file__).resolve().parents[1] / "fixtures/historical-core-schema"
+    with ZipFile(path / archive_name) as archive:
+        definitions = tuple(
+            SchemaDefinition(name.removesuffix(".sql"), archive.read(name).decode())
+            for name in archive.namelist()
+        )
+    assert _fingerprint(definitions) == fingerprint
+    return definitions
+
+
+@pytest.fixture
+def financial_indicator_target_schemas():
+    from thesistrace.migrations.financial_indicator import TARGET
+
+    return _migration_release_schemas("financial-indicator-target.zip", TARGET)
+
+
+@pytest.fixture
+def payload_retention_target_schemas():
+    from thesistrace.migrations.payload_retention_0003 import TARGET
+
+    return _migration_release_schemas("payload-retention-target.zip", TARGET)

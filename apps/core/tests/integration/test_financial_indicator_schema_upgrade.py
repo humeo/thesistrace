@@ -6,12 +6,18 @@ from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg.errors import CheckViolation
 
-from thesistrace._postgres import PostgresDatabase, initialize_schemas
-from thesistrace.entrypoints.schema import verify_core_schema
+from thesistrace._postgres import PostgresDatabase, initialize_schemas, verify_schemas
 
 
 @pytest.fixture
-def indicator_source_database(core_settings, historical_core_schema):
+def indicator_source_database(
+    core_settings, historical_core_schema, financial_indicator_target_schemas, monkeypatch,
+):
+    from thesistrace.migrations import financial_indicator
+
+    monkeypatch.setattr(
+        financial_indicator, "CORE_SCHEMA_DEFINITIONS", financial_indicator_target_schemas,
+    )
     name = "indicator_upgrade_" + uuid4().hex
     admin = psycopg.connect(core_settings.database_url, autocommit=True)
     admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
@@ -44,7 +50,9 @@ def indicator_source_database(core_settings, historical_core_schema):
         admin.close()
 
 
-def test_indicator_upgrade_preserves_data_and_verifies_repeat(indicator_source_database):
+def test_indicator_upgrade_preserves_data_and_verifies_repeat(
+    indicator_source_database, financial_indicator_target_schemas,
+):
     from thesistrace.migrations.financial_indicator import upgrade
 
     database = indicator_source_database
@@ -53,7 +61,7 @@ def test_indicator_upgrade_preserves_data_and_verifies_repeat(indicator_source_d
     assert upgrade(database)["status"] == "validated"
     assert upgrade(database, apply=True)["status"] == "applied"
     assert upgrade(database, apply=True)["status"] == "already_current"
-    verify_core_schema(database)
+    verify_schemas(database, financial_indicator_target_schemas)
     with database.transaction() as tx:
         after = tx.execute("SELECT * FROM data.financial_daily_refresh_operations").fetchall()
         for row in after:
