@@ -121,6 +121,7 @@ Number gaps are intentional and numbers are never reused. When a decision stops 
 - [ADR-0232 — Resolve financial announcement triggers from stock-level Canonical deltas](0232-resolve-financial-announcement-triggers-from-stock-level-canonical-deltas.md)
 - [ADR-0243 — Give statement-derived TTM flows distinct field identities](0243-give-statement-derived-ttm-flows-distinct-field-identities.md)
 - [ADR-0244 — Admit announcement-aligned financial history with evidence limits](0244-admit-announcement-aligned-financial-history-with-evidence-limits.md)
+- [ADR-0248 — Reuse published indicator projections with checked evidence](0248-reuse-published-indicator-projections-with-checked-evidence.md)
 - [ADR-0245 — Express new Alpha percentage fields as decimal ratios](0245-express-new-alpha-percentage-fields-as-decimal-ratios.md)
 - [ADR-0246 — Return missing for misaligned TTM flow arithmetic](0246-return-missing-for-misaligned-ttm-flow-arithmetic.md)
 

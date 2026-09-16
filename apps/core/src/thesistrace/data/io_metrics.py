@@ -17,6 +17,8 @@ class DataIOMeasurement:
     bytes_read: int = 0
     rows_scanned: int = 0
     columns_scanned: int = 0
+    # Refresh-only compute diagnostic; not part of the research I/O wire contract.
+    indicator_securities_projected: int = 0
 
     def snapshot(self) -> dict[str, int]:
         return {
@@ -112,3 +114,9 @@ __all__ = (
     "measure_data_io",
     "record_parquet_scan",
 )
+
+
+def record_indicator_projection() -> None:
+    measurement = _ACTIVE.get()
+    if measurement is not None:
+        measurement.indicator_securities_projected += 1

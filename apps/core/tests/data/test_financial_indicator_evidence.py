@@ -15,6 +15,36 @@ def raw(eps, *, ann_date="20200420"):
     )
 
 
+def test_reusable_projector_keeps_each_security_revision_history_independent(tmp_path):
+    from thesistrace.data.financial_indicator_evidence import IndicatorVersionProjector
+
+    store = FinancialIndicatorObservationStore(RawFinancialBatchStore(tmp_path))
+    original = store.read(store.save(raw(2), observed_at=datetime(2020, 5, 1, tzinfo=UTC)))
+    revision = store.read(store.save(raw(3), observed_at=datetime(2020, 6, 1, tzinfo=UTC)))
+    sessions = ["2020-04-21", "2020-06-02"]
+    projector = IndicatorVersionProjector(sessions)
+    sessions.clear()
+    versions = projector.project([original, revision], instrument_ids={"000001.SZ": "stock-1"})
+    assert [(v["eps"], v["effective_available_session"]) for v in versions] == [
+        (2, "2020-04-21"), (3, "2020-06-02"),
+    ]
+    independent = projector.project([revision], instrument_ids={"000001.SZ": "stock-2"})
+    assert len(independent) == 1
+    assert independent[0]["instrument_id"] == "stock-2"
+    assert independent[0]["effective_available_session"] == "2020-04-21"
+
+
+def test_reusable_projector_rejects_noncanonical_calendar():
+    import pytest
+
+    from thesistrace.data.financial_indicator_evidence import IndicatorVersionProjector
+
+    for calendar in (("2020-4-21",), ("20200421",), ("2020-02-30",),
+                     ("2020-04-21", "2020-04-21"), ("2020-04-22", "2020-04-21")):
+        with pytest.raises(ValueError):
+            IndicatorVersionProjector(calendar)
+
+
 def test_receipts_reopen_and_repeated_content_keeps_earliest_observation(tmp_path):
     store = FinancialIndicatorObservationStore(RawFinancialBatchStore(tmp_path))
     first = store.save(raw(2), observed_at=datetime(2020, 5, 1, tzinfo=UTC))

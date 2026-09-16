@@ -77,91 +77,109 @@ def indicator_versions(
     that disclosure only become available after they were observed in Shanghai.
     Conflicting simultaneous observations stay quarantined.
     """
-    calendar = tuple(sessions)
-    if calendar != tuple(sorted(set(calendar))):
-        raise ValueError("Indicator calendar must be unique and ordered")
-    for session in calendar:
-        if datetime.strptime(session, "%Y-%m-%d").date().isoformat() != session:
-            raise ValueError("Invalid indicator session")
-    grouped = defaultdict(lambda: defaultdict(set))
-    rows_by_digest = {}
-    for observation in observations:
-        _validate_observation(observation)
-        observed = datetime.fromisoformat(str(observation["observed_at"])).astimezone(UTC)
-        for item in observation["items"]:
-            row = dict(zip(observation["fields"], item, strict=True))
-            code = row["ts_code"]
-            if code not in instrument_ids:
-                raise ValueError("Indicator instrument is absent from historical identity")
-            period = str(row["end_date"])
-            if datetime.strptime(period, "%Y%m%d").strftime("%Y%m%d") != period:
-                raise ValueError("Invalid indicator report period")
-            digest = hashlib.sha256(canonical_json_bytes(row)).hexdigest()
-            key = (code, period, row["ann_date"])
-            rows_by_digest.setdefault(digest, row)
-            grouped[key][observed].add(digest)
-    result = []
-    for (code, period, announcement), by_time in grouped.items():
-        earliest = {}
-        previous_state = None
-        for index, observed in enumerate(sorted(by_time)):
-            values = by_time[observed]
-            for digest in values:
-                earliest.setdefault(digest, observed)
-            state = frozenset(values)
-            if state == previous_state:
-                continue
-            previous_state = state
-            status = "available"
-            try:
-                published = datetime.strptime(str(announcement), "%Y%m%d").date()
-                if published.strftime("%Y%m%d") != announcement:
-                    raise ValueError("Invalid source announcement")
-                if published < datetime.strptime(period, "%Y%m%d").date():
-                    status = "invalid_announcement"
-            except ValueError:
-                status = "missing_announcement"
-            if len(values) > 1 and status == "available":
-                status = "conflicting_observation"
-            effective = None
-            if status in {"available", "conflicting_observation"}:
-                cutoff = published
-                if index:
-                    cutoff = max(cutoff, observed.astimezone(ZoneInfo("Asia/Shanghai")).date())
-                position = bisect_right(calendar, cutoff.isoformat())
-                if position < len(calendar):
-                    effective = calendar[position]
-                else:
-                    status = "outside_calendar"
-            for digest in values:
-                row = rows_by_digest[digest]
-                result.append(
-                    {
-                        **row,
-                        "instrument_id": instrument_ids[code],
-                        "source_report_period": period,
-                        "source_published_date": announcement,
-                        "source_row_sha256": digest,
-                        "first_observed_at": earliest[digest].isoformat(),
-                        "observation_event_at": observed.isoformat(),
-                        "state_effective_session": effective,
-                        "effective_available_session": (
-                            effective if status == "available" else None
-                        ),
-                        "availability_status": status,
-                    }
-                )
-    return tuple(
-        sorted(
-            result,
-            key=lambda row: (
-                row["instrument_id"],
-                row["source_report_period"],
-                row["observation_event_at"],
-                row["source_row_sha256"],
-            ),
-        )
+    return IndicatorVersionProjector(sessions).project(
+        observations, instrument_ids=instrument_ids,
     )
+
+
+class IndicatorVersionProjector:
+    """One validated calendar shared by independent security projections."""
+
+    def __init__(self, sessions: Sequence[str]) -> None:
+        calendar = tuple(sessions)
+        if calendar != tuple(sorted(set(calendar))):
+            raise ValueError("Indicator calendar must be unique and ordered")
+        for session in calendar:
+            if date.fromisoformat(session).isoformat() != session:
+                raise ValueError("Invalid indicator session")
+        self._calendar = calendar
+
+    def project(
+        self,
+        observations: Iterable[Mapping[str, object]],
+        *,
+        instrument_ids: Mapping[str, str],
+    ) -> tuple[dict[str, object], ...]:
+        calendar = self._calendar
+        grouped = defaultdict(lambda: defaultdict(set))
+        rows_by_digest = {}
+        for observation in observations:
+            _validate_observation(observation)
+            observed = datetime.fromisoformat(str(observation["observed_at"])).astimezone(UTC)
+            for item in observation["items"]:
+                row = dict(zip(observation["fields"], item, strict=True))
+                code = row["ts_code"]
+                if code not in instrument_ids:
+                    raise ValueError("Indicator instrument is absent from historical identity")
+                period = str(row["end_date"])
+                if datetime.strptime(period, "%Y%m%d").strftime("%Y%m%d") != period:
+                    raise ValueError("Invalid indicator report period")
+                digest = hashlib.sha256(canonical_json_bytes(row)).hexdigest()
+                key = (code, period, row["ann_date"])
+                rows_by_digest.setdefault(digest, row)
+                grouped[key][observed].add(digest)
+        result = []
+        for (code, period, announcement), by_time in grouped.items():
+            earliest = {}
+            previous_state = None
+            for index, observed in enumerate(sorted(by_time)):
+                values = by_time[observed]
+                for digest in values:
+                    earliest.setdefault(digest, observed)
+                state = frozenset(values)
+                if state == previous_state:
+                    continue
+                previous_state = state
+                status = "available"
+                try:
+                    published = datetime.strptime(str(announcement), "%Y%m%d").date()
+                    if published.strftime("%Y%m%d") != announcement:
+                        raise ValueError("Invalid source announcement")
+                    if published < datetime.strptime(period, "%Y%m%d").date():
+                        status = "invalid_announcement"
+                except ValueError:
+                    status = "missing_announcement"
+                if len(values) > 1 and status == "available":
+                    status = "conflicting_observation"
+                effective = None
+                if status in {"available", "conflicting_observation"}:
+                    cutoff = published
+                    if index:
+                        cutoff = max(cutoff, observed.astimezone(ZoneInfo("Asia/Shanghai")).date())
+                    position = bisect_right(calendar, cutoff.isoformat())
+                    if position < len(calendar):
+                        effective = calendar[position]
+                    else:
+                        status = "outside_calendar"
+                for digest in values:
+                    row = rows_by_digest[digest]
+                    result.append(
+                        {
+                            **row,
+                            "instrument_id": instrument_ids[code],
+                            "source_report_period": period,
+                            "source_published_date": announcement,
+                            "source_row_sha256": digest,
+                            "first_observed_at": earliest[digest].isoformat(),
+                            "observation_event_at": observed.isoformat(),
+                            "state_effective_session": effective,
+                            "effective_available_session": (
+                                effective if status == "available" else None
+                            ),
+                            "availability_status": status,
+                        }
+                    )
+        return tuple(
+            sorted(
+                result,
+                key=lambda row: (
+                    row["instrument_id"],
+                    row["source_report_period"],
+                    row["observation_event_at"],
+                    row["source_row_sha256"],
+                ),
+            )
+        )
 
 
 class FinancialIndicatorCheckpoint:

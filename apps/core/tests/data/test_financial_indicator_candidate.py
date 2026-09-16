@@ -26,12 +26,28 @@ def test_candidate_reopens_and_reads_selected_indicator_columns(tmp_path):
         observed_at=datetime(2020, 5, 1, tzinfo=UTC),
     )
     store = FinancialIndicatorCandidateStore(tmp_path)
-    digest = store.build(
-        collection_evidence_sha256s=(_collection_evidence(tmp_path, receipt),),
-        instrument_ids={"000001.SZ": "stock-1"},
-        sessions=("2020-04-20", "2020-04-21", "2020-05-04"),
-    )
-    reference = store.family_reference(digest)
+    from thesistrace.data.io_metrics import measure_data_io
+
+    collection = _collection_evidence(tmp_path, receipt)
+    args = dict(collection_evidence_sha256s=(collection,),
+                instrument_ids={"000001.SZ": "stock-1"},
+                sessions=("2020-04-20", "2020-04-21", "2020-05-04"))
+    with measure_data_io() as coverage_io:
+        assert store.available_sessions(**args) == args["sessions"]
+    with measure_data_io() as build_io:
+        digest = store.build(**args)
+    # Build needs the same coverage evidence plus one observation for projection.
+    assert build_io.raw_financial_batch_opens == coverage_io.raw_financial_batch_opens + 1
+
+    with measure_data_io() as separate:
+        expected_manifest = store.validate(digest)
+        expected_reference = store.family_reference(digest)
+    with measure_data_io() as combined:
+        manifest, reference = store.validate_with_reference(digest)
+    assert manifest == expected_manifest
+    assert reference == expected_reference
+    assert combined.bytes_read < separate.bytes_read
+    assert combined.raw_financial_batch_opens < separate.raw_financial_batch_opens
     assert reference["family_id"] == "equity.financial_indicator"
     assert {
         "financial.indicator.eps", "financial.indicator.bps",
@@ -120,7 +136,22 @@ def test_candidate_validation_rejects_invalid_manifest_references(tmp_path):
     )
     store.validate(digest)
     original = store.reopen(digest)
+    published = store.family_reference(digest)
+    # A valid addressed Parquet file can still be the wrong source projection.
+    alternate_source = {**source, "eps": 999}
+    alternate_receipt = FinancialIndicatorObservationStore(RawFinancialBatchStore(tmp_path)).save(
+        RawSourceResponse(
+            fields=FINANCIAL_INDICATOR_SOURCE_FIELDS,
+            items=(tuple(alternate_source.get(f) for f in FINANCIAL_INDICATOR_SOURCE_FIELDS),),
+        ), observed_at=datetime(2020, 5, 1, tzinfo=UTC),
+    )
+    alternate = store.build(
+        collection_evidence_sha256s=(_collection_evidence(tmp_path, alternate_receipt),),
+        instrument_ids={"000001.SZ": "stock-1"}, sessions=("2020-04-21",),
+    )
+    alternate_partitions = store.validate(alternate)["partitions"]
     for fault in (
+        "wrong_projection",
         "duplicate_partition",
         "foreign_partition",
         "wrong_count",
@@ -128,7 +159,9 @@ def test_candidate_validation_rejects_invalid_manifest_references(tmp_path):
         "dropped_partition",
     ):
         manifest = copy.deepcopy(original)
-        if fault == "duplicate_partition":
+        if fault == "wrong_projection":
+            manifest["partitions"] = alternate_partitions
+        elif fault == "duplicate_partition":
             manifest["partitions"].append(manifest["partitions"][0])
         elif fault == "foreign_partition":
             manifest["partitions"][0]["instrument_id"] = "other"
@@ -142,8 +175,26 @@ def test_candidate_validation_rejects_invalid_manifest_references(tmp_path):
         altered = hashlib.sha256(content).hexdigest()
         path = tmp_path / "manifests" / "sha256" / altered[:2] / f"{altered}.json"
         AddressedFileStore(tmp_path).store(path, altered, content)
-        with pytest.raises(ValueError):
-            store.validate(altered)
+        for validate in (
+            store.validate, store.validate_with_reference,
+            lambda address: store.validate_incremental_with_reference(
+                address, published_base_reference=published,
+            ),
+        ):
+            with pytest.raises(ValueError):
+                validate(altered)
+
+    # Previously returned mutable metadata cannot authorize a later read.
+    manifest, reference = store.validate_with_reference(digest)
+    manifest["partitions"].clear()
+    reference["validation_summary"]["status"] = "tampered"
+    assert store.validate_with_reference(digest)[0] == original
+    partition = original["partitions"][0]
+    address = partition["sha256"]
+    path = tmp_path / "objects" / "sha256" / address[:2] / f"{address}.parquet"
+    path.write_bytes(b"corrupted after validation")
+    with pytest.raises(ValueError):
+        store.validate_with_reference(digest)
 
 
 def _collection_evidence(root, observation_sha256):
@@ -503,3 +554,83 @@ def test_candidate_rejects_invalid_authoring_numbers_before_publication(tmp_path
                 instrument_ids={"000001.SZ": "stock-1"}, sessions=("2020-04-21",),
             )
         assert observations.read(receipt)["items"]
+
+
+def test_incremental_build_matches_full_replay_across_calendar_and_revision(tmp_path):
+    import pytest
+
+    evidence = FinancialIndicatorObservationStore(RawFinancialBatchStore(tmp_path))
+    store = FinancialIndicatorCandidateStore(tmp_path)
+
+    def receipt(eps, observed):
+        source = {"ts_code": "000001.SZ", "ann_date": "20200420",
+                  "end_date": "20191231", "eps": eps}
+        observation = evidence.save(RawSourceResponse(
+            fields=FINANCIAL_INDICATOR_SOURCE_FIELDS,
+            items=(tuple(source.get(f) for f in FINANCIAL_INDICATOR_SOURCE_FIELDS),),
+        ), observed_at=observed)
+        return _collection_evidence(tmp_path, observation)
+
+    collections = [receipt(2, datetime(2020, 4, 20, tzinfo=UTC))]
+    identities = {"000001.SZ": "stock-1"}
+    previous = None
+    for sessions, revision in (
+        (("2020-04-20",), False),
+        (("2020-04-20", "2020-04-21"), False),
+        (("2020-04-20", "2020-04-21", "2020-05-04"), False),
+        (("2020-04-20", "2020-04-21", "2020-05-04"), True),
+    ):
+        if revision:
+            collections.append(receipt(3, datetime(2020, 5, 1, tzinfo=UTC)))
+        args = dict(collection_evidence_sha256s=collections,
+                    instrument_ids=identities, sessions=sessions)
+        full = store.build(**args)
+        incremental = store.build(**args, previous_candidate_sha256=previous)
+        assert incremental == full
+        if previous is not None:
+            from thesistrace.data.io_metrics import measure_data_io
+
+            published = store.family_reference(previous)
+            with measure_data_io() as audited:
+                store.build(**args, previous_candidate_sha256=previous)
+            with measure_data_io() as reused:
+                from_published = store.build(**args, published_base_reference=published)
+            assert from_published == full
+            assert reused.raw_financial_batch_opens < audited.raw_financial_batch_opens
+            expected_projections = int(revision or len(sessions) == 2)
+            assert reused.indicator_securities_projected == expected_projections
+            assert audited.indicator_securities_projected == expected_projections + 1
+            with measure_data_io() as verified:
+                manifest, reference = store.validate_incremental_with_reference(
+                    incremental, published_base_reference=published,
+                )
+            assert verified.indicator_securities_projected == expected_projections
+            assert manifest == store.validate(incremental)
+            assert reference == store.family_reference(incremental)
+        store.validate(incremental)
+        previous = incremental
+
+    published = store.family_reference(previous)
+    dropped = store.build(**{**args, "collection_evidence_sha256s": collections[-1:]})
+    with pytest.raises(ValueError, match="drops retained evidence"):
+        store.validate_incremental_with_reference(dropped, published_base_reference=published)
+    wrong_reference = {**published, "manifest_byte_count": 1}
+    with pytest.raises(ValueError, match="reference"):
+        store.build(**args, published_base_reference=wrong_reference)
+    observation = store.reopen(previous)["observation_sha256s"][0]
+    evidence_path = (tmp_path / "financial" / "raw" / "sha256"
+                     / observation[:2] / f"{observation}.json")
+    saved = evidence_path.read_bytes()
+    evidence_path.unlink()
+    with pytest.raises(ValueError, match="evidence"):
+        store.reopen_published(published)
+    evidence_path.write_bytes(saved)
+    partition = store.reopen(previous)["partitions"][0]
+    address = partition["sha256"]
+    path = tmp_path / "objects" / "sha256" / address[:2] / f"{address}.parquet"
+    path.write_bytes(b"damaged base")
+    with pytest.raises(ValueError):
+        store.build(**args, previous_candidate_sha256=previous)
+
+    with pytest.raises(ValueError):
+        store.build(**args, published_base_reference=published)

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from time import perf_counter
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -21,12 +22,13 @@ from thesistrace.data.financial_collection import (
 )
 from thesistrace.data.financial_indicator_evidence import (
     FinancialIndicatorObservationStore,
-    indicator_versions,
+    IndicatorVersionProjector,
     validate_indicator_collection_evidence,
 )
 from thesistrace.data.financial_indicator_series import normalize_indicator_value
 from thesistrace.data.financial_indicator_source import FINANCIAL_INDICATOR_SOURCE_FIELDS
 from thesistrace.data.generation_files import AddressedFileError, AddressedFileStore
+from thesistrace.data.io_metrics import record_indicator_projection
 from thesistrace.publication.serialization import (
     ParquetWriterContract,
     canonical_json_bytes,
@@ -55,7 +57,10 @@ _WRITER = ParquetWriterContract("financial-indicator-versions", 1, _SCHEMA, _SOR
 
 
 class FinancialIndicatorCandidateStore:
-    def __init__(self, root: Path) -> None:
+    def __init__(
+        self, root: Path, *, progress: Callable[[dict[str, object]], None] | None = None,
+    ) -> None:
+        self._progress = progress or (lambda _event: None)
         self._root = root
         self._files = AddressedFileStore(root)
         self._raw = RawFinancialBatchStore(root)
@@ -80,6 +85,8 @@ class FinancialIndicatorCandidateStore:
         sessions: Sequence[str],
         unresolved_sources: Mapping[str, str] | None = None,
         discovery_evidence_sha256s: Sequence[str] = (),
+        previous_candidate_sha256: str | None = None,
+        published_base_reference: Mapping[str, object] | None = None,
     ) -> str:
         if not sessions or not collection_evidence_sha256s:
             raise ValueError("Indicator candidate requires observations and a calendar")
@@ -89,17 +96,42 @@ class FinancialIndicatorCandidateStore:
             {} if unresolved_sources is None else dict(unresolved_sources),
             instrument_ids,
         )
+        input_started = perf_counter()
         collections = sorted(set(collection_evidence_sha256s))
         discoveries = sorted(set(discovery_evidence_sha256s))
         by_security = self._collection_observations(
             collections, instrument_ids, sessions, discoveries,
         )
         references = sorted({digest for values in by_security.values() for digest in values})
-        partitions = []
+        self._progress({"phase": "indicator_input_validation", "status": "completed",
+                        "duration_ms": round((perf_counter() - input_started) * 1000),
+                        "collection_count": len(collections), "observation_count": len(references)})
+        base_started = perf_counter()
+        if previous_candidate_sha256 is not None and published_base_reference is not None:
+            raise ValueError("Specify one indicator base authority")
+        previous, previous_observations = None, {}
+        if published_base_reference is not None:
+            previous, previous_observations = self._checked_published_contents(
+                published_base_reference,
+            )
+        elif previous_candidate_sha256 is not None:
+            previous = self.validate(previous_candidate_sha256)
+            previous_observations, _ranges = self._collection_ranges(
+                previous["collection_evidence_sha256s"], previous["instrument_ids"],
+            )
+        self._progress({"phase": "indicator_base_validation", "status": "completed",
+                        "duration_ms": round((perf_counter() - base_started) * 1000)})
+        projection_started = perf_counter()
+        reusable = self._reusable_partitions(
+            previous, previous_observations, by_security, instrument_ids, sessions,
+        )
+        partitions = [part for parts in reusable.values() for part in parts]
+        changed = {code: instrument for code, instrument in instrument_ids.items()
+                   if code not in reusable}
         for instrument, row_count, content in _project_partition_contents(
             self._observations,
             by_security,
-            instrument_ids,
+            changed,
             sessions,
         ):
             partitions.append(
@@ -110,10 +142,18 @@ class FinancialIndicatorCandidateStore:
                     "byte_count": len(content),
                 }
             )
+        order = {instrument: index for index, (_code, instrument)
+                 in enumerate(sorted(instrument_ids.items()))}
+        partitions.sort(key=lambda part: order[part["instrument_id"]])
         for instrument, since in self._discovery_unresolved(
             discoveries, instrument_ids, partitions,
         ).items():
             unresolved[instrument] = min(unresolved.get(instrument, since), since)
+        self._progress({"phase": "indicator_projection", "status": "completed",
+                        "duration_ms": round((perf_counter() - projection_started) * 1000),
+                        "total_company_count": len(instrument_ids),
+                        "projected_company_count": len(changed),
+                        "reused_company_count": len(reusable), "partition_count": len(partitions)})
         return self._store(
             canonical_json_bytes(
                 {
@@ -132,6 +172,34 @@ class FinancialIndicatorCandidateStore:
             ),
             "json",
         )
+
+    def _reusable_partitions(
+        self, previous, old_observations, by_security, instrument_ids, sessions,
+    ):
+        if previous is None:
+            return {}
+        old_sessions = previous["research_sessions"]
+        if list(sessions[:len(old_sessions)]) != old_sessions:
+            return {}
+        by_instrument = {}
+        for partition in previous["partitions"]:
+            by_instrument.setdefault(partition["instrument_id"], []).append(partition)
+        reusable = {}
+        for code, instrument in instrument_ids.items():
+            if (previous["instrument_ids"].get(code) != instrument
+                    or set(by_security[code]) != set(old_observations.get(code, ()))):
+                continue
+            partitions = by_instrument.get(instrument, [])
+            if len(sessions) != len(old_sessions) and any(
+                pc.any(pc.equal(
+                    self._read_partition(part, ["availability_status"])["availability_status"],
+                    "outside_calendar",
+                )).as_py()
+                for part in partitions
+            ):
+                continue
+            reusable[code] = partitions
+        return reusable
 
     def reopen(self, digest: str) -> dict[str, object]:
         manifest = json.loads(
@@ -265,6 +333,12 @@ class FinancialIndicatorCandidateStore:
             instrument_ids,
         )
         discovery_ranges = self._discovery_ranges(discovery_evidence_sha256s, instrument_ids)
+        return self._available_from_ranges(ranges, discovery_ranges, sessions)
+
+    @staticmethod
+    def _available_from_ranges(ranges, discovery_ranges, sessions):
+        if tuple(sessions) != tuple(sorted(set(sessions))) or not ranges:
+            raise ValueError("Invalid indicator coverage scope")
         through = []
         for code, intervals in ranges.items():
             # Discovery can extend existing history, never replace its initial collection.
@@ -376,18 +450,88 @@ class FinancialIndicatorCandidateStore:
         observations, ranges = self._collection_ranges(references, instrument_ids)
         if any(not intervals for intervals in ranges.values()):
             raise ValueError("Indicator collection does not cover all candidate identities")
-        verified = self.available_sessions(
-            collection_evidence_sha256s=references,
-            instrument_ids=instrument_ids,
-            sessions=sessions,
-            discovery_evidence_sha256s=discoveries,
+        verified = self._available_from_ranges(
+            ranges, self._discovery_ranges(discoveries, instrument_ids), sessions,
         )
         if verified != tuple(sessions):
             raise ValueError("Indicator collection coverage has a history gap or ends early")
         return {code: sorted(values) for code, values in observations.items()}
 
     def validate(self, digest: str) -> dict[str, object]:
-        """Verify retained references and full partition structure before publishing."""
+        """Audit the complete source projection, including never-published candidates."""
+        manifest, by_security = self._checked_contents(digest)
+        expected = [
+            {
+                "instrument_id": instrument,
+                "sha256": hashlib.sha256(content).hexdigest(),
+                "row_count": row_count,
+                "byte_count": len(content),
+            }
+            for instrument, row_count, content in _project_partition_contents(
+                self._observations,
+                by_security,
+                manifest["instrument_ids"],
+                manifest["research_sessions"],
+            )
+        ]
+        if expected != manifest["partitions"]:
+            raise ValueError("Indicator partitions differ from source observation projection")
+        return manifest
+
+    def validate_incremental_with_reference(
+        self, digest: str, *, published_base_reference: Mapping[str, object] | None,
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        """Verify changed projections against an exact, accepted predecessor."""
+        if published_base_reference is None:
+            return self.validate_with_reference(digest)
+        previous, previous_observations = self._checked_published_contents(published_base_reference)
+        manifest, by_security = self._checked_contents(digest)
+        for key in ("observation_sha256s", "collection_evidence_sha256s",
+                    "discovery_evidence_sha256s"):
+            if not set(previous[key]) <= set(manifest[key]):
+                raise ValueError("Indicator candidate drops retained evidence")
+        if any(manifest["instrument_ids"].get(code) != instrument
+               for code, instrument in previous["instrument_ids"].items()):
+            raise ValueError("Indicator candidate drops or changes retained identities")
+        reusable = self._reusable_partitions(
+            previous, previous_observations, by_security,
+            manifest["instrument_ids"], manifest["research_sessions"],
+        )
+        expected = [part for parts in reusable.values() for part in parts]
+        changed = {code: instrument for code, instrument in manifest["instrument_ids"].items()
+                   if code not in reusable}
+        expected.extend(
+            {"instrument_id": instrument, "sha256": hashlib.sha256(content).hexdigest(),
+             "row_count": row_count, "byte_count": len(content)}
+            for instrument, row_count, content in _project_partition_contents(
+                self._observations, by_security, changed, manifest["research_sessions"],
+            )
+        )
+        order = {instrument: index for index, (_code, instrument)
+                 in enumerate(sorted(manifest["instrument_ids"].items()))}
+        expected.sort(key=lambda part: order[part["instrument_id"]])
+        if expected != manifest["partitions"]:
+            raise ValueError("Indicator partitions differ from incremental source projection")
+        return manifest, self._reference(digest, manifest)
+
+    def reopen_published(self, reference: Mapping[str, object]) -> dict[str, object]:
+        """Check an exact Family reference from an accepted published Generation.
+
+        Publication owns the source-to-projection proof. This read checks current
+        bytes, schemas, source references and coverage without recreating that
+        proof. Callers must obtain reference from their authoritative published
+        Generation, never from a proposed candidate or user input.
+        """
+        return self._checked_published_contents(reference)[0]
+
+    def _checked_published_contents(self, reference):
+        digest = str(reference["manifest_sha256"])
+        manifest, observations = self._checked_contents(digest)
+        if self._reference(digest, manifest) != dict(reference):
+            raise ValueError("Published indicator reference differs from stored contents")
+        return manifest, observations
+
+    def _checked_contents(self, digest: str):
         try:
             manifest = self.reopen(digest)
             by_security = self._collection_observations(
@@ -399,22 +543,6 @@ class FinancialIndicatorCandidateStore:
             references = sorted({digest for values in by_security.values() for digest in values})
             if references != manifest["observation_sha256s"]:
                 raise ValueError("Indicator observations differ from collection evidence")
-            expected = [
-                {
-                    "instrument_id": instrument,
-                    "sha256": hashlib.sha256(content).hexdigest(),
-                    "row_count": row_count,
-                    "byte_count": len(content),
-                }
-                for instrument, row_count, content in _project_partition_contents(
-                    self._observations,
-                    by_security,
-                    manifest["instrument_ids"],
-                    manifest["research_sessions"],
-                )
-            ]
-            if expected != manifest["partitions"]:
-                raise ValueError("Indicator partitions differ from source observation projection")
             for partition in manifest["partitions"]:
                 self._read_partition(partition, _SCHEMA.names)
             inferred = self._discovery_unresolved(
@@ -427,12 +555,26 @@ class FinancialIndicatorCandidateStore:
                 for instrument, since in inferred.items()
             ):
                 raise ValueError("Indicator candidate omits unresolved discovery targets")
-            return manifest
+            return manifest, by_security
         except (AddressedFileError, FinancialCollectionError, KeyError, TypeError) as error:
             raise ValueError("Invalid indicator candidate evidence or partition") from error
 
     def family_reference(self, digest: str) -> dict[str, object]:
+        return self.validate_with_reference(digest)[1]
+
+    def validate_with_reference(
+        self, digest: str,
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        """Return source-validated metadata and its publication reference together.
+
+        The reference is derived during the same validation, never from a caller's
+        mutable manifest or a cached validation flag. Each invocation checks the
+        addressed sources and partitions again.
+        """
         manifest = self.validate(digest)
+        return manifest, self._reference(digest, manifest)
+
+    def _reference(self, digest, manifest):
         content = self._files.read(
             self._path(digest, "json"), digest, max_byte_count=64 * 1024 * 1024
         )
@@ -516,6 +658,7 @@ class FinancialIndicatorCandidateStore:
 
 
 def _project_partition_contents(observation_store, by_security, instrument_ids, sessions):
+    projector = IndicatorVersionProjector(sessions)
     for code, instrument in sorted(instrument_ids.items()):
         # The delegated generator releases this security's decoded payloads before
         # the next security is loaded. Only addresses span the whole universe.
@@ -523,30 +666,33 @@ def _project_partition_contents(observation_store, by_security, instrument_ids, 
             (observation_store.read(digest) for digest in by_security[code]),
             code,
             instrument,
-            sessions,
+            projector,
         )
 
 
-def _project_security_partitions(observations, code, instrument, sessions):
+def _project_security_partitions(observations, code, instrument, projector):
+    record_indicator_projection()
     def validated_observations():
         for observation in observations:
             if set(observation["fields"]) != set(FINANCIAL_INDICATOR_SOURCE_FIELDS):
                 raise ValueError("Indicator candidate requires all source columns")
             code_index = observation["fields"].index("ts_code")
+            field_indexes = tuple(
+                (observation["fields"].index(field.source_column), field.source_unit)
+                for field in FINANCIAL_INDICATOR_FIELDS
+            )
             if any(row[code_index] != code for row in observation["items"]):
                 raise ValueError("Indicator source identity differs from its collection")
             for row in observation["items"]:
-                for field in FINANCIAL_INDICATOR_FIELDS:
+                for field_index, source_unit in field_indexes:
                     normalize_indicator_value(
-                        row[observation["fields"].index(field.source_column)],
-                        source_unit=field.source_unit,
+                        row[field_index], source_unit=source_unit,
                     )
             yield observation
 
-    versions = indicator_versions(
+    versions = projector.project(
         validated_observations(),
         instrument_ids={code: instrument},
-        sessions=sessions,
     )
     for offset in range(0, len(versions), 4096):
         rows = [

@@ -1,0 +1,9 @@
+# Reuse published indicator projections with checked evidence
+
+A Financial Refresh may reuse an unchanged financial indicator partition from its accepted source Generation. The refresh obtains that Generation from Dataset Head and persists its address at admission. Its exact indicator Family reference is the authority for the prior source-to-projection proof; an arbitrary candidate address, a user-supplied reference, or a cached validated flag is not publication authority.
+
+Reopening this published Family verifies the addressed manifest, current object bytes and schemas, source evidence and observation references, collection coverage, discovery gaps, and the exact Family reference. It does not regenerate the already accepted projection. Full source replay remains the audit and untrusted-candidate validation path. Changing projection semantics requires the existing explicit contract evolution process; an old proof cannot authorize a different projection contract.
+
+Incremental construction compares security identities and observation addresses. It reuses partitions only when those inputs are unchanged and the old research calendar is an exact prefix of the new calendar. Calendar extension invalidates partitions containing facts outside the old calendar. A changed identity, observation, or non-prefix calendar requires projection. Readiness and unresolved discovery metadata are recomputed independently of partition reuse. Missing or damaged source evidence and objects fail validation; they never trigger silent reuse.
+
+Publication must still establish that each newly proposed partition either equals its accepted, unchanged predecessor or matches the projection of its changed inputs. A successful build alone is not publication authority. Differential full-replay tests and operation-level projection counts verify the incremental boundary.
