@@ -85,12 +85,12 @@ export function DailyTrackWorkspace({ track, actions, notices }: {
           : <SelectionSchedule observation={track.observation} isStopped={track.status === "stopped" || track.status === "stopping"} isBehind={track.lag_sessions > 0} />}
       </div>
       <div className="track-supporting">
-        <StrategyEvents key={track.id} endpoint={`/api/daily-tracks/${encodeURIComponent(track.id)}/events/query`} />
-        <DailyHoldings key={track.id} rerun={{ folderId: "folder_default", source: {
+        <DailyHoldings key={`holdings:${track.id}`} rerun={{ folderId: "folder_default", source: {
           kind: "daily_track", track_id: track.id,
           checkpoint_manifest_sha256: track.checkpoint_manifest_sha256,
           through_session: track.strategy_session,
         } }} endpoint={`/api/daily-tracks/${encodeURIComponent(track.id)}/holdings/query`} />
+        <StrategyEvents key={`events:${track.id}`} endpoint={`/api/daily-tracks/${encodeURIComponent(track.id)}/events/query`} />
         <CommonInputObservations key={`${track.id}:${track.strategy_session}`} endpoint={`/api/daily-tracks/${encodeURIComponent(track.id)}/common-input-observations`} />
         <details className="track-disclosure"><summary>Update details <span>{trackStatusLabel(track)}</span></summary>
           <div className="track-disclosure-content"><TrackingProgressView progress={track.progress} /></div></details>

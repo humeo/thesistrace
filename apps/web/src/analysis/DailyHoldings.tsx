@@ -74,10 +74,10 @@ export function DailyHoldings({ endpoint, rerun }: {
   }
   const selectedUnit = details?.unit ?? status?.units.find(unit => unit.unit_id === unitId);
   return <section className="strategy-events daily-holdings">
-    <button type="button" className="strategy-events-toggle" aria-expanded={open} onClick={() => {
+    <button type="button" className="strategy-events-toggle" aria-label="Daily holdings" aria-expanded={open} onClick={() => {
       setOpen(!open);
       if (!open && !status) loadPeriods();
-    }}>Daily holdings <span aria-hidden="true">{open ? "−" : "+"}</span></button>
+    }}><span>Daily holdings</span></button>
     {open && <div className="daily-holdings-content">
       <p>Actual holdings after Open execution and fees. Successful detail reads retain that period for another 7 days. Checking availability does not extend retention.</p>
       <button type="button" disabled={busy} onClick={() => loadPeriods()}>Check availability</button>

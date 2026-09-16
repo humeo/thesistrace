@@ -645,9 +645,9 @@ export function ResearchRunsPage({ researcherId, runId }: {
           <>
             <ResearchResultView result={run.result} />
             {"factor" in run.result ? <FactorEvidence key={`factor:${run.id}`} runId={run.id} /> : null}
-            {"strategy" in run.result && <StrategyEvents key={run.id} endpoint={`/api/research-runs/${encodeURIComponent(run.id)}/events/query`} />}
-            {"strategy" in run.result && <DailyHoldings key={run.id} rerun={{ folderId: run.folder_id, source: { kind: "research_run", run_id: run.id } }} endpoint={`/api/research-runs/${encodeURIComponent(run.id)}/holdings/query`} />}
-            <CommonInputObservations key={run.id} endpoint={`/api/research-runs/${encodeURIComponent(run.id)}/common-input-observations`} />
+            {"strategy" in run.result && <DailyHoldings key={`holdings:${run.id}`} rerun={{ folderId: run.folder_id, source: { kind: "research_run", run_id: run.id } }} endpoint={`/api/research-runs/${encodeURIComponent(run.id)}/holdings/query`} />}
+            {"strategy" in run.result && <StrategyEvents key={`events:${run.id}`} endpoint={`/api/research-runs/${encodeURIComponent(run.id)}/events/query`} />}
+            <CommonInputObservations key={`inputs:${run.id}`} endpoint={`/api/research-runs/${encodeURIComponent(run.id)}/common-input-observations`} />
           </>
         ) : null}
         {terminal ? progressView : null}

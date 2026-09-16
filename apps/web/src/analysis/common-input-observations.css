@@ -1,5 +1,4 @@
 .common-input-observations { border-top: 1px solid var(--line); margin-top: 20px; }
-.common-input-observations > summary { cursor: pointer; padding: 16px 0; font-size: 13px; color: var(--ink-muted); }
 .common-input-content > p { color: var(--ink-muted); font-size: 12px; line-height: 1.6; }
 .common-input-table { overflow-x: auto; }
 .common-input-table table { width: 100%; border-collapse: collapse; font-size: 12px; text-align: left; }

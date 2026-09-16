@@ -1,50 +1,61 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { coreFetch } from "../auth/coreFetch";
+import { StrategyEventTable, eventSections as sections, instrumentLabel, type EventRow, type EventSection as Section } from "./StrategyEventDetails";
 import "./strategy-events.css";
 
-type Section = "strategy_targets" | "strategy_orders" | "strategy_child_orders" | "strategy_fills" | "strategy_adjustments";
-type EventValue = string | number | null | string[] | Record<string, string | number>;
-type EventRow = Record<string, EventValue>;
-type Page = { section: Section; status: "recorded" | "not_recorded"; rows: EventRow[]; next_cursor: string | null };
+type Page = { section: Section; status: "recorded" | "not_recorded" | "expired" | "partially_expired"; expires_at: string | null; rows: EventRow[]; next_cursor: string | null };
 type Filter = { start_session?: string; end_session?: string; instrument_id?: string; target_id?: string; order_id?: string; child_order_id?: string };
-const sections: Record<Section, string> = {
-  strategy_targets: "Targets", strategy_orders: "Simulated orders", strategy_child_orders: "Child orders",
-  strategy_fills: "Simulated fills", strategy_adjustments: "Valuation adjustments",
+type View = { section: Section; filters: Filter; cursors: (string | null)[]; scope: string | null };
+const descriptions: Record<Section, string> = {
+  strategy_targets: "收盘时形成的选股和仓位目标，日期为决策日。",
+  strategy_orders: "回测生成的买卖委托，包括被拒绝的委托，日期为执行日。",
+  strategy_child_orders: "按单笔交易数量规则拆分的模拟委托。",
+  strategy_fills: "模拟成交的股数、价格和费用，可展开核对现金变化。",
+  strategy_adjustments: "模拟交易以外的估值变化，包括停牌估值和退市核销。",
+  strategy_execution_constraints: "资金或交易单位限制导致的缩量与跳过；提交股数不代表成交股数。",
 };
-const idFields: Record<Section, string> = {
-  strategy_targets: "target_id", strategy_orders: "order_id", strategy_child_orders: "child_order_id",
-  strategy_fills: "fill_id", strategy_adjustments: "adjustment_id",
-};
-const fieldLabels: Record<string, string> = {
-  raw_open: "Raw Open (CNY)", adjusted_open: "Adjusted Open (CNY)", raw_notional: "Raw notional (CNY)",
-  research_settlement: "Research Settlement (CNY)", cost: "Fees (CNY)", net_cash_delta: "Net cash change (CNY)",
-  gross_cash_delta: "Gross cash change (CNY)", cash_rounding_delta: "Cash rounding (CNY)",
-  adjusted_units_delta: "Adjusted holding units change", execution_shares_delta: "Execution shares change",
-};
-function label(key: string) { return fieldLabels[key] ?? key.replaceAll("_", " ").replace(/^./, value => value.toUpperCase()); }
-function display(value: EventValue | undefined): string {
-  if (value == null) return "—";
-  if (Array.isArray(value)) return value.join(", ") || "None";
-  if (typeof value === "object") return Object.entries(value).map(([key, item]) => `${key}: ${item}`).join("; ") || "None";
-  return String(value);
+function stockFilter(value: string) {
+  const trimmed = value.trim();
+  return /^\d{6}\.(SH|SZ)$/i.test(trimmed) ? "equity:" + trimmed.toUpperCase() : trimmed || undefined;
 }
 
 export function StrategyEvents({ endpoint }: { endpoint: string }) {
   const [open, setOpen] = useState(false);
-  const [section, setSection] = useState<Section>("strategy_targets");
+  const [section, setSection] = useState<Section>("strategy_orders");
   const [filters, setFilters] = useState<Filter>({});
   const [draft, setDraft] = useState({ start_session: "", end_session: "", instrument_id: "" });
   const [cursors, setCursors] = useState<(string | null)[]>([null]);
+  const [scope, setScope] = useState<string | null>(null);
+  const [history, setHistory] = useState<View[]>([]);
   const [page, setPage] = useState<Page | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const focusAfterNavigation = useRef(false);
   const cursor = cursors[cursors.length - 1];
-  function navigate(next: Section, relation: Filter = {}) {
+  const filtered = Object.values(filters).some(value => !!value);
+  function navigate(next: Section, relation: Filter = {}, context: string | null = null) {
+    setHistory(context ? [...history, { section, filters, cursors, scope }] : []);
+    setScope(context);
     setPage(null); setSection(next); setFilters(relation); setCursors([null]);
     setDraft({ start_session: "", end_session: "", instrument_id: "" });
+    focusAfterNavigation.current = true;
+  }
+  function goBack() {
+    const previous = history.at(-1);
+    if (!previous) return;
+    setHistory(history.slice(0, -1));
+    setSection(previous.section); setFilters(previous.filters); setCursors(previous.cursors); setScope(previous.scope);
+    setDraft({ start_session: previous.filters.start_session ?? "", end_session: previous.filters.end_session ?? "", instrument_id: previous.filters.instrument_id ?? "" });
+    setPage(null); focusAfterNavigation.current = true;
   }
   useEffect(() => {
     if (!open) return;
+    if (focusAfterNavigation.current) {
+      heading.current?.focus({ preventScroll: true });
+      heading.current?.scrollIntoView({ block: "nearest" });
+      focusAfterNavigation.current = false;
+    }
     const controller = new AbortController();
     setPage(null); setError(null);
     void coreFetch(endpoint, {
@@ -52,53 +63,65 @@ export function StrategyEvents({ endpoint }: { endpoint: string }) {
       body: JSON.stringify({ section, ...filters, cursor, limit: 20 }),
     }).then(async response => {
       if (!response.ok) throw new Error(response.status === 400
-        ? "This page cannot be continued. Reload the first page."
-        : "Trading events could not be loaded.");
+        ? "当前分页已失效，请重新加载首页。"
+        : response.status === 422 ? "查询条件无效，请检查日期和股票代码。" : "记录加载失败，请重试。");
       const result = await response.json() as Page;
       if (!controller.signal.aborted) setPage(result);
     }).catch((cause: unknown) => {
-      if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : "Unable to load events.");
+      if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : "记录加载失败，请重试。");
     });
     return () => controller.abort();
   }, [open, endpoint, section, filters, cursor, revision]);
-  return <details className="strategy-events" onToggle={event => setOpen(event.currentTarget.open)}>
-    <summary>Trading events</summary>
+  return <details className="strategy-events" onToggle={event => {
+    if (event.target === event.currentTarget) setOpen(event.currentTarget.open);
+  }}>
+    <summary><span>Trading events</span></summary>
     {open && <div className="strategy-events-content">
-      <p>Follow a target through simulated orders and fills. Research Settlement and cash changes reconcile the research account; raw notional is the execution-price amount. Valuation adjustments are listed separately.</p>
+      <header className="strategy-events-heading">
+        <h3 ref={heading} tabIndex={-1}>{sections[section]}</h3>
+        <p>{descriptions[section]}</p>
+        <p>交易明细保留 7 天，成功查看后续期；到期不影响收益报告和最终持仓。</p>
+      </header>
       <form className="strategy-event-filters" onSubmit={event => {
         event.preventDefault(); setPage(null); setCursors([null]);
-        setFilters({ ...filters, start_session: draft.start_session || undefined, end_session: draft.end_session || undefined, instrument_id: draft.instrument_id.trim() || undefined });
+        setFilters({ ...filters, start_session: draft.start_session || undefined, end_session: draft.end_session || undefined, instrument_id: stockFilter(draft.instrument_id) });
+        focusAfterNavigation.current = true;
       }}>
-        <label>Event type<select value={section} onChange={event => navigate(event.target.value as Section)}>
+        <label>事件类型<select value={section} onChange={event => navigate(event.target.value as Section)}>
           {Object.entries(sections).map(([value, title]) => <option key={value} value={value}>{title}</option>)}
         </select></label>
-        <label>From<input type="date" value={draft.start_session} max={draft.end_session || undefined} onChange={event => setDraft({ ...draft, start_session: event.target.value })} /></label>
-        <label>Through<input type="date" value={draft.end_session} min={draft.start_session || undefined} onChange={event => setDraft({ ...draft, end_session: event.target.value })} /></label>
-        <label>Instrument ID<input value={draft.instrument_id} onChange={event => setDraft({ ...draft, instrument_id: event.target.value })} /></label>
-        <button type="submit">Apply filters</button>
-        <button type="button" onClick={() => navigate(section)}>Clear filters</button>
+        <label>起始日期<input type="date" value={draft.start_session} max={draft.end_session || undefined} onChange={event => setDraft({ ...draft, start_session: event.target.value })} /></label>
+        <label>结束日期<input type="date" value={draft.end_session} min={draft.start_session || undefined} onChange={event => setDraft({ ...draft, end_session: event.target.value })} /></label>
+        <label>股票代码<input value={draft.instrument_id} placeholder="600000.SH" onChange={event => setDraft({ ...draft, instrument_id: event.target.value })} /></label>
+        <button type="submit">查询</button>
+        <button type="button" disabled={!filtered && !draft.start_session && !draft.end_session && !draft.instrument_id} onClick={() => navigate(section)}>重置</button>
       </form>
-      <p>Dates refer to the decision for targets and the execution or adjustment for other events.</p>
-      {(filters.target_id || filters.order_id || filters.child_order_id) && <p className="strategy-event-relation">Related to {filters.child_order_id ? "child order" : filters.order_id ? "order" : "target"}: <code>{filters.child_order_id ?? filters.order_id ?? filters.target_id}</code></p>}
-      {error ? <p role="alert">{error}</p> : page === null ? <p role="status">Loading trading events…</p>
-        : page.status === "not_recorded" ? <p>Trading events were not recorded for this result.</p>
-        : page.rows.length === 0 ? <p>No {sections[section].toLowerCase()} match these filters.</p>
-        : <ol className="strategy-event-list">{page.rows.map(row => <li key={String(row[idFields[section]])}>
-          <details>
-            <summary><time>{display(row.session ?? row.decision_session)}</time><span>{display(row.instrument_id ?? row.mode ?? row.type)}</span><span>{display(row.side ?? row.reason)}</span><span>{row.exposure === undefined ? display(row.quantity ?? row.legal_quantity) : `${Number(row.exposure) * 100}% exposure`}</span></summary>
-            <dl>{Object.entries(row).map(([key, value]) => <div key={key}><dt>{label(key)}</dt><dd>{display(value)}</dd></div>)}</dl>
-          </details>
-          <div className="strategy-event-links">
-            {section === "strategy_targets" && <button type="button" onClick={() => navigate("strategy_orders", { target_id: String(row.target_id) })}>View orders</button>}
-            {section === "strategy_orders" && <button type="button" onClick={() => navigate("strategy_child_orders", { order_id: String(row.order_id) })}>View child orders</button>}
-            {(section === "strategy_targets" || section === "strategy_orders" || section === "strategy_child_orders") && <button type="button" onClick={() => navigate("strategy_fills", section === "strategy_child_orders" ? { child_order_id: String(row.child_order_id) } : section === "strategy_orders" ? { order_id: String(row.order_id) } : { target_id: String(row.target_id) })}>View fills</button>}
-          </div>
-        </li>)}</ol>}
-      <nav aria-label="Trading event pages">
-        <button type="button" onClick={() => { setCursors([null]); setRevision(value => value + 1); }}>Reload first page</button>
-        <button type="button" disabled={cursors.length === 1 || !page} onClick={() => { setPage(null); setCursors(values => values.slice(0, -1)); }}>Previous</button>
-        <span>Page {cursors.length}</span>
-        <button type="button" disabled={!page?.next_cursor} onClick={() => { if (page?.next_cursor) { setCursors(values => [...values, page.next_cursor]); setPage(null); } }}>Next</button>
+      {scope && <div className="strategy-event-scope" role="region" aria-label="当前关联范围">
+        <span>仅查看关联记录：{scope}</span>
+        <div className="strategy-event-links">
+          {history.length > 0 && <button type="button" onClick={goBack}>返回{sections[history.at(-1)!.section]}</button>}
+          <button type="button" onClick={() => navigate(section)}>查看全部{sections[section]}</button>
+        </div>
+      </div>}
+      <div className="strategy-events-status">
+        <span>{filters.start_session || filters.end_session ? (filters.start_session ?? "最早") + " 至 " + (filters.end_session ?? "最新") : "全部日期"} · {filters.instrument_id ? instrumentLabel(filters.instrument_id) : "全部股票"}</span>
+        <span>{section === "strategy_targets" ? "决策日期" : section === "strategy_adjustments" ? "调整日期" : "执行日期"} · 每页最多 20 条</span>
+      </div>
+      {page?.status === "partially_expired" && <p role="status">部分历史交易明细已过期，以下展示仍在保留期内的记录。</p>}
+      {error ? <p role="alert">{error}</p> : page === null ? <p role="status">正在加载记录…</p>
+        : page.status === "expired" ? <p role="status">交易明细已过期。连续 7 天未查看后自动清理，收益报告和最终持仓仍然保留。</p>
+        : page.status === "not_recorded" ? <p>{section === "strategy_execution_constraints"
+          ? "所选范围未完整记录执行约束，无法据此判断是否发生过资金或交易单位限制。"
+          : "此结果未记录交易事件。"}</p>
+        : page.rows.length === 0 ? <p>{"没有匹配的" + sections[section] + "记录。"}</p>
+        : <StrategyEventTable key={section + ":" + JSON.stringify(filters) + ":" + cursor}
+            section={section} rows={page.rows} navigate={navigate} />}
+      <nav aria-label="交易事件分页">
+        <span className="strategy-event-page-count" role="status">{(page?.status === "recorded" || page?.status === "partially_expired") && !error && <>本页 {page.rows.length} 条{!page.next_cursor && <span>{filtered ? "已到筛选结果末尾" : "已到末尾"}</span>}</>}</span>
+        <button type="button" onClick={() => { setPage(null); setCursors([null]); setRevision(value => value + 1); focusAfterNavigation.current = true; }}>重新加载首页</button>
+        <button type="button" disabled={cursors.length === 1 || !page} onClick={() => { setPage(null); setCursors(values => values.slice(0, -1)); focusAfterNavigation.current = true; }}>上一页</button>
+        <span>第 {cursors.length} 页</span>
+        <button type="button" disabled={!page?.next_cursor} onClick={() => { if (page?.next_cursor) { setCursors(values => [...values, page.next_cursor]); setPage(null); focusAfterNavigation.current = true; } }}>下一页</button>
       </nav>
     </div>}
   </details>;

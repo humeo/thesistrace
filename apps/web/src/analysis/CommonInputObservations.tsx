@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { coreFetch } from "../auth/coreFetch";
+import "./strategy-events.css";
 import "./common-input-observations.css";
 
 type Observation = {

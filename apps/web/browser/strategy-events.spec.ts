@@ -28,6 +28,66 @@ const order = { target_id: "target_a", order_id: "order_a", decision_session: "2
 const child = { ...order, child_order_id: "child_a", quantity: 100 };
 const fill = { ...child, fill_id: "fill_a", raw_open: "10", adjusted_open: "20", raw_notional: "1000", research_settlement: "1000", cost: "5", net_cash_delta: "-1005", adjusted_units_delta: "50", execution_shares_delta: 100 };
 
+test("troubleshooting table preserves unknown quantities and copies the exact record", async ({ page, context }) => {
+  const reads: Record<string, unknown>[] = [];
+  const recorded = { ...order, intended_value: "1000.0000000000000001", unrounded_quantity: 100 };
+  const suspended = { ...order, order_id: "order_suspended", instrument_id: "equity:000001.SZ", legal_quantity: null, unrounded_quantity: null, rejection_reason: "suspension" };
+  await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: "https://events.test" });
+  await page.route("https://events.test/**", route => {
+    if (new URL(route.request().url()).pathname === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    const query = route.request().postDataJSON() as Record<string, unknown>;
+    reads.push(query);
+    return route.fulfill({ json: { section: query.section, status: "recorded", rows: query.section === "strategy_targets" ? [target] : [recorded, suspended], next_cursor: null } });
+  });
+  await page.goto("https://events.test/");
+  await page.addStyleTag({ content: styles });
+  await page.addScriptTag({ content: script });
+  expect(reads).toHaveLength(0);
+  await page.getByText("Trading events", { exact: true }).click();
+  const table = page.getByRole("table", { name: "委托" });
+  await expect(table).toBeVisible();
+  await expect(table.getByRole("row").filter({ hasText: "000001.SZ" })).toContainText("—");
+  await expect(table.getByRole("row").filter({ hasText: "000001.SZ" })).toContainText("停牌");
+  await expect(page.locator("pre")).toHaveCount(0);
+  await table.getByRole("button", { name: /查看原始记录/ }).first().click();
+  expect(JSON.parse(await page.locator("pre").innerText())).toEqual(recorded);
+  await page.getByRole("button", { name: "复制 JSON", exact: true }).click();
+  await expect(page.getByRole("button", { name: "已复制", exact: true })).toBeVisible();
+  expect(JSON.parse(await page.evaluate(() => navigator.clipboard.readText()))).toEqual(recorded);
+  await page.getByText("Trading events", { exact: true }).click();
+  await expect(table).not.toBeVisible();
+});
+
+test("long rational weights remain exact in optional raw records without widening the page", async ({ page }) => {
+  // Canonical rational weights may be longer than Number can represent.
+  const numerator = "1" + "0".repeat(320);
+  const denominator = "4" + "0".repeat(319) + "1";
+  const weight = `${numerator}/${denominator}`;
+  await page.route("https://events.test/**", route => {
+    if (new URL(route.request().url()).pathname === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    return route.fulfill({ json: { section: "strategy_targets", status: "recorded", rows: [{
+      ...target, signal_session: "2026-08-03", selected_instrument_ids: ["equity:600000.SH", "equity:000001.SZ"],
+      relative_weights: { "equity:600000.SH": weight, "equity:000001.SZ": `${BigInt(denominator) - BigInt(numerator)}/${denominator}` },
+    }], next_cursor: null } });
+  });
+  await page.goto("https://events.test/");
+  await page.addStyleTag({ content: styles });
+  await page.addScriptTag({ content: script });
+  await page.getByText("Trading events", { exact: true }).click();
+  await page.getByLabel("事件类型").selectOption("strategy_targets");
+  const table = page.getByRole("table", { name: "调仓目标" });
+  await expect(table.getByRole("cell", { name: "2", exact: true })).toBeVisible();
+  await expect(table.getByRole("cell", { name: "70.00%", exact: true })).toBeVisible();
+  await expect(page.locator("pre")).toHaveCount(0);
+  await table.getByRole("button", { name: /查看原始记录/ }).click();
+  const raw = JSON.parse(await page.locator("pre").innerText());
+  expect(raw.relative_weights["equity:600000.SH"]).toBe(weight);
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await table.getByRole("button", { name: /查看原始记录/ }).click();
+  await expect(page.locator("pre")).toHaveCount(0);
+});
+
 test("trading evidence pages and follows target, order, child and fill relationships", async ({ page }) => {
   const reads: Record<string, unknown>[] = [];
   await page.route("https://events.test/**", route => {
@@ -43,35 +103,94 @@ test("trading evidence pages and follows target, order, child and fill relations
   await page.addScriptTag({ content: script });
   expect(reads).toHaveLength(0);
   await page.getByText("Trading events", { exact: true }).click();
-  await expect(page.getByText("70% exposure", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Next", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Next", exact: true })).toBeDisabled();
+  await page.getByLabel("事件类型").selectOption("strategy_targets");
+  await expect(page.getByText("70.00%", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "下一页", exact: true }).click();
+  await expect(page.getByRole("button", { name: "下一页", exact: true })).toBeDisabled();
   expect(reads.at(-1)?.cursor).toBe("page-2");
-  await page.getByRole("button", { name: "Previous", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Next", exact: true })).toBeEnabled();
-  await page.getByLabel("From", { exact: true }).fill("2026-08-03");
-  await page.getByLabel("Through", { exact: true }).fill("2026-08-03");
-  await page.getByRole("button", { name: "Apply filters" }).click();
+  await page.getByRole("button", { name: "上一页", exact: true }).click();
+  await expect(page.getByRole("button", { name: "下一页", exact: true })).toBeEnabled();
+  await page.getByLabel("起始日期", { exact: true }).fill("2026-08-03");
+  await page.getByLabel("结束日期", { exact: true }).fill("2026-08-03");
+  await page.getByRole("button", { name: "查询", exact: true }).click();
   await expect.poll(() => reads.at(-1)?.end_session).toBe("2026-08-03");
-  await page.getByRole("button", { name: "View orders", exact: true }).click();
-  await expect(page.getByLabel("Event type")).toHaveValue("strategy_orders");
+  await page.getByRole("button", { name: /查看原始记录/ }).click();
+  await page.getByRole("button", { name: "查看委托", exact: true }).click();
+  await expect(page.getByLabel("事件类型")).toHaveValue("strategy_orders");
+  await expect(page.getByRole("region", { name: "当前关联范围" })).toContainText("2026-08-03 的调仓目标");
   await expect(page.getByText("2026-08-04", { exact: true }).first()).toBeVisible();
   expect(reads.at(-1)?.target_id).toBe("target_a");
   expect(reads.at(-1)?.end_session).toBeUndefined();
   expect(reads.at(-1)?.cursor).toBeNull();
-  await page.getByRole("button", { name: "View child orders" }).click();
-  await expect(page.getByLabel("Event type")).toHaveValue("strategy_child_orders");
-  await expect(page.getByRole("button", { name: "View fills" })).toBeVisible();
+  await page.getByRole("button", { name: /查看原始记录/ }).click();
+  await page.getByRole("button", { name: "查看子委托" }).click();
+  await expect(page.getByLabel("事件类型")).toHaveValue("strategy_child_orders");
+  await page.getByRole("button", { name: /查看原始记录/ }).click();
+  await expect(page.getByRole("button", { name: "查看成交" })).toBeVisible();
   expect(reads.at(-1)?.order_id).toBe("order_a");
-  await page.getByRole("button", { name: "View fills" }).click();
-  await expect(page.getByLabel("Event type")).toHaveValue("strategy_fills");
-  await page.locator(".strategy-event-list summary").click();
-  await expect(page.getByText("Research Settlement (CNY)", { exact: true })).toBeVisible();
-  await expect(page.getByText("-1005", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "查看成交" }).click();
+  await expect(page.getByLabel("事件类型")).toHaveValue("strategy_fills");
+  await expect(page.getByRole("heading", { name: "成交", exact: true })).toBeFocused();
+  await expect(page.getByRole("cell", { name: "5.00", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: /查看原始记录/ }).click();
+  expect(JSON.parse(await page.locator("pre").innerText()).net_cash_delta).toBe("-1005");
   expect(reads.at(-1)?.child_order_id).toBe("child_a");
+  await expect(page.getByText("已到筛选结果末尾", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "返回子委托", exact: true }).click();
+  await expect(page.getByLabel("事件类型")).toHaveValue("strategy_child_orders");
+  await expect.poll(() => reads.at(-1)?.order_id).toBe("order_a");
+  await page.getByRole("button", { name: "返回委托", exact: true }).click();
+  await expect(page.getByLabel("事件类型")).toHaveValue("strategy_orders");
+  await page.getByRole("button", { name: "返回调仓目标", exact: true }).click();
+  await expect(page.getByLabel("起始日期", { exact: true })).toHaveValue("2026-08-03");
+  await expect(page.getByRole("region", { name: "当前关联范围" })).toHaveCount(0);
+  await page.getByRole("button", { name: /查看原始记录/ }).click();
+  await page.getByRole("button", { name: "查看成交", exact: true }).click();
+  await expect(page.getByRole("region", { name: "当前关联范围" })).toContainText("2026-08-03 的调仓目标");
+  await page.getByRole("button", { name: "查看全部成交", exact: true }).click();
+  await expect.poll(() => reads.at(-1)?.target_id).toBeUndefined();
+  await expect(page.getByRole("region", { name: "当前关联范围" })).toHaveCount(0);
+  await expect(page.getByText("全部日期 · 全部股票", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: /查看原始记录/ }).click();
+  await page.screenshot({ path: "../../.local/browser-tests/strategy-events-desktop.png", fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: "../../.local/browser-tests/strategy-events.png", fullPage: true });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
+test("execution constraints distinguish skipped, reduced and unrecorded trades", async ({ page }) => {
+  const constraints = [
+    { ...order, constraint_id: "constraint_reduced", mode: "selection", reason: "insufficient_cash", unrounded_quantity: 1000, legal_quantity: 1000, submitted_quantity: 900, available_cash_cny: "10000" },
+    { ...order, constraint_id: "constraint_skipped", instrument_id: "equity:000001.SZ", mode: "selection", reason: "below_board_lot", unrounded_quantity: 50, legal_quantity: 0, submitted_quantity: 0, order_id: null, available_cash_cny: "500" },
+  ];
+  let availability = "recorded";
+  const reads: Record<string, unknown>[] = [];
+  await page.route("https://events.test/**", route => {
+    if (new URL(route.request().url()).pathname === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    const query = route.request().postDataJSON() as Record<string, unknown>;
+    reads.push(query);
+    return route.fulfill({ json: { section: query.section, status: availability, rows: query.section === "strategy_execution_constraints" && availability === "recorded" ? constraints : [], next_cursor: null } });
+  });
+  await page.goto("https://events.test/");
+  await page.addStyleTag({ content: styles });
+  await page.addScriptTag({ content: script });
+  await page.getByText("Trading events", { exact: true }).click();
+  await page.getByLabel("事件类型").selectOption("strategy_execution_constraints");
+  const table = page.getByRole("table", { name: "执行约束", exact: true });
+  await expect(table.getByRole("row").filter({ hasText: "600000.SH" })).toContainText("1,0001,000900资金不足");
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await table.getByRole("button", { name: /000001.SZ/ }).click();
+  await expect(page.getByRole("button", { name: "查看目标", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "查看委托", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "查看成交", exact: true })).toHaveCount(0);
+  expect(JSON.parse(await page.locator("pre").innerText()).submitted_quantity).toBe(0);
+  await table.getByRole("button", { name: /600000.SH/ }).click();
+  await page.getByRole("button", { name: "查看委托", exact: true }).click();
+  await expect.poll(() => reads.at(-1)?.order_id).toBe("order_a");
+  availability = "not_recorded";
+  await page.getByRole("button", { name: "返回执行约束", exact: true }).click();
+  await expect(page.getByText("所选范围未完整记录执行约束，无法据此判断是否发生过资金或交易单位限制。")).toBeVisible();
+  await expect(page.getByText("没有匹配的执行约束记录。")).toHaveCount(0);
 });
 
 test("event failures, unrecorded evidence and an empty result remain distinct", async ({ page }) => {
@@ -79,14 +198,27 @@ test("event failures, unrecorded evidence and an empty result remain distinct", 
   await page.route("https://events.test/**", route => {
     if (new URL(route.request().url()).pathname === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
     reads++;
-    return route.fulfill(reads === 1 ? { status: 503 } : { json: { section: "strategy_targets", status: reads === 2 ? "not_recorded" : "recorded", rows: [], next_cursor: null } });
+    return route.fulfill(reads === 1 ? { status: 503 } : { json: { section: "strategy_orders", status: reads === 2 ? "not_recorded" : "recorded", rows: [], next_cursor: null } });
   });
   await page.goto("https://events.test/");
   await page.addScriptTag({ content: script });
   await page.getByText("Trading events", { exact: true }).click();
   await expect(page.getByRole("alert")).toBeVisible();
-  await page.getByRole("button", { name: "Reload first page" }).click();
-  await expect(page.getByText("Trading events were not recorded for this result.")).toBeVisible();
-  await page.getByRole("button", { name: "Reload first page" }).click();
-  await expect(page.getByText("No targets match these filters.")).toBeVisible();
+  await page.getByRole("button", { name: "重新加载首页" }).click();
+  await expect(page.getByText("此结果未记录交易事件。")).toBeVisible();
+  await page.getByRole("button", { name: "重新加载首页" }).click();
+  await expect(page.getByText("没有匹配的委托记录。")).toBeVisible();
+});
+
+test("expired trading evidence is distinct from an empty query", async ({ page }) => {
+  await page.route("https://events.test/**", route => {
+    if (new URL(route.request().url()).pathname === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    return route.fulfill({ json: { section: "strategy_orders", status: "expired", rows: [], next_cursor: null, expires_at: "2026-09-22T00:00:00Z" } });
+  });
+  await page.goto("https://events.test/");
+  await page.addScriptTag({ content: script });
+  await page.getByText("Trading events", { exact: true }).click();
+  await expect(page.getByText("交易明细已过期。连续 7 天未查看后自动清理，收益报告和最终持仓仍然保留。")).toBeVisible();
+  await expect(page.getByText("没有匹配的委托记录。")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "下一页" })).toBeDisabled();
 });
