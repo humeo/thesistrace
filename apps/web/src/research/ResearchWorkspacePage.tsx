@@ -401,7 +401,12 @@ export function ResearchDraftWorkspace({
     if (pendingInput === null) return;
     if (pendingInput === "formula") alphaEditor.current?.focus();
     else if (pendingInput === "exposureExpression") exposureEditor.current?.focus();
-    else workspace.current?.querySelector<HTMLElement>(INPUT_SELECTORS[pendingInput])?.focus();
+    else {
+      const input = workspace.current?.querySelector<HTMLElement>(INPUT_SELECTORS[pendingInput]);
+      const disclosure = input?.closest("details");
+      if (disclosure) disclosure.open = true;
+      input?.focus();
+    }
     setPendingInput(null);
   }, [pendingInput, settingsOpen]);
   function focusInput(field: ResearchInputField) {
@@ -847,7 +852,8 @@ export function ResearchDraftWorkspace({
           </div>
       </section>
 
-        <div className="research-notes">
+        <details className="research-notes">
+          <summary>Notes</summary>
           <label htmlFor="research-notes">Notes</label>
           <textarea
             aria-describedby="research-notes-limit"
@@ -861,7 +867,7 @@ export function ResearchDraftWorkspace({
           <p id="research-notes-limit">
             {Array.from(draft.hypothesis).length} / {MAX_HYPOTHESIS_LENGTH} characters
           </p>
-        </div>
+        </details>
       </section>
 
             {specFeedback?.key === specKey ? (

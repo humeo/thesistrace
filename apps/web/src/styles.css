@@ -3501,7 +3501,7 @@ select { color-scheme: dark; }
 @media (max-width: 600px) { .data-search-clear { min-width: 44px; min-height: 44px; } }
 
 /* Research: formula first, detailed configuration on demand. */
-.research-workspace { grid-template-columns: minmax(0, 1fr); gap: 24px; min-height: calc(100dvh - 48px); }
+.research-workspace { grid-template-columns: minmax(0, 1fr); gap: 24px; width: min(960px, 100%); margin-inline: auto; align-content: start; }
 .research-workspace-header { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 20px; border: 0; padding: 0; }
 .research-workspace-header > .research-folder-navigation { grid-column: 1; }
 .research-name-field { grid-column: 1; grid-row: 2; }
@@ -3521,8 +3521,10 @@ select { color-scheme: dark; }
 .research-editor-panel .formula-heading { display: flex; justify-content: space-between; padding: 0 16px; }
 .research-editor-panel .formula-heading h2 { padding: 0; font-size: 13px; }
 .research-editor-panel .formula-heading a { font-size: 12px; color: var(--primary-hover); }
-.research-editor-panel > .formula-workbench .alpha-formula-editor { height: clamp(240px, 36dvh, 460px); }
+.research-editor-panel > .formula-workbench .alpha-formula-editor { height: 280px; }
 .research-notes { margin-top: 16px; }
+.research-notes > summary { width: fit-content; cursor: pointer; color: var(--ink-soft); font-size: 13px; }
+.research-notes > summary:focus-visible { outline: 2px solid var(--primary-focus); outline-offset: 4px; border-radius: 2px; }
 .research-notes label { display: block; margin-top: 12px; }
 .research-action-bar { justify-content: flex-end; position: sticky; bottom: 0; z-index: 5; display: flex; align-items: center; gap: 12px; padding: 16px 0; background: var(--canvas); border-top: 1px solid var(--line); }
 .research-action-bar .button { flex-shrink: 0; }
