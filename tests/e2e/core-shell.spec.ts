@@ -206,16 +206,19 @@ test("Notes keeps multiline research context visible", async ({ page }) => {
   await page.setViewportSize({ width: 956, height: 958 });
   await page.goto("/research");
 
-  const notes = page.getByLabel("Notes");
+  const notes = page.getByLabel("Notes", { exact: true });
+  await expect(notes).toBeHidden();
+  await page.locator("summary").filter({ hasText: /^Notes$/ }).click();
   await notes.fill(
     "Long turnover-amount leaders in Top 300; 20 holdings, rebalance every 5 sessions.",
   );
   const layout = await notes.evaluate((element) => ({
+    height: element.getBoundingClientRect().height,
     clientHeight: element.clientHeight,
     scrollHeight: element.scrollHeight,
   }));
 
-  expect(layout.clientHeight).toBeGreaterThanOrEqual(72);
+  expect(layout.height).toBeGreaterThanOrEqual(72);
   expect(layout.scrollHeight).toBeLessThanOrEqual(layout.clientHeight);
 });
 
@@ -246,7 +249,7 @@ test("date inputs retain a browser-populated value when focus leaves the field",
   await page.getByLabel("Research name").fill("Browser populated dates");
   await page.getByRole("textbox", { name: "Alpha formula", exact: true }).click();
   await page.keyboard.type("close");
-  await page.getByLabel("Universe").selectOption("top300");
+  await page.getByLabel("Universe", { exact: true }).selectOption("top300");
   await page.getByRole("button", { name: "Run settings", exact: true }).click();
   await page.getByLabel("Neutralization").selectOption("none");
   await page.getByRole("button", { name: "Run settings", exact: true }).click();
@@ -263,7 +266,7 @@ test("date inputs retain a browser-populated value when focus leaves the field",
     await page.keyboard.press("Tab");
   }
 
-  await page.getByLabel("Notes").fill("Trigger a controlled React rerender.");
+  await fillResearchNotes(page, "Trigger a controlled React rerender.");
   await expect(page.getByLabel("Research start date")).toHaveValue("2025-08-13");
   await expect(page.getByLabel("Research end date")).toHaveValue("2026-08-13");
   await expect(page.getByRole("button", { name: /^Run (backtest|evaluation)$/ })).toBeEnabled();
@@ -394,10 +397,10 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await expect(editor).toHaveText("ts_mean(close, 2)");
     await expect(page.locator(".cm-alpha-field").first()).toHaveCSS("color", "rgb(139, 213, 202)");
     await expect(page.getByRole("list", { name: "Formula diagnostics" })).toHaveCount(0);
-    await page.getByLabel("Notes").fill("Short rolling mean retains signal.");
+    await fillResearchNotes(page, "Short rolling mean retains signal.");
     await page.getByLabel("Research start date").fill("2026-08-03");
     await page.getByLabel("Research end date").fill("2026-08-05");
-    await page.getByLabel("Universe").selectOption("top300");
+    await page.getByLabel("Universe", { exact: true }).selectOption("top300");
     await page.getByRole("button", { name: "Run settings", exact: true }).click();
     await page.getByLabel("Neutralization").selectOption("none");
     await page.getByLabel("Initial cash (CNY)").fill("100000");
@@ -437,7 +440,7 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await expect(page.getByLabel("Research name")).toHaveValue("Browser Mean Research");
     await expect(page.getByRole("textbox", { name: "Alpha formula", exact: true })).toHaveText("ts_mean(close, 2)");
     await expect(page.getByLabel("Notes")).toHaveValue("Short rolling mean retains signal.");
-    await expect(page.getByLabel("Universe")).toHaveValue("top300");
+    await expect(page.getByLabel("Universe", { exact: true })).toHaveValue("top300");
 
     page.once("dialog", async (dialog) => dialog.dismiss());
     const workspaceNew = page.locator(".research-workspace-header").getByRole("button", { name: "New research" });
@@ -540,32 +543,48 @@ test("Complete field catalog composes one Formula and starts its DailyTrack", { 
   try {
     controlWorker("pause");
     workerPaused = true;
+    const dataResponse = page.waitForResponse((response) => (
+      response.url().endsWith("/api/data") && response.request().method() === "GET"
+    ));
     await openDataOverview(page);
+    const data = await (await dataResponse).json();
+    const fields = data.catalog.fields as Array<{
+      source_endpoint: string; report_period_selection: string;
+    }>;
+    expect(fields).toHaveLength(226);
+    expect(fields.filter((field) => field.source_endpoint === "fina_indicator")).toHaveLength(163);
+    expect(fields.filter((field) => field.report_period_selection === "latest_visible_ttm")).toHaveLength(19);
     await expect(page.getByRole("heading", { name: "Research fields" })).toBeVisible();
-    await expect(page.getByText("226 available", { exact: true })).toBeVisible();
-    await expect(page.locator(".signal-strip")).toHaveCount(4);
-    await expect(page.locator(".data-field-dataset > header")).toContainText([
-      "22 fields", "204 fields",
-    ]);
-    await page.getByRole("searchbox", { name: "Search fields" }).fill("close_raw");
-    await expect(page.locator(".data-field-dataset .data-field-table tbody tr")).toHaveCount(1);
-    await expect(page.locator(".data-field-dataset .data-field-table tbody tr")).toContainText("未复权收盘价");
-    await page.getByRole("searchbox", { name: "Search fields" }).fill("");
+    await expect(page.getByText("226 fields", { exact: true })).toBeVisible();
+    await expect(page.locator(".data-coverage-row")).toHaveCount(4);
+    const categories = page.getByRole("group", { name: "Field category" });
+    await expect(categories.getByRole("button", { name: /^Market/ })).toContainText("22");
+    await expect(categories.getByRole("button", { name: /^Financial/ })).toContainText("204");
+    const rows = page.getByRole("region", { name: "Research fields" })
+      .locator(".data-field-table tbody tr");
+    const pages = page.getByRole("navigation", { name: "Field pages" });
+    await expect(rows).toHaveCount(25);
+    await pages.getByRole("button", { name: "Next", exact: true }).click();
+    await expect(pages.getByRole("status")).toHaveText("Showing 26–50 of 226");
+    await categories.getByRole("button", { name: /^Financial/ }).click();
+    await expect(pages.getByRole("status")).toHaveText("Showing 1–25 of 204");
+    await categories.getByRole("button", { name: "All fields", exact: true }).click();
+    const search = page.getByRole("searchbox", { name: "Search fields" });
+    await search.fill("close_raw");
+    await expect(rows).toHaveCount(1);
+    await expect(rows).toContainText("未复权收盘价");
+    await search.fill("");
     await page.getByRole("combobox", { name: "Research purpose" }).selectOption("盈利");
-    await expect(page.locator(".data-field-dataset .data-field-table tbody tr")).toHaveCount(12);
+    await expect(rows).toHaveCount(12);
     await page.getByRole("combobox", { name: "Research purpose" }).selectOption("");
-    await page.getByRole("combobox", { name: "Field source" }).selectOption("fina_indicator");
-    await expect(page.locator(".data-field-dataset .data-field-table tbody tr")).toHaveCount(163);
-    await page.getByRole("searchbox", { name: "Search fields" }).fill("单季净资产收益率");
-    await expect(page.locator(".data-field-dataset .data-field-table tbody tr")).toHaveCount(1);
-    await expect(page.locator(".data-field-dataset .data-field-table tbody tr")).toContainText("q_roe");
-    await page.getByRole("searchbox", { name: "Search fields" }).fill("");
-    await page.getByRole("combobox", { name: "Field source" }).selectOption("");
-    await page.getByRole("combobox", { name: "Field period" }).selectOption("latest_visible_ttm");
-    await expect(page.locator(".data-field-dataset .data-field-table tbody tr")).toHaveCount(19);
-    await page.getByRole("combobox", { name: "Field period" }).selectOption("");
-    await expect(page.getByText("revenue", { exact: true })).toBeVisible();
-    await expect(page.getByText("Latest full year visible on each Research Session").first()).toBeVisible();
+    await search.fill("单季净资产收益率");
+    await expect(rows).toHaveCount(1);
+    await expect(rows).toContainText("q_roe");
+    await search.fill("revenue");
+    await rows.filter({ has: page.getByText("revenue", { exact: true }) })
+      .getByRole("button").click();
+    await expect(page.getByRole("complementary", { name: "Field details" }))
+      .toContainText("Latest full year visible on each Research Session");
     await page.goto("/research?new");
     await fillCompleteDraft(page, {
       name: "Composite financial browser run",
@@ -669,7 +688,10 @@ test("Complete field catalog composes one Formula and starts its DailyTrack", { 
     const terminalProgress = page.locator("[aria-label='ResearchRun progress']");
     await expect(terminalProgress.getByText("Warm-up", { exact: true })).toHaveCount(0);
     await expect(terminalProgress.getByText("Committed chunks", { exact: true })).toHaveCount(0);
-    await expect(terminalProgress.getByText("Research sessions", { exact: true })).toBeVisible();
+    await expect(terminalProgress.getByText("Execution complete", { exact: true })).toBeVisible();
+    await expect(terminalProgress.locator("summary")).toContainText(/\d+ \/ \d+ sessions/);
+    await expect(terminalProgress.getByText("Started", { exact: true })).toBeHidden();
+    await terminalProgress.locator("summary").click();
     await expect(terminalProgress.getByText("Started", { exact: true })).toBeVisible();
     await expect(terminalProgress.getByText("Finished", { exact: true })).toBeVisible();
     await expect(terminalProgress.locator("time")).toHaveCount(2);
@@ -1093,10 +1115,9 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     const defaultRunId = page.url().split("/").at(-1);
     expect(defaultRunId).toMatch(/^run_[a-f0-9]+$/);
     await expect(page.locator(".research-run-facts").getByText(/Status\s+succeeded/)).toBeVisible({ timeout: 90_000 });
-    await expect(page.getByRole("heading", { name: "Execution progress" })).toBeVisible();
-    await expect(
-      page.locator(".research-run-progress-stats > div").filter({ hasText: "Research" }),
-    ).toContainText("2 / 2");
+    const completedProgress = page.getByRole("region", { name: "ResearchRun progress" });
+    await expect(completedProgress.getByText("Execution complete", { exact: true })).toBeVisible();
+    await expect(completedProgress).toContainText("2 / 2 sessions");
     await expect(page.locator("body")).not.toContainText(/checkpoint|staged payload/i);
     await expect(page.getByRole("heading", { name: "Strategy Summary" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Factor Summary" })).toHaveCount(0);
@@ -1195,9 +1216,12 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     expect(((await factorHistoryAfterReuse.json()).items as unknown[])).toHaveLength(factorHistoryCount);
 
     await page.getByRole("radio", { name: /Strategy Backtest/ }).check();
-    await expect(page.getByRole("button", { name: /^Run (backtest|evaluation)$/, exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: /^Run (backtest|evaluation)$/, exact: true })).toBeEnabled();
     await page.getByLabel("Research name").fill("Converted Factor Strategy");
     await page.getByRole("button", { name: "Run settings", exact: true }).click();
+    await expect(page.getByLabel("Initial cash (CNY)")).toHaveValue("100000");
+    await expect(page.getByLabel("Holdings count")).toHaveValue("10");
+    await expect(page.getByLabel("Selection interval (trading days)")).toHaveValue("5");
     await page.getByLabel("Initial cash (CNY)").fill("100000");
     await page.getByLabel("Holdings count").fill("10");
     await page.getByLabel("Selection interval (trading days)").fill("2");
@@ -1324,7 +1348,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await expect(page.getByLabel("Notes")).toHaveValue("Browser Run acceptance.");
     await expect(page.getByLabel("Research start date")).toHaveValue("2026-08-04");
     await expect(page.getByLabel("Research end date")).toHaveValue("2026-08-05");
-    await expect(page.getByLabel("Universe")).toHaveValue("top300");
+    await expect(page.getByLabel("Universe", { exact: true })).toHaveValue("top300");
     await expect(page.getByLabel("Neutralization")).toHaveValue("none");
     await expect(page.getByRole("radio", { name: /Strategy Backtest/ })).toBeChecked();
     await expect(page.getByLabel("Holdings count")).toHaveValue("10");
@@ -1506,10 +1530,10 @@ async function fillCompleteDraft(
   }).check();
   await page.getByLabel("Research name").fill(values.name);
   await replaceFormula(page, values.formula);
-  await page.getByLabel("Notes").fill("Browser Run acceptance.");
+  await fillResearchNotes(page, "Browser Run acceptance.");
   await page.getByLabel("Research start date").fill("2026-08-04");
   await page.getByLabel("Research end date").fill("2026-08-05");
-  await page.getByLabel("Universe").selectOption("top300");
+  await page.getByLabel("Universe", { exact: true }).selectOption("top300");
   await page.getByRole("button", { name: "Run settings", exact: true }).click();
   await page.getByLabel("Neutralization").selectOption("none");
   if (researchKind === "strategy_backtest") {
@@ -1585,4 +1609,13 @@ async function confirmTrackStop(page: Page) {
   await expect(decision).not.toBeVisible();
   await page.getByRole("button", { name: "Stop DailyTrack", exact: true }).click();
   await decision.getByRole("button", { name: "Stop DailyTrack", exact: true }).click();
+}
+
+
+async function fillResearchNotes(page: Page, value: string): Promise<void> {
+  const notes = page.getByLabel("Notes", { exact: true });
+  if (!(await notes.isVisible())) {
+    await page.locator("summary").filter({ hasText: /^Notes$/ }).click();
+  }
+  await notes.fill(value);
 }

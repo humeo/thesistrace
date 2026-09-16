@@ -1309,7 +1309,7 @@ test("Operator Financial and Industry refresh and response recovery", { tag: "@i
   await expect(page.getByRole("heading", {
     name: "Financial data published with unresolved coverage",
   })).toBeVisible({ timeout: 30_000 });
-  await expect(financialReceipt.getByText("Degraded success", { exact: true }))
+  await expect(financialReceipt.getByText("Published · incomplete coverage", { exact: true }))
     .toBeVisible();
   await expect(financialReceipt).toContainText(
     "A usable Dataset was published, but discovery gaps remain",
@@ -1535,7 +1535,7 @@ test("Operator Financial and Industry refresh and response recovery", { tag: "@i
     financialTargetSession,
     { exact: true },
   )).toBeVisible();
-  await expect(recoveredFinancialReceipt.getByText("Degraded success", { exact: true }))
+  await expect(recoveredFinancialReceipt.getByText("Published · incomplete coverage", { exact: true }))
     .toBeVisible();
   expect(financialStatusRequests).toContainEqual({
     idempotencyKey: droppedFinancialKey,
