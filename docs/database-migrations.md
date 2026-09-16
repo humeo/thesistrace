@@ -118,3 +118,26 @@ Repeated application verifies the target without extending deadlines. A failed
 migration rolls back tables, data and the schema receipt together. Post-commit
 restoration requires the verified database and object backup with the matching
 old image; do not run old code against the new schema.
+
+## 0004: Fair Research execution opportunities
+
+- Source: `1bb894bbece0ade8cb122d4054be492fb26ef56d1d9e85237a002f195e386a4f`
+- Target: `7243074d627ca77e20ea9d5f10bed2a9ae413ca7db730d3bd37e1ff7ad5369a2`
+- Preflight: `python -m thesistrace.migrations.execution_opportunities_0004`.
+- Apply: the same command with `--apply`, using the database owner URL.
+
+Drain and stop Core writers, including Research, Batch Research, Tracking, Data
+Operator and Publication maintenance, and verify a restricted PostgreSQL backup
+can be restored. Preserve referenced object-store bytes. The migration verifies
+the existing researcher table and creates the execution opportunity table and
+sequence with runtime grants. Existing records and immutable references remain
+unchanged; each researcher's scheduling history starts when the new scheduler
+first allocates an opportunity. No historical allocation is fabricated.
+
+DDL, the migration receipt and the source-to-target contract transition commit
+atomically. Repeating the migration verifies the table and sequence definitions
+without resetting allocation state. Unknown fingerprints and affected structure
+drift are rejected. Failures before commit roll back all changes. Restoration
+after commit requires stopping writers and restoring the verified backup with
+its matching application images. Initialize and start all Core services with the
+target release after successful application.
