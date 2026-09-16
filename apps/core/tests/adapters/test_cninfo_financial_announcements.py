@@ -384,6 +384,44 @@ def _discover(**options: object):
     )
 
 
+def test_browser_identity_covers_stock_directory_and_all_announcement_pages(
+    cninfo_pagination, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install, _delays = cninfo_pagination
+    remote = install([])
+    identities: list[str] = []
+
+    class BrowserOnlyTransport:
+        def _accept(self, kwargs: dict[str, object]) -> bool:
+            headers = kwargs.get("headers", {})
+            identity = headers.get("User-Agent", "")
+            identities.append(identity)
+            return identity.startswith("Mozilla/5.0")
+
+        def get(self, url: str, **kwargs: object) -> Response:
+            if not self._accept(kwargs):
+                return _json_response({}, status=403)
+            return remote.get(url, **kwargs)
+
+        def post(self, url: str, **kwargs: object) -> Response:
+            if not self._accept(kwargs):
+                return _json_response({}, status=403)
+            return remote.post(url, **kwargs)
+
+    transport = BrowserOnlyTransport()
+    monkeypatch.setattr(stock_disclosure_cninfo, "requests", transport)
+
+    discovery = _discover()
+
+    assert discovery.gaps == ()
+    assert discovery.completed_categories == FINANCIAL_ANNOUNCEMENT_CATEGORIES
+    assert len(discovery.announcements) == 31
+    assert remote.get_attempts > 0
+    assert 2 in remote.pages
+    assert len(set(identities)) == 1
+    assert stock_disclosure_cninfo.requests is transport
+
+
 @pytest.mark.parametrize(
     "failure", ["json", "connection", "truncated", 408, 429, 500, 502, 503, 504]
 )

@@ -19,6 +19,7 @@ from requests.exceptions import (
     Timeout,
 )
 from requests.exceptions import ConnectionError as RequestConnectionError
+from requests.structures import CaseInsensitiveDict
 
 from thesistrace.data.financial_announcements import (
     FINANCIAL_ANNOUNCEMENT_CATEGORIES,
@@ -36,6 +37,10 @@ from thesistrace.operational_events import (
 _EXPECTED_COLUMNS = frozenset({"代码", "简称", "公告标题", "公告时间", "公告链接"})
 _RETRYABLE_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
 _MAX_RETRY_WAIT_SECONDS = 30
+_CNINFO_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+)
 _emit_cninfo_event = non_blocking_operational_event_sink(
     emit_operational_event_data, component="data_operator"
 )
@@ -83,6 +88,9 @@ class _RequestsWithRetry:
         self, method: str, args: tuple[object, ...], kwargs: dict[str, object]
     ) -> Response:
         kwargs.setdefault("timeout", self._timeout_seconds)
+        headers = CaseInsensitiveDict(cast(dict[str, str], kwargs.get("headers") or {}))
+        headers["User-Agent"] = _CNINFO_USER_AGENT
+        kwargs["headers"] = dict(headers)
         request = self._transport.get if method == "GET" else self._transport.post
         for attempt in range(1, self._max_attempts + 1):
             response = None
