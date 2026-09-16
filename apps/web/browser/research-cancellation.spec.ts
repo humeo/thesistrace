@@ -57,6 +57,36 @@ async function openResearch(page: Page) {
   await expect(page.getByRole("group", { name: "Research execution conditions" })).toContainText("Top 1000");
 }
 
+test("completed execution keeps timing in a keyboard-accessible disclosure on desktop and mobile", async ({ page }) => {
+  await page.route("**/api/research-runs/run_cancel", route => route.fulfill({ json: {
+    ...detail,
+    status: "succeeded",
+    progress: { ...detail.progress, phase: "succeeded", completed_research_sessions: 5 },
+    execution_timing: {
+      started_at: "2026-09-15T00:00:00Z", finished_at: "2026-09-15T00:02:39Z",
+      elapsed_seconds: 159, is_final: true,
+    },
+  } }));
+  await openResearch(page);
+  const progress = page.getByRole("region", { name: "ResearchRun progress", exact: true });
+  const disclosure = progress.locator("summary");
+  await expect(progress).toContainText("Execution complete");
+  await expect(progress).toContainText("5 / 5 sessions");
+  await expect(progress).toContainText("2m 39s");
+  await expect(progress.getByRole("progressbar")).toHaveCount(0);
+  for (const width of [1050, 390]) {
+    await page.setViewportSize({ width, height: 964 });
+    await expect(progress.getByText("Started", { exact: true })).not.toBeVisible();
+    await disclosure.focus();
+    await disclosure.press("Enter");
+    await expect(progress.getByText("2026-09-15 00:00:00 UTC")).toBeVisible();
+    await expect(progress.getByText("2026-09-15 00:02:39 UTC")).toBeVisible();
+    expect(await progress.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+    await disclosure.press("Enter");
+    await expect(progress.getByText("Started", { exact: true })).not.toBeVisible();
+  }
+});
+
 test("rejected batch cancellation explains the restriction and keeps live research visible", async ({ page }) => {
   let completedSessions = 1;
   await page.route("**/api/research-runs/run_cancel", route => route.fulfill({ json: {

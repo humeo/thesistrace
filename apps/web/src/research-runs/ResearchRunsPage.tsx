@@ -8,6 +8,7 @@ import {
   CaretRight,
   CaretUp,
   CaretUpDown,
+  CheckCircle,
 } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
 
@@ -872,6 +873,42 @@ export function ResearchRunProgressView({
   const total = progress.total_warmup_sessions + progress.total_research_sessions;
   const active = status === "running" || status === "cancelling";
   const progressPercentage = total === 0 ? 0 : Math.round((completed / total) * 100);
+  const executionTiming = (
+    <dl className="research-run-timing">
+      <div>
+        <dt>Started</dt>
+        <dd><ExecutionTimestamp value={timing?.started_at ?? null} /></dd>
+      </div>
+      <div>
+        <dt>Finished</dt>
+        <dd><ExecutionTimestamp value={timing?.finished_at ?? null} /></dd>
+      </div>
+    </dl>
+  );
+  if (status === "succeeded") {
+    return (
+      <section aria-label="ResearchRun progress" className="research-run-progress research-run-progress-complete">
+        <details className="research-run-completion-details">
+          <summary>
+            <span className="research-run-completion-label">
+              <CheckCircle aria-hidden="true" size={18} weight="fill" />
+              Execution complete
+            </span>
+            <span className="research-run-completion-metric">
+              <strong>{progress.completed_research_sessions} / {progress.total_research_sessions}</strong> sessions
+            </span>
+            <span className="research-run-completion-metric">
+              <span>Execution time</span> <strong>{formatDuration(timing?.elapsed_seconds ?? null)}</strong>
+            </span>
+            <span className="research-run-completion-toggle">
+              Timing details <CaretDown aria-hidden="true" size={14} />
+            </span>
+          </summary>
+          {executionTiming}
+        </details>
+      </section>
+    );
+  }
   return (
     <section aria-label="ResearchRun progress" className="research-run-progress">
       <header className="research-run-progress-heading">
@@ -881,6 +918,7 @@ export function ResearchRunProgressView({
             {progressLabel(status, progress.phase)}
           </span>
         </div>
+        <span className="research-run-progress-percentage">{progressPercentage}%</span>
         <dl className="research-run-duration">
           <div>
             <dt>{timing?.is_final ? "Execution time" : "Elapsed"}</dt>
@@ -894,7 +932,6 @@ export function ResearchRunProgressView({
           max={Math.max(total, 1)}
           value={completed}
         />
-        <span aria-hidden="true">{progressPercentage}%</span>
       </div>
       <div className="research-run-progress-ledger">
         <dl className="research-run-progress-stats">
@@ -904,16 +941,7 @@ export function ResearchRunProgressView({
             <dd>{progress.completed_research_sessions} / {progress.total_research_sessions}</dd>
           </div>
         </dl>
-        <dl className="research-run-timing">
-          <div>
-            <dt>Started</dt>
-            <dd><ExecutionTimestamp value={timing?.started_at ?? null} /></dd>
-          </div>
-          <div>
-            <dt>Finished</dt>
-            <dd><ExecutionTimestamp value={timing?.finished_at ?? null} /></dd>
-          </div>
-        </dl>
+        {executionTiming}
       </div>
       {active && estimate !== null ? (
         <p className="research-run-progress-note">
@@ -1500,12 +1528,10 @@ export function ResearchResultView({ result }: { result: ResearchResult }) {
       </section> : null}
 
       {strategyResult !== null ? <section className="research-result-section">
-        <div className="section-heading">
+        <div className="section-heading strategy-summary-heading">
           <h2>Strategy Summary</h2>
-          <p>Account completed through {strategyResult.terminal_strategy_state.session}. Decisions execute at the next Open, including the final session; the ending account is not liquidated.</p>
+          <p>Account through <time>{strategyResult.terminal_strategy_state.session}</time></p>
         </div>
-        <p>Last Close target {formatPercent(strategyResult.terminal_strategy_state.target_exposure)} · actual Open allocation {formatPercent(1 - Number(strategyResult.terminal_strategy_state.net_cash) / Number(strategyResult.terminal_strategy_state.net_nav))}. Orders, costs and rounding can leave a difference; the target is not a hard allocation limit.</p>
-        <SelectionEligibilityView selection={strategyResult.terminal_strategy_state.target_selection} />
         <div className="strategy-metrics">
           <Metric label="Net cumulative" help={strategyMetricHelp.netCumulative} value={formatPercent(strategyResult.strategy.summary.metrics.net_cumulative_return)} />
           <Metric
@@ -1529,6 +1555,26 @@ export function ResearchResultView({ result }: { result: ResearchResult }) {
             help={strategyMetricHelp.cumulativeCostRatio}
             value={formatPercent(strategyResult.strategy.summary.metrics.transaction_costs.ratio)}
           />
+        </div>
+        <div className="strategy-execution-context">
+          <div className="strategy-context-row">
+            <h3>Exposure</h3>
+            <dl className="strategy-exposure-values">
+              <div><dt>Last Close target</dt><dd>{formatPercent(strategyResult.terminal_strategy_state.target_exposure)}</dd></div>
+              <div><dt>Actual Open allocation</dt><dd>{formatPercent(1 - Number(strategyResult.terminal_strategy_state.net_cash) / Number(strategyResult.terminal_strategy_state.net_nav))}</dd></div>
+            </dl>
+          </div>
+          <div className="strategy-context-row">
+            <h3>Selection check</h3>
+            <SelectionEligibilityView selection={strategyResult.terminal_strategy_state.target_selection} />
+          </div>
+          <details className="strategy-execution-notes">
+            <summary>Execution conventions <CaretDown aria-hidden="true" size={14} /></summary>
+            <ul>
+              <li>Decisions execute at the next Open, including the final session; the ending account is not liquidated.</li>
+              <li>Orders, costs and rounding can leave a difference between target exposure and actual allocation; the target is not a hard allocation limit.</li>
+            </ul>
+          </details>
         </div>
         <StrategyComparisonPanel comparison={strategyResult.strategy.comparison} />
       </section> : null}

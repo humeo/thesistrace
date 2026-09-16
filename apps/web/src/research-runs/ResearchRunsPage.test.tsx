@@ -232,7 +232,11 @@ describe("ResearchRunProgressView", () => {
     );
 
     expect(markup).toContain("Execution time");
-    expect(markup).toContain("100%");
+    expect(markup).toContain("Execution complete");
+    expect(markup).toContain("875 / 875");
+    expect(markup).toContain("Timing details");
+    expect(markup).not.toContain("<progress");
+    expect(markup).not.toContain("100%");
     expect(markup).toContain("2m 46s");
     expect(markup).toContain("2026-08-13 01:00:00 UTC");
     expect(markup).toContain("2026-08-13 01:02:46 UTC");
