@@ -262,15 +262,26 @@ class FinancialVersionProjector:
             )
             earliest_observation = ordered[0].first_observed_at
             observations_by_time: dict[str, set[str]] = defaultdict(set)
+            latest_by_time: dict[str, set[str]] = defaultdict(set)
             for version in ordered:
                 # A supplier update marker is evidence, not a different financial value.
                 content = {
                     key: value for key, value in version.source().items()
                     if key != "update_flag"
                 }
-                observations_by_time[version.first_observed_at].add(_sha(content))
+                content_sha256 = _sha(content)
+                observations_by_time[version.first_observed_at].add(content_sha256)
+                if str(version.source().get("update_flag") or "") == "1":
+                    latest_by_time[version.first_observed_at].add(content_sha256)
             for version in ordered:
-                if len(observations_by_time[version.first_observed_at]) > 1:
+                # Preserve every source version. Query/seed selection already prefers
+                # update_flag=1 at the same effective session. Only competing latest
+                # payloads (or unmarked conflicts) are ambiguous, not an old/new pair.
+                competing = (
+                    latest_by_time[version.first_observed_at]
+                    or observations_by_time[version.first_observed_at]
+                )
+                if len(competing) > 1:
                     canonical.append(
                         replace(
                             version,

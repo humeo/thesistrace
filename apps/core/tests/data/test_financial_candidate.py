@@ -153,11 +153,11 @@ def _materialized_candidate(
         income_items if income_items is not None else [
             ["000001.SZ", "20080425", "", "20071231", "1", "1", "4", "70", "0"],
             ["000001.SZ", "20090425", "", "20081231", "1", "1", "4", "80", "0"],
-            ["000001.SZ", "20090425", "", "20081231", "1", "1", "4", "81", "1"],
+            ["000001.SZ", "20090425", "", "20081231", "1", "1", "4", "81", "0"],
             ["000001.SZ", "20091231", "", "20090930", "1", "1", "3", "90", "0"],
             ["000001.SZ", "20100420", "", "20091231", "1", "1", "4", None, "0"],
             ["000001.SZ", "20100420", "20100421", "20091231", "2", "2", "4", "200", "0"],
-            ["000001.SZ", "20100420", "", "20091231", "1", "1", "4", "101", "1"],
+            ["000001.SZ", "20100420", "", "20091231", "1", "1", "4", "101", "0"],
             ["000001.SZ", "", "", "20100331", "1", "1", "1", "25", "0"],
             *[
                 [
@@ -191,7 +191,7 @@ def _materialized_candidate(
         "balancesheet",
         balance_items if balance_items is not None else [
             ["000001.SZ", "20090425", "", "20081231", "1", "1", "4", "500", "0"],
-            ["000001.SZ", "20090425", "", "20081231", "1", "1", "4", "501", "1"],
+            ["000001.SZ", "20090425", "", "20081231", "1", "1", "4", "501", "0"],
             ["000001.SZ", "20260813", "", "20260630", "1", "1", "2", "999", "0"],
         ],
         datetime(2026, 4, 24, 8, tzinfo=UTC),
@@ -1650,7 +1650,7 @@ def test_daily_instrument_validation_ignores_raw_batch_only_change(
             "1",
             "4",
             "81",
-            "1",
+            "0",
         ],
     )
 
@@ -2345,7 +2345,7 @@ def test_research_projection_preserves_agreeing_fields_and_masks_conflicts(
     payload = raw.read(checkpoint.batch_sha256)
     items = [
         ["000001.SZ", "20100420", "", "20091231", "1", "1", "4", "100", flag, ebit, "100"]
-        for flag, ebit in (("0", "30"), ("1", other_ebit))
+        for flag, ebit in (("1", "30"), ("1", other_ebit))
     ]
     payload.update(items=items, row_count=2, source_date_extent=["20100420", "20100420"],
                    payload_sha256=hashlib.sha256(canonical_json_bytes(
@@ -2408,7 +2408,10 @@ def test_research_projection_preserves_agreeing_fields_and_masks_conflicts(
     }
 
 
-def test_projector_quarantines_simultaneous_conflicts_without_choosing_payload_order() -> None:
+@pytest.mark.parametrize("flags", (("0", "1"), ("0", "0"), ("1", "1")))
+def test_projector_resolves_update_markers_without_choosing_payload_order(
+    flags: tuple[str, str],
+) -> None:
     observations = tuple(
         FinancialSourceObservation(
             endpoint="balancesheet",
@@ -2421,15 +2424,19 @@ def test_projector_quarantines_simultaneous_conflicts_without_choosing_payload_o
             first_observed_at="2026-04-24T08:00:00+00:00",
             raw_batch_sha256=digest * 64,
         )
-        for value, flag, digest in (("100", "0", "a"), ("101", "1", "b"))
+        for value, flag, digest in (("100", flags[0], "a"), ("101", flags[1], "b"))
     )
     for ordered in (observations, tuple(reversed(observations))):
         versions = FinancialVersionProjector().project(ordered, SESSIONS)
         assert len(versions) == 2
-        assert {version.availability_status for version in versions} == {"quarantined"}
-        assert {version.coverage_role for version in versions} == {"quarantined"}
+        resolved = flags == ("0", "1")
+        assert {version.availability_status for version in versions} == {
+            "available" if resolved else "quarantined"
+        }
         assert {version.source()["revenue"] for version in versions} == {"100", "101"}
-        assert all(not version.effective_available_session for version in versions)
+        assert {version.effective_available_session for version in versions} == {
+            "2010-04-21" if resolved else ""
+        }
 
 
 def test_explicit_rebuild_reprojects_saved_receipts_without_new_source_batches(
@@ -2499,6 +2506,70 @@ def test_retained_reprojection_preserves_announcement_coverage_and_pending_sourc
         ) if row["instrument_id"] == "equity:000001.SZ"
         and row["coverage_role"] == "pre_start_seed"
     } == {"20081231", "20090331"}
+
+
+@pytest.mark.parametrize("latest_value", ("101", None))
+def test_latest_marked_statement_resolves_without_dropping_source_evidence(
+    tmp_path: Path, latest_value: str | None,
+) -> None:
+    fields = (*FIELDS, "total_revenue")
+    snapshot = _empty_complete_snapshot(
+        tmp_path, _market_generation(tmp_path), idempotency_key="latest-marked", fields=fields,
+    )
+    raw = RawFinancialBatchStore(tmp_path)
+    checkpoint = snapshot.shards[0]
+    payload = raw.read(checkpoint.batch_sha256)
+    items = [
+        ["000001.SZ", "20100420", "", "20091231", "1", "1", "4", value, flag, value]
+        for value, flag in (("100", "0"), (latest_value, "1"))
+    ]
+    payload.update(items=items, row_count=2, source_date_extent=["20100420", "20100420"],
+                   payload_sha256=hashlib.sha256(canonical_json_bytes(
+                       {"fields": list(fields), "items": items},
+                   )).hexdigest())
+    digest = raw.store(canonical_json_bytes(payload))
+    snapshot = replace(snapshot, shards=(replace(
+        checkpoint, batch_sha256=digest,
+        first_observed_at="2026-04-23T08:00:00+00:00",
+        collected_at="2026-04-23T08:00:00+00:00",
+    ), *snapshot.shards[1:]))
+    store = FinancialCandidateStore(tmp_path)
+    candidate = store.materialize(snapshot, observation_through_session=SESSIONS[-1])
+    assert store.validate(candidate.manifest_sha256) == candidate
+    rows = store.read_table(candidate.manifest_sha256, "income_statement_versions")
+    assert len(rows) == 2
+    assert {row["update_flag"] for row in rows} == {"0", "1"}
+    assert {row["availability_status"] for row in rows} == {"available"}
+    assert raw.read(digest)["items"] == items
+    field = "financial.income.total_revenue.latest_fy"
+    resolved = FinancialSeriesResolver(store).resolve(
+        manifest_sha256=candidate.manifest_sha256, field_ids=(field,),
+        sessions=("2010-04-20", "2010-04-21"), instrument_ids=("equity:000001.SZ",),
+    )
+    assert resolved[field] == (
+        {} if latest_value is None else {("2010-04-21", "equity:000001.SZ"): "101"}
+    )
+
+
+def test_latest_marker_does_not_backdate_a_later_observed_correction() -> None:
+    old = FinancialSourceObservation(
+        endpoint="income", instrument_id="equity:000001.SZ", ts_code="000001.SZ",
+        source_fields=FIELDS,
+        source_values=("000001.SZ", "20100420", "", "20091231", "1", "1", "4", "100", "0"),
+        first_observed_at="2026-04-23T08:00:00+00:00", raw_batch_sha256="a" * 64,
+    )
+    later = replace(
+        old, source_values=(*old.source_values[:-2], "101", "1"),
+        first_observed_at="2026-04-24T08:00:00+00:00", raw_batch_sha256="b" * 64,
+    )
+    for observations in ((old,), (old, later), (later, old)):
+        rows = {v.source()["update_flag"]: v
+                for v in FinancialVersionProjector().project(observations, SESSIONS)}
+        assert rows["0"].availability_status == "available"
+        assert rows["0"].effective_available_session == "2010-04-21"
+        if len(observations) > 1:
+            assert rows["1"].revision_basis == "observed_correction"
+            assert rows["1"].effective_available_session == "2026-04-27"
 
 
 def test_projector_preserves_equal_values_with_different_update_flags() -> None:
