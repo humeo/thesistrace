@@ -303,8 +303,9 @@ class ReplayTushareProvider:
         del primary_key
         if api_name == "index_classify" and params == {"src": "SW2021"}:
             rows = self._snapshot.get("industry_classification", [])
-        elif api_name == "index_member_all" and not params:
-            rows = self._snapshot.get("industry_membership", [])
+        elif api_name == "index_member_all" and params in ({"is_new": "Y"}, {"is_new": "N"}):
+            rows = [row for row in self._snapshot.get("industry_membership", [])
+                    if row["is_new"] == params["is_new"]]
         else:
             raise TushareSourceError("REPLAY_REQUEST_MISMATCH", source_code=0)
         if any(not isinstance(row, dict) or not set(fields) <= set(row) for row in rows):

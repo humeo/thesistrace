@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping, Sequence
+from datetime import date, timedelta
 from typing import Protocol
 
 from thesistrace.adapters.tushare_provider import TushareSourceError, iso_date
@@ -47,12 +48,18 @@ class TushareIndustrySource:
                 fields=_CLASSIFICATION_FIELDS,
                 primary_key=("index_code",),
             )
-            memberships = self._provider.query_paginated(
-                "index_member_all",
-                params={},
-                fields=_MEMBERSHIP_FIELDS,
-                primary_key=("ts_code", "in_date", "l3_code", "is_new"),
-            )
+            # The supplier defaults to current members. Both partitions are
+            # needed for historical classifications and delisted stocks.
+            memberships = [
+                row
+                for is_new in ("Y", "N")
+                for row in self._provider.query_paginated(
+                    "index_member_all",
+                    params={"is_new": is_new},
+                    fields=_MEMBERSHIP_FIELDS,
+                    primary_key=("ts_code", "in_date", "l3_code", "is_new"),
+                )
+            ]
         except TushareSourceError as error:
             raise IndustrySourceError(error.reason_code) from error
         if not classifications or not memberships:
@@ -94,7 +101,11 @@ def _normalize_primary_classification(
         {
             "instrument_id": f"equity:{row['ts_code']}",
             "active_from": iso_date(str(row["in_date"])),
-            "active_to": iso_date(str(row["out_date"])) if row.get("out_date") else "",
+            # Supplier history ends on the last membership day; Canonical
+            # intervals have an exclusive upper bound.
+            "active_to": (
+                date.fromisoformat(iso_date(str(row["out_date"]))) + timedelta(days=1)
+            ).isoformat() if row.get("out_date") else "",
             "sw2021_l1": str(row.get("l1_code", "")),
             "sw2021_l2": str(row.get("l2_code", "")),
             "sw2021_l3": str(row.get("l3_code", "")),

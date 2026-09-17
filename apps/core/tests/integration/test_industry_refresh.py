@@ -251,6 +251,52 @@ def test_data_overview_marks_lagging_industry_coverage_stale(
         database.close()
 
 
+def test_refreshed_source_history_reaches_research_without_backfilling_gaps(
+    core_settings: CoreSettings, tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    try:
+        _source, canonical = build_fixture(session_count=4)
+        del canonical["industry_membership"]
+        sessions = canonical["research_calendar"]
+        instrument = canonical["instruments"][0]
+        generations = MountedGenerationStore(tmp_path)
+        market = generations.materialize(
+            canonical, prepared_at=NOW, source_name="historical-industry-test",
+            source_lineage={"fixture": "market"},
+        ).manifest_sha256
+        _establish_head(database, tmp_path, market)
+
+        class Provider:
+            def query_paginated(self, api_name, *, params, fields, primary_key):
+                if api_name == "index_classify":
+                    return [{"index_code": "801010", "industry_name": "Historical",
+                             "level": "L1", "src": "SW2021"}]
+                row = {"ts_code": instrument["ts_code"], "l1_code": "801010",
+                       "l2_code": "801011", "l3_code": "850111", "is_new": params["is_new"]}
+                if params["is_new"] == "N":
+                    return [{**row, "in_date": sessions[0].replace("-", ""),
+                             "out_date": sessions[1].replace("-", "")}]
+                return [{**row, "in_date": sessions[3].replace("-", ""), "out_date": "",
+                         "l1_code": "801780", "l2_code": "801783", "l3_code": "851911"}]
+
+        outcome = IndustryRefreshService(
+            database, tmp_path, TushareIndustrySource(Provider()), clock=lambda: NOW,
+        ).publish(idempotency_key="historical-industry", observation_through_session=sessions[-1])
+        result = generations.read_market_slice(
+            outcome.generation_manifest_sha256, sessions=sessions, universe_name="top3000",
+            neutralization="industry", field_bindings={"price.close.adjusted": "close"},
+        ).research_data
+        stock = instrument["instrument_id"]
+        assert result.industries[(sessions[0], stock)] == "801010"
+        assert result.industries[(sessions[1], stock)] == "801010"
+        assert (sessions[2], stock) not in result.industries
+        assert result.industries[(sessions[3], stock)] == "801780"
+        assert generations.inspect_root(market).manifest_sha256 == market
+    finally:
+        database.close()
+
+
 def test_industry_publication_recovers_after_head_moved_before_completion(
     core_settings: CoreSettings,
     tmp_path: Path,

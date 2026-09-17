@@ -37,7 +37,29 @@ class RecordingProvider:
                 }
             ]
         assert api_name == "index_member_all"
-        return self.memberships
+        return [row for row in self.memberships if row["is_new"] == params.get("is_new", "Y")]
+
+
+def test_industry_source_preserves_history_changes_and_delisted_members() -> None:
+    old = {
+        "l1_code": "801010", "l2_code": "801011", "l3_code": "850111",
+        "ts_code": "000001.SZ", "in_date": "20000101", "out_date": "20201231",
+        "is_new": "N",
+    }
+    current = {**old, "l1_code": "801780", "l2_code": "801783", "l3_code": "851911",
+               "in_date": "20210101", "out_date": "", "is_new": "Y"}
+    delisted = {**old, "ts_code": "000005.SZ", "out_date": "20200101"}
+    snapshot = TushareIndustrySource(RecordingProvider([current, old, delisted])).collect(
+        allowed_codes={"000001.SZ", "000005.SZ"},
+    )
+
+    assert [(row["instrument_id"], row["active_from"], row["active_to"], row["sw2021_l1"])
+            for row in snapshot.memberships] == [
+        ("equity:000001.SZ", "2000-01-01", "2021-01-01", "801010"),
+        ("equity:000001.SZ", "2021-01-01", "", "801780"),
+        ("equity:000005.SZ", "2000-01-01", "2020-01-02", "801010"),
+    ]
+    assert {row["is_new"] for row in snapshot.raw_memberships} == {"Y", "N"}
 
 
 def test_industry_source_requests_and_retains_complete_primary_classification() -> None:
@@ -59,8 +81,11 @@ def test_industry_source_requests_and_retains_complete_primary_classification() 
     assert [request[0] for request in provider.requests] == [
         "index_classify",
         "index_member_all",
+        "index_member_all",
     ]
-    assert provider.requests[1][1] == {}
+    assert [request[1] for request in provider.requests[1:]] == [
+        {"is_new": "Y"}, {"is_new": "N"},
+    ]
     assert provider.requests[1][2] == (
         "l1_code",
         "l2_code",
@@ -74,7 +99,8 @@ def test_industry_source_requests_and_retains_complete_primary_classification() 
     assert snapshot.memberships[0]["active_to"] == ""
 
 
-def test_industry_source_fails_closed_on_overlapping_primary_classification() -> None:
+@pytest.mark.parametrize("historical", [False, True])
+def test_industry_source_fails_closed_on_overlapping_primary_classification(historical) -> None:
     provider = RecordingProvider(
         [
             {
@@ -83,8 +109,8 @@ def test_industry_source_fails_closed_on_overlapping_primary_classification() ->
                 "l3_code": "850111",
                 "ts_code": "000001.SZ",
                 "in_date": "20210101",
-                "out_date": "",
-                "is_new": "Y",
+                "out_date": "20230101" if historical else "",
+                "is_new": "N" if historical else "Y",
             },
             {
                 "l1_code": "801780",
