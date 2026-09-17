@@ -7,6 +7,72 @@ from thesistrace.data.financial_indicator_progress import FinancialIndicatorProg
 from thesistrace.entrypoints.schema import initialize_core
 
 
+def test_daily_indicator_scopes_events_separately_from_history_and_replays_them(
+    core_settings, tmp_path
+):
+    from datetime import UTC, datetime
+
+    from thesistrace.data.financial_indicator_collection import FinancialIndicatorDailyCollector
+    from thesistrace.data.generation_store import HistoricalInstrumentIdentity
+    from thesistrace.data.source import RawSourceResponse
+
+    initialize_core(core_settings.database_url)
+    database = PostgresDatabase(core_settings.database_url)
+    database.open()
+    prefix = "scoped-" + uuid4().hex
+    identities = tuple(HistoricalInstrumentIdentity(prefix + str(n), f"00000{n}.SZ")
+                       for n in (1, 2, 3, 4))
+
+    class Provider:
+        offline = False
+
+        def __init__(self):
+            self.ranges = {}
+
+        def query_raw(self, api_name, *, params, fields):
+            if self.offline:
+                raise AssertionError("A completed frozen request must replay without the supplier")
+            self.ranges[params["ts_code"]] = (params["start_date"], params["end_date"])
+            row = {"ts_code": params["ts_code"], "end_date": "20200331", "ann_date": "20200420"}
+            return RawSourceResponse(
+                fields=tuple(fields), items=(tuple(row.get(f) for f in fields),),
+            )
+
+    provider = Provider()
+    try:
+        progress = FinancialIndicatorProgressStore(database)
+        progress.require_report(identities[0].instrument_id,
+                                report_period="2020-03-31", announced_on="2020-04-20")
+        progress.require_report(identities[3].instrument_id,
+                                report_period=None, announced_on="2020-04-20")
+        args = dict(operation_key=prefix, identities=identities, checked_through="2020-05-01",
+                    research_session_index=1, initial_instrument_ids=(identities[2].instrument_id,))
+        def collector():
+            return FinancialIndicatorDailyCollector(
+                database, tmp_path, TushareFinancialIndicatorProvider(provider),
+                reconciliation_limit=1, clock=lambda: datetime(2020, 5, 1, tzinfo=UTC),
+            )
+        result = collector().collect(**args)
+        assert result.failures == ()
+        assert provider.ranges == {
+            "000001.SZ": ("20200331", "20200501"),  # known announcement period
+            "000002.SZ": ("19900101", "20200501"),  # rotating reconciliation
+            "000003.SZ": ("19900101", "20200501"),  # initial history
+            "000004.SZ": ("19900101", "20200501"),  # unknown correction period
+        }
+        assert progress.pending(identities[0].instrument_id) == ()
+        provider.offline = True
+        assert collector().collect(**args) == result
+    finally:
+        with database.transaction() as tx:
+            for table in (
+                "financial_indicator_report_targets", "financial_indicator_reconciliation",
+                "financial_indicator_collections",
+            ):
+                tx.execute(f"DELETE FROM data.{table} WHERE instrument_id LIKE %s", (prefix + "%",))
+        database.close()
+
+
 def test_indicator_pending_survives_unmatched_collection_and_reopens(core_settings):
     initialize_core(core_settings.database_url)
     database = PostgresDatabase(core_settings.database_url)

@@ -1017,6 +1017,8 @@ class DailyFinancialRefreshService:
         idempotency_key: str,
         observation_through_session: str,
     ) -> FinancialDailyRefreshOutcome:
+        from thesistrace.data.financial_indicator_candidate import FinancialIndicatorCandidateStore
+
         target = _iso_date(observation_through_session)
         with self._database.session_advisory_lock("financial-daily-refresh"):
             self._ownership_guard()
@@ -1025,8 +1027,14 @@ class DailyFinancialRefreshService:
                 return existing
             operation = self._operation_or_initialize(idempotency_key, target)
             try:
-                candidate = self._build_candidate(idempotency_key, operation)
-                return self._publish_candidate(idempotency_key, candidate)
+                indicators = FinancialIndicatorCandidateStore(
+                    self._root, progress=lambda event: self._progress({
+                        "event": "financial_refresh", "idempotency_key": idempotency_key, **event,
+                    }),
+                )
+                with indicators.validation_session():
+                    candidate = self._build_candidate(idempotency_key, operation, indicators)
+                    return self._publish_candidate(idempotency_key, candidate, indicators)
             except FinancialDailyRefreshError as error:
                 if not error.retryable and not _daily_failure_is_retryable(error.code):
                     self._store.fail(idempotency_key, error.code, self._validated_clock())
@@ -1118,6 +1126,7 @@ class DailyFinancialRefreshService:
         self,
         idempotency_key: str,
         operation: Mapping[str, object],
+        indicators,
     ) -> FinancialFamilyCandidate:
         source_generation = str(operation["source_generation_manifest_sha256"])
         prior_manifest = str(operation["prior_financial_manifest_sha256"])
@@ -1213,7 +1222,7 @@ class DailyFinancialRefreshService:
             )
             operation = self._store.operation(idempotency_key)
         if operation["indicator_candidate_manifest_sha256"] is None:
-            self._build_indicator_candidate(idempotency_key, operation)
+            self._build_indicator_candidate(idempotency_key, operation, indicators)
             operation = self._store.operation(idempotency_key)
         candidate_sha = operation["candidate_manifest_sha256"]
         if candidate_sha is not None:
@@ -1359,9 +1368,9 @@ class DailyFinancialRefreshService:
         )
         return candidate
 
-    def _build_indicator_candidate(self, key: str, operation: Mapping[str, object]) -> None:
-        from thesistrace.data.financial_indicator_candidate import FinancialIndicatorCandidateStore
-
+    def _build_indicator_candidate(
+        self, key: str, operation: Mapping[str, object], candidates,
+    ) -> None:
         source = str(operation["source_generation_manifest_sha256"])
         descriptor = self._generations.inspect_root(source)
         target = operation["target_session"].isoformat()
@@ -1371,11 +1380,6 @@ class DailyFinancialRefreshService:
                 source, through_session=target
             )
         }
-        candidates = FinancialIndicatorCandidateStore(
-            self._root, progress=lambda event: self._progress({
-                "event": "financial_refresh", "idempotency_key": key, **event,
-            }),
-        )
         previous_end = next(
             (family.dataset_coverage["end"] for family in descriptor.families
              if family.family_id == "equity.financial_indicator"), None,
@@ -1461,6 +1465,7 @@ class DailyFinancialRefreshService:
         self,
         idempotency_key: str,
         candidate: FinancialFamilyCandidate,
+        indicators,
     ) -> FinancialDailyRefreshOutcome:
         operation = self._store.operation(idempotency_key)
         fingerprint = str(operation["fingerprint"])
@@ -1524,6 +1529,7 @@ class DailyFinancialRefreshService:
                         composed.manifest_sha256, str(indicator_candidate),
                         published_generation_sha256=current.generation_manifest_sha256,
                         prepared_at=prepared_at,
+                        indicator_store=indicators,
                     )
                 self._completed_stage(idempotency_key, "composition", composition_started)
                 publication_started = perf_counter()

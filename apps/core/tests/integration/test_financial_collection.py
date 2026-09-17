@@ -1016,7 +1016,7 @@ def test_daily_financial_refresh_discovers_one_stock_and_moves_the_one_head(
             publish_candidate = service._publish_candidate
             competing = []
 
-            def publish_after_competitor(key, candidate):
+            def publish_after_competitor(key, candidate, indicators):
                 operation = FinancialDailyRefreshStore(database).operation(key)
                 candidates = FinancialIndicatorCandidateStore(tmp_path)
                 prepared = candidates.validate(operation["indicator_candidate_manifest_sha256"])
@@ -1035,7 +1035,7 @@ def test_daily_financial_refresh_discovers_one_stock_and_moves_the_one_head(
                     operation_id="competing-indicator", expected=source_generation,
                 )
                 competing.append(generation.manifest_sha256)
-                return publish_candidate(key, candidate)
+                return publish_candidate(key, candidate, indicators)
 
             monkeypatch.setattr(service, "_publish_candidate", publish_after_competitor)
             with pytest.raises(

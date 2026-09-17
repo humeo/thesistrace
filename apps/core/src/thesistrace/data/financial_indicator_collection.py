@@ -175,7 +175,6 @@ class FinancialIndicatorDailyCollector:
         research_session_index: int,
         initial_instrument_ids: Sequence[str],
     ) -> DailyIndicatorCollection:
-        from thesistrace.data.financial_collection import FINANCIAL_HISTORY_FLOOR
         from thesistrace.data.source import DataSourceError
 
         target = date.fromisoformat(checked_through)
@@ -202,13 +201,10 @@ class FinancialIndicatorDailyCollector:
                 operation_key, by_id, checked_through, research_session_index, initial,
             )
         completed, failures, pending = [], [], []
-        for instrument in plan["selected"]:
+        for request in plan["requests"]:
+            instrument = request["instrument_id"]
             self._guard()
-            targets = tuple(
-                (period, announced)
-                for period, announced in self._progress.pending(instrument)
-                if announced <= checked_through
-            )
+            targets = tuple(tuple(pair) for pair in request["required_reports"])
             try:
                 result = self._collector.collect(
                     collection_key=hashlib.sha256(
@@ -220,7 +216,7 @@ class FinancialIndicatorDailyCollector:
                         )
                     ).hexdigest(),
                     identity=by_id[instrument],
-                    start_date=FINANCIAL_HISTORY_FLOOR,
+                    start_date=request["start_date"],
                     end_date=target.strftime("%Y%m%d"),
                     checked_through=checked_through,
                     required_reports=targets,
@@ -236,7 +232,7 @@ class FinancialIndicatorDailyCollector:
                 pending.append(instrument)
             self._guard()
         return DailyIndicatorCollection(
-            tuple(plan["selected"]),
+            tuple(request["instrument_id"] for request in plan["requests"]),
             tuple(sorted(completed)),
             tuple(failures),
             tuple(pending),
@@ -252,9 +248,11 @@ class FinancialIndicatorDailyCollector:
     ) -> dict[str, object]:
         import json
 
+        from thesistrace.data.financial_collection import FINANCIAL_HISTORY_FLOOR
         from thesistrace.data.generation_files import AddressedFileStore
 
         scope = {
+            "version": 2,
             "operation_key": operation_key,
             "checked_through": target,
             "research_session_index": session_index,
@@ -277,23 +275,46 @@ class FinancialIndicatorDailyCollector:
             plan = json.loads(files.read(path, path.stem, max_byte_count=16 * 1024 * 1024))
             if (
                 not isinstance(plan, dict)
-                or set(plan) != {"scope", "selected"}
+                or set(plan) != {"scope", "requests"}
                 or plan["scope"] != scope
-                or not isinstance(plan["selected"], list)
-                or not plan["selected"]
-                or not all(isinstance(item, str) and item in by_id for item in plan["selected"])
-                or len(set(plan["selected"])) != len(plan["selected"])
+                or not isinstance(plan["requests"], list)
+                or not plan["requests"]
             ):
                 raise ValueError("Indicator dispatch scope differs")
+            seen = set()
+            for request in plan["requests"]:
+                if (not isinstance(request, dict)
+                        or set(request) != {"instrument_id", "start_date", "required_reports"}
+                        or request["instrument_id"] not in by_id
+                        or request["instrument_id"] in seen
+                        or not isinstance(request["required_reports"], list)):
+                    raise ValueError("Invalid indicator dispatch request")
+                seen.add(request["instrument_id"])
+                start = datetime.strptime(request["start_date"], "%Y%m%d").date()
+                if not date(1990, 1, 1) <= start <= date.fromisoformat(target):
+                    raise ValueError("Invalid indicator dispatch range")
+                for period, announced in request["required_reports"]:
+                    if (not start <= date.fromisoformat(announced) <= date.fromisoformat(target)
+                            or (period is not None
+                                and not start <= date.fromisoformat(period)
+                                <= date.fromisoformat(announced))):
+                        raise ValueError("Invalid indicator dispatch target")
             return plan
         with self._database.transaction() as tx:
             rows = tx.execute(
-                """SELECT DISTINCT instrument_id FROM data.financial_indicator_report_targets
+                """SELECT instrument_id, report_period, announced_on
+                   FROM data.financial_indicator_report_targets
                    WHERE instrument_id = ANY(%s::text[]) AND announced_on <= %s
-                     AND resolved_observation_sha256 IS NULL ORDER BY instrument_id""",
+                     AND resolved_observation_sha256 IS NULL
+                   ORDER BY instrument_id, report_period, announced_on""",
                 (list(by_id), date.fromisoformat(target)),
             ).fetchall()
-        pending = [str(row["instrument_id"]) for row in rows]
+        pending = defaultdict(list)
+        for row in rows:
+            pending[str(row["instrument_id"])].append([
+                None if row["report_period"] is None else row["report_period"].isoformat(),
+                row["announced_on"].isoformat(),
+            ])
         ordered = sorted(by_id)
         start = session_index * self._limit % len(ordered)
         rotated = ordered[start:] + ordered[:start]
@@ -302,7 +323,19 @@ class FinancialIndicatorDailyCollector:
         selected = list(dict.fromkeys([
             *initial_instrument_ids, *pending, *rotated[: self._limit],
         ]))
-        plan = {"scope": scope, "selected": selected}
+        historical = set(initial_instrument_ids) | set(rotated[:self._limit])
+        requests = []
+        for instrument in selected:
+            reports = pending[instrument]
+            # Initial history and the fixed background cycle still reconcile all
+            # report periods. A dated disclosure only needs its affected range;
+            # an undated correction cannot safely narrow that range.
+            start_date = FINANCIAL_HISTORY_FLOOR
+            if instrument not in historical and reports and all(period for period, _day in reports):
+                start_date = min(period for period, _day in reports).replace("-", "")
+            requests.append({"instrument_id": instrument, "start_date": start_date,
+                             "required_reports": reports})
+        plan = {"scope": scope, "requests": requests}
         content = canonical_json_bytes(plan)
         digest = hashlib.sha256(content).hexdigest()
         files.store(directory / f"{digest}.json", digest, content)
