@@ -57,6 +57,86 @@ def test_indicator_report_presence_requires_one_accepted_version(
         database.close()
 
 
+def test_daily_indicator_scopes_pending_reports_separately_from_history_and_replays_them(
+    core_settings, tmp_path
+):
+    from datetime import UTC, datetime
+
+    from thesistrace.data.financial_indicator_collection import FinancialIndicatorDailyCollector
+    from thesistrace.data.generation_store import HistoricalInstrumentIdentity
+    from thesistrace.data.source import RawSourceResponse
+
+    initialize_core(core_settings.database_url)
+    database = PostgresDatabase(core_settings.database_url)
+    database.open()
+    prefix = "scoped-" + uuid4().hex
+    identities = tuple(HistoricalInstrumentIdentity(prefix + str(n), f"00000{n}.SZ")
+                       for n in (1, 2, 3, 4))
+
+    class Provider:
+        offline = False
+
+        def __init__(self):
+            self.ranges = {}
+
+        def query_raw(self, api_name, *, params, fields):
+            if self.offline:
+                raise AssertionError("A completed frozen request must replay without the supplier")
+            self.ranges[params["ts_code"]] = (params["start_date"], params["end_date"])
+            row = {"ts_code": params["ts_code"], "end_date": "20200331", "ann_date": "20200420"}
+            return RawSourceResponse(
+                fields=tuple(fields), items=(tuple(row.get(f) for f in fields),),
+            )
+
+    provider = Provider()
+    try:
+        progress = FinancialIndicatorProgressStore(database)
+        progress.require_report(identities[0].instrument_id,
+                                report_period="2020-03-31", announced_on="2020-04-20")
+        from thesistrace.data.financial_report_progress import record_recheck
+
+        with database.transaction() as tx:
+            record_recheck(tx, identities[0].instrument_id, "fina_indicator")
+            record_recheck(
+                tx, identities[3].instrument_id, "fina_indicator", "UPSTREAM_UNAVAILABLE",
+            )
+        args = dict(operation_key=prefix, identities=identities, checked_through="2020-05-01",
+                    research_session_index=1, initial_instrument_ids=(identities[2].instrument_id,))
+        def collector():
+            return FinancialIndicatorDailyCollector(
+                database, tmp_path, TushareFinancialIndicatorProvider(provider),
+                reconciliation_limit=1, clock=lambda: datetime(2020, 5, 1, tzinfo=UTC),
+            )
+        result = collector().collect(**args)
+        assert result.failures == ()
+        assert provider.ranges == {
+            "000001.SZ": ("20200331", "20200501"),  # known missing report period
+            "000002.SZ": ("19900101", "20200501"),  # rotating reconciliation
+            "000003.SZ": ("19900101", "20200501"),  # initial history
+            "000004.SZ": ("19900101", "20200501"),  # failed historical reconciliation
+        }
+        assert progress.pending(identities[0].instrument_id) == ()
+        provider.offline = True
+        assert collector().collect(**args) == result
+        provider.offline = False
+        provider.ranges.clear()
+        rotated = collector().collect(**{
+            **args, "operation_key": prefix + "-next", "initial_instrument_ids": (),
+        })
+        assert rotated.failures == ()
+        # A partial report query did not recheck the older history, even when
+        # resumed from its frozen response. It must be next in the full-history cycle.
+        assert provider.ranges == {"000001.SZ": ("19900101", "20200501")}
+    finally:
+        with database.transaction() as tx:
+            for table in (
+                "financial_report_targets", "financial_indicator_reconciliation",
+                "financial_indicator_collections", "financial_report_rechecks",
+            ):
+                tx.execute(f"DELETE FROM data.{table} WHERE instrument_id LIKE %s", (prefix + "%",))
+        database.close()
+
+
 def test_indicator_pending_survives_unmatched_collection_and_reopens(core_settings):
     initialize_core(core_settings.database_url)
     database = PostgresDatabase(core_settings.database_url)
@@ -320,6 +400,12 @@ def test_daily_indicator_dispatch_retries_frozen_work_and_keeps_source_failures(
         progress.require_report(
             identities[0].instrument_id, report_period="2020-03-31", announced_on="2020-04-20"
         )
+        # History is already checked; this report retry should run alongside
+        # the next unchecked company's independent full-history request.
+        from thesistrace.data.financial_report_progress import record_recheck
+
+        with database.transaction() as tx:
+            record_recheck(tx, identities[0].instrument_id, "fina_indicator")
         collector = FinancialIndicatorDailyCollector(
             database,
             tmp_path,

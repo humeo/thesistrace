@@ -426,17 +426,7 @@ class RawFinancialBatchStore:
         return sha256
 
     def read(self, sha256: str, *, byte_count: int | None = None) -> dict[str, object]:
-        if len(sha256) != 64 or any(character not in "0123456789abcdef" for character in sha256):
-            raise FinancialCollectionError("INVALID_RAW_BATCH_REFERENCE")
-        try:
-            content = self._files.read(
-                self._path(sha256),
-                sha256,
-                expected_byte_count=byte_count,
-                max_byte_count=256 * 1024 * 1024,
-            )
-        except AddressedFileError as error:
-            raise FinancialCollectionError("RAW_BATCH_READ_FAILED") from error
+        content = self._read_bytes(sha256, byte_count=byte_count)
         try:
             value = json.loads(content)
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -444,6 +434,23 @@ class RawFinancialBatchStore:
         if not isinstance(value, dict):
             raise FinancialCollectionError("INVALID_RAW_BATCH")
         return value
+
+    def verify(self, sha256: str) -> None:
+        """Recheck addressed bytes without decoding already validated evidence."""
+        self._read_bytes(sha256)
+
+    def _read_bytes(self, sha256: str, *, byte_count: int | None = None) -> bytes:
+        if len(sha256) != 64 or any(character not in "0123456789abcdef" for character in sha256):
+            raise FinancialCollectionError("INVALID_RAW_BATCH_REFERENCE")
+        try:
+            return self._files.read(
+                self._path(sha256),
+                sha256,
+                expected_byte_count=byte_count,
+                max_byte_count=256 * 1024 * 1024,
+            )
+        except AddressedFileError as error:
+            raise FinancialCollectionError("RAW_BATCH_READ_FAILED") from error
 
     def require_present(self, sha256: str) -> None:
         if len(sha256) != 64 or any(character not in "0123456789abcdef" for character in sha256):

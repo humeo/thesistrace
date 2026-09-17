@@ -25,11 +25,14 @@ point-in-time availability still govern whether individual facts can be used.
 The refresh first persists the disclosure check, reconciles requirements against
 its accepted source Generation, and freezes the collection plan. Pending reports
 and failed checks retry on the next refresh. Separately, each source family checks
-up to 64 other companies in order of oldest actual check time. This rotation
+up to 64 companies in order of oldest actual full-history check time. This rotation
 examines full histories to discover revisions to already received reports and
 continues even when the target session has not changed. The three statements
 retain their atomic per-company acceptance boundary. Accepted facts survive
 failed requests. Resume reuses saved plans and validated checkpoints.
+Indicator requests outside the history rotation begin at the earliest missing
+report period. Partial requests do not advance the history-check time, and pending
+companies remain eligible for full-history rotation, including initial coverage.
 Persisted disclosures survive interruption before collection. Indicator report
 readiness is reconciled with the merged candidate in the same transaction that
 records it: an omitted old row preserves accepted history, while a conflicting

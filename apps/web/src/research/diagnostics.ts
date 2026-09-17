@@ -16,7 +16,7 @@ export type DiagnosticState =
 
 export function createDiagnosticsScheduler(
   request: typeof fetch = coreFetch,
-  delayMilliseconds = 300,
+  delayMilliseconds = 2000,
   context: "signal" | "exposure" = "signal",
 ) {
   let generation = 0;

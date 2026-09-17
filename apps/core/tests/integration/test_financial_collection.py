@@ -1035,7 +1035,7 @@ def test_daily_financial_refresh_discovers_one_stock_and_moves_the_one_head(
             publish_candidate = service._publish_candidate
             competing = []
 
-            def publish_after_competitor(key, candidate):
+            def publish_after_competitor(key, candidate, indicators):
                 operation = FinancialDailyRefreshStore(database).operation(key)
                 candidates = FinancialIndicatorCandidateStore(tmp_path)
                 prepared = candidates.validate(operation["indicator_candidate_manifest_sha256"])
@@ -1058,7 +1058,7 @@ def test_daily_financial_refresh_discovers_one_stock_and_moves_the_one_head(
                     expected=source_generation,
                 )
                 competing.append(generation.manifest_sha256)
-                return publish_candidate(key, candidate)
+                return publish_candidate(key, candidate, indicators)
 
             monkeypatch.setattr(service, "_publish_candidate", publish_after_competitor)
             with pytest.raises(
@@ -4203,7 +4203,7 @@ def _daily_financial_replay(
     for ts_code in ("000001.SZ", "000002.SZ"):
         indicator_response = FixtureIndicatorProvider().query_raw(
             "fina_indicator",
-            params={"ts_code": ts_code},
+            params={"ts_code": ts_code, "start_date": "19900101", "end_date": "20260814"},
             fields=FINANCIAL_INDICATOR_SOURCE_FIELDS,
         )
         financial["fina_indicator"][ts_code] = {
@@ -4443,7 +4443,8 @@ class FixtureIndicatorProvider:
         ]
         return RawSourceResponse(
             fields=tuple(fields),
-            items=tuple(tuple(row.get(field) for field in fields) for row in rows),
+            items=tuple(tuple(row.get(field) for field in fields) for row in rows
+                        if params["start_date"] <= row["end_date"] <= params["end_date"]),
         )
 
 

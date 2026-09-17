@@ -1,3 +1,5 @@
 # Use historical SW2021 industry classification
 
 Historical industry comparisons require effective-dated SW2021 membership, resolved as one primary path per instrument in left-closed, right-open intervals. Overlaps are invalid and missing history remains missing; using historical L1 groups for optional neutralization avoids applying today's classification to past research.
+
+The Tushare adapter explicitly pages both current (`is_new=Y`) and historical (`is_new=N`) memberships. The endpoint defaults to current members, which cannot establish historical coverage. Preserve both responses as source evidence, including historical-only or delisted instruments in the accepted identity universe. Convert the supplier's last membership day into an exclusive Canonical upper bound by adding one calendar day; retain genuine gaps and reject overlapping paths rather than filling them with today's classification. Successful refresh and its observation-through date do not assert that every historical classification is known.

@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 
 from thesistrace._postgres import PostgresDatabase
-from thesistrace.data.financial_collection import RawFinancialBatchStore
+from thesistrace.data.financial_collection import FINANCIAL_HISTORY_FLOOR, RawFinancialBatchStore
 from thesistrace.data.financial_indicator_evidence import (
     FinancialIndicatorCheckpoint,
     indicator_versions,
@@ -172,7 +173,6 @@ class FinancialIndicatorDailyCollector:
         research_session_index: int,
         initial_instrument_ids: Sequence[str],
     ) -> DailyIndicatorCollection:
-        from thesistrace.data.financial_collection import FINANCIAL_HISTORY_FLOOR
         from thesistrace.data.source import DataSourceError
 
         target = date.fromisoformat(checked_through)
@@ -204,13 +204,10 @@ class FinancialIndicatorDailyCollector:
                 initial,
             )
         completed, failures, pending = [], [], []
-        for instrument in plan["selected"]:
+        for request in plan["requests"]:
+            instrument = request["instrument_id"]
             self._guard()
-            targets = tuple(
-                (period, announced)
-                for period, announced in self._progress.pending(instrument)
-                if announced <= checked_through
-            )
+            targets = tuple(tuple(pair) for pair in request["required_reports"])
             try:
                 result = self._collector.collect(
                     collection_key=hashlib.sha256(
@@ -222,7 +219,7 @@ class FinancialIndicatorDailyCollector:
                         )
                     ).hexdigest(),
                     identity=by_id[instrument],
-                    start_date=FINANCIAL_HISTORY_FLOOR,
+                    start_date=request["start_date"],
                     end_date=target.strftime("%Y%m%d"),
                     checked_through=checked_through,
                     required_reports=targets,
@@ -238,16 +235,17 @@ class FinancialIndicatorDailyCollector:
                 pending.append(instrument)
             from thesistrace.data.financial_report_progress import record_recheck
 
-            with self._database.transaction() as tx:
-                record_recheck(
-                    tx,
-                    instrument,
-                    "fina_indicator",
-                    next((code for item, code in failures if item == instrument), None),
-                )
+            if request["start_date"] == FINANCIAL_HISTORY_FLOOR:
+                with self._database.transaction() as tx:
+                    record_recheck(
+                        tx,
+                        instrument,
+                        "fina_indicator",
+                        next((code for item, code in failures if item == instrument), None),
+                    )
             self._guard()
         return DailyIndicatorCollection(
-            tuple(plan["selected"]),
+            tuple(request["instrument_id"] for request in plan["requests"]),
             tuple(sorted(completed)),
             tuple(failures),
             tuple(pending),
@@ -266,6 +264,7 @@ class FinancialIndicatorDailyCollector:
         from thesistrace.data.generation_files import AddressedFileStore
 
         scope = {
+            "version": 2,
             "operation_key": operation_key,
             "checked_through": target,
             "research_session_index": session_index,
@@ -288,32 +287,63 @@ class FinancialIndicatorDailyCollector:
             plan = json.loads(files.read(path, path.stem, max_byte_count=16 * 1024 * 1024))
             if (
                 not isinstance(plan, dict)
-                or set(plan) != {"scope", "selected"}
+                or set(plan) != {"scope", "requests"}
                 or plan["scope"] != scope
-                or not isinstance(plan["selected"], list)
-                or not plan["selected"]
-                or not all(isinstance(item, str) and item in by_id for item in plan["selected"])
-                or len(set(plan["selected"])) != len(plan["selected"])
+                or not isinstance(plan["requests"], list)
+                or not plan["requests"]
             ):
                 raise ValueError("Indicator dispatch scope differs")
+            seen = set()
+            for request in plan["requests"]:
+                if (not isinstance(request, dict)
+                        or set(request) != {"instrument_id", "start_date", "required_reports"}
+                        or request["instrument_id"] not in by_id
+                        or request["instrument_id"] in seen
+                        or not isinstance(request["required_reports"], list)):
+                    raise ValueError("Invalid indicator dispatch request")
+                seen.add(request["instrument_id"])
+                start = datetime.strptime(request["start_date"], "%Y%m%d").date()
+                if not date(1990, 1, 1) <= start <= date.fromisoformat(target):
+                    raise ValueError("Invalid indicator dispatch range")
+                for period, announced in request["required_reports"]:
+                    if (not start <= date.fromisoformat(announced) <= date.fromisoformat(target)
+                            or not start <= date.fromisoformat(period)
+                            <= date.fromisoformat(announced)):
+                        raise ValueError("Invalid indicator dispatch target")
             return plan
         with self._database.transaction() as tx:
             rows = tx.execute(
-                """SELECT DISTINCT instrument_id FROM data.financial_report_targets
-                   WHERE endpoint='fina_indicator' AND instrument_id = ANY(%s::text[])
-                     AND actual_date <= %s
-                     AND resolved_evidence_sha256 IS NULL ORDER BY instrument_id""",
+                """SELECT instrument_id, report_period, actual_date
+                   FROM data.financial_report_targets
+                   WHERE endpoint='fina_indicator' AND instrument_id=ANY(%s::text[])
+                     AND actual_date<=%s AND resolved_evidence_sha256 IS NULL
+                   ORDER BY instrument_id, report_period, actual_date""",
                 (list(by_id), date.fromisoformat(target)),
             ).fetchall()
-        pending = [str(row["instrument_id"]) for row in rows]
+        pending = defaultdict(list)
+        for row in rows:
+            pending[str(row["instrument_id"])].append([
+                row["report_period"].isoformat(), row["actual_date"].isoformat(),
+            ])
         from thesistrace.data.financial_report_progress import reconciliation_ids
 
         with self._database.transaction() as tx:
             rotated = reconciliation_ids(
-                tx, by_id, "fina_indicator", limit=self._limit, exclude=set(pending)
+                tx, by_id, "fina_indicator", limit=self._limit
             )
         selected = list(dict.fromkeys([*initial_instrument_ids, *pending, *rotated]))
-        plan = {"scope": scope, "selected": selected}
+        historical = set(initial_instrument_ids) | set(rotated)
+        requests = []
+        for instrument in selected:
+            reports = pending[instrument]
+            # Initial history and background reconciliation still check every period.
+            # Known missing reports only need their affected date range.
+            start_date = FINANCIAL_HISTORY_FLOOR
+            if instrument not in historical and reports:
+                start_date = min(period for period, _day in reports).replace("-", "")
+            requests.append({"instrument_id": instrument, "start_date": start_date,
+                             "required_reports": reports})
+        plan = {"scope": scope, "requests": requests}
         content = canonical_json_bytes(plan)
         digest = hashlib.sha256(content).hexdigest()
         files.store(directory / f"{digest}.json", digest, content)

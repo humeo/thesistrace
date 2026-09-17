@@ -1,5 +1,7 @@
 from datetime import UTC, datetime
 
+import pytest
+
 from thesistrace.data.financial_collection import RawFinancialBatchStore
 from thesistrace.data.financial_indicator_candidate import FinancialIndicatorCandidateStore
 from thesistrace.data.financial_indicator_evidence import FinancialIndicatorObservationStore
@@ -109,6 +111,54 @@ def test_candidate_rejects_source_identity_outside_history(tmp_path):
             instrument_ids={"000001.SZ": "stock-1"},
             sessions=("2020-04-21",),
         )
+
+
+def test_refresh_validation_session_reuses_evidence_but_rechecks_current_bytes(tmp_path):
+    import pytest
+
+    from thesistrace.data.io_metrics import measure_data_io
+
+    raw = RawFinancialBatchStore(tmp_path)
+    receipt = FinancialIndicatorObservationStore(raw).save(
+        RawSourceResponse(fields=FINANCIAL_INDICATOR_SOURCE_FIELDS, items=(tuple(
+            {"ts_code": "000001.SZ", "ann_date": "20200420", "end_date": "20191231",
+             "eps": 2}.get(field) for field in FINANCIAL_INDICATOR_SOURCE_FIELDS
+        ),)), observed_at=datetime(2020, 4, 20, tzinfo=UTC),
+    )
+    args = dict(collection_evidence_sha256s=(_collection_evidence(tmp_path, receipt),),
+                instrument_ids={"000001.SZ": "stock-1"}, sessions=("2020-04-21",))
+    store = FinancialIndicatorCandidateStore(tmp_path)
+    base = store.build(**args)
+    published = store.family_reference(base)
+
+    def refresh():
+        assert store.available_sessions(**args) == args["sessions"]
+        digest = store.build(**args, published_base_reference=published)
+        return store.validate_incremental_with_reference(digest, published_base_reference=published)
+
+    with measure_data_io() as independent:
+        expected = refresh()
+    with store.validation_session(), measure_data_io() as shared:
+        result = refresh()
+        assert result == expected
+        assert shared.bytes_read < independent.bytes_read
+        assert shared.raw_financial_batch_opens < independent.raw_financial_batch_opens
+        # Neither returned mutable metadata nor a prior validation is authority.
+        result[0]["partitions"].clear()
+        assert refresh() == expected
+        path = tmp_path / "financial" / "raw" / "sha256" / receipt[:2] / f"{receipt}.json"
+        saved = path.read_bytes()
+        path.write_bytes(b"corrupted source")
+        with pytest.raises(ValueError, match="evidence"):
+            refresh()
+        path.write_bytes(saved)
+        partition = expected[0]["partitions"][0]
+        address = partition["sha256"]
+        (tmp_path / "objects" / "sha256" / address[:2] / f"{address}.parquet").unlink()
+        with pytest.raises(ValueError, match="evidence"):
+            refresh()
+    with pytest.raises(ValueError):
+        store.validate(base)
 
 
 def test_candidate_validation_rejects_invalid_manifest_references(tmp_path):
@@ -556,11 +606,21 @@ def test_candidate_rejects_invalid_authoring_numbers_before_publication(tmp_path
         assert observations.read(receipt)["items"]
 
 
-def test_incremental_build_matches_full_replay_across_calendar_and_revision(tmp_path):
-    import pytest
+@pytest.fixture(params=[False, True], ids=["independent-validation", "refresh-session"])
+def incremental_candidate_store(request, tmp_path):
+    from contextlib import nullcontext
+
+    store = FinancialIndicatorCandidateStore(tmp_path)
+    with store.validation_session() if request.param else nullcontext():
+        yield store
+
+
+def test_incremental_build_matches_full_replay_across_calendar_and_revision(
+    tmp_path, incremental_candidate_store,
+):
 
     evidence = FinancialIndicatorObservationStore(RawFinancialBatchStore(tmp_path))
-    store = FinancialIndicatorCandidateStore(tmp_path)
+    store = incremental_candidate_store
 
     def receipt(eps, observed):
         source = {"ts_code": "000001.SZ", "ann_date": "20200420",

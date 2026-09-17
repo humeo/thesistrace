@@ -752,16 +752,15 @@ class MountedGenerationStore:
     def _compose_incremental_indicator_candidate(
         self, prevalidated_generation_sha256: str, candidate_sha256: str, *,
         published_generation_sha256: str, prepared_at: datetime,
+        indicator_store,
     ) -> MountedFamilyGenerationDescriptor:
-        from thesistrace.data.financial_indicator_candidate import FinancialIndicatorCandidateStore
 
         # The financial refresh owns both authorities: a Head read and a market
         # Generation already composed/checked against that same Head.
         published = self.published_indicator_reference(published_generation_sha256)
         if self.published_indicator_reference(prevalidated_generation_sha256) != published:
             raise GenerationStoreError("Indicator composition predecessor differs from Head")
-        store = FinancialIndicatorCandidateStore(self._root)
-        candidate, reference = store.validate_incremental_with_reference(
+        candidate, reference = indicator_store.validate_incremental_with_reference(
             candidate_sha256, published_base_reference=published,
         )
         return self._compose_validated_indicator(

@@ -5,6 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import contextmanager
+from copy import deepcopy
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from time import perf_counter
@@ -59,6 +62,15 @@ _SCHEMA = pa.schema(
 _WRITER = ParquetWriterContract("financial-indicator-versions", 1, _SCHEMA, _SORT_KEYS)
 
 
+@dataclass(frozen=True)
+class _CheckedCollection:
+    ts_code: str
+    instrument_id: str
+    start: date
+    end: date
+    observations: tuple[str, ...]
+
+
 class FinancialIndicatorCandidateStore:
     def __init__(
         self, root: Path, *, progress: Callable[[dict[str, object]], None] | None = None,
@@ -68,6 +80,65 @@ class FinancialIndicatorCandidateStore:
         self._files = AddressedFileStore(root)
         self._raw = RawFinancialBatchStore(root)
         self._observations = FinancialIndicatorObservationStore(self._raw)
+        self._validation = None
+
+    @contextmanager
+    def validation_session(self):
+        """Share compact input proofs for one refresh, never across operations.
+
+        No observation rows or decoded wide tables are retained. Publication
+        validation rehashes every reused input before using these proofs, then
+        still verifies changed projections against the exact published base.
+        """
+        if self._validation is not None:
+            raise ValueError("Indicator validation session is already active")
+        self._validation = {"collections": {}, "discoveries": {}, "contents": {}, "partitions": {}}
+        try:
+            yield self
+        finally:
+            self._validation = None
+
+    def _recheck_session_bytes(self):
+        if self._validation is None:
+            return
+        try:
+            sources = set(self._validation["discoveries"])
+            for digest, evidence in self._validation["collections"].items():
+                sources.add(digest)
+                sources.update(evidence.observations)
+            for digest in sorted(sources):
+                self._raw.verify(digest)
+            for digest in self._validation["contents"]:
+                self._files.read(
+                    self._path(digest, "json"), digest, max_byte_count=64 * 1024 * 1024,
+                )
+            for digest, (partition, _outside) in self._validation["partitions"].items():
+                self._files.read(self._path(digest, "parquet"), digest,
+                                 expected_byte_count=partition["byte_count"],
+                                 max_byte_count=256 * 1024 * 1024)
+        except (AddressedFileError, FinancialCollectionError) as error:
+            raise ValueError("Invalid indicator candidate evidence or partition") from error
+
+    def _partition_outside_calendar(self, partition):
+        digest = partition["sha256"]
+        cached = None if self._validation is None else self._validation["partitions"].get(digest)
+        if cached is not None:
+            if cached[0] != partition:
+                raise ValueError("Indicator partition reference differs from checked contents")
+            return cached[1]
+        table = self._read_partition(partition, ["availability_status"])
+        outside = bool(pc.any(pc.equal(table["availability_status"], "outside_calendar")).as_py())
+        if self._validation is not None:
+            self._validation["partitions"][digest] = (dict(partition), outside)
+        return outside
+
+    def _discovery_evidence(self, digest):
+        if self._validation is None:
+            return self._raw.read(digest)
+        cached = self._validation["discoveries"]
+        if digest not in cached:
+            cached[digest] = self._raw.read(digest)
+        return cached[digest]
 
     def _path(self, digest: str, suffix: str) -> Path:
         if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
@@ -91,6 +162,7 @@ class FinancialIndicatorCandidateStore:
         previous_candidate_sha256: str | None = None,
         published_base_reference: Mapping[str, object] | None = None,
     ) -> str:
+        self._recheck_session_bytes()
         if not sessions or not collection_evidence_sha256s:
             raise ValueError("Indicator candidate requires observations and a calendar")
         if len(set(instrument_ids.values())) != len(instrument_ids):
@@ -194,10 +266,7 @@ class FinancialIndicatorCandidateStore:
                 continue
             partitions = by_instrument.get(instrument, [])
             if len(sessions) != len(old_sessions) and any(
-                pc.any(pc.equal(
-                    self._read_partition(part, ["availability_status"])["availability_status"],
-                    "outside_calendar",
-                )).as_py()
+                self._partition_outside_calendar(part)
                 for part in partitions
             ):
                 continue
@@ -292,18 +361,23 @@ class FinancialIndicatorCandidateStore:
         observations = {code: set() for code in instrument_ids}
         ranges = {code: [] for code in instrument_ids}
         for digest in references:
-            evidence = validate_indicator_collection_evidence(self._raw, digest)
-            if instrument_ids.get(evidence["ts_code"]) != evidence["instrument_id"]:
-                raise ValueError("Indicator collection identity differs from candidate")
-            ranges[evidence["ts_code"]].append(
-                (
-                    datetime.strptime(evidence["start_date"], "%Y%m%d").date(),
-                    datetime.strptime(evidence["end_date"], "%Y%m%d").date(),
+            cached = None if self._validation is None else self._validation["collections"]
+            if cached is not None and digest in cached:
+                evidence = cached[digest]
+            else:
+                receipt = validate_indicator_collection_evidence(self._raw, digest)
+                evidence = _CheckedCollection(
+                    receipt["ts_code"], receipt["instrument_id"],
+                    datetime.strptime(receipt["start_date"], "%Y%m%d").date(),
+                    datetime.strptime(receipt["end_date"], "%Y%m%d").date(),
+                    tuple(item["observation_sha256"] for item in receipt["completed_requests"]),
                 )
-            )
-            observations[evidence["ts_code"]].update(
-                receipt["observation_sha256"] for receipt in evidence["completed_requests"]
-            )
+                if cached is not None:
+                    cached[digest] = evidence
+            if instrument_ids.get(evidence.ts_code) != evidence.instrument_id:
+                raise ValueError("Indicator collection identity differs from candidate")
+            ranges[evidence.ts_code].append((evidence.start, evidence.end))
+            observations[evidence.ts_code].update(evidence.observations)
         return observations, ranges
 
     def canonical_projection_sha256(self, digest: str) -> str:
@@ -362,7 +436,7 @@ class FinancialIndicatorCandidateStore:
         if list(references) != sorted(set(references)):
             raise ValueError("Invalid indicator discovery references")
         for digest in references:
-            evidence = self._raw.read(digest)
+            evidence = self._discovery_evidence(digest)
             if (
                 not isinstance(evidence, dict)
                 or set(evidence)
@@ -442,14 +516,14 @@ class FinancialIndicatorCandidateStore:
         return ranges
 
     def _discovery_unresolved(self, references, instrument_ids, partitions):
-        checks = [self._raw.read(digest) for digest in references]
+        checks = [self._discovery_evidence(digest) for digest in references]
         structured = [check for check in checks if check["source"] == "indicator-disclosure-check"]
         if structured:
             return self._report_requirements_unresolved(structured, instrument_ids, partitions)
         # Pinned historical Generations retain their original audit and readiness proof.
         targets = set()
-        for digest in references:
-            for item in self._raw.read(digest)["discovery"]["announcements"]:
+        for check in checks:
+            for item in check["discovery"]["announcements"]:
                 targets.add(
                     (
                         instrument_ids[item["ts_code"]],
@@ -539,6 +613,7 @@ class FinancialIndicatorCandidateStore:
 
     def validate(self, digest: str) -> dict[str, object]:
         """Audit the complete source projection, including never-published candidates."""
+        self._recheck_session_bytes()
         manifest, by_security = self._checked_contents(digest)
         expected = [
             {
@@ -564,6 +639,7 @@ class FinancialIndicatorCandidateStore:
         """Verify changed projections against an exact, accepted predecessor."""
         if published_base_reference is None:
             return self.validate_with_reference(digest)
+        self._recheck_session_bytes()
         previous, previous_observations = self._checked_published_contents(published_base_reference)
         manifest, by_security = self._checked_contents(digest)
         for key in ("observation_sha256s", "collection_evidence_sha256s",
@@ -602,6 +678,7 @@ class FinancialIndicatorCandidateStore:
         proof. Callers must obtain reference from their authoritative published
         Generation, never from a proposed candidate or user input.
         """
+        self._recheck_session_bytes()
         return self._checked_published_contents(reference)[0]
 
     def _checked_published_contents(self, reference):
@@ -612,6 +689,9 @@ class FinancialIndicatorCandidateStore:
         return manifest, observations
 
     def _checked_contents(self, digest: str):
+        cached = None if self._validation is None else self._validation["contents"]
+        if cached is not None and digest in cached:
+            return deepcopy(cached[digest])
         try:
             manifest = self.reopen(digest)
             by_security = self._collection_observations(
@@ -624,7 +704,7 @@ class FinancialIndicatorCandidateStore:
             if references != manifest["observation_sha256s"]:
                 raise ValueError("Indicator observations differ from collection evidence")
             for partition in manifest["partitions"]:
-                self._read_partition(partition, _SCHEMA.names)
+                self._partition_outside_calendar(partition)
             inferred = self._discovery_unresolved(
                 manifest["discovery_evidence_sha256s"],
                 manifest["instrument_ids"], manifest["partitions"],
@@ -635,6 +715,8 @@ class FinancialIndicatorCandidateStore:
                 for instrument, since in inferred.items()
             ):
                 raise ValueError("Indicator candidate omits unresolved discovery targets")
+            if cached is not None:
+                cached[digest] = deepcopy((manifest, by_security))
             return manifest, by_security
         except (AddressedFileError, FinancialCollectionError, KeyError, TypeError) as error:
             raise ValueError("Invalid indicator candidate evidence or partition") from error

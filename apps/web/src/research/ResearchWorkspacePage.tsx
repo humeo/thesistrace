@@ -431,7 +431,7 @@ export function ResearchDraftWorkspace({
     fieldsTrigger.current?.focus();
   }
   const [exposureDiagnosticState, setExposureDiagnosticState] = useState<DiagnosticState>({ kind: "idle", result: null });
-  const exposureDiagnostics = useRef(createDiagnosticsScheduler(coreFetch, 300, "exposure"));
+  const exposureDiagnostics = useRef(createDiagnosticsScheduler(coreFetch, undefined, "exposure"));
   const [specFeedback, setSpecFeedback] = useState<{
     key: string; checking: boolean; message: string; issues: ResearchRunAdmissionRejection["issues"];
   } | null>(null);
