@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -13,6 +12,8 @@ from thesistrace._postgres import PostgresDatabase
 from thesistrace.data.financial_collection import RawFinancialBatchStore
 from thesistrace.data.financial_indicator_evidence import (
     FinancialIndicatorCheckpoint,
+    indicator_versions,
+    received_indicator_reports,
     validate_indicator_collection_evidence,
 )
 from thesistrace.data.financial_indicator_progress import FinancialIndicatorProgressStore
@@ -29,7 +30,7 @@ from thesistrace.publication.serialization import canonical_json_bytes
 class CompletedIndicatorCollection:
     evidence_sha256: str
     observation_sha256s: tuple[str, ...]
-    pending_reports: tuple[tuple[str | None, str], ...]
+    pending_reports: tuple[tuple[str, str], ...]
 
 
 class FinancialIndicatorCollector:
@@ -53,7 +54,7 @@ class FinancialIndicatorCollector:
         start_date: str,
         end_date: str,
         checked_through: str,
-        required_reports: Sequence[tuple[str | None, str]],
+        required_reports: Sequence[tuple[str, str]],
     ) -> CompletedIndicatorCollection:
         start = datetime.strptime(start_date, "%Y%m%d").date()
         end = datetime.strptime(end_date, "%Y%m%d").date()
@@ -61,12 +62,13 @@ class FinancialIndicatorCollector:
         if start > end or end > checked:
             raise ValueError("Invalid indicator collection range")
         for period, announced in required_reports:
-            if (
-                period is not None and not start <= date.fromisoformat(period) <= end
-            ) or date.fromisoformat(announced) > checked:
+            if (not start <= date.fromisoformat(period) <= end) or date.fromisoformat(
+                announced
+            ) > checked:
                 raise ValueError("Indicator target falls outside collection scope")
         with mounted_data_mutation_lock(
-            self._database, exclusive_name="indicator-collection:" + identity.instrument_id,
+            self._database,
+            exclusive_name="indicator-collection:" + identity.instrument_id,
         ):
             for period, announced in required_reports:
                 self._progress.require_report(
@@ -107,25 +109,19 @@ class FinancialIndicatorCollector:
                 )
             )
             validate_indicator_collection_evidence(self._raw, evidence)
-            reports = defaultdict(set)
-            for observation in observations:
-                for item in observation["items"]:
-                    row = dict(zip(observation["fields"], item, strict=True))
-                    try:
-                        period = datetime.strptime(str(row["end_date"]), "%Y%m%d").date()
-                        announced = datetime.strptime(str(row["ann_date"]), "%Y%m%d").date()
-                    except ValueError:
-                        continue
-                    if period <= announced <= checked:
-                        reports[(period.isoformat(), announced.isoformat())].add(
-                            hashlib.sha256(canonical_json_bytes(row)).hexdigest()
-                        )
+            # Receipt does not require a later research session. The same version rules
+            # still reject conflicting observations, including those outside the calendar.
+            reports = received_indicator_reports(
+                indicator_versions(
+                    observations, instrument_ids={identity.ts_code: identity.instrument_id},
+                    sessions=(),
+                ),
+                through=checked_through,
+            )
             self._progress.record_reconciliation(
                 identity.instrument_id,
                 checked_through=checked_through,
-                observed_reports=tuple(
-                    pair for pair, contents in reports.items() if len(contents) == 1
-                ),
+                observed_reports=tuple((period, published) for _id, period, published in reports),
                 observation_sha256=evidence,
             )
             return CompletedIndicatorCollection(
@@ -161,6 +157,7 @@ class FinancialIndicatorDailyCollector:
         if type(reconciliation_limit) is not int or reconciliation_limit <= 0:
             raise ValueError("Indicator reconciliation limit must be positive")
         self._database, self._root = database, root
+        self._clock = clock
         self._limit = reconciliation_limit
         self._guard = ownership_guard
         self._progress = FinancialIndicatorProgressStore(database)
@@ -195,11 +192,16 @@ class FinancialIndicatorDailyCollector:
         if len(initial) != len(set(initial)) or not set(initial) <= set(by_id):
             raise ValueError("Initial indicator identities fall outside dispatch scope")
         with mounted_data_mutation_lock(
-            self._database, exclusive_name="indicator-daily-dispatch",
+            self._database,
+            exclusive_name="indicator-daily-dispatch",
         ):
             self._guard()
             plan = self._plan(
-                operation_key, by_id, checked_through, research_session_index, initial,
+                operation_key,
+                by_id,
+                checked_through,
+                research_session_index,
+                initial,
             )
         completed, failures, pending = [], [], []
         for instrument in plan["selected"]:
@@ -234,6 +236,15 @@ class FinancialIndicatorDailyCollector:
                 for _period, announced in self._progress.pending(instrument)
             ):
                 pending.append(instrument)
+            from thesistrace.data.financial_report_progress import record_recheck
+
+            with self._database.transaction() as tx:
+                record_recheck(
+                    tx,
+                    instrument,
+                    "fina_indicator",
+                    next((code for item, code in failures if item == instrument), None),
+                )
             self._guard()
         return DailyIndicatorCollection(
             tuple(plan["selected"]),
@@ -288,20 +299,20 @@ class FinancialIndicatorDailyCollector:
             return plan
         with self._database.transaction() as tx:
             rows = tx.execute(
-                """SELECT DISTINCT instrument_id FROM data.financial_indicator_report_targets
-                   WHERE instrument_id = ANY(%s::text[]) AND announced_on <= %s
-                     AND resolved_observation_sha256 IS NULL ORDER BY instrument_id""",
+                """SELECT DISTINCT instrument_id FROM data.financial_report_targets
+                   WHERE endpoint='fina_indicator' AND instrument_id = ANY(%s::text[])
+                     AND actual_date <= %s
+                     AND resolved_evidence_sha256 IS NULL ORDER BY instrument_id""",
                 (list(by_id), date.fromisoformat(target)),
             ).fetchall()
         pending = [str(row["instrument_id"]) for row in rows]
-        ordered = sorted(by_id)
-        start = session_index * self._limit % len(ordered)
-        rotated = ordered[start:] + ordered[:start]
-        # Rotate over the entire frozen universe: persistent pending/failure rows cannot
-        # change the background cycle or starve the other historical securities.
-        selected = list(dict.fromkeys([
-            *initial_instrument_ids, *pending, *rotated[: self._limit],
-        ]))
+        from thesistrace.data.financial_report_progress import reconciliation_ids
+
+        with self._database.transaction() as tx:
+            rotated = reconciliation_ids(
+                tx, by_id, "fina_indicator", limit=self._limit, exclude=set(pending)
+            )
+        selected = list(dict.fromkeys([*initial_instrument_ids, *pending, *rotated]))
         plan = {"scope": scope, "selected": selected}
         content = canonical_json_bytes(plan)
         digest = hashlib.sha256(content).hexdigest()

@@ -13,17 +13,17 @@ from thesistrace.data.daily_financial_refresh import (
     FinancialPendingInstrument,
     financial_discovery_window,
 )
-from thesistrace.data.financial_announcements import (
-    FINANCIAL_ANNOUNCEMENT_CATEGORIES,
-    FinancialAnnouncement,
-    FinancialAnnouncementDiscovery,
-    FinancialDiscoveryGap,
-)
 from thesistrace.data.financial_collection import (
     FINANCIAL_ENDPOINTS,
     FinancialCollectionContract,
     FinancialDateShard,
     FinancialShardCheckpoint,
+)
+from thesistrace.data.financial_disclosures import (
+    FinancialDisclosure,
+    FinancialDisclosureDiscovery,
+    FinancialDiscoveryGap,
+    disclosure_periods,
 )
 from thesistrace.data.financial_indicator_progress import FinancialIndicatorProgressStore
 from thesistrace.data.financial_progress import read_financial_progress
@@ -86,7 +86,7 @@ def test_financial_progress_reads_partial_checkpoints_and_preserves_historical_g
         begin(key)
         discovering = inspect()
         assert discovering.phase == "discovery"
-        assert discovering.discovered_announcement_count is None
+        assert discovering.disclosed_report_count is None
         assert discovering.discovery_gaps is None
 
         identities = tuple(
@@ -95,12 +95,26 @@ def test_financial_progress_reads_partial_checkpoints_and_preserves_historical_g
         )
         store.record_discovery(
             idempotency_key=key,
-            discovery=FinancialAnnouncementDiscovery(
+            discovery=FinancialDisclosureDiscovery(
                 start_date="2026-08-07",
                 end_date="2026-08-14",
-                completed_categories=FINANCIAL_ANNOUNCEMENT_CATEGORIES[:-1],
-                announcements=tuple(
-                    _announcement(str(index) * 64, f"00000{index}.SZ") for index in (1, 2, 3)
+                completed_periods=tuple(
+                    period
+                    for period in disclosure_periods("2026-08-07", "2026-08-14")
+                    if period
+                    not in {
+                        gap.report_period
+                        for gap in _gap_discovery(end_date="2026-08-14", lineage="c" * 64).gaps
+                    }
+                ),
+                reports=tuple(
+                    {
+                        (report.ts_code, report.report_period): report
+                        for report in tuple(
+                            _announcement(str(index) * 64, f"00000{index}.SZ")
+                            for index in (1, 2, 3)
+                        )
+                    }.values()
                 ),
                 gaps=_gap_discovery(end_date="2026-08-14", lineage="c" * 64).gaps,
                 source_lineage_sha256="c" * 64,
@@ -112,13 +126,15 @@ def test_financial_progress_reads_partial_checkpoints_and_preserves_historical_g
         assert indicator_progress.pending(identities[0].instrument_id) == (
             ("2026-06-30", "2026-08-14"),
         )
-        assert inspect().discovered_announcement_count == 3
+        assert inspect().disclosed_report_count == 3
         assert inspect().phase == "indicator_collection"
         from thesistrace.data.financial_indicator_collection import DailyIndicatorCollection
 
         collected = DailyIndicatorCollection(
             tuple(f"stock-{index}" for index in range(65)),
-            tuple(f"{index:064x}" for index in range(65)), (), (),
+            tuple(f"{index:064x}" for index in range(65)),
+            (),
+            (),
         )
         store.record_indicator_collection(key, collected, started)
         indicator = inspect()
@@ -136,7 +152,7 @@ def test_financial_progress_reads_partial_checkpoints_and_preserves_historical_g
         operation.update(status="succeeded", finished_at=started)
         assert inspect().indicator_candidate_status == "retained"
         operation.update(status="running", finished_at=None)
-        store.record_indicator_candidate(key, "e" * 64, started)
+        store.record_indicator_candidate(key, "e" * 64, started, received_reports=())
         assert inspect().phase == "collection"
         assert inspect().indicator_candidate_status == "ready"
         assert inspect().indicator_retained_reason is None
@@ -144,7 +160,8 @@ def test_financial_progress_reads_partial_checkpoints_and_preserves_historical_g
             idempotency_key=key,
             instrument_id=identities[0].instrument_id,
             status="accepted",
-            matched_announcement_ids=("1" * 64,),
+            observed_reports={endpoint: ("2026-06-30",) for endpoint in FINANCIAL_ENDPOINTS},
+            canonical_changed=True,
             checkpoints=_accepted_checkpoints(identities[0].instrument_id, identities[0].ts_code),
             failure_code=None,
             failure_endpoint=None,
@@ -162,7 +179,8 @@ def test_financial_progress_reads_partial_checkpoints_and_preserves_historical_g
             idempotency_key=key,
             instrument_id=identities[1].instrument_id,
             status="accepted",
-            matched_announcement_ids=(),
+            observed_reports={endpoint: ("2026-06-30",) for endpoint in FINANCIAL_ENDPOINTS},
+            canonical_changed=False,
             checkpoints=_accepted_checkpoints(identities[1].instrument_id, identities[1].ts_code),
             failure_code=None,
             failure_endpoint=None,
@@ -172,7 +190,7 @@ def test_financial_progress_reads_partial_checkpoints_and_preserves_historical_g
             idempotency_key=key,
             instrument_id=identities[2].instrument_id,
             status="failed",
-            matched_announcement_ids=(),
+            canonical_changed=False,
             checkpoints=(),
             failure_code="SOURCE_FAILURE",
             failure_endpoint="income",
@@ -187,11 +205,11 @@ def test_financial_progress_reads_partial_checkpoints_and_preserves_historical_g
         begin("financial-progress-later")
         store.record_discovery(
             idempotency_key="financial-progress-later",
-            discovery=FinancialAnnouncementDiscovery(
+            discovery=FinancialDisclosureDiscovery(
                 start_date="2026-08-07",
                 end_date="2026-08-14",
-                completed_categories=FINANCIAL_ANNOUNCEMENT_CATEGORIES,
-                announcements=(),
+                completed_periods=disclosure_periods("2026-08-07", "2026-08-14"),
+                reports=(),
                 gaps=(),
                 source_lineage_sha256="d" * 64,
             ),
@@ -321,9 +339,7 @@ def test_targeted_collection_accepts_three_statements_atomically_per_instrument(
 
         assert outcome.snapshot.target_count == 3
         assert {item.endpoint for item in outcome.snapshot.shards} == set(FINANCIAL_ENDPOINTS)
-        assert {item.instrument_id for item in outcome.snapshot.shards} == {
-            "equity:000001.SZ"
-        }
+        assert {item.instrument_id for item in outcome.snapshot.shards} == {"equity:000001.SZ"}
         assert outcome.pending == (
             FinancialPendingInstrument(
                 instrument_id="equity:000002.SZ",
@@ -360,20 +376,36 @@ def test_discovery_store_persists_partial_progress_without_losing_pending_stocks
         )
         store.record_discovery(
             idempotency_key=operation_key,
-            discovery=FinancialAnnouncementDiscovery(
+            discovery=FinancialDisclosureDiscovery(
                 start_date="2026-08-07",
                 end_date="2026-08-14",
-                completed_categories=FINANCIAL_ANNOUNCEMENT_CATEGORIES[:-1],
-                announcements=(
-                    _announcement("1" * 64, "000001.SZ"),
-                    _announcement("2" * 64, "000002.SZ"),
+                completed_periods=tuple(
+                    period
+                    for period in disclosure_periods("2026-08-07", "2026-08-14")
+                    if period
+                    not in {
+                        gap.report_period
+                        for gap in (
+                            FinancialDiscoveryGap(
+                                report_period=disclosure_periods("2026-08-07", "2026-08-14")[0],
+                                failure_code="UPSTREAM_UNAVAILABLE",
+                            ),
+                        )
+                    }
+                ),
+                reports=tuple(
+                    {
+                        (report.ts_code, report.report_period): report
+                        for report in (
+                            _announcement("1" * 64, "000001.SZ"),
+                            _announcement("2" * 64, "000002.SZ"),
+                        )
+                    }.values()
                 ),
                 gaps=(
                     FinancialDiscoveryGap(
-                        category="补充更正",
-                        start_date="2026-08-07",
-                        end_date="2026-08-14",
-                        failure_code="CNINFO_DISCOVERY_UNAVAILABLE",
+                        report_period=disclosure_periods("2026-08-07", "2026-08-14")[0],
+                        failure_code="UPSTREAM_UNAVAILABLE",
                     ),
                 ),
                 source_lineage_sha256="c" * 64,
@@ -387,7 +419,8 @@ def test_discovery_store_persists_partial_progress_without_losing_pending_stocks
             idempotency_key=operation_key,
             instrument_id="equity:000001.SZ",
             status="accepted",
-            matched_announcement_ids=("1" * 64,),
+            observed_reports={endpoint: ("2026-06-30",) for endpoint in FINANCIAL_ENDPOINTS},
+            canonical_changed=True,
             checkpoints=_accepted_checkpoints("equity:000001.SZ", "000001.SZ"),
             failure_code=None,
             failure_endpoint=None,
@@ -397,7 +430,7 @@ def test_discovery_store_persists_partial_progress_without_losing_pending_stocks
             idempotency_key=operation_key,
             instrument_id="equity:000002.SZ",
             status="failed",
-            matched_announcement_ids=(),
+            canonical_changed=False,
             checkpoints=(),
             failure_code="SOURCE_FAILURE",
             failure_endpoint="balancesheet",
@@ -414,14 +447,14 @@ def test_discovery_store_persists_partial_progress_without_losing_pending_stocks
         inspection = store.inspect(operation_key)
         assert inspection.status == "running"
         assert inspection.matched_trigger_count == 1
-        assert inspection.pending_trigger_count == 1
+        assert inspection.pending_trigger_count == 2
         assert inspection.failed_instrument_count == 1
     finally:
         _delete_operation(database, operation_key)
         database.close()
 
 
-def test_failed_pull_stays_pending_but_first_accepted_no_change_closes_trigger(
+def test_failed_pull_stays_pending_until_the_expected_report_is_received(
     core_settings: CoreSettings,
 ) -> None:
     database = _database(core_settings)
@@ -443,11 +476,16 @@ def test_failed_pull_stays_pending_but_first_accepted_no_change_closes_trigger(
         )
         store.record_discovery(
             idempotency_key=failed_key,
-            discovery=FinancialAnnouncementDiscovery(
+            discovery=FinancialDisclosureDiscovery(
                 start_date="2026-08-07",
                 end_date="2026-08-14",
-                completed_categories=FINANCIAL_ANNOUNCEMENT_CATEGORIES,
-                announcements=(_announcement("3" * 64, "000001.SZ"),),
+                completed_periods=disclosure_periods("2026-08-07", "2026-08-14"),
+                reports=tuple(
+                    {
+                        (report.ts_code, report.report_period): report
+                        for report in (_announcement("3" * 64, "000001.SZ"),)
+                    }.values()
+                ),
                 gaps=(),
                 source_lineage_sha256="4" * 64,
             ),
@@ -458,7 +496,7 @@ def test_failed_pull_stays_pending_but_first_accepted_no_change_closes_trigger(
             idempotency_key=failed_key,
             instrument_id=identity.instrument_id,
             status="failed",
-            matched_announcement_ids=(),
+            canonical_changed=False,
             checkpoints=(),
             failure_code="SOURCE_FAILURE",
             failure_endpoint="income",
@@ -482,11 +520,11 @@ def test_failed_pull_stays_pending_but_first_accepted_no_change_closes_trigger(
         )
         store.record_discovery(
             idempotency_key=accepted_key,
-            discovery=FinancialAnnouncementDiscovery(
+            discovery=FinancialDisclosureDiscovery(
                 start_date="2026-08-08",
                 end_date="2026-08-17",
-                completed_categories=FINANCIAL_ANNOUNCEMENT_CATEGORIES,
-                announcements=(),
+                completed_periods=disclosure_periods("2026-08-08", "2026-08-17"),
+                reports=(),
                 gaps=(),
                 source_lineage_sha256="5" * 64,
             ),
@@ -497,7 +535,8 @@ def test_failed_pull_stays_pending_but_first_accepted_no_change_closes_trigger(
             idempotency_key=accepted_key,
             instrument_id=identity.instrument_id,
             status="accepted",
-            matched_announcement_ids=(),
+            observed_reports={endpoint: ("2026-06-30",) for endpoint in FINANCIAL_ENDPOINTS},
+            canonical_changed=False,
             checkpoints=_accepted_checkpoints(
                 identity.instrument_id,
                 identity.ts_code,
@@ -512,22 +551,15 @@ def test_failed_pull_stays_pending_but_first_accepted_no_change_closes_trigger(
         assert accepted_publication.pending_instrument_count == 0
         assert store.inspect(accepted_key).checked_no_structured_change_count == 1
         with database.transaction() as transaction:
-            trigger = transaction.execute(
-                """
-                SELECT status, resolution_code, accepted_no_match_count,
-                       last_attempt_operation_key
-                FROM data.financial_announcement_triggers
-                WHERE announcement_id = %s
-                """,
-                ("3" * 64,),
-            ).fetchone()
-        assert trigger is not None
-        assert dict(trigger) == {
-            "status": "checked_no_structured_change",
-            "resolution_code": "checked_no_structured_change",
-            "accepted_no_match_count": 5,
-            "last_attempt_operation_key": accepted_key,
-        }
+            assert (
+                transaction.execute(
+                    "SELECT count(*) n FROM data.financial_report_targets "
+                    "WHERE instrument_id=%s AND endpoint<>'fina_indicator' "
+                    "AND resolved_evidence_sha256 IS NULL",
+                    (identity.instrument_id,),
+                ).fetchone()["n"]
+                == 0
+            )
     finally:
         _delete_operations(database, operation_prefix)
         database.close()
@@ -573,11 +605,11 @@ def test_complete_discovery_resolves_prior_gap_and_catches_up_complete_through(
         )
         store.record_discovery(
             idempotency_key=second_key,
-            discovery=FinancialAnnouncementDiscovery(
+            discovery=FinancialDisclosureDiscovery(
                 start_date="2026-08-08",
                 end_date="2026-08-17",
-                completed_categories=FINANCIAL_ANNOUNCEMENT_CATEGORIES,
-                announcements=(),
+                completed_periods=disclosure_periods("2026-08-08", "2026-08-17"),
+                reports=(),
                 gaps=(),
                 source_lineage_sha256="2" * 64,
             ),
@@ -611,38 +643,40 @@ def _contract() -> FinancialCollectionContract:
     return FinancialCollectionContract(
         capability_sha256="b" * 64,
         endpoint_fields=tuple((endpoint, FIELDS) for endpoint in FINANCIAL_ENDPOINTS),
-        suspected_truncation_row_counts=tuple(
-            (endpoint, None) for endpoint in FINANCIAL_ENDPOINTS
-        ),
+        suspected_truncation_row_counts=tuple((endpoint, None) for endpoint in FINANCIAL_ENDPOINTS),
         shards=(FinancialDateShard("complete-history"),),
     )
 
 
-def _announcement(announcement_id: str, ts_code: str) -> FinancialAnnouncement:
-    return FinancialAnnouncement(
-        announcement_id=announcement_id,
-        category="半年报",
-        ts_code=ts_code,
-        name=ts_code,
-        title=f"{ts_code} 2026年半年度报告",
-        source_published_date="2026-08-14",
-        report_period="2026-06-30",
-        url=f"https://example.test/{announcement_id}",
+def _announcement(announcement_id: str, ts_code: str) -> FinancialDisclosure:
+    return FinancialDisclosure(
+        ts_code=ts_code, report_period="2026-06-30", actual_date="2026-08-14"
     )
 
 
-def _gap_discovery(*, end_date: str, lineage: str) -> FinancialAnnouncementDiscovery:
-    return FinancialAnnouncementDiscovery(
+def _gap_discovery(*, end_date: str, lineage: str) -> FinancialDisclosureDiscovery:
+    return FinancialDisclosureDiscovery(
         start_date="2026-08-07",
         end_date=end_date,
-        completed_categories=FINANCIAL_ANNOUNCEMENT_CATEGORIES[:-1],
-        announcements=(),
+        completed_periods=tuple(
+            period
+            for period in disclosure_periods("2026-08-07", end_date)
+            if period
+            not in {
+                gap.report_period
+                for gap in (
+                    FinancialDiscoveryGap(
+                        report_period=disclosure_periods("2026-08-07", end_date)[0],
+                        failure_code="UPSTREAM_UNAVAILABLE",
+                    ),
+                )
+            }
+        ),
+        reports=(),
         gaps=(
             FinancialDiscoveryGap(
-                category="补充更正",
-                start_date="2026-08-07",
-                end_date=end_date,
-                failure_code="CNINFO_DISCOVERY_UNAVAILABLE",
+                report_period=disclosure_periods("2026-08-07", end_date)[0],
+                failure_code="UPSTREAM_UNAVAILABLE",
             ),
         ),
         source_lineage_sha256=lineage,
@@ -675,8 +709,8 @@ def _database(settings: CoreSettings) -> PostgresDatabase:
     database.open()
     with database.transaction() as transaction:
         transaction.execute(
-            "TRUNCATE data.financial_daily_refresh_operations, "
-            "data.financial_raw_batches CASCADE"
+            "TRUNCATE data.financial_daily_refresh_operations, data.financial_raw_batches, "
+            "data.financial_report_targets, data.financial_report_rechecks CASCADE"
         )
         transaction.execute(
             "UPDATE data.current_dataset_state SET last_financial_refresh_at = NULL "
@@ -688,8 +722,7 @@ def _database(settings: CoreSettings) -> PostgresDatabase:
 def _delete_operation(database: PostgresDatabase, idempotency_key: str) -> None:
     with database.transaction() as transaction:
         transaction.execute(
-            "DELETE FROM data.financial_daily_refresh_operations "
-            "WHERE idempotency_key = %s",
+            "DELETE FROM data.financial_daily_refresh_operations WHERE idempotency_key = %s",
             (idempotency_key,),
         )
 
@@ -697,7 +730,6 @@ def _delete_operation(database: PostgresDatabase, idempotency_key: str) -> None:
 def _delete_operations(database: PostgresDatabase, idempotency_prefix: str) -> None:
     with database.transaction() as transaction:
         transaction.execute(
-            "DELETE FROM data.financial_daily_refresh_operations "
-            "WHERE idempotency_key LIKE %s",
+            "DELETE FROM data.financial_daily_refresh_operations WHERE idempotency_key LIKE %s",
             (f"{idempotency_prefix}%",),
         )

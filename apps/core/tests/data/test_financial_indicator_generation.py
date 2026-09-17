@@ -148,7 +148,7 @@ def test_generation_composes_indicator_without_changing_original_root(
     assert "equity.eod_price" in generation_family_coverage(pending_generation)
     assert "equity.financial_indicator" in generation_family_coverage(combined)
 
-    from thesistrace.data.financial_announcements import FINANCIAL_ANNOUNCEMENT_CATEGORIES
+    FINANCIAL_ANNOUNCEMENT_CATEGORIES = ("年报", "半年报", "一季报", "三季报", "补充更正")
 
     discovery = raw_store.store(canonical_json_bytes({
         "source": "indicator-announcement-discovery",

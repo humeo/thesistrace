@@ -3,7 +3,7 @@ import type { FinancialRefreshProgress } from "./financialRefreshProgress";
 const phaseLabels: Record<FinancialRefreshProgress["phase"], string> = {
   queued: "Waiting for Worker",
   preparing: "Preparing refresh",
-  discovery: "Discovering announcements",
+  discovery: "Checking disclosure lists",
   indicator_collection: "Collecting financial indicators",
   indicator_candidate: "Preparing financial indicator candidate",
   collection: "Collecting company statements",
@@ -31,7 +31,7 @@ export function FinancialRefreshTelemetry({
       </header>
       <p>Statement processing</p>
       <dl>
-        <div><dt>Announcements discovered</dt><dd>{progress.discoveredAnnouncementCount ?? "Unknown"}</dd></div>
+        <div><dt>Reports disclosed</dt><dd>{progress.disclosedReportCount ?? "Unknown"}</dd></div>
         <div><dt>Companies processed</dt><dd>{progress.processedCompanyCount ?? "Unknown"}</dd></div>
         <div><dt>With data changes</dt><dd>{progress.updatedCompanyCount ?? "Unknown"}</dd></div>
         <div><dt>Without data changes</dt><dd>{progress.unchangedCompanyCount ?? "Unknown"}</dd></div>
@@ -56,15 +56,13 @@ export function FinancialRefreshTelemetry({
       ) : null}
       {gaps !== null && gaps.length > 0 ? (
         <div className="operator-financial-gaps">
-          <strong>Announcement discovery gaps</strong>
-          <p>Some announcements may be missing. The full affected-company count is unknown.</p>
+          <strong>Disclosure list check gaps</strong>
+          <p>The disclosure list could not be checked for these report periods.</p>
           <ul>
             {gaps.map((gap) => (
-              <li key={`${gap.category}:${gap.startDate}:${gap.endDate}`}>
-                <strong>{gap.category}</strong>
-                <span>{gap.startDate} – {gap.endDate}</span>
-                <span>{gap.failureCode === "CNINFO_DISCOVERY_UNAVAILABLE"
-                  ? "CNINFO request unavailable" : "Invalid CNINFO response"}</span>
+              <li key={gap.reportPeriod}>
+                <strong>{gap.reportPeriod}</strong>
+                <span>TuShare disclosure list unavailable or incomplete</span>
                 <code>{gap.failureCode}</code>
               </li>
             ))}

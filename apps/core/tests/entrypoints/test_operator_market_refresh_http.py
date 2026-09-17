@@ -668,7 +668,7 @@ def test_operator_financial_inspection_exposes_progress_before_publication() -> 
         phase="publication",
         elapsed_seconds=12,
         last_progress_at=datetime(2026, 8, 14, 10, tzinfo=UTC),
-        discovered_announcement_count=10,
+        disclosed_report_count=10,
         processed_company_count=3,
         updated_company_count=1,
         unchanged_company_count=1,

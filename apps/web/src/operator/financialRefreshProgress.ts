@@ -6,16 +6,14 @@ const session = z.string().regex(/^(?!0000)\d{4}-\d{2}-\d{2}$/).refine((value) =
   return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 });
 const gapSchema = z.object({
-  category: z.enum(["年报", "半年报", "一季报", "三季报", "补充更正"]),
-  start_date: session,
-  end_date: session,
-  failure_code: z.enum(["CNINFO_DISCOVERY_UNAVAILABLE", "CNINFO_DISCOVERY_INVALID"]),
-}).strict().refine((gap) => gap.start_date <= gap.end_date);
+  report_period: session,
+  failure_code: z.string().min(1).max(100),
+}).strict();
 const progressSchema = z.object({
   phase: z.enum(["queued", "preparing", "discovery", "indicator_collection", "indicator_candidate", "collection", "publication", "finished"]),
   elapsed_seconds: count.nullable(),
   last_progress_at: z.string().datetime({ offset: true }).nullable(),
-  discovered_announcement_count: count.nullable(),
+  disclosed_report_count: count.nullable(),
   processed_company_count: count.nullable(),
   updated_company_count: count.nullable(),
   unchanged_company_count: count.nullable(),
@@ -25,7 +23,7 @@ const progressSchema = z.object({
   indicator_failed_count: count.nullable(),
   indicator_candidate_status: z.enum(["not_started", "building", "ready", "retained"]),
   indicator_retained_reason: z.literal("INDICATOR_COVERAGE_UNAVAILABLE").nullable(),
-  discovery_gaps: z.array(gapSchema).max(5).nullable(),
+  discovery_gaps: z.array(gapSchema).max(500).nullable(),
 }).strict().refine((value) => {
   const counts = [value.processed_company_count, value.updated_company_count,
     value.unchanged_company_count, value.failed_company_count];
@@ -52,7 +50,7 @@ export function decodeFinancialRefreshProgress(value: unknown) {
     phase: progress.phase,
     elapsedSeconds: progress.elapsed_seconds,
     lastProgressAt: progress.last_progress_at,
-    discoveredAnnouncementCount: progress.discovered_announcement_count,
+    disclosedReportCount: progress.disclosed_report_count,
     processedCompanyCount: progress.processed_company_count,
     updatedCompanyCount: progress.updated_company_count,
     unchangedCompanyCount: progress.unchanged_company_count,
@@ -63,9 +61,7 @@ export function decodeFinancialRefreshProgress(value: unknown) {
     indicatorCandidateStatus: progress.indicator_candidate_status,
     indicatorRetainedReason: progress.indicator_retained_reason,
     discoveryGaps: progress.discovery_gaps?.map((gap) => ({
-      category: gap.category,
-      startDate: gap.start_date,
-      endDate: gap.end_date,
+      reportPeriod: gap.report_period,
       failureCode: gap.failure_code,
     })) ?? null,
   };

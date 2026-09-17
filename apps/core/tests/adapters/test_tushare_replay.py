@@ -170,9 +170,9 @@ def test_refresh_bundle_selects_each_exact_worker_window_and_rejects_duplicates(
         end_date="2026-08-14",
         allowed_ts_codes={"000001.SZ"},
     )
-    assert discovery.announcements == ()
+    assert discovery.reports == ()
     assert len(discovery.gaps) == 1
-    assert discovery.gaps[0].failure_code == "CNINFO_DISCOVERY_UNAVAILABLE"
+    assert discovery.gaps[0].failure_code == "UPSTREAM_UNAVAILABLE"
 
     resumed = ReplayTushareRefreshBundle(
         (financial, console, console_no_change, image_smoke)

@@ -13,7 +13,6 @@ dependencies = [
   "boto3>=1.40,<2",
   "cryptography>=50,<51",
   "numpy>=2.3,<3",
-  "akshare==1.18.94",
   "mcp>=2,<3",
   "pyjwt>=2.13,<3",
 ]

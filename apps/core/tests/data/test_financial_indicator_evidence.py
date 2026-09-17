@@ -4,6 +4,7 @@ from thesistrace.data.financial_collection import RawFinancialBatchStore
 from thesistrace.data.financial_indicator_evidence import (
     FinancialIndicatorObservationStore,
     indicator_versions,
+    received_indicator_reports,
 )
 from thesistrace.data.source import RawSourceResponse
 
@@ -133,6 +134,17 @@ def test_later_conflict_has_an_effective_missing_transition_and_can_resolve(tmp_
     assert all(v["effective_available_session"] is None for v in conflicts)
     assert versions[-1]["eps"] == 3
     assert versions[-1]["effective_available_session"] == "2020-07-02"
+
+    conflicted = indicator_versions(
+        observations[:-1], instrument_ids={"000001.SZ": "stock-1"}, sessions=(),
+    )
+    assert received_indicator_reports(conflicted, through="2020-07-01") == ()
+    resolved = indicator_versions(
+        observations, instrument_ids={"000001.SZ": "stock-1"}, sessions=(),
+    )
+    assert received_indicator_reports(resolved, through="2020-07-01") == (
+        ("stock-1", "2019-12-31", "2020-04-20"),
+    )
 
 
 def test_revision_uses_shanghai_observation_date_and_keeps_null(tmp_path):

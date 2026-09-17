@@ -1360,14 +1360,14 @@ def test_shared_worker_dispatches_financial_and_persists_a_safe_degraded_receipt
                 self,
                 selected_database: object,
                 mount_root: object,
-                announcement_source: object,
+                disclosure_source: object,
                 financial_source: object,
                 **options: object,
             ) -> None:
                 received.update(
                     database=selected_database,
                     mount_root=mount_root,
-                    announcement_source=announcement_source,
+                    disclosure_source=disclosure_source,
                     financial_source=financial_source,
                     options=options,
                 )
@@ -1388,7 +1388,7 @@ def test_shared_worker_dispatches_financial_and_persists_a_safe_degraded_receipt
                     canonical_changed=True,
                 )
 
-        announcement_source = object()
+        disclosure_source = object()
         financial_source = object()
         monkeypatch.setattr(
             refresh_module,
@@ -1400,7 +1400,7 @@ def test_shared_worker_dispatches_financial_and_persists_a_safe_degraded_receipt
             refresh.process_next(
                 RecordingRefreshSource(current),
                 benchmark_source=FixtureBenchmarkSource(),
-                financial_announcement_source=announcement_source,
+                financial_disclosure_source=disclosure_source,
                 financial_source=financial_source,
                 indicator_provider=financial_source,
             )
@@ -1408,7 +1408,7 @@ def test_shared_worker_dispatches_financial_and_persists_a_safe_degraded_receipt
         )
 
         receipt = refresh.inspect("financial-degraded")
-        assert received["announcement_source"] is announcement_source
+        assert received["disclosure_source"] is disclosure_source
         assert received["financial_source"] is financial_source
         assert received["options"]["indicator_provider"] is financial_source
         assert received["idempotency_key"] == "financial-degraded"
@@ -1480,7 +1480,7 @@ def test_shared_worker_distinguishes_clean_financial_terminal_outcomes(
             refresh.process_next(
                 RecordingRefreshSource(current),
                 benchmark_source=FixtureBenchmarkSource(),
-                financial_announcement_source=object(),
+                financial_disclosure_source=object(),
                 financial_source=object(),
                 indicator_provider=object(),
             )
@@ -1529,7 +1529,7 @@ def test_financial_business_rejection_is_terminal_without_retry(
             refresh.process_next(
                 RecordingRefreshSource(current),
                 benchmark_source=FixtureBenchmarkSource(),
-                financial_announcement_source=object(),
+                financial_disclosure_source=object(),
                 financial_source=object(),
                 indicator_provider=object(),
             )
@@ -1589,7 +1589,7 @@ def test_nonretryable_financial_internal_failure_is_not_business_rejection(
             refresh.process_next(
                 RecordingRefreshSource(current),
                 benchmark_source=FixtureBenchmarkSource(),
-                financial_announcement_source=object(),
+                financial_disclosure_source=object(),
                 financial_source=object(),
                 indicator_provider=object(),
             )
@@ -1639,7 +1639,7 @@ def test_financial_infrastructure_failure_retries_then_exhausts(
                 refresh.process_next(
                     RecordingRefreshSource(current),
                     benchmark_source=FixtureBenchmarkSource(),
-                    financial_announcement_source=object(),
+                    financial_disclosure_source=object(),
                     financial_source=object(),
                     indicator_provider=object(),
                 )

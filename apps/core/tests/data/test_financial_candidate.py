@@ -1374,13 +1374,13 @@ def test_daily_rebuild_publishes_targeted_evidence_and_degraded_discovery_covera
 
     coverage = store.family_reference(current.manifest_sha256)["dataset_coverage"]
     assert coverage == {
-        "kind": "financial-announcement-observation-range",
+        "kind": "financial-disclosure-observation-range",
         "start": "2010-01-04",
         "discovery_baseline_session": "2026-08-13",
         "discovery_attempted_through_session": "2026-08-13",
         "discovery_complete_through_session": "2026-08-13",
         "historical_reconciliation_watermark": "2026-08-13",
-        "revision_coverage": "cninfo-announcement-driven-tushare-observed",
+        "revision_coverage": "tushare-disclosure-periods-with-rotating-reconciliation",
         "seed_policy": "annual-stock-and-ttm-dependency-seeds",
         "readiness_status": "ready_with_pending",
         "pending_instrument_count": 1,
@@ -1627,7 +1627,40 @@ def test_daily_instrument_validation_reports_no_delta_for_identical_history(
         observation_through_session="2026-08-13",
     )
 
-    assert changed is False
+    assert changed.canonical_changed is False
+
+
+def test_daily_report_presence_excludes_repeated_quarantined_versions(tmp_path: Path) -> None:
+    store, prior, _repeated, snapshot = _materialized_candidate(tmp_path)
+    validated = store.validate_daily_instrument(
+        _targeted_instrument_collection(snapshot, idempotency_key="quarantined-report-presence"),
+        prior_candidate_manifest_sha256=prior.manifest_sha256,
+        observation_through_session="2026-08-13",
+    )
+    # Both conflicting 2008 annual values and conflicting 2009 annual values are retained
+    # as evidence, but neither is an accepted report that can resolve a missing period.
+    assert validated.report_periods["income"] == ("2007-12-31", "2009-09-30")
+    assert validated.canonical_changed is False
+
+
+def test_received_report_waiting_for_calendar_is_present_even_with_null_metrics(tmp_path: Path):
+    store, prior, _repeated, snapshot = _materialized_candidate(
+        tmp_path,
+        income_items=[
+            ["000001.SZ", "20260813", "", "20260630", "1", "1", "2", None, "0"],
+        ],
+    )
+    inventory = store.report_inventory(prior.manifest_sha256, through="2026-08-13")
+    assert ("equity:000001.SZ", "2026-06-30") in inventory["income"]
+    assert ("equity:000001.SZ", "2026-06-30") not in store.report_inventory(
+        prior.manifest_sha256, through="2026-08-12",
+    )["income"]
+    validated = store.validate_daily_instrument(
+        _targeted_instrument_collection(snapshot, idempotency_key="received-report"),
+        prior_candidate_manifest_sha256=prior.manifest_sha256,
+        observation_through_session="2026-08-13",
+    )
+    assert validated.report_periods["income"] == ("2026-06-30",)
 
 
 def test_daily_instrument_validation_ignores_raw_batch_only_change(
@@ -1660,7 +1693,7 @@ def test_daily_instrument_validation_ignores_raw_batch_only_change(
         observation_through_session="2026-08-13",
     )
 
-    assert changed is False
+    assert changed.canonical_changed is False
 
 
 @pytest.mark.parametrize(
@@ -1702,7 +1735,7 @@ def test_daily_instrument_validation_reports_canonical_row_delta(
         observation_through_session="2026-08-13",
     )
 
-    assert changed is True
+    assert changed.canonical_changed is True
 
 
 def test_daily_instrument_validation_reports_availability_session_delta(
@@ -1725,7 +1758,7 @@ def test_daily_instrument_validation_reports_availability_session_delta(
         observation_through_session="2026-08-14",
     )
 
-    assert changed is True
+    assert changed.canonical_changed is True
 
 
 def test_daily_instrument_validation_rejects_a_new_undated_source_row(

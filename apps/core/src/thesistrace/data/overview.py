@@ -12,6 +12,7 @@ from thesistrace.benchmark import (
     validate_independent_benchmark_mount,
 )
 from thesistrace.data.fields import alpha_field_catalog
+from thesistrace.data.financial_disclosures import DISCOVERY_COVERAGE_KINDS
 from thesistrace.data.generation_family import MountedFamilyGenerationDescriptor
 from thesistrace.data.head_store import DatasetHeadPointer, MountedDatasetHeadStore
 from thesistrace.data.lifecycle import lock_data_lifecycle
@@ -29,6 +30,7 @@ from thesistrace.data.models import (
 class DatasetOverviewSnapshot:
     pointer: DatasetHeadPointer | None
     overview: DataOverview
+    indicator_coverage: dict[str, object] | None = None
 
 
 class DatasetOverviewService:
@@ -69,9 +71,7 @@ class DatasetOverviewService:
                         financial_coverage=None,
                         industry_coverage=None,
                         benchmark_coverage=_benchmark_coverage(benchmark),
-                        benchmark_snapshot_sha256=(
-                            None if benchmark is None else benchmark.sha256
-                        ),
+                        benchmark_snapshot_sha256=(None if benchmark is None else benchmark.sha256),
                         benchmark_last_published_at=(
                             None if benchmark is None else benchmark.published_at
                         ),
@@ -132,6 +132,14 @@ class DatasetOverviewService:
             market_end = pointer.dataset_coverage["end"]
             field_families = describe_family_fields(descriptor)
             return DatasetOverviewSnapshot(
+                indicator_coverage=next(
+                    (
+                        family.dataset_coverage
+                        for family in descriptor.families
+                        if family.family_id == "equity.financial_indicator"
+                    ),
+                    None,
+                ),
                 pointer=pointer,
                 overview=DataOverview(
                     generation_manifest_sha256=pointer.generation_manifest_sha256,
@@ -146,9 +154,7 @@ class DatasetOverviewService:
                         end=market_end,
                     ),
                     financial_coverage=(
-                        None
-                        if coverage is None
-                        else _financial_coverage(coverage)
+                        None if coverage is None else _financial_coverage(coverage)
                     ),
                     industry_coverage=(
                         None
@@ -159,9 +165,7 @@ class DatasetOverviewService:
                         )
                     ),
                     benchmark_coverage=_benchmark_coverage(benchmark),
-                    benchmark_snapshot_sha256=(
-                        None if benchmark is None else benchmark.sha256
-                    ),
+                    benchmark_snapshot_sha256=(None if benchmark is None else benchmark.sha256),
                     benchmark_last_published_at=(
                         None if benchmark is None else benchmark.published_at
                     ),
@@ -173,8 +177,7 @@ class DatasetOverviewService:
                     industry_refresh_failure_code=state["industry_refresh_failure_code"],
                     market_research_readiness=True,
                     benchmark_research_readiness=(
-                        benchmark is not None
-                        and benchmark.coverage_end_session >= market_end
+                        benchmark is not None and benchmark.coverage_end_session >= market_end
                     ),
                     financial_research_readiness=financial_family_readiness(field_families),
                     industry_research_readiness=(
@@ -197,9 +200,9 @@ def describe_family_fields(
 ) -> list[FieldFamilyAvailability]:
     """Describe actual coverage and fields independently of catalog support."""
     fields = alpha_field_catalog()
-    references = {} if descriptor is None else {
-        family.family_id: family for family in descriptor.families
-    }
+    references = (
+        {} if descriptor is None else {family.family_id: family for family in descriptor.families}
+    )
     declared = set() if descriptor is None else set(descriptor.field_availability)
     result: list[FieldFamilyAvailability] = []
     for family_id in dict.fromkeys(field.family_id for field in fields):
@@ -211,7 +214,8 @@ def describe_family_fields(
         readiness = "not_ready"
         if reference is not None:
             if reference.dataset_coverage["kind"] in {
-                "financial-announcement-observation-range", "financial-observation-range",
+                *DISCOVERY_COVERAGE_KINDS,
+                "financial-observation-range",
             }:
                 financial = _financial_coverage(reference.dataset_coverage)
                 start = financial.start
@@ -230,21 +234,27 @@ def describe_family_fields(
             readiness = "not_ready"
         elif descriptor is not None and (
             available != supported_ids
-            or start is None or end is None
+            or start is None
+            or end is None
             or start.isoformat() > descriptor.research_sessions[0]
-            or end.isoformat() < descriptor.data_through_session
+            or (
+                end.isoformat() < descriptor.data_through_session
+                and readiness != "ready_with_pending"
+            )
         ):
             readiness = "partial"
-        result.append(FieldFamilyAvailability(
-            family_id=family_id,
-            research_category=supported[0].research_category,
-            source_endpoints=sorted({field.source_endpoint for field in supported}),
-            supported_field_ids=supported_ids,
-            available_field_ids=available,
-            coverage_start=start,
-            coverage_end=end,
-            readiness=readiness,
-        ))
+        result.append(
+            FieldFamilyAvailability(
+                family_id=family_id,
+                research_category=supported[0].research_category,
+                source_endpoints=sorted({field.source_endpoint for field in supported}),
+                supported_field_ids=supported_ids,
+                available_field_ids=available,
+                coverage_start=start,
+                coverage_end=end,
+                readiness=readiness,
+            )
+        )
     return result
 
 
@@ -275,19 +285,13 @@ def _benchmark_coverage(
 
 def _financial_coverage(coverage: dict[str, object]) -> FinancialCoverage:
     kind = coverage.get("kind")
-    if kind == "financial-announcement-observation-range":
+    if kind in DISCOVERY_COVERAGE_KINDS:
         return FinancialCoverage(
             start=coverage["start"],
             discovery_baseline_session=coverage["discovery_baseline_session"],
-            discovery_attempted_through_session=coverage[
-                "discovery_attempted_through_session"
-            ],
-            discovery_complete_through_session=coverage[
-                "discovery_complete_through_session"
-            ],
-            historical_reconciliation_watermark=coverage[
-                "historical_reconciliation_watermark"
-            ],
+            discovery_attempted_through_session=coverage["discovery_attempted_through_session"],
+            discovery_complete_through_session=coverage["discovery_complete_through_session"],
+            historical_reconciliation_watermark=coverage["historical_reconciliation_watermark"],
             revision_coverage=coverage["revision_coverage"],
             seed_policy=coverage["seed_policy"],
             readiness_status=coverage["readiness_status"],
@@ -302,9 +306,7 @@ def _financial_coverage(coverage: dict[str, object]) -> FinancialCoverage:
             discovery_baseline_session=through,
             discovery_attempted_through_session=through,
             discovery_complete_through_session=through,
-            historical_reconciliation_watermark=coverage[
-                "historical_reconciliation_watermark"
-            ],
+            historical_reconciliation_watermark=coverage["historical_reconciliation_watermark"],
             revision_coverage=coverage["revision_coverage"],
             seed_policy=coverage["seed_policy"],
             readiness_status="ready",

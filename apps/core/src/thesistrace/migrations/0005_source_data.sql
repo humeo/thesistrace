@@ -199,7 +199,6 @@ CREATE TABLE data.financial_daily_refresh_operations (
     discovery_start_date date,
     discovery_end_date date,
     discovery_evidence jsonb,
-    statement_instrument_ids jsonb,
     indicator_collection jsonb,
     indicator_candidate_manifest_sha256 text
         CHECK (indicator_candidate_manifest_sha256 ~ '^[0-9a-f]{64}$'),
@@ -873,22 +872,4 @@ CREATE TABLE data.financial_indicator_collections (
     instrument_id text NOT NULL REFERENCES data.financial_indicator_reconciliation(instrument_id)
         ON DELETE CASCADE,
     checked_through date NOT NULL
-);
-
--- Structured requirements are independent of the retained announcement audit tables.
-CREATE TABLE data.financial_report_targets (
-    instrument_id text NOT NULL CHECK (instrument_id <> ''),
-    endpoint text NOT NULL CHECK (endpoint IN ('income', 'balancesheet', 'cashflow', 'fina_indicator')),
-    report_period date NOT NULL,
-    actual_date date NOT NULL CHECK (report_period <= actual_date),
-    resolved_evidence_sha256 text CHECK (resolved_evidence_sha256 ~ '^[0-9a-f]{64}$'),
-    PRIMARY KEY (instrument_id, endpoint, report_period)
-);
-
-CREATE TABLE data.financial_report_rechecks (
-    instrument_id text NOT NULL CHECK (instrument_id <> ''),
-    endpoint text NOT NULL CHECK (endpoint IN ('statements', 'fina_indicator')),
-    checked_at timestamptz NOT NULL,
-    failure_code text,
-    PRIMARY KEY (instrument_id, endpoint)
 );

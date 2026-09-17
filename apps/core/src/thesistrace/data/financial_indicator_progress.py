@@ -1,4 +1,4 @@
-"""Indicator-specific disclosure targets and reconciliation progress."""
+"""Indicator-specific report requirements and reconciliation progress."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ class FinancialIndicatorProgressStore:
         self,
         instrument_id: str,
         *,
-        report_period: str | None,
+        report_period: str,
         announced_on: str,
     ) -> None:
         with self._database.transaction() as tx:
@@ -34,7 +34,7 @@ class FinancialIndicatorProgressStore:
     ) -> None:
         """Record an exhausted, validated source query; absent targets remain pending.
 
-        The collector supplies only unambiguous, valid announcement/report pairs
+        The collector supplies validated publication/report pairs
         from its retained observations. Statement collection never calls this.
         """
         checked = date.fromisoformat(checked_through)
@@ -61,28 +61,30 @@ class FinancialIndicatorProgressStore:
                    ON CONFLICT DO NOTHING""",
                 (observation_sha256, instrument_id, checked),
             )
-            for period, announced in reports:
+            for period, _announced in reports:
                 tx.execute(
-                    """UPDATE data.financial_indicator_report_targets
-                              SET resolved_observation_sha256=%s
-                              WHERE instrument_id=%s AND report_period=%s AND announced_on<=%s
-                                AND resolved_observation_sha256 IS NULL""",
-                    (observation_sha256, instrument_id, period, announced),
+                    """UPDATE data.financial_report_targets
+                              SET resolved_evidence_sha256=%s
+                              WHERE instrument_id=%s AND report_period=%s
+                                AND endpoint='fina_indicator'
+                                AND resolved_evidence_sha256 IS NULL""",
+                    (observation_sha256, instrument_id, period),
                 )
 
-    def pending(self, instrument_id: str) -> tuple[tuple[str | None, str], ...]:
+    def pending(self, instrument_id: str) -> tuple[tuple[str, str], ...]:
         with self._database.transaction() as tx:
             rows = tx.execute(
-                """SELECT report_period, announced_on
-                                 FROM data.financial_indicator_report_targets
-                                 WHERE instrument_id=%s AND resolved_observation_sha256 IS NULL
-                                 ORDER BY report_period, announced_on""",
+                """SELECT report_period, actual_date
+                                 FROM data.financial_report_targets
+                                 WHERE instrument_id=%s AND endpoint='fina_indicator'
+                                 AND resolved_evidence_sha256 IS NULL
+                                 ORDER BY report_period, actual_date""",
                 (instrument_id,),
             ).fetchall()
         return tuple(
             (
-                None if row["report_period"] is None else row["report_period"].isoformat(),
-                row["announced_on"].isoformat(),
+                row["report_period"].isoformat(),
+                row["actual_date"].isoformat(),
             )
             for row in rows
         )
@@ -101,17 +103,10 @@ def require_indicator_report(
     transaction: PostgresTransaction,
     instrument_id: str,
     *,
-    report_period: str | None,
+    report_period: str,
     announced_on: str,
 ) -> None:
-    """Persist a source-specific target alongside the discovery transaction."""
-    period = None if report_period is None else date.fromisoformat(report_period)
-    announcement = date.fromisoformat(announced_on)
-    if period is not None and period > announcement:
-        raise ValueError("Report cannot be announced before its period ends")
-    transaction.execute(
-        """INSERT INTO data.financial_indicator_report_targets
-                  (instrument_id, report_period, announced_on) VALUES (%s, %s, %s)
-                  ON CONFLICT DO NOTHING""",
-        (instrument_id, period, announcement),
-    )
+    """Persist an actual disclosure's report period, not its announcement text."""
+    from thesistrace.data.financial_report_progress import require_report
+
+    require_report(transaction, instrument_id, "fina_indicator", report_period, announced_on)

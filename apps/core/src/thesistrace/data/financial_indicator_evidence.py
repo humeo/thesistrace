@@ -82,6 +82,33 @@ def indicator_versions(
     )
 
 
+def received_indicator_reports(
+    rows: Iterable[Mapping[str, object]], *, through: str,
+) -> tuple[tuple[str, str, str], ...]:
+    """Report presence uses the latest nonconflicting state, independently of field nulls."""
+    latest = {}
+    for row in rows:
+        key = (row["instrument_id"], row["source_report_period"], row["source_published_date"])
+        event = row["observation_event_at"]
+        if key not in latest or event > latest[key][0]:
+            latest[key] = (event, set(), set())
+        if event == latest[key][0]:
+            latest[key][1].add(row["source_row_sha256"])
+            latest[key][2].add(row["availability_status"])
+    reports = []
+    for (instrument, period, published), (_event, hashes, statuses) in latest.items():
+        if len(hashes) != 1 or not statuses <= {"available", "outside_calendar"}:
+            continue
+        try:
+            period = datetime.strptime(str(period), "%Y%m%d").date().isoformat()
+            published = datetime.strptime(str(published), "%Y%m%d").date().isoformat()
+        except ValueError:
+            continue
+        if period <= published <= through:
+            reports.append((str(instrument), period, published))
+    return tuple(sorted(reports))
+
+
 class IndicatorVersionProjector:
     """One validated calendar shared by independent security projections."""
 

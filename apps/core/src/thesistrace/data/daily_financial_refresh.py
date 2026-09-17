@@ -12,12 +12,6 @@ from typing import TYPE_CHECKING, Literal, cast
 from psycopg.types.json import Jsonb
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
-from thesistrace.data.financial_announcements import (
-    FINANCIAL_ANNOUNCEMENT_CATEGORIES,
-    FinancialAnnouncement,
-    FinancialAnnouncementDiscovery,
-    FinancialAnnouncementSource,
-)
 from thesistrace.data.financial_candidate import (
     FinancialCandidateError,
     FinancialCandidateStore,
@@ -35,7 +29,16 @@ from thesistrace.data.financial_collection import (
     _raw_batch_content,
     _source_failure_code,
 )
-from thesistrace.data.financial_indicator_progress import require_indicator_report
+from thesistrace.data.financial_disclosures import (
+    FinancialDisclosureDiscovery,
+    FinancialDisclosureSource,
+    disclosure_periods,
+)
+from thesistrace.data.financial_report_progress import (
+    reconciliation_ids,
+    record_recheck,
+    resolve_reports,
+)
 from thesistrace.data.generation_files import AddressedFileError
 from thesistrace.data.generation_store import (
     GenerationStoreError,
@@ -178,114 +181,71 @@ class FinancialDailyRefreshStore:
         self,
         *,
         idempotency_key: str,
-        discovery: FinancialAnnouncementDiscovery,
+        discovery: FinancialDisclosureDiscovery,
         identities: Sequence[HistoricalInstrumentIdentity],
         recorded_at: datetime,
     ) -> None:
         recorded = _aware_clock(recorded_at)
         identity_by_code = _identity_by_code(identities)
-        completed = tuple(discovery.completed_categories)
-        gaps = tuple(discovery.gaps)
-        gap_categories = tuple(item.category for item in gaps)
-        if (
-            tuple(
-                category for category in FINANCIAL_ANNOUNCEMENT_CATEGORIES if category in completed
-            )
-            != completed
-            or len(set(completed)) != len(completed)
-            or set(completed).intersection(gap_categories)
-            or set(completed).union(gap_categories) != set(FINANCIAL_ANNOUNCEMENT_CATEGORIES)
-        ):
-            raise FinancialDailyRefreshError("FINANCIAL_DISCOVERY_CATEGORY_SET_INVALID")
+        expected = set(disclosure_periods(discovery.start_date, discovery.end_date))
+        completed = set(discovery.completed_periods)
+        missing = {gap.report_period for gap in discovery.gaps}
+        if completed & missing or completed | missing != expected:
+            raise FinancialDailyRefreshError("FINANCIAL_DISCOVERY_PERIOD_SET_INVALID")
         _require_sha256(discovery.source_lineage_sha256)
         evidence = _discovery_evidence(discovery) | {
-            "instrument_ids": {code: identity.instrument_id
-                               for code, identity in identity_by_code.items()},
+            "instrument_ids": {code: item.instrument_id for code, item in identity_by_code.items()},
         }
-        with self._database.transaction() as transaction:
-            operation = transaction.execute(
-                """
-                SELECT status, target_session, prior_complete_through_session,
-                       discovery_evidence
-                FROM data.financial_daily_refresh_operations
-                WHERE idempotency_key = %s
-                FOR UPDATE
-                """,
+        requirements = []
+        for report in discovery.reports:
+            identity = identity_by_code.get(report.ts_code)
+            if (
+                identity is None
+                or report.report_period not in completed
+                or not report.report_period <= report.actual_date <= discovery.end_date
+            ):
+                raise FinancialDailyRefreshError("FINANCIAL_DISCOVERY_REPORT_INVALID")
+            requirements.extend(
+                dict(
+                    instrument_id=identity.instrument_id,
+                    endpoint=endpoint,
+                    report_period=report.report_period,
+                    actual_date=report.actual_date,
+                )
+                for endpoint in (*FINANCIAL_ENDPOINTS, "fina_indicator")
+            )
+        with self._database.transaction() as tx:
+            operation = tx.execute(
+                "SELECT * FROM data.financial_daily_refresh_operations "
+                "WHERE idempotency_key=%s FOR UPDATE",
                 (idempotency_key,),
             ).fetchone()
-            if operation is None:
-                raise FinancialDailyRefreshError("FINANCIAL_DAILY_REFRESH_NOT_FOUND")
-            if str(operation["status"]) != "running":
+            if operation is None or operation["status"] != "running":
                 raise FinancialDailyRefreshError("FINANCIAL_DAILY_REFRESH_NOT_RUNNING")
-            if _iso_date(discovery.end_date) != operation["target_session"].isoformat():
+            if discovery.end_date != operation["target_session"].isoformat():
                 raise FinancialDailyRefreshError("FINANCIAL_DISCOVERY_TARGET_MISMATCH")
-            existing = operation["discovery_evidence"]
-            if existing is not None:
-                if existing != evidence:
+            if operation["discovery_evidence"] is not None:
+                if operation["discovery_evidence"] != evidence:
                     raise FinancialDailyRefreshError("FINANCIAL_DISCOVERY_REPLAY_MISMATCH")
                 return
-            for announcement in discovery.announcements:
-                identity = identity_by_code.get(announcement.ts_code)
-                if identity is None:
-                    raise FinancialDailyRefreshError("FINANCIAL_DISCOVERY_IDENTITY_INVALID")
-                _insert_trigger(
-                    transaction,
-                    idempotency_key=idempotency_key,
-                    identity=identity,
-                    announcement=announcement,
-                    source_lineage_sha256=discovery.source_lineage_sha256,
-                    recorded_at=recorded,
-                )
-                require_indicator_report(
-                    transaction,
-                    identity.instrument_id,
-                    report_period=announcement.report_period,
-                    announced_on=announcement.source_published_date,
-                )
-            for category in completed:
-                transaction.execute(
-                    """
-                    UPDATE data.financial_discovery_gaps
-                    SET status = 'resolved', resolved_by_operation_key = %s,
-                        resolved_at = %s, updated_at = %s
-                    WHERE status = 'open' AND category = %s
-                      AND unresolved_from_date >= %s
-                      AND query_end_date <= %s
-                    """,
-                    (
-                        idempotency_key,
-                        recorded,
-                        recorded,
-                        category,
-                        _iso_date(discovery.start_date),
-                        _iso_date(discovery.end_date),
-                    ),
-                )
-            first_unverified = operation["prior_complete_through_session"] + timedelta(days=1)
-            for gap in gaps:
-                unresolved_from = max(_date(gap.start_date), first_unverified)
-                if unresolved_from <= _date(gap.end_date):
-                    _upsert_gap(
-                        transaction,
-                        idempotency_key=idempotency_key,
-                        category=gap.category,
-                        query_start_date=_date(gap.start_date),
-                        query_end_date=_date(gap.end_date),
-                        unresolved_from_date=unresolved_from,
-                        failure_code=gap.failure_code,
-                        recorded_at=recorded,
-                    )
-            transaction.execute(
-                """
-                UPDATE data.financial_daily_refresh_operations
-                SET discovery_start_date = %s, discovery_end_date = %s,
-                    discovery_evidence = %s, source_lineage_sha256 = %s,
-                    updated_at = %s
-                WHERE idempotency_key = %s
+            tx.execute(
+                """INSERT INTO data.financial_report_targets
+                   (instrument_id, endpoint, report_period, actual_date)
+                   SELECT instrument_id, endpoint, report_period, actual_date
+                   FROM jsonb_to_recordset(%s) AS r(instrument_id text, endpoint text,
+                                                   report_period date, actual_date date)
+                   ON CONFLICT (instrument_id, endpoint, report_period) DO UPDATE
+                   SET actual_date=LEAST(financial_report_targets.actual_date, EXCLUDED.actual_date)
                 """,
+                (Jsonb(requirements),),
+            )
+            tx.execute(
+                """UPDATE data.financial_daily_refresh_operations
+                   SET discovery_start_date=%s, discovery_end_date=%s, discovery_evidence=%s,
+                       source_lineage_sha256=%s, updated_at=%s WHERE idempotency_key=%s""",
                 (
-                    _iso_date(discovery.start_date),
-                    _iso_date(discovery.end_date),
+                    discovery.start_date,
+                    discovery.end_date,
                     Jsonb(evidence),
                     discovery.source_lineage_sha256,
                     recorded,
@@ -293,40 +253,96 @@ class FinancialDailyRefreshStore:
                 ),
             )
 
-    def pending_identities(
-        self,
-        idempotency_key: str,
-    ) -> tuple[HistoricalInstrumentIdentity, ...]:
-        self._require_running_discovery(idempotency_key)
-        with self._database.transaction() as transaction:
-            rows = transaction.execute(
-                """
-                SELECT DISTINCT instrument_id, ts_code
-                FROM data.financial_announcement_triggers
-                WHERE status = 'pending'
-                ORDER BY instrument_id, ts_code
-                """
+    def prepare_reports(self, idempotency_key, observed_reports, recorded_at):
+        with self._database.transaction() as tx:
+            operation = tx.execute(
+                "SELECT * FROM data.financial_daily_refresh_operations "
+                "WHERE idempotency_key=%s FOR UPDATE",
+                (idempotency_key,),
+            ).fetchone()
+            if operation is None or operation["discovery_evidence"] is None:
+                raise FinancialDailyRefreshError("FINANCIAL_DISCOVERY_NOT_RECORDED")
+            if operation["statement_instrument_ids"] is not None:
+                return
+            target = operation["target_session"].isoformat()
+            identities = operation["discovery_evidence"]["instrument_ids"]
+            # Reconcile against accepted published bytes, not a prior failed publication's ledger.
+            inventory = []
+            for endpoint, (digest, reports) in observed_reports.items():
+                _require_sha256(digest)
+                inventory.extend(
+                    dict(
+                        instrument_id=instrument,
+                        endpoint=endpoint,
+                        report_period=period,
+                        evidence=digest,
+                    )
+                    for instrument, period in reports
+                )
+            ids = list(identities.values())
+            tx.execute(
+                "UPDATE data.financial_report_targets SET resolved_evidence_sha256=NULL "
+                "WHERE instrument_id=ANY(%s::text[]) AND actual_date<=%s",
+                (ids, target),
+            )
+            tx.execute(
+                """UPDATE data.financial_report_targets AS target
+                   SET resolved_evidence_sha256=inventory.evidence
+                   FROM jsonb_to_recordset(%s) AS inventory(
+                       instrument_id text, endpoint text, report_period date, evidence text)
+                   WHERE target.instrument_id=inventory.instrument_id
+                     AND target.endpoint=inventory.endpoint
+                     AND target.report_period=inventory.report_period""",
+                (Jsonb(inventory),),
+            )
+            pending = tx.execute(
+                """SELECT DISTINCT instrument_id FROM data.financial_report_targets
+                   WHERE endpoint<>'fina_indicator' AND actual_date<=%s
+                     AND resolved_evidence_sha256 IS NULL AND instrument_id=ANY(%s::text[])
+                   ORDER BY instrument_id""",
+                (target, ids),
             ).fetchall()
+            selected = tuple(
+                dict.fromkeys(
+                    [
+                        *(str(row["instrument_id"]) for row in pending),
+                        *reconciliation_ids(
+                            tx, ids, "statements", exclude={row["instrument_id"] for row in pending}
+                        ),
+                    ]
+                )
+            )
+            tx.execute(
+                "UPDATE data.financial_daily_refresh_operations SET statement_instrument_ids=%s, "
+                "updated_at=%s WHERE idempotency_key=%s",
+                (Jsonb(selected), _aware_clock(recorded_at), idempotency_key),
+            )
+
+    def planned_identities(self, idempotency_key):
+        operation = self.operation(idempotency_key)
+        selected = set(operation["statement_instrument_ids"])
         return tuple(
-            HistoricalInstrumentIdentity(str(row["instrument_id"]), str(row["ts_code"]))
-            for row in rows
+            HistoricalInstrumentIdentity(instrument, code)
+            for code, instrument in operation["discovery_evidence"]["instrument_ids"].items()
+            if instrument in selected
         )
 
-    def pending_announcement_ids(
-        self,
-        instrument_id: str,
-    ) -> tuple[str, ...]:
-        with self._database.transaction() as transaction:
-            rows = transaction.execute(
-                """
-                SELECT announcement_id
-                FROM data.financial_announcement_triggers
-                WHERE instrument_id = %s AND status = 'pending'
-                ORDER BY source_published_date, announcement_id
-                """,
-                (instrument_id,),
+    def pending_identities(self, idempotency_key):
+        self._require_running_discovery(idempotency_key)
+        operation = self.operation(idempotency_key)
+        with self._database.transaction() as tx:
+            rows = tx.execute(
+                "SELECT DISTINCT instrument_id FROM data.financial_report_targets "
+                "WHERE endpoint<>'fina_indicator' AND resolved_evidence_sha256 IS NULL "
+                "AND actual_date<=%s",
+                (operation["target_session"],),
             ).fetchall()
-        return tuple(str(row["announcement_id"]) for row in rows)
+        selected = {row["instrument_id"] for row in rows}
+        return tuple(
+            HistoricalInstrumentIdentity(instrument, code)
+            for code, instrument in operation["discovery_evidence"]["instrument_ids"].items()
+            if instrument in selected
+        )
 
     def attempted_instrument_ids(self, idempotency_key: str) -> frozenset[str]:
         with self._database.transaction() as transaction:
@@ -378,16 +394,17 @@ class FinancialDailyRefreshStore:
         idempotency_key: str,
         instrument_id: str,
         status: Literal["accepted", "failed"],
-        matched_announcement_ids: Sequence[str],
+        canonical_changed: bool,
+        observed_reports: Mapping[str, Sequence[str]] | None = None,
         checkpoints: Sequence[FinancialShardCheckpoint],
         failure_code: str | None,
         failure_endpoint: str | None,
         attempted_at: datetime,
     ) -> None:
         attempted = _aware_clock(attempted_at)
-        matches = tuple(sorted(set(matched_announcement_ids)))
-        for announcement_id in matches:
-            _require_sha256(announcement_id)
+        # The historical column remains audit storage. New processing supplies a Canonical
+        # change flag, encoded as a nonempty marker for the retained receipt counters.
+        matches = ("canonical-change",) if canonical_changed else ()
         checkpoint_payload = [_checkpoint_payload(item) for item in checkpoints]
         if status == "accepted":
             if (
@@ -423,18 +440,6 @@ class FinancialDailyRefreshStore:
                 raise FinancialDailyRefreshError("FINANCIAL_DAILY_REFRESH_NOT_RUNNING")
             if operation["discovery_evidence"] is None:
                 raise FinancialDailyRefreshError("FINANCIAL_DISCOVERY_NOT_RECORDED")
-            pending = transaction.execute(
-                """
-                SELECT announcement_id
-                FROM data.financial_announcement_triggers
-                WHERE instrument_id = %s AND status = 'pending'
-                FOR UPDATE
-                """,
-                (instrument_id,),
-            ).fetchall()
-            pending_ids = {str(row["announcement_id"]) for row in pending}
-            if not pending_ids or not set(matches).issubset(pending_ids):
-                raise FinancialDailyRefreshError("FINANCIAL_TRIGGER_TARGET_INVALID")
             inserted = transaction.execute(
                 """
                 INSERT INTO data.financial_refresh_instrument_attempts (
@@ -485,154 +490,89 @@ class FinancialDailyRefreshStore:
                 if actual != expected:
                     raise FinancialDailyRefreshError("FINANCIAL_ATTEMPT_REPLAY_MISMATCH")
                 return
-            if status == "failed":
-                return
-            if matches:
-                transaction.execute(
-                    """
-                    UPDATE data.financial_announcement_triggers
-                    SET status = 'matched', resolution_code = 'matched_source_version',
-                        last_attempt_operation_key = %s, resolved_at = %s,
-                        updated_at = %s
-                    WHERE instrument_id = %s AND status = 'pending'
-                      AND announcement_id = ANY(%s)
-                    """,
-                    (idempotency_key, attempted, attempted, instrument_id, list(matches)),
-                )
-            transaction.execute(
-                """
-                UPDATE data.financial_announcement_triggers
-                SET accepted_no_match_count = 5,
-                    last_attempt_operation_key = %s,
-                    status = 'checked_no_structured_change',
-                    resolution_code = 'checked_no_structured_change',
-                    resolved_at = %s,
-                    updated_at = %s
-                WHERE instrument_id = %s AND status = 'pending'
-                """,
-                (idempotency_key, attempted, attempted, instrument_id),
-            )
+            record_recheck(transaction, instrument_id, "statements", failure_code)
+            if status == "accepted":
+                for checkpoint in checkpoints:
+                    resolve_reports(
+                        transaction,
+                        instrument_id,
+                        checkpoint.endpoint,
+                        (observed_reports or {}).get(checkpoint.endpoint, ()),
+                        checkpoint.batch_sha256,
+                    )
 
     def publication_state(self, idempotency_key: str) -> FinancialDiscoveryPublication:
-        with self._database.transaction() as transaction:
-            operation = transaction.execute(
-                """
-                SELECT discovery_baseline_session, prior_complete_through_session,
-                       target_session, source_lineage_sha256, discovery_evidence
-                FROM data.financial_daily_refresh_operations
-                WHERE idempotency_key = %s
-                """,
+        operation = self.operation(idempotency_key)
+        evidence = operation["discovery_evidence"]
+        if evidence is None:
+            raise FinancialDailyRefreshError("FINANCIAL_DISCOVERY_NOT_RECORDED")
+        with self._database.transaction() as tx:
+            pending = tx.execute(
+                """SELECT instrument_id, min(actual_date) AS since
+                   FROM data.financial_report_targets
+                   WHERE endpoint<>'fina_indicator' AND resolved_evidence_sha256 IS NULL
+                     AND actual_date<=%s GROUP BY instrument_id""",
+                (operation["target_session"],),
+            ).fetchall()
+            failures = tx.execute(
+                "SELECT instrument_id FROM data.financial_refresh_instrument_attempts "
+                "WHERE idempotency_key=%s AND status='failed'",
                 (idempotency_key,),
-            ).fetchone()
-            if operation is None:
-                raise FinancialDailyRefreshError("FINANCIAL_DAILY_REFRESH_NOT_FOUND")
-            if operation["discovery_evidence"] is None:
-                raise FinancialDailyRefreshError("FINANCIAL_DISCOVERY_NOT_RECORDED")
-            gap_rows = transaction.execute(
-                """
-                SELECT gap_id, unresolved_from_date
-                FROM data.financial_discovery_gaps
-                WHERE status = 'open' AND unresolved_from_date <= %s
-                ORDER BY unresolved_from_date, gap_id
-                """,
-                (operation["target_session"],),
             ).fetchall()
-            trigger_rows = transaction.execute(
-                """
-                SELECT announcement_id, instrument_id, source_published_date
-                FROM data.financial_announcement_triggers
-                WHERE status = 'pending' AND source_published_date <= %s
-                ORDER BY source_published_date, announcement_id
-                """,
-                (operation["target_session"],),
-            ).fetchall()
-        gap_count = len(gap_rows)
-        pending_count = len({str(row["instrument_id"]) for row in trigger_rows})
-        readiness: Literal["ready", "ready_with_pending", "ready_with_gaps"] = "ready"
-        if gap_count:
-            readiness = "ready_with_gaps"
-        elif pending_count:
-            readiness = "ready_with_pending"
-        unresolved_dates = [row["unresolved_from_date"] for row in gap_rows]
-        unresolved_dates.extend(row["source_published_date"] for row in trigger_rows)
-        source_lineage = _sha(
-            {
-                "discovery_source_lineage_sha256": str(operation["source_lineage_sha256"]),
-                "open_gap_ids": [str(row["gap_id"]) for row in gap_rows],
-                "pending_announcement_ids": [str(row["announcement_id"]) for row in trigger_rows],
-            }
-        )
+        pending_ids = {row["instrument_id"] for row in (*pending, *failures)}
+        gaps = evidence["gaps"]
+        unresolved_dates = [row["since"] for row in pending]
+        if gaps:
+            unresolved_dates.append(operation["prior_complete_through_session"] + timedelta(days=1))
+        if failures:
+            unresolved_dates.append(operation["target_session"])
         return FinancialDiscoveryPublication(
             baseline_session=operation["discovery_baseline_session"].isoformat(),
             attempted_through_session=operation["target_session"].isoformat(),
             complete_through_session=(
-                operation["prior_complete_through_session"].isoformat()
-                if gap_count
-                else operation["target_session"].isoformat()
+                operation["prior_complete_through_session"] if gaps else operation["target_session"]
+            ).isoformat(),
+            source_lineage_sha256=_sha(
+                {"discovery": operation["source_lineage_sha256"], "pending": sorted(pending_ids)}
             ),
-            source_lineage_sha256=source_lineage,
-            readiness_status=readiness,
-            pending_instrument_count=pending_count,
-            discovery_gap_count=gap_count,
-            earliest_unresolved_date=(
-                None if not unresolved_dates else min(unresolved_dates).isoformat()
+            readiness_status=(
+                "ready_with_gaps" if gaps else "ready_with_pending" if pending_ids else "ready"
             ),
+            pending_instrument_count=len(pending_ids),
+            discovery_gap_count=len(gaps),
+            earliest_unresolved_date=min(unresolved_dates).isoformat()
+            if unresolved_dates
+            else None,
         )
 
     def inspect(self, idempotency_key: str) -> FinancialDailyRefreshInspection:
-        with self._database.transaction() as transaction:
-            operation = transaction.execute(
-                """
-                SELECT status, target_session
-                FROM data.financial_daily_refresh_operations
-                WHERE idempotency_key = %s
-                """,
+        operation = self.operation(idempotency_key)
+        with self._database.transaction() as tx:
+            counts = tx.execute(
+                """SELECT count(*) FILTER (WHERE status='accepted') AS accepted,
+                   count(*) FILTER (WHERE status='failed') AS failed,
+                   count(*) FILTER (WHERE status='accepted'
+                       AND jsonb_array_length(matched_announcement_ids)>0) AS changed,
+                   count(*) FILTER (WHERE status='accepted'
+                       AND jsonb_array_length(matched_announcement_ids)=0) AS unchanged
+                   FROM data.financial_refresh_instrument_attempts WHERE idempotency_key=%s""",
                 (idempotency_key,),
             ).fetchone()
-            if operation is None:
-                raise FinancialDailyRefreshError("FINANCIAL_DAILY_REFRESH_NOT_FOUND")
-            trigger_counts = transaction.execute(
-                """
-                SELECT
-                    count(*) FILTER (
-                        WHERE status = 'matched'
-                          AND last_attempt_operation_key = %s
-                    ) AS matched_count,
-                    count(*) FILTER (
-                        WHERE status = 'pending'
-                          AND source_published_date <= %s
-                    ) AS pending_count,
-                    count(*) FILTER (
-                        WHERE status = 'checked_no_structured_change'
-                          AND last_attempt_operation_key = %s
-                    ) AS checked_count
-                FROM data.financial_announcement_triggers
-                """,
-                (
-                    idempotency_key,
-                    operation["target_session"],
-                    idempotency_key,
-                ),
-            ).fetchone()
-            attempt_counts = transaction.execute(
-                """
-                SELECT
-                    count(*) FILTER (WHERE status = 'accepted') AS accepted_count,
-                    count(*) FILTER (WHERE status = 'failed') AS failed_count
-                FROM data.financial_refresh_instrument_attempts
-                WHERE idempotency_key = %s
-                """,
-                (idempotency_key,),
-            ).fetchone()
+            pending = tx.execute(
+                "SELECT count(DISTINCT (instrument_id, report_period)) n "
+                "FROM data.financial_report_targets "
+                "WHERE resolved_evidence_sha256 IS NULL AND actual_date<=%s",
+                (operation["target_session"],),
+            ).fetchone()["n"]
         return FinancialDailyRefreshInspection(
-            idempotency_key=idempotency_key,
-            status=str(operation["status"]),
-            target_session=operation["target_session"].isoformat(),
-            matched_trigger_count=int(trigger_counts["matched_count"]),
-            pending_trigger_count=int(trigger_counts["pending_count"]),
-            checked_no_structured_change_count=int(trigger_counts["checked_count"]),
-            accepted_instrument_count=int(attempt_counts["accepted_count"]),
-            failed_instrument_count=int(attempt_counts["failed_count"]),
+            idempotency_key,
+            str(operation["status"]),
+            operation["target_session"].isoformat(),
+            int(counts["changed"]),
+            int(pending),
+            int(counts["unchanged"]),
+            int(counts["accepted"]),
+            int(counts["failed"]),
         )
 
     def operation(self, idempotency_key: str) -> dict[str, object]:
@@ -649,19 +589,11 @@ class FinancialDailyRefreshStore:
             raise FinancialDailyRefreshError("FINANCIAL_DAILY_REFRESH_NOT_FOUND")
         return dict(row)
 
-    def earliest_open_gap_date(self) -> str | None:
-        with self._database.transaction() as transaction:
-            row = transaction.execute(
-                """
-                SELECT min(unresolved_from_date) AS earliest
-                FROM data.financial_discovery_gaps
-                WHERE status = 'open'
-                """
-            ).fetchone()
-        return None if row["earliest"] is None else row["earliest"].isoformat()
-
     def record_indicator_collection(
-        self, idempotency_key: str, result: DailyIndicatorCollection, recorded_at: datetime,
+        self,
+        idempotency_key: str,
+        result: DailyIndicatorCollection,
+        recorded_at: datetime,
     ) -> None:
         payload = asdict(result)
         with self._database.transaction() as transaction:
@@ -688,14 +620,22 @@ class FinancialDailyRefreshStore:
                      AND indicator_collection IS NOT NULL
                      AND indicator_candidate_manifest_sha256 IS NULL
                      AND published_generation_manifest_sha256 IS NULL""",
-                (Jsonb({"retained_reason": "INDICATOR_COVERAGE_UNAVAILABLE"}),
-                 _aware_clock(recorded_at), idempotency_key),
+                (
+                    Jsonb({"retained_reason": "INDICATOR_COVERAGE_UNAVAILABLE"}),
+                    _aware_clock(recorded_at),
+                    idempotency_key,
+                ),
             ).rowcount
         if changed != 1:
             raise FinancialDailyRefreshError("FINANCIAL_INDICATOR_CANDIDATE_CONFLICT")
 
     def record_indicator_candidate(
-        self, idempotency_key: str, digest: str, recorded_at: datetime,
+        self,
+        idempotency_key: str,
+        digest: str,
+        recorded_at: datetime,
+        *,
+        received_reports: Sequence[tuple[str, str]],
     ) -> None:
         _require_sha256(digest)
         with self._database.transaction() as transaction:
@@ -706,11 +646,32 @@ class FinancialDailyRefreshStore:
                    WHERE idempotency_key=%s AND status='running'
                      AND published_generation_manifest_sha256 IS NULL
                      AND (indicator_candidate_manifest_sha256 IS NULL
-                          OR indicator_candidate_manifest_sha256=%s)""",
+                          OR indicator_candidate_manifest_sha256=%s)
+                   RETURNING target_session, discovery_evidence""",
                 (digest, _aware_clock(recorded_at), idempotency_key, digest),
-            ).rowcount
-        if changed != 1:
-            raise FinancialDailyRefreshError("FINANCIAL_INDICATOR_CANDIDATE_CONFLICT")
+            ).fetchone()
+            if changed is None:
+                raise FinancialDailyRefreshError("FINANCIAL_INDICATOR_CANDIDATE_CONFLICT")
+            # The merged candidate is authoritative: a later conflict can reopen a
+            # report, while a response omitting an older accepted row cannot erase it.
+            scope = list(changed["discovery_evidence"]["instrument_ids"].values())
+            transaction.execute(
+                """UPDATE data.financial_report_targets SET resolved_evidence_sha256=NULL
+                   WHERE endpoint='fina_indicator' AND instrument_id=ANY(%s::text[])
+                     AND actual_date<=%s""",
+                (scope, changed["target_session"]),
+            )
+            transaction.execute(
+                """UPDATE data.financial_report_targets AS target SET resolved_evidence_sha256=%s
+                   FROM jsonb_to_recordset(%s) AS report(instrument_id text, report_period date)
+                   WHERE target.endpoint='fina_indicator'
+                     AND target.instrument_id=report.instrument_id
+                     AND target.report_period=report.report_period
+                     AND target.instrument_id=ANY(%s::text[]) AND target.actual_date<=%s""",
+                (digest, Jsonb([dict(instrument_id=instrument, report_period=period)
+                                for instrument, period in received_reports]),
+                 scope, changed["target_session"]),
+            )
 
     def record_candidate(
         self,
@@ -821,15 +782,15 @@ class FinancialDailyRefreshStore:
         completed = _aware_clock(completed_at)
         with self._database.transaction() as transaction:
             operation = transaction.execute(
-                "SELECT indicator_collection, target_session "
+                "SELECT indicator_collection, indicator_candidate_manifest_sha256, target_session "
                 "FROM data.financial_daily_refresh_operations WHERE idempotency_key=%s",
                 (idempotency_key,),
             ).fetchone()
             if operation is None:
                 raise FinancialDailyRefreshError("FINANCIAL_DAILY_REFRESH_NOT_FOUND")
             pending_rows = transaction.execute(
-                "SELECT DISTINCT instrument_id FROM data.financial_announcement_triggers "
-                "WHERE status='pending' AND source_published_date<=%s",
+                "SELECT DISTINCT instrument_id FROM data.financial_report_targets "
+                "WHERE resolved_evidence_sha256 IS NULL AND actual_date<=%s",
                 (operation["target_session"],),
             ).fetchall()
             failed_rows = transaction.execute(
@@ -839,15 +800,20 @@ class FinancialDailyRefreshStore:
             ).fetchall()
             pending_ids = {str(row["instrument_id"]) for row in pending_rows}
             failed_ids = {str(row["instrument_id"]) for row in failed_rows}
+            pending_ids.update(failed_ids)
             indicator = operation["indicator_collection"]
             if indicator is not None:
                 indicator_failures = {str(item[0]) for item in indicator["failures"]}
-                pending_ids.update(indicator["pending_instrument_ids"])
+                if operation["indicator_candidate_manifest_sha256"] is None:
+                    pending_ids.update(indicator["pending_instrument_ids"])
                 pending_ids.update(indicator_failures)
                 failed_ids.update(indicator_failures)
             readiness = (
-                "ready_with_gaps" if publication.discovery_gap_count else
-                "ready_with_pending" if pending_ids else "ready"
+                "ready_with_gaps"
+                if publication.discovery_gap_count
+                else "ready_with_pending"
+                if pending_ids
+                else "ready"
             )
             status = {
                 "ready": "succeeded",
@@ -967,7 +933,7 @@ class DailyFinancialRefreshService:
         self,
         database: PostgresDatabase,
         mount_root: Path | str,
-        announcement_source: FinancialAnnouncementSource,
+        disclosure_source: FinancialDisclosureSource,
         financial_source: FinancialRawSource,
         *,
         indicator_provider: FinancialIndicatorProvider,
@@ -989,7 +955,7 @@ class DailyFinancialRefreshService:
             raise ValueError("Financial publication lease must be positive")
         self._database = database
         self._root = Path(mount_root).resolve()
-        self._announcement_source = announcement_source
+        self._disclosure_source = disclosure_source
         self._financial_source = financial_source
         self._indicator_provider = indicator_provider
         self._clock = clock or (lambda: datetime.now(UTC))
@@ -1005,11 +971,16 @@ class DailyFinancialRefreshService:
         self._lifecycle = DatasetLifecycle(database, self._root)
 
     def _completed_stage(self, key: str, phase: str, started: float, **counts: object) -> None:
-        self._progress({
-            "event": "financial_refresh", "phase": phase, "status": "completed",
-            "idempotency_key": key, "duration_ms": round((perf_counter() - started) * 1000),
-            **counts,
-        })
+        self._progress(
+            {
+                "event": "financial_refresh",
+                "phase": phase,
+                "status": "completed",
+                "idempotency_key": key,
+                "duration_ms": round((perf_counter() - started) * 1000),
+                **counts,
+            }
+        )
 
     def publish(
         self,
@@ -1034,9 +1005,7 @@ class DailyFinancialRefreshService:
             except FinancialCandidateError as error:
                 retryable = _has_filesystem_failure(error)
                 code = (
-                    "REFRESH_INFRASTRUCTURE_FAILURE"
-                    if retryable
-                    else "FINANCIAL_CANDIDATE_INVALID"
+                    "REFRESH_INFRASTRUCTURE_FAILURE" if retryable else "FINANCIAL_CANDIDATE_INVALID"
                 )
                 if not retryable:
                     self._store.fail(idempotency_key, code, self._validated_clock())
@@ -1064,7 +1033,8 @@ class DailyFinancialRefreshService:
             "checked_no_structured_change_count": (inspection.checked_no_structured_change_count),
             "accepted_instrument_count": inspection.accepted_instrument_count,
             "failed_instrument_count": (
-                inspection.failed_instrument_count if operation["published_outcome"] is None
+                inspection.failed_instrument_count
+                if operation["published_outcome"] is None
                 else int(operation["published_outcome"]["failed_instrument_count"])
             ),
         }
@@ -1114,6 +1084,28 @@ class DailyFinancialRefreshService:
         )
         return self._store.operation(idempotency_key)
 
+    def _published_report_inventory(self, generation_digest, target):
+        from thesistrace.data.financial_indicator_candidate import FinancialIndicatorCandidateStore
+
+        generation = self._generations.inspect_root(generation_digest)
+        digest = generation.financial_candidate_manifest_sha256
+        inventory = {
+            endpoint: (digest, reports)
+            for endpoint, reports in self._candidates.report_inventory(
+                digest, through=target
+            ).items()
+        }
+        for family in generation.families:
+            if family.family_id == "equity.financial_indicator":
+                inventory["fina_indicator"] = (
+                    family.manifest_sha256,
+                    FinancialIndicatorCandidateStore(self._root).report_inventory(
+                        family.manifest_sha256,
+                        through=target,
+                    ),
+                )
+        return inventory
+
     def _build_candidate(
         self,
         idempotency_key: str,
@@ -1134,7 +1126,7 @@ class DailyFinancialRefreshService:
             start, end = financial_discovery_window(
                 complete_through_session=(operation["prior_complete_through_session"].isoformat()),
                 target_session=target,
-                earliest_unresolved_date=self._store.earliest_open_gap_date(),
+                earliest_unresolved_date=None,
             )
             self._progress(
                 {
@@ -1148,7 +1140,9 @@ class DailyFinancialRefreshService:
             )
             self._ownership_guard()
             discovery_started = perf_counter()
-            discovery = self._announcement_source.discover(
+            if self._financial_source_window_selector is not None:
+                self._financial_source_window_selector(start, end)
+            discovery = self._disclosure_source.discover(
                 start_date=start,
                 end_date=end,
                 allowed_ts_codes={item.ts_code for item in discovery_identities},
@@ -1160,10 +1154,20 @@ class DailyFinancialRefreshService:
                 recorded_at=self._validated_clock(),
             )
             self._completed_stage(
-                idempotency_key, "discovery", discovery_started,
-                announcement_count=len(discovery.announcements), gap_count=len(discovery.gaps),
+                idempotency_key,
+                "discovery",
+                discovery_started,
+                report_count=len(discovery.reports),
+                gap_count=len(discovery.gaps),
             )
             self._ownership_guard()
+            operation = self._store.operation(idempotency_key)
+        if operation["statement_instrument_ids"] is None:
+            self._store.prepare_reports(
+                idempotency_key,
+                self._published_report_inventory(source_generation, target),
+                self._validated_clock(),
+            )
             operation = self._store.operation(idempotency_key)
         if operation["indicator_collection"] is None:
             from thesistrace.data.financial_indicator_candidate import (
@@ -1178,8 +1182,12 @@ class DailyFinancialRefreshService:
             if target not in calendar:
                 raise FinancialDailyRefreshError("FINANCIAL_TARGET_NOT_IN_CALENDAR")
             indicator_family = next(
-                (family for family in generation.families
-                 if family.family_id == "equity.financial_indicator"), None,
+                (
+                    family
+                    for family in generation.families
+                    if family.family_id == "equity.financial_indicator"
+                ),
+                None,
             )
             initial_instrument_ids = ()
             if indicator_family is not None:
@@ -1187,26 +1195,37 @@ class DailyFinancialRefreshService:
                     indicator_family.manifest_sha256,
                 )["instrument_ids"]
                 initial_instrument_ids = tuple(
-                    item.instrument_id for item in lifecycles
+                    item.instrument_id
+                    for item in lifecycles
                     if item.listed_from <= target and item.ts_code not in covered
                 )
             indicator_collection_started = perf_counter()
             indicator_result = FinancialIndicatorDailyCollector(
-                self._database, self._root, self._indicator_provider,
-                clock=self._clock, ownership_guard=self._ownership_guard,
+                self._database,
+                self._root,
+                self._indicator_provider,
+                clock=self._clock,
+                ownership_guard=self._ownership_guard,
             ).collect(
                 operation_key=idempotency_key,
-                identities=tuple(HistoricalInstrumentIdentity(item.instrument_id, item.ts_code)
-                                 for item in lifecycles if item.listed_from <= target),
+                identities=tuple(
+                    HistoricalInstrumentIdentity(item.instrument_id, item.ts_code)
+                    for item in lifecycles
+                    if item.listed_from <= target
+                ),
                 checked_through=target,
                 research_session_index=calendar.index(target),
                 initial_instrument_ids=initial_instrument_ids,
             )
             self._store.record_indicator_collection(
-                idempotency_key, indicator_result, self._validated_clock(),
+                idempotency_key,
+                indicator_result,
+                self._validated_clock(),
             )
             self._completed_stage(
-                idempotency_key, "indicator_collection", indicator_collection_started,
+                idempotency_key,
+                "indicator_collection",
+                indicator_collection_started,
                 scheduled_count=len(indicator_result.scheduled_instrument_ids),
                 collected_count=len(indicator_result.collection_evidence_sha256s),
                 failed_count=len(indicator_result.failures),
@@ -1226,14 +1245,12 @@ class DailyFinancialRefreshService:
                 discovery_start = _iso_date(str(evidence["start_date"]))
                 discovery_end = _iso_date(str(evidence["end_date"]))
             except (KeyError, ValueError) as error:
-                raise FinancialDailyRefreshError(
-                    "FINANCIAL_DISCOVERY_REPLAY_MISMATCH"
-                ) from error
+                raise FinancialDailyRefreshError("FINANCIAL_DISCOVERY_REPLAY_MISMATCH") from error
             self._financial_source_window_selector(discovery_start, discovery_end)
         attempted = self._store.attempted_instrument_ids(idempotency_key)
         remaining = tuple(
             identity
-            for identity in self._store.pending_identities(idempotency_key)
+            for identity in self._store.planned_identities(idempotency_key)
             if identity.instrument_id not in attempted
         )
         contract = self._candidates.collection_contract(prior_manifest)
@@ -1255,7 +1272,7 @@ class DailyFinancialRefreshService:
             checkpoints = collection.snapshot.shards
             if checkpoints:
                 try:
-                    has_canonical_delta = self._candidates.validate_daily_instrument(
+                    validated = self._candidates.validate_daily_instrument(
                         collection.snapshot,
                         prior_candidate_manifest_sha256=prior_manifest,
                         observation_through_session=target,
@@ -1267,7 +1284,7 @@ class DailyFinancialRefreshService:
                         idempotency_key=idempotency_key,
                         instrument_id=identity.instrument_id,
                         status="failed",
-                        matched_announcement_ids=(),
+                        canonical_changed=False,
                         checkpoints=(),
                         failure_code="FINANCIAL_DAILY_INSTRUMENT_INVALID",
                         failure_endpoint="canonical_projection",
@@ -1275,17 +1292,14 @@ class DailyFinancialRefreshService:
                     )
                     status = "failed"
                 else:
-                    pending_announcement_ids = self._store.pending_announcement_ids(
-                        identity.instrument_id
-                    )
+                    observed_reports = validated.report_periods
                     self._store.record_instrument_attempt(
                         idempotency_key=idempotency_key,
                         instrument_id=identity.instrument_id,
                         status="accepted",
-                        matched_announcement_ids=(
-                            pending_announcement_ids if has_canonical_delta else ()
-                        ),
+                        canonical_changed=validated.canonical_changed,
                         checkpoints=checkpoints,
+                        observed_reports=observed_reports,
                         failure_code=None,
                         failure_endpoint=None,
                         attempted_at=self._validated_clock(),
@@ -1299,7 +1313,7 @@ class DailyFinancialRefreshService:
                     idempotency_key=idempotency_key,
                     instrument_id=pending.instrument_id,
                     status="failed",
-                    matched_announcement_ids=(),
+                    canonical_changed=False,
                     checkpoints=(),
                     failure_code=pending.failure_code,
                     failure_endpoint=pending.failure_endpoint,
@@ -1318,7 +1332,10 @@ class DailyFinancialRefreshService:
             )
             self._ownership_guard()
         self._completed_stage(
-            idempotency_key, "statements", statements_started, scheduled_count=len(remaining),
+            idempotency_key,
+            "statements",
+            statements_started,
+            scheduled_count=len(remaining),
         )
         checkpoints = self._store.accepted_checkpoints(idempotency_key)
         inspection = self._store.inspect(idempotency_key)
@@ -1372,23 +1389,23 @@ class DailyFinancialRefreshService:
             )
         }
         candidates = FinancialIndicatorCandidateStore(
-            self._root, progress=lambda event: self._progress({
-                "event": "financial_refresh", "idempotency_key": key, **event,
-            }),
-        )
-        previous_end = next(
-            (family.dataset_coverage["end"] for family in descriptor.families
-             if family.family_id == "equity.financial_indicator"), None,
+            self._root,
+            progress=lambda event: self._progress(
+                {
+                    "event": "financial_refresh",
+                    "idempotency_key": key,
+                    **event,
+                }
+            ),
         )
         with mounted_data_mutation_lock(self._database):
             preflight_started = perf_counter()
             with self._database.transaction() as transaction:
                 discoveries_rows = transaction.execute(
                     """SELECT discovery_evidence FROM data.financial_daily_refresh_operations
-                       WHERE discovery_evidence IS NOT NULL AND target_session<=%s
-                         AND indicator_collection IS NOT NULL
-                         AND (%s::date IS NULL OR target_session>=%s::date)""",
-                    (operation["target_session"], previous_end, previous_end),
+                       WHERE discovery_evidence IS NOT NULL AND discovery_evidence ? 'reports'
+                         AND target_session<=%s""",
+                    (operation["target_session"],),
                 ).fetchall()
                 rows = transaction.execute(
                     """SELECT observation_sha256 FROM data.financial_indicator_collections
@@ -1401,12 +1418,18 @@ class DailyFinancialRefreshService:
                 discovery = dict(row["discovery_evidence"])
                 lineage = discovery.pop("source_lineage_sha256")
                 discovery_scope = discovery.pop("instrument_ids")
-                discoveries.add(RawFinancialBatchStore(self._root).store(canonical_json_bytes({
-                    "source": "indicator-announcement-discovery",
-                    "instrument_ids": discovery_scope,
-                    "discovery": discovery,
-                    "source_lineage_sha256": lineage,
-                })))
+                discoveries.add(
+                    RawFinancialBatchStore(self._root).store(
+                        canonical_json_bytes(
+                            {
+                                "source": "indicator-disclosure-check",
+                                "instrument_ids": discovery_scope,
+                                "discovery": discovery,
+                                "source_lineage_sha256": lineage,
+                            }
+                        )
+                    )
+                )
             for family in descriptor.families:
                 if family.family_id == "equity.financial_indicator":
                     # Read the addressed manifest to establish coverage before replaying
@@ -1416,46 +1439,51 @@ class DailyFinancialRefreshService:
                     evidence.update(previous["collection_evidence_sha256s"])
                     discoveries.update(previous["discovery_evidence_sha256s"])
             sessions = candidates.available_sessions(
-                collection_evidence_sha256s=sorted(evidence), instrument_ids=identities,
+                collection_evidence_sha256s=sorted(evidence),
+                instrument_ids=identities,
                 sessions=tuple(day for day in descriptor.research_sessions if day <= target),
                 discovery_evidence_sha256s=sorted(discoveries),
             )
-            self._progress({
-                "event": "financial_refresh", "phase": "indicator_coverage",
-                "status": "completed", "idempotency_key": key,
-                "duration_ms": round((perf_counter() - preflight_started) * 1000),
-                "outcome": "available" if sessions else "retained",
-                "failure_code": None if sessions else "INDICATOR_COVERAGE_UNAVAILABLE",
-            })
+            self._progress(
+                {
+                    "event": "financial_refresh",
+                    "phase": "indicator_coverage",
+                    "status": "completed",
+                    "idempotency_key": key,
+                    "duration_ms": round((perf_counter() - preflight_started) * 1000),
+                    "outcome": "available" if sessions else "retained",
+                    "failure_code": None if sessions else "INDICATOR_COVERAGE_UNAVAILABLE",
+                }
+            )
             if not sessions:
                 self._store.record_indicator_retained(key, self._validated_clock())
                 return
-            with self._database.transaction() as transaction:
-                unresolved_rows = transaction.execute(
-                    """SELECT instrument_id, min(announced_on) AS since
-                       FROM data.financial_indicator_report_targets
-                       WHERE instrument_id=ANY(%s::text[]) AND announced_on<=%s
-                         AND resolved_observation_sha256 IS NULL GROUP BY instrument_id""",
-                    (list(identities.values()), operation["target_session"]),
-                ).fetchall()
-            unresolved = {
-                str(row["instrument_id"]): row["since"].isoformat() for row in unresolved_rows
-            }
-            for instrument, _code in operation["indicator_collection"]["failures"]:
-                unresolved.setdefault(instrument, target)
+            # Report readiness is derived from all retained disclosure and observation
+            # evidence below; only failed source requests need an external pending marker.
+            unresolved = {instrument: target
+                          for instrument, _code in operation["indicator_collection"]["failures"]}
             build_started = perf_counter()
             digest = candidates.build(
-                collection_evidence_sha256s=sorted(evidence), instrument_ids=identities,
-                sessions=sessions, unresolved_sources=unresolved,
+                collection_evidence_sha256s=sorted(evidence),
+                instrument_ids=identities,
+                sessions=sessions,
+                unresolved_sources=unresolved,
                 discovery_evidence_sha256s=sorted(discoveries),
                 published_base_reference=self._generations.published_indicator_reference(source),
             )
-            self._progress({
-                "event": "financial_refresh", "phase": "indicator_build",
-                "status": "completed", "idempotency_key": key,
-                "duration_ms": round((perf_counter() - build_started) * 1000),
-            })
-            self._store.record_indicator_candidate(key, digest, self._validated_clock())
+            self._progress(
+                {
+                    "event": "financial_refresh",
+                    "phase": "indicator_build",
+                    "status": "completed",
+                    "idempotency_key": key,
+                    "duration_ms": round((perf_counter() - build_started) * 1000),
+                }
+            )
+            self._store.record_indicator_candidate(
+                key, digest, self._validated_clock(),
+                received_reports=sorted(candidates.report_inventory(digest, through=target)),
+            )
 
     def _publish_candidate(
         self,
@@ -1469,8 +1497,12 @@ class DailyFinancialRefreshService:
         indicator_candidate = operation["indicator_candidate_manifest_sha256"]
         source = self._generations.inspect_root(str(operation["source_generation_manifest_sha256"]))
         prior_indicator = next(
-            (family.manifest_sha256 for family in source.families
-             if family.family_id == "equity.financial_indicator"), None,
+            (
+                family.manifest_sha256
+                for family in source.families
+                if family.family_id == "equity.financial_indicator"
+            ),
+            None,
         )
         for attempt in range(4):
             self._ownership_guard()
@@ -1484,9 +1516,7 @@ class DailyFinancialRefreshService:
             ):
                 composed = operation["composed_generation_manifest_sha256"]
                 if composed is None:
-                    raise FinancialDailyRefreshError(
-                        "FINANCIAL_PUBLICATION_RECONCILIATION_INVALID"
-                    )
+                    raise FinancialDailyRefreshError("FINANCIAL_PUBLICATION_RECONCILIATION_INVALID")
                 return reconcile_daily_financial_publication(
                     self._database,
                     self._root,
@@ -1495,11 +1525,16 @@ class DailyFinancialRefreshService:
                     completed_at=self._validated_clock(),
                 )
             current_indicator = next(
-                (family.manifest_sha256 for family in descriptor.families
-                 if family.family_id == "equity.financial_indicator"), None,
+                (
+                    family.manifest_sha256
+                    for family in descriptor.families
+                    if family.family_id == "equity.financial_indicator"
+                ),
+                None,
             )
             if indicator_candidate is not None and current_indicator not in {
-                prior_indicator, indicator_candidate,
+                prior_indicator,
+                indicator_candidate,
             }:
                 raise FinancialDailyRefreshError("FINANCIAL_INDICATOR_TARGET_CHANGED")
             current_financial = descriptor.financial_candidate_manifest_sha256
@@ -1521,7 +1556,8 @@ class DailyFinancialRefreshService:
                 )
                 if indicator_candidate is not None:
                     composed = self._generations._compose_incremental_indicator_candidate(
-                        composed.manifest_sha256, str(indicator_candidate),
+                        composed.manifest_sha256,
+                        str(indicator_candidate),
                         published_generation_sha256=current.generation_manifest_sha256,
                         prepared_at=prepared_at,
                     )
@@ -1697,13 +1733,15 @@ def reconcile_daily_financial_publication(
         composed_sha != generation_manifest_sha256 and published_sha != generation_manifest_sha256
     ):
         raise FinancialDailyRefreshError("FINANCIAL_PUBLICATION_RECONCILIATION_INVALID")
-    descriptor = MountedGenerationStore(Path(mount_root)).inspect_root(
-        generation_manifest_sha256
-    )
+    descriptor = MountedGenerationStore(Path(mount_root)).inspect_root(generation_manifest_sha256)
     indicator_candidate = operation["indicator_candidate_manifest_sha256"]
     published_indicator = next(
-        (family.manifest_sha256 for family in descriptor.families
-         if family.family_id == "equity.financial_indicator"), None,
+        (
+            family.manifest_sha256
+            for family in descriptor.families
+            if family.family_id == "equity.financial_indicator"
+        ),
+        None,
     )
     if (
         descriptor.financial_publication_coordinate != str(operation["fingerprint"])
@@ -1765,8 +1803,12 @@ def _daily_financial_outcome(
             str(operation["source_generation_manifest_sha256"]),
         )
         prior_indicator = next(
-            (family.manifest_sha256 for family in source.families
-             if family.family_id == "equity.financial_indicator"), None,
+            (
+                family.manifest_sha256
+                for family in source.families
+                if family.family_id == "equity.financial_indicator"
+            ),
+            None,
         )
         indicators = FinancialIndicatorCandidateStore(mount_root)
         indicator_changed = prior_indicator is None or (
@@ -1805,169 +1847,15 @@ def _identity_by_code(
     return {item.ts_code: item for item in ordered}
 
 
-def _discovery_evidence(discovery: FinancialAnnouncementDiscovery) -> dict[str, object]:
+def _discovery_evidence(discovery: FinancialDisclosureDiscovery) -> dict[str, object]:
     return {
-        "start_date": _iso_date(discovery.start_date),
-        "end_date": _iso_date(discovery.end_date),
-        "completed_categories": list(discovery.completed_categories),
-        "announcements": [
-            {
-                "announcement_id": item.announcement_id,
-                "category": item.category,
-                "ts_code": item.ts_code,
-                "name": item.name,
-                "title": item.title,
-                "source_published_date": _iso_date(item.source_published_date),
-                "report_period": (
-                    None if item.report_period is None else _iso_date(item.report_period)
-                ),
-                "url": item.url,
-            }
-            for item in discovery.announcements
-        ],
-        "gaps": [
-            {
-                "category": item.category,
-                "start_date": _iso_date(item.start_date),
-                "end_date": _iso_date(item.end_date),
-                "failure_code": item.failure_code,
-            }
-            for item in discovery.gaps
-        ],
+        "start_date": discovery.start_date,
+        "end_date": discovery.end_date,
+        "completed_periods": list(discovery.completed_periods),
+        "reports": [asdict(report) for report in discovery.reports],
+        "gaps": [asdict(gap) for gap in discovery.gaps],
         "source_lineage_sha256": discovery.source_lineage_sha256,
     }
-
-
-def _insert_trigger(
-    transaction: object,
-    *,
-    idempotency_key: str,
-    identity: HistoricalInstrumentIdentity,
-    announcement: FinancialAnnouncement,
-    source_lineage_sha256: str,
-    recorded_at: datetime,
-) -> None:
-    _require_sha256(announcement.announcement_id)
-    if announcement.category not in FINANCIAL_ANNOUNCEMENT_CATEGORIES:
-        raise FinancialDailyRefreshError("FINANCIAL_ANNOUNCEMENT_INVALID")
-    published = _iso_date(announcement.source_published_date)
-    report_period = (
-        None if announcement.report_period is None else _iso_date(announcement.report_period)
-    )
-    transaction.execute(  # type: ignore[attr-defined]
-        """
-        INSERT INTO data.financial_announcement_triggers (
-            announcement_id, category, instrument_id, ts_code,
-            instrument_name, title, source_published_date, report_period,
-            source_url, source_lineage_sha256, status,
-            first_seen_operation_key, created_at, updated_at
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                  'pending', %s, %s, %s)
-        ON CONFLICT (announcement_id) DO NOTHING
-        """,
-        (
-            announcement.announcement_id,
-            announcement.category,
-            identity.instrument_id,
-            identity.ts_code,
-            announcement.name,
-            announcement.title,
-            published,
-            report_period,
-            announcement.url,
-            source_lineage_sha256,
-            idempotency_key,
-            recorded_at,
-            recorded_at,
-        ),
-    )
-    observed = transaction.execute(  # type: ignore[attr-defined]
-        """
-        SELECT category, instrument_id, ts_code, instrument_name, title,
-               source_published_date, report_period, source_url
-        FROM data.financial_announcement_triggers
-        WHERE announcement_id = %s
-        """,
-        (announcement.announcement_id,),
-    ).fetchone()
-    expected = (
-        announcement.category,
-        identity.instrument_id,
-        identity.ts_code,
-        announcement.name,
-        announcement.title,
-        published,
-        report_period,
-        announcement.url,
-    )
-    actual = (
-        str(observed["category"]),
-        str(observed["instrument_id"]),
-        str(observed["ts_code"]),
-        str(observed["instrument_name"]),
-        str(observed["title"]),
-        observed["source_published_date"].isoformat(),
-        None if observed["report_period"] is None else observed["report_period"].isoformat(),
-        str(observed["source_url"]),
-    )
-    if actual != expected:
-        raise FinancialDailyRefreshError("FINANCIAL_ANNOUNCEMENT_ID_COLLISION")
-
-
-def _upsert_gap(
-    transaction: object,
-    *,
-    idempotency_key: str,
-    category: str,
-    query_start_date: date,
-    query_end_date: date,
-    unresolved_from_date: date,
-    failure_code: str,
-    recorded_at: datetime,
-) -> None:
-    if category not in FINANCIAL_ANNOUNCEMENT_CATEGORIES or not failure_code:
-        raise FinancialDailyRefreshError("FINANCIAL_DISCOVERY_GAP_INVALID")
-    gap_id = _sha(
-        {
-            "category": category,
-            "unresolved_from_date": unresolved_from_date.isoformat(),
-        }
-    )
-    transaction.execute(  # type: ignore[attr-defined]
-        """
-        INSERT INTO data.financial_discovery_gaps (
-            gap_id, category, query_start_date, query_end_date,
-            unresolved_from_date, failure_code, status,
-            first_seen_operation_key, last_seen_operation_key,
-            created_at, updated_at
-        ) VALUES (%s, %s, %s, %s, %s, %s, 'open', %s, %s, %s, %s)
-        ON CONFLICT (gap_id) DO UPDATE
-        SET query_start_date = LEAST(
-                data.financial_discovery_gaps.query_start_date,
-                EXCLUDED.query_start_date
-            ),
-            query_end_date = GREATEST(
-                data.financial_discovery_gaps.query_end_date,
-                EXCLUDED.query_end_date
-            ),
-            failure_code = EXCLUDED.failure_code,
-            last_seen_operation_key = EXCLUDED.last_seen_operation_key,
-            updated_at = EXCLUDED.updated_at
-        WHERE data.financial_discovery_gaps.status = 'open'
-        """,
-        (
-            gap_id,
-            category,
-            query_start_date,
-            query_end_date,
-            unresolved_from_date,
-            failure_code,
-            idempotency_key,
-            idempotency_key,
-            recorded_at,
-            recorded_at,
-        ),
-    )
 
 
 def _checkpoint_payload(checkpoint: FinancialShardCheckpoint) -> dict[str, object]:

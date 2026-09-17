@@ -17,11 +17,9 @@ from typing import NoReturn
 
 from thesistrace._memory import release_unused_memory
 from thesistrace._postgres import PostgresDatabase
-from thesistrace.adapters.cninfo_financial_announcements import (
-    AkshareCninfoFinancialAnnouncementSource,
-)
 from thesistrace.adapters.tushare_benchmark import TushareBenchmarkSource
 from thesistrace.adapters.tushare_data import TushareDataSource
+from thesistrace.adapters.tushare_disclosures import TushareDisclosureSource
 from thesistrace.adapters.tushare_financial import TushareFinancialSource
 from thesistrace.adapters.tushare_financial_indicator import TushareFinancialIndicatorProvider
 from thesistrace.adapters.tushare_industry import (
@@ -291,7 +289,7 @@ def _run(
                 else ReplayTushareProvider(replay)
             )
             financial_source = provider
-            financial_announcement_source = provider
+            financial_disclosure_source = TushareDisclosureSource(provider)
             if isinstance(provider, ReplayTushareRefreshBundle):
                 financial_source_window_selector = provider.select_financial_window
                 industry_source_target_selector = provider.select_industry_target
@@ -309,8 +307,8 @@ def _run(
             )
             provider = live_provider
             financial_source = TushareFinancialSource(live_provider)
-            financial_announcement_source = (
-                AkshareCninfoFinancialAnnouncementSource()
+            financial_disclosure_source = (
+                TushareDisclosureSource(live_provider)
                 if parsed.command == "worker"
                 else None
             )
@@ -407,7 +405,7 @@ def _run(
                         processed = refresh_service.process_next(
                             source,
                             benchmark_source=benchmark_source,
-                            financial_announcement_source=financial_announcement_source,
+                            financial_disclosure_source=financial_disclosure_source,
                             financial_source=financial_source,
                             indicator_provider=TushareFinancialIndicatorProvider(provider),
                             financial_source_window_selector=financial_source_window_selector,

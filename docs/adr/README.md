@@ -119,6 +119,7 @@ Number gaps are intentional and numbers are never reused. When a decision stops 
 - [ADR-0192 — Paginate the ordinary balance sheet inside one logical shard](0192-paginate-the-ordinary-balance-sheet-inside-one-logical-shard.md)
 - [ADR-0219 — Drive daily financial refresh from disclosure evidence](0219-drive-daily-financial-refresh-from-cninfo-disclosures.md)
 - [ADR-0232 — Resolve financial announcement triggers from stock-level Canonical deltas](0232-resolve-financial-announcement-triggers-from-stock-level-canonical-deltas.md)
+- [ADR-0249 — Discover financial reports from structured disclosure periods](0249-discover-financial-reports-from-structured-disclosure-periods.md) (supersedes ADR-0219 and ADR-0232)
 - [ADR-0243 — Give statement-derived TTM flows distinct field identities](0243-give-statement-derived-ttm-flows-distinct-field-identities.md)
 - [ADR-0244 — Admit announcement-aligned financial history with evidence limits](0244-admit-announcement-aligned-financial-history-with-evidence-limits.md)
 - [ADR-0248 — Reuse published indicator projections with checked evidence](0248-reuse-published-indicator-projections-with-checked-evidence.md)

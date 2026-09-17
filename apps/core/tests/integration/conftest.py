@@ -90,3 +90,10 @@ def payload_retention_target_schemas():
     from thesistrace.migrations.payload_retention_0003 import TARGET
 
     return _migration_release_schemas("payload-retention-target.zip", TARGET)
+
+
+@pytest.fixture
+def execution_opportunity_target_schemas():
+    from thesistrace.migrations.execution_opportunities_0004 import TARGET
+
+    return _migration_release_schemas("execution-opportunities-target.zip", TARGET)

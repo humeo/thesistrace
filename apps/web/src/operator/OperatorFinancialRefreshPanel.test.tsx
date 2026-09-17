@@ -24,7 +24,7 @@ test("polls company checkpoints, preserves stale counts, and stops at a terminal
       indicatorScheduledCount: 65, indicatorCollectedCount: 65, indicatorFailedCount: 0,
       indicatorCandidateStatus: "ready",
     indicatorRetainedReason: null,
-      discoveredAnnouncementCount: 10, processedCompanyCount: 1, updatedCompanyCount: 1,
+      disclosedReportCount: 10, processedCompanyCount: 1, updatedCompanyCount: 1,
       unchangedCompanyCount: 0, failedCompanyCount: 0, discoveryGaps: []},
   });
   const publishing = {...running, progress: {...running.progress!, phase: "publication" as const,
@@ -118,14 +118,14 @@ test("shows checkpoint telemetry while collection is running, without claiming p
     indicatorRetainedReason: null,
           elapsedSeconds: 12,
           lastProgressAt: "2026-08-17T08:00:12Z",
-          discoveredAnnouncementCount: 10,
+          disclosedReportCount: 10,
           processedCompanyCount: 3,
           updatedCompanyCount: 1,
           unchangedCompanyCount: 1,
           failedCompanyCount: 1,
           discoveryGaps: [{
-            category: "半年报", startDate: "2026-08-08", endDate: "2026-08-17",
-            failureCode: "CNINFO_DISCOVERY_UNAVAILABLE",
+            reportPeriod: "2026-06-30",
+            failureCode: "UPSTREAM_UNAVAILABLE",
           }],
         },
       })}
@@ -140,8 +140,8 @@ test("shows checkpoint telemetry while collection is running, without claiming p
   expect(markup).toContain("<dt>Without data changes</dt><dd>1</dd>");
   expect(markup).toContain("<dt>Companies failed</dt><dd>1</dd>");
   expect(markup).toContain("12s");
-  expect(markup).toContain("半年报");
-  expect(markup).toContain("CNINFO_DISCOVERY_UNAVAILABLE");
+  expect(markup).toContain("2026-06-30");
+  expect(markup).toContain("UPSTREAM_UNAVAILABLE");
   expect(markup).toContain("not published yet");
   expect(markup).not.toContain("100%");
 });
@@ -172,12 +172,12 @@ test("keeps unknown discovery distinct from zero and publication distinct from f
     indicatorScheduledCount: null, indicatorCollectedCount: null, indicatorFailedCount: null,
     indicatorCandidateStatus: "not_started" as const,
     indicatorRetainedReason: null,
-    elapsedSeconds: 30, lastProgressAt: null, discoveredAnnouncementCount: null,
+    elapsedSeconds: 30, lastProgressAt: null, disclosedReportCount: null,
     processedCompanyCount: 0, updatedCompanyCount: 0, unchangedCompanyCount: 0,
     failedCompanyCount: 0, discoveryGaps: null,
   };
   const discovery = renderToStaticMarkup(<FinancialRefreshTelemetry progress={{...base, phase: "discovery"}} />);
-  expect(discovery).toContain("<dt>Announcements discovered</dt><dd>Unknown</dd>");
+  expect(discovery).toContain("<dt>Reports disclosed</dt><dd>Unknown</dd>");
   expect(discovery).toContain("<dt>Companies processed</dt><dd>0</dd>");
   const publication = renderToStaticMarkup(<FinancialRefreshTelemetry progress={{...base, phase: "publication"}} />);
   expect(publication).toContain("Preparing Dataset publication");
@@ -337,7 +337,7 @@ test("explains retained indicator coverage while statements continue", () => {
     ...base, status: "running", outcome: null,
     progress: {
       phase: "collection", elapsedSeconds: 12, lastProgressAt: null,
-      discoveredAnnouncementCount: 0, processedCompanyCount: 0, updatedCompanyCount: 0,
+      disclosedReportCount: 0, processedCompanyCount: 0, updatedCompanyCount: 0,
       unchangedCompanyCount: 0, failedCompanyCount: 0,
       indicatorScheduledCount: 1, indicatorCollectedCount: 0, indicatorFailedCount: 1,
       indicatorCandidateStatus: "retained",

@@ -26,19 +26,19 @@ const proof = "00000000-0000-4000-8000-000000000001." + "a".repeat(43);
 
 const progress = {
   phase: "collection", elapsed_seconds: 12, last_progress_at: "2026-08-17T08:00:12Z",
-  discovered_announcement_count: 15, processed_company_count: 3,
+  disclosed_report_count: 15, processed_company_count: 3,
   updated_company_count: 1, unchanged_company_count: 1, failed_company_count: 1,
   indicator_scheduled_count: 65, indicator_collected_count: 65, indicator_failed_count: 0,
   indicator_candidate_status: "building",
   indicator_retained_reason: null,
-  discovery_gaps: [{category: "半年报", start_date: "2026-08-08", end_date: "2026-08-17",
-    failure_code: "CNINFO_DISCOVERY_UNAVAILABLE"}],
+  discovery_gaps: [{report_period: "2026-06-30",
+    failure_code: "UPSTREAM_UNAVAILABLE"}],
 };
 
 it("strictly decodes bounded company progress and rejects impossible or private fields", () => {
   expect(decodeFinancialRefreshProgress(progress)).toMatchObject({
     processedCompanyCount: 3, updatedCompanyCount: 1, unchangedCompanyCount: 1,
-    failedCompanyCount: 1, discoveredAnnouncementCount: 15,
+    failedCompanyCount: 1, disclosedReportCount: 15,
     indicatorScheduledCount: 65, indicatorCollectedCount: 65, indicatorFailedCount: 0,
     indicatorCandidateStatus: "building",
     indicatorRetainedReason: null,
@@ -50,9 +50,9 @@ it("strictly decodes bounded company progress and rejects impossible or private 
     {...progress, failed_company_count: -1},
     {...progress, indicator_scheduled_count: 64},
     {...progress, elapsed_seconds: 0.5},
-    {...progress, discovery_gaps: Array(6).fill(progress.discovery_gaps[0])},
+    {...progress, discovery_gaps: Array(501).fill(progress.discovery_gaps[0])},
     {...progress, discovery_gaps: [{...progress.discovery_gaps[0], source_url: "private"}]},
-    {...progress, discovery_gaps: [{...progress.discovery_gaps[0], end_date: "2026-02-30"}]},
+    {...progress, discovery_gaps: [{...progress.discovery_gaps[0], report_period: "2026-02-30"}]},
   ]) expect(() => decodeFinancialRefreshProgress(invalid)).toThrow();
 });
 

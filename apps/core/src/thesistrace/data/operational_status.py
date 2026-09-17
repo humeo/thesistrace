@@ -55,6 +55,9 @@ class DatasetOperationalHead(BaseModel):
     financial_complete_through_session: date | None
     financial_last_refresh_at: datetime | None
     financial_pending_instrument_count: int | None = Field(ge=0)
+    financial_indicator_pending_instrument_count: int | None = Field(ge=0)
+    financial_indicator_checked_through_session: date | None
+    financial_indicator_complete_through_session: date | None
     financial_discovery_gap_count: int | None = Field(ge=0)
     financial_earliest_unresolved_date: date | None
     industry_coverage_start: date | None
@@ -174,7 +177,8 @@ class DatasetOperationalStatusService:
                 """
             ).fetchone()
             progress = read_financial_progress(
-                transaction, [*latest_rows, *rows[:DATA_REFRESH_OPERATION_PAGE_SIZE]],
+                transaction,
+                [*latest_rows, *rows[:DATA_REFRESH_OPERATION_PAGE_SIZE]],
             )
         operations = tuple(
             _operation_from_row(row, progress.get(str(row["idempotency_key"])))
@@ -184,9 +188,7 @@ class DatasetOperationalStatusService:
             head=_head_from_snapshot(overview),
             worker=DataOperatorWorkerStatus(
                 available=bool(worker_row and worker_row["available"]),
-                last_heartbeat_at=(
-                    None if worker_row is None else worker_row["last_heartbeat_at"]
-                ),
+                last_heartbeat_at=(None if worker_row is None else worker_row["last_heartbeat_at"]),
             ),
             latest_by_kind=tuple(
                 _operation_from_row(row, progress.get(str(row["idempotency_key"])))
@@ -212,6 +214,7 @@ def _head_from_snapshot(snapshot: DatasetOverviewSnapshot) -> DatasetOperational
     benchmark = overview.benchmark_coverage
     financial = overview.financial_coverage
     industry = overview.industry_coverage
+    indicator = snapshot.indicator_coverage
     return DatasetOperationalHead(
         data_identity=None if pointer is None else pointer.data_identity,
         prepared_at=None if pointer is None else _aware_datetime(pointer.prepared_at),
@@ -237,6 +240,15 @@ def _head_from_snapshot(snapshot: DatasetOverviewSnapshot) -> DatasetOperational
         financial_last_refresh_at=overview.last_financial_refresh_at,
         financial_pending_instrument_count=(
             None if financial is None else financial.pending_instrument_count
+        ),
+        financial_indicator_pending_instrument_count=(
+            None if indicator is None else indicator["pending_instrument_count"]
+        ),
+        financial_indicator_checked_through_session=(
+            None if indicator is None else indicator["end"]
+        ),
+        financial_indicator_complete_through_session=(
+            None if indicator is None else indicator["complete_through_session"]
         ),
         financial_discovery_gap_count=None if financial is None else financial.discovery_gap_count,
         financial_earliest_unresolved_date=(
@@ -266,9 +278,7 @@ def _operation_from_row(
         last_heartbeat_at=row["last_heartbeat_at"],  # type: ignore[arg-type]
         data_through_session=row["data_through_session"],  # type: ignore[arg-type]
         last_refresh_at=row["last_refresh_at"],  # type: ignore[arg-type]
-        financial_complete_through_session=row[
-            "financial_complete_through_session"
-        ],  # type: ignore[arg-type]
+        financial_complete_through_session=row["financial_complete_through_session"],  # type: ignore[arg-type]
         matched_trigger_count=_optional_count(row["matched_trigger_count"]),
         checked_no_structured_change_count=_optional_count(
             row["checked_no_structured_change_count"]

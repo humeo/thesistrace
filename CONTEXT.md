@@ -693,30 +693,36 @@ current financial families.
 _避免混用_: Financial Refresh, independent Dataset Head
 
 **Financial Refresh**:
-A Data Refresh of affected instruments’ financial statements that preserves prior accepted facts for unsuccessful instruments and leaves market facts unchanged.
+A Data Refresh that checks actual structured disclosures, retries missing reports
+and rotates through financial histories for revisions. Statements and indicators
+retain independent coverage, and unsuccessful collection preserves accepted facts.
 _避免混用_: Market Refresh, complete Financial Coverage, publication on collection
 
-**Financial Announcement Discovery**:
-The observed disclosures and corrections that identify possible financial updates or reveal gaps in announcement coverage.
+**Financial Disclosure Check**:
+A query of TuShare's structured disclosure lists for declared report periods.
+Actual publication dates identify due reports; scheduled dates do not.
 _避免混用_: Financial statement values, completed Financial Refresh
 
 **Financial Discovery Attempted Through**:
 The latest Research Session through which a Financial Refresh published either
-complete announcement evidence or explicit discovery gaps.
+complete structured disclosure checks or explicit discovery gaps.
 _避免混用_: Financial Discovery Complete Through, implicit success
 
 **Financial Discovery Complete Through**:
-The latest Research Session through which every declared announcement category
-and page has been observed without an unresolved Financial Discovery Gap.
+The latest Research Session through which every required report-period disclosure
+list has been checked without an unresolved Financial Discovery Gap.
 _避免混用_: Financial Discovery Attempted Through, statement freshness
 
 **Financial Discovery Gap**:
-An interval or disclosure category whose incomplete announcement evidence leaves some affected instruments unknown.
+An incomplete or invalid disclosure-list response for a report period that leaves
+some expected reports unknown.
 _避免混用_: A known instrument’s failed update, complete discovery
 
-**Financial Announcement Trigger**:
-An observed disclosure or correction requiring an affected instrument’s financial facts to be rechecked. It is resolved only by a validated change or a validated finding of no change.
-_避免混用_: Financial Fact, exact disclosure-to-version correspondence, successful collection alone
+**Financial Report Requirement**:
+A disclosed report expected for an instrument, source endpoint and report period.
+It remains pending until accepted evidence contains that period. Different source
+publication dates and nullable metrics do not imply a missing report.
+_避免混用_: Financial Fact, announcement text, successful collection alone
 
 **Canonical Data**:
 The accepted market, reference, industry, and financial facts with governed meaning and information availability for research.

@@ -12,10 +12,8 @@ from thesistrace._postgres import PostgresTransaction
 class FinancialDiscoveryGapStatus(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    category: Literal["年报", "半年报", "一季报", "三季报", "补充更正"]
-    start_date: date
-    end_date: date
-    failure_code: Literal["CNINFO_DISCOVERY_UNAVAILABLE", "CNINFO_DISCOVERY_INVALID"]
+    report_period: date
+    failure_code: str = Field(min_length=1, max_length=100)
 
 
 class FinancialRefreshProgress(BaseModel):
@@ -24,12 +22,18 @@ class FinancialRefreshProgress(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     phase: Literal[
-        "queued", "preparing", "discovery", "indicator_collection", "indicator_candidate",
-        "collection", "publication", "finished",
+        "queued",
+        "preparing",
+        "discovery",
+        "indicator_collection",
+        "indicator_candidate",
+        "collection",
+        "publication",
+        "finished",
     ]
     elapsed_seconds: int | None = Field(ge=0)
     last_progress_at: datetime | None
-    discovered_announcement_count: int | None = Field(ge=0)
+    disclosed_report_count: int | None = Field(ge=0)
     processed_company_count: int | None = Field(ge=0)
     updated_company_count: int | None = Field(ge=0)
     unchanged_company_count: int | None = Field(ge=0)
@@ -39,7 +43,7 @@ class FinancialRefreshProgress(BaseModel):
     indicator_failed_count: int | None = Field(ge=0)
     indicator_candidate_status: Literal["not_started", "building", "ready", "retained"]
     indicator_retained_reason: Literal["INDICATOR_COVERAGE_UNAVAILABLE"] | None
-    discovery_gaps: tuple[FinancialDiscoveryGapStatus, ...] | None = Field(max_length=5)
+    discovery_gaps: tuple[FinancialDiscoveryGapStatus, ...] | None = Field(max_length=500)
 
 
 def read_financial_progress(
@@ -73,8 +77,9 @@ def read_financial_progress(
                    AS indicator_collected,
                jsonb_array_length(f.indicator_collection->'failures') AS indicator_failed,
                greatest(f.updated_at, a.last_checkpoint_at) AS last_progress_at,
-               jsonb_array_length(f.discovery_evidence->'announcements') AS announcements,
-               f.discovery_evidence->'gaps' AS gaps,
+               jsonb_array_length(f.discovery_evidence->'reports') AS reports,
+               CASE WHEN f.discovery_evidence ? 'reports'
+                    THEN f.discovery_evidence->'gaps' END AS gaps,
                a.processed, a.changed, a.unchanged, a.failed
         FROM unnest(%s::text[]) AS requested(key)
         LEFT JOIN data.financial_daily_refresh_operations AS f
@@ -128,7 +133,7 @@ def read_financial_progress(
             phase=phase,
             elapsed_seconds=elapsed,
             last_progress_at=finished if terminal else row["last_progress_at"],
-            discovered_announcement_count=row["announcements"],
+            disclosed_report_count=row["reports"],
             processed_company_count=row["processed"] if row["available"] else None,
             updated_company_count=row["changed"] if row["available"] else None,
             unchanged_company_count=row["unchanged"] if row["available"] else None,
@@ -137,9 +142,13 @@ def read_financial_progress(
             indicator_collected_count=row["indicator_collected"],
             indicator_failed_count=row["indicator_failed"],
             indicator_candidate_status=(
-                "ready" if row["indicator_candidate_ready"] else
-                "retained" if terminal or row["indicator_retained_reason"] is not None else
-                "building" if row["indicators_collected"] else "not_started"
+                "ready"
+                if row["indicator_candidate_ready"]
+                else "retained"
+                if terminal or row["indicator_retained_reason"] is not None
+                else "building"
+                if row["indicators_collected"]
+                else "not_started"
             ),
             indicator_retained_reason=row["indicator_retained_reason"],
             discovery_gaps=(

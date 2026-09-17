@@ -14,15 +14,16 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from thesistrace.data.fields import FINANCIAL_INDICATOR_FIELDS
-from thesistrace.data.financial_announcements import FINANCIAL_ANNOUNCEMENT_CATEGORIES
 from thesistrace.data.financial_collection import (
     FINANCIAL_HISTORY_FLOOR,
     FinancialCollectionError,
     RawFinancialBatchStore,
 )
+from thesistrace.data.financial_disclosures import disclosure_periods
 from thesistrace.data.financial_indicator_evidence import (
     FinancialIndicatorObservationStore,
     IndicatorVersionProjector,
+    received_indicator_reports,
     validate_indicator_collection_evidence,
 )
 from thesistrace.data.financial_indicator_series import normalize_indicator_value
@@ -34,6 +35,8 @@ from thesistrace.publication.serialization import (
     canonical_json_bytes,
     parquet_bytes,
 )
+
+_ARCHIVED_ANNOUNCEMENT_CATEGORIES = ("年报", "半年报", "一季报", "三季报", "补充更正")
 
 _METADATA = (
     "instrument_id",
@@ -362,10 +365,15 @@ class FinancialIndicatorCandidateStore:
             evidence = self._raw.read(digest)
             if (
                 not isinstance(evidence, dict)
-                or set(evidence) != {
-                    "source", "instrument_ids", "discovery", "source_lineage_sha256",
+                or set(evidence)
+                != {
+                    "source",
+                    "instrument_ids",
+                    "discovery",
+                    "source_lineage_sha256",
                 }
-                or evidence["source"] != "indicator-announcement-discovery"
+                or evidence["source"]
+                not in {"indicator-announcement-discovery", "indicator-disclosure-check"}
                 or not isinstance(evidence["instrument_ids"], dict)
             ):
                 raise ValueError("Invalid indicator discovery evidence")
@@ -374,23 +382,58 @@ class FinancialIndicatorCandidateStore:
             if any(instrument_ids.get(code) != identity for code, identity in scope.items()):
                 raise ValueError("Indicator discovery identity differs from candidate")
             discovery = evidence["discovery"]
+            if evidence["source"] == "indicator-disclosure-check":
+                if not isinstance(discovery, dict) or set(discovery) != {
+                    "start_date",
+                    "end_date",
+                    "completed_periods",
+                    "reports",
+                    "gaps",
+                }:
+                    raise ValueError("Invalid structured disclosure evidence")
+                expected = set(disclosure_periods(discovery["start_date"], discovery["end_date"]))
+                completed = set(discovery["completed_periods"])
+                gaps = {gap["report_period"] for gap in discovery["gaps"]}
+                if completed & gaps or completed | gaps != expected:
+                    raise ValueError("Incomplete disclosure period inventory")
+                for report in discovery["reports"]:
+                    if (
+                        report["ts_code"] not in scope
+                        or report["report_period"] not in completed
+                        or not report["report_period"]
+                        <= report["actual_date"]
+                        <= discovery["end_date"]
+                    ):
+                        raise ValueError("Invalid actual disclosure")
+                if not gaps:
+                    lower, upper = (
+                        date.fromisoformat(discovery[key]) for key in ("start_date", "end_date")
+                    )
+                    for code in scope:
+                        ranges[code].append((lower, upper))
+                continue
             if not isinstance(discovery, dict) or set(discovery) != {
-                "start_date", "end_date", "completed_categories", "announcements", "gaps",
+                "start_date",
+                "end_date",
+                "completed_categories",
+                "announcements",
+                "gaps",
             }:
                 raise ValueError("Invalid indicator discovery record")
-            lower, upper = (date.fromisoformat(discovery[key])
-                            for key in ("start_date", "end_date"))
+            lower, upper = (
+                date.fromisoformat(discovery[key]) for key in ("start_date", "end_date")
+            )
             if lower > upper or not isinstance(discovery["announcements"], list):
                 raise ValueError("Invalid indicator discovery interval")
             for item in discovery["announcements"]:
                 if (
                     item["ts_code"] not in scope
-                    or item["category"] not in FINANCIAL_ANNOUNCEMENT_CATEGORIES
+                    or item["category"] not in _ARCHIVED_ANNOUNCEMENT_CATEGORIES
                     or not lower <= date.fromisoformat(item["source_published_date"]) <= upper
                 ):
                     raise ValueError("Invalid indicator discovered announcement")
             if (
-                discovery["completed_categories"] != list(FINANCIAL_ANNOUNCEMENT_CATEGORIES)
+                discovery["completed_categories"] != list(_ARCHIVED_ANNOUNCEMENT_CATEGORIES)
                 or discovery["gaps"] != []
             ):
                 continue
@@ -399,29 +442,46 @@ class FinancialIndicatorCandidateStore:
         return ranges
 
     def _discovery_unresolved(self, references, instrument_ids, partitions):
+        checks = [self._raw.read(digest) for digest in references]
+        structured = [check for check in checks if check["source"] == "indicator-disclosure-check"]
+        if structured:
+            return self._report_requirements_unresolved(structured, instrument_ids, partitions)
+        # Pinned historical Generations retain their original audit and readiness proof.
         targets = set()
         for digest in references:
             for item in self._raw.read(digest)["discovery"]["announcements"]:
-                targets.add((
-                    instrument_ids[item["ts_code"]],
-                    (None if item["report_period"] is None
-                     else item["report_period"].replace("-", "")),
-                    item["source_published_date"].replace("-", ""),
-                ))
+                targets.add(
+                    (
+                        instrument_ids[item["ts_code"]],
+                        (
+                            None
+                            if item["report_period"] is None
+                            else item["report_period"].replace("-", "")
+                        ),
+                        item["source_published_date"].replace("-", ""),
+                    )
+                )
         if not targets:
             return {}
         instruments = {instrument for instrument, _period, _announced in targets}
         columns = (
-            "instrument_id", "source_report_period", "source_published_date",
-            "observation_event_at", "source_row_sha256", "availability_status",
+            "instrument_id",
+            "source_report_period",
+            "source_published_date",
+            "observation_event_at",
+            "source_row_sha256",
+            "availability_status",
         )
         latest = {}
         for partition in partitions:
             if partition["instrument_id"] not in instruments:
                 continue
             for row in self._read_partition(partition, columns).to_pylist():
-                key = (row["instrument_id"], row["source_report_period"],
-                       row["source_published_date"])
+                key = (
+                    row["instrument_id"],
+                    row["source_report_period"],
+                    row["source_published_date"],
+                )
                 if key not in targets:
                     continue
                 event = row["observation_event_at"]
@@ -435,13 +495,33 @@ class FinancialIndicatorCandidateStore:
             instrument, period, announced = key
             state = latest.get(key)
             if (
-                period is not None and period <= announced and state is not None
+                period is not None
+                and period <= announced
+                and state is not None
                 and len(state[1]) == 1
                 and state[2] <= {"available", "outside_calendar"}
             ):
                 continue
             since = datetime.strptime(announced, "%Y%m%d").date().isoformat()
             unresolved[instrument] = min(unresolved.get(instrument, since), since)
+        return unresolved
+
+    def _report_requirements_unresolved(self, checks, instrument_ids, partitions):
+        expected = {}
+        for check in checks:
+            for report in check["discovery"]["reports"]:
+                key = (instrument_ids[report["ts_code"]], report["report_period"].replace("-", ""))
+                since = report["actual_date"]
+                expected[key] = min(expected.get(key, since), since)
+        through = max(check["discovery"]["end_date"] for check in checks)
+        present = {
+            (instrument, period.replace("-", ""))
+            for instrument, period, _published in self._received_reports(partitions, through)
+        }
+        unresolved = {}
+        for (instrument, period), since in expected.items():
+            if (instrument, period) not in present:
+                unresolved[instrument] = min(unresolved.get(instrument, since), since)
         return unresolved
 
     def _collection_observations(
@@ -630,6 +710,25 @@ class FinancialIndicatorCandidateStore:
         if table["instrument_id"].null_count:
             raise ValueError("Indicator partition contains a missing identity")
         return table.select(columns)
+
+    def report_inventory(self, digest: str, *, through: str):
+        manifest = self.reopen(digest)
+        return {
+            (instrument, period)
+            for instrument, period, _published in self._received_reports(
+                manifest["partitions"], through,
+            )
+        }
+
+    def _received_reports(self, partitions, through):
+        columns = (
+            "instrument_id", "source_report_period", "source_published_date",
+            "observation_event_at", "source_row_sha256", "availability_status",
+        )
+        return received_indicator_reports(
+            (row for part in partitions for row in self._read_partition(part, columns).to_pylist()),
+            through=through,
+        )
 
     def read_table(
         self,

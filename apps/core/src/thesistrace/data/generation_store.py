@@ -21,6 +21,7 @@ from thesistrace.data.daily_basic_evidence import (
     daily_basic_evidence_path,
 )
 from thesistrace.data.fields import field_definitions
+from thesistrace.data.financial_disclosures import DISCOVERY_COVERAGE_KINDS
 from thesistrace.data.generation_family import (
     CORE_MARKET_FAMILY_SPECS,
     DAILY_BASIC_FAMILY_SPEC,
@@ -1525,8 +1526,7 @@ class MountedGenerationStore:
                 coverage = financial_family.dataset_coverage
                 value = (
                     coverage["discovery_attempted_through_session"]
-                    if coverage.get("kind")
-                    == "financial-announcement-observation-range"
+                    if coverage.get("kind") in DISCOVERY_COVERAGE_KINDS
                     else coverage["observation_through_session"]
                 )
                 financial_through = date.fromisoformat(str(value)).isoformat()
@@ -3339,7 +3339,7 @@ def _financial_readiness_declaration(
             "status": "ready",
             **common,
         }
-    if coverage.get("kind") != "financial-announcement-observation-range":
+    if coverage.get("kind") not in DISCOVERY_COVERAGE_KINDS:
         raise GenerationStoreError("Financial Research Readiness is incompatible")
     status = str(coverage.get("readiness_status"))
     attempted = str(coverage.get("discovery_attempted_through_session"))
@@ -3463,7 +3463,7 @@ def _financial_family_descriptor_from_reference(
         or coverage.get("kind")
         not in {
             "financial-observation-range",
-            "financial-announcement-observation-range",
+            *DISCOVERY_COVERAGE_KINDS,
         }
     ):
         raise GenerationStoreError("Financial Dataset Family reference is incompatible")

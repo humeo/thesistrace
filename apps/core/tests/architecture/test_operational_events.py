@@ -24,7 +24,7 @@ _FIXED_OBSERVED_AT = datetime(2026, 8, 24, tzinfo=UTC)
 def test_financial_stage_counts_survive_the_operational_sink() -> None:
     output = StringIO()
     counts = {
-        "announcement_count": 13, "gap_count": 0,
+        "report_count": 13, "gap_count": 0,
         "scheduled_count": 76, "collected_count": 76, "failed_count": 0,
         "collection_count": 5615, "observation_count": 10961,
         "total_company_count": 5551, "projected_company_count": 65,

@@ -95,7 +95,7 @@ _INTEGER_FIELDS = frozenset(
         "retry_seconds",
         "attempt_number",
         "duration_ms",
-        "announcement_count",
+        "report_count",
         "gap_count",
         "scheduled_count",
         "collected_count",

@@ -101,6 +101,7 @@ def generation_family_coverage(
         "membership-range": "end",
         "financial-observation-range": "observation_through_session",
         "financial-announcement-observation-range": "discovery_attempted_through_session",
+        "financial-disclosure-observation-range": "discovery_attempted_through_session",
     }
     result = {}
     for family in generation.families:

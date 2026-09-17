@@ -94,12 +94,12 @@ describe("Operator Dataset status", () => {
     expect(markup).toContain("Updates with Market Refresh");
     expect(markup).toContain("2010-01-04");
     expect(markup).toContain("2026-08-31");
-    expect(markup).toContain("Discovery attempted through");
-    expect(markup).toContain("Discovery complete through");
+    expect(markup).toContain("Disclosure list checked through");
+    expect(markup).toContain("Disclosure list complete through");
     expect(markup).toContain("2026-08-28");
-    expect(markup).toContain("Pending instruments");
-    expect(markup).toContain("Discovery gaps");
-    expect(markup).toContain("Earliest unresolved");
+    expect(markup).toContain("Statement companies pending");
+    expect(markup).toContain("Disclosure list gaps");
+    expect(markup).toContain("Statements earliest unresolved");
     expect(markup).toContain("2026-08-26");
     expect(markup).toContain("2026-08-30 08:02:00 UTC");
     expect(markup).toContain("2026-08-29 08:03:00 UTC");
@@ -117,6 +117,9 @@ describe("Operator Dataset status", () => {
         benchmarkLastPublishedAt: null,
         benchmarkResearchReadiness: false,
         financialPendingInstrumentCount: 0,
+        financialIndicatorPendingInstrumentCount: 0,
+        financialIndicatorCheckedThroughSession: "2026-08-31",
+        financialIndicatorCompleteThroughSession: "2026-08-31",
         financialDiscoveryGapCount: 0,
         financialEarliestUnresolvedDate: null,
         industryCoverageStart: null,
@@ -129,8 +132,8 @@ describe("Operator Dataset status", () => {
     expect(markup).toContain("Benchmark not ready");
     expect(markup).toContain("Industry not ready");
     expect(markup).toContain("Not available");
-    expect(markup).toContain("<dt>Pending instruments</dt><dd>0</dd>");
-    expect(markup).toContain("<dt>Discovery gaps</dt><dd>0</dd>");
+    expect(markup).toContain("<dt>Statement companies pending</dt><dd>0</dd>");
+    expect(markup).toContain("<dt>Disclosure list gaps</dt><dd>0</dd>");
     expect(markup).not.toContain("undefined");
   });
 
@@ -243,8 +246,8 @@ describe("Operator Dataset status", () => {
     expect(markup).toContain("Operation details");
     expect(markup).toContain("financial-degraded");
     expect(markup).toContain("Last heartbeat");
-    expect(markup).toContain("Matched triggers");
-    expect(markup).toContain("Discovery gaps");
+    expect(markup).toContain("Changed companies");
+    expect(markup).toContain("Disclosure list gaps");
     expect(markup).toContain("<dt>Queue wait</dt><dd>1s</dd>");
     expect(markup).toContain("<dt>Execution</dt><dd>1m 59s</dd>");
     expect(markup).toContain(">Close<");
@@ -396,6 +399,9 @@ function statusPage(
       financialCompleteThroughSession: "2026-08-28",
       financialLastRefreshAt: "2026-08-29T08:03:00Z",
       financialPendingInstrumentCount: 2,
+      financialIndicatorPendingInstrumentCount: 0,
+      financialIndicatorCheckedThroughSession: "2026-08-31",
+      financialIndicatorCompleteThroughSession: "2026-08-31",
       financialDiscoveryGapCount: 1,
       financialEarliestUnresolvedDate: "2026-08-26",
       industryCoverageStart: "2015-01-05",

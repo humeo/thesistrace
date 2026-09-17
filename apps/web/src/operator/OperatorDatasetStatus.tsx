@@ -315,11 +315,14 @@ function DatasetHeadSummary({ data }: Readonly<{ data: DatasetOperationalStatus 
           )}
         >
           <DatasetFact label="Coverage start" value={head.financialCoverageStart} />
-          <DatasetFact label="Discovery attempted through" value={head.financialAttemptedThroughSession} />
-          <DatasetFact label="Discovery complete through" value={head.financialCompleteThroughSession} />
-          <DatasetFact label="Pending instruments" value={head.financialPendingInstrumentCount} />
-          <DatasetFact label="Discovery gaps" value={head.financialDiscoveryGapCount} />
-          <DatasetFact label="Earliest unresolved" value={head.financialEarliestUnresolvedDate} />
+          <DatasetFact label="Disclosure list checked through" value={head.financialAttemptedThroughSession} />
+          <DatasetFact label="Disclosure list complete through" value={head.financialCompleteThroughSession} />
+          <DatasetFact label="Statement companies pending" value={head.financialPendingInstrumentCount} />
+          <DatasetFact label="Indicator companies pending" value={head.financialIndicatorPendingInstrumentCount} />
+          <DatasetFact label="Indicators checked through" value={head.financialIndicatorCheckedThroughSession} />
+          <DatasetFact label="Indicators complete through" value={head.financialIndicatorCompleteThroughSession} />
+          <DatasetFact label="Disclosure list gaps" value={head.financialDiscoveryGapCount} />
+          <DatasetFact label="Statements earliest unresolved" value={head.financialEarliestUnresolvedDate} />
           <DatasetFact label="Last refresh" value={datasetTimestamp(head.financialLastRefreshAt)} />
         </DatasetFamilyStatus>
         <DatasetFamilyStatus
@@ -584,12 +587,12 @@ export function OperatorDataStatusDrawer({
           <Detail label="Data through" value={operation.dataThroughSession ?? "Not published"} />
           <Detail label="Last refresh" value={operation.lastRefreshAt ?? "Not completed"} />
           <Detail label="Financial complete through" value={operation.financialCompleteThroughSession ?? "Not applicable"} />
-          <Detail label="Matched triggers" value={countText(operation.matchedTriggerCount)} />
+          <Detail label="Changed companies" value={countText(operation.matchedTriggerCount)} />
           <Detail label="Checked without structured change" value={countText(operation.checkedNoStructuredChangeCount)} />
           <Detail label="Accepted instruments" value={countText(operation.acceptedInstrumentCount)} />
           <Detail label="Failed instruments" value={countText(operation.failedInstrumentCount)} />
           <Detail label="Pending instruments" value={countText(operation.pendingInstrumentCount)} />
-          <Detail label="Discovery gaps" value={countText(operation.discoveryGapCount)} />
+          <Detail label="Disclosure list gaps" value={countText(operation.discoveryGapCount)} />
           <Detail label="Outcome" value={operation.outcome === null ? "None" : outcomeText(operation.outcome)} />
           <Detail label="Failure code" code value={operation.failureCode ?? "None"} />
           <Detail label="Previous attempt failure" code value={operation.lastFailureCode ?? "None"} />

@@ -27,6 +27,7 @@ from thesistrace.data.financial_collection import (
     FinancialShardCheckpoint,
     RawFinancialBatchStore,
 )
+from thesistrace.data.financial_disclosures import DISCOVERY_COVERAGE_KINDS
 from thesistrace.data.generation_files import AddressedFileError, AddressedFileStore
 from thesistrace.data.generation_schema import (
     GENERATION_MANIFEST_MAX_BYTES,
@@ -132,6 +133,12 @@ class FinancialFamilyCandidate:
     discovery_gap_count: int = 0
     earliest_unresolved_date: str | None = None
     source_lineage_sha256: str | None = None
+
+
+@dataclass(frozen=True)
+class ValidatedFinancialInstrument:
+    canonical_changed: bool
+    report_periods: Mapping[str, tuple[str, ...]]
 
 
 @dataclass(frozen=True)
@@ -478,8 +485,8 @@ class FinancialCandidateStore:
         *,
         prior_candidate_manifest_sha256: str,
         observation_through_session: str,
-    ) -> bool:
-        """Validate one targeted snapshot and report whether Canonical rows changed."""
+    ) -> ValidatedFinancialInstrument:
+        """Return accepted report periods and Canonical changes from one validation."""
         if len({item.instrument_id for item in collection.shards}) != 1:
             raise FinancialCandidateError("FINANCIAL_DAILY_INSTRUMENT_INVALID")
         prior = self.reopen(prior_candidate_manifest_sha256)
@@ -515,7 +522,7 @@ class FinancialCandidateStore:
             )
         )
         self._validate_historical_identities(prior_checkpoints, historical)
-        deltas, quarantine_unchanged = self._daily_table_deltas(
+        deltas, quarantine_unchanged, reports = self._daily_table_deltas(
             collection.shards,
             calendar_instruments=frozenset(),
             prior_checkpoints=prior_checkpoints,
@@ -530,7 +537,9 @@ class FinancialCandidateStore:
         )
         if not quarantine_unchanged:
             raise FinancialCandidateError("FINANCIAL_DAILY_INSTRUMENT_INVALID")
-        return any(deltas[endpoint] for endpoint in FINANCIAL_ENDPOINTS)
+        return ValidatedFinancialInstrument(
+            any(deltas[endpoint] for endpoint in FINANCIAL_ENDPOINTS), reports,
+        )
 
     def _materialize_daily(
         self,
@@ -546,7 +555,7 @@ class FinancialCandidateStore:
         current_lifecycles: Sequence[HistoricalInstrumentLifecycle],
     ) -> FinancialFamilyCandidate:
         coverage_start = str(prior_manifest["dataset_coverage"]["start"])
-        deltas, quarantine_unchanged = self._daily_table_deltas(
+        deltas, quarantine_unchanged, _reports = self._daily_table_deltas(
             collection.shards,
             calendar_instruments=self._calendar_reprojection_instruments(
                 prior_candidate_manifest_sha256, prior_sessions, current_sessions,
@@ -636,10 +645,10 @@ class FinancialCandidateStore:
         prior_sessions: list[str],
         current_lifecycles: Sequence[HistoricalInstrumentLifecycle],
         prior_generation_manifest_sha256: str,
-    ) -> tuple[dict[str, list[dict[str, object]]], bool]:
+    ) -> tuple[dict[str, list[dict[str, object]]], bool, dict[str, tuple[str, ...]]]:
         affected = {item.instrument_id for item in current_checkpoints} | calendar_instruments
         if not affected:
-            return ({endpoint: [] for endpoint in FINANCIAL_ENDPOINTS}, True)
+            return ({endpoint: [] for endpoint in FINANCIAL_ENDPOINTS}, True, {})
         prior_affected = tuple(
             item for item in prior_checkpoints if item.instrument_id in affected
         )
@@ -662,6 +671,7 @@ class FinancialCandidateStore:
             and (not item.listed_to or item.listed_to >= coverage_start)
         }
         deltas: dict[str, list[dict[str, object]]] = {}
+        reports: dict[str, tuple[str, ...]] = {}
         quarantine_unchanged = True
         for endpoint in FINANCIAL_ENDPOINTS:
             old_versions, old_quarantine = self._canonical_versions(
@@ -696,6 +706,11 @@ class FinancialCandidateStore:
                 )
                 for version in new_retained
             }
+            reports[endpoint] = tuple(sorted({
+                period for _instrument, period in _statement_report_inventory(
+                    new_rows.values(), current_sessions[-1],
+                )
+            }))
             if not set(old_rows).issubset(new_rows):
                 raise FinancialCandidateError("FINANCIAL_DAILY_DELETE_REQUIRED")
             deltas[endpoint] = [
@@ -706,7 +721,7 @@ class FinancialCandidateStore:
             quarantine_unchanged = quarantine_unchanged and {
                 item.source_row_sha256 for item in old_quarantine
             } == {item.source_row_sha256 for item in new_quarantine}
-        return deltas, quarantine_unchanged
+        return deltas, quarantine_unchanged, reports
 
     def _calendar_reprojection_instruments(
         self, prior_digest: str, prior_sessions: list[str], current_sessions: list[str],
@@ -1562,7 +1577,7 @@ class FinancialCandidateStore:
             _aware_iso(item.collected_at) > finished_at for item in current_checkpoints
         ):
             raise FinancialCandidateError("FINANCIAL_SOURCE_COLLECTION_INVALID")
-        deltas, quarantine_unchanged = self._daily_table_deltas(
+        deltas, quarantine_unchanged, _reports = self._daily_table_deltas(
             current_checkpoints,
             calendar_instruments=self._calendar_reprojection_instruments(
                 str(source_collection["prior_candidate_manifest_sha256"]), prior_sessions, sessions,
@@ -1627,6 +1642,34 @@ class FinancialCandidateStore:
         ):
             raise FinancialCandidateError("FINANCIAL_COVERAGE_INVALID")
         return descriptor
+
+    def report_inventory(self, manifest_sha256: str, *, through: str):
+        """Report presence is independent of field nulls and session availability."""
+        manifest = self._read_family(manifest_sha256)
+        result = {endpoint: set() for endpoint in FINANCIAL_ENDPOINTS}
+        columns = [
+            "instrument_id",
+            "source_report_period",
+            "source_published_date",
+            "source_report_type",
+            "availability_status",
+        ]
+        for reference in manifest["tables"]:
+            endpoint = _TABLE_ENDPOINTS[reference["name"]]
+            digest = reference["manifest_sha256"]
+            table = self._read_json(
+                self._manifest_path(digest), digest, reference["manifest_byte_count"]
+            )
+            for part in table["objects"]:
+                content = self._read(
+                    self._object_path(part["sha256"]),
+                    part["sha256"],
+                    part["byte_count"],
+                    GENERATION_OBJECT_MAX_BYTES,
+                )
+                rows = pq.read_table(pa.BufferReader(content), columns=columns).to_pylist()
+                result[endpoint].update(_statement_report_inventory(rows, through))
+        return result
 
     def read_table(self, manifest_sha256: str, table_name: str) -> tuple[dict[str, object], ...]:
         manifest = self._read_family(manifest_sha256)
@@ -2731,7 +2774,7 @@ class FinancialCandidateStore:
             earliest_value = normalized["earliest_unresolved_date"]
             earliest = None if earliest_value is None else str(earliest_value)
             lineage = str(normalized["source_lineage_sha256"])
-            reconciliation_status = "announcement-driven"
+            reconciliation_status = "disclosure-checked"
         table_names = tuple(str(item.get("name")) for item in tables if isinstance(item, Mapping))
         if table_names != tuple(_ENDPOINT_TABLES.values()):
             raise FinancialCandidateError("FINANCIAL_TABLE_SET_INVALID")
@@ -2831,7 +2874,6 @@ def _table_contract(table_name: str, source_fields: tuple[str, ...]) -> ParquetW
             "source_row_sha256",
         ),
     )
-
 
 
 def _ttm_coverage_seeds(
@@ -3191,13 +3233,13 @@ def _discovery_coverage(
 ) -> dict[str, object]:
     _validate_discovery_publication(discovery)
     return {
-        "kind": "financial-announcement-observation-range",
+        "kind": "financial-disclosure-observation-range",
         "start": coverage_start,
         "discovery_baseline_session": discovery.baseline_session,
         "discovery_attempted_through_session": discovery.attempted_through_session,
         "discovery_complete_through_session": discovery.complete_through_session,
         "historical_reconciliation_watermark": discovery.baseline_session,
-        "revision_coverage": "cninfo-announcement-driven-tushare-observed",
+        "revision_coverage": "tushare-disclosure-periods-with-rotating-reconciliation",
         "seed_policy": "annual-stock-and-ttm-dependency-seeds",
         "readiness_status": discovery.readiness_status,
         "pending_instrument_count": discovery.pending_instrument_count,
@@ -3254,6 +3296,10 @@ def _validated_discovery_coverage(coverage: Mapping[str, object]) -> dict[str, o
     if not isinstance(seed_policy, str) or not seed_policy.strip():
         raise FinancialCandidateError("FINANCIAL_COVERAGE_INVALID")
     normalized = _discovery_coverage(start, publication)
+    if coverage["kind"] == "financial-announcement-observation-range":
+        # Archived source provenance stays immutable when reopening an accepted Generation.
+        normalized["kind"] = "financial-announcement-observation-range"
+        normalized["revision_coverage"] = "cninfo-announcement-driven-tushare-observed"
     # Seed provenance describes the stored facts, not the currently active writer.
     # Field admission still uses the candidate's own declared projection contract.
     normalized["seed_policy"] = seed_policy
@@ -3270,7 +3316,7 @@ def _coverage_baseline(manifest: Mapping[str, object]) -> str:
         raise FinancialCandidateError("FINANCIAL_COVERAGE_INVALID")
     value = (
         coverage.get("discovery_baseline_session")
-        if coverage.get("kind") == "financial-announcement-observation-range"
+        if coverage.get("kind") in DISCOVERY_COVERAGE_KINDS
         else coverage.get("historical_reconciliation_watermark")
     )
     try:
@@ -3285,13 +3331,23 @@ def _coverage_complete_through(manifest: Mapping[str, object]) -> str:
         raise FinancialCandidateError("FINANCIAL_COVERAGE_INVALID")
     value = (
         coverage.get("discovery_complete_through_session")
-        if coverage.get("kind") == "financial-announcement-observation-range"
+        if coverage.get("kind") in DISCOVERY_COVERAGE_KINDS
         else coverage.get("observation_through_session")
     )
     try:
         return date.fromisoformat(str(value)).isoformat()
     except ValueError as error:
         raise FinancialCandidateError("FINANCIAL_COVERAGE_INVALID") from error
+
+
+def _statement_report_inventory(rows, through):
+    return {
+        (row["instrument_id"], _iso_date(row["source_report_period"]))
+        for row in rows
+        if row["availability_status"] in {"available", "pending_calendar", "outside_calendar"}
+        and row["source_report_type"] == "1"
+        and row["source_report_period"] <= row["source_published_date"] <= through.replace("-", "")
+    }
 
 
 def _version_row(

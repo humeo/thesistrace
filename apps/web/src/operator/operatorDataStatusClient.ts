@@ -32,6 +32,9 @@ type DatasetOperationalHead = Readonly<{
   financialCompleteThroughSession: string | null;
   financialLastRefreshAt: string | null;
   financialPendingInstrumentCount: number | null;
+  financialIndicatorPendingInstrumentCount: number | null;
+  financialIndicatorCheckedThroughSession: string | null;
+  financialIndicatorCompleteThroughSession: string | null;
   financialDiscoveryGapCount: number | null;
   financialEarliestUnresolvedDate: string | null;
   industryCoverageStart: string | null;
@@ -204,6 +207,9 @@ function decodeHead(value: unknown): DatasetOperationalHead {
       "financial_complete_through_session",
       "financial_last_refresh_at",
       "financial_pending_instrument_count",
+      "financial_indicator_pending_instrument_count",
+      "financial_indicator_checked_through_session",
+      "financial_indicator_complete_through_session",
       "financial_discovery_gap_count",
       "financial_earliest_unresolved_date",
       "industry_coverage_start",
@@ -228,6 +234,9 @@ function decodeHead(value: unknown): DatasetOperationalHead {
     || !isOptionalSession(value.financial_complete_through_session)
     || !isOptionalTimestamp(value.financial_last_refresh_at)
     || !isOptionalCount(value.financial_pending_instrument_count)
+    || !isOptionalCount(value.financial_indicator_pending_instrument_count)
+    || !isOptionalSession(value.financial_indicator_checked_through_session)
+    || !isOptionalSession(value.financial_indicator_complete_through_session)
     || !isOptionalCount(value.financial_discovery_gap_count)
     || !isOptionalSession(value.financial_earliest_unresolved_date)
     || !isOptionalSession(value.industry_coverage_start)
@@ -260,6 +269,9 @@ function decodeHead(value: unknown): DatasetOperationalHead {
     financialCompleteThroughSession: value.financial_complete_through_session,
     financialLastRefreshAt: value.financial_last_refresh_at,
     financialPendingInstrumentCount: value.financial_pending_instrument_count,
+    financialIndicatorPendingInstrumentCount: value.financial_indicator_pending_instrument_count,
+    financialIndicatorCheckedThroughSession: value.financial_indicator_checked_through_session,
+    financialIndicatorCompleteThroughSession: value.financial_indicator_complete_through_session,
     financialDiscoveryGapCount: value.financial_discovery_gap_count,
     financialEarliestUnresolvedDate: value.financial_earliest_unresolved_date,
     industryCoverageStart: value.industry_coverage_start,

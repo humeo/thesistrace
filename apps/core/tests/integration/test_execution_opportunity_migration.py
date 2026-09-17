@@ -8,6 +8,14 @@ from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from thesistrace._postgres import PostgresDatabase, initialize_schemas
 
 
+@pytest.fixture(autouse=True)
+def release_contract(monkeypatch, execution_opportunity_target_schemas):
+    monkeypatch.setattr(
+        "thesistrace.migrations.execution_opportunities_0004.CORE_SCHEMA_DEFINITIONS",
+        execution_opportunity_target_schemas,
+    )
+
+
 @pytest.fixture
 def source_database(core_settings, payload_retention_target_schemas):
     name = "execution_migration_" + uuid4().hex

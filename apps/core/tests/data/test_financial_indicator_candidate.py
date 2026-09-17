@@ -405,7 +405,7 @@ def test_candidate_projects_one_security_payload_at_a_time(tmp_path, monkeypatch
 
 
 def test_discovery_extends_coverage_without_claiming_another_raw_query(tmp_path):
-    from thesistrace.data.financial_announcements import FINANCIAL_ANNOUNCEMENT_CATEGORIES
+    FINANCIAL_ANNOUNCEMENT_CATEGORIES = ("年报", "半年报", "一季报", "三季报", "补充更正")
     from thesistrace.publication.serialization import canonical_json_bytes
 
     raw = RawFinancialBatchStore(tmp_path)

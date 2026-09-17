@@ -24,8 +24,8 @@ from thesistrace.data.daily_financial_refresh import (
     FinancialDailyRefreshOutcome,
     reconcile_daily_financial_publication,
 )
-from thesistrace.data.financial_announcements import FinancialAnnouncementSource
 from thesistrace.data.financial_collection import FinancialRawSource
+from thesistrace.data.financial_disclosures import FinancialDisclosureSource
 from thesistrace.data.financial_progress import FinancialRefreshProgress, read_financial_progress
 from thesistrace.data.generation_store import GenerationStoreError, MountedGenerationStore
 from thesistrace.data.head_store import (
@@ -455,7 +455,7 @@ class DataRefreshService:
         source: DataSource,
         *,
         benchmark_source: BenchmarkLevelSource,
-        financial_announcement_source: FinancialAnnouncementSource | None = None,
+        financial_disclosure_source: FinancialDisclosureSource | None = None,
         financial_source: FinancialRawSource | None = None,
         indicator_provider: FinancialIndicatorProvider | None = None,
         financial_source_window_selector: Callable[[str, str], None] | None = None,
@@ -466,7 +466,7 @@ class DataRefreshService:
             return self._process_next(
                 source,
                 benchmark_source=benchmark_source,
-                financial_announcement_source=financial_announcement_source,
+                financial_disclosure_source=financial_disclosure_source,
                 financial_source=financial_source,
                 indicator_provider=indicator_provider,
                 financial_source_window_selector=financial_source_window_selector,
@@ -479,7 +479,7 @@ class DataRefreshService:
         source: DataSource,
         *,
         benchmark_source: BenchmarkLevelSource,
-        financial_announcement_source: FinancialAnnouncementSource | None,
+        financial_disclosure_source: FinancialDisclosureSource | None,
         financial_source: FinancialRawSource | None,
         indicator_provider: FinancialIndicatorProvider | None,
         financial_source_window_selector: Callable[[str, str], None] | None,
@@ -494,7 +494,7 @@ class DataRefreshService:
         if claim.kind == "financial":
             return self._process_financial_claim(
                 claim,
-                announcement_source=financial_announcement_source,
+                disclosure_source=financial_disclosure_source,
                 financial_source=financial_source,
                 indicator_provider=indicator_provider,
                 financial_source_window_selector=financial_source_window_selector,
@@ -718,7 +718,7 @@ class DataRefreshService:
         self,
         claim: _RefreshClaim,
         *,
-        announcement_source: FinancialAnnouncementSource | None,
+        disclosure_source: FinancialDisclosureSource | None,
         financial_source: FinancialRawSource | None,
         indicator_provider: FinancialIndicatorProvider | None,
         financial_source_window_selector: Callable[[str, str], None] | None,
@@ -739,7 +739,7 @@ class DataRefreshService:
         )
         try:
             if (
-                announcement_source is None
+                disclosure_source is None
                 or financial_source is None
                 or indicator_provider is None
             ):
@@ -750,7 +750,7 @@ class DataRefreshService:
                     outcome = DailyFinancialRefreshService(
                         self._database,
                         self._generations.root,
-                        announcement_source,
+                        disclosure_source,
                         financial_source,
                         indicator_provider=indicator_provider,
                         clock=self._clock,
@@ -2283,43 +2283,18 @@ def _financial_failure_diagnostics(
     if operation is None or operation["discovery_evidence"] is None:
         return None
     counts = transaction.execute(
-        """
-        SELECT
-            count(*) FILTER (
-                WHERE status = 'matched' AND last_attempt_operation_key = %s
-            ) AS matched_count,
-            count(*) FILTER (
-                WHERE status = 'checked_no_structured_change'
-                  AND last_attempt_operation_key = %s
-            ) AS checked_count,
-            (
-                SELECT count(*)
-                FROM data.financial_refresh_instrument_attempts
-                WHERE idempotency_key = %s AND status = 'accepted'
-            ) AS accepted_count,
-            (
-                SELECT count(*)
-                FROM data.financial_refresh_instrument_attempts
-                WHERE idempotency_key = %s AND status = 'failed'
-            ) AS failed_count,
-            count(DISTINCT instrument_id) FILTER (
-                WHERE status = 'pending' AND source_published_date <= %s
-            ) AS pending_count,
-            (
-                SELECT count(*)
-                FROM data.financial_discovery_gaps
-                WHERE status = 'open' AND unresolved_from_date <= %s
-            ) AS gap_count
-        FROM data.financial_announcement_triggers
-        """,
-        (
-            idempotency_key,
-            idempotency_key,
-            idempotency_key,
-            idempotency_key,
-            operation["target_session"],
-            operation["target_session"],
-        ),
+        """SELECT count(*) FILTER (WHERE status='accepted'
+                   AND jsonb_array_length(matched_announcement_ids)>0) AS matched_count,
+               count(*) FILTER (WHERE status='accepted'
+                   AND jsonb_array_length(matched_announcement_ids)=0) AS checked_count,
+               count(*) FILTER (WHERE status='accepted') AS accepted_count,
+               count(*) FILTER (WHERE status='failed') AS failed_count,
+               (SELECT count(DISTINCT instrument_id) FROM data.financial_report_targets
+                WHERE resolved_evidence_sha256 IS NULL AND actual_date<=%s) AS pending_count,
+               %s::integer AS gap_count
+        FROM data.financial_refresh_instrument_attempts WHERE idempotency_key=%s""",
+        (operation["target_session"], len(operation["discovery_evidence"]["gaps"]),
+         idempotency_key),
     ).fetchone()
     assert counts is not None
     return (

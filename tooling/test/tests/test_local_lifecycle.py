@@ -782,6 +782,8 @@ def test_core_has_one_operational_output_schema_and_no_log_files() -> None:
         "migrations/financial_indicator.py",  # Explicit data-preserving upgrade receipt.
         "migrations/publication_maintenance_0002.py",  # Explicit migration receipt.
         "migrations/payload_retention_0003.py",  # Explicit data-preserving migration receipt.
+        "migrations/execution_opportunities_0004.py",  # Explicit migration CLI JSON receipt.
+        "migrations/financial_disclosures_0005.py",  # Explicit data-preserving migration receipt.
         "migrations/rank_ic_0001.py",  # Explicit migration CLI JSON receipt.
     }
     assert not [

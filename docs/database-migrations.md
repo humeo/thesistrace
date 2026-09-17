@@ -141,3 +141,30 @@ drift are rejected. Failures before commit roll back all changes. Restoration
 after commit requires stopping writers and restoring the verified backup with
 its matching application images. Initialize and start all Core services with the
 target release after successful application.
+
+## 0005: Structured financial disclosures
+
+- Source: `7243074d627ca77e20ea9d5f10bed2a9ae413ca7db730d3bd37e1ff7ad5369a2`
+- Target: `5c82cb46665a54816e186fe74105c25ef287cc661e43fcdc8a58e4d94450ee8c`
+- Preflight: `python -m thesistrace.migrations.financial_disclosures_0005`.
+- Apply: the same command with `--apply`, using the database owner URL.
+
+Drain Financial Refresh operations and stop Core writers. Build the target image,
+take a restricted PostgreSQL backup and verify restoration before applying;
+preserve the dataset mount and referenced object-storage bytes. A running
+Financial Refresh, an unknown fingerprint or drift in an affected table blocks
+the upgrade.
+
+This adds a frozen statement collection plan, the instrument/endpoint/report-period
+requirement ledger and the bounded reconciliation schedule. Existing report
+facts, Dataset Head, published Generations, receipts and historical announcement
+targets remain unchanged. Historical announcement rows are audit records only;
+the first refresh checks `disclosure_date` and reconciles against accepted report
+evidence to establish current requirements.
+
+DDL, runtime grants, the migration receipt and the schema fingerprint commit in
+one transaction. Failed application rolls back all changes; repeating a completed
+upgrade verifies the affected target structures and preserves progress. For a
+post-commit rollback, stop writers and restore the verified backup with its
+matching application images. Start the target Core services only after the
+migration succeeds. Do not reset the database or alter its fingerprint manually.
