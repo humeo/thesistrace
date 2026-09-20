@@ -1,4 +1,3 @@
-import { OperatorCodeField } from "./OperatorCodeField";
 import { useEffect, useRef, useState } from "react";
 
 import type { DataRefreshOperationalStatus } from "./operatorDataStatusClient";
@@ -35,7 +34,6 @@ export function OperatorDataRefreshActionDialog({
 }>) {
   const dialog = useRef<HTMLDialogElement | null>(null);
   const request = useRef<AbortController | null>(null);
-  const [otp, setOtp] = useState("");
   const [newKey] = useState(() => (
     action.action === "retry"
       ? suggestDataRefreshRetryKey(action.operation.kind, now())
@@ -84,10 +82,8 @@ export function OperatorDataRefreshActionDialog({
     try {
       const confirmed = await confirmDataRefreshActionProof(
         actionRequest,
-        otp,
         controller.signal,
       );
-      setOtp("");
       mutationStarted = true;
       const receipt = await submitDataRefreshAction(
         actionRequest,
@@ -122,7 +118,6 @@ export function OperatorDataRefreshActionDialog({
         setError("Confirmation is temporarily unavailable. Try again.");
       }
     } finally {
-      setOtp("");
       request.current = null;
       setSubmitting(false);
     }
@@ -173,7 +168,7 @@ export function OperatorDataRefreshActionDialog({
           </h2>
         </header>
         <p id={descriptionId}>
-          Review the exact receipt and effect before confirming with your verification code.
+          Review the exact receipt and effect before confirming this action.
         </p>
         <dl className="operator-confirmation-target">
           <div><dt>Kind</dt><dd><strong>{kindText(operation.kind)}</strong></dd></div>
@@ -192,7 +187,6 @@ export function OperatorDataRefreshActionDialog({
           </p>
         </div>
         {keyError === null ? null : <p role="alert">{keyError}</p>}
-        <OperatorCodeField value={otp} onChange={setOtp} disabled={submitting} />
         {error === null ? null : (
           <p className="inline-status inline-status-error" role="alert">{error}</p>
         )}
@@ -268,7 +262,6 @@ function dataRefreshActionMessage(
   action: DataRefreshStatusAction["action"],
   reason: OperatorMutationError,
 ): string {
-  if (reason.code === "invalid-otp") return "The verification code is incorrect or has expired.";
   if (reason.code === "invalid-proof") {
     return "Confirmation expired or was already used. Submit again.";
   }

@@ -470,7 +470,6 @@ describe("Operator mutation client", () => {
   });
 
   it("binds Cancel and Retry proofs to exact immutable receipt actions", async () => {
-    const otp = "123456";
     const cancel = {
       action: "cancel" as const,
       kind: "market" as const,
@@ -513,7 +512,6 @@ describe("Operator mutation client", () => {
 
     const cancelProof = await confirmDataRefreshActionProof(
       cancel,
-      otp,
       signal,
     );
     await expect(
@@ -522,7 +520,7 @@ describe("Operator mutation client", () => {
       idempotencyKey: cancel.sourceIdempotencyKey,
       status: "cancelled",
     });
-    const retryProof = await confirmDataRefreshActionProof(retry, otp, signal);
+    const retryProof = await confirmDataRefreshActionProof(retry, signal);
     await expect(
       submitDataRefreshAction(retry, retryProof.proof, signal),
     ).resolves.toMatchObject({
@@ -537,7 +535,6 @@ describe("Operator mutation client", () => {
         body: JSON.stringify({
           kind: cancel.kind,
           operation: "data.refresh.cancel",
-          otp,
           source_idempotency_key: cancel.sourceIdempotencyKey,
           target: cancel.target,
         }),
@@ -563,7 +560,6 @@ describe("Operator mutation client", () => {
           kind: retry.kind,
           new_idempotency_key: retry.newIdempotencyKey,
           operation: "data.refresh.retry",
-          otp,
           source_idempotency_key: retry.sourceIdempotencyKey,
           target: retry.target,
         }),
@@ -582,8 +578,7 @@ describe("Operator mutation client", () => {
         }),
       }),
     );
-    expect(JSON.stringify(fetchMock.mock.calls[1])).not.toContain(otp);
-    expect(JSON.stringify(fetchMock.mock.calls[3])).not.toContain(otp);
+    expect(JSON.stringify(fetchMock.mock.calls)).not.toContain("otp");
   });
 
   it.each([

@@ -73,7 +73,7 @@ describe.sequential("Auth Operator Proof", () => {
     await owner.end();
   });
 
-  it("authorizes refresh submissions without email while rejecting a revoked Operator", async () => {
+  it("authorizes every Data Refresh proof without email while rejecting a revoked Operator", async () => {
     const proofService = new OperatorProofService({
       clock: () => now,
       pool: runtimePool,
@@ -83,6 +83,8 @@ describe.sequential("Auth Operator Proof", () => {
       { operation: "data.refresh.market.submit", asOf: "2026-08-11T18:00:00+08:00", idempotencyKey: "market-no-email" },
       { operation: "data.refresh.financial.submit", observationThroughSession: "2026-08-11", idempotencyKey: "financial-no-email" },
       { operation: "data.refresh.industry.submit", observationThroughSession: "2026-08-11", idempotencyKey: "industry-no-email" },
+      { operation: "data.refresh.cancel", kind: "market", sourceIdempotencyKey: "market-cancel-no-email", target: "2026-08-11T10:00:00+00:00" },
+      { operation: "data.refresh.retry", kind: "financial", newIdempotencyKey: "financial-retry-no-email", sourceIdempotencyKey: "financial-failed-no-email", target: "2026-08-11" },
     ] as const;
     for (const request of requests) {
       const confirmed = await proofService.confirm(principal(), request);
@@ -321,10 +323,7 @@ describe.sequential("Auth Operator Proof", () => {
       sourceIdempotencyKey: "market-cancel-source",
       target: "2026-08-11T10:00:00+00:00",
     };
-    const confirmed = await proofService.confirm(principal(), {
-      ...request,
-      otp: "123456",
-    });
+    const confirmed = await proofService.confirm(principal(), request);
 
     for (const mismatch of [
       { ...request, sourceIdempotencyKey: "different-source" },
@@ -361,10 +360,7 @@ describe.sequential("Auth Operator Proof", () => {
       sourceIdempotencyKey: "industry-failed-source",
       target: "2026-08-14",
     };
-    const confirmed = await proofService.confirm(principal(), {
-      ...request,
-      otp: "123456",
-    });
+    const confirmed = await proofService.confirm(principal(), request);
 
     for (const mismatch of [
       { ...request, sourceIdempotencyKey: "different-source" },

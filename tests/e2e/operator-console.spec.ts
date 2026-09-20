@@ -183,7 +183,6 @@ test("Operator access control and responsive navigation", { tag: "@isolated" }, 
       {
         kind: "market",
         operation: "data.refresh.cancel",
-        otp: "123456",
         source_idempotency_key: "ordinary-denied-action-source",
         target: "2026-08-11T10:00:00Z",
       },
@@ -194,7 +193,6 @@ test("Operator access control and responsive navigation", { tag: "@isolated" }, 
         kind: "industry",
         new_idempotency_key: "ordinary-denied-action-retry",
         operation: "data.refresh.retry",
-        otp: "123456",
         source_idempotency_key: "ordinary-denied-action-source",
         target: "2026-08-11",
       },
@@ -2011,10 +2009,8 @@ test("Operator Dataset operations and Worker recovery", { tag: "@isolated" }, as
   await expect(cancelDialog).toContainText(cancelSourceTarget);
   await expect(cancelDialog).toContainText(cancelSourceKey);
   await expect(cancelDialog).toContainText("The Worker will never claim this queued receipt");
-  const cancelPassword = cancelDialog.getByLabel("Verification code");
-  await expect(cancelPassword).toBeFocused();
-  await fillOperatorCode(cancelPassword);
-  await cancelPassword.press("Enter");
+  await expect(cancelDialog.getByLabel("Verification code")).toHaveCount(0);
+  await cancelDialog.getByRole("button", { name: "Cancel queued operation" }).click();
   await expect(cancelDialog).toHaveCount(0);
   await expect(cancelSourceRow.getByText("Cancelled", { exact: true })).toBeVisible();
   await expect(cancelSourceRow.getByRole("button", {
@@ -2044,8 +2040,8 @@ test("Operator Dataset operations and Worker recovery", { tag: "@isolated" }, as
     new URL(request.url()).pathname === "/api/auth/operator/proofs"
     && request.method() === "POST"
     && request.postDataJSON().operation === "data.refresh.retry");
-  await fillOperatorCode(retryDialog.getByLabel("Verification code"));
-  await retryDialog.getByLabel("Verification code").press("Enter");
+  await expect(retryDialog.getByLabel("Verification code")).toHaveCount(0);
+  await retryDialog.getByRole("button", { name: "Create Retry" }).click();
   const actionRetryKey = (await retryProofRequest).postDataJSON().new_idempotency_key as string;
   expect(actionRetryKey).toMatch(/^market-retry-\d{8}T\d{6}Z-[a-f0-9-]{36}$/);
   expect(actionRetryKey).not.toBe(cancelSourceKey);
@@ -2075,8 +2071,8 @@ test("Operator Dataset operations and Worker recovery", { tag: "@isolated" }, as
   }).click();
   const rejectedCancel = page.getByRole("dialog", { name: "Cancel queued Refresh?" });
   markDataRefreshRunning(claimedSourceKey);
-  await fillOperatorCode(rejectedCancel.getByLabel("Verification code"));
-  await rejectedCancel.getByLabel("Verification code").press("Enter");
+  await expect(rejectedCancel.getByLabel("Verification code")).toHaveCount(0);
+  await rejectedCancel.getByRole("button", { name: "Cancel queued operation" }).click();
   await expect(rejectedCancel.getByRole("alert")).toContainText(
     "The Worker claimed this operation before Cancel won",
   );
@@ -2099,7 +2095,7 @@ test("Operator Dataset operations and Worker recovery", { tag: "@isolated" }, as
   expect(actionProofRequests).toHaveLength(3);
   for (const request of actionProofRequests) {
     const proofRequest = JSON.parse(request.body);
-    expect(proofRequest.otp).toMatch(/^\d{6}$/);
+    expect(proofRequest).not.toHaveProperty("otp");
     expect(proofRequest).not.toHaveProperty("password");
   }
   expect(actionMutations).toHaveLength(3);

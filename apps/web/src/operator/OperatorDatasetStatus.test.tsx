@@ -310,7 +310,7 @@ describe("Operator Dataset status", () => {
     expect(markup).not.toContain("cannot start");
   });
 
-  it("shows exact Cancel facts and effect before asking for the otp", () => {
+  it("shows exact Cancel facts and effect without an email code", () => {
     const target = operation({
       idempotencyKey: "market-cancel-source",
       kind: "market",
@@ -331,7 +331,8 @@ describe("Operator Dataset status", () => {
     expect(markup).toContain("2026-08-30T08:00:00Z");
     expect(markup).toContain("market-cancel-source");
     expect(markup).toContain("The Worker will never claim this queued receipt");
-    expect(markup.indexOf("Effect")).toBeLessThan(markup.indexOf("Verification code"));
+    expect(markup).not.toContain("Verification code");
+    expect(markup).not.toContain("Send confirmation code");
     expect(markup).not.toContain("New idempotency key");
   });
 
@@ -362,6 +363,7 @@ describe("Operator Dataset status", () => {
     expect(markup).not.toContain("New idempotency key");
     expect(markup).toContain("The original failed receipt remains unchanged and inspectable");
     expect(markup).toContain("accepted into the FIFO as new queued work");
+    expect(markup).not.toContain("Verification code");
   });
 
   it("polls for non-terminal work or an unavailable Worker", () => {

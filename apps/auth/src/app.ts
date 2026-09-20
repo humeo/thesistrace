@@ -89,7 +89,6 @@ const operatorProofSchema = z.union([
     .object({
       kind: z.enum(["market", "financial", "industry"]),
       operation: z.literal("data.refresh.cancel"),
-      otp: z.string().regex(/^\d{6}$/),
       source_idempotency_key: z.string().refine(isMarketRefreshIdempotencyKey),
       target: z.string().min(1).max(128),
     })
@@ -100,7 +99,6 @@ const operatorProofSchema = z.union([
       kind: z.enum(["market", "financial", "industry"]),
       new_idempotency_key: z.string().refine(isMarketRefreshIdempotencyKey),
       operation: z.literal("data.refresh.retry"),
-      otp: z.string().regex(/^\d{6}$/),
       source_idempotency_key: z.string().refine(isMarketRefreshIdempotencyKey),
       target: z.string().min(1).max(128),
     })
@@ -528,7 +526,6 @@ export function createAuthApp(dependencies: AuthAppDependencies, mcpRoutes?: Ret
                 ? {
                     kind: body.kind,
                     operation: body.operation,
-                    otp: body.otp,
                     sourceIdempotencyKey: body.source_idempotency_key,
                     target: body.target,
                   }
@@ -537,7 +534,6 @@ export function createAuthApp(dependencies: AuthAppDependencies, mcpRoutes?: Ret
                       kind: body.kind,
                       newIdempotencyKey: body.new_idempotency_key,
                       operation: body.operation,
-                      otp: body.otp,
                       sourceIdempotencyKey: body.source_idempotency_key,
                       target: body.target,
                     }

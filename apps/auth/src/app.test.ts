@@ -1046,10 +1046,7 @@ describe("Auth HTTP boundary", () => {
     const confirmation = await app.request(
       "http://auth.test/api/auth/operator/proofs",
       {
-        body: JSON.stringify({
-          ...request,
-          otp: "123456",
-        }),
+        body: JSON.stringify(request),
         headers: {
           "content-type": "application/json",
           cookie: "operator=fake",
@@ -1065,7 +1062,7 @@ describe("Auth HTTP boundary", () => {
         researcherId: "00000000-0000-4000-8000-000000000001",
         sessionId: "00000000-0000-4000-8000-000000000010",
       },
-      { ...expected, otp: "123456" },
+      expected,
     );
 
     const consumed = await app.request(
@@ -1108,10 +1105,7 @@ describe("Auth HTTP boundary", () => {
     const confirmation = await app.request(
       "http://auth.test/api/auth/operator/proofs",
       {
-        body: JSON.stringify({
-          ...request,
-          otp: "123456",
-        }),
+        body: JSON.stringify(request),
         headers,
         method: "POST",
       },

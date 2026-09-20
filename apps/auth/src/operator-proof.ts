@@ -109,12 +109,17 @@ export type OperatorProofRequest =
       target: string;
     }>;
 
-type DataRefreshSubmitRequest = Extract<OperatorProofRequest, {
-  operation: "data.refresh.market.submit" | "data.refresh.financial.submit" | "data.refresh.industry.submit";
+type DataRefreshRequest = Extract<OperatorProofRequest, {
+  operation:
+    | "data.refresh.market.submit"
+    | "data.refresh.financial.submit"
+    | "data.refresh.industry.submit"
+    | "data.refresh.cancel"
+    | "data.refresh.retry";
 }>;
 export type OperatorProofConfirmationRequest =
-  | DataRefreshSubmitRequest
-  | (Exclude<OperatorProofRequest, DataRefreshSubmitRequest> & Readonly<{ otp: string }>);
+  | DataRefreshRequest
+  | (Exclude<OperatorProofRequest, DataRefreshRequest> & Readonly<{ otp: string }>);
 
 export type OperatorProofClaim = Readonly<{
   claimedAt: Date;
@@ -194,9 +199,7 @@ export class OperatorProofService {
   ): Promise<Readonly<{ expiresAt: string; proof: string }>> {
     assertPrincipal(principal);
     const request = normalizeProofRequest(input);
-    if (input.operation !== "data.refresh.market.submit"
-      && input.operation !== "data.refresh.financial.submit"
-      && input.operation !== "data.refresh.industry.submit") {
+    if ("otp" in input) {
       if (!this.#verifyCode) throw new OperatorCodeInvalidError();
       await this.#verifyCode(principal, input.otp);
     }

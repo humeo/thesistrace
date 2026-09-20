@@ -372,7 +372,6 @@ export async function loadIndustryRefresh(
 
 export async function confirmDataRefreshActionProof(
   request: DataRefreshActionRequest,
-  otp: string,
   signal: AbortSignal,
 ): Promise<Readonly<{ expiresAt: string; proof: string }>> {
   let body: Readonly<Record<string, string>>;
@@ -380,7 +379,6 @@ export async function confirmDataRefreshActionProof(
     body = {
       kind: request.kind,
       operation: "data.refresh.cancel",
-      otp,
       source_idempotency_key: request.sourceIdempotencyKey,
       target: request.target,
     };
@@ -389,7 +387,6 @@ export async function confirmDataRefreshActionProof(
       kind: request.kind,
       new_idempotency_key: request.newIdempotencyKey,
       operation: "data.refresh.retry",
-      otp,
       source_idempotency_key: request.sourceIdempotencyKey,
       target: request.target,
     };
