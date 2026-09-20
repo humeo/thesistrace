@@ -150,9 +150,10 @@ class IndicatorVersionProjector:
             earliest = {}
             previous_state = None
             for index, observed in enumerate(sorted(by_time)):
-                values = by_time[observed]
-                for digest in values:
+                observed_values = by_time[observed]
+                for digest in observed_values:
                     earliest.setdefault(digest, observed)
+                values = _preferred_indicator_rows(observed_values, rows_by_digest)
                 state = frozenset(values)
                 if state == previous_state:
                     continue
@@ -207,6 +208,17 @@ class IndicatorVersionProjector:
                 ),
             )
         )
+
+
+def _preferred_indicator_rows(
+    digests: set[str], rows_by_digest: Mapping[str, Mapping[str, object]],
+) -> set[str]:
+    latest = {
+        digest
+        for digest in digests
+        if str(rows_by_digest[digest].get("update_flag") or "") == "1"
+    }
+    return latest or digests
 
 
 class FinancialIndicatorCheckpoint:

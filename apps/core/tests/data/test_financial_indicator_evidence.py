@@ -162,17 +162,47 @@ def test_revision_uses_shanghai_observation_date_and_keeps_null(tmp_path):
     assert versions[-1]["effective_available_session"] == "2020-06-03"
 
 
-def test_update_flag_does_not_rank_conflicting_rows(tmp_path):
+def test_update_flag_selects_latest_indicator_row_independent_of_input_order(tmp_path):
+    store = FinancialIndicatorObservationStore(RawFinancialBatchStore(tmp_path))
+    fields = raw(2).fields
+    rows = (
+        ("000001.SZ", "20191231", "20200420", 2, "1"),
+        ("000001.SZ", "20191231", "20200420", 9, "0"),
+    )
+    for items in (rows, rows[::-1]):
+        response = RawSourceResponse(fields=fields, items=items)
+        observation = store.read(
+            store.save(response, observed_at=datetime(2020, 5, 1, tzinfo=UTC))
+        )
+        versions = indicator_versions(
+            [observation],
+            instrument_ids={"000001.SZ": "stock-1"},
+            sessions=("2020-04-21",),
+        )
+        assert tuple(map(tuple, observation["items"])) == items
+        assert len(versions) == 1
+        assert versions[0]["eps"] == 2
+        assert versions[0]["update_flag"] == "1"
+        assert versions[0]["availability_status"] == "available"
+        assert versions[0]["effective_available_session"] == "2020-04-21"
+        assert received_indicator_reports(versions, through="2020-07-01") == (
+            ("stock-1", "2019-12-31", "2020-04-20"),
+        )
+
+
+def test_tied_latest_indicator_rows_remain_quarantined(tmp_path):
     store = FinancialIndicatorObservationStore(RawFinancialBatchStore(tmp_path))
     response = raw(2)
     response = RawSourceResponse(
         fields=response.fields,
         items=(
             response.items[0],
-            ("000001.SZ", "20191231", "20200420", 9, "0"),
+            ("000001.SZ", "20191231", "20200420", 9, "1"),
         ),
     )
-    observation = store.read(store.save(response, observed_at=datetime(2020, 5, 1, tzinfo=UTC)))
+    observation = store.read(
+        store.save(response, observed_at=datetime(2020, 5, 1, tzinfo=UTC))
+    )
     versions = indicator_versions(
         [observation],
         instrument_ids={"000001.SZ": "stock-1"},

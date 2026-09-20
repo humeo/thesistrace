@@ -12,6 +12,12 @@ quarantined. Without a marked payload, the same `ann_date` rule applies to the
 remaining records. Different `f_ann_date` values remain separate PIT versions,
 and different report types are never merged.
 
+Financial indicator observations do not expose `f_ann_date` or report type. For
+rows observed together with the same instrument, report period, and `ann_date`,
+the same `update_flag=1` preference applies. Multiple distinct marked payloads
+remain quarantined. The immutable observation receipt retains every returned
+row even though indicator projection and formulas consume only the winner.
+
 This preference does not establish a revision timestamp. A later-observed
 correction retains its first-observed effective session and cannot replace the
 value used before that session. Initial historical collection retains the
