@@ -72,6 +72,7 @@ _METADATA_COLUMNS = (
     "availability_status",
     "first_observed_at",
     "source_published_date",
+    "ann_date",
     "source_row_sha256",
     "update_flag",
 )
@@ -494,6 +495,7 @@ def _state_transitions_table(
             ("_report_period_order", "ascending"),
             ("_update_order", "ascending"),
             ("source_published_date", "ascending"),
+            ("ann_date", "ascending"),
             ("first_observed_at", "ascending"),
             ("source_row_sha256", "ascending"),
         ]
@@ -588,12 +590,13 @@ def _coordinate_table(sessions: tuple[str, ...], instruments: tuple[str, ...]) -
     )
 
 
-def _version_key(row: Mapping[str, object]) -> tuple[str, str, int, str, str, str]:
+def _version_key(row: Mapping[str, object]) -> tuple[str, str, int, str, str, str, str]:
     return (
         str(row.get("effective_available_session", "")),
         str(row.get("source_report_period", "")),
         1 if str(row.get("update_flag", "")) == "1" else 0,
         str(row.get("source_published_date", "")),
+        str(row.get("ann_date", "")),
         str(row.get("first_observed_at", "")),
         str(row.get("source_row_sha256", "")),
     )

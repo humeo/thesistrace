@@ -104,6 +104,7 @@ _FINANCIAL_HISTORY_VERSION_FIELDS = (
     "effective_available_session",
     "update_flag",
     "source_published_date",
+    "ann_date",
     "first_observed_at",
     "source_row_sha256",
 )
@@ -268,8 +269,8 @@ class FinancialVersionProjector:
                 ),
             )
             earliest_observation = ordered[0].first_observed_at
-            observations_by_time: dict[str, set[str]] = defaultdict(set)
-            latest_by_time: dict[str, set[str]] = defaultdict(set)
+            observations_by_time: dict[str, set[tuple[str, str]]] = defaultdict(set)
+            latest_by_time: dict[str, set[tuple[str, str]]] = defaultdict(set)
             for version in ordered:
                 # A supplier update marker is evidence, not a different financial value.
                 content = {
@@ -277,17 +278,26 @@ class FinancialVersionProjector:
                     if key != "update_flag"
                 }
                 content_sha256 = _sha(content)
-                observations_by_time[version.first_observed_at].add(content_sha256)
+                candidate = (
+                    _source_date(version.source().get("ann_date"), required=False),
+                    content_sha256,
+                )
+                observations_by_time[version.first_observed_at].add(candidate)
                 if str(version.source().get("update_flag") or "") == "1":
-                    latest_by_time[version.first_observed_at].add(content_sha256)
+                    latest_by_time[version.first_observed_at].add(candidate)
             for version in ordered:
                 # Preserve every source version. Query/seed selection already prefers
-                # update_flag=1 at the same effective session. Only competing latest
-                # payloads (or unmarked conflicts) are ambiguous, not an old/new pair.
-                competing = (
+                # update_flag=1 and then the greatest ann_date at the same effective
+                # session. Only conflicts tied at that ann_date remain ambiguous.
+                candidates = (
                     latest_by_time[version.first_observed_at]
                     or observations_by_time[version.first_observed_at]
                 )
+                latest_ann_date = max(ann_date for ann_date, _content in candidates)
+                competing = {
+                    content for ann_date, content in candidates
+                    if ann_date == latest_ann_date
+                }
                 if len(competing) > 1:
                     canonical.append(
                         replace(
@@ -649,12 +659,21 @@ class FinancialCandidateStore:
         affected = {item.instrument_id for item in current_checkpoints} | calendar_instruments
         if not affected:
             return ({endpoint: [] for endpoint in FINANCIAL_ENDPOINTS}, True, {})
-        prior_affected = tuple(
-            item for item in prior_checkpoints if item.instrument_id in affected
-        )
-        merged_affected = _merge_evidence_checkpoints(
-            (*prior_affected, *current_checkpoints)
-        )
+        prior_by_instrument: dict[
+            tuple[str, str], list[FinancialShardCheckpoint]
+        ] = defaultdict(list)
+        current_by_instrument: dict[
+            tuple[str, str], list[FinancialShardCheckpoint]
+        ] = defaultdict(list)
+        for checkpoint in prior_checkpoints:
+            if checkpoint.instrument_id in affected:
+                prior_by_instrument[(checkpoint.endpoint, checkpoint.instrument_id)].append(
+                    checkpoint
+                )
+        for checkpoint in current_checkpoints:
+            current_by_instrument[(checkpoint.endpoint, checkpoint.instrument_id)].append(
+                checkpoint
+            )
         prior_lifecycles = self._market.read_historical_ordinary_a_share_lifecycles(
             prior_generation_manifest_sha256
         )
@@ -670,57 +689,68 @@ class FinancialCandidateStore:
             if item.listed_from <= coverage_start
             and (not item.listed_to or item.listed_to >= coverage_start)
         }
-        deltas: dict[str, list[dict[str, object]]] = {}
+        deltas: dict[str, list[dict[str, object]]] = {
+            endpoint: [] for endpoint in FINANCIAL_ENDPOINTS
+        }
         reports: dict[str, tuple[str, ...]] = {}
         quarantine_unchanged = True
         for endpoint in FINANCIAL_ENDPOINTS:
-            old_versions, old_quarantine = self._canonical_versions(
-                tuple(item for item in prior_affected if item.endpoint == endpoint),
-                endpoint_fields[endpoint],
-                prior_sessions,
-            )
-            new_versions, new_quarantine = self._canonical_versions(
-                tuple(item for item in merged_affected if item.endpoint == endpoint),
-                endpoint_fields[endpoint],
-                current_sessions,
-            )
-            old_retained = self._retain_coverage_versions(
-                old_versions,
-                coverage_start,
-                prior_in_scope,
-            )[endpoint]
-            new_retained = self._retain_coverage_versions(
-                new_versions,
-                coverage_start,
-                current_in_scope,
-            )[endpoint]
-            old_rows = {
-                version.source_row_sha256: _version_row(
-                    version, endpoint_fields[endpoint]
+            report_periods: set[str] = set()
+            for instrument_id in sorted(affected):
+                key = (endpoint, instrument_id)
+                prior_group = tuple(prior_by_instrument.get(key, ()))
+                current_group = tuple(current_by_instrument.get(key, ()))
+                if not prior_group and not current_group:
+                    continue
+                merged_group = _merge_evidence_checkpoints((*prior_group, *current_group))
+                old_versions, old_quarantine = self._canonical_versions(
+                    prior_group,
+                    endpoint_fields[endpoint],
+                    prior_sessions,
                 )
-                for version in old_retained
-            }
-            new_rows = {
-                version.source_row_sha256: _version_row(
-                    version, endpoint_fields[endpoint]
+                new_versions, new_quarantine = self._canonical_versions(
+                    merged_group,
+                    endpoint_fields[endpoint],
+                    current_sessions,
                 )
-                for version in new_retained
-            }
-            reports[endpoint] = tuple(sorted({
-                period for _instrument, period in _statement_report_inventory(
-                    new_rows.values(), current_sessions[-1],
+                old_retained = self._retain_coverage_versions(
+                    old_versions,
+                    coverage_start,
+                    {instrument_id} if instrument_id in prior_in_scope else set(),
+                )[endpoint]
+                new_retained = self._retain_coverage_versions(
+                    new_versions,
+                    coverage_start,
+                    {instrument_id} if instrument_id in current_in_scope else set(),
+                )[endpoint]
+                old_rows = {
+                    version.source_row_sha256: _version_row(
+                        version, endpoint_fields[endpoint]
+                    )
+                    for version in old_retained
+                }
+                new_rows = {
+                    version.source_row_sha256: _version_row(
+                        version, endpoint_fields[endpoint]
+                    )
+                    for version in new_retained
+                }
+                report_periods.update(
+                    period for _instrument, period in _statement_report_inventory(
+                        new_rows.values(), current_sessions[-1],
+                    )
                 )
-            }))
-            if not set(old_rows).issubset(new_rows):
-                raise FinancialCandidateError("FINANCIAL_DAILY_DELETE_REQUIRED")
-            deltas[endpoint] = [
-                row
-                for source_row_sha256, row in new_rows.items()
-                if old_rows.get(source_row_sha256) != row
-            ]
-            quarantine_unchanged = quarantine_unchanged and {
-                item.source_row_sha256 for item in old_quarantine
-            } == {item.source_row_sha256 for item in new_quarantine}
+                if not set(old_rows).issubset(new_rows):
+                    raise FinancialCandidateError("FINANCIAL_DAILY_DELETE_REQUIRED")
+                deltas[endpoint].extend(
+                    row
+                    for source_row_sha256, row in new_rows.items()
+                    if old_rows.get(source_row_sha256) != row
+                )
+                quarantine_unchanged = quarantine_unchanged and {
+                    item.source_row_sha256 for item in old_quarantine
+                } == {item.source_row_sha256 for item in new_quarantine}
+            reports[endpoint] = tuple(sorted(report_periods))
         return deltas, quarantine_unchanged, reports
 
     def _calendar_reprojection_instruments(
@@ -2204,6 +2234,9 @@ class FinancialCandidateStore:
                     str(item.source()["end_date"]),
                     item.effective_available_session,
                     str(item.source().get("update_flag") or ""),
+                    item.source_published_date,
+                    _source_date(item.source().get("ann_date"), required=False),
+                    item.first_observed_at,
                     item.source_row_sha256,
                 ),
             )
@@ -2913,7 +2946,10 @@ def _ttm_coverage_seeds(
             seeds.append(max(candidates, key=lambda item: (
                 item.effective_available_session,
                 str(item.source().get("update_flag") or "") == "1",
-                item.source_published_date, item.first_observed_at, item.source_row_sha256,
+                item.source_published_date,
+                _source_date(item.source().get("ann_date"), required=False),
+                item.first_observed_at,
+                item.source_row_sha256,
             )))
     return seeds
 
@@ -2993,6 +3029,7 @@ def _compact_financial_history(table: pa.Table, start_session: str) -> pa.Table:
             ("effective_available_session", "ascending"),
             ("_update_order", "ascending"),
             ("source_published_date", "ascending"),
+            ("ann_date", "ascending"),
             ("first_observed_at", "ascending"),
             ("source_row_sha256", "ascending"),
         ]

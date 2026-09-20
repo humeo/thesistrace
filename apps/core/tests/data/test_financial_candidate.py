@@ -1394,6 +1394,55 @@ def test_daily_rebuild_publishes_targeted_evidence_and_degraded_discovery_covera
     ) == store.read_table(prior.manifest_sha256, "income_statement_versions")
 
 
+def test_daily_rebuild_projects_one_instrument_at_a_time(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, prior, _repeated, snapshot = _materialized_candidate(tmp_path)
+    original = store._canonical_versions
+    projected_instruments: list[frozenset[str]] = []
+
+    def record_projection(
+        checkpoints: tuple[FinancialShardCheckpoint, ...],
+        source_fields: tuple[str, ...],
+        sessions: list[str],
+    ):
+        instruments = frozenset(item.instrument_id for item in checkpoints)
+        projected_instruments.append(instruments)
+        assert len(instruments) <= 1
+        return original(checkpoints, source_fields, sessions)
+
+    monkeypatch.setattr(store, "_canonical_versions", record_projection)
+    current = store.rebuild_daily(
+        replace(snapshot, idempotency_key="daily-financial-bounded-instruments"),
+        prior_candidate_manifest_sha256=prior.manifest_sha256,
+        discovery=FinancialDiscoveryPublication(
+            baseline_session="2026-08-13",
+            attempted_through_session="2026-08-13",
+            complete_through_session="2026-08-13",
+            source_lineage_sha256="f" * 64,
+            readiness_status="ready",
+            pending_instrument_count=0,
+            discovery_gap_count=0,
+            earliest_unresolved_date=None,
+        ),
+    )
+
+    assert current.raw_batch_count == prior.raw_batch_count
+    assert projected_instruments
+    assert {next(iter(instruments)) for instruments in projected_instruments if instruments} == {
+        "equity:000001.SZ", "equity:000002.SZ",
+    }
+    for table_name in (
+        "income_statement_versions",
+        "balance_sheet_versions",
+        "cash_flow_statement_versions",
+    ):
+        assert store.read_table(current.manifest_sha256, table_name) == store.read_table(
+            prior.manifest_sha256, table_name,
+        )
+
+
 def test_zero_trigger_daily_rebuild_reuses_validated_parent_without_historical_reads(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1736,6 +1785,41 @@ def test_daily_instrument_validation_reports_canonical_row_delta(
     )
 
     assert changed.canonical_changed is True
+
+
+def test_daily_instrument_validation_accepts_later_announcement_winner(
+    tmp_path: Path,
+) -> None:
+    store, prior, _repeated, snapshot = _materialized_candidate(tmp_path)
+    targeted = _targeted_instrument_collection(
+        snapshot,
+        idempotency_key="daily-financial-later-announcement-wins",
+    )
+    for row in (
+        [
+            "000001.SZ", "20260729", "20260813", "20260630", "1", "1", "2",
+            "885587286.9", "1",
+        ],
+        [
+            "000001.SZ", "20260813", "20260813", "20260630", "1", "1", "2",
+            "928072038.93", "1",
+        ],
+    ):
+        targeted = _append_targeted_source_row(
+            tmp_path,
+            targeted,
+            endpoint="income",
+            row=row,
+        )
+
+    validated = store.validate_daily_instrument(
+        targeted,
+        prior_candidate_manifest_sha256=prior.manifest_sha256,
+        observation_through_session="2026-08-13",
+    )
+
+    assert validated.canonical_changed is True
+    assert "2026-06-30" in validated.report_periods["income"]
 
 
 def test_daily_instrument_validation_reports_availability_session_delta(
@@ -2472,6 +2556,71 @@ def test_projector_resolves_update_markers_without_choosing_payload_order(
         }
 
 
+def test_projector_prefers_later_announcement_for_601231_competing_latest_rows() -> None:
+    fields = (*FIELDS, "ebit", "ebitda")
+    observations = tuple(
+        FinancialSourceObservation(
+            endpoint="income",
+            instrument_id="equity:601231.SH",
+            ts_code="601231.SH",
+            source_fields=fields,
+            source_values=(
+                "601231.SH", ann_date, "20260827", "20260630", "1", "1", "2",
+                "27336366042.06", "1", ebit, ebitda,
+            ),
+            first_observed_at="2026-09-19T17:04:36.495802+00:00",
+            raw_batch_sha256="a" * 64,
+        )
+        for ann_date, ebit, ebitda in (
+            ("20260729", "885587286.9", "1526205311.32"),
+            ("20260827", "928072038.93", "1568690063.35"),
+        )
+    )
+    sessions = (*SESSIONS, "2026-08-28")
+
+    for ordered in (observations, tuple(reversed(observations))):
+        versions = FinancialVersionProjector().project(ordered, sessions)
+        assert len(versions) == 2
+        assert {version.availability_status for version in versions} == {"available"}
+        assert {version.source()["ann_date"] for version in versions} == {
+            "20260729", "20260827",
+        }
+        selected = max(versions, key=lambda version: str(version.source()["ann_date"]))
+        assert selected.source()["ebit"] == "928072038.93"
+        assert selected.source()["ebitda"] == "1568690063.35"
+
+
+def test_projector_keeps_different_final_announcement_dates_as_pit_versions() -> None:
+    observations = tuple(
+        FinancialSourceObservation(
+            endpoint="income",
+            instrument_id="equity:000001.SZ",
+            ts_code="000001.SZ",
+            source_fields=FIELDS,
+            source_values=(
+                "000001.SZ", final_date, final_date, "20091231", "1", "1", "4",
+                value, "1",
+            ),
+            first_observed_at="2026-04-23T08:00:00+00:00",
+            raw_batch_sha256=digest * 64,
+        )
+        for final_date, value, digest in (
+            ("20100420", "100", "a"),
+            ("20100421", "101", "b"),
+        )
+    )
+
+    versions = FinancialVersionProjector().project(observations, SESSIONS)
+
+    assert {version.availability_status for version in versions} == {"available"}
+    assert {version.source_published_date for version in versions} == {
+        "20100420", "20100421",
+    }
+    assert {version.effective_available_session for version in versions} == {
+        "2010-04-21", "2010-04-22",
+    }
+
+
 def test_explicit_rebuild_reprojects_saved_receipts_without_new_source_batches(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2582,6 +2731,57 @@ def test_latest_marked_statement_resolves_without_dropping_source_evidence(
     assert resolved[field] == (
         {} if latest_value is None else {("2010-04-21", "equity:000001.SZ"): "101"}
     )
+
+
+def test_formula_prefers_later_announcement_when_latest_markers_compete(
+    tmp_path: Path,
+) -> None:
+    fields = (*FIELDS, "total_revenue")
+    snapshot = _empty_complete_snapshot(
+        tmp_path, _market_generation(tmp_path),
+        idempotency_key="later-announcement-wins", fields=fields,
+    )
+    raw = RawFinancialBatchStore(tmp_path)
+    checkpoint = snapshot.shards[0]
+    payload = raw.read(checkpoint.batch_sha256)
+    items = [
+        [
+            "000001.SZ", ann_date, "20100420", "20091231", "1", "1", "4",
+            value, "1", value,
+        ]
+        for ann_date, value in (("20100419", "100"), ("20100420", "101"))
+    ]
+    payload.update(
+        items=items,
+        row_count=2,
+        source_date_extent=["20100420", "20100420"],
+        payload_sha256=hashlib.sha256(canonical_json_bytes(
+            {"fields": list(fields), "items": items},
+        )).hexdigest(),
+    )
+    digest = raw.store(canonical_json_bytes(payload))
+    snapshot = replace(snapshot, shards=(replace(
+        checkpoint,
+        batch_sha256=digest,
+        first_observed_at="2026-04-23T08:00:00+00:00",
+        collected_at="2026-04-23T08:00:00+00:00",
+    ), *snapshot.shards[1:]))
+    store = FinancialCandidateStore(tmp_path)
+    candidate = store.materialize(snapshot, observation_through_session=SESSIONS[-1])
+
+    rows = store.read_table(candidate.manifest_sha256, "income_statement_versions")
+    assert len(rows) == 2
+    assert {row["ann_date"] for row in rows} == {"20100419", "20100420"}
+    assert {row["availability_status"] for row in rows} == {"available"}
+    field = "financial.income.total_revenue.latest_fy"
+    resolved = FinancialSeriesResolver(store).resolve(
+        manifest_sha256=candidate.manifest_sha256,
+        field_ids=(field,),
+        sessions=("2010-04-20", "2010-04-21"),
+        instrument_ids=("equity:000001.SZ",),
+    )
+    assert resolved[field] == {("2010-04-21", "equity:000001.SZ"): "101"}
+    assert raw.read(digest)["items"] == items
 
 
 def test_latest_marker_does_not_backdate_a_later_observed_correction() -> None:
