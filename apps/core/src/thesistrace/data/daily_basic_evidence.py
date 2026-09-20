@@ -215,4 +215,3 @@ class DailyBasicCheckpoint:
         if not isinstance(value, dict):
             raise ValueError("Evidence must be an object")
         return value
-
