@@ -62,4 +62,7 @@ source data, the private `reproject-financial` operation replays retained raw
 receipts against an explicitly expected Dataset Head. It uses the normal
 candidate protection and compare-and-swap publication path, reconciles report
 requirements from the repaired candidate, preserves previous Generations, and
-does not advance the financial observation boundary.
+does not advance the financial observation boundary. Because that operation
+does not collect a new supplier batch, its `current_raw_evidence` is empty;
+all retained checkpoints remain in `raw_evidence`, and validation explicitly
+replays that historical set when checking the repair delta.

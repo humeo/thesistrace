@@ -754,6 +754,7 @@ class FinancialCandidateStore:
             current_sessions=current_sessions,
             prior_sessions=prior_sessions,
             current_lifecycles=lifecycles,
+            retained_evidence_reprojection=True,
         )
 
     def rebuild_daily(
@@ -887,6 +888,7 @@ class FinancialCandidateStore:
         current_sessions: list[str],
         prior_sessions: list[str],
         current_lifecycles: Sequence[HistoricalInstrumentLifecycle],
+        retained_evidence_reprojection: bool = False,
     ) -> FinancialFamilyCandidate:
         coverage_start = str(prior_manifest["dataset_coverage"]["start"])
         delta_counts, published, quarantine_hashes, quarantine_added, _reports = (
@@ -926,25 +928,30 @@ class FinancialCandidateStore:
         historical_checkpoints = _merge_evidence_checkpoints(
             (*prior_checkpoints, *collection.shards)
         )
-        current_evidence_reference = self._materialize_evidence_index(collection.shards)
+        current_evidence_reference = self._materialize_evidence_index(
+            () if retained_evidence_reprojection else collection.shards
+        )
         evidence_reference = (
             prior_manifest["raw_evidence"]
             if historical_checkpoints == tuple(prior_checkpoints)
             else self._materialize_evidence_index(historical_checkpoints)
         )
         evidence_shards = self._manifest_evidence_shards(prior_manifest)
+        source_collection = {
+            "idempotency_key": collection.idempotency_key,
+            "contract": collection.contract.descriptor(),
+            "finished_at": collection.finished_at,
+            "prior_candidate_manifest_sha256": prior_candidate_manifest_sha256,
+        }
+        if retained_evidence_reprojection:
+            source_collection["retained_evidence_reprojection"] = True
         family = {
             "format": _FAMILY_FORMAT,
             "version": _VERSION,
             "family_id": _FAMILY_ID,
             "schema_contract": _SCHEMA_CONTRACT,
             "source_generation_manifest_sha256": collection.generation_manifest_sha256,
-            "source_collection": {
-                "idempotency_key": collection.idempotency_key,
-                "contract": collection.contract.descriptor(),
-                "finished_at": collection.finished_at,
-                "prior_candidate_manifest_sha256": prior_candidate_manifest_sha256,
-            },
+            "source_collection": source_collection,
             "evidence_shards": [
                 _evidence_shard_descriptor(item) for item in evidence_shards
             ],
@@ -1964,6 +1971,11 @@ class FinancialCandidateStore:
         _validate_contract(contract)
         evidence = self._read_evidence_index(manifest["raw_evidence"])
         current_evidence = self._read_evidence_index(manifest["current_raw_evidence"])
+        retained_evidence_reprojection = (
+            source_collection.get("retained_evidence_reprojection") is True
+        )
+        if retained_evidence_reprojection and current_evidence:
+            raise FinancialCandidateError("FINANCIAL_SOURCE_COLLECTION_INVALID")
         prior_evidence = self._read_daily_parent_evidence_index(
             prior_manifest["raw_evidence"]
         )
@@ -2019,9 +2031,12 @@ class FinancialCandidateStore:
             _aware_iso(item.collected_at) > finished_at for item in current_checkpoints
         ):
             raise FinancialCandidateError("FINANCIAL_SOURCE_COLLECTION_INVALID")
+        projection_checkpoints = (
+            checkpoints if retained_evidence_reprojection else current_checkpoints
+        )
         delta_counts, published, quarantine_hashes, quarantine_added, _reports = (
             self._daily_table_deltas(
-            current_checkpoints,
+            projection_checkpoints,
             prior_candidate_manifest_sha256=prior_manifest_sha256,
             calendar_instruments=self._calendar_reprojection_instruments(
                 str(source_collection["prior_candidate_manifest_sha256"]), prior_sessions, sessions,
@@ -3177,6 +3192,13 @@ class FinancialCandidateStore:
                 "finished_at",
                 "prior_candidate_manifest_sha256",
             },
+            {
+                "idempotency_key",
+                "contract",
+                "finished_at",
+                "prior_candidate_manifest_sha256",
+                "retained_evidence_reprojection",
+            },
         ):
             raise FinancialCandidateError("FINANCIAL_SOURCE_COLLECTION_INVALID")
         if (
@@ -3188,6 +3210,8 @@ class FinancialCandidateStore:
         _aware_iso(str(source_collection["finished_at"]))
         if "prior_candidate_manifest_sha256" in source_collection:
             _require_sha256(source_collection["prior_candidate_manifest_sha256"])
+        if source_collection.get("retained_evidence_reprojection", True) is not True:
+            raise FinancialCandidateError("FINANCIAL_SOURCE_COLLECTION_INVALID")
         if coverage.get("kind") == "financial-observation-range":
             if (
                 coverage.get("reconciliation_status") != "complete"

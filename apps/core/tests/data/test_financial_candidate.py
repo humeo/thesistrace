@@ -1834,6 +1834,55 @@ def test_daily_report_presence_excludes_repeated_quarantined_versions(tmp_path: 
     assert validated.canonical_changed is False
 
 
+def test_retained_reprojection_keeps_repeated_historical_evidence_out_of_current_batch(
+    tmp_path: Path,
+) -> None:
+    store, baseline, _repeated, snapshot = _materialized_candidate(tmp_path)
+    targeted = _targeted_instrument_collection(
+        snapshot,
+        idempotency_key="repeat-historical-evidence",
+    )
+    reobserved = replace(
+        targeted,
+        shards=tuple(
+            replace(
+                checkpoint,
+                collected_at="2026-04-24T08:01:00+00:00",
+                first_observed_at="2026-04-24T08:01:00+00:00",
+            )
+            for checkpoint in targeted.shards
+        ),
+    )
+    prior = store.rebuild_daily(
+        reobserved,
+        prior_candidate_manifest_sha256=baseline.manifest_sha256,
+        discovery=FinancialDiscoveryPublication(
+            baseline_session="2026-08-13",
+            attempted_through_session="2026-08-13",
+            complete_through_session="2026-08-13",
+            source_lineage_sha256="3" * 64,
+            readiness_status="ready",
+            pending_instrument_count=0,
+            discovery_gap_count=0,
+            earliest_unresolved_date=None,
+        ),
+    )
+    assert prior.raw_batch_count == baseline.raw_batch_count + len(reobserved.shards)
+
+    reprojected = store.reproject_saved(
+        prior_candidate_manifest_sha256=prior.manifest_sha256,
+        generation_manifest_sha256=snapshot.generation_manifest_sha256,
+        idempotency_key="reproject-repeated-historical-evidence",
+        finished_at=datetime(2026, 8, 13, 10, tzinfo=UTC),
+    )
+
+    assert reprojected.raw_batch_count == prior.raw_batch_count
+    assert store.validate(reprojected.manifest_sha256) == reprojected
+    assert store.prior_candidate_manifest_sha256(reprojected.manifest_sha256) == (
+        prior.manifest_sha256
+    )
+
+
 def test_received_report_waiting_for_calendar_is_present_even_with_null_metrics(tmp_path: Path):
     store, prior, _repeated, snapshot = _materialized_candidate(
         tmp_path,
