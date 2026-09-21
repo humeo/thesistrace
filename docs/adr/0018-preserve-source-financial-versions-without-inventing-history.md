@@ -23,3 +23,12 @@ correction retains its first-observed effective session and cannot replace the
 value used before that session. Initial historical collection retains the
 existing source-dated bootstrap convention, not a claim of complete historical
 revision evidence.
+
+Incremental projection compares the newly projected receipts with the logical
+rows actually stored in the published financial Family. It does not regenerate
+the old side with current projection rules. A rule correction can therefore
+replace an older quarantined projection even when the raw receipt is unchanged.
+New conflicts still fail the company acceptance boundary; resolving a previously
+stored quarantine updates both the row overlay and the Family quarantine summary.
+Projection and comparison run one instrument at a time and spool cross-market
+rows to a task-local disk index before writing immutable delta objects.

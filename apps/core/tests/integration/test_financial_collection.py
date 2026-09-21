@@ -39,8 +39,10 @@ from thesistrace.data.daily_financial_refresh import (
     FinancialDailyRefreshError,
     FinancialDailyRefreshStore,
 )
+from thesistrace.data.financial_candidate import FinancialDiscoveryPublication
 from thesistrace.data.financial_collection import (
     FINANCIAL_ENDPOINTS,
+    CompletedFinancialCollection,
     FinancialCollectionContract,
     FinancialCollectionError,
     FinancialCollectionService,
@@ -2892,6 +2894,152 @@ def test_financial_refresh_rejects_prior_identity_mismatch_before_collection(
                 transaction.execute("SELECT 1 FROM data.financial_refresh_operations").fetchone()
                 is None
             )
+    finally:
+        database.close()
+
+
+def test_financial_reprojection_reuses_saved_receipts_and_is_idempotent(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    try:
+        market = _market_generation(tmp_path)
+        contract = _executable_contract()
+        collection = FinancialCollectionService(
+            database,
+            tmp_path,
+            ExecutableStatementSource(),
+            clock=lambda: COLLECTED_AT,
+        )
+        collection.collect(
+            idempotency_key="financial-reprojection-source",
+            generation_manifest_sha256=market,
+            contract=contract,
+        )
+        snapshot = collection.completed_snapshot("financial-reprojection-source")
+        candidates = FinancialCandidateStore(tmp_path)
+        bootstrap = candidates.materialize(
+            snapshot,
+            observation_through_session="2026-08-13",
+        )
+        prior = candidates.rebuild_daily(
+            CompletedFinancialCollection(
+                idempotency_key="financial-reprojection-discovery",
+                generation_manifest_sha256=market,
+                contract=contract,
+                finished_at=COLLECTED_AT.isoformat(),
+                target_count=0,
+                shards=(),
+            ),
+            prior_candidate_manifest_sha256=bootstrap.manifest_sha256,
+            discovery=FinancialDiscoveryPublication(
+                baseline_session="2026-08-13",
+                attempted_through_session="2026-08-13",
+                complete_through_session="2026-08-13",
+                source_lineage_sha256="a" * 64,
+                readiness_status="ready",
+                pending_instrument_count=0,
+                discovery_gap_count=0,
+                earliest_unresolved_date=None,
+            ),
+        )
+        bootstrap_generation = _financial_generation(tmp_path, market, bootstrap)
+        source_generation = _financial_generation(tmp_path, bootstrap_generation, prior)
+        _establish_head(
+            database,
+            tmp_path,
+            source_generation,
+            operation_id="financial-reprojection-head",
+        )
+        service = FinancialRefreshService(
+            database,
+            tmp_path,
+            None,
+            clock=lambda: COLLECTED_AT + timedelta(days=1),
+        )
+
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                CREATE FUNCTION data.reject_reprojection_receipt() RETURNS trigger
+                LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'receipt commit failed'; END $$
+                """
+            )
+            transaction.execute(
+                """
+                CREATE TRIGGER reject_reprojection_receipt
+                BEFORE UPDATE OF publication_head_moved_at
+                ON data.financial_refresh_operations
+                FOR EACH ROW
+                WHEN (NEW.idempotency_key = 'financial-reprojection')
+                EXECUTE FUNCTION data.reject_reprojection_receipt()
+                """
+            )
+        with pytest.raises(
+            FinancialRefreshError,
+            match="FINANCIAL_PUBLICATION_COMPLETION_PENDING",
+        ):
+            service.reproject(
+                idempotency_key="financial-reprojection",
+                expected_generation_manifest_sha256=source_generation,
+            )
+        interrupted_head = MountedDatasetHeadStore(tmp_path).current_pointer()
+        assert interrupted_head is not None
+        assert interrupted_head.generation_manifest_sha256 != source_generation
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                DROP TRIGGER reject_reprojection_receipt
+                ON data.financial_refresh_operations;
+                DROP FUNCTION data.reject_reprojection_receipt();
+                """
+            )
+
+        published = service.reproject(
+            idempotency_key="financial-reprojection",
+            expected_generation_manifest_sha256=source_generation,
+        )
+        replayed = service.reproject(
+            idempotency_key="financial-reprojection",
+            expected_generation_manifest_sha256=source_generation,
+        )
+
+        assert replayed == published
+        assert published.expected_shard_count == 0
+        assert published.completed_shard_count == 0
+        assert published.resumed_shard_count == 0
+        assert published.candidate.raw_batch_count == prior.raw_batch_count
+        assert published.generation_manifest_sha256 != source_generation
+        head = MountedDatasetHeadStore(tmp_path).current_pointer()
+        assert head is not None
+        assert head.generation_manifest_sha256 == published.generation_manifest_sha256
+        final = MountedGenerationStore(tmp_path).validate_generation(
+            published.generation_manifest_sha256
+        )
+        assert final.financial_candidate_manifest_sha256 == (
+            published.candidate.manifest_sha256
+        )
+        with pytest.raises(FinancialRefreshError, match="FINANCIAL_TARGET_CHANGED"):
+            service.reproject(
+                idempotency_key="financial-reprojection-stale",
+                expected_generation_manifest_sha256=source_generation,
+            )
+        with database.transaction() as transaction:
+            receipt = transaction.execute(
+                """
+                SELECT status, expected_shard_count, completed_shard_count,
+                       published_generation_manifest_sha256
+                FROM data.financial_refresh_operations
+                WHERE idempotency_key = 'financial-reprojection'
+                """
+            ).fetchone()
+        assert receipt == {
+            "status": "succeeded",
+            "expected_shard_count": 0,
+            "completed_shard_count": 0,
+            "published_generation_manifest_sha256": published.generation_manifest_sha256,
+        }
     finally:
         database.close()
 

@@ -156,6 +156,12 @@ def _run(
     financial_refresh = subcommands.add_parser("refresh-financial")
     financial_refresh.add_argument("--idempotency-key", required=True)
     financial_refresh.add_argument("--observation-through-session", required=True)
+    financial_reproject = subcommands.add_parser("reproject-financial")
+    financial_reproject.add_argument("--idempotency-key", required=True)
+    financial_reproject.add_argument(
+        "--expected-generation-manifest-sha256",
+        required=True,
+    )
     financial_inspect = subcommands.add_parser("inspect-financial-refresh")
     financial_inspect.add_argument("--idempotency-key", required=True)
     industry_refresh = subcommands.add_parser("refresh-industry")
@@ -273,6 +279,27 @@ def _run(
                 mount_root,
                 benchmark_mount_root=benchmark_mount,
             ).inspect(parsed.idempotency_key)
+        if parsed.command == "reproject-financial":
+            outcome = FinancialRefreshService(
+                database,
+                mount_root,
+                None,
+                lifecycle_event=_progress,
+            ).reproject(
+                idempotency_key=parsed.idempotency_key,
+                expected_generation_manifest_sha256=(
+                    parsed.expected_generation_manifest_sha256
+                ),
+            )
+            return {
+                "idempotency_key": outcome.idempotency_key,
+                "status": "succeeded",
+                "candidate_manifest_sha256": outcome.candidate.manifest_sha256,
+                "generation_manifest_sha256": outcome.generation_manifest_sha256,
+                "expected_shard_count": outcome.expected_shard_count,
+                "completed_shard_count": outcome.completed_shard_count,
+                "resumed_shard_count": outcome.resumed_shard_count,
+            }
         if parsed.command == "collect":
             return DataGarbageCollector(database, mount_root).collect(
                 idempotency_key=parsed.idempotency_key

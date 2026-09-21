@@ -160,7 +160,6 @@ def test_financial_progress_reads_partial_checkpoints_and_preserves_historical_g
             idempotency_key=key,
             instrument_id=identities[0].instrument_id,
             status="accepted",
-            observed_reports={endpoint: ("2026-06-30",) for endpoint in FINANCIAL_ENDPOINTS},
             canonical_changed=True,
             checkpoints=_accepted_checkpoints(identities[0].instrument_id, identities[0].ts_code),
             failure_code=None,
@@ -179,7 +178,6 @@ def test_financial_progress_reads_partial_checkpoints_and_preserves_historical_g
             idempotency_key=key,
             instrument_id=identities[1].instrument_id,
             status="accepted",
-            observed_reports={endpoint: ("2026-06-30",) for endpoint in FINANCIAL_ENDPOINTS},
             canonical_changed=False,
             checkpoints=_accepted_checkpoints(identities[1].instrument_id, identities[1].ts_code),
             failure_code=None,
@@ -419,7 +417,6 @@ def test_discovery_store_persists_partial_progress_without_losing_pending_stocks
             idempotency_key=operation_key,
             instrument_id="equity:000001.SZ",
             status="accepted",
-            observed_reports={endpoint: ("2026-06-30",) for endpoint in FINANCIAL_ENDPOINTS},
             canonical_changed=True,
             checkpoints=_accepted_checkpoints("equity:000001.SZ", "000001.SZ"),
             failure_code=None,
@@ -441,7 +438,9 @@ def test_discovery_store_persists_partial_progress_without_losing_pending_stocks
         assert publication.attempted_through_session == "2026-08-14"
         assert publication.complete_through_session == "2026-08-13"
         assert publication.readiness_status == "ready_with_gaps"
-        assert publication.pending_instrument_count == 1
+        # An accepted source checkpoint is still provisional until the final
+        # candidate proves the report exists in the published logical rows.
+        assert publication.pending_instrument_count == 2
         assert publication.discovery_gap_count == 1
         assert publication.earliest_unresolved_date == "2026-08-14"
         inspection = store.inspect(operation_key)
@@ -535,7 +534,6 @@ def test_failed_pull_stays_pending_until_the_expected_report_is_received(
             idempotency_key=accepted_key,
             instrument_id=identity.instrument_id,
             status="accepted",
-            observed_reports={endpoint: ("2026-06-30",) for endpoint in FINANCIAL_ENDPOINTS},
             canonical_changed=False,
             checkpoints=_accepted_checkpoints(
                 identity.instrument_id,
@@ -544,6 +542,19 @@ def test_failed_pull_stays_pending_until_the_expected_report_is_received(
             failure_code=None,
             failure_endpoint=None,
             attempted_at=datetime(2026, 8, 17, 9, 2, tzinfo=UTC),
+        )
+
+        # Collection evidence alone cannot resolve a report. Only the final
+        # candidate inventory is authoritative for the mutable requirement ledger.
+        assert store.publication_state(accepted_key).readiness_status == "ready_with_pending"
+        store.record_candidate(
+            accepted_key,
+            "6" * 64,
+            datetime(2026, 8, 17, 9, 3, tzinfo=UTC),
+            received_reports={
+                endpoint: {(identity.instrument_id, "2026-06-30")}
+                for endpoint in FINANCIAL_ENDPOINTS
+            },
         )
 
         accepted_publication = store.publication_state(accepted_key)
@@ -560,6 +571,107 @@ def test_failed_pull_stays_pending_until_the_expected_report_is_received(
                 ).fetchone()["n"]
                 == 0
             )
+    finally:
+        _delete_operations(database, operation_prefix)
+        database.close()
+
+
+def test_candidate_reconciliation_prevents_repaired_report_from_reentering_pending_queue(
+    core_settings: CoreSettings,
+) -> None:
+    database = _database(core_settings)
+    store = FinancialDailyRefreshStore(database)
+    operation_prefix = "daily-financial-candidate-reconciliation-"
+    identities = tuple(
+        HistoricalInstrumentIdentity(
+            f"equity:{index:06d}.SZ",
+            f"{index:06d}.SZ",
+        )
+        for index in range(1, 66)
+    )
+    repaired = identities[-1]
+    inventory = {
+        endpoint: {(repaired.instrument_id, "2026-06-30")}
+        for endpoint in FINANCIAL_ENDPOINTS
+    }
+    observed = {
+        endpoint: (f"{index + 1:x}" * 64, reports)
+        for index, (endpoint, reports) in enumerate(inventory.items())
+    }
+
+    def begin_and_discover(
+        key: str,
+        *,
+        target: str,
+        prior_attempted: str,
+        reports: tuple[FinancialDisclosure, ...] = (),
+    ) -> None:
+        store.begin(
+            idempotency_key=key,
+            source_generation_manifest_sha256="a" * 64,
+            prior_financial_manifest_sha256="b" * 64,
+            discovery_baseline_session="2026-08-13",
+            prior_attempted_through_session=prior_attempted,
+            prior_complete_through_session=prior_attempted,
+            target_session=target,
+            started_at=datetime.fromisoformat(f"{target}T09:00:00+00:00"),
+        )
+        store.record_discovery(
+            idempotency_key=key,
+            discovery=FinancialDisclosureDiscovery(
+                start_date="2026-08-07",
+                end_date=target,
+                completed_periods=disclosure_periods("2026-08-07", target),
+                reports=reports,
+                gaps=(),
+                source_lineage_sha256="c" * 64,
+            ),
+            identities=identities,
+            recorded_at=datetime.fromisoformat(f"{target}T09:01:00+00:00"),
+        )
+
+    try:
+        repair_key = f"{operation_prefix}repair"
+        begin_and_discover(
+            repair_key,
+            target="2026-08-14",
+            prior_attempted="2026-08-13",
+            reports=(
+                FinancialDisclosure(
+                    ts_code=repaired.ts_code,
+                    report_period="2026-06-30",
+                    actual_date="2026-08-14",
+                ),
+            ),
+        )
+        assert store.publication_state(repair_key).pending_instrument_count == 1
+        assert store.candidate_publication_state(
+            repair_key,
+            inventory,
+        ).pending_instrument_count == 0
+        store.record_candidate(
+            repair_key,
+            "d" * 64,
+            datetime(2026, 8, 14, 9, 2, tzinfo=UTC),
+            received_reports=inventory,
+        )
+        assert store.publication_state(repair_key).pending_instrument_count == 0
+
+        for suffix, target, prior in (
+            ("same-day", "2026-08-14", "2026-08-14"),
+            ("next-day", "2026-08-17", "2026-08-14"),
+        ):
+            key = f"{operation_prefix}{suffix}"
+            begin_and_discover(key, target=target, prior_attempted=prior)
+            store.prepare_reports(
+                key,
+                observed,
+                datetime.fromisoformat(f"{target}T09:02:00+00:00"),
+            )
+            planned = store.planned_identities(key)
+            assert len(planned) == 64
+            assert repaired not in planned
+            assert store.publication_state(key).pending_instrument_count == 0
     finally:
         _delete_operations(database, operation_prefix)
         database.close()

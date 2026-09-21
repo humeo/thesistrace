@@ -13,6 +13,7 @@ from thesistrace._postgres import PostgresDatabase
 from thesistrace.data.financial_candidate import (
     FinancialCandidateError,
     FinancialCandidateStore,
+    FinancialDiscoveryPublication,
     FinancialFamilyCandidate,
 )
 from thesistrace.data.financial_collection import (
@@ -53,7 +54,7 @@ class FinancialRefreshService:
         self,
         database: PostgresDatabase,
         mount_root: Path | str,
-        source: FinancialRawSource,
+        source: FinancialRawSource | None,
         *,
         clock: Callable[[], datetime] | None = None,
         monotonic: Callable[[], float] | None = None,
@@ -66,16 +67,250 @@ class FinancialRefreshService:
             lifecycle_event or (lambda _event: None),
             component="data_operator",
         )
-        self._collection = FinancialCollectionService(
-            database,
-            mount_root,
-            source,
-            clock=self._clock,
-            monotonic=self._monotonic,
+        self._collection = (
+            None
+            if source is None
+            else FinancialCollectionService(
+                database,
+                mount_root,
+                source,
+                clock=self._clock,
+                monotonic=self._monotonic,
+            )
         )
         self._candidates = FinancialCandidateStore(mount_root)
         self._generations = MountedGenerationStore(mount_root)
         self._lifecycle = DatasetLifecycle(database, mount_root)
+
+    def reproject(
+        self,
+        *,
+        idempotency_key: str,
+        expected_generation_manifest_sha256: str,
+    ) -> FinancialRefreshOutcome:
+        try:
+            generation = self._generations.inspect_root(
+                expected_generation_manifest_sha256
+            )
+            prior_candidate = generation.financial_candidate_manifest_sha256
+            prior = self._candidates.reopen(prior_candidate)
+        except (FinancialCandidateError, GenerationStoreError) as error:
+            raise FinancialRefreshError("FINANCIAL_DATASET_NOT_READY") from error
+        fingerprint = _reprojection_fingerprint(
+            idempotency_key,
+            expected_generation_manifest_sha256,
+            prior_candidate,
+            prior.observation_through_session,
+        )
+        published = self._published_outcome(idempotency_key, fingerprint)
+        if published is not None:
+            return published
+        pointer = self._lifecycle.current_pointer()
+        if (
+            pointer is None
+            or pointer.generation_manifest_sha256
+            != expected_generation_manifest_sha256
+        ) and not self._current_head_inherits_publication(
+            expected_generation_manifest_sha256,
+            publication_coordinate=fingerprint,
+        ):
+            raise FinancialRefreshError("FINANCIAL_TARGET_CHANGED")
+        with self._database.session_advisory_lock(
+            f"financial-refresh:{idempotency_key}"
+        ):
+            outcome = self._initialize(
+                idempotency_key=idempotency_key,
+                fingerprint=fingerprint,
+                generation_manifest_sha256=expected_generation_manifest_sha256,
+                prior_candidate_manifest_sha256=prior_candidate,
+                observation_through_session=prior.observation_through_session,
+                allow_create=True,
+            )
+            if outcome is None:
+                prepared_at = self._validated_clock()
+                try:
+                    candidate = self._candidates.reproject_saved(
+                        prior_candidate_manifest_sha256=prior_candidate,
+                        generation_manifest_sha256=expected_generation_manifest_sha256,
+                        idempotency_key=idempotency_key,
+                        finished_at=prepared_at,
+                    )
+                    discovery = self._reprojection_discovery(candidate, prior_candidate)
+                    prior_coverage = self._candidates.family_reference(prior_candidate)[
+                        "dataset_coverage"
+                    ]
+                    if (
+                        discovery.readiness_status
+                        != prior_coverage["readiness_status"]
+                        or discovery.pending_instrument_count
+                        != prior_coverage["pending_instrument_count"]
+                        or discovery.earliest_unresolved_date
+                        != prior_coverage["earliest_unresolved_date"]
+                        or discovery.source_lineage_sha256
+                        != prior_coverage["source_lineage_sha256"]
+                    ):
+                        candidate = self._candidates.reproject_saved(
+                            prior_candidate_manifest_sha256=prior_candidate,
+                            generation_manifest_sha256=(
+                                expected_generation_manifest_sha256
+                            ),
+                            idempotency_key=idempotency_key,
+                            finished_at=prepared_at,
+                            discovery=discovery,
+                        )
+                except FinancialCandidateError as error:
+                    self._fail(idempotency_key, str(error))
+                    raise
+                outcome = FinancialRefreshOutcome(
+                    idempotency_key=idempotency_key,
+                    candidate=candidate,
+                    expected_shard_count=0,
+                    completed_shard_count=0,
+                    resumed_shard_count=0,
+                )
+                self._complete(outcome)
+        with self._database.session_advisory_lock("financial-publication"):
+            self._reconcile_inherited_publication()
+            published = self._published_outcome(idempotency_key, fingerprint)
+            if published is not None:
+                return published
+            reconciled = self._reconcile_publication(idempotency_key, outcome)
+            if reconciled is not None:
+                return reconciled
+            current = self._lifecycle.current_pointer()
+            if (
+                current is None
+                or current.generation_manifest_sha256
+                != expected_generation_manifest_sha256
+            ):
+                raise FinancialRefreshError("FINANCIAL_TARGET_CHANGED")
+            current_generation = self._generations.inspect_root(
+                current.generation_manifest_sha256
+            )
+            if (
+                current_generation.financial_candidate_manifest_sha256
+                != prior_candidate
+            ):
+                raise FinancialRefreshError("FINANCIAL_TARGET_CHANGED")
+            publication_started = self._monotonic()
+            prepared_at = self._validated_clock()
+            operation_id = _publication_operation_id(idempotency_key, 0)
+            with mounted_data_mutation_lock(self._database):
+                composed = self._generations._compose_prevalidated_financial_candidate(
+                    current.generation_manifest_sha256,
+                    outcome.candidate.manifest_sha256,
+                    prepared_at=prepared_at,
+                    publication_coordinate=fingerprint,
+                )
+                self._record_publication_candidate(
+                    idempotency_key,
+                    outcome.candidate.manifest_sha256,
+                    composed.manifest_sha256,
+                    prepared_at,
+                )
+                self._lifecycle.protect_prevalidated_candidate(
+                    operation_id=operation_id,
+                    generation_manifest_sha256=composed.manifest_sha256,
+                    lease_seconds=900,
+                )
+                try:
+                    moved = self._lifecycle.compare_and_swap_head(
+                        expected_generation_manifest_sha256=(
+                            expected_generation_manifest_sha256
+                        ),
+                        candidate_generation_manifest_sha256=composed.manifest_sha256,
+                        operation_id=operation_id,
+                        prepared_at=prepared_at,
+                        financial_publication_key=idempotency_key,
+                    )
+                except DatasetHeadConflict as error:
+                    self._lifecycle.release_candidate(operation_id=operation_id)
+                    raise FinancialRefreshError("FINANCIAL_TARGET_CHANGED") from error
+                except Exception as error:
+                    head_state = self._physical_head_is(composed.manifest_sha256)
+                    if head_state is False:
+                        self._lifecycle.release_candidate(operation_id=operation_id)
+                        raise
+                    raise FinancialRefreshError(
+                        "FINANCIAL_PUBLICATION_COMPLETION_PENDING"
+                    ) from error
+            self._complete_publication(
+                idempotency_key,
+                generation_manifest_sha256=moved.generation_manifest_sha256,
+                completed_at=prepared_at,
+            )
+            return self._publication_completed(
+                replace(
+                    outcome,
+                    generation_manifest_sha256=moved.generation_manifest_sha256,
+                ),
+                operation_id=_financial_refresh_operation_id(idempotency_key),
+                started=publication_started,
+            )
+
+    def _reprojection_discovery(
+        self,
+        candidate: FinancialFamilyCandidate,
+        prior_candidate_manifest_sha256: str,
+    ) -> FinancialDiscoveryPublication:
+        coverage = self._candidates.family_reference(prior_candidate_manifest_sha256)[
+            "dataset_coverage"
+        ]
+        inventory = self._candidates.report_inventory(
+            candidate.manifest_sha256,
+            through=candidate.observation_through_session,
+        )
+        with self._database.transaction() as transaction:
+            requirements = transaction.execute(
+                """
+                SELECT instrument_id, endpoint, report_period, actual_date
+                FROM data.financial_report_targets
+                WHERE endpoint <> 'fina_indicator' AND actual_date <= %s
+                """,
+                (candidate.observation_through_session,),
+            ).fetchall()
+        missing_since: dict[str, date] = {}
+        for requirement in requirements:
+            endpoint = str(requirement["endpoint"])
+            identity = (
+                str(requirement["instrument_id"]),
+                requirement["report_period"].isoformat(),
+            )
+            if identity in inventory[endpoint]:
+                continue
+            actual_date = requirement["actual_date"]
+            previous = missing_since.get(identity[0])
+            if previous is None or actual_date < previous:
+                missing_since[identity[0]] = actual_date
+        gap_count = int(coverage["discovery_gap_count"])
+        earliest = min(missing_since.values()).isoformat() if missing_since else None
+        if gap_count and coverage["earliest_unresolved_date"] is not None:
+            prior_earliest = str(coverage["earliest_unresolved_date"])
+            earliest = prior_earliest if earliest is None else min(earliest, prior_earliest)
+        pending_ids = sorted(missing_since)
+        return FinancialDiscoveryPublication(
+            baseline_session=str(coverage["discovery_baseline_session"]),
+            attempted_through_session=str(coverage["discovery_attempted_through_session"]),
+            complete_through_session=str(coverage["discovery_complete_through_session"]),
+            source_lineage_sha256=hashlib.sha256(
+                canonical_json_bytes(
+                    {
+                        "reprojected_from": coverage["source_lineage_sha256"],
+                        "pending": pending_ids,
+                    }
+                )
+            ).hexdigest(),
+            readiness_status=(
+                "ready_with_gaps"
+                if gap_count
+                else "ready_with_pending"
+                if pending_ids
+                else "ready"
+            ),
+            pending_instrument_count=len(pending_ids),
+            discovery_gap_count=gap_count,
+            earliest_unresolved_date=earliest,
+        )
 
     def publish(
         self,
@@ -466,6 +701,8 @@ class FinancialRefreshService:
         prior_candidate_manifest_sha256: str | None,
         observation_through_session: str,
     ) -> FinancialRefreshOutcome:
+        if self._collection is None:
+            raise FinancialRefreshError("LIVE_FINANCIAL_COLLECTION_REQUIRED")
         fingerprint = _fingerprint(
             idempotency_key,
             generation_manifest_sha256,
@@ -702,6 +939,29 @@ class FinancialRefreshService:
                 row_count=int(snapshot["row_count"]),
                 quarantined_row_count=int(snapshot["quarantined_row_count"]),
                 raw_batch_count=int(snapshot["raw_batch_count"]),
+                discovery_baseline_session=(
+                    None
+                    if snapshot["discovery_baseline_session"] is None
+                    else str(snapshot["discovery_baseline_session"])
+                ),
+                discovery_complete_through_session=(
+                    None
+                    if snapshot["discovery_complete_through_session"] is None
+                    else str(snapshot["discovery_complete_through_session"])
+                ),
+                readiness_status=str(snapshot["readiness_status"]),
+                pending_instrument_count=int(snapshot["pending_instrument_count"]),
+                discovery_gap_count=int(snapshot["discovery_gap_count"]),
+                earliest_unresolved_date=(
+                    None
+                    if snapshot["earliest_unresolved_date"] is None
+                    else str(snapshot["earliest_unresolved_date"])
+                ),
+                source_lineage_sha256=(
+                    None
+                    if snapshot["source_lineage_sha256"] is None
+                    else str(snapshot["source_lineage_sha256"])
+                ),
             )
             expected = int(snapshot["expected_shard_count"])
             completed = int(snapshot["completed_shard_count"])
@@ -758,21 +1018,89 @@ class FinancialRefreshService:
                        expected_shard_count, completed_shard_count, resumed_shard_count
                 FROM data.financial_refresh_operations
                 WHERE idempotency_key = %s AND status = 'succeeded'
+                """,
+                (idempotency_key,),
+            ).fetchone()
+        if operation is None or operation["publication_candidate_manifest_sha256"] is None:
+            raise FinancialRefreshError("FINANCIAL_PUBLICATION_COMPLETION_CONFLICT")
+        candidate_manifest_sha256 = str(
+            operation["publication_candidate_manifest_sha256"]
+        )
+        candidate = self._candidates.reopen(candidate_manifest_sha256)
+        inventory = self._candidates.report_inventory(
+            candidate_manifest_sha256,
+            through=candidate.observation_through_session,
+        )
+        with self._database.transaction() as transaction:
+            locked = transaction.execute(
+                """
+                SELECT publication_candidate_manifest_sha256,
+                       expected_shard_count, completed_shard_count, resumed_shard_count
+                FROM data.financial_refresh_operations
+                WHERE idempotency_key = %s AND status = 'succeeded'
                 FOR UPDATE
                 """,
                 (idempotency_key,),
             ).fetchone()
-            if operation is None or operation["publication_candidate_manifest_sha256"] is None:
+            if (
+                locked is None
+                or str(locked["publication_candidate_manifest_sha256"])
+                != candidate_manifest_sha256
+            ):
                 raise FinancialRefreshError("FINANCIAL_PUBLICATION_COMPLETION_CONFLICT")
-            candidate = self._candidates.reopen(
-                str(operation["publication_candidate_manifest_sha256"])
+            requirements = transaction.execute(
+                """
+                SELECT instrument_id, endpoint, report_period
+                FROM data.financial_report_targets
+                WHERE endpoint <> 'fina_indicator' AND actual_date <= %s
+                """,
+                (candidate.observation_through_session,),
+            ).fetchall()
+            resolved = [
+                {
+                    "instrument_id": str(row["instrument_id"]),
+                    "endpoint": str(row["endpoint"]),
+                    "report_period": row["report_period"].isoformat(),
+                }
+                for row in requirements
+                if (
+                    str(row["instrument_id"]),
+                    row["report_period"].isoformat(),
+                )
+                in inventory[str(row["endpoint"])]
+            ]
+            transaction.execute(
+                """
+                UPDATE data.financial_report_targets
+                SET resolved_evidence_sha256 = NULL
+                WHERE endpoint <> 'fina_indicator' AND actual_date <= %s
+                """,
+                (candidate.observation_through_session,),
+            )
+            transaction.execute(
+                """
+                UPDATE data.financial_report_targets AS target
+                SET resolved_evidence_sha256 = %s
+                FROM jsonb_to_recordset(%s) AS report(
+                    instrument_id text, endpoint text, report_period date
+                )
+                WHERE target.instrument_id = report.instrument_id
+                  AND target.endpoint = report.endpoint
+                  AND target.report_period = report.report_period
+                  AND target.actual_date <= %s
+                """,
+                (
+                    candidate_manifest_sha256,
+                    Jsonb(resolved),
+                    candidate.observation_through_session,
+                ),
             )
             snapshot = {
                 **candidate.__dict__,
                 "table_names": list(candidate.table_names),
-                "expected_shard_count": int(operation["expected_shard_count"]),
-                "completed_shard_count": int(operation["completed_shard_count"]),
-                "resumed_shard_count": int(operation["resumed_shard_count"]),
+                "expected_shard_count": int(locked["expected_shard_count"]),
+                "completed_shard_count": int(locked["completed_shard_count"]),
+                "resumed_shard_count": int(locked["resumed_shard_count"]),
             }
             changed = transaction.execute(
                 """
@@ -899,6 +1227,36 @@ def _financial_failure_level(code: str) -> str:
 def _publication_operation_id(idempotency_key: str, attempt: int) -> str:
     identity = hashlib.sha256(f"{idempotency_key}:{attempt}".encode()).hexdigest()[:32]
     return f"financial-refresh:{identity}"
+
+
+def _reprojection_fingerprint(
+    idempotency_key: str,
+    generation_manifest_sha256: str,
+    prior_candidate_manifest_sha256: str,
+    observation_through_session: str,
+) -> str:
+    if not idempotency_key or idempotency_key != idempotency_key.strip():
+        raise FinancialRefreshError("FINANCIAL_REFRESH_REQUEST_INVALID")
+    for value in (generation_manifest_sha256, prior_candidate_manifest_sha256):
+        if len(value) != 64 or any(
+            character not in "0123456789abcdef" for character in value
+        ):
+            raise FinancialRefreshError("FINANCIAL_REFRESH_REQUEST_INVALID")
+    try:
+        through = date.fromisoformat(observation_through_session).isoformat()
+    except ValueError as error:
+        raise FinancialRefreshError("FINANCIAL_REFRESH_REQUEST_INVALID") from error
+    return hashlib.sha256(
+        canonical_json_bytes(
+            {
+                "command": "data-operator/financial-reprojection/v1",
+                "idempotency_key": idempotency_key,
+                "expected_generation_manifest_sha256": generation_manifest_sha256,
+                "prior_candidate_manifest_sha256": prior_candidate_manifest_sha256,
+                "observation_through_session": through,
+            }
+        )
+    ).hexdigest()
 
 
 def _fingerprint(

@@ -37,7 +37,6 @@ from thesistrace.data.financial_disclosures import (
 from thesistrace.data.financial_report_progress import (
     reconciliation_ids,
     record_recheck,
-    resolve_reports,
 )
 from thesistrace.data.generation_files import AddressedFileError
 from thesistrace.data.generation_store import (
@@ -395,7 +394,6 @@ class FinancialDailyRefreshStore:
         instrument_id: str,
         status: Literal["accepted", "failed"],
         canonical_changed: bool,
-        observed_reports: Mapping[str, Sequence[str]] | None = None,
         checkpoints: Sequence[FinancialShardCheckpoint],
         failure_code: str | None,
         failure_endpoint: str | None,
@@ -491,15 +489,6 @@ class FinancialDailyRefreshStore:
                     raise FinancialDailyRefreshError("FINANCIAL_ATTEMPT_REPLAY_MISMATCH")
                 return
             record_recheck(transaction, instrument_id, "statements", failure_code)
-            if status == "accepted":
-                for checkpoint in checkpoints:
-                    resolve_reports(
-                        transaction,
-                        instrument_id,
-                        checkpoint.endpoint,
-                        (observed_reports or {}).get(checkpoint.endpoint, ()),
-                        checkpoint.batch_sha256,
-                    )
 
     def publication_state(self, idempotency_key: str) -> FinancialDiscoveryPublication:
         operation = self.operation(idempotency_key)
@@ -543,6 +532,87 @@ class FinancialDailyRefreshStore:
             earliest_unresolved_date=min(unresolved_dates).isoformat()
             if unresolved_dates
             else None,
+        )
+
+    def candidate_publication_state(
+        self,
+        idempotency_key: str,
+        received_reports: Mapping[str, set[tuple[str, str]]],
+    ) -> FinancialDiscoveryPublication:
+        """Derive readiness from the immutable candidate that would be published."""
+        operation = self.operation(idempotency_key)
+        evidence = operation["discovery_evidence"]
+        if evidence is None:
+            raise FinancialDailyRefreshError("FINANCIAL_DISCOVERY_NOT_RECORDED")
+        accepted = {
+            (instrument_id, endpoint, report_period)
+            for endpoint in FINANCIAL_ENDPOINTS
+            for instrument_id, report_period in received_reports.get(endpoint, set())
+        }
+        with self._database.transaction() as transaction:
+            requirements = transaction.execute(
+                """
+                SELECT instrument_id, endpoint, report_period, actual_date
+                FROM data.financial_report_targets
+                WHERE endpoint <> 'fina_indicator' AND actual_date <= %s
+                """,
+                (operation["target_session"],),
+            ).fetchall()
+            failures = transaction.execute(
+                """
+                SELECT instrument_id
+                FROM data.financial_refresh_instrument_attempts
+                WHERE idempotency_key = %s AND status = 'failed'
+                """,
+                (idempotency_key,),
+            ).fetchall()
+        missing_since: dict[str, date] = {}
+        for requirement in requirements:
+            identity = (
+                str(requirement["instrument_id"]),
+                str(requirement["endpoint"]),
+                requirement["report_period"].isoformat(),
+            )
+            if identity in accepted:
+                continue
+            instrument_id = identity[0]
+            actual_date = requirement["actual_date"]
+            previous = missing_since.get(instrument_id)
+            if previous is None or actual_date < previous:
+                missing_since[instrument_id] = actual_date
+        pending_ids = set(missing_since)
+        pending_ids.update(str(row["instrument_id"]) for row in failures)
+        gaps = evidence["gaps"]
+        unresolved_dates = list(missing_since.values())
+        if gaps:
+            unresolved_dates.append(
+                operation["prior_complete_through_session"] + timedelta(days=1)
+            )
+        if failures:
+            unresolved_dates.append(operation["target_session"])
+        return FinancialDiscoveryPublication(
+            baseline_session=operation["discovery_baseline_session"].isoformat(),
+            attempted_through_session=operation["target_session"].isoformat(),
+            complete_through_session=(
+                operation["prior_complete_through_session"]
+                if gaps
+                else operation["target_session"]
+            ).isoformat(),
+            source_lineage_sha256=_sha(
+                {"discovery": operation["source_lineage_sha256"], "pending": sorted(pending_ids)}
+            ),
+            readiness_status=(
+                "ready_with_gaps"
+                if gaps
+                else "ready_with_pending"
+                if pending_ids
+                else "ready"
+            ),
+            pending_instrument_count=len(pending_ids),
+            discovery_gap_count=len(gaps),
+            earliest_unresolved_date=(
+                min(unresolved_dates).isoformat() if unresolved_dates else None
+            ),
         )
 
     def inspect(self, idempotency_key: str) -> FinancialDailyRefreshInspection:
@@ -678,6 +748,8 @@ class FinancialDailyRefreshStore:
         idempotency_key: str,
         candidate_manifest_sha256: str,
         recorded_at: datetime,
+        *,
+        received_reports: Mapping[str, set[tuple[str, str]]],
     ) -> None:
         _require_sha256(candidate_manifest_sha256)
         recorded = _aware_clock(recorded_at)
@@ -692,6 +764,7 @@ class FinancialDailyRefreshStore:
                     candidate_manifest_sha256 IS NULL
                     OR candidate_manifest_sha256 = %s
                   )
+                RETURNING target_session, discovery_evidence
                 """,
                 (
                     candidate_manifest_sha256,
@@ -699,9 +772,51 @@ class FinancialDailyRefreshStore:
                     idempotency_key,
                     candidate_manifest_sha256,
                 ),
-            ).rowcount
-        if changed != 1:
-            raise FinancialDailyRefreshError("FINANCIAL_CANDIDATE_RECORD_CONFLICT")
+            ).fetchone()
+            if changed is None:
+                raise FinancialDailyRefreshError("FINANCIAL_CANDIDATE_RECORD_CONFLICT")
+            operation = changed
+            if operation["discovery_evidence"] is None:
+                raise FinancialDailyRefreshError("FINANCIAL_DISCOVERY_NOT_RECORDED")
+            scope = list(operation["discovery_evidence"]["instrument_ids"].values())
+            inventory = [
+                {
+                    "instrument_id": instrument_id,
+                    "endpoint": endpoint,
+                    "report_period": report_period,
+                }
+                for endpoint in FINANCIAL_ENDPOINTS
+                for instrument_id, report_period in received_reports.get(endpoint, set())
+            ]
+            transaction.execute(
+                """
+                UPDATE data.financial_report_targets
+                SET resolved_evidence_sha256 = NULL
+                WHERE endpoint <> 'fina_indicator'
+                  AND instrument_id = ANY(%s::text[]) AND actual_date <= %s
+                """,
+                (scope, operation["target_session"]),
+            )
+            transaction.execute(
+                """
+                UPDATE data.financial_report_targets AS target
+                SET resolved_evidence_sha256 = %s
+                FROM jsonb_to_recordset(%s) AS report(
+                    instrument_id text, endpoint text, report_period date
+                )
+                WHERE target.instrument_id = report.instrument_id
+                  AND target.endpoint = report.endpoint
+                  AND target.report_period = report.report_period
+                  AND target.instrument_id = ANY(%s::text[])
+                  AND target.actual_date <= %s
+                """,
+                (
+                    candidate_manifest_sha256,
+                    Jsonb(inventory),
+                    scope,
+                    operation["target_session"],
+                ),
+            )
 
     def record_composed_generation(
         self,
@@ -1299,14 +1414,12 @@ class DailyFinancialRefreshService:
                     )
                     status = "failed"
                 else:
-                    observed_reports = validated.report_periods
                     self._store.record_instrument_attempt(
                         idempotency_key=idempotency_key,
                         instrument_id=identity.instrument_id,
                         status="accepted",
                         canonical_changed=validated.canonical_changed,
                         checkpoints=checkpoints,
-                        observed_reports=observed_reports,
                         failure_code=None,
                         failure_endpoint=None,
                         attempted_at=self._validated_clock(),
@@ -1363,10 +1476,29 @@ class DailyFinancialRefreshService:
             prior_candidate_manifest_sha256=prior_manifest,
             discovery=publication,
         )
+        received_reports = self._candidates.report_inventory(
+            candidate.manifest_sha256,
+            through=target,
+        )
+        candidate_publication = self._store.candidate_publication_state(
+            idempotency_key,
+            received_reports,
+        )
+        if candidate_publication != publication:
+            candidate = self._candidates.rebuild_daily(
+                snapshot,
+                prior_candidate_manifest_sha256=prior_manifest,
+                discovery=candidate_publication,
+            )
+            received_reports = self._candidates.report_inventory(
+                candidate.manifest_sha256,
+                through=target,
+            )
         self._store.record_candidate(
             idempotency_key,
             candidate.manifest_sha256,
             finished_at,
+            received_reports=received_reports,
         )
         self._ownership_guard()
         self._progress(

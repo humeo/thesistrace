@@ -99,8 +99,16 @@ def _materialized_candidate(
     tmp_path: Path, *, extra_income_versions: int = 0, quarterly_cash_seed: bool = False,
     income_items: list[list[object]] | None = None, market_sessions: tuple[str, ...] = SESSIONS,
     balance_items: list[list[object]] | None = None,
+    second_instrument_id: str = "equity:000002.SZ",
+    second_ts_code: str = "000002.SZ",
+    second_cashflow_items: list[list[object]] | None = None,
 ):
-    market_manifest = _market_generation(tmp_path, sessions=market_sessions)
+    market_manifest = _market_generation(
+        tmp_path,
+        sessions=market_sessions,
+        second_instrument_id=second_instrument_id,
+        second_ts_code=second_ts_code,
+    )
     batches = RawFinancialBatchStore(tmp_path)
     checkpoints: list[FinancialShardCheckpoint] = []
 
@@ -180,11 +188,11 @@ def _materialized_candidate(
     add_batch(
         1,
         "income",
-        [["000002.SZ", "20090425", "", "20081231", "1", "1", "4", "900", "0"]],
+        [[second_ts_code, "20090425", "", "20081231", "1", "1", "4", "900", "0"]],
         datetime(2026, 4, 24, 8, tzinfo=UTC),
         shard="complete-history",
-        instrument_id="equity:000002.SZ",
-        ts_code="000002.SZ",
+        instrument_id=second_instrument_id,
+        ts_code=second_ts_code,
     )
     add_batch(
         2,
@@ -200,11 +208,11 @@ def _materialized_candidate(
     add_batch(
         3,
         "balancesheet",
-        [["000002.SZ", "20090425", "", "20081231", "1", "1", "4", "950", "0"]],
+        [[second_ts_code, "20090425", "", "20081231", "1", "1", "4", "950", "0"]],
         datetime(2026, 4, 24, 8, tzinfo=UTC),
         shard="complete-history",
-        instrument_id="equity:000002.SZ",
-        ts_code="000002.SZ",
+        instrument_id=second_instrument_id,
+        ts_code=second_ts_code,
     )
     add_batch(
         4,
@@ -222,11 +230,13 @@ def _materialized_candidate(
     add_batch(
         5,
         "cashflow",
-        [["000002.SZ", "20090425", "", "20081231", "1", "1", "4", "930", "0"]],
+        second_cashflow_items if second_cashflow_items is not None else [
+            [second_ts_code, "20090425", "", "20081231", "1", "1", "4", "930", "0"]
+        ],
         datetime(2026, 4, 24, 8, tzinfo=UTC),
         shard="complete-history",
-        instrument_id="equity:000002.SZ",
-        ts_code="000002.SZ",
+        instrument_id=second_instrument_id,
+        ts_code=second_ts_code,
     )
     contract = FinancialCollectionContract(
         capability_sha256="b" * 64,
@@ -261,13 +271,14 @@ def _targeted_instrument_collection(
     *,
     idempotency_key: str,
     generation_manifest_sha256: str | None = None,
+    instrument_id: str = "equity:000001.SZ",
 ) -> CompletedFinancialCollection:
     checkpoints = tuple(
         replace(checkpoint, ordinal=ordinal)
         for ordinal, checkpoint in enumerate(
             item
             for item in snapshot.shards
-            if item.instrument_id == "equity:000001.SZ"
+            if item.instrument_id == instrument_id
         )
     )
     return replace(
@@ -1679,6 +1690,137 @@ def test_daily_instrument_validation_reports_no_delta_for_identical_history(
     assert changed.canonical_changed is False
 
 
+def test_daily_reprojection_repairs_002296_published_quarantine_without_new_source_data(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_project = FinancialVersionProjector.project
+
+    def legacy_projector(
+        projector: FinancialVersionProjector,
+        observations: tuple[FinancialSourceObservation, ...] | list[FinancialSourceObservation],
+        sessions: tuple[str, ...] | list[str],
+    ):
+        projected = original_project(projector, observations, sessions)
+        return tuple(
+            replace(
+                version,
+                availability_status="quarantined",
+                effective_available_session="",
+                coverage_role="quarantined",
+            )
+            if (
+                version.endpoint == "cashflow"
+                and version.instrument_id == "equity:002296.SZ"
+                and version.source()["end_date"] == "20260331"
+            )
+            else version
+            for version in projected
+        )
+
+    cashflow = [
+        ["002296.SZ", ann_date, "20260428", "20260331", "1", "1", "1", value, "1"]
+        for ann_date, value in (("20260427", "100"), ("20260428", "101"))
+    ]
+    with monkeypatch.context() as legacy:
+        legacy.setattr(FinancialVersionProjector, "project", legacy_projector)
+        store, bootstrap, _repeated, snapshot = _materialized_candidate(
+            tmp_path,
+            second_instrument_id="equity:002296.SZ",
+            second_ts_code="002296.SZ",
+            second_cashflow_items=cashflow,
+        )
+        prior = store.rebuild_daily(
+            replace(
+                snapshot,
+                idempotency_key="legacy-002296-discovery",
+                target_count=0,
+                shards=(),
+            ),
+            prior_candidate_manifest_sha256=bootstrap.manifest_sha256,
+            discovery=FinancialDiscoveryPublication(
+                baseline_session="2026-08-13",
+                attempted_through_session="2026-08-13",
+                complete_through_session="2026-08-13",
+                source_lineage_sha256="1" * 64,
+                readiness_status="ready_with_pending",
+                pending_instrument_count=1,
+                discovery_gap_count=0,
+                earliest_unresolved_date="2026-03-31",
+            ),
+        )
+
+    targeted = _targeted_instrument_collection(
+        snapshot,
+        idempotency_key="repair-002296-published-quarantine",
+        instrument_id="equity:002296.SZ",
+    )
+    validated = store.validate_daily_instrument(
+        targeted,
+        prior_candidate_manifest_sha256=prior.manifest_sha256,
+        observation_through_session="2026-08-13",
+    )
+
+    assert validated.canonical_changed is True
+    assert validated.report_periods["cashflow"] == ("2026-03-31",)
+
+    repaired = store.rebuild_daily(
+        targeted,
+        prior_candidate_manifest_sha256=prior.manifest_sha256,
+        discovery=FinancialDiscoveryPublication(
+            baseline_session="2026-08-13",
+            attempted_through_session="2026-08-13",
+            complete_through_session="2026-08-13",
+            source_lineage_sha256="2" * 64,
+            readiness_status="ready",
+            pending_instrument_count=0,
+            discovery_gap_count=0,
+            earliest_unresolved_date=None,
+        ),
+    )
+    rows = store.read_financial_rows(
+        repaired.manifest_sha256,
+        "cashflow",
+        ("source_report_period", "availability_status", "revenue"),
+        ("2026-08-13",),
+        frozenset({"equity:002296.SZ"}),
+    )
+    assert {row["revenue"] for row in rows if row["source_report_period"] == "20260331"} == {
+        "100",
+        "101",
+    }
+    assert {
+        row["availability_status"]
+        for row in rows
+        if row["source_report_period"] == "20260331"
+    } == {"available"}
+    assert store.quarantined_row_count(repaired.manifest_sha256) == (
+        store.quarantined_row_count(prior.manifest_sha256) - 2
+    )
+    assert ("equity:002296.SZ", "2026-03-31") in store.report_inventory(
+        repaired.manifest_sha256,
+        through="2026-08-13",
+    )["cashflow"]
+
+    reprojected = store.reproject_saved(
+        prior_candidate_manifest_sha256=prior.manifest_sha256,
+        generation_manifest_sha256=snapshot.generation_manifest_sha256,
+        idempotency_key="reproject-002296-published-quarantine",
+        finished_at=datetime(2026, 8, 13, 10, tzinfo=UTC),
+    )
+    assert reprojected.raw_batch_count == prior.raw_batch_count
+    assert store.quarantined_row_count(reprojected.manifest_sha256) == (
+        store.quarantined_row_count(prior.manifest_sha256) - 2
+    )
+    assert store.read_financial_rows(
+        reprojected.manifest_sha256,
+        "cashflow",
+        ("source_report_period", "availability_status", "revenue"),
+        ("2026-08-13",),
+        frozenset({"equity:002296.SZ"}),
+    ) == rows
+
+
 def test_daily_report_presence_excludes_repeated_quarantined_versions(tmp_path: Path) -> None:
     store, prior, _repeated, snapshot = _materialized_candidate(tmp_path)
     validated = store.validate_daily_instrument(
@@ -2250,6 +2392,8 @@ def _market_generation(
     include_second: bool = True,
     include_daily_fields: bool = False,
     sessions: tuple[str, ...] = SESSIONS,
+    second_instrument_id: str = "equity:000002.SZ",
+    second_ts_code: str = "000002.SZ",
 ) -> str:
     canonical = build_minimal_canonical_fixture()
     template_price = dict(canonical["prices"][0])
@@ -2264,8 +2408,8 @@ def _market_generation(
         canonical["instruments"] = [
             *canonical["instruments"],
             {
-                "instrument_id": "equity:000002.SZ",
-                "ts_code": "000002.SZ",
+                "instrument_id": second_instrument_id,
+                "ts_code": second_ts_code,
                 "asset_type": "ordinary_a_share",
                 "exchange": "SZSE",
                 "board": "main",

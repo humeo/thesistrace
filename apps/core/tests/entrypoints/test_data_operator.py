@@ -398,6 +398,10 @@ def test_bootstrap_cli_exposes_an_explicit_start_date(
                 "--observation-through-session",
             ),
         ),
+        (
+            "reproject-financial",
+            ("--idempotency-key", "--expected-generation-manifest-sha256"),
+        ),
     ],
 )
 def test_private_financial_operator_exposes_explicit_contract_inputs(

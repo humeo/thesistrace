@@ -37,6 +37,10 @@ Persisted disclosures survive interruption before collection. Indicator report
 readiness is reconciled with the merged candidate in the same transaction that
 records it: an omitted old row preserves accepted history, while a conflicting
 latest observation reopens the requirement until a valid later response arrives.
+Statement readiness follows the same rule. The merged, overlaid candidate is the
+authority for report presence; its inventory is reconciled with the report ledger
+in the transaction that records the candidate. Coverage readiness is derived from
+that final inventory rather than from an accepted source request alone.
 
 The [TuShare disclosure-date contract](https://tushare.pro/document/2?doc_id=162)
 provides structured report periods and actual dates, not an exhaustive correction
@@ -52,3 +56,10 @@ preserves historical rows and accepted dataset objects while introducing the
 new report ledger. Its first refresh rebuilds requirements from structured
 disclosures and accepted report evidence; old tasks are neither blindly copied
 nor falsely marked completed.
+
+When a projection rule correction must repair the current Family without new
+source data, the private `reproject-financial` operation replays retained raw
+receipts against an explicitly expected Dataset Head. It uses the normal
+candidate protection and compare-and-swap publication path, reconciles report
+requirements from the repaired candidate, preserves previous Generations, and
+does not advance the financial observation boundary.
