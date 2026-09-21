@@ -5,7 +5,7 @@ import hashlib
 import json
 import tempfile
 from collections import defaultdict
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -105,11 +105,6 @@ class _PublishedFinancialRowIndex:
         self._connection.execute("PRAGMA temp_store=FILE")
         self._connection.executescript(
             """
-            CREATE TABLE seen_rows (
-                endpoint TEXT NOT NULL,
-                source_row_sha256 TEXT NOT NULL,
-                PRIMARY KEY (endpoint, source_row_sha256)
-            ) WITHOUT ROWID;
             CREATE TABLE logical_rows (
                 endpoint TEXT NOT NULL,
                 instrument_id TEXT NOT NULL,
@@ -118,13 +113,8 @@ class _PublishedFinancialRowIndex:
                 source_published_date TEXT NOT NULL,
                 source_report_type TEXT NOT NULL,
                 availability_status TEXT NOT NULL,
-                row_json BLOB NOT NULL,
-                PRIMARY KEY (endpoint, source_row_sha256)
-            ) WITHOUT ROWID;
-            CREATE INDEX logical_rows_by_instrument
-                ON logical_rows (endpoint, instrument_id);
-            CREATE INDEX logical_rows_by_status
-                ON logical_rows (availability_status, endpoint);
+                row_json BLOB NOT NULL
+            );
             CREATE TABLE delta_rows (
                 endpoint TEXT NOT NULL,
                 source_row_sha256 TEXT NOT NULL,
@@ -144,12 +134,6 @@ class _PublishedFinancialRowIndex:
             );
             """
         )
-
-    def claim(self, endpoint: str, source_row_sha256: str) -> bool:
-        return self._connection.execute(
-            "INSERT OR IGNORE INTO seen_rows(endpoint, source_row_sha256) VALUES (?, ?)",
-            (endpoint, source_row_sha256),
-        ).rowcount == 1
 
     def add(self, endpoint: str, row: Mapping[str, object]) -> None:
         self._connection.execute(
@@ -173,6 +157,14 @@ class _PublishedFinancialRowIndex:
         )
 
     def finish(self) -> None:
+        # Loading is append-only. Building the lookup index after the scan avoids
+        # hours of random B-tree maintenance while retaining bounded memory.
+        self._connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS logical_rows_by_instrument
+            ON logical_rows (endpoint, instrument_id)
+            """
+        )
         self._connection.commit()
 
     def rows(self, endpoint: str, instrument_id: str) -> tuple[dict[str, object], ...]:
@@ -567,7 +559,6 @@ class FinancialCandidateStore:
                     endpoint_fields[endpoint],
                     references[endpoint],
                     sessions,
-                    claim_identity=index.claim,
                 ):
                     index.add(endpoint, row)
             index.finish()
@@ -2834,8 +2825,6 @@ class FinancialCandidateStore:
         source_fields: tuple[str, ...],
         reference: Mapping[str, object],
         sessions: list[str],
-        *,
-        claim_identity: Callable[[str, str], bool] | None = None,
     ) -> Iterator[dict[str, object]]:
         manifest_sha256 = str(reference.get("manifest_sha256"))
         manifest = self._read_json(
@@ -2921,14 +2910,10 @@ class FinancialCandidateStore:
                 if layered is not None:
                     source_hash = str(row["source_row_sha256"])
                     _require_sha256(source_hash)
-                    if claim_identity is not None:
-                        if not claim_identity(endpoint, source_hash):
-                            continue
-                    else:
-                        identity = bytes.fromhex(source_hash)
-                        if identity in seen:
-                            continue
-                        seen.add(identity)
+                    identity = bytes.fromhex(source_hash)
+                    if identity in seen:
+                        continue
+                    seen.add(identity)
                 yield row
             del partition, table, content
         previous = None
