@@ -88,6 +88,68 @@ execution. A size failure includes the program and decision date and does not
 publish partial state or orders. Declare only the fields/history the program
 uses; narrower declarations reduce input and calculation cost.
 
+## Framework modules
+
+HTTP and MCP accept `strategy_mode: "framework"` and a `modules` object with
+exactly these four slots, evaluated in this fixed order at each Close:
+
+| Slot | Built-in identity | Python output |
+| --- | --- | --- |
+| `universe_selection` | `dataset_universe/v1` | `None`, or `{reason, instrument_ids}` |
+| `alpha` | `alpha_formula/v1` | `None`, or `{reason, signals}` |
+| `portfolio_construction` | `periodic_top_n/v1` | `None`, or the Direct target shape |
+| `risk_management` | `no_risk/v1` | `None`, or an explicit Risk Adjustment |
+
+Replace a slot's built-in string with `{"kind": "python", "program": {...}}`.
+Each program has the same source, parameters and data declaration contract as
+Direct, its own explicit state, and its own isolated invocation. All four
+slots are frozen with the Run. Omitting `modules` selects all four built-ins.
+
+Only built-in Alpha accepts `formula` and `neutralization`. Only built-in
+Portfolio accepts `holdings_count`, `selection_every_sessions`,
+`exposure_expression`, `weighting` and `volatility_window`. Inactive settings
+must be omitted. The shared data preparation uses the union of declarations;
+each program still sees only its own declared fields and history.
+
+Every module receives the ordinary daily context plus `context.framework`:
+`universe`, active `signals`, `universe_changed`, `signals_updated`,
+`expired_signals`, `removed_signals`, the current `proposal`, and the
+`retained_proposal` from the last Portfolio update. The last value is a
+reference, never an instruction to replay old weights. Downstream candidate
+lists are restricted by Universe Selection; actual holdings remain visible.
+
+Universe output replaces the selected list with up to 3,000 unique current
+Dataset candidates. `None` retains previously selected candidates that remain
+available; it starts empty. Built-in Alpha retains the Research Universe's
+original rank and neutralization population, then Universe Selection filters
+strategy candidates. A Python Alpha may compute on its selected candidates.
+
+Each Python signal contains `instrument_id`, a finite numeric `value`, and
+`valid_for_sessions` from 1 to 252. Output replaces the active snapshot with at
+most one signal per selected instrument. The host stamps `created_session`
+and `created_session_number`; a lifetime of one expires before the next Close
+decision. `None` retains unexpired signals. Expiry and Universe removal are
+inputs to Portfolio Construction; neither creates a sale by itself. Built-in
+Portfolio keeps its every-N-session selection policy even when signals change
+daily. Python Portfolio can instead react to opportunity changes.
+
+Risk runs every Close, including when Portfolio returns NoUpdate. Its output
+must state the intended composition:
+
+- `{"mode": "limit_positions", "reason": "...", "position_limits": {...}}`
+  caps actual remaining shares. These caps intersect any Portfolio share caps;
+  they cannot increase a holding. With no new Portfolio proposal, reducing A
+  leaves B/C shares and the released cash unchanged.
+- `{"mode": "replace", "reason": "...", "target": ...}` explicitly replaces
+  the entire proposal with a Direct target shape; a null target cancels it.
+- `None` leaves this Close's new proposal unchanged. It never restores the
+  retained proposal or buys back a previous reduction.
+
+The composed target alone reaches the shared execution account. A Framework
+Strategy Sweep requires either built-in Alpha for every item (one shared
+formula and neutralization) or Python Alpha for every item (no shared formula).
+Python modules, active signals and accounts remain independent between items.
+
 ## Frozen environment
 
 The runtime uses CPython 3.14.7 compiled for WASI, executed by Wasmtime 49.0.0.

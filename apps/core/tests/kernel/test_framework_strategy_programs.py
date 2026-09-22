@@ -425,9 +425,10 @@ def test_framework_programs_survive_public_kernel_run_and_advance(custom_alpha):
             == full_checkpoint["strategy_state"]["terminal"])
 
 
-def framework_run_input(*, custom_alpha=False, builtin_portfolio=False):
+def framework_run_input(*, custom_alpha=False, builtin_portfolio=False, exposure_source=None):
     from contracts import CLOSE_ADJUSTED, FIELD_BINDINGS
 
+    from thesistrace.alpha_language import alpha_language
     from thesistrace.research_kernel import RunInput, StrategyRunInput
     from thesistrace.research_kernel.serialization import canonical_json_bytes
 
@@ -442,19 +443,127 @@ def framework_run_input(*, custom_alpha=False, builtin_portfolio=False):
         strategy["modules"]["alpha"] = python_module(
             "def decide(context, state, parameters):\n    return {'output': None, 'state': {}}",
         )
+    exposure = (alpha_language.compile(exposure_source, context="exposure")
+                if exposure_source else None)
+    lookback = exposure.effective_lookback if exposure else 0
     return data, RunInput(
         research_data=data, alpha_expression=None if custom_alpha else CLOSE_ADJUSTED,
         field_bindings=FIELD_BINDINGS,
-        effective_lookback=0, universe="manual", neutralization=None if custom_alpha else "none",
+        effective_lookback=lookback, universe="manual",
+        neutralization=None if custom_alpha else "none",
         research_kind="strategy_backtest",
         strategy=StrategyRunInput(
-            holdings_count=1, selection_interval=5, initial_cash_cny="100000",
+            holdings_count=1 if builtin_portfolio else None,
+            selection_interval=5 if builtin_portfolio else None, initial_cash_cny="100000",
             modules_json=canonical_json_bytes(strategy["modules"]),
             environment_json=canonical_json_bytes(strategy["environment"]),
+            exposure_expression_json=(canonical_json_bytes(exposure.expression)
+                                      if exposure else None),
             **definition["costs"],
         ),
-        research_start_session=SESSIONS[0], research_end_session=SESSIONS[-1],
+        research_start_session=SESSIONS[lookback], research_end_session=SESSIONS[-1],
     )
+
+
+@pytest.mark.parametrize("columnar", [False, True])
+@pytest.mark.parametrize("custom_alpha", [False, True])
+def test_framework_preserves_common_exposure_evidence_across_run_and_tracking(
+    columnar, custom_alpha,
+):
+    from functools import partial
+
+    from thesistrace.daily_track.checkpoint import (
+        project_tracking_checkpoint,
+        restore_tracking_checkpoint,
+    )
+    from thesistrace.daily_track.models import KernelStateCheckpoint
+    from thesistrace.daily_track.observation_state import (
+        TrackingObservationState,
+        initial_tracking_observation_state,
+    )
+    from thesistrace.research_kernel import AdvanceInput, advance, continuation_snapshot, run
+    from thesistrace.research_kernel.kernel_run import run_columnar_chunk
+    from thesistrace.research_kernel.tracking_advance import advance_tracking
+
+    data, request = framework_run_input(
+        custom_alpha=custom_alpha, builtin_portfolio=True,
+        exposure_source="universe_advancing_fraction()",
+    )
+    if columnar:
+        import numpy as np
+        from test_research_chunk_continuation import _ColumnarFixture
+
+        data = _ColumnarFixture(
+            sessions=data.sessions, instruments=data.instruments,
+            universe_members=data.universe_members, industries=data.industries,
+            execution_prices=data.execution_prices, trading_states=data.trading_states,
+            price_limits=data.price_limits,
+            matrices={field: np.asarray([
+                [float(values.get((session, item), "nan")) for session in data.sessions]
+                for item in data.instruments
+            ]) for field, values in data.fields.items()},
+        )
+        request = request.with_research_data(data)
+    calculate = partial(run_columnar_chunk, cancellation_check=lambda: None) if columnar else run
+    whole = calculate(request)
+    initial = initial_tracking_observation_state(SESSIONS[0], "100000")
+    checkpoint = project_tracking_checkpoint(
+        whole.track_state, retained_strategy_sessions=SESSIONS[1:], prior_observation_state=initial,
+    )
+    observations = checkpoint["common_input_observations"]
+    assert [(row["session"], row["identifier"], row["value"], row["valid_count"])
+            for row in observations] == [
+        (SESSIONS[1], "universe_advancing_fraction", 0.5, 2),
+        (SESSIONS[2], "universe_advancing_fraction", 0.0, 2),
+        (SESSIONS[3], "universe_advancing_fraction", 0.5, 2),
+    ]
+    KernelStateCheckpoint.model_validate(checkpoint)
+    assert ("alpha_matrix" in whole.artifacts_snapshot()) is not custom_alpha
+    prefix = calculate(request.with_research_data(
+        slice_research_sessions(data, SESSIONS[:2]), research_end_session=SESSIONS[1],
+    )).track_state
+    prefix_checkpoint = project_tracking_checkpoint(
+        prefix, retained_strategy_sessions=SESSIONS[1:2], prior_observation_state=initial,
+    )
+    restored = restore_tracking_checkpoint(
+        prefix_checkpoint, research_data=slice_research_sessions(data, SESSIONS[:2]),
+    )
+    continued = (advance_tracking if columnar else advance)(AdvanceInput(
+        prior_state=restored, target_research_data=data, appended_sessions=list(SESSIONS[2:]),
+        continuation=continuation_snapshot(restored), calculation_scope="forward_tracking",
+    ))
+    suffix = project_tracking_checkpoint(
+        continued, retained_strategy_sessions=SESSIONS[2:],
+        prior_observation_state=TrackingObservationState.model_validate(
+            prefix_checkpoint["tracking_observation_state"],
+        ),
+    )
+    KernelStateCheckpoint.model_validate(suffix)
+    assert suffix["common_input_observations"] == observations[1:]
+    assert suffix["strategy_state"]["terminal"] == checkpoint["strategy_state"]["terminal"]
+
+
+@pytest.mark.parametrize("custom_alpha", [False, True])
+def test_framework_advance_preserves_observed_exposure_when_prior_data_is_revised(custom_alpha):
+    from thesistrace.research_kernel import AdvanceInput, advance, continuation_snapshot, run
+
+    data, request = framework_run_input(
+        custom_alpha=custom_alpha, builtin_portfolio=True,
+        exposure_source="universe_advancing_fraction()",
+    )
+    prefix = run(request.with_research_data(
+        slice_research_sessions(data, SESSIONS[:2]), research_end_session=SESSIONS[1],
+    )).track_state
+    corrected = data.snapshot()
+    corrected.fields["price.close.adjusted"][(SESSIONS[0], B)] = "50"
+    continued = advance(AdvanceInput(
+        prior_state=prefix, target_research_data=corrected, appended_sessions=list(SESSIONS[2:]),
+        continuation=continuation_snapshot(prefix), calculation_scope="research_period",
+    ))
+    observed = continued.output_snapshot()["common_inputs"]["sessions"]
+    assert [(row["session"], row["common_inputs"][0]["value"]) for row in observed] == [
+        (SESSIONS[1], 0.5), (SESSIONS[2], 0.0), (SESSIONS[3], 0.5),
+    ]
 
 
 def test_checkpoint_rejects_corrupt_builtin_portfolio_state_in_a_mixed_framework():

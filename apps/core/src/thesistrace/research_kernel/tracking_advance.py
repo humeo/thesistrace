@@ -66,7 +66,10 @@ def advance_tracking(
         attach_common_input_evidence(matrix, exposure_observations, tuple(appended))
     return KernelState(
         run_input=run_input,
-        output=compose_output(matrix, strategy.finalized),
+        output=compose_output(
+            matrix, strategy.finalized, exposure_observations, sessions=tuple(appended),
+            prior_common_inputs=restored["common_inputs"],
+        ),
         strategy_resume=strategy.resumable,
         origin_session=prior.origin_session,
     )

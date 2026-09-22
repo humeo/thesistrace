@@ -20,6 +20,7 @@ from thesistrace.research_kernel.alpha_expression import (
 from thesistrace.research_kernel.builtin_framework import BUILTIN_FRAMEWORK_MODULES
 from thesistrace.research_kernel.common_observations import (
     attach_common_input_evidence,
+    merge_common_input_sessions,
     record_common_input,
 )
 from thesistrace.research_kernel.direct_strategy import PythonProgram
@@ -60,16 +61,16 @@ class InsufficientCalculationWarmupError(KernelRunError):
 
 @dataclass(frozen=True)
 class StrategyRunInput:
-    holdings_count: int
-    selection_interval: int
+    holdings_count: int | None
+    selection_interval: int | None
     initial_cash_cny: str
     commission_rate_all_in: str
     commission_min_cny: str
     stamp_duty_sell_rate: str
     transfer_fee_rate: str
-    weighting: PortfolioWeighting = "equal_weight"
-    volatility_window: int = 20
-    exposure_expression_json: bytes = b'{"kind":"number","value":1}'
+    weighting: PortfolioWeighting | None = None
+    volatility_window: int | None = None
+    exposure_expression_json: bytes | None = None
     modules_json: bytes | None = field(default=None, repr=False)
     environment_json: bytes | None = field(default=None, repr=False)
 
@@ -81,13 +82,32 @@ class StrategyRunInput:
                 raise ValueError("Framework programs require a frozen execution environment")
         elif self.environment_json is not None:
             raise ValueError("Builtin Framework has no Python execution environment")
+        if "portfolio_construction" in programs:
+            if any(value is not None for value in (
+                self.holdings_count, self.selection_interval, self.weighting,
+                self.volatility_window, self.exposure_expression_json,
+            )):
+                raise ValueError("Python Portfolio cannot contain builtin Portfolio settings")
+            return
+        if (type(self.holdings_count) is not int or not 1 <= self.holdings_count <= 100
+                or type(self.selection_interval) is not int
+                or not 1 <= self.selection_interval <= 20):
+            raise ValueError("Invalid builtin Portfolio breadth or interval")
+        for name, default in (
+            ("weighting", "equal_weight"), ("volatility_window", 20),
+            ("exposure_expression_json", b'{"kind":"number","value":1}'),
+        ):
+            if getattr(self, name) is None:
+                object.__setattr__(self, name, default)
         if type(self.volatility_window) is not int or not 1 <= self.volatility_window <= 252:
             raise ValueError("Invalid volatility window")
         validate_exposure(self.exposure_expression_snapshot())
         if self.weighting not in {"equal_weight", "rank_weight", "inverse_volatility"}:
             raise ValueError("Unsupported portfolio weighting")
 
-    def exposure_expression_snapshot(self) -> dict[str, object]:
+    def exposure_expression_snapshot(self) -> dict[str, object] | None:
+        if self.exposure_expression_json is None:
+            return None
         value = json.loads(self.exposure_expression_json)
         if not isinstance(value, dict):
             raise ValueError("Exposure expression must be a normalized tree")
@@ -102,17 +122,19 @@ class StrategyRunInput:
         snapshot = {
             "mode": "framework",
             "modules": self.modules_snapshot().model_dump(mode="json"),
-            "holdings_count": self.holdings_count,
-            "selection_interval": self.selection_interval,
-            "weighting": self.weighting,
-            "volatility_window": self.volatility_window,
             "initial_cash_cny": self.initial_cash_cny,
-            "exposure_expression": self.exposure_expression_snapshot(),
             "commission_rate_all_in": self.commission_rate_all_in,
             "commission_min_cny": self.commission_min_cny,
             "stamp_duty_sell_rate": self.stamp_duty_sell_rate,
             "transfer_fee_rate": self.transfer_fee_rate,
         }
+        if "portfolio_construction" not in self.modules_snapshot().programs():
+            snapshot.update({
+                "holdings_count": self.holdings_count,
+                "selection_interval": self.selection_interval,
+                "weighting": self.weighting, "volatility_window": self.volatility_window,
+                "exposure_expression": self.exposure_expression_snapshot(),
+            })
         if self.environment_json is not None:
             snapshot["environment"] = json.loads(self.environment_json)
         return snapshot
@@ -164,16 +186,21 @@ def strategy_input_from_snapshot(
             program_json=canonical_json_bytes(value["program"]),
             environment_json=canonical_json_bytes(value["environment"]), **costs,
         )
-    settings = {"holdings_count", "selection_interval", "weighting", "volatility_window"}
     programs = FrameworkModules.model_validate(value.get("modules")).programs()
-    expected = cost_names | settings | {"mode", "modules", "exposure_expression"}
+    builtin_portfolio = "portfolio_construction" not in programs
+    settings = ({"holdings_count", "selection_interval", "weighting", "volatility_window",
+                 "exposure_expression"} if builtin_portfolio else set())
+    expected = cost_names | settings | {"mode", "modules"}
     if programs:
         expected.add("environment")
     if value.get("mode") != "framework" or set(value) != expected:
         raise KernelRunError("Framework Strategy snapshot fields are invalid")
     return StrategyRunInput(
-        **{name: value[name] for name in settings}, **costs,
-        exposure_expression_json=canonical_json_bytes(value["exposure_expression"]),
+        holdings_count=value.get("holdings_count"),
+        selection_interval=value.get("selection_interval"),
+        weighting=value.get("weighting"), volatility_window=value.get("volatility_window"), **costs,
+        exposure_expression_json=(canonical_json_bytes(value["exposure_expression"])
+                                  if builtin_portfolio else None),
         modules_json=canonical_json_bytes(value["modules"]),
         environment_json=canonical_json_bytes(value["environment"]) if programs else None,
     )
@@ -695,7 +722,9 @@ def _calculate_from_matrix(
         cancellation_check()
     if matrix is not None:
         attach_common_input_evidence(matrix, exposure_observations, tuple(period_sessions))
-    artifacts = compose_output(matrix, strategy.finalized)
+    artifacts = compose_output(
+        matrix, strategy.finalized, exposure_observations, sessions=tuple(period_sessions),
+    )
     track_state = KernelState(
         run_input=run_input,
         output=artifacts,
@@ -733,9 +762,30 @@ def calculation_definition(
 def compose_output(
     matrix: dict[str, object] | None,
     strategy: dict[str, object],
+    exposure_observations: Mapping[str, list[dict[str, object]]],
+    *,
+    sessions: tuple[str, ...],
+    prior_common_inputs: Mapping[str, object] | None = None,
 ) -> dict[str, dict[str, object]]:
+    observed = {row["session"]: row for row in (
+        prior_common_inputs["sessions"] if prior_common_inputs is not None else []
+    )}
+    if observed.keys() & set(sessions):
+        raise KernelRunError("Completed Common observations cannot be overwritten")
+    common = {
+        row["session"]: row for row in merge_common_input_sessions(
+            matrix["sessions"] if matrix is not None else [], exposure_observations, sessions,
+        )
+    }
+    observed.update({
+        session: common.get(session, {"session": session, "common_inputs": []})
+        for session in sessions
+    })
     return {
         **({"alpha_matrix": matrix} if matrix is not None else {}),
+        "common_inputs": {"sessions": [
+            observed[session] for session in sorted(observed)
+        ]},
         "strategy_backtest": strategy,
         "strategy_time_series": {"daily": strategy["daily"]},
         "strategy_events": {

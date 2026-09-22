@@ -2971,10 +2971,10 @@ class ResearchBatchService:
             alpha = binding.get("alpha")
             research_period = binding.get("research_period")
             if (
-                (alpha is not None if immutable.is_direct else (
+                (alpha is not None if not immutable.has_alpha else (
                     not isinstance(alpha, dict)
                     or alpha.get("expression") != immutable.alpha_expression
-                    or alpha.get("field_bindings") != immutable.field_bindings
+                    or alpha.get("field_bindings") != immutable.alpha_field_bindings
                 ))
                 or research_period
                 != {
@@ -3856,14 +3856,15 @@ def _child_commands(
                 **{name: value for name, value in common.items() if name != "neutralization"},
             )
         else:
+            signal = ({"formula": command.alpha.formula,
+                       "hypothesis": command.alpha.hypothesis,
+                       "neutralization": command.neutralization} if item.has_alpha else {})
             child = StrategyBacktestAdmissionCommand(
                 request_id=f"batch-strategy-{ordinal}", research_kind="strategy_backtest",
-                strategy_mode="framework", name=item.name,
-                formula=command.alpha.formula, hypothesis=command.alpha.hypothesis,
-                initial_cash_cny=item.initial_cash_cny, holdings_count=item.holdings_count,
-                selection_every_sessions=item.selection_every_sessions,
-                exposure_expression=item.exposure_expression, weighting=item.weighting,
-                volatility_window=item.volatility_window, **common,
+                name=item.name,
+                **item.model_dump(exclude={"item_key", "name"}, exclude_none=True),
+                **signal,
+                **{name: value for name, value in common.items() if name != "neutralization"},
             )
         children.append((item.item_key, child))
     return children

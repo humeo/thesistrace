@@ -77,8 +77,9 @@ def project_tracking_checkpoint(
             "neutralization": alpha["neutralization"],
         },
         "strategy_state": strategy_state,
-        "common_input_observations": [] if alpha is None else common_input_observation_rows(
-            alpha, sessions=tuple(retained_strategy_sessions),
+        "common_input_observations": common_input_observation_rows(
+            _mapping(output.get("common_inputs"), "Common inputs"),
+            sessions=tuple(retained_strategy_sessions),
         ),
         "continuation_sha256": hashlib.sha256(continuation_bytes).hexdigest(),
         "pending_alpha_sessions": len(continuation["pending_alpha"]),
@@ -130,9 +131,18 @@ def restore_tracking_checkpoint(
         or not isinstance(retained_delta, list)
     ):
         raise KernelRunError("DailyTrack Strategy state is invalid")
+    common_by_session = defaultdict(list)
+    for observation in value["common_input_observations"]:
+        common_by_session[observation["session"]].append({
+            key: item for key, item in observation.items() if key != "session"
+        })
     return KernelState(
         run_input=run_input,
         output={
+            "common_inputs": {"sessions": [
+                {"session": row["session"], "common_inputs": common_by_session[row["session"]]}
+                for row in retained_delta
+            ]},
             **({} if not run_input.has_alpha else {"alpha_matrix": {
                 **dict(_mapping(value.get("alpha_state"), "Alpha state")),
                 "sessions": [],
@@ -183,6 +193,7 @@ def restore_tracking_origin(
     return KernelState(
         run_input=run_input,
         output={
+            "common_inputs": {"sessions": []},
             **({} if not run_input.has_alpha else {"alpha_matrix": {
                 "expression": run_input.alpha_expression_snapshot(),
                 "effective_lookback": run_input.alpha_execution_plan().effective_lookback,

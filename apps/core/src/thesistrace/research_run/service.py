@@ -69,7 +69,6 @@ from thesistrace.publication import (
 from thesistrace.publication.holding_retention import HOLDING_KIND, HoldingRetention
 from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.research_kernel.alpha_expression import estimate_alpha_run_work
-from thesistrace.research_kernel.builtin_framework import BUILTIN_FRAMEWORK_MODULES
 from thesistrace.research_kernel.common_inputs import (
     common_input_references,
     requires_common_industry,
@@ -1031,10 +1030,10 @@ class ResearchRunService:
     def _prepare_research_input(
         self, command: ResearchSpec, *, dataset: DatasetAdmissionSnapshot | None,
     ) -> ImmutableRunInput:
-        if self._compile_formula is None and not isinstance(command, DirectStrategyBacktestSpec):
+        if self._compile_formula is None and command.has_alpha:
             raise RuntimeError("ResearchRun admission compiler is not configured")
         try:
-            compiled = (None if isinstance(command, DirectStrategyBacktestSpec)
+            compiled = (None if not command.has_alpha
                         else self._compile_formula(command.formula))
         except FormulaCompilationError as error:
             raise ResearchRunAdmissionRejected(
@@ -3249,63 +3248,43 @@ class ResearchRunService:
         self,
         immutable_input: ImmutableRunInput,
     ) -> None:
-        if immutable_input.is_direct:
-            strategy = immutable_input.strategy
-            fields = {field.field_id: field.alpha.identifier for field in alpha_field_catalog()}
-            if (
-                immutable_input.semantic_versions != SEMANTIC_VERSIONS
-                or strategy["execution"] != FIXED_EXECUTION
-                or strategy["environment"] != get_strategy_runtime().identity()
-                or immutable_input.costs != FIXED_COSTS or immutable_input.risk_free_rate != "0"
-                or immutable_input.field_bindings != {
-                    key: fields.get(key)
-                    for key in strategy["program"]["data_requirements"]["field_ids"]
-                }
-                or any(getattr(immutable_input.expression_admission, name) != 0
-                       for name in ("node_count", "depth", "formula_work", "estimated_run_work"))
-            ):
-                raise ResearchRunContractMismatch("frozen Direct execution contract is obsolete")
-            require_current_numeric_contract(immutable_input.numeric_execution_contract)
-            return
         try:
             require_current_numeric_contract(immutable_input.numeric_execution_contract)
-            compiled = alpha_language.compile(immutable_input.formula_source)
+            spec = TypeAdapter(ResearchSpec).validate_python(immutable_input.authorable_value())
+            compiled = (alpha_language.compile(spec.formula) if spec.has_alpha else None)
             exposure = (
-                alpha_language.compile(
-                    str(immutable_input.strategy["exposure_source"]), context="exposure",
-                )
-                if immutable_input.strategy is not None else None
+                alpha_language.compile(spec.exposure_expression, context="exposure")
+                if isinstance(spec, StrategyBacktestSpec) and spec.has_builtin_portfolio else None
             )
-        except (NumericContractError, FormulaCompilationError) as error:
+            requirements = _spec_data_requirements(spec, compiled, exposure)
+        except (NumericContractError, FormulaCompilationError, ValidationError,
+                ResearchRunAdmissionRejected) as error:
             raise ResearchRunContractMismatch(
                 "frozen Research execution contract is obsolete"
             ) from error
-        requirements = expression_requirements(
-            compiled, *(() if exposure is None else (exposure,)),
-            weighting=(immutable_input.strategy["weighting"]
-                       if immutable_input.strategy is not None else "equal_weight"),
-            volatility_window=(immutable_input.strategy["volatility_window"]
-                               if immutable_input.strategy is not None else 20),
-        )
-        current_bindings = requirements.field_bindings
         admission = immutable_input.expression_admission
         strategy = immutable_input.strategy
+        estimated_work = (estimate_alpha_run_work(
+            requirements.estimated_work,
+            research_session_count=immutable_input.data_admission.calculation_session_count,
+            universe_instrument_count=immutable_input.data_admission.universe_instrument_count,
+        ) if requirements.estimated_work else 0)
         common_contract_mismatch = (
             immutable_input.semantic_versions != SEMANTIC_VERSIONS
-            or compiled.expression != immutable_input.alpha_expression
-            or current_bindings != immutable_input.field_bindings
+            or (compiled.expression if compiled is not None else None)
+            != immutable_input.alpha_expression
+            or requirements.field_bindings != immutable_input.field_bindings
             or requirements.effective_lookback != admission.effective_lookback
             or requirements.node_count != admission.node_count
             or requirements.depth != admission.depth
             or requirements.estimated_work != admission.formula_work
+            or estimated_work != admission.estimated_run_work
         )
-        strategy_contract_mismatch = immutable_input.research_kind == "strategy_backtest" and (
-            strategy is None
-            or strategy.get("kind") != FIXED_STRATEGY_KIND
-            or strategy.get("modules") != BUILTIN_FRAMEWORK_MODULES
-            or strategy.get("execution") != FIXED_EXECUTION
-            or exposure is None
-            or strategy["exposure_expression"] != exposure.expression
+        strategy_contract_mismatch = strategy is not None and (
+            strategy["execution"] != FIXED_EXECUTION
+            or (exposure is not None and strategy["exposure_expression"] != exposure.expression)
+            or (immutable_input.programs
+                and strategy["environment"] != get_strategy_runtime().identity())
             or immutable_input.costs != FIXED_COSTS
             or immutable_input.risk_free_rate != "0"
         )
@@ -4460,6 +4439,48 @@ def _decode_list_cursor(
     return created_at, run_id
 
 
+def _spec_programs(command: ResearchSpec):
+    if isinstance(command, DirectStrategyBacktestSpec):
+        return {"program": command.program}
+    if isinstance(command, StrategyBacktestSpec):
+        return {f"modules.{stage}.program": program
+                for stage, program in command.modules.programs().items()}
+    return {}
+
+
+def _spec_data_requirements(command, compiled, exposure) -> ExpressionRequirements:
+    expressions = tuple(item for item in (compiled, exposure) if item is not None)
+    builtin_portfolio = (isinstance(command, StrategyBacktestSpec)
+                         and command.has_builtin_portfolio)
+    base = (expression_requirements(
+        *expressions,
+        weighting=command.weighting if builtin_portfolio else "equal_weight",
+        volatility_window=command.volatility_window if builtin_portfolio else 20,
+    ) if expressions else ExpressionRequirements(
+        field_bindings={}, effective_lookback=0, node_count=0, depth=0,
+        estimated_work=0, require_industry=False,
+    ))
+    bindings = dict(base.field_bindings)
+    lookback = base.effective_lookback
+    programs = _spec_programs(command)
+    if programs:
+        fields = {field.field_id: field.alpha.identifier for field in alpha_field_catalog()}
+        for path, program in programs.items():
+            declared = program.data_requirements
+            if not set(declared.field_ids) <= fields.keys():
+                raise ResearchRunAdmissionRejected([ResearchRunAdmissionIssue(
+                    code="FIELD_UNAVAILABLE_IN_CURRENT_DATA", field=f"{path}.data_requirements",
+                    message="Python program declares an unknown research field",
+                )])
+            bindings.update({key: fields[key] for key in declared.field_ids})
+            lookback = max(lookback, declared.history_sessions - 1)
+    return ExpressionRequirements(
+        field_bindings=bindings, effective_lookback=lookback, node_count=base.node_count,
+        depth=base.depth, estimated_work=base.estimated_work,
+        require_industry=base.require_industry,
+    )
+
+
 def _admitted_input(
     command: ResearchSpec,
     compiled: CompiledAlpha | None,
@@ -4468,7 +4489,7 @@ def _admitted_input(
     execution_memory_bytes: int,
 ) -> ImmutableRunInput:
     exposure = None
-    if isinstance(command, StrategyBacktestSpec):
+    if isinstance(command, StrategyBacktestSpec) and command.has_builtin_portfolio:
         try:
             exposure = alpha_language.compile(command.exposure_expression, context="exposure")
         except FormulaCompilationError as error:
@@ -4484,37 +4505,31 @@ def _admitted_input(
             ]) from error
     direct = isinstance(command, DirectStrategyBacktestSpec)
     environment = None
-    if direct:
-        try:
-            runtime = get_strategy_runtime()
-            runtime.validate(command.program.source)
-            environment = runtime.identity()
-        except StrategyProgramError as error:
-            raise ResearchRunAdmissionRejected([ResearchRunAdmissionIssue(
-                code="STRATEGY_PROGRAM_INVALID", field="program.source", message=str(error),
-            )]) from error
-        fields = {field.field_id: field.alpha.identifier for field in alpha_field_catalog()}
-        declared = command.program.data_requirements
-        if not set(declared.field_ids) <= fields.keys():
-            raise ResearchRunAdmissionRejected([ResearchRunAdmissionIssue(
-                code="FIELD_UNAVAILABLE_IN_CURRENT_DATA", field="program.data_requirements",
-                message="Python program declares an unknown research field",
-            )])
-        requirements = ExpressionRequirements(
-            field_bindings={key: fields[key] for key in declared.field_ids},
-            effective_lookback=declared.history_sessions - 1,
-            node_count=0, depth=0, estimated_work=0, require_industry=False,
-        )
-    else:
-        requirements = expression_requirements(
-            compiled, *(() if exposure is None else (exposure,)),
-            weighting=(command.weighting
-                       if isinstance(command, StrategyBacktestSpec) else "equal_weight"),
-            volatility_window=(command.volatility_window
-                               if isinstance(command, StrategyBacktestSpec) else 20),
-        )
-    neutralization = None if direct else command.neutralization
-    data_field = "program.data_requirements" if direct else "formula"
+    programs = _spec_programs(command)
+    if programs:
+        runtime = get_strategy_runtime()
+        for path, program in programs.items():
+            try:
+                runtime.validate(program.source)
+            except StrategyProgramError as error:
+                raise ResearchRunAdmissionRejected([ResearchRunAdmissionIssue(
+                    code="STRATEGY_PROGRAM_INVALID", field=f"{path}.source", message=str(error),
+                )]) from error
+        environment = runtime.identity()
+    requirements = _spec_data_requirements(command, compiled, exposure)
+    neutralization = command.neutralization if command.has_alpha else None
+    field_owners = {
+        name: set(expression.field_ids_by_identifier.values())
+        for name, expression in (("formula", compiled), ("exposure_expression", exposure))
+        if expression is not None
+    }
+    field_owners.update({
+        f"{path}.data_requirements": set(program.data_requirements.field_ids)
+        for path, program in programs.items()
+    })
+    if (isinstance(command, StrategyBacktestSpec) and command.has_builtin_portfolio
+            and command.weighting == "inverse_volatility"):
+        field_owners["weighting"] = {"price.close.adjusted"}
     if snapshot is None:
         raise ResearchRunAdmissionRejected(
             [
@@ -4552,9 +4567,11 @@ def _admitted_input(
             [
                 ResearchRunAdmissionIssue(
                     code="FIELD_UNAVAILABLE_IN_CURRENT_DATA",
-                    field=data_field,
+                    field=owner,
                     message="Research field is unavailable in current Data",
                 )
+                for owner, owned in field_owners.items()
+                if owned - snapshot.available_field_ids
             ]
         )
     dependencies = resolve_data_dependencies(
@@ -4573,23 +4590,27 @@ def _admitted_input(
     if unavailable:
         issues = []
         for family_id in sorted(unavailable):
+            owners = [owner for owner, owned in field_owners.items()
+                      if owned & dependencies.field_ids_by_family.get(family_id, frozenset())]
             coverage = snapshot.family_coverage.get(family_id)
             available = (
                 "not ready" if coverage is None
                 else f"{coverage.start.isoformat()} to {coverage.end.isoformat()}"
             )
             if family_id == "equity.industry_membership":
-                code, field = "INDUSTRY_CALCULATION_OUTSIDE_COVERAGE", "neutralization"
+                code, owners = "INDUSTRY_CALCULATION_OUTSIDE_COVERAGE", ["neutralization"]
             elif family_id in dependencies.financial_families:
-                code, field = "FINANCIAL_CALCULATION_OUTSIDE_COVERAGE", data_field
+                code = "FINANCIAL_CALCULATION_OUTSIDE_COVERAGE"
             else:
-                code, field = "FIELD_CALCULATION_OUTSIDE_COVERAGE", data_field
+                code = "FIELD_CALCULATION_OUTSIDE_COVERAGE"
             issue_range = None
             if family_id == "equity.industry_membership" and requirements.require_industry:
                 industry_expression = (
-                    compiled if requires_common_industry(compiled.expression) else exposure
+                    compiled if compiled is not None and requires_common_industry(
+                        compiled.expression,
+                    ) else exposure
                 )
-                field = "formula" if industry_expression is compiled else "exposure_expression"
+                owners = ["formula" if industry_expression is compiled else "exposure_expression"]
                 issue_range = {
                     "start": {"offset": 0, "line": 1, "column": 1},
                     "end": {
@@ -4598,13 +4619,13 @@ def _admitted_input(
                         "column": len(industry_expression.source.rsplit("\n", 1)[-1]) + 1,
                     },
                 }
-            issues.append(ResearchRunAdmissionIssue(
-                code=code, field=field, range=issue_range,
+            issues.extend(ResearchRunAdmissionIssue(
+                code=code, field=owner, range=issue_range,
                 message=(
                     f"Research requires {family_id} coverage for its calculation period; "
                     f"current coverage is {available}."
                 ),
-            ))
+            ) for owner in owners or ["data"])
         raise ResearchRunAdmissionRejected(issues)
     try:
         calculation_session_count, universe_instrument_count = snapshot.calculation_shape(
@@ -4623,7 +4644,7 @@ def _admitted_input(
                 )
             ]
         ) from error
-    estimated_run_work = 0 if direct else estimate_alpha_run_work(
+    estimated_run_work = 0 if not requirements.estimated_work else estimate_alpha_run_work(
         requirements.estimated_work,
         research_session_count=calculation_session_count,
         universe_instrument_count=universe_instrument_count,
@@ -4665,17 +4686,18 @@ def _admitted_input(
             "costs": FIXED_COSTS, "risk_free_rate": "0",
         }
     elif isinstance(command, StrategyBacktestSpec):
-        assert exposure is not None
+        portfolio_settings = {} if not command.has_builtin_portfolio else {
+            "holdings_count": command.holdings_count,
+            "selection_every_sessions": command.selection_every_sessions,
+            "weighting": command.weighting, "volatility_window": command.volatility_window,
+            "exposure_source": exposure.source, "exposure_expression": exposure.expression,
+        }
         strategy_values = {
             "strategy": {
                 "kind": FIXED_STRATEGY_KIND,
-                "modules": dict(BUILTIN_FRAMEWORK_MODULES),
-                "holdings_count": command.holdings_count,
-                "selection_every_sessions": command.selection_every_sessions,
-                "weighting": command.weighting,
-                "volatility_window": command.volatility_window,
-                "exposure_source": exposure.source,
-                "exposure_expression": exposure.expression,
+                "modules": command.modules.model_dump(mode="json"),
+                **portfolio_settings,
+                **({"environment": environment} if programs else {}),
                 "initial_cash_cny": command.initial_cash_cny,
                 "execution": FIXED_EXECUTION,
             },
@@ -4683,8 +4705,8 @@ def _admitted_input(
             "risk_free_rate": "0",
         }
     return ImmutableRunInput(
-        formula_source=None if direct else command.formula,
-        alpha_expression=None if direct else compiled.expression,
+        formula_source=command.formula if command.has_alpha else None,
+        alpha_expression=compiled.expression if compiled is not None else None,
         hypothesis=command.hypothesis,
         requested_start_date=command.start_date,
         requested_end_date=command.end_date,
@@ -4893,7 +4915,8 @@ def _summary(row: object) -> ResearchRunSummary:
     immutable_input = ImmutableRunInput.model_validate(row["immutable_input"])
     compact_formula = (
         f"Python · {immutable_input.strategy['program_sha256'][:12]}" if immutable_input.is_direct
-        else " ".join(immutable_input.formula_source.split())
+        else (" ".join(immutable_input.formula_source.split()) if immutable_input.has_alpha
+              else "Framework · Python Signals")
     )
     formula_summary = (
         compact_formula if len(compact_formula) <= 120 else f"{compact_formula[:117]}..."

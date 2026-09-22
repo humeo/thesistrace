@@ -92,11 +92,11 @@ from thesistrace.research_definition import (
     kernel_strategy_from_frozen,
     spec_discriminator,
 )
-from thesistrace.research_kernel.builtin_framework import BUILTIN_FRAMEWORK_MODULES
 from thesistrace.research_kernel.common_observations import CommonInputObservation
 from thesistrace.research_kernel.direct_strategy import PythonProgram
 from thesistrace.research_kernel.exposure import validate_exposure
 from thesistrace.research_kernel.factor_evidence import FactorDailyObservation
+from thesistrace.research_kernel.framework_strategy import FrameworkModules
 from thesistrace.research_kernel.portfolio_weighting import PortfolioWeighting, VolatilityWindow
 from thesistrace.research_kernel.terminal_state_schema import DecisionState, PendingTarget
 from thesistrace.research_run.result_schema import FactorPeriodStatistic, StrategyMetrics
@@ -448,27 +448,44 @@ class ImmutableRunInput(BaseModel):
                 raise ValueError("Frozen Python data or execution environment is invalid")
             TypeAdapter(InitialCash).validate_python(self.strategy["initial_cash_cny"])
             return self
-        if any(value is None for value in (
-            self.formula_source, self.alpha_expression, self.neutralization,
-        )):
+        if self.strategy is not None and self.strategy.get("kind") != "framework":
+            raise ValueError("Frozen Strategy must identify the supported Framework modules")
+        modules = (FrameworkModules.model_validate(self.strategy.get("modules"))
+                   if self.strategy is not None else None)
+        requires_alpha = modules is None or modules.alpha == "alpha_formula/v1"
+        alpha_values = (self.formula_source, self.alpha_expression, self.neutralization)
+        if requires_alpha and any(value is None for value in alpha_values):
             raise ValueError("Formula research requires Alpha settings")
+        if not requires_alpha and any(value is not None for value in alpha_values):
+            raise ValueError("Python Signal cannot contain builtin Alpha settings")
         if self.strategy is not None:
-            if set(self.strategy) != {
-                "kind", "holdings_count", "selection_every_sessions", "initial_cash_cny",
-                "execution", "exposure_source", "exposure_expression",
-                "weighting", "volatility_window", "modules",
-            }:
+            programs = modules.programs()
+            expected = {"kind", "initial_cash_cny", "execution", "modules"}
+            if self.has_builtin_portfolio:
+                expected |= {"holdings_count", "selection_every_sessions", "exposure_source",
+                             "exposure_expression", "weighting", "volatility_window"}
+            if programs:
+                expected.add("environment")
+            if set(self.strategy) != expected:
                 raise ValueError("Frozen Strategy input does not match the current contract")
-            if (self.strategy["kind"] != "framework"
-                    or self.strategy["modules"] != BUILTIN_FRAMEWORK_MODULES):
-                raise ValueError("Frozen Strategy must identify the supported Framework modules")
             TypeAdapter(InitialCash).validate_python(self.strategy["initial_cash_cny"])
-            TypeAdapter(HoldingsCount).validate_python(self.strategy["holdings_count"])
-            TypeAdapter(PortfolioWeighting).validate_python(self.strategy["weighting"])
-            TypeAdapter(VolatilityWindow).validate_python(self.strategy["volatility_window"])
-            TypeAdapter(SelectionInterval).validate_python(self.strategy["selection_every_sessions"])
-            TypeAdapter(Formula).validate_python(self.strategy["exposure_source"])
-            validate_exposure(self.strategy["exposure_expression"])
+            if programs and not isinstance(self.strategy["environment"], dict):
+                raise ValueError("Framework programs require a frozen execution environment")
+            for program in programs.values():
+                declaration = program.data_requirements
+                if (not set(declaration.field_ids) <= self.field_bindings.keys()
+                        or declaration.history_sessions - 1
+                        > self.expression_admission.effective_lookback):
+                    raise ValueError("Frozen Framework program data requirements are invalid")
+            if self.has_builtin_portfolio:
+                TypeAdapter(HoldingsCount).validate_python(self.strategy["holdings_count"])
+                TypeAdapter(PortfolioWeighting).validate_python(self.strategy["weighting"])
+                TypeAdapter(VolatilityWindow).validate_python(self.strategy["volatility_window"])
+                TypeAdapter(SelectionInterval).validate_python(
+                    self.strategy["selection_every_sessions"],
+                )
+                TypeAdapter(Formula).validate_python(self.strategy["exposure_source"])
+                validate_exposure(self.strategy["exposure_expression"])
         return self
 
     @property
@@ -476,11 +493,39 @@ class ImmutableRunInput(BaseModel):
         return self.strategy is not None and self.strategy.get("kind") == "direct"
 
     @property
-    def expression_trees(self) -> tuple[dict[str, object], ...]:
+    def has_alpha(self) -> bool:
+        return self.alpha_expression is not None
+
+    @property
+    def alpha_field_bindings(self) -> dict[str, str]:
+        from thesistrace.research_kernel.alpha_expression import validate_normalized_alpha
+
+        if not self.has_alpha:
+            return {}
+        expression = validate_normalized_alpha(
+            self.alpha_expression, field_bindings=self.field_bindings,
+        )
+        return {field_id: identifier
+                for identifier, field_id in expression.field_ids_by_identifier.items()}
+
+    @property
+    def has_builtin_portfolio(self) -> bool:
+        return (self.strategy is not None and self.strategy.get("kind") == "framework"
+                and self.strategy["modules"]["portfolio_construction"] == "periodic_top_n/v1")
+
+    @property
+    def programs(self) -> dict[str, PythonProgram]:
         if self.is_direct:
-            return ()
-        return (self.alpha_expression,) + (
-            () if self.strategy is None else (self.strategy["exposure_expression"],)
+            return {"program": PythonProgram.model_validate(self.strategy["program"])}
+        if self.strategy is None:
+            return {}
+        return {f"modules.{stage}.program": program for stage, program
+                in FrameworkModules.model_validate(self.strategy["modules"]).programs().items()}
+
+    @property
+    def expression_trees(self) -> tuple[dict[str, object], ...]:
+        return (() if not self.has_alpha else (self.alpha_expression,)) + (
+            (self.strategy["exposure_expression"],) if self.has_builtin_portfolio else ()
         )
 
     def kernel_strategy(self):
@@ -620,6 +665,7 @@ class ResearchRunAuthorableInput(BaseModel):
     )
 
     program: PythonProgram | None = Field(default=None, exclude_if=lambda value: value is None)
+    modules: FrameworkModules | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def validate_research_kind_contract(self) -> ResearchRunAuthorableInput:

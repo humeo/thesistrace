@@ -20,7 +20,9 @@ from pydantic import (
 )
 
 from thesistrace.alpha_language.language import MAX_FORMULA_LENGTH
+from thesistrace.research_kernel.builtin_framework import BUILTIN_FRAMEWORK_MODULES
 from thesistrace.research_kernel.direct_strategy import PythonProgram
+from thesistrace.research_kernel.framework_strategy import FrameworkModules
 from thesistrace.research_kernel.kernel_run import DirectStrategyRunInput, StrategyRunInput
 from thesistrace.research_kernel.numeric import MAX_INITIAL_CASH_CNY
 from thesistrace.research_kernel.portfolio_weighting import PortfolioWeighting, VolatilityWindow
@@ -118,18 +120,67 @@ class FactorEvaluationSpec(_ResearchSpecBase):
     formula: Formula
     neutralization: ResearchNeutralization
 
+    @property
+    def has_alpha(self) -> bool:
+        return True
 
-class StrategyBacktestSpec(_ResearchSpecBase):
-    research_kind: Literal["strategy_backtest"]
-    formula: Formula
-    neutralization: ResearchNeutralization
+
+class FrameworkConfiguration(BaseModel):
+    """Active Framework modules and only the settings owned by builtin Portfolio."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
     strategy_mode: Literal["framework"] = "framework"
+    modules: FrameworkModules = Field(default_factory=lambda: FrameworkModules.model_validate(
+        dict(BUILTIN_FRAMEWORK_MODULES),
+    ))
     initial_cash_cny: InitialCash
-    holdings_count: HoldingsCount
-    selection_every_sessions: SelectionInterval
-    exposure_expression: Formula = "1"
-    weighting: PortfolioWeighting = "equal_weight"
-    volatility_window: VolatilityWindow = 20
+    holdings_count: HoldingsCount | None = None
+    selection_every_sessions: SelectionInterval | None = None
+    exposure_expression: Formula | None = None
+    weighting: PortfolioWeighting | None = None
+    volatility_window: VolatilityWindow | None = None
+
+    @model_validator(mode="after")
+    def only_active_portfolio_settings(self):
+        values = (self.holdings_count, self.selection_every_sessions, self.exposure_expression,
+                  self.weighting, self.volatility_window)
+        if not self.has_builtin_portfolio:
+            if any(value is not None for value in values):
+                raise ValueError("Python Portfolio cannot contain builtin Portfolio settings")
+        else:
+            if self.holdings_count is None or self.selection_every_sessions is None:
+                raise ValueError("Builtin Portfolio requires Holdings Count and Selection Interval")
+            for name, default in (
+                ("exposure_expression", "1"), ("weighting", "equal_weight"),
+                ("volatility_window", 20),
+            ):
+                if getattr(self, name) is None:
+                    object.__setattr__(self, name, default)
+        return self
+
+    @property
+    def has_alpha(self) -> bool:
+        return self.modules.alpha == "alpha_formula/v1"
+
+    @property
+    def has_builtin_portfolio(self) -> bool:
+        return self.modules.portfolio_construction == "periodic_top_n/v1"
+
+
+class StrategyBacktestSpec(_ResearchSpecBase, FrameworkConfiguration):
+    research_kind: Literal["strategy_backtest"]
+    formula: Formula | None = None
+    neutralization: ResearchNeutralization | None = None
+
+    @model_validator(mode="after")
+    def only_active_alpha_settings(self):
+        if self.has_alpha:
+            if self.formula is None or self.neutralization is None:
+                raise ValueError("Builtin Alpha requires a Formula and neutralization")
+        elif self.formula is not None or self.neutralization is not None:
+            raise ValueError("Python Signal cannot contain builtin Alpha settings")
+        return self
 
 
 class DirectStrategyBacktestSpec(_ResearchSpecBase):
@@ -137,6 +188,10 @@ class DirectStrategyBacktestSpec(_ResearchSpecBase):
     strategy_mode: Literal["direct"]
     initial_cash_cny: InitialCash
     program: PythonProgram
+
+    @property
+    def has_alpha(self) -> bool:
+        return False
 
 
 def spec_discriminator(value: object) -> str | None:
@@ -173,10 +228,14 @@ def kernel_strategy_from_frozen(
     if strategy["kind"] != "framework":
         raise ValueError("Frozen Strategy mode is invalid")
     return StrategyRunInput(
-        holdings_count=strategy["holdings_count"],
-        selection_interval=strategy["selection_every_sessions"],
-        weighting=strategy["weighting"], volatility_window=strategy["volatility_window"],
-        exposure_expression_json=canonical_json_bytes(strategy["exposure_expression"]), **common,
+        holdings_count=strategy.get("holdings_count"),
+        selection_interval=strategy.get("selection_every_sessions"),
+        weighting=strategy.get("weighting"), volatility_window=strategy.get("volatility_window"),
+        exposure_expression_json=(canonical_json_bytes(strategy["exposure_expression"])
+                                  if "exposure_expression" in strategy else None),
+        modules_json=canonical_json_bytes(strategy["modules"]),
+        environment_json=(canonical_json_bytes(strategy["environment"])
+                          if "environment" in strategy else None), **common,
     )
 
 
@@ -193,13 +252,21 @@ def authorable_research_input(immutable: Mapping[str, object]) -> dict[str, obje
             **value, "strategy_mode": "direct", "program": deepcopy(strategy["program"]),
             "initial_cash_cny": strategy["initial_cash_cny"],
         }
-    value.update(formula=immutable["formula_source"], neutralization=immutable["neutralization"])
+    if immutable["alpha_expression"] is not None:
+        value.update(
+            formula=immutable["formula_source"], neutralization=immutable["neutralization"],
+        )
     if strategy is not None:
         value.update({
             "strategy_mode": "framework", "initial_cash_cny": strategy["initial_cash_cny"],
-            "holdings_count": strategy["holdings_count"],
-            "selection_every_sessions": strategy["selection_every_sessions"],
-            "weighting": strategy["weighting"], "volatility_window": strategy["volatility_window"],
-            "exposure_expression": strategy["exposure_source"],
+            "modules": deepcopy(strategy["modules"]),
         })
+        if strategy["modules"]["portfolio_construction"] == "periodic_top_n/v1":
+            value.update({
+                "holdings_count": strategy["holdings_count"],
+                "selection_every_sessions": strategy["selection_every_sessions"],
+                "weighting": strategy["weighting"],
+                "volatility_window": strategy["volatility_window"],
+                "exposure_expression": strategy["exposure_source"],
+            })
     return value

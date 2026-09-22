@@ -250,7 +250,8 @@ def decide(context, state, parameters):
             "parameters": {}, "data_requirements": {"field_ids": [], "history_sessions": 1},
         }}
         strategy = StrategyRunInput(
-            holdings_count=1, selection_interval=5, modules_json=canonical_json_bytes(modules),
+            holdings_count=None, selection_interval=None,
+            modules_json=canonical_json_bytes(modules),
             environment_json=environment, **common,
         )
     columnar = _ColumnarFixture(

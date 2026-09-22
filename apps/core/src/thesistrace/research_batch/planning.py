@@ -144,7 +144,7 @@ def validate_research_batch_capacity(
         0
         if batch_kind != "strategy_sweep"
         else max(
-            value.data_admission.universe_instrument_count if value.is_direct
+            value.data_admission.universe_instrument_count if value.programs
             else int(value.strategy["holdings_count"]) for value in inputs if value.strategy
         )
     )

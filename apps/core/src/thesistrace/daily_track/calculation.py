@@ -75,7 +75,7 @@ def origin_universe(origin: TrackingOrigin) -> str:
 
 def origin_neutralization(origin: TrackingOrigin) -> str | None:
     neutralization = origin.immutable_input.get("neutralization")
-    if origin.immutable_input["strategy"]["kind"] == "direct" and neutralization is None:
+    if origin.immutable_input["alpha_expression"] is None and neutralization is None:
         return None
     if neutralization not in {"none", "industry"}:
         raise RuntimeError("Tracking Neutralization is invalid")
@@ -221,7 +221,7 @@ def _rebuild_continuation(
     predecessor: Mapping[str, object],
 ) -> dict[str, object]:
     """Rebuild bounded transient state without retaining a 504-session data slice."""
-    if origin.immutable_input["strategy"]["kind"] == "direct":
+    if origin.immutable_input["alpha_expression"] is None:
         return empty_continuation()
     lookback = origin_effective_lookback(origin)
     appended_start = max(calculation_start_index, current_index - 504 + 1)

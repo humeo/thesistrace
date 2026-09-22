@@ -990,7 +990,7 @@ def _execute_strategy_sweep_messages(
                         research_sessions=window.research_sessions,
                         universe=shared_input.universe,
                         neutralization=shared_input.neutralization,
-                        field_bindings={} if shared_input.is_direct else union_bindings,
+                        field_bindings=union_bindings if shared_input.has_alpha else {},
                         require_industry=requires_common_industry(*shared_input.expression_trees),
                         effective_lookback=(shared_input.expression_admission.effective_lookback),
                         fact_instrument_ids=frozenset(),
@@ -1193,7 +1193,7 @@ def _execute_strategy_item_messages(
                 data_read_started = monotonic()
                 # Shared scores are frozen; each account owns its Exposure and Weighting data.
                 strategy = item.immutable_input.strategy
-                if item.immutable_input.is_direct:
+                if item.immutable_input.programs:
                     strategy_fields = item.immutable_input.field_bindings
                     strategy_lookback = item.immutable_input.expression_admission.effective_lookback
                 else:

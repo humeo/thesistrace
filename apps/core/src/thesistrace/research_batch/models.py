@@ -12,11 +12,10 @@ from pydantic import (
 )
 
 from thesistrace.alpha_language.models import DiagnosticDetails, SourceRange
+from thesistrace.research_definition import FrameworkConfiguration
 from thesistrace.research_kernel.direct_strategy import PythonProgram
-from thesistrace.research_kernel.portfolio_weighting import PortfolioWeighting, VolatilityWindow
 from thesistrace.research_run.models import (
     Formula,
-    HoldingsCount,
     InitialCash,
     NaturalDate,
     RequestId,
@@ -24,7 +23,6 @@ from thesistrace.research_run.models import (
     ResearchName,
     ResearchNeutralization,
     ResearchUniverse,
-    SelectionInterval,
 )
 
 
@@ -96,18 +94,11 @@ class StrategySweepAlpha(BaseModel):
     hypothesis: ResearchHypothesis | None = None
 
 
-class StrategySweepItem(BaseModel):
+class StrategySweepItem(FrameworkConfiguration):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     item_key: ItemKey
-    strategy_mode: Literal["framework"] = "framework"
     name: ResearchName | None = None
-    initial_cash_cny: InitialCash
-    holdings_count: HoldingsCount
-    selection_every_sessions: SelectionInterval
-    exposure_expression: Formula = "1"
-    weighting: PortfolioWeighting = "equal_weight"
-    volatility_window: VolatilityWindow = 20
 
 
 class DirectStrategySweepItem(BaseModel):
@@ -136,8 +127,15 @@ class StrategySweepBatchAdmissionCommand(_ResearchBatchAdmissionBase):
         if modes == {"direct"}:
             if self.alpha is not None or self.neutralization is not None:
                 raise ValueError("Direct Strategy Sweep cannot contain shared Alpha settings")
-        elif self.alpha is None or self.neutralization is None:
-            raise ValueError("Framework Strategy Sweep requires shared Alpha settings")
+        else:
+            alpha_modes = {item.has_alpha for item in self.strategies}
+            if len(alpha_modes) != 1:
+                raise ValueError("A Strategy Sweep must use one Alpha mode")
+            if True in alpha_modes:
+                if self.alpha is None or self.neutralization is None:
+                    raise ValueError("Builtin Alpha Sweep requires shared Alpha settings")
+            elif self.alpha is not None or self.neutralization is not None:
+                raise ValueError("Python Signal Sweep cannot contain shared Alpha settings")
         return self
 
 

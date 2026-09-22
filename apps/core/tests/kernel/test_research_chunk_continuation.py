@@ -170,6 +170,15 @@ class _ColumnarFixture:
     matrices: dict[str, np.ndarray]
 
     @property
+    def fields(self):
+        return {
+            field: {(session, instrument): float(matrix[item_index, session_index])
+                    for session_index, session in enumerate(self.sessions)
+                    for item_index, instrument in enumerate(self.instruments)}
+            for field, matrix in self.matrices.items()
+        }
+
+    @property
     def historical_universe_members(self):
         return self.universe_members
 

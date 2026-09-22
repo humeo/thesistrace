@@ -1,10 +1,12 @@
 from copy import deepcopy
+from dataclasses import replace
 from uuid import UUID
 
 import pytest
 from pydantic import TypeAdapter, ValidationError
 from test_common_input_admission import inputs
 
+from thesistrace.alpha_language import alpha_language
 from thesistrace.research_run.models import ResearchRunAdmissionCommand, ResearchSpec
 from thesistrace.research_run.service import ResearchRunAdmissionRejected, ResearchRunService
 
@@ -29,13 +31,17 @@ def direct_spec():
     }
 
 
-def service_and_snapshot():
+def service_and_snapshot(*, field_ids=None):
     class NoPersistence:
         def __getattr__(self, name):
             raise AssertionError(f"Preparation attempted persistence: {name}")
 
     _, _, snapshot = inputs("close")
-    return ResearchRunService(NoPersistence(), current_dataset=lambda: snapshot), snapshot
+    if field_ids is not None:
+        snapshot = replace(snapshot, available_field_ids=frozenset(field_ids))
+    return ResearchRunService(
+        NoPersistence(), current_dataset=lambda: snapshot, compile_formula=alpha_language.compile,
+    ), snapshot
 
 
 def test_direct_diagnosis_and_admission_freeze_only_the_active_program():

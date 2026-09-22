@@ -23,6 +23,7 @@ from thesistrace.daily_holding_queries import (
 from thesistrace.daily_track.observation_state import TrackingObservationState
 from thesistrace.research_kernel.common_inputs import common_input_references
 from thesistrace.research_kernel.common_observations import CommonInputObservation
+from thesistrace.research_kernel.framework_strategy import FrameworkModules
 from thesistrace.research_kernel.portfolio_weighting import PortfolioWeighting, VolatilityWindow
 from thesistrace.research_kernel.terminal_state_schema import DecisionState, PendingTarget
 from thesistrace.strategy_evidence import (
@@ -214,12 +215,10 @@ class TrackingOrigin(BaseModel):
 
     @property
     def expression_trees(self) -> tuple[dict[str, object], ...]:
-        if self.immutable_input["strategy"]["kind"] == "direct":
-            return ()
-        return (
+        return tuple(expression for expression in (
             self.immutable_input["alpha_expression"],
-            self.immutable_input["strategy"]["exposure_expression"],
-        )
+            self.immutable_input["strategy"].get("exposure_expression"),
+        ) if expression is not None)
 
 
 class DailyTrackSummary(BaseModel):
@@ -660,6 +659,7 @@ class DailyTrackFrozenResearchInput(BaseModel):
     weighting: PortfolioWeighting | None = Field(default=None, exclude_if=lambda v: v is None)
     volatility_window: VolatilityWindow | None = Field(default=None, exclude_if=lambda v: v is None)
     program: dict[str, object] | None = Field(default=None, exclude_if=lambda v: v is None)
+    modules: FrameworkModules | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def active_strategy_only(self):
@@ -817,15 +817,25 @@ class KernelRunInputSnapshot(BaseModel):
             if (set(self.field_bindings) != set(declared.field_ids)
                     or self.effective_lookback != declared.history_sessions - 1):
                 raise ValueError("Direct Checkpoint data declaration differs")
-        elif self.alpha_expression is None or self.neutralization not in {"none", "industry"}:
-            raise ValueError("Framework Checkpoint requires Alpha settings")
+        else:
+            programs = strategy.modules_snapshot().programs()
+            if "alpha" in programs:
+                if self.alpha_expression is not None or self.neutralization is not None:
+                    raise ValueError("Python Signal Checkpoint cannot contain Alpha settings")
+            elif self.alpha_expression is None or self.neutralization not in {"none", "industry"}:
+                raise ValueError("Builtin Alpha Checkpoint requires Alpha settings")
+            for program in programs.values():
+                declared = program.data_requirements
+                if (not set(declared.field_ids) <= set(self.field_bindings)
+                        or self.effective_lookback < declared.history_sessions - 1):
+                    raise ValueError("Framework Checkpoint data declaration differs")
         return self
 
     @property
     def expression_trees(self):
-        if self.strategy["mode"] == "direct":
-            return ()
-        return (self.alpha_expression, self.strategy["exposure_expression"])
+        return tuple(expression for expression in (
+            self.alpha_expression, self.strategy.get("exposure_expression"),
+        ) if expression is not None)
 
 
 class KernelStateCheckpoint(BaseModel):
@@ -849,8 +859,10 @@ class KernelStateCheckpoint(BaseModel):
     def observation_boundary_matches(self) -> KernelStateCheckpoint:
         if self.tracking_observation_state.boundary_session != self.boundary_session:
             raise ValueError("Checkpoint observation boundary differs")
-        direct = self.run_input.strategy["mode"] == "direct"
-        if (self.alpha_state is None) != direct or (direct and self.pending_alpha_sessions != 0):
+        has_alpha = self.run_input.alpha_expression is not None
+        if (self.alpha_state is not None) != has_alpha or (
+            not has_alpha and self.pending_alpha_sessions != 0
+        ):
             raise ValueError("Checkpoint Alpha state differs from its strategy mode")
         references = common_input_references(*self.run_input.expression_trees)
         delta = self.strategy_state.get("retained_delta")
