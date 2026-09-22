@@ -642,6 +642,7 @@ class DailyTrackOriginResultSection(BaseModel):
 
 
 class DailyTrackFrozenResearchInput(BaseModel):
+    strategy_mode: Literal["framework"]
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     formula: Annotated[str, Field(max_length=4096)]

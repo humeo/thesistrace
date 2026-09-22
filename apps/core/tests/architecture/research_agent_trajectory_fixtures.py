@@ -240,6 +240,7 @@ def run_polling_payload(
     }
     if research_kind == "strategy_backtest":
         input_payload.update({"volatility_window": 20, "weighting": "equal_weight",
+            "strategy_mode": "framework",
             "initial_cash_cny": "10000000", "holdings_count": 10, "selection_every_sessions": 5,
             "exposure_expression": "1",
         })

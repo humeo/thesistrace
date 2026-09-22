@@ -109,7 +109,8 @@ def test_execution_constraint_queries_page_and_preserve_unrecorded_history() -> 
     rows = [{
         "constraint_id": f"constraint_{index}", "target_id": f"target_{index:064x}",
         "decision_session": "2026-01-05", "session": "2026-01-06",
-        "instrument_id": f"equity:60000{index}.SH", "side": "buy", "mode": "selection",
+        "instrument_id": f"equity:60000{index}.SH", "side": "buy", "mode": "rebalance",
+        "decision_reason": "selection",
         "reason": "below_board_lot", "intended_value": "500", "unrounded_quantity": 50,
         "legal_quantity": 0, "submitted_quantity": 0, "available_cash_cny": "500",
         "order_id": None,
@@ -149,15 +150,14 @@ def _publication(*, constraints=None):
         {
             "target_id": f"target_{index:064x}",
             "decision_session": session,
-            "signal_session": session,
-            "selected_instrument_ids": ["equity:600001.SH"],
-            "relative_weights": {"equity:600001.SH": "1"},
-            "eligibility_exclusions": {},
-            "signal_checksum": "a" * 64,
             "contract_checksum": "b" * 64,
-            "mode": "selection",
+            "reason": "selection",
             "execution": "next_research_session_open",
-            "exposure": 1.0,
+            "allocation": {
+                "mode": "rebalance", "instrument_ids": ["equity:600001.SH"],
+                "relative_weights": {"equity:600001.SH": "1"}, "exposure": 1.0,
+            },
+            "position_limits": {},
         }
         for index, session in enumerate(["2026-01-05"] * 512 + ["2026-01-06"])
     ]

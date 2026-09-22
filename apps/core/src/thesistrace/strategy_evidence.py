@@ -42,7 +42,7 @@ from thesistrace.research_kernel.strategy_events import (
 )
 
 EVENT_PARTITION_ROWS = 512
-_JSON_FIELDS = frozenset({"relative_weights", "eligibility_exclusions"})
+_JSON_FIELDS = frozenset({"allocation", "position_limits"})
 _INTEGER_FIELDS = frozenset(
     {
         "unrounded_quantity",
@@ -58,10 +58,6 @@ _NULLABLE_FIELDS = frozenset({"unrounded_quantity", "legal_quantity", "rejection
 def _field(name: str, section: str) -> pa.Field:
     if name in _INTEGER_FIELDS:
         data_type = pa.int64()
-    elif name == "exposure":
-        data_type = pa.float64()
-    elif name == "selected_instrument_ids":
-        data_type = pa.list_(pa.string())
     else:
         data_type = pa.string()
     nullable = name in _NULLABLE_FIELDS or (
@@ -77,7 +73,7 @@ def event_session_field(section: str) -> str:
 EVENT_CONTRACTS = {
     section: ParquetWriterContract(
         name="research-result-" + section.replace("_", "-"),
-        version=1,
+        version=2,
         schema=pa.schema([_field(name, section) for name in model.model_fields]),
         sort_keys=(event_session_field(section), EVENT_ID_FIELDS[section]),
     )
@@ -295,7 +291,7 @@ def event_matches(
     instrument = filters.get("instrument_id")
     if instrument is not None:
         if section == "strategy_targets":
-            if instrument not in row["selected_instrument_ids"]:
+            if instrument not in StrategyTargetEvent.model_validate(row).instrument_ids:
                 return False
         elif row["instrument_id"] != instrument:
             return False
@@ -341,7 +337,7 @@ def _validate_event_relationships(evidence: Mapping, covered: set[str]) -> None:
             if order["decision_session"] in covered:
                 target = targets[order["target_id"]]
                 if (target["decision_session"] != order["decision_session"]
-                    or target["mode"] != order["reason"]):
+                    or target["reason"] != order["reason"]):
                     raise ValueError("Strategy event relationship differs from its target")
         context = ("target_id", "decision_session", "session", "instrument_id", "side")
         submitted_orders = {
@@ -352,14 +348,17 @@ def _validate_event_relationships(evidence: Mapping, covered: set[str]) -> None:
             if constraint["submitted_quantity"]:
                 if (order is None or order["order_id"] != constraint["order_id"]
                     or order["legal_quantity"] != constraint["submitted_quantity"]
-                    or order["reason"] != constraint["mode"]):
+                    or order["reason"] != constraint["decision_reason"]):
                     raise ValueError("Strategy constraint relationship differs from its order")
             elif order is not None:
                 raise ValueError("Skipped Strategy constraint relationship cannot have an order")
             if constraint["decision_session"] in covered:
                 target = targets[constraint["target_id"]]
+                allocation = target["allocation"]
                 if (target["decision_session"] != constraint["decision_session"]
-                    or target["mode"] != constraint["mode"]):
+                    or target["reason"] != constraint["decision_reason"]
+                    or (allocation["mode"] if allocation is not None else "local")
+                    != constraint["mode"]):
                     raise ValueError("Strategy constraint relationship differs from its target")
     except (KeyError, TypeError) as error:
         raise ValueError("Strategy event relationship has a missing or invalid parent") from error

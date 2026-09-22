@@ -144,6 +144,7 @@ def test_complete_provenance_with_maximum_text_preserves_every_character_under_b
     from thesistrace.research_run.models import ProvenanceResultSection, ResearchRunAuthorableInput
 
     inputs = dict(
+        strategy_mode="framework",
         formula="close #" + "\x01" * 4089,
         hypothesis="\x01" * 1024,
         start_date=date(2024, 1, 1),

@@ -15,6 +15,7 @@ from thesistrace.research_kernel.alpha import (
     evaluate_alpha_matrix,
     validate_alpha,
 )
+from thesistrace.research_kernel.builtin_framework import BUILTIN_FRAMEWORK_MODULES
 from thesistrace.research_kernel.factor import build_forward_labels, evaluate_factor
 from thesistrace.research_kernel.strategy import run_strategy
 
@@ -31,6 +32,7 @@ def accepted_calculation_case() -> dict[str, object]:
         "neutralization": "none",
         "universe": "top300",
         "strategy": {"volatility_window": 20, "weighting": "equal_weight",
+            "mode": "framework", "modules": dict(BUILTIN_FRAMEWORK_MODULES),
             "holdings_count": 10,
             "selection_interval": 5,
             "exposure_expression": {"kind": "number", "value": 1},

@@ -468,7 +468,13 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
             "neutralization": "none",
             "research_kind": "strategy_backtest",
             "strategy": {"volatility_window": 20, "weighting": "equal_weight",
-                "kind": "long_only_top_n",
+                "kind": "framework",
+                "modules": {
+                    "universe_selection": "dataset_universe/v1",
+                    "alpha": "alpha_formula/v1",
+                    "portfolio_construction": "periodic_top_n/v1",
+                    "risk_management": "no_risk/v1",
+                },
                 "holdings_count": 1,
                 "selection_every_sessions": 1,
                 "initial_cash_cny": "10000000",
@@ -486,8 +492,8 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
             "numeric_execution_contract": "thesistrace-numeric-v1",
             "semantic_versions": {
                 "factor": "factor-v1",
-                "strategy": "strategy-v2",
-                "kernel": "kernel-v5",
+                "strategy": "strategy-v3",
+                "kernel": "kernel-v6",
             },
             "expression_admission": {
                 "effective_lookback": 0,
@@ -543,6 +549,7 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
         assert completed.json()["execution_timing"]["elapsed_seconds"] >= 0
         assert completed.json()["execution_timing"]["is_final"] is True
         assert completed.json()["input"] == {"volatility_window": 20, "weighting": "equal_weight",
+            "strategy_mode": "framework",
             "formula": "close",
             "hypothesis": None,
             "start_date": "2026-08-03",

@@ -73,6 +73,7 @@ const STRATEGY_RUN: ResearchRun = {
     holdings_count: 10,
     initial_cash_cny: "100000",
     selection_every_sessions: 2,
+    strategy_mode: "framework",
     exposure_expression: "1",
     weighting: "equal_weight", volatility_window: 20,
   },
@@ -278,8 +279,9 @@ const TERMINAL_STATE: TerminalStrategyState = {
   target_selection: { signal_session: "2026-08-05", eligibility_exclusions: {} },
   target_exposure: 1,
   pending_target: {
-    decision_session: "2026-08-05", mode: "selection",
-    signal_session: "2026-08-05",
+    decision_session: "2026-08-05", reason: "selection", contract_checksum: "contract",
+    allocation: { mode: "rebalance", instrument_ids: ["cn.stock.000001"], relative_weights: { "cn.stock.000001": "1" }, exposure: 1 },
+    position_limits: {},
     execution: "next_research_session_open",
   },
 };
@@ -683,6 +685,7 @@ describe("UseAsDraftPanel", () => {
           holdings_count: 10,
           initial_cash_cny: "100000",
           selection_every_sessions: 2,
+          strategy_mode: "framework",
           exposure_expression: "1",
           weighting: "equal_weight", volatility_window: 20,
         }}

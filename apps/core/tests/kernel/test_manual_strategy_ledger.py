@@ -10,6 +10,7 @@ from series import aligned_market_data
 
 from thesistrace.research_kernel import RunInput, StrategyRunInput, run
 from thesistrace.research_kernel.alpha import evaluate_alpha_matrix, validate_alpha
+from thesistrace.research_kernel.builtin_framework import BUILTIN_FRAMEWORK_MODULES
 from thesistrace.research_kernel.strategy import run_strategy
 
 SESSIONS = ("2026-01-05", "2026-01-06", "2026-01-07", "2026-01-08")
@@ -715,6 +716,7 @@ def _definition(
     return {
         "universe": "manual",
         "strategy": {"volatility_window": 20, "weighting": "equal_weight",
+            "mode": "framework", "modules": dict(BUILTIN_FRAMEWORK_MODULES),
             "holdings_count": holdings_count,
             "selection_interval": selection_interval,
             "initial_cash_cny": "10000000",

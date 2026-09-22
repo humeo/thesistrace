@@ -50,33 +50,68 @@ class TargetSelection(TerminalStateModel):
 
     @model_validator(mode="after")
     def target_weights_match_selection(self) -> TargetSelection:
-        selected = self.selected_instrument_ids
-        weights = self.relative_weights
-        if len(selected) != len(set(selected)) or set(weights) != set(selected):
-            raise ValueError("Pending target weights do not match the unique selection")
-        try:
-            ratios = [Fraction(weight) for weight in weights.values()]
-        except (ValueError, ZeroDivisionError):
-            raise ValueError("Target weights must be canonical positive ratios") from None
-        if any(str(ratio) != weight or not 0 < ratio <= 1
-               for weight, ratio in zip(weights.values(), ratios, strict=True)):
-            raise ValueError("Target weights must be canonical positive ratios")
-        if selected and sum(ratios) != 1:
-            raise ValueError("Target weights must sum to one")
+        _validate_target_weights(self.selected_instrument_ids, self.relative_weights)
         return self
 
 
-class PendingTarget(TargetSelection):
-    decision_session: StrictStr
-    mode: Literal["selection", "reduce", "increase"]
-    execution: Literal["next_research_session_open"]
+def _validate_target_weights(selected: list[str], weights: dict[str, str]) -> None:
+    if len(selected) != len(set(selected)) or set(weights) != set(selected):
+        raise ValueError("Pending target weights do not match the unique selection")
+    try:
+        ratios = [Fraction(weight) for weight in weights.values()]
+    except (ValueError, ZeroDivisionError):
+        raise ValueError("Target weights must be canonical positive ratios") from None
+    if any(str(ratio) != weight or not 0 < ratio <= 1
+           for weight, ratio in zip(weights.values(), ratios, strict=True)):
+        raise ValueError("Target weights must be canonical positive ratios")
+    if selected and sum(ratios) != 1:
+        raise ValueError("Target weights must sum to one")
+
+
+class TargetAllocation(TerminalStateModel):
+    """Close-frozen weights; rebalance exits omitted names, increase only buys,
+    and reduce applies an exposure ceiling proportionally to actual holdings.
+    """
+
+    mode: Literal["rebalance", "reduce", "increase"]
+    instrument_ids: list[StrictStr]
+    relative_weights: dict[StrictStr, StrictStr]
     exposure: StrictFloat
 
     @model_validator(mode="after")
-    def exposure_is_valid(self) -> PendingTarget:
+    def allocation_is_valid(self) -> TargetAllocation:
+        _validate_target_weights(self.instrument_ids, self.relative_weights)
         if not isfinite(self.exposure) or not 0 <= self.exposure <= 1:
             raise ValueError("Pending Exposure must be finite and between zero and one")
         return self
+
+
+class PendingTarget(TerminalStateModel):
+    """One final decision, independent of any module's retained selection.
+
+    Without an allocation, unmentioned positions are unchanged. Position limits
+    cap execution shares frozen at Close, including any simultaneous allocation.
+    NoUpdate is represented by no pending target, never an empty decision.
+    """
+
+    decision_session: StrictStr
+    execution: Literal["next_research_session_open"]
+    contract_checksum: StrictStr
+    reason: Annotated[StrictStr, Field(min_length=1, max_length=512)]
+    allocation: TargetAllocation | None
+    position_limits: dict[StrictStr, Annotated[StrictInt, Field(ge=0)]]
+
+    @model_validator(mode="after")
+    def decision_is_not_empty(self) -> PendingTarget:
+        if self.allocation is None and not self.position_limits:
+            raise ValueError("Empty target must be NoUpdate")
+        return self
+
+    @property
+    def instrument_ids(self) -> frozenset[str]:
+        return frozenset(self.position_limits) | (
+            frozenset(self.allocation.instrument_ids) if self.allocation else frozenset()
+        )
 
 
 class ValuationEvent(TerminalStateModel):
@@ -199,13 +234,9 @@ class TerminalStrategyStateValue(TerminalStateModel):
         if self.target_selection.signal_session > self.session:
             raise ValueError("Retained Selection cannot come from the future")
         if self.pending_target is not None and (
-            self.pending_target.exposure != self.target_exposure
-            or self.pending_target.model_dump(
-                exclude={"execution", "exposure", "decision_session", "mode"},
-            )
-            != self.target_selection.model_dump()
+            self.pending_target.contract_checksum != self.target_selection.contract_checksum
         ):
-            raise ValueError("Pending target differs from the decided Selection and Exposure")
+            raise ValueError("Pending target differs from the Strategy contract")
         if (
             self.last_daily_observation.session != self.session
             or self.metric_state.last_session != self.session

@@ -46,7 +46,7 @@ class TradeEvent(TerminalStateModel):
     session: Session
     instrument_id: StrictStr
     side: Literal["buy", "sell"]
-    reason: Literal["selection", "reduce", "increase"]
+    reason: Annotated[StrictStr, Field(min_length=1, max_length=512)]
     order_id: StrictStr
 
     @model_validator(mode="after")
@@ -125,7 +125,8 @@ class StrategyExecutionConstraintEvent(TerminalStateModel):
     session: Session
     instrument_id: StrictStr
     side: Literal["buy", "sell"]
-    mode: Literal["selection", "reduce", "increase"]
+    mode: Literal["rebalance", "reduce", "increase", "local"]
+    decision_reason: Annotated[StrictStr, Field(min_length=1, max_length=512)]
     reason: Literal["below_board_lot", "insufficient_cash"]
     intended_value: DecimalEvidence
     unrounded_quantity: Annotated[StrictInt, Field(ge=0)]

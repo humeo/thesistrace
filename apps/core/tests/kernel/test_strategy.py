@@ -7,6 +7,7 @@ from series import aligned_market_data
 
 from thesistrace.fixture import build_fixture
 from thesistrace.research_kernel.alpha import evaluate_alpha_matrix, validate_alpha
+from thesistrace.research_kernel.builtin_framework import BUILTIN_FRAMEWORK_MODULES
 from thesistrace.research_kernel.strategy import (
     Position,
     StrategyCalculationError,
@@ -125,6 +126,7 @@ def test_top_n_strategy_runs_one_deterministic_net_primary_account() -> None:
     definition = {
         "universe": "top300",
         "strategy": {"volatility_window": 20, "weighting": "equal_weight",
+            "mode": "framework", "modules": dict(BUILTIN_FRAMEWORK_MODULES),
             "holdings_count": 10,
             "selection_interval": 5,
             "exposure_expression": {"kind": "number", "value": 1},
@@ -252,6 +254,7 @@ def test_unexplained_missing_held_open_fails_instead_of_becoming_suspension() ->
     definition = {
         "universe": "top300",
         "strategy": {"volatility_window": 20, "weighting": "equal_weight",
+            "mode": "framework", "modules": dict(BUILTIN_FRAMEWORK_MODULES),
             "holdings_count": 10,
             "selection_interval": 1,
             "exposure_expression": {"kind": "number", "value": 1},
@@ -461,6 +464,7 @@ def strategy_definition(*, selection_interval: int) -> dict[str, object]:
     return {
         "universe": "top300",
         "strategy": {"volatility_window": 20, "weighting": "equal_weight",
+            "mode": "framework", "modules": dict(BUILTIN_FRAMEWORK_MODULES),
             "holdings_count": 10,
             "selection_interval": selection_interval,
             "exposure_expression": {"kind": "number", "value": 1},

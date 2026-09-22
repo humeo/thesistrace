@@ -16,6 +16,7 @@ from thesistrace.research_kernel.alpha_expression import (
     AlphaExpression,
     validate_normalized_alpha,
 )
+from thesistrace.research_kernel.builtin_framework import BUILTIN_FRAMEWORK_MODULES
 from thesistrace.research_kernel.common_observations import (
     attach_common_input_evidence,
     record_common_input,
@@ -76,6 +77,8 @@ class StrategyRunInput:
 
     def contract_snapshot(self) -> dict[str, object]:
         return {
+            "mode": "framework",
+            "modules": dict(BUILTIN_FRAMEWORK_MODULES),
             "holdings_count": self.holdings_count,
             "selection_interval": self.selection_interval,
             "weighting": self.weighting,
@@ -572,6 +575,8 @@ def calculation_definition(
         "universe": run_input.universe,
         "neutralization": run_input.neutralization,
         "strategy": {
+            "mode": "framework",
+            "modules": dict(BUILTIN_FRAMEWORK_MODULES),
             "holdings_count": strategy.holdings_count,
             "selection_interval": strategy.selection_interval,
             "weighting": strategy.weighting,

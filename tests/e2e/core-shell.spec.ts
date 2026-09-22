@@ -431,6 +431,7 @@ test("Default Folder retains one local Research Draft with authoritative Formula
       universe: "top300",
       neutralization: "none",
       researchKind: "strategy_backtest",
+      strategyMode: "framework",
       holdingsCount: "10",
       selectionEverySessions: "2",
       lastAdmittedBaseline: null,

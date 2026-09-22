@@ -7,6 +7,7 @@ export type EditorState = {
 
 export type ResearchInputs = {
   researchKind: "factor_evaluation" | "strategy_backtest";
+  strategyMode: "framework";
   name: string;
   formula: string;
   hypothesis: string;
@@ -57,6 +58,7 @@ export type FrozenResearchAuthorableInput = CommonFrozenResearchAuthorableInput 
   research_kind: "factor_evaluation";
 } | {
   research_kind: "strategy_backtest";
+  strategy_mode: "framework";
   initial_cash_cny: string;
   holdings_count: number;
   selection_every_sessions: number;
@@ -79,6 +81,7 @@ const MAX_TEXT_LENGTH = 10_000;
 export function emptyResearchDraft(): ResearchDraft {
   return {
     researchKind: "factor_evaluation",
+    strategyMode: "framework",
     name: "",
     formula: "",
     hypothesis: "",
@@ -190,6 +193,7 @@ export function beginResearchRun(
 export type ResearchSpec = Omit<CommonResearchRunAdmissionCommand, "request_id" | "folder_id" | "name"> & (
   { research_kind: "factor_evaluation" } | {
     research_kind: "strategy_backtest";
+    strategy_mode: "framework";
     initial_cash_cny: string;
     holdings_count: number;
     selection_every_sessions: number;
@@ -211,7 +215,7 @@ export function researchSpec(inputs: ResearchInputs): ResearchSpec {
   return inputs.researchKind === "factor_evaluation" ? {
     ...common, research_kind: "factor_evaluation",
   } : {
-    ...common, research_kind: "strategy_backtest",
+    ...common, research_kind: "strategy_backtest", strategy_mode: inputs.strategyMode,
     initial_cash_cny: inputs.initialCashCny,
     holdings_count: Number(inputs.holdingsCount),
     selection_every_sessions: Number(inputs.selectionEverySessions),
@@ -310,6 +314,7 @@ export function useResearchAsDraft(
     universe: input.universe,
     neutralization: input.neutralization,
     researchKind: input.research_kind,
+    strategyMode: input.research_kind === "strategy_backtest" ? input.strategy_mode : "framework",
     initialCashCny: input.research_kind === "strategy_backtest" ? input.initial_cash_cny : "",
     holdingsCount: input.research_kind === "strategy_backtest"
       ? String(input.holdings_count)
@@ -348,6 +353,7 @@ function wouldOverwriteUnexecutedAuthorableValue(
     "universe",
     "neutralization",
     "researchKind",
+    "strategyMode",
     "initialCashCny",
     "holdingsCount",
     "selectionEverySessions",
@@ -401,6 +407,7 @@ function readInputs(value: unknown): ResearchInputs | null {
   if (!isRecord(value)) return null;
   const keys = [
     "researchKind",
+    "strategyMode",
     "name",
     "formula",
     "hypothesis",
@@ -419,6 +426,7 @@ function readInputs(value: unknown): ResearchInputs | null {
   const strings = value as Record<(typeof keys)[number], string>;
   if (
     !["factor_evaluation", "strategy_backtest"].includes(strings.researchKind) ||
+    strings.strategyMode !== "framework" ||
     !["equal_weight", "rank_weight", "inverse_volatility"].includes(strings.weighting) ||
     strings.formula.length > MAX_FORMULA_LENGTH ||
     strings.exposureExpression.length > MAX_FORMULA_LENGTH ||

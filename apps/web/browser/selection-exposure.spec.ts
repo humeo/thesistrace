@@ -48,6 +48,8 @@ test(`Exposure, ${weighting}, retained draft and submission share one source`, a
     await page.addScriptTag({ content: script });
   };
   await mount();
+  await expect(page.getByText(/Framework · Built-in strategy/)).toBeVisible();
+  await expect(page.getByText(/Decide after the close; simulate trades at the next/)).toBeVisible();
   await page.getByRole("button", { name: "Run settings", exact: true }).click();
   await expect(page.getByLabel("Portfolio weighting", { exact: false })).toHaveValue("equal_weight");
   await page.getByLabel("Portfolio weighting", { exact: false }).selectOption(weighting);

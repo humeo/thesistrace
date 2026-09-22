@@ -713,6 +713,7 @@ async def _assert_first_semantic_result_pages(
     assert provenance.is_error is False
     assert provenance.structured_content["authoring_input"] == {
         "volatility_window": 20, "weighting": "equal_weight",
+        "strategy_mode": "framework",
         "formula": strategy_command["formula"],
         "hypothesis": strategy_command["hypothesis"],
         "start_date": strategy_command["start_date"],

@@ -98,6 +98,7 @@ class StrategySweepItem(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     item_key: ItemKey
+    strategy_mode: Literal["framework"] = "framework"
     name: ResearchName | None = None
     initial_cash_cny: InitialCash
     holdings_count: HoldingsCount

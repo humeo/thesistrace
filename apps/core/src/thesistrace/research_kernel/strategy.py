@@ -7,6 +7,11 @@ from decimal import Decimal, DecimalException, localcontext
 from fractions import Fraction
 from statistics import stdev
 
+from thesistrace.research_kernel.builtin_framework import (
+    BUILTIN_FRAMEWORK_MODULES,
+    BuiltinFramework,
+    BuiltinFrameworkState,
+)
 from thesistrace.research_kernel.common_inputs import CLOSE_FIELD_ID
 from thesistrace.research_kernel.exposure import evaluate_exposure_series, require_exposure_value
 from thesistrace.research_kernel.numeric import (
@@ -14,10 +19,6 @@ from thesistrace.research_kernel.numeric import (
     MAX_INITIAL_CASH_CNY,
     canonical_decimal,
     require_finite_decimal,
-)
-from thesistrace.research_kernel.portfolio_weighting import (
-    inverse_volatility_selection,
-    select_portfolio,
 )
 from thesistrace.research_kernel.serialization import canonical_json_bytes
 from thesistrace.research_kernel.series_plan import CommonInputObserver
@@ -311,10 +312,8 @@ def _execute_strategy(
         origin_index = processing_start - report_session_count
     report_calendar = calendar[processing_start:]
     strategy = definition["strategy"]
-    holdings_count = int(strategy["holdings_count"])
-    selection_interval = int(strategy["selection_interval"])
-    if not 1 <= holdings_count <= 100 or not 1 <= selection_interval <= 20:
-        raise StrategyCalculationError("invalid Strategy breadth or schedule")
+    if strategy["mode"] != "framework" or strategy["modules"] != BUILTIN_FRAMEWORK_MODULES:
+        raise StrategyCalculationError("Unsupported Strategy implementation")
     close_histories = None
     if strategy["weighting"] == "inverse_volatility":
         instruments = tuple(sorted(research_data.instruments))
@@ -365,21 +364,26 @@ def _execute_strategy(
         else {str(item["session"]): item["values"] for item in alpha_matrix["sessions"]}
     )
     contract_checksum = hashlib.sha256(canonical_json_bytes(definition)).hexdigest()
+    framework = BuiltinFramework(
+        holdings_count=int(strategy["holdings_count"]),
+        selection_interval=int(strategy["selection_interval"]),
+        weighting=strategy["weighting"],
+        volatility_window=int(strategy["volatility_window"]),
+        contract_checksum=contract_checksum,
+    )
     target_selection = None if continuation is None else continuation["target_selection"]
     if target_selection is not None:
         target_selection = TargetSelection.model_validate(target_selection).model_dump(mode="json")
         if target_selection["contract_checksum"] != contract_checksum:
             raise StrategyCalculationError("Retained Selection differs from Strategy contract")
+    framework_state = (
+        BuiltinFrameworkState(TargetSelection.model_validate(target_selection), exposure)
+        if target_selection is not None else None
+    )
     pending_target = None if continuation is None else continuation["pending_target"]
     if pending_target is not None:
         pending_target = PendingTarget.model_validate(pending_target).model_dump(mode="json")
-        if (
-            pending_target["contract_checksum"] != contract_checksum
-            or pending_target["exposure"] != exposure
-            or {key: value for key, value in pending_target.items()
-                if key not in {"execution", "exposure", "decision_session", "mode"}}
-            != target_selection
-        ):
+        if pending_target["contract_checksum"] != contract_checksum:
             raise StrategyCalculationError("Pending decision differs from Strategy contract")
     if continuation is None:
         positions: dict[str, Position] = {}
@@ -456,6 +460,15 @@ def _execute_strategy(
     for session in report_calendar:
         if cancellation_check is not None:
             cancellation_check()
+        if pending_target is not None:
+            decision = PendingTarget.model_validate(pending_target)
+            if not decision.instrument_ids <= instruments.keys():
+                raise StrategyCalculationError("Pending decision contains unknown instruments")
+            if any(
+                item not in positions or maximum > positions[item].execution_shares
+                for item, maximum in decision.position_limits.items()
+            ):
+                raise StrategyCalculationError("Local target must reduce an actual holding")
         global_index = calendar.index(session)
         report_index = global_index - origin_index
         marks, valuation_events = mark_positions(session, positions, prices, states, instruments)
@@ -474,27 +487,24 @@ def _execute_strategy(
         execution_signal: dict[str, object] | None = None
 
         signal_index = global_index - 1
-        scheduled = report_index > 0 and (signal_index - origin_index) % selection_interval == 0
-        if scheduled and pending_target is None:
-            raise StrategyCalculationError("Scheduled Open has no frozen decision")
         if pending_target is not None:
-            if (pending_target["mode"] == "selection") != scheduled:
-                raise StrategyCalculationError("Frozen decision mode differs from Selection phase")
             if report_index <= 0:
                 raise StrategyCalculationError("Initial baseline cannot execute a prior target")
             rebalance = True
             signal_session = calendar[signal_index]
             if pending_target["decision_session"] != signal_session:
                 raise StrategyCalculationError("Open target is not from the preceding Close")
-            mode = pending_target["mode"]
+            allocation = pending_target["allocation"]
+            mode = allocation["mode"] if allocation is not None else "local"
+            reason = pending_target["reason"]
             target_id = strategy_event_id("target", contract_checksum, signal_session)
-            candidates = list(pending_target["selected_instrument_ids"])
+            candidates = list(allocation["instrument_ids"]) if allocation is not None else []
             if ledger is not None:
                 execution_signal = {
                     "session": signal_session,
                     "selected_instrument_ids": candidates,
                 }
-            if not candidates:
+            if allocation is not None and not candidates:
                 diagnostics.append(
                     {
                         "session": session,
@@ -502,15 +512,17 @@ def _execute_strategy(
                         "available": 0,
                     }
                 )
-            target_capital = money(pre_net_nav * Decimal(str(pending_target["exposure"])))
+            target_capital = (
+                money(pre_net_nav * Decimal(str(allocation["exposure"])))
+                if allocation is not None else Decimal(0)
+            )
             target_values = {}
             for instrument_id in candidates:
-                ratio = Fraction(pending_target["relative_weights"][instrument_id])
+                ratio = Fraction(allocation["relative_weights"][instrument_id])
                 target_values[instrument_id] = money(
                     target_capital * ratio.numerator / ratio.denominator
                 )
             actual_stock_value = sum_position_values(positions, marks)
-            buy_budget = max(Decimal(0), target_capital - actual_stock_value)
             if mode == "reduce":
                 ratio = (min(Decimal(1), target_capital / actual_stock_value)
                          if actual_stock_value else Decimal(0))
@@ -518,10 +530,24 @@ def _execute_strategy(
                     item: money(position.adjusted_units * marks[item] * ratio)
                     for item, position in positions.items()
                 }
+            if mode in {"local", "increase"}:
+                for item, position in positions.items():
+                    target_values.setdefault(item, money(position.adjusted_units * marks[item]))
+            position_limits = pending_target["position_limits"]
+            for item, maximum in position_limits.items():
+                # Delisting can remove a holding during the Open mark above.
+                if item in positions:
+                    position = positions[item]
+                    capped_value = money(
+                        position.adjusted_units * marks[item] * maximum / position.execution_shares
+                    )
+                    target_values[item] = min(target_values.get(item, Decimal(0)), capped_value)
             candidate_set = set(target_values)
             alpha_order = {instrument_id: index for index, instrument_id in enumerate(candidates)}
 
-            for instrument_id in ([] if mode == "increase" else sorted(positions)):
+            for instrument_id in sorted(positions):
+                if mode == "increase" and instrument_id not in position_limits:
+                    continue
                 position = positions[instrument_id]
                 current_value = money(position.adjusted_units * marks[instrument_id])
                 desired_value = (
@@ -536,6 +562,10 @@ def _execute_strategy(
                     reduction = current_value - desired_value
                     unrounded = int(
                         money(Decimal(position.execution_shares) * reduction / current_value)
+                    )
+                if instrument_id in position_limits:
+                    unrounded = max(
+                        unrounded, position.execution_shares - position_limits[instrument_id],
                     )
                 quantity = legal_order_quantity(
                     instruments[instrument_id].board,
@@ -556,6 +586,7 @@ def _execute_strategy(
                     execution_constraints.append(_execution_constraint(
                         target_id=target_id, decision_session=signal_session,
                         session=session, instrument_id=instrument_id, side="sell", mode=mode,
+                        decision_reason=reason,
                         reason="below_board_lot", intended_value=current_value - desired_value,
                         unrounded_quantity=unrounded, legal_quantity=0, submitted_quantity=0,
                         available_cash=net_cash,
@@ -575,7 +606,7 @@ def _execute_strategy(
                     session=session,
                     target_id=target_id,
                     decision_session=signal_session,
-                    reason=mode,
+                    reason=reason,
                     instrument_id=instrument_id,
                     side="sell",
                     quantity=quantity,
@@ -600,6 +631,9 @@ def _execute_strategy(
                 session, positions, prices, states, instruments
             )
             valuation_events.extend(additional_events)
+            buy_budget = max(
+                Decimal(0), target_capital - sum_position_values(positions, marks),
+            )
             for instrument_id in ([] if mode == "reduce" else sorted(
                 candidates, key=lambda value: alpha_order[value],
             )):
@@ -639,7 +673,7 @@ def _execute_strategy(
                             {
                                 "target_id": target_id,
                                 "decision_session": signal_session,
-                                "reason": mode,
+                                "reason": reason,
                                 "rejection_reason": rejection_reason,
                                 "order_id": order_id,
                                 "session": session,
@@ -709,6 +743,7 @@ def _execute_strategy(
                     execution_constraints.append(_execution_constraint(
                         target_id=target_id, decision_session=signal_session,
                         session=session, instrument_id=instrument_id, side="buy", mode=mode,
+                        decision_reason=reason,
                         reason="below_board_lot" if legal_quantity == 0 else "insufficient_cash",
                         intended_value=deficit, unrounded_quantity=unrounded,
                         legal_quantity=legal_quantity, submitted_quantity=quantity,
@@ -742,7 +777,7 @@ def _execute_strategy(
                     session=session,
                     target_id=target_id,
                     decision_session=signal_session,
-                    reason=mode,
+                    reason=reason,
                     instrument_id=instrument_id,
                     side="buy",
                     quantity=quantity,
@@ -870,63 +905,30 @@ def _execute_strategy(
                     "valuation_events": unique_events(valuation_events),
                 }
             )
-        pending_target = None
+        end_index = global_index + 1
+        close_windows = {} if close_histories is None else {
+            str(item["instrument_id"]): close_histories[str(item["instrument_id"])][
+                max(0, end_index - framework.volatility_window - 1):end_index
+            ] for item in alpha_by_session[session]
+        }
         try:
-            next_exposure = require_exposure_value(exposure_values[session], session)
+            decision = framework.decide(
+                session=session, report_index=report_index,
+                alpha_values=alpha_by_session[session], close_windows=close_windows,
+                exposure_value=exposure_values[session], previous=framework_state,
+            )
         except ValueError as error:
             raise StrategyCalculationError(str(error)) from error
-        selection_updated = report_index % selection_interval == 0
-        if selection_updated:
-            alpha_values = alpha_by_session[session]
-            exclusions = []
-            if close_histories is not None:
-                end_index = calendar.index(session) + 1
-                window = strategy["volatility_window"]
-                selected, relative_weights, exclusions = inverse_volatility_selection(
-                    alpha_values, holdings_count,
-                    {str(item["instrument_id"]): close_histories[str(item["instrument_id"])][
-                        max(0, end_index - window - 1):end_index
-                    ] for item in alpha_values}, window,
-                )
-                diagnostics.extend({
-                    "session": session, "reason": "weighting_ineligible",
-                    "instrument_id": item["instrument_id"],
-                    "eligibility_reason": item["reason"], "volatility_window": window,
-                } for item in exclusions)
-            else:
-                selected, relative_weights = select_portfolio(
-                    alpha_values, holdings_count, strategy["weighting"],
-                )
-            selected_ids = [str(item["instrument_id"]) for item in selected]
-            target_selection = {
-                "signal_session": session,
-                "selected_instrument_ids": selected_ids,
-                "relative_weights": relative_weights,
-                "eligibility_exclusions": dict(Counter(item["reason"] for item in exclusions)),
-                "signal_checksum": hashlib.sha256(canonical_json_bytes({
-                    "session": session,
-                    "values": [dict(item) for item in selected],
-                })).hexdigest(),
-                "contract_checksum": contract_checksum,
-            }
-        if selection_updated or next_exposure != exposure:
-            if target_selection is None:
-                raise StrategyCalculationError("Exposure decision has no retained Selection")
-            pending_target = {
-                **target_selection,
-                "decision_session": session,
-                "mode": ("selection" if selection_updated else (
-                    "reduce" if next_exposure < exposure else "increase"
-                )),
-                "execution": "next_research_session_open",
-                "exposure": next_exposure,
-            }
+        framework_state = decision.state
+        target_selection = framework_state.selection.model_dump(mode="json")
+        exposure = framework_state.exposure
+        pending_target = decision.target.model_dump(mode="json") if decision.target else None
+        diagnostics.extend(decision.diagnostics)
         if pending_target is not None:
             target_events.append({
                 "target_id": strategy_event_id("target", contract_checksum, session),
                 **pending_target,
             })
-        exposure = next_exposure
         if cancellation_check is not None:
             cancellation_check()
 
@@ -959,7 +961,8 @@ def _execute_strategy(
 
 def _execution_constraint(
     *, target_id: str, decision_session: str, session: str, instrument_id: str,
-    side: str, mode: str, reason: str, intended_value: Decimal, unrounded_quantity: int,
+    side: str, mode: str, decision_reason: str, reason: str,
+    intended_value: Decimal, unrounded_quantity: int,
     legal_quantity: int, submitted_quantity: int, available_cash: Decimal,
 ) -> dict[str, object]:
     return {
@@ -968,6 +971,7 @@ def _execution_constraint(
         ),
         "target_id": target_id, "decision_session": decision_session, "session": session,
         "instrument_id": instrument_id, "side": side, "mode": mode, "reason": reason,
+        "decision_reason": decision_reason,
         "intended_value": canonical_decimal(intended_value),
         "unrounded_quantity": unrounded_quantity, "legal_quantity": legal_quantity,
         "submitted_quantity": submitted_quantity,

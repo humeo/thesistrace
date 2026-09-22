@@ -28,6 +28,7 @@ from thesistrace.daily_holding_queries import (
 )
 from thesistrace.daily_track.models import DailyTrackSummary
 from thesistrace.data.models import FinancialResearchReadiness
+from thesistrace.research_kernel.builtin_framework import BUILTIN_FRAMEWORK_MODULES
 from thesistrace.research_kernel.common_observations import CommonInputObservation
 from thesistrace.research_kernel.exposure import validate_exposure
 from thesistrace.research_kernel.factor_evidence import FactorDailyObservation
@@ -233,6 +234,7 @@ class FactorEvaluationSpec(_ResearchSpecBase):
 
 class StrategyBacktestSpec(_ResearchSpecBase):
     research_kind: Literal["strategy_backtest"]
+    strategy_mode: Literal["framework"] = "framework"
     initial_cash_cny: InitialCash
     holdings_count: HoldingsCount
     selection_every_sessions: SelectionInterval
@@ -466,9 +468,12 @@ class ImmutableRunInput(BaseModel):
             if set(self.strategy) != {
                 "kind", "holdings_count", "selection_every_sessions", "initial_cash_cny",
                 "execution", "exposure_source", "exposure_expression",
-                "weighting", "volatility_window",
+                "weighting", "volatility_window", "modules",
             }:
                 raise ValueError("Frozen Strategy input does not match the current contract")
+            if (self.strategy["kind"] != "framework"
+                    or self.strategy["modules"] != BUILTIN_FRAMEWORK_MODULES):
+                raise ValueError("Frozen Strategy must identify the supported Framework modules")
             TypeAdapter(InitialCash).validate_python(self.strategy["initial_cash_cny"])
             TypeAdapter(HoldingsCount).validate_python(self.strategy["holdings_count"])
             TypeAdapter(PortfolioWeighting).validate_python(self.strategy["weighting"])
@@ -591,6 +596,9 @@ class ResearchRunAuthorableInput(BaseModel):
     universe: ResearchUniverse
     neutralization: ResearchNeutralization
     research_kind: ResearchKind
+    strategy_mode: Literal["framework"] | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
     initial_cash_cny: InitialCash | None = Field(
         default=None, exclude_if=lambda value: value is None,
     )
@@ -613,7 +621,7 @@ class ResearchRunAuthorableInput(BaseModel):
     def validate_research_kind_contract(self) -> ResearchRunAuthorableInput:
         strategy_values = (
             self.initial_cash_cny, self.holdings_count, self.selection_every_sessions,
-            self.exposure_expression, self.weighting, self.volatility_window,
+            self.exposure_expression, self.weighting, self.volatility_window, self.strategy_mode,
         )
         if self.research_kind == "factor_evaluation" and any(
             value is not None for value in strategy_values

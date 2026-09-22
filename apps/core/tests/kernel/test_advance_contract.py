@@ -25,6 +25,7 @@ from thesistrace.research_kernel import (
     run,
 )
 from thesistrace.research_kernel.alpha_expression import validate_normalized_alpha
+from thesistrace.research_kernel.builtin_framework import BUILTIN_FRAMEWORK_MODULES
 from thesistrace.research_kernel.strategy import advance_strategy_metric_state
 from thesistrace.research_series import AlignedResearchData, slice_research_sessions
 
@@ -201,6 +202,7 @@ def test_compact_advance_retains_only_bounded_strategy_alpha() -> None:
         "neutralization": "none",
         "universe": "top300",
         "strategy": {"volatility_window": 20, "weighting": "equal_weight",
+            "mode": "framework", "modules": dict(BUILTIN_FRAMEWORK_MODULES),
             "holdings_count": 10,
             "selection_interval": 5,
             "exposure_expression": {"kind": "number", "value": 1},
@@ -270,6 +272,7 @@ def test_warm_continuation_with_short_data_slice_has_no_factor_state() -> None:
         "neutralization": "none",
         "universe": "top300",
         "strategy": {"volatility_window": 20, "weighting": "equal_weight",
+            "mode": "framework", "modules": dict(BUILTIN_FRAMEWORK_MODULES),
             "holdings_count": 10,
             "selection_interval": 5,
             "exposure_expression": {"kind": "number", "value": 1},
@@ -335,6 +338,7 @@ def test_cold_continuation_rebuild_uses_lookback_before_504_retained_sessions() 
         "neutralization": "none",
         "universe": "top300",
         "strategy": {"volatility_window": 20, "weighting": "equal_weight",
+            "mode": "framework", "modules": dict(BUILTIN_FRAMEWORK_MODULES),
             "holdings_count": 10,
             "selection_interval": 5,
             "exposure_expression": {"kind": "number", "value": 1},

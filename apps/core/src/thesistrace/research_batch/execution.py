@@ -40,6 +40,7 @@ from thesistrace.research_kernel.research_chunks import (
     execute_strategy_chunk_from_alpha_factor_outcome,
 )
 from thesistrace.research_kernel.serialization import canonical_json_bytes
+from thesistrace.research_kernel.terminal_state_schema import PendingTarget
 from thesistrace.research_run.execution import (
     ResearchExecutionCalculationFailed,
     ResearchExecutionError,
@@ -1462,7 +1463,9 @@ def _continuation_instrument_ids(
     if not isinstance(positions, list):
         raise ResearchExecutionInputInvalid("Research Strategy continuation is invalid")
     pending = strategy["pending_target"]
-    pending_ids = pending["selected_instrument_ids"] if pending is not None else []
+    pending_ids = (
+        PendingTarget.model_validate(pending).instrument_ids if pending is not None else []
+    )
     return frozenset([
         *(str(position["instrument_id"]) for position in positions), *pending_ids,
     ])

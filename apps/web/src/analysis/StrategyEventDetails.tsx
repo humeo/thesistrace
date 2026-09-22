@@ -5,12 +5,13 @@ export const eventSections = {
   strategy_fills: "成交", strategy_adjustments: "估值调整", strategy_execution_constraints: "执行约束",
 } as const;
 export type EventSection = keyof typeof eventSections;
-type EventValue = string | number | null | string[] | Record<string, string | number>;
+type EventValue = string | number | null | EventValue[] | { [key: string]: EventValue };
 export type EventRow = Record<string, EventValue>;
 export type EventRelation = { target_id?: string; order_id?: string; child_order_id?: string };
 type Navigate = (section: EventSection, relation: EventRelation, context: string) => void;
 const labels: Record<string, string> = {
   selection: "选股调仓", reduce: "降低仓位", increase: "增加仓位",
+  rebalance: "完整组合", local: "局部减仓",
   valuation_carry: "沿用估值", terminal_delisting_writeoff: "退市核销",
   suspension: "停牌", data_unavailable: "行情不可用",
   upper_limit_buy: "涨停买入受限", lower_limit_sell: "跌停卖出受限",
@@ -23,9 +24,11 @@ const idFields: Record<EventSection, string> = {
 };
 const columns: Record<EventSection, { key: string; label: string; numeric?: boolean }[]> = {
   strategy_targets: [
-    { key: "decision_session", label: "决策日期" }, { key: "mode", label: "调整类型" },
-    { key: "selected_instrument_ids", label: "股票数", numeric: true },
-    { key: "exposure", label: "目标仓位", numeric: true },
+    { key: "decision_session", label: "决策日期" }, { key: "reason", label: "原因" },
+    { key: "allocation.mode", label: "作用范围" },
+    { key: "allocation.instrument_ids", label: "组合股票数", numeric: true },
+    { key: "allocation.exposure", label: "目标仓位", numeric: true },
+    { key: "position_limits", label: "局部持仓上限（股）" },
   ],
   strategy_orders: [
     { key: "session", label: "执行日期" }, { key: "instrument_id", label: "股票" },
@@ -54,10 +57,18 @@ const columns: Record<EventSection, { key: string; label: string; numeric?: bool
   ],
 };
 export function instrumentLabel(value: string) { return value.replace(/^equity:/, ""); }
-function cellValue(key: string, value: EventValue | undefined) {
+function cellValue(path: string, row: EventRow) {
+  const [section, nested] = path.split(".");
+  const parent = row[section];
+  const value = nested && parent !== null && typeof parent === "object" && !Array.isArray(parent)
+    ? parent[nested] : nested ? undefined : parent;
+  const key = nested ?? section;
+  if (path === "allocation.mode" && parent === null) return labels.local;
   if (value == null) return "—";
   if (key === "instrument_id") return instrumentLabel(String(value));
-  if (key === "selected_instrument_ids") return (value as string[]).length.toLocaleString("zh-CN");
+  if (key === "instrument_ids") return (value as string[]).length.toLocaleString("zh-CN");
+  if (key === "position_limits") return Object.entries(value).map(([id, shares]) =>
+    `${instrumentLabel(id)} ≤ ${Number(shares).toLocaleString("zh-CN")}`).join("；") || "—";
   if (key === "exposure") return (Number(value) * 100).toFixed(2) + "%";
   if (["side", "mode", "reason", "rejection_reason", "type"].includes(key)) return labels[String(value)] ?? String(value);
   if (key.endsWith("quantity")) return Number(value).toLocaleString("zh-CN");
@@ -126,7 +137,7 @@ export function StrategyEventTable({ rows, section, navigate }: {
               column.numeric ? "numeric" : "",
               column.key.endsWith("session") || column.key === "instrument_id" ? "mono" : "",
               column.key === "rejection_reason" && row[column.key] ? "strategy-event-rejected" : "",
-            ].filter(Boolean).join(" ")}>{cellValue(column.key, row[column.key])}</td>)}
+            ].filter(Boolean).join(" ")}>{cellValue(column.key, row)}</td>)}
             <td className="strategy-event-expand"><button type="button" aria-label={"查看原始记录：" + label}
               aria-expanded={open} aria-controls={open ? detailId : undefined} onClick={event => { event.stopPropagation(); toggle(); }}>
               <span aria-hidden="true" className={open ? "is-open" : undefined}>›</span>

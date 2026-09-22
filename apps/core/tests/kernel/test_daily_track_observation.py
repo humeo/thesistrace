@@ -48,13 +48,14 @@ def account(
                 "signal_checksum": "signal", "contract_checksum": "contract",
             },
             "target_exposure": 1.0,
-            "pending_target": {"eligibility_exclusions": {},
-                "decision_session": session, "mode": "selection",
-                "exposure": 1.0,
-                "signal_session": session, "execution": "next_research_session_open",
-                "selected_instrument_ids": ["000001.SZ"],
-                "relative_weights": {"000001.SZ": "1"},
-                "signal_checksum": "signal", "contract_checksum": "contract",
+            "pending_target": {
+                "decision_session": session, "reason": "selection",
+                "execution": "next_research_session_open", "contract_checksum": "contract",
+                "allocation": {
+                    "mode": "rebalance", "exposure": 1.0,
+                    "instrument_ids": ["000001.SZ"], "relative_weights": {"000001.SZ": "1"},
+                },
+                "position_limits": {},
             }
             if pending
             else None,

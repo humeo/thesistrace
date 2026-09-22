@@ -23,7 +23,12 @@ test.beforeAll(async () => {
   script = chunk.code;
 });
 
-const target = { target_id: "target_a", decision_session: "2026-08-03", mode: "selection", exposure: 0.7, selected_instrument_ids: ["equity:600000.SH"], relative_weights: { "equity:600000.SH": "1" } };
+const target = {
+  target_id: "target_a", decision_session: "2026-08-03", reason: "selection",
+  execution: "next_research_session_open", contract_checksum: "contract",
+  allocation: { mode: "rebalance", exposure: 0.7, instrument_ids: ["equity:600000.SH"], relative_weights: { "equity:600000.SH": "1" } },
+  position_limits: {},
+};
 const order = { target_id: "target_a", order_id: "order_a", decision_session: "2026-08-03", session: "2026-08-04", instrument_id: "equity:600000.SH", side: "buy", reason: "selection", legal_quantity: 100, rejection_reason: null };
 const child = { ...order, child_order_id: "child_a", quantity: 100 };
 const fill = { ...child, fill_id: "fill_a", raw_open: "10", adjusted_open: "20", raw_notional: "1000", research_settlement: "1000", cost: "5", net_cash_delta: "-1005", adjusted_units_delta: "50", execution_shares_delta: 100 };
@@ -66,8 +71,8 @@ test("long rational weights remain exact in optional raw records without widenin
   await page.route("https://events.test/**", route => {
     if (new URL(route.request().url()).pathname === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
     return route.fulfill({ json: { section: "strategy_targets", status: "recorded", rows: [{
-      ...target, signal_session: "2026-08-03", selected_instrument_ids: ["equity:600000.SH", "equity:000001.SZ"],
-      relative_weights: { "equity:600000.SH": weight, "equity:000001.SZ": `${BigInt(denominator) - BigInt(numerator)}/${denominator}` },
+      ...target, allocation: { ...target.allocation, instrument_ids: ["equity:600000.SH", "equity:000001.SZ"],
+        relative_weights: { "equity:600000.SH": weight, "equity:000001.SZ": `${BigInt(denominator) - BigInt(numerator)}/${denominator}` } },
     }], next_cursor: null } });
   });
   await page.goto("https://events.test/");
@@ -81,7 +86,7 @@ test("long rational weights remain exact in optional raw records without widenin
   await expect(page.locator("pre")).toHaveCount(0);
   await table.getByRole("button", { name: /查看原始记录/ }).click();
   const raw = JSON.parse(await page.locator("pre").innerText());
-  expect(raw.relative_weights["equity:600000.SH"]).toBe(weight);
+  expect(raw.allocation.relative_weights["equity:600000.SH"]).toBe(weight);
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await table.getByRole("button", { name: /查看原始记录/ }).click();
@@ -160,8 +165,8 @@ test("trading evidence pages and follows target, order, child and fill relations
 
 test("execution constraints distinguish skipped, reduced and unrecorded trades", async ({ page }) => {
   const constraints = [
-    { ...order, constraint_id: "constraint_reduced", mode: "selection", reason: "insufficient_cash", unrounded_quantity: 1000, legal_quantity: 1000, submitted_quantity: 900, available_cash_cny: "10000" },
-    { ...order, constraint_id: "constraint_skipped", instrument_id: "equity:000001.SZ", mode: "selection", reason: "below_board_lot", unrounded_quantity: 50, legal_quantity: 0, submitted_quantity: 0, order_id: null, available_cash_cny: "500" },
+    { ...order, constraint_id: "constraint_reduced", mode: "rebalance", decision_reason: "selection", reason: "insufficient_cash", unrounded_quantity: 1000, legal_quantity: 1000, submitted_quantity: 900, available_cash_cny: "10000" },
+    { ...order, constraint_id: "constraint_skipped", instrument_id: "equity:000001.SZ", mode: "rebalance", decision_reason: "selection", reason: "below_board_lot", unrounded_quantity: 50, legal_quantity: 0, submitted_quantity: 0, order_id: null, available_cash_cny: "500" },
   ];
   let availability = "recorded";
   const reads: Record<string, unknown>[] = [];

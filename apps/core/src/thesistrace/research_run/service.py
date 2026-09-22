@@ -68,6 +68,7 @@ from thesistrace.publication import (
 from thesistrace.publication.holding_retention import HOLDING_KIND, HoldingRetention
 from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.research_kernel.alpha_expression import estimate_alpha_run_work
+from thesistrace.research_kernel.builtin_framework import BUILTIN_FRAMEWORK_MODULES
 from thesistrace.research_kernel.common_inputs import (
     common_input_references,
     requires_common_industry,
@@ -329,7 +330,7 @@ class ResearchRunAdmissionRejected(ValueError):
         self.issues = issues
 
 
-FIXED_STRATEGY_KIND = "long_only_top_n"
+FIXED_STRATEGY_KIND = "framework"
 FIXED_EXECUTION = "next_open_full_fill"
 FIXED_COSTS = {
     "commission_rate_all_in": "0.0003",
@@ -339,8 +340,8 @@ FIXED_COSTS = {
 }
 SEMANTIC_VERSIONS = {
     "factor": "factor-v1",
-    "strategy": "strategy-v2",
-    "kernel": "kernel-v5",
+    "strategy": "strategy-v3",
+    "kernel": "kernel-v6",
 }
 
 
@@ -1342,6 +1343,7 @@ class ResearchRunService:
             # are diagnosed; never substitute current defaults for a different model.
             for field, value, supported in (
                 ("strategy.kind", strategy["kind"], FIXED_STRATEGY_KIND),
+                ("strategy.modules", strategy["modules"], dict(BUILTIN_FRAMEWORK_MODULES)),
                 ("strategy.execution", strategy["execution"], FIXED_EXECUTION),
                 ("costs", immutable["costs"], FIXED_COSTS),
                 ("risk_free_rate", immutable["risk_free_rate"], "0"),
@@ -1365,6 +1367,7 @@ class ResearchRunService:
             projected = StrategyBacktestAdmissionCommand.model_validate({
                 "request_id": command.request_id, "folder_id": command.folder_id,
                 "name": command.name, "research_kind": "strategy_backtest",
+                "strategy_mode": strategy["kind"],
                 "formula": immutable["formula_source"], "hypothesis": immutable["hypothesis"],
                 "start_date": immutable["requested_start_date"], "end_date": through,
                 "universe": immutable["universe"], "neutralization": immutable["neutralization"],
@@ -3296,6 +3299,7 @@ class ResearchRunService:
         strategy_contract_mismatch = immutable_input.research_kind == "strategy_backtest" and (
             strategy is None
             or strategy.get("kind") != FIXED_STRATEGY_KIND
+            or strategy.get("modules") != BUILTIN_FRAMEWORK_MODULES
             or strategy.get("execution") != FIXED_EXECUTION
             or exposure is None
             or strategy["exposure_expression"] != exposure.expression
@@ -4626,6 +4630,7 @@ def _admitted_input(
         strategy_values = {
             "strategy": {
                 "kind": FIXED_STRATEGY_KIND,
+                "modules": dict(BUILTIN_FRAMEWORK_MODULES),
                 "holdings_count": command.holdings_count,
                 "selection_every_sessions": command.selection_every_sessions,
                 "weighting": command.weighting,
@@ -4982,6 +4987,7 @@ def _authorable_input(row: object) -> ResearchRunAuthorableInput:
     if immutable_input.research_kind == "strategy_backtest":
         assert immutable_input.strategy is not None
         strategy_values = {
+            "strategy_mode": immutable_input.strategy["kind"],
             "initial_cash_cny": str(immutable_input.strategy["initial_cash_cny"]),
             "holdings_count": int(immutable_input.strategy["holdings_count"]),
             "selection_every_sessions": int(immutable_input.strategy["selection_every_sessions"]),

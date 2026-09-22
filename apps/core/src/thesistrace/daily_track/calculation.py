@@ -22,6 +22,7 @@ from thesistrace.research_kernel.common_inputs import requires_common_industry
 from thesistrace.research_kernel.holding_observations import holding_rows
 from thesistrace.research_kernel.numeric import require_current_numeric_contract
 from thesistrace.research_kernel.strategy_events import strategy_event_rows
+from thesistrace.research_kernel.terminal_state_schema import PendingTarget
 from thesistrace.research_kernel.tracking_advance import (
     advance_tracking,
     advance_tracking_continuation,
@@ -279,5 +280,7 @@ def _predecessor_instrument_ids(predecessor: Mapping[str, object]) -> frozenset[
     if not isinstance(positions, list) or any(not isinstance(item, Mapping) for item in positions):
         raise RuntimeError("Tracking predecessor Positions are invalid")
     pending = terminal["pending_target"]
-    pending_ids = pending["selected_instrument_ids"] if pending is not None else []
+    pending_ids = (
+        PendingTarget.model_validate(pending).instrument_ids if pending is not None else []
+    )
     return frozenset([*(str(item["instrument_id"]) for item in positions), *pending_ids])

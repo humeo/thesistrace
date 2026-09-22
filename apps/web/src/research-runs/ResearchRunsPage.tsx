@@ -98,8 +98,15 @@ export type TerminalStrategyState = {
   target_exposure: number;
   pending_target: {
     decision_session: string;
-    mode: "selection" | "reduce" | "increase";
-    signal_session: string;
+    reason: string;
+    contract_checksum: string;
+    allocation: {
+      mode: "rebalance" | "reduce" | "increase";
+      instrument_ids: string[];
+      relative_weights: Record<string, string>;
+      exposure: number;
+    } | null;
+    position_limits: Record<string, number>;
     execution: "next_research_session_open";
   } | null;
 };
@@ -983,6 +990,7 @@ export function ResearchRunFacts({ run }: { run: ResearchRun }) {
           </p>
           {input.research_kind === "strategy_backtest" ? (
             <>
+              <p><strong>Strategy</strong> Framework · Built-in</p>
               <p><strong>Initial cash (CNY)</strong> {input.initial_cash_cny}</p>
               <p><strong>Holdings count</strong> {input.holdings_count}</p>
               {input.weighting === "inverse_volatility" && <p><strong>Volatility window</strong> {input.volatility_window} sessions</p>}

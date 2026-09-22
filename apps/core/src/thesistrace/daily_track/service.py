@@ -2118,6 +2118,7 @@ class DailyTrackService:
                         canonical_json_bytes(immutable)
                     ).hexdigest(),
                     "frozen_research_input": {
+                        "strategy_mode": strategy["kind"],
                         "formula": immutable["formula_source"],
                         "hypothesis": immutable.get("hypothesis"),
                         "start_date": immutable["requested_start_date"],

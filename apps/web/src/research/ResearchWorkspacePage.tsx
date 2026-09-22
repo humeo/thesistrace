@@ -730,6 +730,9 @@ export function ResearchDraftWorkspace({
             ))}
           </ul>
         ) : null}
+        {draft.researchKind === "strategy_backtest" && <p className="research-spec-feedback">
+          Framework · Built-in strategy. Decide after the close; simulate trades at the next trading session’s open.
+        </p>}
         <div className="research-selection-settings">
           {draft.researchKind === "strategy_backtest" && <>
                 <ResearchNumberStepper

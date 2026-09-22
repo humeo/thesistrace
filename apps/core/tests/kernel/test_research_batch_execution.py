@@ -178,6 +178,10 @@ def _batch_request(
             research_kind="strategy_backtest" if strategy else "factor_evaluation",
             strategy={"volatility_window": 20, "weighting": "equal_weight",
                 "kind": FIXED_STRATEGY_KIND,
+                "modules": {
+                    "universe_selection": "dataset_universe/v1", "alpha": "alpha_formula/v1",
+                    "portfolio_construction": "periodic_top_n/v1", "risk_management": "no_risk/v1",
+                },
                 "holdings_count": holdings,
                 "selection_every_sessions": rebalance,
                 "initial_cash_cny": "10000000",

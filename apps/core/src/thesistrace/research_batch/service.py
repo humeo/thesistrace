@@ -3849,6 +3849,7 @@ def _child_commands(
             StrategyBacktestAdmissionCommand(
                 request_id=f"batch-strategy-{ordinal}",
                 research_kind="strategy_backtest",
+                strategy_mode=item.strategy_mode,
                 name=item.name,
                 formula=command.alpha.formula,
                 hypothesis=command.alpha.hypothesis,

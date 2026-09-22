@@ -72,7 +72,8 @@ def test_execution_constraints_publish_and_continue_through_tracking(
         assert len(page["rows"]) == 1
         row = page["rows"][0]
         assert row["decision_session"] == sessions[0] and row["session"] == sessions[1]
-        assert row["reason"] == reason and row["mode"] == "selection"
+        assert row["reason"] == reason and row["mode"] == "rebalance"
+        assert row["decision_reason"] == "selection"
         assert row["unrounded_quantity"] == planned
         assert row["legal_quantity"] == legal
         assert row["submitted_quantity"] == submitted

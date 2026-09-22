@@ -119,11 +119,11 @@ def test_fixed_exposure_publishes_and_tracks_its_first_entry(
         result = detail["result"]
         account = result["terminal_strategy_state"]
         assert account["target_exposure"] == (0.7 if exposure == "7 / 10" else float(exposure))
-        assert account["pending_target"]["exposure"] == account["target_exposure"]
+        assert account["pending_target"]["allocation"]["exposure"] == account["target_exposure"]
         assert account["target_selection"]["selected_instrument_ids"]
         assert account["positions"] == []
         assert Decimal(account["net_nav"]) == Decimal("100000")
-        assert account["pending_target"]["signal_session"] == sessions[0]
+        assert account["pending_target"]["decision_session"] == sessions[0]
         assert result["strategy"]["summary"]["entry_session"] is None
         assert result["strategy"]["comparison"] == {
             "status": "unavailable",
@@ -446,7 +446,7 @@ def test_common_statistics_publish_from_checkpoint_to_completed_result(
             terminal = run_detail["result"]["terminal_strategy_state"]
             assert run_detail["input"]["exposure_expression"] == exposure
             assert terminal["target_exposure"] == 0
-            assert terminal["pending_target"]["mode"] == "reduce"
+            assert terminal["pending_target"]["allocation"]["mode"] == "reduce"
             assert terminal["target_selection"]["signal_session"] == sessions[1]
             assert tracked["observation"]["target_exposure"] == 1
             assert tracked["observation"]["holdings"]
@@ -730,7 +730,7 @@ def _assert_published_run_events(client, run_id):
     orders = {row["order_id"]: row for row in result["strategy_orders"]}
     children = {row["child_order_id"]: row for row in result["strategy_child_orders"]}
     assert targets
-    if any(row["selected_instrument_ids"] for row in targets.values()):
+    if any(row["allocation"]["instrument_ids"] for row in targets.values()):
         assert orders and children
     else:
         assert not orders and not children and not result["strategy_fills"]
