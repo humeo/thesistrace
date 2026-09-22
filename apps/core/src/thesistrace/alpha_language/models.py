@@ -23,6 +23,8 @@ class SourceRange(BaseModel):
 
 
 class DiagnosticDetails(BaseModel):
+    """Integer literal facts use decimal strings to survive the JSON/JavaScript boundary."""
+
     model_config = ConfigDict(frozen=True)
 
     kind: Literal[
@@ -34,9 +36,10 @@ class DiagnosticDetails(BaseModel):
         "window",
         "literal",
         "resource_limit",
+        "common_input",
     ]
-    expected: str | int | list[str]
-    actual: str | int | list[str]
+    expected: str | int | list[str | int]
+    actual: str | int | list[str | int]
 
 
 class FormulaDiagnostic(BaseModel):
@@ -46,7 +49,7 @@ class FormulaDiagnostic(BaseModel):
     message: str
     severity: Literal["error"] = "error"
     range: SourceRange
-    details: DiagnosticDetails | None = None
+    details: DiagnosticDetails
 
 
 class FormulaDiagnostics(BaseModel):

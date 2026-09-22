@@ -291,6 +291,23 @@ def test_alpha_diagnostics_rejects_request_shape_errors() -> None:
     assert extra.status_code == 422
 
 
+def test_alpha_diagnostics_publish_type_facts_with_the_exact_argument_range() -> None:
+    with _client() as client:
+        response = client.post("/api/alpha/diagnostics", json={"source": "log(close > 0)"})
+    assert response.status_code == 200
+    diagnostic = response.json()["diagnostics"][0]
+    assert diagnostic["code"] == "TYPE_MISMATCH"
+    assert diagnostic["details"] == {
+        "kind": "value_type",
+        "expected": ["common_numeric_series", "number", "numeric_series"],
+        "actual": "boolean_series",
+    }
+    assert diagnostic["range"] == {
+        "start": {"offset": 4, "line": 1, "column": 5},
+        "end": {"offset": 13, "line": 1, "column": 14},
+    }
+
+
 def test_conditional_signal_diagnostics_share_backend_type_rules() -> None:
     cases = {
         "if_else(close > open and not (open == 0), close, open)": True,
@@ -355,3 +372,14 @@ def test_daily_basic_http_catalog_preserves_family_units_and_actual_availability
     with _client() as client:
         prices = client.get("/api/alpha/catalog").json()
     assert not any(field["family_id"] == "equity.daily_basic" for field in prices["fields"])
+
+
+def test_alpha_diagnostics_preserve_arbitrary_integer_literals_for_json_clients() -> None:
+    with _client() as client:
+        response = client.post(
+            "/api/alpha/diagnostics", json={"source": "ts_mean(close, 9007199254740993)"},
+        )
+    assert response.status_code == 200
+    assert response.json()["diagnostics"][0]["details"] == {
+        "kind": "window", "expected": [1, 252], "actual": "9007199254740993",
+    }

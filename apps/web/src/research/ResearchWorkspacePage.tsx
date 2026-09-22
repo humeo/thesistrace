@@ -14,11 +14,13 @@ import { useCallback, useEffect, useId, useRef, useState, type ReactNode, type R
 import type { AlphaCatalog } from "../alphaCatalog";
 import { coreFetch } from "../auth/coreFetch";
 import type { BrowserLocation } from "../auth/routing";
+import { interfaceLocale, useTranslation } from "../i18n";
 import { ResearchFieldCatalog, type DataOverview } from "../data/DataPage";
 import { AlphaFormulaEditor, type AlphaFormulaEditorHandle } from "./AlphaFormulaEditor";
 import { buildResearchDatePresets } from "./dateRange";
 import {
   createDiagnosticsScheduler,
+  formatFormulaDiagnostic,
   type DiagnosticState,
   type FormulaDiagnostic,
 } from "./diagnostics";
@@ -385,6 +387,8 @@ export function ResearchDraftWorkspace({
 }) {
   const [draft, setDraft] = useState<ResearchDraft>(() =>
     loadResearchDraft(storage, researcherId, folder.id));
+  useTranslation("diagnostics");
+  const locale = interfaceLocale();
   const [storageError, setStorageError] = useState<string | null>(null);
   const [diagnosticState, setDiagnosticState] = useState<DiagnosticState>({ kind: "idle", result: null });
   const [admissionFeedback, setAdmissionFeedback] = useState<AdmissionFeedback | null>(null);
@@ -584,6 +588,7 @@ export function ResearchDraftWorkspace({
           message: reason instanceof Error ? reason.message : "Research Run request failed",
           severity: "error",
           range: null,
+          details: null,
         }],
       });
     } finally {
@@ -714,7 +719,7 @@ export function ResearchDraftWorkspace({
           <ul aria-label="Formula diagnostics" className="formula-diagnostics">
             {diagnosticState.result.diagnostics.map((diagnostic) => (
               <li key={`${diagnostic.code}-${diagnostic.range.start.offset}`}>
-                <code>{diagnostic.code}</code> {diagnostic.message}
+                <code>{diagnostic.code}</code> {formatFormulaDiagnostic(diagnostic, locale)}
               </li>
             ))}
           </ul>
@@ -726,7 +731,7 @@ export function ResearchDraftWorkspace({
         {visibleIssues.length > 0 ? (
           <ul aria-label="Run issues" className="formula-diagnostics">
             {visibleIssues.map((issue, index) => (
-              <li key={`${issue.code}-${index}`}><code>{issue.code}</code> {issue.message}</li>
+              <li key={`${issue.code}-${index}`}><code>{issue.code}</code> {issue.details === null ? issue.message : formatFormulaDiagnostic(issue, locale)}</li>
             ))}
           </ul>
         ) : null}
@@ -842,7 +847,7 @@ export function ResearchDraftWorkspace({
                 {exposureDiagnosticState.kind === "complete" && !exposureDiagnosticState.result.valid ? (
                   <ul aria-label="Exposure diagnostics" className="formula-diagnostics research-spec-feedback">
                     {exposureDiagnosticState.result.diagnostics.map((issue) => (
-                      <li key={`${issue.code}-${issue.range.start.offset}`}>{issue.message}</li>
+                      <li key={`${issue.code}-${issue.range.start.offset}`}>{formatFormulaDiagnostic(issue, locale)}</li>
                     ))}
                   </ul>
                 ) : null}
@@ -874,7 +879,7 @@ export function ResearchDraftWorkspace({
               <div className="research-spec-feedback" role="status">
                 <p>{specFeedback.message}</p>
                 {specFeedback.issues.length > 0 ? <ul aria-label="Configuration issues">
-                  {specFeedback.issues.map((issue, index) => <li key={`${issue.field}-${issue.code}-${index}`}><strong>{issue.field}</strong>: {issue.message}</li>)}
+                  {specFeedback.issues.map((issue, index) => <li key={`${issue.field}-${issue.code}-${index}`}><strong>{issue.field}</strong>: {issue.details === null ? issue.message : formatFormulaDiagnostic(issue, locale)}</li>)}
                 </ul> : null}
               </div>
             ) : null}
@@ -908,6 +913,7 @@ type ResearchRunAdmissionIssue = {
   message: string;
   severity: "error";
   range: FormulaDiagnostic["range"] | null;
+  details: FormulaDiagnostic["details"];
 };
 
 type ResearchRunAdmissionRejection = { issues: ResearchRunAdmissionIssue[] };
@@ -918,7 +924,7 @@ type AdmissionFeedback = {
 
 function issueAsFormulaDiagnostic(issue: ResearchRunAdmissionIssue): FormulaDiagnostic[] {
   if (issue.field !== "formula" || issue.range === null) return [];
-  return [{ code: issue.code, message: issue.message, severity: issue.severity, range: issue.range }];
+  return [{ code: issue.code, message: issue.message, severity: issue.severity, range: issue.range, details: issue.details }];
 }
 
 export function ResearchDateFields({

@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import { build } from "vite";
 import type { AlphaCatalog } from "../src/alphaCatalog";
+import { fontStylesheet, serveBrandAssets } from "./brand-assets";
 
 const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
 const catalog = JSON.parse(readFileSync(
@@ -43,7 +44,7 @@ for (const width of [1280, 390, 320]) {
     await page.route("http://data.test/**", async (route) => {
       const pathname = new URL(route.request().url()).pathname;
       if (pathname === "/") {
-        return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+        return route.fulfill({ contentType: "text/html", body: `${fontStylesheet}<div id="root"></div>` });
       }
       requests.push(pathname);
       if (pathname !== "/api/data") return route.fulfill({ status: 404 });
@@ -84,10 +85,12 @@ for (const width of [1280, 390, 320]) {
         benchmark_research_readiness: false, industry_research_readiness: false,
       } });
     });
+    await serveBrandAssets(page);
     await page.goto("http://data.test/");
     await page.addStyleTag({ content: styles });
     await page.addScriptTag({ content: script });
     await expect(page.getByText("226 fields", { exact: true })).toBeVisible();
+    await page.evaluate(() => document.fonts.ready);
     await expect(page.getByText("Limited coverage", { exact: true })).toBeVisible();
     expect(requests).toEqual(["/api/data"]);
     await expect(page.locator(".data-coverage-row")).toHaveCount(4);
@@ -215,3 +218,51 @@ for (const width of [1280, 390, 320]) {
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
   });
 }
+
+test("editor language changes preserve the formula, selection and undo history", async ({ page }) => {
+  await page.route("http://data.test/**", route => route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' }));
+  await page.goto("http://data.test/");
+  await page.addStyleTag({ content: styles });
+  await page.addScriptTag({ content: script });
+  const editor = page.locator(".cm-content");
+  await editor.click();
+  await editor.pressSequentially("rank(close)");
+  await editor.press("ControlOrMeta+A");
+  await expect(page.getByLabel("Editor selection")).toHaveText("0:11");
+  // Dispatching the existing language control retains editor focus while the locale updates.
+  await page.getByRole("button", { name: "简体中文", exact: true }).dispatchEvent("click");
+  await expect(editor).toHaveAttribute("aria-label", "Alpha 公式");
+  await expect(editor).toBeFocused();
+  await expect(editor).toHaveText("rank(close)");
+  await expect(page.getByLabel("Editor selection")).toHaveText("0:11");
+  await editor.press("ControlOrMeta+z");
+  await expect(editor.locator(".cm-placeholder")).toHaveText("从字段或函数开始");
+  await editor.press("ControlOrMeta+Shift+z");
+  await expect(editor).toHaveText("rank(close)");
+  await editor.press("ControlOrMeta+A");
+  await editor.pressSequentially("industry_r");
+  await expect(page.getByRole("listbox", { name: "补全建议" })).toBeVisible();
+  await expect(page.getByText(/在所选研究股票池内，限定指定 SW2021 一级行业/)).toBeVisible();
+  await page.getByRole("button", { name: "English", exact: true }).dispatchEvent("click");
+  await expect(page.getByRole("listbox", { name: "Completions" })).toBeVisible();
+  await expect(page.getByText(/Within the selected research Universe, restricted to the specified SW2021/)).toBeVisible();
+  await expect(editor).toBeFocused();
+  await expect(editor).toHaveText("industry_r");
+  const industry = page.getByRole("option").filter({ hasText: "industry_return" });
+  await industry.click();
+  await expect(editor).toHaveText("industry_return");
+  await page.getByRole("button", { name: "Show diagnostic" }).click();
+  const invalidWindow = page.locator(".cm-lintRange-error");
+  await expect(invalidWindow).toHaveText("0");
+  await invalidWindow.hover();
+  await expect(page.getByText("Window must be between 1 and 252; received 0.")).toBeVisible();
+  await page.getByRole("button", { name: "简体中文", exact: true }).click();
+  await expect(invalidWindow).toHaveText("0");
+  await invalidWindow.hover();
+  await expect(page.getByText("窗口必须在 1 到 252 之间，实际为 0。")).toBeVisible();
+  await expect(editor).toHaveText("ts_mean(close, 0)");
+  await page.getByRole("button", { name: "Show Unicode diagnostic" }).click();
+  await expect(invalidWindow).toHaveText("𠮷");
+  await invalidWindow.hover();
+  await expect(page.getByText("未知 Alpha 标识：𠮷")).toBeVisible();
+});

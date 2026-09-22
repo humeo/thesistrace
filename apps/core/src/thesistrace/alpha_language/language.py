@@ -208,7 +208,8 @@ class AlphaLanguage:
                 parsed.body,
                 details=DiagnosticDetails(
                     kind="value_type",
-                    expected=" or ".join(value.value for value in expected_types),
+                    expected=(expected_types[0].value if len(expected_types) == 1
+                              else [value.value for value in expected_types]),
                     actual=built.value_type.value,
                 ),
             )
@@ -268,6 +269,9 @@ class AlphaLanguage:
                     "EXPOSURE_OUT_OF_RANGE",
                     "Exposure must be a finite number between 0 and 1",
                     parsed.body,
+                    details=DiagnosticDetails(
+                        kind="literal", expected=[0, 1], actual="outside_finite_range",
+                    ),
                 )
         return compiled
 
@@ -305,7 +309,7 @@ class AlphaLanguage:
                     details=DiagnosticDetails(
                         kind="callability",
                         expected="builtin_call",
-                        actual="bare_builtin_identifier",
+                        actual=node.id,
                     ),
                 )
             self._raise(
@@ -376,13 +380,23 @@ class AlphaLanguage:
                     "UNSUPPORTED_OPERATOR",
                     "Only unary minus and not are supported",
                     node,
+                    details=DiagnosticDetails(
+                        kind="syntax", expected=["USub", "Not"], actual=type(node.op).__name__,
+                    ),
                 )
             operand = self._build(source, node.operand, depth=depth + 1)
             operator = "not" if isinstance(node.op, ast.Not) else "negate"
             try:
                 result_type = unary_result_type(operator, operand.value_type)
             except ValueError as error:
-                self._raise(source, "TYPE_MISMATCH", str(error), node)
+                self._raise(
+                    source, "TYPE_MISMATCH", str(error), node,
+                    details=DiagnosticDetails(
+                        kind="value_type",
+                        expected=sorted(BOOLEAN_TYPES if operator == "not" else NUMERIC_TYPES),
+                        actual=operand.value_type.value,
+                    ),
+                )
             return _BuiltExpression(
                 expression={
                     "kind": "unary",
@@ -404,7 +418,13 @@ class AlphaLanguage:
                 ast.Div: "divide",
             }.get(type(node.op))
             if operator is None:
-                self._raise(source, "UNSUPPORTED_OPERATOR", "Unsupported arithmetic operator", node)
+                self._raise(
+                    source, "UNSUPPORTED_OPERATOR", "Unsupported arithmetic operator", node,
+                    details=DiagnosticDetails(
+                        kind="syntax", expected=["Add", "Sub", "Mult", "Div"],
+                        actual=type(node.op).__name__,
+                    ),
+                )
             return self._binary(
                 source,
                 node,
@@ -415,7 +435,12 @@ class AlphaLanguage:
             )
         if isinstance(node, ast.Compare):
             if len(node.ops) != 1:
-                self._raise(source, "UNSUPPORTED_SYNTAX", "Use and to combine comparisons", node)
+                self._raise(
+                    source, "UNSUPPORTED_SYNTAX", "Use and to combine comparisons", node,
+                    details=DiagnosticDetails(
+                        kind="syntax", expected="single_comparison", actual="chained_comparison",
+                    ),
+                )
             operator = {
                 ast.Gt: "gt",
                 ast.GtE: "ge",
@@ -425,7 +450,13 @@ class AlphaLanguage:
                 ast.NotEq: "ne",
             }.get(type(node.ops[0]))
             if operator is None:
-                self._raise(source, "UNSUPPORTED_OPERATOR", "Unsupported comparison", node)
+                self._raise(
+                    source, "UNSUPPORTED_OPERATOR", "Unsupported comparison", node,
+                    details=DiagnosticDetails(
+                        kind="syntax", expected=["Gt", "GtE", "Lt", "LtE", "Eq", "NotEq"],
+                        actual=type(node.ops[0]).__name__,
+                    ),
+                )
             return self._binary(
                 source,
                 node,
@@ -451,13 +482,23 @@ class AlphaLanguage:
             "UNSUPPORTED_SYNTAX",
             f"Unsupported Alpha syntax: {type(node).__name__}",
             node,
+            details=DiagnosticDetails(
+                kind="syntax", expected="alpha_expression", actual=type(node).__name__,
+            ),
         )
 
     def _binary(self, source, node, operator, left, right, depth) -> _BuiltExpression:
         try:
             result_type = binary_result_type(operator, left.value_type, right.value_type)
         except ValueError as error:
-            self._raise(source, "TYPE_MISMATCH", str(error), node)
+            self._raise(
+                source, "TYPE_MISMATCH", str(error), node,
+                details=DiagnosticDetails(
+                    kind="value_type",
+                    expected=sorted(BOOLEAN_TYPES if operator in {"and", "or"} else NUMERIC_TYPES),
+                    actual=[left.value_type.value, right.value_type.value],
+                ),
+            )
         return _BuiltExpression(
             expression={
                 "kind": "binary",
@@ -499,7 +540,7 @@ class AlphaLanguage:
                 details=DiagnosticDetails(
                     kind="callability",
                     expected="builtin_identifier",
-                    actual="field_identifier",
+                    actual=identifier,
                 ),
             )
         builtin = self._builtin_by_identifier.get(identifier)
@@ -523,12 +564,18 @@ class AlphaLanguage:
                     "STARRED_ARGUMENT_NOT_ALLOWED",
                     "Starred arguments are not allowed",
                     keyword.value,
+                    details=DiagnosticDetails(
+                        kind="syntax", expected="positional_arguments", actual="keyword_unpacking",
+                    ),
                 )
             self._raise(
                 source,
                 "KEYWORD_ARGUMENT_NOT_ALLOWED",
                 "Keyword arguments are not allowed",
                 keyword.value,
+                details=DiagnosticDetails(
+                    kind="syntax", expected="positional_arguments", actual="keyword_argument",
+                ),
             )
         if any(isinstance(argument, ast.Starred) for argument in node.args):
             starred = next(argument for argument in node.args if isinstance(argument, ast.Starred))
@@ -537,6 +584,9 @@ class AlphaLanguage:
                 "STARRED_ARGUMENT_NOT_ALLOWED",
                 "Starred arguments are not allowed",
                 starred,
+                details=DiagnosticDetails(
+                    kind="syntax", expected="positional_arguments", actual="starred_argument",
+                ),
             )
         if len(node.args) != len(builtin.parameters):
             self._raise(
@@ -558,14 +608,28 @@ class AlphaLanguage:
                     [arg.value if isinstance(arg, ast.Constant) else None for arg in node.args],
                 )
             except ValueError as error:
-                self._raise(source, "INVALID_COMMON_INPUT", str(error), node)
+                argument = node.args[0]
+                self._raise(
+                    source, "INVALID_COMMON_INPUT", str(error), node,
+                    details=DiagnosticDetails(
+                        kind="common_input", expected="sw2021_l1_integer_literal",
+                        actual=(str(argument.value) if isinstance(argument, ast.Constant)
+                                and type(argument.value) is int else
+                                type(argument.value).__name__ if isinstance(argument, ast.Constant)
+                                else type(argument).__name__),
+                    ),
+                )
             # Static industry arguments still consume the ordinary expression depth budget.
             for argument in node.args:
                 self._build(source, argument, depth=depth + 1)
             close_field = self._field_by_identifier.get("close")
             if close_field is None or close_field.field_id != CLOSE_FIELD_ID:
                 self._raise(
-                    source, "UNKNOWN_IDENTIFIER", "Common input requires adjusted Close", node
+                    source, "UNKNOWN_IDENTIFIER", "Common input requires adjusted Close", node,
+                    details=DiagnosticDetails(
+                        kind="common_input", expected=CLOSE_FIELD_ID,
+                        actual=close_field.field_id if close_field else "unavailable",
+                    ),
                 )
             return _BuiltExpression(
                 expression=expression,
@@ -630,7 +694,13 @@ class AlphaLanguage:
                 NUMERIC_TYPES if rule == "numeric" else BOOLEAN_TYPES if rule == "boolean" else None
             )
             if allowed is not None and argument.value_type not in allowed:
-                self._raise(source, "TYPE_MISMATCH", f"{identifier} requires {rule}", argument_node)
+                self._raise(
+                    source, "TYPE_MISMATCH", f"{identifier} requires {rule}", argument_node,
+                    details=DiagnosticDetails(
+                        kind="value_type", expected=sorted(allowed),
+                        actual=argument.value_type.value,
+                    ),
+                )
             arguments.append(argument)
 
         first = arguments[0]
@@ -640,7 +710,13 @@ class AlphaLanguage:
                     *(argument.value_type for argument in arguments)
                 )
             except ValueError as error:
-                self._raise(source, "TYPE_MISMATCH", str(error), node)
+                self._raise(
+                    source, "TYPE_MISMATCH", str(error), node,
+                    details=DiagnosticDetails(
+                        kind="value_type", expected="matching_branch_types",
+                        actual=[argument.value_type.value for argument in arguments[1:]],
+                    ),
+                )
         else:
             result_type = (
                 ValueType.NUMERIC_SERIES
@@ -678,7 +754,7 @@ class AlphaLanguage:
                 node,
                 details=DiagnosticDetails(
                     kind="window",
-                    expected="integer_literal_1_to_252",
+                    expected=[1, 252],
                     actual=type(node).__name__,
                 ),
             )
@@ -690,7 +766,7 @@ class AlphaLanguage:
                 node,
                 details=DiagnosticDetails(
                     kind="window",
-                    expected="integer_literal_1_to_252",
+                    expected=[1, 252],
                     actual=type(node.value).__name__,
                 ),
             )
@@ -702,8 +778,8 @@ class AlphaLanguage:
                 node,
                 details=DiagnosticDetails(
                     kind="window",
-                    expected="integer_literal_1_to_252",
-                    actual=node.value,
+                    expected=[1, 252],
+                    actual=str(node.value),
                 ),
             )
         return node.value
@@ -715,7 +791,7 @@ class AlphaLanguage:
         message: str,
         node: ast.AST | None = None,
         *,
-        details: DiagnosticDetails | None = None,
+        details: DiagnosticDetails,
     ) -> None:
         raise FormulaCompilationError(
             [

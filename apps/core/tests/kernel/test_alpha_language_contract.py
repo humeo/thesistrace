@@ -458,6 +458,7 @@ def test_compile_rejects_every_non_allowlisted_language_form(source: str, code: 
 
     assert diagnostics.valid is False
     assert diagnostics.diagnostics[0].code == code
+    assert diagnostics.diagnostics[0].details is not None
     with pytest.raises(FormulaCompilationError):
         alpha_language.compile(source)
 
@@ -532,8 +533,39 @@ def test_relevant_diagnostics_include_typed_expected_and_actual_details() -> Non
     assert window.details is not None
     assert window.details.model_dump(mode="json") == {
         "kind": "window",
-        "expected": "integer_literal_1_to_252",
-        "actual": 0,
+        "expected": [1, 252],
+        "actual": "0",
+    }
+
+
+@pytest.mark.parametrize(
+    ("source", "code", "kind", "expected", "actual", "start", "end"),
+    [
+        ("not close", "TYPE_MISMATCH", "value_type",
+         ["boolean", "boolean_series", "common_boolean_series"], "numeric_series", 0, 9),
+        ("close + (close > open)", "TYPE_MISMATCH", "value_type",
+         ["common_numeric_series", "number", "numeric_series"],
+         ["numeric_series", "boolean_series"], 0, 22),
+        ("log(close > 0)", "TYPE_MISMATCH", "value_type",
+         ["common_numeric_series", "number", "numeric_series"], "boolean_series", 4, 13),
+        ("if_else(close > 0, close, close > 0)", "TYPE_MISMATCH", "value_type",
+         "matching_branch_types", ["numeric_series", "boolean_series"], 0, 36),
+        ("industry_return(123456)", "INVALID_COMMON_INPUT", "common_input",
+         "sw2021_l1_integer_literal", "123456", 0, 23),
+        ("industry_return(close)", "INVALID_COMMON_INPUT", "common_input",
+         "sw2021_l1_integer_literal", "Name", 0, 22),
+    ],
+)
+def test_diagnostic_details_preserve_specific_reasons_for_localized_clients(
+    source, code, kind, expected, actual, start, end,
+) -> None:
+    diagnostic = alpha_language.diagnose(source).diagnostics[0]
+    assert diagnostic.code == code
+    assert diagnostic.range.start.offset == start
+    assert diagnostic.range.end.offset == end
+    assert diagnostic.details is not None
+    assert diagnostic.details.model_dump(mode="json") == {
+        "kind": kind, "expected": expected, "actual": actual,
     }
 
 
@@ -767,7 +799,9 @@ def test_bilingual_display_metadata_covers_the_authoritative_catalog() -> None:
     # Authority changes require revisiting the translations, not merely keeping the same IDs.
     for field in catalog.fields:
         assert fields["zh-CN"][field.field_id]["name"] == field.display_name
-        source_locale = "zh-CN" if any("\u4e00" <= c <= "\u9fff" for c in field.description) else "en"
+        source_locale = (
+            "zh-CN" if any("\u4e00" <= c <= "\u9fff" for c in field.description) else "en"
+        )
         assert fields[source_locale][field.field_id]["description"] == field.description.strip()
     for builtin in catalog.builtins:
         assert metadata["en"]["builtins"][builtin.identifier] == {
