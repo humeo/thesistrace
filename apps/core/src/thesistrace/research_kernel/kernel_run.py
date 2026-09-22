@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -24,6 +25,7 @@ from thesistrace.research_kernel.common_observations import (
 from thesistrace.research_kernel.direct_strategy import PythonProgram
 from thesistrace.research_kernel.exposure import validate_exposure
 from thesistrace.research_kernel.factor import build_forward_labels, evaluate_factor
+from thesistrace.research_kernel.framework_strategy import FrameworkModules
 from thesistrace.research_kernel.portfolio_weighting import PortfolioWeighting
 from thesistrace.research_kernel.serialization import canonical_json_bytes
 from thesistrace.research_kernel.series_plan import (
@@ -34,6 +36,12 @@ from thesistrace.research_kernel.series_plan import (
 from thesistrace.research_kernel.strategy import (
     transition_columnar_strategy,
     transition_strategy,
+)
+from thesistrace.research_kernel.terminal_state_schema import (
+    DECISION_STATE_ADAPTER,
+    DirectDecisionState,
+    FrameworkDecisionState,
+    FrameworkModulesDecisionState,
 )
 from thesistrace.research_series import (
     AlignedResearchData,
@@ -62,8 +70,17 @@ class StrategyRunInput:
     weighting: PortfolioWeighting = "equal_weight"
     volatility_window: int = 20
     exposure_expression_json: bytes = b'{"kind":"number","value":1}'
+    modules_json: bytes | None = field(default=None, repr=False)
+    environment_json: bytes | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
+        programs = self.modules_snapshot().programs()
+        if programs:
+            if (self.environment_json is None
+                    or not isinstance(json.loads(self.environment_json), dict)):
+                raise ValueError("Framework programs require a frozen execution environment")
+        elif self.environment_json is not None:
+            raise ValueError("Builtin Framework has no Python execution environment")
         if type(self.volatility_window) is not int or not 1 <= self.volatility_window <= 252:
             raise ValueError("Invalid volatility window")
         validate_exposure(self.exposure_expression_snapshot())
@@ -76,10 +93,15 @@ class StrategyRunInput:
             raise ValueError("Exposure expression must be a normalized tree")
         return value
 
+    def modules_snapshot(self) -> FrameworkModules:
+        return (FrameworkModules.model_validate_json(self.modules_json)
+                if self.modules_json is not None else
+                FrameworkModules.model_validate(dict(BUILTIN_FRAMEWORK_MODULES)))
+
     def contract_snapshot(self) -> dict[str, object]:
-        return {
+        snapshot = {
             "mode": "framework",
-            "modules": dict(BUILTIN_FRAMEWORK_MODULES),
+            "modules": self.modules_snapshot().model_dump(mode="json"),
             "holdings_count": self.holdings_count,
             "selection_interval": self.selection_interval,
             "weighting": self.weighting,
@@ -91,6 +113,9 @@ class StrategyRunInput:
             "stamp_duty_sell_rate": self.stamp_duty_sell_rate,
             "transfer_fee_rate": self.transfer_fee_rate,
         }
+        if self.environment_json is not None:
+            snapshot["environment"] = json.loads(self.environment_json)
+        return snapshot
 
 
 @dataclass(frozen=True)
@@ -140,12 +165,17 @@ def strategy_input_from_snapshot(
             environment_json=canonical_json_bytes(value["environment"]), **costs,
         )
     settings = {"holdings_count", "selection_interval", "weighting", "volatility_window"}
-    if (value.get("mode") != "framework" or value.get("modules") != BUILTIN_FRAMEWORK_MODULES
-            or set(value) != cost_names | settings | {"mode", "modules", "exposure_expression"}):
+    programs = FrameworkModules.model_validate(value.get("modules")).programs()
+    expected = cost_names | settings | {"mode", "modules", "exposure_expression"}
+    if programs:
+        expected.add("environment")
+    if value.get("mode") != "framework" or set(value) != expected:
         raise KernelRunError("Framework Strategy snapshot fields are invalid")
     return StrategyRunInput(
         **{name: value[name] for name in settings}, **costs,
         exposure_expression_json=canonical_json_bytes(value["exposure_expression"]),
+        modules_json=canonical_json_bytes(value["modules"]),
+        environment_json=canonical_json_bytes(value["environment"]) if programs else None,
     )
 
 
@@ -177,11 +207,15 @@ class RunInput:
         research_end_session: str | None = None,
     ) -> None:
         direct = isinstance(strategy, DirectStrategyRunInput)
-        if direct and (alpha_expression is not None or neutralization is not None):
+        custom_signal = (isinstance(strategy, StrategyRunInput)
+                         and "alpha" in strategy.modules_snapshot().programs())
+        if (direct or custom_signal) and (
+            alpha_expression is not None or neutralization is not None
+        ):
             raise KernelRunError(
-                "Direct Strategy cannot contain an Alpha Formula or neutralization"
+                "Python Signal or Direct Strategy cannot contain an Alpha Formula or neutralization"
             )
-        if not direct and not isinstance(alpha_expression, Mapping):
+        if not (direct or custom_signal) and not isinstance(alpha_expression, Mapping):
             raise KernelRunError("Alpha expression must be a normalized tree")
         if effective_lookback < 0 or effective_lookback > 252:
             raise KernelRunError("Effective calculation lookback is invalid")
@@ -208,10 +242,19 @@ class RunInput:
             if effective_lookback != requirements.history_sessions - 1:
                 raise KernelRunError("Python program history and calculation lookback disagree")
         else:
-            required_fields = set(self.alpha_execution_plan().field_names)
+            required_fields = (set(self.alpha_execution_plan().field_names)
+                               if self.has_alpha else set())
         if isinstance(strategy, StrategyRunInput):
-            required_fields.update(validate_exposure(strategy.exposure_expression_snapshot()).field_ids)
-        if isinstance(strategy, StrategyRunInput) and strategy.weighting == "inverse_volatility":
+            for program in strategy.modules_snapshot().programs().values():
+                required_fields.update(program.data_requirements.field_ids)
+                if effective_lookback < program.data_requirements.history_sessions - 1:
+                    raise KernelRunError("Insufficient Framework program history")
+            if "portfolio_construction" not in strategy.modules_snapshot().programs():
+                required_fields.update(
+                    validate_exposure(strategy.exposure_expression_snapshot()).field_ids,
+                )
+        if (isinstance(strategy, StrategyRunInput) and strategy.weighting == "inverse_volatility"
+                and "portfolio_construction" not in strategy.modules_snapshot().programs()):
             required_fields.add("price.close.adjusted")
             if effective_lookback < strategy.volatility_window:
                 raise KernelRunError("Insufficient volatility calculation lookback")
@@ -235,15 +278,36 @@ class RunInput:
         return value
 
     @property
-    def is_direct(self) -> bool:
-        return isinstance(self.strategy, DirectStrategyRunInput)
+    def has_alpha(self) -> bool:
+        return self._alpha_expression_json is not None
 
     def field_bindings_snapshot(self) -> dict[str, str]:
         return dict(self._field_bindings)
 
+    def validate_strategy_continuation(self, state: Mapping[str, object]) -> None:
+        """Bind resumable decisions to the frozen implementation before restoring it."""
+        decision = DECISION_STATE_ADAPTER.validate_python(state["decision_state"])
+        checksum = hashlib.sha256(canonical_json_bytes(calculation_definition(self))).hexdigest()
+        if state["contract_checksum"] != checksum:
+            raise KernelRunError("Strategy continuation differs from the frozen contract")
+        if isinstance(self.strategy, DirectStrategyRunInput):
+            if (not isinstance(decision, DirectDecisionState)
+                    or decision.program_sha256 != self.strategy.program_snapshot().source_sha256):
+                raise KernelRunError("Direct continuation differs from the frozen program")
+            return
+        if not isinstance(self.strategy, StrategyRunInput):
+            raise KernelRunError("Strategy continuation requires Strategy input")
+        programs = self.strategy.modules_snapshot().programs()
+        expected_type = FrameworkModulesDecisionState if programs else FrameworkDecisionState
+        interval = (
+            None if "portfolio_construction" in programs else self.strategy.selection_interval
+        )
+        if not isinstance(decision, expected_type) or decision.selection_interval != interval:
+            raise KernelRunError("Framework continuation differs from the frozen modules")
+
     def compiled_alpha_snapshot(self) -> ExecutableAlpha:
-        if self.is_direct:
-            raise KernelRunError("Direct Strategy has no Alpha computation")
+        if not self.has_alpha:
+            raise KernelRunError("Strategy has no Alpha computation")
         parsed = validate_normalized_alpha(
             self.alpha_expression_snapshot(), field_bindings=self.field_bindings_snapshot(),
         )
@@ -264,7 +328,7 @@ class RunInput:
         """Return the Run-owned inputs that define Alpha-and-Factor computation."""
         if self.research_start_session is None or self.research_end_session is None:
             raise KernelRunError("Alpha-and-Factor Research Period is incomplete")
-        if self.is_direct:
+        if not self.has_alpha:
             return {
                 "research_kind": self.research_kind, "alpha": None,
                 "research_period": {
@@ -352,6 +416,8 @@ class KernelState:
         calendar = run_input.research_data_snapshot().sessions
         if not calendar:
             raise KernelRunError("Kernel state requires aligned Research Sessions")
+        if run_input.strategy is not None:
+            run_input.validate_strategy_continuation(strategy_resume)
         object.__setattr__(self, "_run_input", run_input)
         object.__setattr__(self, "_output_json", canonical_json_bytes(output))
         object.__setattr__(
@@ -520,7 +586,7 @@ def _calculate(
     origin_session: str,
     period_sessions: list[str],
 ) -> RunOutput:
-    matrix = None if run_input.is_direct else evaluate_alpha_matrix(
+    matrix = None if not run_input.has_alpha else evaluate_alpha_matrix(
         research_data,
         compiled_alpha=run_input.compiled_alpha_snapshot(),
         neutralization=run_input.neutralization,
@@ -542,7 +608,7 @@ def _calculate_columnar(
     period_sessions: list[str],
     cancellation_check: Callable[[], None],
 ) -> RunOutput:
-    matrix = None if run_input.is_direct else evaluate_columnar_alpha_matrix(
+    matrix = None if not run_input.has_alpha else evaluate_columnar_alpha_matrix(
         research_data,
         compiled_alpha=run_input.compiled_alpha_snapshot(),
         neutralization=run_input.neutralization,
@@ -655,7 +721,7 @@ def calculation_definition(
         "commission_rate_all_in", "commission_min_cny", "stamp_duty_sell_rate", "transfer_fee_rate",
     )}
     result = {"universe": run_input.universe, "strategy": strategy_contract, "costs": costs}
-    if not run_input.is_direct:
+    if run_input.has_alpha:
         result["alpha"] = {"expression": (
             run_input.alpha_expression_snapshot() if alpha_expression is None else alpha_expression
         )}

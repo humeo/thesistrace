@@ -206,11 +206,15 @@ def test_direct_public_kernel_input_does_not_invent_an_alpha_formula():
     )
 
 
-def test_direct_columnar_chunks_match_the_public_run_without_alpha_computation():
+@pytest.mark.parametrize("mode", ["direct", "framework"])
+def test_python_strategy_columnar_chunks_match_the_public_run_without_alpha_computation(mode):
+    from copy import deepcopy
+
     import numpy as np
     from test_research_chunk_continuation import _ColumnarFixture
 
-    from thesistrace.research_kernel import DirectStrategyRunInput, RunInput, run
+    from thesistrace.research_kernel import DirectStrategyRunInput, RunInput, StrategyRunInput, run
+    from thesistrace.research_kernel.builtin_framework import BUILTIN_FRAMEWORK_MODULES
     from thesistrace.research_kernel.numeric import NUMERIC_CONTRACT_ID
     from thesistrace.research_kernel.research_chunks import (
         AlphaFactorExecutionBinding,
@@ -222,6 +226,33 @@ def test_direct_columnar_chunks_match_the_public_run_without_alpha_computation()
     from thesistrace.research_run.result import build_result_payload
 
     data, definition = inputs()
+    environment = canonical_json_bytes(definition["strategy"]["environment"])
+    common = {"initial_cash_cny": "100000", **definition["costs"]}
+    strategy = DirectStrategyRunInput(
+        program_json=canonical_json_bytes(definition["strategy"]["program"]),
+        environment_json=environment, **common,
+    )
+    if mode == "framework":
+        modules = dict(BUILTIN_FRAMEWORK_MODULES)
+        modules["portfolio_construction"] = {
+            "kind": "python", "program": definition["strategy"]["program"],
+        }
+        modules["alpha"] = {"kind": "python", "program": {
+            "source": """
+def decide(context, state, parameters):
+    output = None
+    if context['completed_sessions'] == 1:
+        output = {'reason': 'two_day_signal', 'signals': [{
+            'instrument_id': context['candidates'][0]['instrument_id'],
+            'value': 1.0, 'valid_for_sessions': 2}]}
+    return {'output': output, 'state': {}}
+""",
+            "parameters": {}, "data_requirements": {"field_ids": [], "history_sessions": 1},
+        }}
+        strategy = StrategyRunInput(
+            holdings_count=1, selection_interval=5, modules_json=canonical_json_bytes(modules),
+            environment_json=environment, **common,
+        )
     columnar = _ColumnarFixture(
         sessions=data.sessions,
         instruments=data.instruments,
@@ -248,12 +279,7 @@ def test_direct_columnar_chunks_match_the_public_run_without_alpha_computation()
         universe="manual",
         neutralization=None,
         research_kind="strategy_backtest",
-        strategy=DirectStrategyRunInput(
-            program_json=canonical_json_bytes(definition["strategy"]["program"]),
-            environment_json=canonical_json_bytes(definition["strategy"]["environment"]),
-            initial_cash_cny="100000",
-            **definition["costs"],
-        ),
+        strategy=strategy,
         research_start_session=SESSIONS[0],
         research_end_session=SESSIONS[-1],
     )
@@ -284,6 +310,23 @@ def test_direct_columnar_chunks_match_the_public_run_without_alpha_computation()
         )
         assert state["alpha_checksum"] is None
         assert state["pending_alpha"] == []
+        if mode == "framework" and end == 2:
+            for name, value in (
+                ("created_session", "2099-01-01"),
+                ("created_session", "not-a-session"),
+                ("created_session_number", 3),
+                ("valid_for_sessions", 1),
+            ):
+                corrupted = deepcopy(state)
+                corrupted["strategy_state"]["decision_state"]["signals"][0][name] = value
+                with pytest.raises(ValueError, match="continuation is invalid"):
+                    validated_research_continuation(corrupted, research_kind="strategy_backtest")
+            corrupted = deepcopy(state)
+            corrupted["strategy_state"]["decision_state"]["module_states"]["alpha"] = {
+                "oversized": "x" * (300 * 1024),
+            }
+            with pytest.raises(ValueError, match="continuation is invalid"):
+                validated_research_continuation(corrupted, research_kind="strategy_backtest")
         observations.extend(chunk.strategy_daily_observations)
     expected = build_result_payload(
         run(run_input.with_research_data(data)),

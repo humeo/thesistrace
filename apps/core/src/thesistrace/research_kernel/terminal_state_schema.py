@@ -2,19 +2,23 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
+from datetime import date
 from fractions import Fraction
 from math import isfinite, lcm
 from typing import Annotated, Literal
 
 from pydantic import (
+    AfterValidator,
     BaseModel,
     ConfigDict,
+    Discriminator,
     Field,
     JsonValue,
     StrictBool,
     StrictFloat,
     StrictInt,
     StrictStr,
+    Tag,
     TypeAdapter,
     model_validator,
 )
@@ -57,11 +61,24 @@ class TargetSelection(TerminalStateModel):
         return self
 
 
-class FrameworkDecisionState(TerminalStateModel):
-    mode: Literal["framework"]
+class BuiltinPortfolioState(TerminalStateModel):
     selection: TargetSelection
-    selection_interval: Annotated[StrictInt, Field(ge=1, le=20)]
     exposure: StrictFloat = Field(ge=0, le=1, allow_inf_nan=False)
+
+    def validate_selection_boundary(self, *, session: str, contract_checksum: str) -> None:
+        if self.selection.signal_session > session:
+            raise ValueError("Retained Selection cannot come from the future")
+        if self.selection.contract_checksum != contract_checksum:
+            raise ValueError("Retained Selection differs from the Strategy contract")
+
+
+class FrameworkDecisionState(BuiltinPortfolioState):
+    mode: Literal["framework"]
+    selection_interval: Annotated[StrictInt, Field(ge=1, le=20)]
+
+    @property
+    def contract_checksum(self) -> str:
+        return self.selection.contract_checksum
 
 
 class DirectDecisionState(TerminalStateModel):
@@ -73,13 +90,6 @@ class DirectDecisionState(TerminalStateModel):
     def explicit_state_is_bounded(self):
         encode_program_json(self.state, STATE_BYTES, "state")
         return self
-
-
-type DecisionState = Annotated[
-    FrameworkDecisionState | DirectDecisionState, Field(discriminator="mode"),
-]
-
-DECISION_STATE_ADAPTER = TypeAdapter(DecisionState)
 
 
 def _validate_target_weights(selected: list[str], weights: dict[str, str]) -> None:
@@ -148,6 +158,93 @@ class PendingTarget(TerminalStateModel):
         return frozenset(self.position_limits) | (
             frozenset(self.allocation.instrument_ids) if self.allocation else frozenset()
         )
+
+
+FRAMEWORK_STATE_BYTES = 3 * 1024 * 1024
+
+
+def _signal_session(value: str) -> str:
+    if date.fromisoformat(value).isoformat() != value:
+        raise ValueError("Signal creation Session must use YYYY-MM-DD")
+    return value
+
+
+class ActiveStrategySignal(TerminalStateModel):
+    instrument_id: StrictStr
+    value: StrictFloat = Field(allow_inf_nan=False)
+    created_session: Annotated[StrictStr, AfterValidator(_signal_session)]
+    created_session_number: Annotated[StrictInt, Field(ge=1)]
+    valid_for_sessions: Annotated[StrictInt, Field(ge=1, le=252)]
+
+
+class FrameworkModulesDecisionState(TerminalStateModel):
+    mode: Literal["framework"]
+    contract_checksum: Annotated[StrictStr, Field(pattern=r"^[0-9a-f]{64}$")]
+    selection_interval: Annotated[StrictInt, Field(ge=1, le=20)] | None
+    module_states: dict[StrictStr, dict[str, JsonValue]]
+    universe: list[StrictStr] = Field(max_length=3000)
+    signals: list[ActiveStrategySignal] = Field(max_length=3000)
+    retained_proposal: PendingTarget | None
+
+    @model_validator(mode="after")
+    def explicit_state_is_valid(self):
+        if set(self.module_states) != {
+            "universe_selection", "alpha", "portfolio_construction", "risk_management",
+        }:
+            raise ValueError("Framework state requires all four module states")
+        signal_ids = [signal.instrument_id for signal in self.signals]
+        if (len(self.universe) != len(set(self.universe))
+                or len(signal_ids) != len(set(signal_ids))
+                or not set(signal_ids) <= set(self.universe)):
+            raise ValueError("Framework Universe and signals must be unique and aligned")
+        if (self.retained_proposal is not None
+                and self.retained_proposal.contract_checksum != self.contract_checksum):
+            raise ValueError("Retained proposal differs from the Framework contract")
+        portfolio = self.builtin_portfolio
+        if portfolio and portfolio.selection.contract_checksum != self.contract_checksum:
+            raise ValueError("Retained Selection differs from the Strategy contract")
+        for state in self.module_states.values():
+            encode_program_json(state, STATE_BYTES, "module state")
+        encode_program_json(self.model_dump(mode="json"), FRAMEWORK_STATE_BYTES, "Framework state")
+        return self
+
+    @property
+    def builtin_portfolio(self) -> BuiltinPortfolioState | None:
+        return (BuiltinPortfolioState.model_validate(self.module_states["portfolio_construction"])
+                if self.selection_interval is not None else None)
+
+    def validate_boundary(self, *, session: str, completed_sessions: int) -> None:
+        portfolio = self.builtin_portfolio
+        if portfolio is not None:
+            portfolio.validate_selection_boundary(
+                session=session, contract_checksum=self.contract_checksum,
+            )
+        if any(
+            signal.created_session > session
+            or signal.created_session_number > completed_sessions
+            or signal.created_session_number + signal.valid_for_sessions <= completed_sessions
+            for signal in self.signals
+        ):
+            raise ValueError("Framework signals do not match the completed Session boundary")
+        if self.retained_proposal and self.retained_proposal.decision_session > session:
+            raise ValueError("Retained proposal cannot come from the future")
+
+
+def _decision_state_discriminator(value: object) -> str | None:
+    read = value.get if isinstance(value, dict) else lambda name: getattr(value, name, None)
+    if read("mode") == "framework":
+        return "framework_modules" if read("module_states") is not None else "framework_builtin"
+    return read("mode")
+
+
+type DecisionState = Annotated[
+    Annotated[FrameworkDecisionState, Tag("framework_builtin")]
+    | Annotated[FrameworkModulesDecisionState, Tag("framework_modules")]
+    | Annotated[DirectDecisionState, Tag("direct")],
+    Discriminator(_decision_state_discriminator),
+]
+
+DECISION_STATE_ADAPTER = TypeAdapter(DecisionState)
 
 
 class ValuationEvent(TerminalStateModel):
@@ -265,12 +362,16 @@ class TerminalStrategyStateValue(TerminalStateModel):
 
     @model_validator(mode="after")
     def continuation_sessions_must_match_boundary(self) -> TerminalStrategyStateValue:
-        if self.decision_state.mode == "framework":
-            selection = self.decision_state.selection
-            if selection.signal_session > self.session:
-                raise ValueError("Retained Selection cannot come from the future")
-            if selection.contract_checksum != self.contract_checksum:
-                raise ValueError("Retained Selection differs from the Strategy contract")
+        if isinstance(self.decision_state, FrameworkDecisionState):
+            self.decision_state.validate_selection_boundary(
+                session=self.session, contract_checksum=self.contract_checksum,
+            )
+        if isinstance(self.decision_state, FrameworkModulesDecisionState):
+            if self.decision_state.contract_checksum != self.contract_checksum:
+                raise ValueError("Framework modules differ from the Strategy contract")
+            self.decision_state.validate_boundary(
+                session=self.session, completed_sessions=self.research_phase.report_session_count,
+            )
         if self.pending_target is not None and (
             self.pending_target.contract_checksum != self.contract_checksum
         ):

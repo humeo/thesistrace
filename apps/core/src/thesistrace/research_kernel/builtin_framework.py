@@ -10,7 +10,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 
-from thesistrace.research_kernel.exposure import require_exposure_value
+from thesistrace.research_kernel.common_inputs import CLOSE_FIELD_ID
+from thesistrace.research_kernel.exposure import evaluate_exposure_series, require_exposure_value
 from thesistrace.research_kernel.portfolio_weighting import (
     PortfolioWeighting,
     inverse_volatility_selection,
@@ -18,10 +19,12 @@ from thesistrace.research_kernel.portfolio_weighting import (
 )
 from thesistrace.research_kernel.serialization import canonical_json_bytes
 from thesistrace.research_kernel.terminal_state_schema import (
+    BuiltinPortfolioState,
     PendingTarget,
     TargetAllocation,
     TargetSelection,
 )
+from thesistrace.research_series import ColumnarResearchSeries
 
 BUILTIN_FRAMEWORK_MODULES = MappingProxyType({
     "universe_selection": "dataset_universe/v1",
@@ -32,14 +35,8 @@ BUILTIN_FRAMEWORK_MODULES = MappingProxyType({
 
 
 @dataclass(frozen=True)
-class BuiltinFrameworkState:
-    selection: TargetSelection
-    exposure: float
-
-
-@dataclass(frozen=True)
 class BuiltinFrameworkDecision:
-    state: BuiltinFrameworkState
+    state: BuiltinPortfolioState
     target: PendingTarget | None
     diagnostics: tuple[dict[str, object], ...]
 
@@ -64,7 +61,7 @@ class BuiltinFramework:
         alpha_values: Sequence[Mapping[str, object]],
         close_windows: Mapping[str, Sequence[object]],
         exposure_value: object,
-        previous: BuiltinFrameworkState | None,
+        previous: BuiltinPortfolioState | None,
     ) -> BuiltinFrameworkDecision:
         exposure = require_exposure_value(exposure_value, session)
         selection_updated = report_index % self.selection_interval == 0
@@ -117,7 +114,62 @@ class BuiltinFramework:
                 position_limits={},
             )
         return BuiltinFrameworkDecision(
-            state=BuiltinFrameworkState(selection=selection, exposure=exposure),
+            state=BuiltinPortfolioState(selection=selection, exposure=exposure),
             target=target,
             diagnostics=diagnostics,
+        )
+
+
+def alpha_values_by_session(alpha_matrix):
+    if alpha_matrix is None:
+        return None
+    value_store = alpha_matrix.get("value_store")
+    return value_store if isinstance(value_store, Mapping) else {
+        str(item["session"]): item["values"] for item in alpha_matrix["sessions"]
+    }
+
+
+class PreparedBuiltinPortfolio:
+    """The same periodic policy for form-authored and mixed Framework modules."""
+
+    def __init__(self, data, strategy, checksum, *, observe_common=None):
+        self._data = data
+        self.policy = BuiltinFramework(
+            holdings_count=int(strategy["holdings_count"]),
+            selection_interval=int(strategy["selection_interval"]),
+            weighting=strategy["weighting"], volatility_window=int(strategy["volatility_window"]),
+            contract_checksum=checksum,
+        )
+        self._exposures = evaluate_exposure_series(
+            data, strategy["exposure_expression"], observe_common=observe_common,
+        )
+        self._closes = None
+        if strategy["weighting"] == "inverse_volatility":
+            instruments = tuple(sorted(data.instruments))
+            if isinstance(data, ColumnarResearchSeries):
+                matrix = data.numeric_field_matrices((CLOSE_FIELD_ID,), instruments)[CLOSE_FIELD_ID]
+                self._closes = dict(zip(instruments, matrix, strict=True))
+            else:
+                field = data.fields[CLOSE_FIELD_ID]
+                self._closes = {item: [field.get((session, item)) for session in data.sessions]
+                                for item in instruments}
+
+    def decide(self, *, session, report_index, alpha_values, previous):
+        state = None
+        if previous:
+            selection = TargetSelection.model_validate(previous["selection"])
+            if selection.contract_checksum != self.policy.contract_checksum:
+                raise ValueError("Retained Selection differs from Strategy contract")
+            state = BuiltinPortfolioState(
+                selection=selection, exposure=require_exposure_value(previous["exposure"], session),
+            )
+        end = self._data.sessions.index(session) + 1
+        close_windows = {} if self._closes is None else {
+            str(item["instrument_id"]): self._closes[str(item["instrument_id"])][
+                max(0, end - self.policy.volatility_window - 1):end
+            ] for item in alpha_values
+        }
+        return self.policy.decide(
+            session=session, report_index=report_index, alpha_values=alpha_values,
+            close_windows=close_windows, exposure_value=self._exposures[session], previous=state,
         )

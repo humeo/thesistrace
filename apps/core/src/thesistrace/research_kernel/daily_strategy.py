@@ -1,35 +1,24 @@
 """Prepare one daily decision policy for the shared execution account."""
 
 import hashlib
-from collections.abc import Mapping
-from dataclasses import dataclass
 
 from thesistrace.research_kernel.builtin_framework import (
     BUILTIN_FRAMEWORK_MODULES,
-    BuiltinFramework,
-    BuiltinFrameworkState,
+    PreparedBuiltinPortfolio,
+    alpha_values_by_session,
 )
-from thesistrace.research_kernel.common_inputs import CLOSE_FIELD_ID
 from thesistrace.research_kernel.direct_strategy import (
     DirectStrategy,
     PythonProgram,
     program_context,
 )
-from thesistrace.research_kernel.exposure import evaluate_exposure_series, require_exposure_value
+from thesistrace.research_kernel.framework_strategy import FrameworkStrategy
 from thesistrace.research_kernel.serialization import canonical_json_bytes
+from thesistrace.research_kernel.strategy_decision import DailyDecision
 from thesistrace.research_kernel.strategy_program_runtime import (
     StrategyProgramError,
     get_strategy_runtime,
 )
-from thesistrace.research_kernel.terminal_state_schema import PendingTarget, TargetSelection
-from thesistrace.research_series import ColumnarResearchSeries
-
-
-@dataclass(frozen=True)
-class DailyDecision:
-    state: dict[str, object]
-    target: PendingTarget | None
-    diagnostics: tuple[dict[str, object], ...]
 
 
 def prepare_daily_strategy(research_data, alpha_matrix, definition, *, observe_common=None):
@@ -41,6 +30,10 @@ def prepare_daily_strategy(research_data, alpha_matrix, definition, *, observe_c
         )
     if strategy["mode"] == "direct":
         return _DirectDailyStrategy(research_data, strategy, checksum)
+    if strategy["mode"] == "framework":
+        return FrameworkStrategy(
+            research_data, alpha_matrix, strategy, checksum, observe_common=observe_common,
+        )
     raise ValueError("Unsupported Strategy implementation")
 
 
@@ -48,58 +41,25 @@ class _BuiltinDailyStrategy:
     def __init__(self, data, alpha_matrix, strategy, checksum, observe_common):
         if alpha_matrix is None:
             raise ValueError("Builtin Framework requires an Alpha matrix")
-        self._data = data
-        value_store = alpha_matrix.get("value_store")
-        self._alpha = (value_store if isinstance(value_store, Mapping) else {
-            str(item["session"]): item["values"] for item in alpha_matrix["sessions"]
-        })
-        self._framework = BuiltinFramework(
-            holdings_count=int(strategy["holdings_count"]),
-            selection_interval=int(strategy["selection_interval"]),
-            weighting=strategy["weighting"], volatility_window=int(strategy["volatility_window"]),
-            contract_checksum=checksum,
+        self._alpha = alpha_values_by_session(alpha_matrix)
+        self._portfolio = PreparedBuiltinPortfolio(
+            data, strategy, checksum, observe_common=observe_common,
         )
-        self._exposures = evaluate_exposure_series(
-            data, strategy["exposure_expression"], observe_common=observe_common,
-        )
-        self._closes = None
-        if strategy["weighting"] == "inverse_volatility":
-            instruments = tuple(sorted(data.instruments))
-            if isinstance(data, ColumnarResearchSeries):
-                matrix = data.numeric_field_matrices((CLOSE_FIELD_ID,), instruments)[CLOSE_FIELD_ID]
-                self._closes = dict(zip(instruments, matrix, strict=True))
-            else:
-                field = data.fields[CLOSE_FIELD_ID]
-                self._closes = {item: [field.get((session, item)) for session in data.sessions]
-                                for item in instruments}
 
     def decide(self, *, session, report_index, account, fills, rejections, previous):
         del account, fills, rejections
-        state = None
         if previous is not None:
             if (set(previous) != {"mode", "selection", "exposure", "selection_interval"}
                     or previous["mode"] != "framework"
-                    or previous["selection_interval"] != self._framework.selection_interval):
+                    or previous["selection_interval"] != self._portfolio.policy.selection_interval):
                 raise ValueError("Framework state does not match the active mode")
-            selection = TargetSelection.model_validate(previous["selection"])
-            if selection.contract_checksum != self._framework.contract_checksum:
-                raise ValueError("Retained Selection differs from Strategy contract")
-            state = BuiltinFrameworkState(
-                selection, require_exposure_value(previous["exposure"], session),
-            )
-        end = self._data.sessions.index(session) + 1
-        close_windows = {} if self._closes is None else {
-            str(item["instrument_id"]): self._closes[str(item["instrument_id"])][
-                max(0, end - self._framework.volatility_window - 1):end
-            ] for item in self._alpha[session]
-        }
-        result = self._framework.decide(
+        result = self._portfolio.decide(
             session=session, report_index=report_index, alpha_values=self._alpha[session],
-            close_windows=close_windows, exposure_value=self._exposures[session], previous=state,
+            previous=previous,
         )
         return DailyDecision(
             state={"mode": "framework", "selection": result.state.selection.model_dump(mode="json"),
-                   "selection_interval": self._framework.selection_interval,
+                   "selection_interval": self._portfolio.policy.selection_interval,
                    "exposure": result.state.exposure},
             target=result.target, diagnostics=result.diagnostics,
         )

@@ -35,7 +35,11 @@ from thesistrace.research_kernel.strategy import (
     strategy_metrics_from_state,
 )
 from thesistrace.research_kernel.strategy_events import strategy_event_rows
-from thesistrace.research_kernel.terminal_state_schema import DECISION_STATE_ADAPTER, PendingTarget
+from thesistrace.research_kernel.terminal_state_schema import (
+    DECISION_STATE_ADAPTER,
+    FrameworkModulesDecisionState,
+    PendingTarget,
+)
 from thesistrace.research_series import ColumnarResearchSeries
 
 _STATISTIC_NAMES = (
@@ -647,6 +651,7 @@ def _execute_strategy_chunk_from_validated_alpha_factor(
     prior_daily_count = 0
     if prior_strategy is not None:
         strategy_continuation = _mapping(prior_strategy, "Strategy continuation")
+        run_input.validate_strategy_continuation(strategy_continuation)
         prior_daily = strategy_continuation.get("daily")
         if not isinstance(prior_daily, list) or len(prior_daily) != 1:
             raise ValueError("Strategy continuation is not bounded")
@@ -815,9 +820,9 @@ def _execute_alpha_factor_chunk_from_validated(
     if any(session not in calendar for session in research_sessions):
         raise ValueError("Research Chunk sessions are outside its data slice")
     cancellation_check()
-    if run_input.is_direct:
+    if not run_input.has_alpha:
         if state["alpha_checksum"] is not None or state["pending_alpha"]:
-            raise ValueError("Direct continuation cannot contain Alpha computation")
+            raise ValueError("Program-only continuation cannot contain Alpha computation")
         state["completed_research_session_count"] += len(research_sessions)
         state["rolling_tail_sessions"] = list(calendar[-max(run_input.effective_lookback, 2):])
         return AlphaFactorChunkOutcome._from_validated(
@@ -1427,8 +1432,12 @@ def _validated_bounded_strategy_state(state: dict[str, object]) -> dict[str, obj
         if (not isinstance(checksum, str) or len(checksum) != 64
                 or any(char not in "0123456789abcdef" for char in checksum)):
             raise ValueError("Strategy continuation contract is invalid")
-        if decision.mode == "framework" and decision.selection.contract_checksum != checksum:
+        if decision.mode == "framework" and decision.contract_checksum != checksum:
             raise ValueError("Strategy continuation Selection contract is invalid")
+        if isinstance(decision, FrameworkModulesDecisionState):
+            decision.validate_boundary(
+                session=last_daily["session"], completed_sessions=report_session_count,
+            )
         if state["pending_target"] is not None:
             pending = PendingTarget.model_validate(state["pending_target"])
             if pending.contract_checksum != checksum:

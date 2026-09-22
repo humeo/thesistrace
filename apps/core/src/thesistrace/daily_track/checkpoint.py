@@ -46,7 +46,8 @@ def project_tracking_checkpoint(
     run_input = state.run_input_with_research_data(state.research_data_snapshot())
     strategy_input = _strategy_input(run_input)
     output = state.output_snapshot()
-    alpha = None if run_input.is_direct else _mapping(output.get("alpha_matrix"), "Alpha Matrix")
+    alpha = (_mapping(output.get("alpha_matrix"), "Alpha Matrix")
+             if run_input.has_alpha else None)
     strategy = _mapping(output.get("strategy_backtest"), "Strategy Backtest")
     continuation = continuation_snapshot(state)
     continuation_bytes = canonical_json_bytes(continuation)
@@ -110,7 +111,9 @@ def restore_tracking_checkpoint(
     if not sessions or sessions[-1] != str(value["boundary_session"]):
         raise KernelRunError("DailyTrack Checkpoint boundary does not match Research Data")
     strategy_state = _mapping(value.get("strategy_state"), "Strategy state")
-    terminal = _mapping(strategy_state.get("terminal"), "Terminal Strategy State")
+    terminal = TerminalStrategyStateValue.model_validate(
+        _mapping(strategy_state.get("terminal"), "Terminal Strategy State"),
+    ).model_dump(mode="json", exclude_unset=True)
     resume_observation = _mapping(
         terminal.get("last_daily_observation"),
         "Strategy continuation observation",
@@ -130,7 +133,7 @@ def restore_tracking_checkpoint(
     return KernelState(
         run_input=run_input,
         output={
-            **({} if run_input.is_direct else {"alpha_matrix": {
+            **({} if not run_input.has_alpha else {"alpha_matrix": {
                 **dict(_mapping(value.get("alpha_state"), "Alpha state")),
                 "sessions": [],
             }}),
@@ -180,7 +183,7 @@ def restore_tracking_origin(
     return KernelState(
         run_input=run_input,
         output={
-            **({} if run_input.is_direct else {"alpha_matrix": {
+            **({} if not run_input.has_alpha else {"alpha_matrix": {
                 "expression": run_input.alpha_expression_snapshot(),
                 "effective_lookback": run_input.alpha_execution_plan().effective_lookback,
                 "neutralization": run_input.neutralization,

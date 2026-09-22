@@ -48,7 +48,7 @@ def advance_tracking(
         raise KernelRunError("Tracking calculation requires columnar input")
     restored = _with_continuation(prior.output_snapshot(), value.continuation_snapshot())
     run_input = prior.run_input_with_research_data(data)
-    matrix = None if run_input.is_direct else _tracking_delta(
+    matrix = None if not run_input.has_alpha else _tracking_delta(
         run_input, data, restored, appended,
     )
     exposure_observations = {}
@@ -82,7 +82,7 @@ def advance_tracking_continuation(
     """Rebuild transient tracking state with the same delta calculation as warm Advance."""
     if not isinstance(target_research_data, ColumnarResearchSeries):
         raise KernelRunError("Tracking calculation requires columnar input")
-    if run_input.is_direct:
+    if not run_input.has_alpha:
         _with_continuation({}, prior_continuation)
         return empty_continuation()
     restored = _with_continuation(

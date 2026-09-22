@@ -15,6 +15,7 @@ from pydantic import (
     model_validator,
 )
 
+from thesistrace.research_kernel.strategy_decision import program_target
 from thesistrace.research_kernel.strategy_program_runtime import (
     INPUT_BYTES,
     PARAMETER_BYTES,
@@ -157,27 +158,10 @@ class DirectStrategy:
             self._program.source, context=context, state=previous,
             parameters=self._program.parameters,
         )
-        target = None
-        if result.output is not None:
-            try:
-                if (type(result.output) is not dict
-                        or set(result.output) != {"reason", "allocation", "position_limits"}):
-                    raise ValueError("Direct output requires reason, allocation, position_limits")
-                target = PendingTarget.model_validate({
-                    **result.output, "decision_session": context["session"],
-                    "execution": "next_research_session_open",
-                    "contract_checksum": self._contract_checksum,
-                })
-                holdings = {item["instrument_id"]: item["execution_shares"]
-                            for item in context["account"]["positions"]}
-                visible = set(holdings) | {item["instrument_id"] for item in context["candidates"]}
-                if not target.instrument_ids <= visible:
-                    raise ValueError("Direct target contains an unknown or unavailable instrument")
-                if any(item not in holdings or maximum > holdings[item]
-                       for item, maximum in target.position_limits.items()):
-                    raise ValueError("Direct local target must reduce an actual holding")
-            except ValueError as error:
-                raise StrategyProgramError(
-                    str(error), source=self._program.source, session=context["session"],
-                ) from error
+        try:
+            target = program_target(result.output, context, self._contract_checksum)
+        except ValueError as error:
+            raise StrategyProgramError(
+                str(error), source=self._program.source, session=context["session"],
+            ) from error
         return DirectDecision(state=result.state, target=target, diagnostics=result.diagnostics)

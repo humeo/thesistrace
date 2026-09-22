@@ -115,7 +115,7 @@ def advance(advance_input: AdvanceInput) -> KernelState:
             new_sessions[-1] if advance_input.calculation_scope == "research_period" else None
         ),
     )
-    matrix = None if run_input.is_direct else _advance_alpha(
+    matrix = None if not run_input.has_alpha else _advance_alpha(
         run_input,
         research_data,
         _mapping(prior_output.get("alpha_matrix"), "prior Alpha Matrix"),
@@ -185,7 +185,7 @@ def advance_continuation(
     appended_sessions: list[str],
 ) -> dict[str, object]:
     """Advance only the bounded transient Alpha working state."""
-    if run_input.is_direct:
+    if not run_input.has_alpha:
         _with_continuation({}, prior_continuation)
         return empty_continuation()
     effective_lookback = run_input.alpha_execution_plan().effective_lookback
