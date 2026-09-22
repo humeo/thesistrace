@@ -15,7 +15,9 @@ import {
   loadResearchDraft,
   persistResearchDraft,
   researchDraftKey,
+  researchInputs,
   selectResearchKind,
+  selectStrategyMode,
   useResearchAsDraft,
 } from "./draft";
 import {
@@ -23,6 +25,15 @@ import {
   ResearchFolderNavigation,
 } from "./ResearchWorkspacePage";
 import { buildResearchDatePresets } from "./dateRange";
+import { parseProgramParameters } from "./pythonStrategy";
+
+describe("Python parameter JSON", () => {
+  it.each(['{"threshold": 1e999}', '{"x": 9007199254740992}', '{"x": "\\ud800"}',
+    '{"x": ' + '['.repeat(33) + '0' + ']'.repeat(33) + '}'])
+  ("rejects %s before serialization can change its meaning", source => {
+    expect(() => parseProgramParameters(source)).toThrow();
+  });
+});
 
 class MemoryStorage implements Storage {
   private readonly values = new Map<string, string>();
@@ -477,9 +488,7 @@ describe("browser Research Draft", () => {
     expect(hasUnexecutedChanges(emptyResearchDraft())).toBe(false);
     expect(hasUnexecutedChanges({ ...emptyResearchDraft(), formula: "close" })).toBe(true);
     const admitted = { ...emptyResearchDraft(), formula: "close" };
-    expect(hasUnexecutedChanges({ ...admitted, lastAdmittedBaseline: {
-      researchKind: "factor_evaluation", strategyMode: "framework", name: "", formula: "close", hypothesis: "", startDate: "", endDate: "", universe: "", neutralization: "none", initialCashCny: "", holdingsCount: "", selectionEverySessions: "", exposureExpression: "1", weighting: "equal_weight", volatilityWindow: "20",
-    } })).toBe(false);
+    expect(hasUnexecutedChanges({ ...admitted, lastAdmittedBaseline: researchInputs(admitted) })).toBe(false);
   });
 
   it("renders the DSL as the only Alpha surface without server-edit controls", () => {
@@ -681,4 +690,72 @@ it("restores a frozen Exposure source exactly when reusing a Run as a draft", ()
   expect(restored.exposureExpression).toBe("7 / 10");
   expect(beginResearchRun(restored, "folder_default", () => "reuse").command)
     .toMatchObject({ exposure_expression: "7 / 10" });
+});
+
+
+describe("Direct Python authoring", () => {
+  it("reuses and reloads legal parameters whose formatted text exceeds 64 KiB", () => {
+    const parameters = Object.fromEntries(Array.from({ length: 3500 }, (_, i) =>
+      [`key${String(i).padStart(4, "0")}`, "value"]));
+    expect(JSON.stringify(parameters).length).toBeLessThan(65536);
+    const formatted = JSON.stringify(parameters, null, 2);
+    expect(formatted.length).toBeGreaterThan(65536);
+    const draft = { ...selectStrategyMode(selectResearchKind(emptyResearchDraft(), "strategy_backtest"), "direct"),
+      startDate: "2026-08-03", endDate: "2026-08-05", universe: "top300", programParameters: formatted };
+    expect(isCompleteResearchInputs(draft)).toBe(true);
+    const storage = new MemoryStorage();
+    persistResearchDraft(storage, researcherId, folder.id, draft);
+    expect(loadResearchDraft(storage, researcherId, folder.id).programParameters).toBe(formatted);
+    const { command } = beginResearchRun(draft, folder.id, () => "large-parameters");
+    if (command.research_kind !== "strategy_backtest" || command.strategy_mode !== "direct") throw new Error("Direct expected");
+    expect(useResearchAsDraft(storage, researcherId, folder.id, {
+      ...command, universe: "top300",
+    }, () => true)).toBe(true);
+    const restored = loadResearchDraft(storage, researcherId, folder.id);
+    expect(restored.strategyMode).toBe("direct");
+    expect(restored.programSource).toBe(draft.programSource);
+    expect(JSON.parse(restored.programParameters)).toEqual(parameters);
+  });
+
+  it("switches the active strategy, submits only Python, and restores its frozen draft", () => {
+    const framework = { ...selectResearchKind(emptyResearchDraft(), "strategy_backtest"),
+      formula: "close", startDate: "2026-08-03", endDate: "2026-08-05", universe: "top300" };
+    const draft = selectStrategyMode(framework, "direct");
+    expect(draft.formula).toBe("");
+    expect(isCompleteResearchInputs(draft)).toBe(true);
+    const { command } = beginResearchRun(draft, folder.id, () => "direct-one");
+    expect(command).toHaveProperty("strategy_mode", "direct");
+    expect(command).not.toHaveProperty("formula");
+    expect(command).not.toHaveProperty("neutralization");
+    expect(command).not.toHaveProperty("holdings_count");
+    expect(command).not.toHaveProperty("selection_every_sessions");
+    if (command.research_kind !== "strategy_backtest" || command.strategy_mode !== "direct") throw new Error("Direct expected");
+    const storage = new MemoryStorage();
+    expect(useResearchAsDraft(storage, researcherId, folder.id, {
+      ...command, universe: "top300",
+    }, () => true)).toBe(true);
+    const restored = loadResearchDraft(storage, researcherId, folder.id);
+    expect(restored.programSource).toBe(draft.programSource);
+    expect(JSON.parse(restored.programParameters)).toEqual(command.program.parameters);
+    const switched = selectStrategyMode(restored, "framework");
+    expect(switched.programSource).toBe("");
+    expect(switched.programParameters).toBe("");
+    expect(switched.holdingsCount).toBe("10");
+  });
+
+  it("keeps incomplete Python parameters editable and explains the invalid field", () => {
+    const draft = { ...selectStrategyMode(selectResearchKind(emptyResearchDraft(), "strategy_backtest"), "direct"),
+      startDate: "2026-08-03", endDate: "2026-08-05", universe: "top300", programParameters: "{" };
+    const storage = new MemoryStorage();
+    persistResearchDraft(storage, researcherId, folder.id, draft);
+    expect(loadResearchDraft(storage, researcherId, folder.id).programParameters).toBe("{");
+    expect(isCompleteResearchInputs(draft)).toBe(false);
+    const markup = renderToStaticMarkup(<ResearchDraftWorkspace researcherId={researcherId} folder={folder} catalog={catalog} data={data} storage={storage} />);
+    expect(markup).toContain("Python source");
+    expect(markup).toContain("Parameters (JSON)");
+    expect(markup).toContain("Declared fields");
+    expect(markup).not.toContain('id="research-holdings-count"');
+    expect(markup).not.toContain("Alpha formula");
+    expect(markup).not.toContain("Framework · Built-in strategy. Decide");
+  });
 });

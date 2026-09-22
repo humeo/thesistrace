@@ -24,7 +24,7 @@ def test_stdio_raw_frame_reader_is_bounded_before_json_parsing() -> None:
 async def _exercise_bounded_stdio_reader() -> None:
     exact = b"x" * (RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES - 1) + b"\n"
     reader = research_agent_mcp._BoundedStdin(
-        BytesIO(exact + b"private-raw-frame-canary" * 10000)
+        BytesIO(exact + b"private-raw-frame-canary" + b"x" * RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES)
     )
 
     assert await anext(reader) == exact.decode()

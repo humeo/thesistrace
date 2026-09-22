@@ -8,8 +8,8 @@
     "execution_slots_per_worker": 1
   },
   "fixed_limits": {
-    "request_bytes": 131072,
-    "response_bytes": 262144,
+    "request_bytes": 16777216,
+    "response_bytes": 8388608,
     "formula_characters": 4096,
     "calls_per_window": 120,
     "window_seconds": 60,
@@ -21,8 +21,8 @@
     "cursor_characters": 1024
   },
   "deterministic_payloads": {
-    "v1_contract_sha256": "e3eb45319bb4e23752214ee684d74f563e459c5ff087fee83c46184bc0395559",
-    "v1_contract_bytes": 235472,
+    "v1_contract_sha256": "480faf9c8f98774f15418f0a03fe9f127dd63dee46cfb3148398d9838716c04f",
+    "v1_contract_bytes": 246652,
     "maximum_factor_batch_call_bytes": 84536
   },
   "observed": {
@@ -41,6 +41,6 @@
     "transport": "in-process deterministic MCP client",
     "network_access": false,
     "real_model": false,
-    "note": "Deterministic payload hash and size refreshed on 2026-09-22 for explicit Framework authoring identity; observed performance remains the 2026-09-07 measurement. Peak RSS includes the Python interpreter, pytest, plugins, schemas, and fixtures; it is compared conservatively with the current production container envelope. Current pagination and receipt contract; transport and business-page bounds are verified separately."
+    "note": "Deterministic payload hash, size and ingress limits refreshed on 2026-09-22 for Direct Python programs, twenty-item batches and explicit state. Observed performance below remains the prior 2026-09-07 measurement and does not qualify the increased limits. The new maximum Python payload has a separate regression in test_research_agent_mcp_contract.py. Business-page bounds and transport bounds are verified separately."
   }
 }

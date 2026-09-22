@@ -80,12 +80,33 @@ const STRATEGY_RUN: ResearchRun = {
 };
 
 describe("ResearchRunFacts", () => {
+  it("shows frozen Direct code and parameters without Framework settings", () => {
+    const markup = renderToStaticMarkup(<ResearchRunFacts run={{
+      ...STRATEGY_RUN, input: {
+        research_kind: "strategy_backtest", strategy_mode: "direct",
+        hypothesis: null, start_date: "2026-08-01", end_date: "2026-08-05",
+        universe: "top300", initial_cash_cny: "100000",
+        program: { source: "def decide(context, state, parameters): pass",
+          parameters: { improvement: 0.02 }, data_requirements: {
+            field_ids: ["price.close.adjusted"], history_sessions: 6,
+          } },
+      },
+    }} />);
+    expect(markup).toContain("Direct · Python");
+    expect(markup).toContain("def decide(context, state, parameters): pass");
+    expect(markup).toContain("improvement");
+    expect(markup).toContain("price.close.adjusted");
+    expect(markup).not.toContain("Framework");
+    expect(markup).not.toContain("<strong>Formula</strong>");
+    expect(markup).not.toContain("Neutralization");
+    expect(markup).not.toContain("Holdings count");
+  });
   it.each([
     ["equal_weight", "Equal weight"], ["rank_weight", "Rank weight"],
     ["inverse_volatility", "Inverse volatility"],
   ] as const)("shows one accurate frozen %s weighting", (weighting, label) => {
     const input = STRATEGY_RUN.input;
-    if (input?.research_kind !== "strategy_backtest") throw new Error("Invalid Strategy fixture");
+    if (input?.research_kind !== "strategy_backtest" || input.strategy_mode !== "framework") throw new Error("Invalid Strategy fixture");
     const markup = renderToStaticMarkup(<ResearchRunFacts run={{
       ...STRATEGY_RUN, input: { ...input, weighting },
     }} />);
@@ -270,14 +291,12 @@ const TERMINAL_STATE: TerminalStrategyState = {
       last_adjusted_price: "10.01",
     },
   ],
-  selection_phase: {
+  research_phase: {
     origin_session: "2026-08-03",
     report_session_count: 3,
-    selection_interval: 1,
-    completed_intervals: 2,
   },
-  target_selection: { signal_session: "2026-08-05", eligibility_exclusions: {} },
-  target_exposure: 1,
+  decision_state: { mode: "framework", selection: { signal_session: "2026-08-05", eligibility_exclusions: {} }, selection_interval: 1, exposure: 1 },
+  contract_checksum: "contract",
   pending_target: {
     decision_session: "2026-08-05", reason: "selection", contract_checksum: "contract",
     allocation: { mode: "rebalance", instrument_ids: ["cn.stock.000001"], relative_weights: { "cn.stock.000001": "1" }, exposure: 1 },
@@ -360,7 +379,7 @@ describe("ResearchResultView", () => {
       },
       terminal_strategy_state: TERMINAL_STATE,
       provenance: {
-        schema_version: "research-result-v2",
+        schema_version: "research-result-v3",
         research_run_id: "run_test",
         immutable_input_sha256: "a".repeat(64),
         calculation_contracts: {},
@@ -600,7 +619,7 @@ const FACTOR_RESULT = {
     }>,
   },
   provenance: {
-    schema_version: "research-result-v2",
+    schema_version: "research-result-v3",
     research_run_id: "run_factor",
     immutable_input_sha256: "a".repeat(64),
     calculation_contracts: {},

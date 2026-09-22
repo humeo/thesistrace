@@ -3541,6 +3541,16 @@ select { color-scheme: dark; }
 .research-inline-settings .run-configuration-grid { align-items: start; }
 .research-notes textarea { min-height: 72px; }
 
+.research-strategy-mode { display: grid; gap: 7px; max-width: 320px; margin-top: 16px; font-size: 12px; }
+.python-program-source { display: block; width: 100%; min-height: 280px; padding: 16px; resize: vertical; border: 0; border-radius: 0; background: var(--canvas); color: var(--ink); font: 13px/1.55 var(--mono); tab-size: 4; white-space: pre; }
+.python-program-settings { margin-top: 16px; align-items: start; }
+.python-program-settings textarea { font: 13px/1.55 var(--mono); resize: vertical; }
+.python-program-settings small, .python-program-contract p { color: var(--ink-muted); font-size: 12px; }
+.python-program-contract code { overflow-wrap: anywhere; }
+.research-run-fact-program { grid-column: 1 / -1; min-width: 0; overflow-wrap: anywhere; }
+.research-run-fact-program summary { cursor: pointer; }
+.research-run-fact-program pre { max-height: 400px; overflow: auto; padding: 12px; background: var(--canvas); border: 1px solid var(--line); font: 13px/1.55 var(--mono); }
+
 .research-parameter-field { position: relative; display: grid; gap: 7px; min-width: 0; font-size: 12px; }
 .research-parameter-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 28px; }
 .research-exposure-expression { position: relative; }

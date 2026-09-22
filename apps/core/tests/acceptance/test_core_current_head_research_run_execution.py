@@ -4319,7 +4319,7 @@ def test_attempt_keeps_its_pinned_generation_when_head_moves(tmp_path: Path) -> 
         expected = build_result_payload(
             run(_kernel_input(canonical_a, sessions=sessions)),
             research_kind="strategy_backtest",
-            selection_interval=1,
+
         )
         assert actual == expected
         assert stored["active_pin_count"] == 0
@@ -4828,7 +4828,7 @@ def test_short_attempt_publishes_exact_period_and_complete_terminal_state(
             terminal = result["terminal_strategy_state"]
             assert terminal["session"] == sessions[-1]
             assert terminal["last_daily_observation"]["session"] == sessions[-1]
-            assert terminal["selection_phase"]["report_session_count"] == session_count
+            assert terminal["research_phase"]["report_session_count"] == session_count
             assert terminal["metric_state"]["session_count"] == session_count
             assert isinstance(terminal["positions"], list)
         assert stored["active_pin_count"] == 0
@@ -6083,7 +6083,7 @@ def _reference_result(
             )
         ),
         research_kind=immutable.research_kind,
-        selection_interval=None if strategy is None else int(strategy["selection_every_sessions"]),
+
     )
 
 

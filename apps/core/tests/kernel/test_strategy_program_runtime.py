@@ -9,6 +9,8 @@ from thesistrace.research_kernel.strategy_program_runtime import (
     StrategyProgramError,
 )
 
+pytestmark = pytest.mark.bounded_process
+
 
 def test_python_strategy_returns_explicit_state_in_a_fresh_guest():
     runtime = PythonStrategyRuntime()
@@ -38,6 +40,52 @@ def decide(context, state, parameters):
     assert second.state == {
         "days": 2, "counter": 1, "session": "2026-08-04", "label": "test",
     }
+
+
+def test_trusted_bootstrap_does_not_consume_the_user_program_wall_budget(monkeypatch):
+    from thesistrace.research_kernel import strategy_program_runtime as execution
+
+    runtime = PythonStrategyRuntime()
+    clock = [0]
+
+    class StartupPauseTimer:
+        def __init__(self, interval, callback):
+            self.deadline = clock[0] + interval
+            self.callback = callback
+
+        def start(self):
+            # Pause before the guest starts, deterministically charging four
+            # seconds to its initial deadline, irrespective of host performance.
+            if clock[0] == 0:
+                clock[0] = 4
+            if clock[0] >= self.deadline:
+                self.callback()
+
+        def cancel(self):
+            pass
+
+        def join(self):
+            pass
+
+    monkeypatch.setattr(execution.threading, "Timer", StartupPauseTimer)
+    result = runtime.invoke(
+        "def decide(context, state, parameters):\n"
+        "    return {'output': None, 'state': {'ok': True}}",
+        context={"session": "2026-08-03"}, state={}, parameters={},
+    )
+    assert result.state == {"ok": True}
+
+
+def test_bootstrap_deadline_is_bounded_and_does_not_poison_the_next_invocation(monkeypatch):
+    from thesistrace.research_kernel import strategy_program_runtime as execution
+
+    runtime = PythonStrategyRuntime()
+    source = "def decide(context, state, parameters):\n    return {'output': None, 'state': {}}"
+    with monkeypatch.context() as limits:
+        limits.setattr(execution, "BOOTSTRAP_WALL_SECONDS", 0.001)
+        with pytest.raises(StrategyProgramError, match="bootstrap exceeded its wall time"):
+            runtime.invoke(source, context={}, state={}, parameters={})
+    assert runtime.invoke(source, context={}, state={}, parameters={}).state == {}
 
 
 def test_simulated_clock_and_randomness_repeat_in_another_runtime():
@@ -90,6 +138,11 @@ def decide(context, state, parameters):
         observed["write"] = "allowed"
     except OSError:
         observed["write"] = "denied"
+    try:
+        os.write(3, b'thesistrace-python-ready/v1')
+        observed["restart_deadline"] = "allowed"
+    except OSError:
+        observed["restart_deadline"] = "denied"
     observed["environment"] = dict(os.environ)
     return {"output": observed, "state": {}}
 """
@@ -99,6 +152,7 @@ def decide(context, state, parameters):
     )
     assert {path: result.output[path] for path in paths} == dict.fromkeys(paths, "denied")
     assert result.output["write"] == "denied"
+    assert result.output["restart_deadline"] == "denied"
     assert all(result.output[name] == "unavailable" for name in ("socket", "subprocess", "ctypes"))
     assert result.output["environment"] == {
         "PYTHONHOME": "/runtime", "PYTHONHASHSEED": "0", "TZ": "UTC",
@@ -123,6 +177,8 @@ def decide(context, state, parameters):
 
 @pytest.mark.parametrize("body", [
     "while True:\n    pass",
+    "import os\nwhile True:\n"
+    "    try: os.write(3, b'thesistrace-python-ready/v1')\n    except OSError: pass",
     "bytearray(512 * 1024 * 1024)",
     "__import__('os').write(1, b'x' * (2 * 1024 * 1024))",
     "__import__('time').sleep(3600)",
@@ -134,7 +190,7 @@ def test_resource_failure_is_bounded_and_the_next_guest_still_completes(body):
     started = time.monotonic()
     with pytest.raises(StrategyProgramError):
         runtime.invoke(source, context={"session": "2026-08-03"}, state={}, parameters={})
-    assert time.monotonic() - started < 10
+    assert time.monotonic() - started < 15
     result = runtime.invoke(
         "def decide(context, state, parameters):\n"
         "    return {'output': None, 'state': {'ok': True}}",

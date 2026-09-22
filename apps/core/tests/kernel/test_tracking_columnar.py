@@ -139,8 +139,8 @@ def test_columnar_tracking_matches_every_checkpoint_and_recovery_boundary(
         prior, prior_observation_state=observation,
         retained_strategy_sessions=[prior.boundary_session],
     )
-    assert checkpoint["run_input"]["weighting"] == weighting
-    assert checkpoint["run_input"]["volatility_window"] == 20
+    assert checkpoint["run_input"]["strategy"]["weighting"] == weighting
+    assert checkpoint["run_input"]["strategy"]["volatility_window"] == 20
     if weighting == "inverse_volatility":
         assert checkpoint["run_input"]["effective_lookback"] == 20
     continuation = continuation_snapshot(prior)

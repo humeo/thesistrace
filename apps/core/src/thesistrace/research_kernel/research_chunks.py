@@ -35,7 +35,7 @@ from thesistrace.research_kernel.strategy import (
     strategy_metrics_from_state,
 )
 from thesistrace.research_kernel.strategy_events import strategy_event_rows
-from thesistrace.research_kernel.terminal_state_schema import PendingTarget, TargetSelection
+from thesistrace.research_kernel.terminal_state_schema import DECISION_STATE_ADAPTER, PendingTarget
 from thesistrace.research_series import ColumnarResearchSeries
 
 _STATISTIC_NAMES = (
@@ -117,6 +117,7 @@ class AlphaFactorExecutionBinding:
         cls,
         value: Mapping[str, object],
     ) -> AlphaFactorExecutionBinding:
+        direct = value.get("alpha") is None
         if set(value) != {
             "data_generation_id",
             "alpha",
@@ -145,6 +146,10 @@ class AlphaFactorExecutionBinding:
         ):
             raise ValueError("Alpha-and-Factor binding snapshot is invalid")
         require_current_numeric_contract(numeric_contract)
+        if direct and (
+            value["research_kind"] != "strategy_backtest" or value["neutralization"] is not None
+        ):
+            raise ValueError("Direct data binding snapshot is invalid")
         run_contract = {
             name: deepcopy(value[name])
             for name in ("alpha", "research_period", "research_kind", "universe", "neutralization")
@@ -165,7 +170,7 @@ class AlphaFactorExecutionBinding:
 class AlphaFactorChunkOutcome:
     _binding_json: bytes
     _continuation: dict[str, object]
-    _alpha_matrix: dict[str, object]
+    _alpha_matrix: dict[str, object] | None
     _factor_summary: dict[str, object] | None
     _factor_daily_observations: list[dict[str, object]]
     _phase_seconds: tuple[tuple[str, float], ...]
@@ -178,7 +183,7 @@ class AlphaFactorChunkOutcome:
         *,
         binding: AlphaFactorExecutionBinding,
         continuation: dict[str, object],
-        alpha_matrix: dict[str, object],
+        alpha_matrix: dict[str, object] | None,
         factor_summary: dict[str, object] | None,
         factor_daily_observations: list[dict[str, object]],
         phase_seconds: Mapping[str, float],
@@ -216,10 +221,12 @@ class AlphaFactorChunkOutcome:
     def continuation_snapshot(self) -> dict[str, object]:
         return deepcopy(self._continuation)
 
-    def alpha_matrix_snapshot(self) -> dict[str, object]:
+    def alpha_matrix_snapshot(self) -> dict[str, object] | None:
         return deepcopy(self._alpha_matrix)
 
     def common_input_sessions_snapshot(self) -> tuple[dict[str, object], ...]:
+        if self._alpha_matrix is None:
+            return ()
         return tuple(
             {"session": row["session"], "common_inputs": deepcopy(row["common_inputs"])}
             for row in self._alpha_matrix["sessions"] if "common_inputs" in row
@@ -275,7 +282,7 @@ class AlphaFactorChunkOutcome:
                 or compact.get("schema_version") != "alpha-factor-chunk-outcome-v1"
                 or compact.get("binding_checksum") != binding.checksum
                 or not isinstance(continuation_value, Mapping)
-                or not isinstance(alpha_matrix, dict)
+                or (alpha_matrix is not None and not isinstance(alpha_matrix, dict))
                 or not isinstance(phase_seconds, Mapping)
                 or (
                     factor_summary_value is not None
@@ -289,8 +296,12 @@ class AlphaFactorChunkOutcome:
             if continuation["binding_checksum"] != binding.checksum:
                 raise ValueError
             alpha_checksum = continuation.get("alpha_checksum")
-            if (
-                set(alpha_matrix)
+            if binding.value_snapshot()["alpha"] is None:
+                if (alpha_matrix is not None or alpha_checksum is not None
+                        or continuation["pending_alpha"]):
+                    raise ValueError
+            elif (
+                not isinstance(alpha_matrix, dict) or set(alpha_matrix)
                 != {
                     "expression",
                     "effective_lookback",
@@ -330,7 +341,7 @@ class AlphaFactorChunkOutcome:
     def _continuation_for_current_process(self) -> dict[str, object]:
         return self._continuation
 
-    def _alpha_matrix_for_current_process(self) -> dict[str, object]:
+    def _alpha_matrix_for_current_process(self) -> dict[str, object] | None:
         return self._alpha_matrix
 
     def _factor_summary_for_current_process(self) -> dict[str, object] | None:
@@ -472,7 +483,7 @@ def empty_research_continuation(
     if research_kind not in {"factor_evaluation", "strategy_backtest"}:
         raise ValueError("Research Kind is invalid")
     continuation: dict[str, object] = {
-        "schema_version": "research-chunk-continuation-v2",
+        "schema_version": "research-chunk-continuation-v3",
         "research_kind": research_kind,
         **empty_alpha_factor_continuation(research_kind),
     }
@@ -528,8 +539,8 @@ def execute_research_chunk(
     selected_sessions = set(research_sessions)
     common_input_sessions = tuple(
         {"session": row["session"], "common_inputs": deepcopy(row["common_inputs"])}
-        for row in alpha_factor._alpha_matrix["sessions"]
-        if row["session"] in selected_sessions and "common_inputs" in row
+        for row in alpha_factor.common_input_sessions_snapshot()
+        if row["session"] in selected_sessions
     )
     alpha_and_pending_seconds = alpha_factor.phase_seconds["alpha_and_pending"]
     factor_seconds = alpha_factor.phase_seconds["factor"]
@@ -686,8 +697,8 @@ def _execute_strategy_chunk_from_validated_alpha_factor(
         "rejections": [],
         "diagnostics": [],
         "report_session_count": completed_count,
-        "target_selection": strategy["target_selection"],
-        "target_exposure": strategy["target_exposure"],
+        "decision_state": strategy["decision_state"],
+        "contract_checksum": strategy["contract_checksum"],
         "pending_target": strategy["pending_target"],
         "metric_state": metric_state,
     }
@@ -708,7 +719,7 @@ def _execute_strategy_chunk_from_validated_alpha_factor(
         entry_session = metric_state.get("entry_session")
         final_values = {
             "strategy_summary": {
-                "alpha_checksum": str(
+                "alpha_checksum": (
                     alpha_factor_outcome._continuation_for_current_process()["alpha_checksum"]
                 ),
                 "entry_session": entry_session,
@@ -724,14 +735,12 @@ def _execute_strategy_chunk_from_validated_alpha_factor(
                 "net_nav": str(terminal["net_nav"]),
                 "cumulative_transaction_cost": str(terminal["cumulative_transaction_cost"]),
                 "positions": [dict(value) for value in strategy["positions"]],
-                "selection_phase": {
+                "research_phase": {
                     "origin_session": str(run_input.research_start_session),
                     "report_session_count": completed_count,
-                    "selection_interval": strategy_settings.selection_interval,
-                    "completed_intervals": completed_count - 1,
                 },
-                "target_selection": strategy["target_selection"],
-                "target_exposure": strategy["target_exposure"],
+                "decision_state": strategy["decision_state"],
+                "contract_checksum": strategy["contract_checksum"],
                 "pending_target": strategy["pending_target"],
                 "last_daily_observation": terminal,
                 "metric_state": metric_state,
@@ -747,7 +756,7 @@ def _execute_strategy_chunk_from_validated_alpha_factor(
             strategy, sessions=tuple(row["session"] for row in new_daily),
         ),
         common_input_sessions=merge_common_input_sessions(
-            alpha_factor_outcome._alpha_matrix_for_current_process()["sessions"],
+            alpha_factor_outcome.common_input_sessions_snapshot(),
             exposure_observations, tuple(row["session"] for row in new_daily),
         ),
         final_values=final_values,
@@ -806,6 +815,17 @@ def _execute_alpha_factor_chunk_from_validated(
     if any(session not in calendar for session in research_sessions):
         raise ValueError("Research Chunk sessions are outside its data slice")
     cancellation_check()
+    if run_input.is_direct:
+        if state["alpha_checksum"] is not None or state["pending_alpha"]:
+            raise ValueError("Direct continuation cannot contain Alpha computation")
+        state["completed_research_session_count"] += len(research_sessions)
+        state["rolling_tail_sessions"] = list(calendar[-max(run_input.effective_lookback, 2):])
+        return AlphaFactorChunkOutcome._from_validated(
+            binding=binding, continuation=state, alpha_matrix=None, factor_summary=None,
+            factor_daily_observations=[],
+            phase_seconds={"alpha_and_pending": monotonic() - alpha_started,
+                           "factor": 0.0, "finalize": 0.0},
+        )
     evaluated = evaluate_columnar_alpha_sessions(
         research_data,
         compiled_alpha=run_input.compiled_alpha_snapshot(),
@@ -1275,7 +1295,7 @@ def validated_research_continuation(
     )
     if (
         not isinstance(copied, dict)
-        or copied.get("schema_version") != "research-chunk-continuation-v2"
+        or copied.get("schema_version") != "research-chunk-continuation-v3"
         or copied.get("research_kind") != research_kind
         or research_kind not in {"factor_evaluation", "strategy_backtest"}
         or set(copied) != expected_keys
@@ -1358,8 +1378,8 @@ def _validated_bounded_strategy_state(state: dict[str, object]) -> dict[str, obj
         "diagnostics",
         "report_session_count",
         "metric_state",
-        "target_selection",
-        "target_exposure",
+        "decision_state",
+        "contract_checksum",
         "pending_target",
     }
     daily = state.get("daily")
@@ -1402,15 +1422,17 @@ def _validated_bounded_strategy_state(state: dict[str, object]) -> dict[str, obj
     if not required_daily <= set(last_daily) or not isinstance(last_daily["session"], str):
         raise ValueError("Strategy continuation is invalid")
     try:
-        TargetSelection.model_validate(state["target_selection"])
-        if (
-            type(state["target_exposure"]) is not float
-            or not math.isfinite(state["target_exposure"])
-            or not 0 <= state["target_exposure"] <= 1
-        ):
-            raise ValueError("Strategy continuation Exposure is invalid")
+        decision = DECISION_STATE_ADAPTER.validate_python(state["decision_state"])
+        checksum = state["contract_checksum"]
+        if (not isinstance(checksum, str) or len(checksum) != 64
+                or any(char not in "0123456789abcdef" for char in checksum)):
+            raise ValueError("Strategy continuation contract is invalid")
+        if decision.mode == "framework" and decision.selection.contract_checksum != checksum:
+            raise ValueError("Strategy continuation Selection contract is invalid")
         if state["pending_target"] is not None:
-            PendingTarget.model_validate(state["pending_target"])
+            pending = PendingTarget.model_validate(state["pending_target"])
+            if pending.contract_checksum != checksum:
+                raise ValueError("Strategy continuation target contract is invalid")
         for name in required_daily - {"session"}:
             if not Decimal(str(last_daily[name])).is_finite():
                 raise ValueError("Strategy continuation is invalid")

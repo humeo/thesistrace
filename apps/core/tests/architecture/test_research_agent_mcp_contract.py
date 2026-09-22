@@ -1814,14 +1814,14 @@ def test_v1_inventory_scopes_descriptions_annotations_and_schemas_are_exact() ->
     canonical = _canonical_v1_contract()
 
     assert sha256(canonical).hexdigest() == (
-        "e3eb45319bb4e23752214ee684d74f563e459c5ff087fee83c46184bc0395559"
+        "480faf9c8f98774f15418f0a03fe9f127dd63dee46cfb3148398d9838716c04f"
     )
-    assert len(canonical) == 235472
+    assert len(canonical) == 246652
 
 
 def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None:
-    assert RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES == 128 * 1024
-    assert RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES == 256 * 1024
+    assert RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES == 16 * 1024 * 1024
+    assert RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES == 8 * 1024 * 1024
     assert RESEARCH_AGENT_RATE_WINDOW_SECONDS == 60
     assert RESEARCH_AGENT_MAX_CALLS_PER_WINDOW == 120
     assert RESEARCH_AGENT_MAX_CONCURRENT_CALLS == 4
@@ -1890,6 +1890,58 @@ def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None
         evidence["production_envelope"]["container_memory_bytes"] // 10
     )
     assert evidence["observed"]["swaps"] == 0
+
+
+def test_wire_envelope_carries_twenty_maximum_python_programs_and_explicit_state():
+    from pydantic import TypeAdapter
+
+    prefix = (
+        "def decide(context, state, parameters):\n"
+        "    return {'output': None, 'state': state}\n#"
+    )
+    source = prefix + "\x01" * (65_536 - len(prefix.encode()))
+    parameters = {"payload": "\x7f" * (65_536 - len('{"payload":""}'))}
+    program = {
+        "source": source, "parameters": parameters,
+        "data_requirements": {"field_ids": ["price.close.adjusted"], "history_sessions": 1},
+    }
+    batch = {
+        "batch_kind": "strategy_sweep", "request_id": "maximum-python-batch",
+        "start_date": "2026-08-03", "end_date": "2026-08-04", "universe": "top300",
+        "strategies": [
+            {"item_key": str(i), "strategy_mode": "direct", "initial_cash_cny": "100000",
+             "program": program} for i in range(20)
+        ],
+    }
+    TypeAdapter(ResearchBatchAdmissionCommand).validate_python(batch)
+    assert _wire_request_bytes(CallToolRequestParams(
+        name="submit_research_batch", arguments=batch,
+    )) <= RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES
+    # MCP returns both structured and text content. Neither may truncate a
+    # valid explicit state at its 256 KiB contract limit.
+    state = {"payload": "x" * (256 * 1024 - len('{"payload":""}'))}
+    result = CallToolResult(
+        content=[TextContent(type="text", text=json.dumps(state))], structured_content=state,
+    )
+    context = SimpleNamespace(protocol_version=LATEST_HANDSHAKE_VERSION, request_id="request")
+    assert _wire_response_bytes(context, method="tools/call", result=result) <= (
+        RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES
+    )
+
+
+def test_wire_response_preserves_maximum_target_page_in_both_mcp_representations():
+    # Complete-record pages can use 2 MiB plus 32 KiB metadata. Backslashes
+    # exercise the extra escaping in MCP's text representation.
+    payload = {"page": "\\" * ((2 * 1024 * 1024 + 32 * 1024) // 2 - 16)}
+    encoded = json.dumps(payload, separators=(",", ":"))
+    assert len(encoded) <= 2 * 1024 * 1024 + 32 * 1024
+    result = CallToolResult(
+        content=[TextContent(type="text", text=encoded)], structured_content=payload,
+    )
+    context = SimpleNamespace(protocol_version=LATEST_HANDSHAKE_VERSION, request_id="request")
+    assert _wire_response_bytes(context, method="tools/call", result=result) < (
+        RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES
+    )
 
 
 def test_v1_response_ceiling_counts_the_exact_jsonrpc_envelope() -> None:
@@ -2149,8 +2201,17 @@ async def _exercise_in_memory_protocol() -> None:
                     assert set(source["required"]) == {"request_id", "folder_id", "rerun_source"}
                     assert "rerun_source" in tool.description
                     schema = schema["$defs"]["ResearchRunAdmissionCommand"]
-                assert schema["discriminator"]["propertyName"] == discriminator
-                assert len(schema["oneOf"]) == 2
+                if tool.name == "submit_research_run":
+                    # Research kind plus strategy mode selects the concrete
+                    # command; JSON Schema represents its three exact branches.
+                    assert len(schema["oneOf"]) == 3
+                    direct = tool.input_schema["$defs"]["DirectStrategyAdmissionCommand"]
+                    assert direct["properties"]["strategy_mode"]["const"] == "direct"
+                    assert "program" in direct["required"]
+                    assert "formula" not in direct["properties"]
+                else:
+                    assert schema["discriminator"]["propertyName"] == discriminator
+                    assert len(schema["oneOf"]) == 2
                 for branch in schema["oneOf"]:
                     definition = tool.input_schema["$defs"][branch["$ref"].rsplit("/", 1)[-1]]
                     assert definition["additionalProperties"] is False
@@ -2869,7 +2930,7 @@ async def _exercise_wire_request_ceiling() -> None:
     async with Client(server) as client:
         result = await client.call_tool(
             "diagnose_alpha_formula",
-            {"source": "request-size-canary" * RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES},
+            {"source": "request-size-canary" + "x" * RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES},
         )
 
     assert result.is_error is True

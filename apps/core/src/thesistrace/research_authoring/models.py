@@ -56,10 +56,37 @@ class ExposureAuthoringConstraints(BaseModel):
     execution_time: Literal["next_session_open"] = "next_session_open"
 
 
+class PythonProgramConstraints(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    callback: str = "decide(context, state, parameters)"
+    decision_time: Literal["session_close"] = "session_close"
+    execution_time: Literal["next_session_open"] = "next_session_open"
+    maximum_source_bytes: int
+    maximum_parameter_bytes: int
+    maximum_state_bytes: int
+    maximum_input_bytes: int
+    maximum_output_bytes: int
+    maximum_memory_bytes: int
+    maximum_bootstrap_wall_seconds: int
+    maximum_wall_seconds: int
+    maximum_fields: int
+    history_sessions: IntegerRange
+    python_version: str
+    modules: tuple[str, ...]
+    output: str = (
+        'Return {"output": null or {"reason": string, "allocation": object or null, '
+        '"position_limits": object}, "state": object}. Null output is NoUpdate. '
+        "Only explicit JSON state survives. No filesystem or network access."
+    )
+
+
 class ResearchAuthoringConstraints(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     research_kinds: tuple[ResearchKind, ...]
+    strategy_modes: tuple[Literal["framework", "direct"], ...]
+    python_program: PythonProgramConstraints
     universes: tuple[ResearchUniverse, ...]
     neutralizations: tuple[ResearchNeutralization, ...]
     initial_cash_cny: InitialCashConstraints

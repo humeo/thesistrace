@@ -44,7 +44,7 @@ def test_strategy_run_does_not_require_future_labels(
     assert "factor_evaluation" not in artifacts
     assert artifacts["strategy_backtest"] == accepted_calculation_case["strategy_backtest"]
     payload = build_result_payload(
-        result, research_kind="strategy_backtest", selection_interval=5,
+        result, research_kind="strategy_backtest",
     )
     assert "factor_summary" not in payload
 
@@ -83,7 +83,7 @@ def test_strategy_ledger_is_transient_and_rejected_from_product_state(
     result = build_result_payload(
         accepted_kernel_run,
         research_kind="strategy_backtest",
-        selection_interval=5,
+
     )
     assert set(result) == {
         "strategy_summary",

@@ -585,7 +585,7 @@ def _insert_parent_track(database: PostgresDatabase, *, track_id: str) -> None:
         "verified_result": {
             "kind": "research.result",
             "research_run_id": f"run_{track_id}",
-            "schema_version": "research-result-v2",
+            "schema_version": "research-result-v3",
             "result_manifest_sha256": "f" * 64,
             "result_checksum_sha256": "e" * 64,
         },

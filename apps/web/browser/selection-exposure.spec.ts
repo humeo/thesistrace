@@ -5,6 +5,90 @@ import { build } from "vite";
 
 let script: string;
 const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+
+for (const width of [1280, 390]) {
+  test(`Direct Python remains editable, validates and submits one active definition at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 964 });
+    const checks: Record<string, unknown>[] = [];
+    const submissions: Record<string, unknown>[] = [];
+    await page.route("https://exposure.test/**", route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === "/api/alpha/diagnostics") return route.fulfill({ json: { valid: true, diagnostics: [] } });
+      if (path === "/api/research/diagnostics") {
+        checks.push(route.request().postDataJSON());
+        return route.fulfill({ json: checks.length === 1 ? {
+          valid: false, issues: [{ code: "STRATEGY_PROGRAM_INVALID", field: "program.source",
+            message: "program abcdef123456, line 1: SyntaxError: invalid syntax", severity: "error", range: null }],
+        } : { valid: true, issues: [] } });
+      }
+      if (path === "/api/research-runs") {
+        submissions.push(route.request().postDataJSON());
+        return route.fulfill({ status: 202, json: { id: "run_direct" } });
+      }
+      return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    });
+    const mount = async () => {
+      await page.goto("https://exposure.test/");
+      await page.addStyleTag({ content: styles });
+      await page.addScriptTag({ content: script });
+    };
+    await mount();
+    await page.getByLabel("Strategy mode", { exact: true }).selectOption("direct");
+    await expect(page.getByLabel("Python source", { exact: true })).toContainText("def decide");
+    await expect(page.getByLabel("Alpha formula", { exact: true })).toHaveCount(0);
+    await expect(page.getByLabel("Holdings count", { exact: true })).toHaveCount(0);
+    await page.getByLabel("Parameters (JSON)", { exact: true }).fill("{");
+    await page.getByRole("button", { name: "Run backtest", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText("JSON");
+    await expect(page.getByLabel("Parameters (JSON)", { exact: true })).toBeFocused();
+    await page.getByLabel("Python source", { exact: true }).focus();
+    await expect(page.locator("#python-parameters-error")).toContainText("JSON");
+    expect(submissions).toHaveLength(0);
+    await mount();
+    await expect(page.getByLabel("Parameters (JSON)", { exact: true })).toHaveValue("{");
+    await page.getByLabel("Parameters (JSON)", { exact: true }).fill('{"improvement": 0.03}');
+    await page.getByLabel("Python source", { exact: true }).fill("def decide(:");
+    await page.getByRole("button", { name: "Check configuration" }).click();
+    await expect(page.getByLabel("Configuration issues")).toContainText("line 1");
+    await expect(page.locator("#python-source-error")).toContainText("line 1");
+    const source = "def decide(context, state, parameters):\n    return {'output': None, 'state': state}\n";
+    await page.getByLabel("Python source", { exact: true }).fill(source);
+    await expect(page.getByLabel("Configuration issues")).not.toBeVisible();
+    await page.getByRole("button", { name: "Check configuration" }).click();
+    await expect(page.getByText("Configuration is valid.", { exact: false })).toBeVisible();
+    expect(checks[1]).toMatchObject({ strategy_mode: "direct", program: {
+      source, parameters: { improvement: 0.03 },
+      data_requirements: { field_ids: ["price.close.adjusted"], history_sessions: 6 },
+    } });
+    expect(checks[1]).not.toHaveProperty("formula");
+    expect(checks[1]).not.toHaveProperty("holdings_count");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: `../../.local/browser-tests/direct-python-${width}.png`, fullPage: true });
+    await page.getByRole("button", { name: "Run backtest", exact: true }).click();
+    await expect.poll(() => submissions.length).toBe(1);
+    expect(submissions[0]).toMatchObject(checks[1]);
+    expect(submissions[0]).not.toHaveProperty("exposure_expression");
+  });
+}
+
+test("switching back to built-in Framework removes the Python definition", async ({ page }) => {
+  await page.route("https://exposure.test/**", route => route.fulfill({
+    contentType: "text/html", body: '<div id="root"></div>',
+  }));
+  await page.goto("https://exposure.test/");
+  await page.addStyleTag({ content: styles });
+  await page.addScriptTag({ content: script });
+  const mode = page.getByLabel("Strategy mode", { exact: true });
+  await mode.selectOption("direct");
+  await page.getByLabel("Python source", { exact: true }).fill("private draft");
+  await mode.selectOption("framework");
+  await expect(page.getByLabel("Python source", { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("Alpha formula", { exact: true })).toBeVisible();
+  const draft = await page.evaluate(() => JSON.parse(localStorage.getItem("thesistrace.research-draft.exposure-test.folder_default")!));
+  expect(draft.programSource).toBe("");
+  expect(draft.programParameters).toBe("");
+  expect(draft.programFields).toBe("");
+});
 test.beforeAll(async () => {
   const result = await build({
     configFile: false, logLevel: "silent", esbuild: { jsx: "automatic" },

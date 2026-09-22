@@ -79,6 +79,8 @@ pnpm --dir apps/agent test:integration <test_file>
 THESISTRACE_TEST_PLAYWRIGHT_GREP='用例名称' pnpm test:e2e
 ```
 
+快速检查中带硬时限的真实 guest／进程测试使用 `bounded_process` 标记，在并行测试结束后串行执行，避免测试竞争消耗产品的执行时限。
+
 Core 完整集成入口会执行普通集成及专门的依赖重启阶段；不能用一次普通 pytest 执行声称重启阶段已验证。性能敏感改动使用 `pnpm check:performance`，在空闲机器上保留基线和对比；普通改动不运行该项。`pnpm test:codex-mcp`、`pnpm check:live-tushare` 和应用的真实模型评估是专用检查，按涉及的外部边界和授权选择，不属于确定性日常门禁。
 
 TuShare 固定原始值回归使用 `tests/fixtures/tushare-recorded-values/` 的本地样本，自动纳入 `pnpm test`。可定向运行 `uv run --project apps/core pytest -c apps/core/pyproject.toml --rootdir . apps/core/tests/adapters/test_tushare_recorded_values.py`。此测试完全离线，禁止网络连接，不读取 Token，也不自动更新基准。更新样本必须显式保存新原始值、参数、抓取时间及哈希，并独立核对差异；不得用当前实现输出覆盖预期值以消除失败。

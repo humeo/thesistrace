@@ -16,6 +16,79 @@ function recordDocumentRequests(page: Page): string[] {
   return documentRequests;
 }
 
+test("Direct Python authoring executes, reuses frozen source and explicitly advances DailyTrack", { tag: "@isolated" }, async ({ page }) => {
+  test.setTimeout(180_000);
+  publishFinancialTrackHead("lagged");
+  await page.goto("/research?new");
+  await page.getByRole("radio", { name: /Strategy Backtest/ }).check();
+  await page.getByLabel("Research name").fill("Daily Python");
+  await page.getByLabel("Research start date").fill("2026-08-04");
+  await page.getByLabel("Research end date").fill("2026-08-05");
+  await page.getByLabel("Universe", { exact: true }).selectOption("top300");
+  await page.getByLabel("Strategy mode", { exact: true }).selectOption("direct");
+  await page.getByLabel("History (trading sessions)").fill("1");
+  await page.getByLabel("Declared fields", { exact: true }).fill("price.close.adjusted");
+  await page.getByLabel("Parameters (JSON)").fill('{"label": "visible_candidate"}');
+  const source = [
+    "def decide(context, state, parameters):",
+    "    state['count'] = state.get('count', 0) + 1",
+    "    output = None",
+    "    if not context['account']['positions']:",
+    "        item = context['candidates'][0]['instrument_id']",
+    "        output = {'reason': parameters['label'], 'allocation': {'mode': 'rebalance',",
+    "                  'instrument_ids': [item], 'relative_weights': {item: '1'},",
+    "                  'exposure': 1.0}, 'position_limits': {}}",
+    "    return {'output': output, 'state': state}",
+  ].join("\n");
+  await page.getByLabel("Python source", { exact: true }).fill("def decide(:");
+  await page.getByRole("button", { name: "Check configuration" }).click();
+  // The first validation also compiles the pinned guest in a fresh API process.
+  await expect(page.getByLabel("Configuration issues")).toContainText("line 1", { timeout: 60_000 });
+  await page.getByLabel("Python source", { exact: true }).fill(source);
+  await page.getByRole("button", { name: "Check configuration" }).click();
+  await expect(page.getByText("Configuration is valid.", { exact: false })).toBeVisible();
+  await page.getByRole("button", { name: "Run backtest", exact: true }).click();
+  await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
+  const runUrl = page.url();
+  const runId = runUrl.split("/").at(-1)!;
+  let runOutcome = { status: "", failure_reason: "" };
+  await expect.poll(async () => {
+    const response = await page.request.get(`/api/research-runs/${runId}`);
+    if (!response.ok()) return false;
+    runOutcome = await response.json();
+    return ["succeeded", "failed", "cancelled"].includes(runOutcome.status);
+  }, { timeout: 90_000 }).toBe(true);
+  expect(runOutcome.status, runOutcome.failure_reason).toBe("succeeded");
+  await expect(page.locator(".research-run-facts").getByText(/Status\s+succeeded/)).toBeVisible({ timeout: 90_000 });
+  const facts = page.getByRole("group", { name: "Research execution conditions" });
+  await expect(facts).toContainText("Direct · Python");
+  await expect(facts).not.toContainText("Holdings count");
+  await page.getByText("Frozen Python source and parameters", { exact: true }).click();
+  await expect(facts.locator("pre").first()).toHaveText(source);
+  await expect(page.getByRole("heading", { name: "Strategy Summary" })).toBeVisible();
+  const accepted = await (await page.request.get(`/api/research-runs/${runId}`)).json();
+  expect(accepted.result.terminal_strategy_state.decision_state.state).toEqual({ count: 2 });
+  await page.getByRole("button", { name: "Create draft", exact: true }).click();
+  await expect(page).toHaveURL(/\/research$/);
+  await expect(page.getByLabel("Python source", { exact: true })).toHaveValue(source);
+  await page.getByLabel("Python source", { exact: true }).fill("a later editable draft");
+  await page.goto(runUrl);
+  await page.getByRole("button", { name: "Start Tracking", exact: true }).click();
+  await expect(page).toHaveURL(/\/daily-tracks\/track_[a-f0-9]+$/);
+  const trackId = page.url().split("/").at(-1)!;
+  const origin = await (await page.request.get(`/api/daily-tracks/${trackId}`)).json();
+  expect(origin.strategy_session).toBe("2026-08-05");
+  expect(origin.observation.decision_state.state).toEqual({ count: 2 });
+  await page.getByRole("button", { name: "Refresh to latest data", exact: true }).click();
+  await expect.poll(async () => (await (await page.request.get(`/api/daily-tracks/${trackId}`)).json()).strategy_session,
+    { timeout: 90_000 }).toBe("2026-08-11");
+  await page.getByRole("button", { name: "Reload status", exact: true }).click();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  const latest = await (await page.request.get(`/api/daily-tracks/${trackId}`)).json();
+  expect(latest.observation.decision_state.state).toEqual({ count: 6 });
+  expect(latest.observation.selection_interval).toBeNull();
+});
+
 test("ResearchRun return keeps the selected Type without a document reload", async ({ page }) => {
   const documentRequests = recordDocumentRequests(page);
   await page.route("**/api/research-folders", async (route) => {

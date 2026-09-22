@@ -18,7 +18,7 @@ from psycopg import OperationalError
 from psycopg.types.json import Jsonb
 from psycopg_pool import PoolTimeout
 
-from thesistrace._paging import fit_page
+from thesistrace._paging import BUSINESS_PAGE_BYTES, fit_page
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.benchmark import (
     StrategyComparisonFacts,
@@ -119,6 +119,10 @@ from thesistrace.research_kernel import (
 from thesistrace.research_kernel.common_inputs import (
     common_input_references,
     requires_common_industry,
+)
+from thesistrace.research_kernel.strategy_program_runtime import (
+    OUTPUT_BYTES,
+    StrategyProgramFailure,
 )
 from thesistrace.research_series import (
     research_sessions,
@@ -2067,9 +2071,9 @@ class DailyTrackService:
                             "gross_nav",
                             "net_nav",
                             "cumulative_transaction_cost",
-                            "selection_phase",
-                            "target_selection",
-                            "target_exposure",
+                            "research_phase",
+                            "decision_state",
+                            "contract_checksum",
                             "pending_target",
                         )
                     },
@@ -2095,13 +2099,16 @@ class DailyTrackService:
                         ),
                     }
                 ),
+                byte_budget=BUSINESS_PAGE_BYTES + (
+                    OUTPUT_BYTES if account.decision_state.mode == "direct" else 0
+                ),
             )
         if isinstance(query, DailyTrackProvenanceResultSectionInput):
             immutable = origin.immutable_input
-            strategy = _mapping_value(
-                immutable.get("strategy"),
-                "Tracking frozen Strategy input",
-            )
+            from thesistrace.research_definition import authorable_research_input
+
+            authorable = authorable_research_input(immutable)
+            authorable.pop("research_kind")
             semantic_versions = _mapping_value(
                 immutable.get("semantic_versions"),
                 "Tracking semantic versions",
@@ -2117,21 +2124,7 @@ class DailyTrackService:
                     "immutable_input_sha256": hashlib.sha256(
                         canonical_json_bytes(immutable)
                     ).hexdigest(),
-                    "frozen_research_input": {
-                        "strategy_mode": strategy["kind"],
-                        "formula": immutable["formula_source"],
-                        "hypothesis": immutable.get("hypothesis"),
-                        "start_date": immutable["requested_start_date"],
-                        "end_date": immutable["requested_end_date"],
-                        "universe": immutable["universe"],
-                        "neutralization": immutable["neutralization"],
-                        "initial_cash_cny": strategy["initial_cash_cny"],
-                        "holdings_count": strategy["holdings_count"],
-                        "selection_every_sessions": strategy["selection_every_sessions"],
-                        "exposure_expression": strategy["exposure_source"],
-                        "weighting": strategy["weighting"],
-                        "volatility_window": strategy["volatility_window"],
-                    },
+                    "frozen_research_input": authorable,
                     "origin_data_through_session": origin.seed_data_through_session,
                     "tracking_strategy_session": current_session,
                     "checkpoint_manifest_sha256": current_manifest,
@@ -2394,9 +2387,9 @@ class DailyTrackService:
                                 "net_nav",
                                 "cumulative_transaction_cost",
                                 "positions",
-                                "selection_phase",
-                                "target_selection",
-                                "target_exposure",
+                                "research_phase",
+                                "decision_state",
+                                "contract_checksum",
                                 "pending_target",
                             )
                         },
@@ -3409,7 +3402,7 @@ class DailyTrackService:
     ) -> Mapping[str, object] | None:
         if (
             self._working_cache is None
-            or predecessor.get("schema_version") != "daily-track-checkpoint-v3"
+            or predecessor.get("schema_version") != "daily-track-checkpoint-v4"
         ):
             return None
         try:
@@ -3434,7 +3427,7 @@ class DailyTrackService:
         if checkpoint.boundary_session != claim.target_sessions[-1]:
             raise RuntimeError("Tracking child returned an invalid Target boundary")
         provenance = {
-            "schema_version": "daily-track-checkpoint-v3",
+            "schema_version": "daily-track-checkpoint-v4",
             "daily_track_id": claim.track_id,
             "predecessor_manifest_sha256": claim.predecessor_manifest_sha256,
             "boundary_session": checkpoint.boundary_session,
@@ -3587,6 +3580,8 @@ class DailyTrackService:
         blocked_reason: str = PUBLIC_BLOCKED_REASON,
     ) -> _TrackingFailure | None:
         assert self._dataset_lifecycle is not None
+        if isinstance(error, StrategyProgramFailure):
+            blocked_reason = str(error)
         retryable = _tracking_failure_is_retryable(error)
         failure_reason = "InfrastructureFailure" if retryable else type(error).__name__
         retry_wait = tracking_attempt_retry_eligible(
@@ -3811,9 +3806,7 @@ def _origin_planning_facts(origin: TrackingOrigin) -> dict[str, int]:
         }
     except (KeyError, TypeError, ValueError) as error:
         raise RuntimeError("DailyTrack frozen planning input is invalid") from error
-    if any(value <= 0 for key, value in facts.items() if key != "effective_lookback"):
-        raise RuntimeError("DailyTrack frozen planning input is invalid")
-    if facts["effective_lookback"] < 0:
+    if any(value < 0 for value in facts.values()):
         raise RuntimeError("DailyTrack frozen planning input is invalid")
     return facts
 
@@ -4163,7 +4156,7 @@ def _read_publication_json(
     value = decode_compressed_json(payload)
     value = _mapping_value(value, "DailyTrack product payload")
     schema = value.get("schema_version")
-    if schema == "daily-track-checkpoint-v3":
+    if schema == "daily-track-checkpoint-v4":
         KernelStateCheckpoint.model_validate(value)
     elif schema == "daily-track-activation-checkpoint-v3":
         expected = {"schema_version", "terminal_strategy_state", "tracking_observation_state"}

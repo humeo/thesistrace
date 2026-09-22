@@ -13,6 +13,8 @@ AVAILABLE_MODULES = (
     "enum", "fractions", "functools", "heapq", "itertools", "json", "math", "operator",
     "random", "re", "statistics", "string", "time", "typing", "_strptime",
 )
+BOOTSTRAP_READY_FD = 3
+BOOTSTRAP_READY = b"thesistrace-python-ready/v1"
 
 
 def freeze(value):
@@ -50,6 +52,9 @@ def main():
     diagnostics = Diagnostics()
     sys.stdout = diagnostics
     sys.stderr = diagnostics
+    # The host accepts this one-time control write only after the trusted
+    # bootstrap has revoked its file capabilities and before any user source.
+    os.write(BOOTSTRAP_READY_FD, BOOTSTRAP_READY)
     try:
         code = compile(request["source"], "strategy.py", "exec")
         if request["operation"] == "validate":

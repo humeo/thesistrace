@@ -143,7 +143,10 @@ def validate_research_batch_capacity(
     strategy_held_instrument_count = (
         0
         if batch_kind != "strategy_sweep"
-        else max(int(value.strategy["holdings_count"]) for value in inputs if value.strategy)
+        else max(
+            value.data_admission.universe_instrument_count if value.is_direct
+            else int(value.strategy["holdings_count"]) for value in inputs if value.strategy
+        )
     )
     for session_count, windows in candidate_windows.items():
         maximum_slice_union = max(count_by_window[window] for window in windows)

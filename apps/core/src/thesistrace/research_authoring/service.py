@@ -10,6 +10,7 @@ from thesistrace.research_authoring.models import (
     FormulaAuthoringConstraints,
     InitialCashConstraints,
     IntegerRange,
+    PythonProgramConstraints,
     ResearchAuthoringConstraints,
 )
 from thesistrace.research_batch.models import (
@@ -18,6 +19,18 @@ from thesistrace.research_batch.models import (
     RESEARCH_BATCH_KINDS,
 )
 from thesistrace.research_kernel.numeric import MAX_INITIAL_CASH_CNY
+from thesistrace.research_kernel.strategy_program_assets import PYTHON_VERSION
+from thesistrace.research_kernel.strategy_program_guest import AVAILABLE_MODULES
+from thesistrace.research_kernel.strategy_program_runtime import (
+    BOOTSTRAP_WALL_SECONDS,
+    INPUT_BYTES,
+    MEMORY_BYTES,
+    OUTPUT_BYTES,
+    PARAMETER_BYTES,
+    SOURCE_BYTES,
+    STATE_BYTES,
+    WALL_SECONDS,
+)
 from thesistrace.research_run.models import (
     MAX_HOLDINGS_COUNT,
     MAX_SELECTION_INTERVAL,
@@ -30,6 +43,16 @@ from thesistrace.research_run.models import (
 
 CURRENT_RESEARCH_AUTHORING_CONSTRAINTS = ResearchAuthoringConstraints(
     research_kinds=RESEARCH_KINDS,
+    strategy_modes=("framework", "direct"),
+    python_program=PythonProgramConstraints(
+        maximum_source_bytes=SOURCE_BYTES, maximum_parameter_bytes=PARAMETER_BYTES,
+        maximum_state_bytes=STATE_BYTES, maximum_input_bytes=INPUT_BYTES,
+        maximum_output_bytes=OUTPUT_BYTES, maximum_memory_bytes=MEMORY_BYTES,
+        maximum_wall_seconds=WALL_SECONDS,
+        maximum_bootstrap_wall_seconds=BOOTSTRAP_WALL_SECONDS, maximum_fields=32,
+        history_sessions=IntegerRange(minimum=1, maximum=253),
+        python_version=PYTHON_VERSION, modules=AVAILABLE_MODULES,
+    ),
     universes=RESEARCH_UNIVERSES,
     neutralizations=RESEARCH_NEUTRALIZATIONS,
     initial_cash_cny=InitialCashConstraints(maximum=str(MAX_INITIAL_CASH_CNY)),

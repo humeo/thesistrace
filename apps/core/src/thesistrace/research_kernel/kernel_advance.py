@@ -103,7 +103,6 @@ def advance(advance_input: AdvanceInput) -> KernelState:
     prior_output = prior.output_snapshot()
     continuation = advance_input.continuation_snapshot()
     prior_output = _with_continuation(prior_output, continuation)
-    prior_matrix = _mapping(prior_output.get("alpha_matrix"), "prior Alpha Matrix")
     research_data = _accept_target_research_data(
         prior.research_data_snapshot(),
         advance_input.target_research_data_snapshot(),
@@ -116,14 +115,14 @@ def advance(advance_input: AdvanceInput) -> KernelState:
             new_sessions[-1] if advance_input.calculation_scope == "research_period" else None
         ),
     )
-    matrix = _advance_alpha(
+    matrix = None if run_input.is_direct else _advance_alpha(
         run_input,
         research_data,
-        prior_matrix,
+        _mapping(prior_output.get("alpha_matrix"), "prior Alpha Matrix"),
         new_sessions,
         prior.session_count,
     )
-    if advance_input.calculation_scope == "research_period":
+    if matrix is not None and advance_input.calculation_scope == "research_period":
         selected_sessions = _research_period_sessions(run_input, research_data)
         if _alpha_session_ids(matrix) != selected_sessions:
             matrix = _rebuild_explicit_alpha(run_input, research_data, selected_sessions)
@@ -140,7 +139,8 @@ def advance(advance_input: AdvanceInput) -> KernelState:
         ),
         continuation=strategy_resume,
     )
-    attach_common_input_evidence(matrix, exposure_observations, tuple(new_sessions))
+    if matrix is not None:
+        attach_common_input_evidence(matrix, exposure_observations, tuple(new_sessions))
     return KernelState(
         run_input=run_input,
         output=compose_output(matrix, strategy.finalized),
@@ -155,6 +155,8 @@ def continuation_snapshot(state: KernelState) -> dict[str, object]:
 
 def continuation_from_output(output: Mapping[str, object]) -> dict[str, object]:
     """Project the bounded working state shared by ordinary Advance and recovery."""
+    if "alpha_matrix" not in output:
+        return empty_continuation()
     alpha = _mapping(output.get("alpha_matrix"), "Alpha Matrix")
     alpha_sessions = alpha.get("sessions")
     if not isinstance(alpha_sessions, list):
@@ -183,6 +185,9 @@ def advance_continuation(
     appended_sessions: list[str],
 ) -> dict[str, object]:
     """Advance only the bounded transient Alpha working state."""
+    if run_input.is_direct:
+        _with_continuation({}, prior_continuation)
+        return empty_continuation()
     effective_lookback = run_input.alpha_execution_plan().effective_lookback
     restored = _with_continuation(
         {
@@ -248,6 +253,10 @@ def _with_continuation(
     ):
         raise KernelRunError("Advance continuation bound is invalid")
     restored = json.loads(canonical_json_bytes(prior_output))
+    if "alpha_matrix" not in restored:
+        if pending:
+            raise KernelRunError("Direct Strategy cannot carry Pending Alpha")
+        return restored
     alpha = _mapping(restored.get("alpha_matrix"), "prior Alpha Matrix")
     alpha_sessions = alpha.get("sessions")
     if not isinstance(alpha_sessions, list):

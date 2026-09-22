@@ -39,6 +39,11 @@ def decide(context, state, parameters):
         observed['network'] = 'connected'
     except (ImportError, OSError):
         observed['network'] = 'denied'
+    try:
+        os.write(3, b'thesistrace-python-ready/v1')
+        observed['restart_deadline'] = 'allowed'
+    except OSError:
+        observed['restart_deadline'] = 'denied'
     return {'output': {
         'resources': observed,
         'environment': dict(os.environ),
@@ -75,7 +80,7 @@ def main():
         parameters = {"paths": paths, "port": port}
         result = invoke(runtime, parameters)
         assert result.output["resources"] == dict.fromkeys(
-            [*paths, "socket", "subprocess", "ctypes", "network"], "denied",
+            [*paths, "socket", "subprocess", "ctypes", "network", "restart_deadline"], "denied",
         )
         assert result.output["environment"] == {
             "PYTHONHOME": "/runtime", "PYTHONHASHSEED": "0", "TZ": "UTC",

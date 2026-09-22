@@ -107,7 +107,7 @@ def estimate_session_work(
 ) -> int:
     if (
         not 1 <= session_count <= MAX_CHUNK_SESSION_COUNT
-        or formula_work <= 0
+        or formula_work < 0
         or maximum_universe_cardinality <= 0
     ):
         raise ValueError("Research Chunk work facts are invalid")
@@ -124,15 +124,11 @@ def _capacity_memory_components(
     execution_memory_bytes: int,
     additional_live_columns: int,
 ) -> tuple[int, int]:
-    positive_values = (
-        formula_work,
-        node_count,
-        field_count,
-        maximum_universe_cardinality,
-        execution_memory_bytes,
-    )
+    positive_values = (maximum_universe_cardinality, execution_memory_bytes)
+    nonnegative_values = (formula_work, node_count, field_count)
     if (
         any(value <= 0 for value in positive_values)
+        or any(value < 0 for value in nonnegative_values)
         or effective_lookback < 0
         or additional_live_columns < 0
     ):

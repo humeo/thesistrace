@@ -157,8 +157,8 @@ def test_kernel_advance_uses_bounded_continuation_with_compact_prior_state(
         strategy_resume={
             "daily": resume_daily[-504:],
             "positions": resume["positions"],
-            "target_selection": resume["target_selection"],
-            "target_exposure": resume["target_exposure"],
+            "decision_state": resume["decision_state"],
+            "contract_checksum": resume["contract_checksum"],
             "pending_target": resume["pending_target"],
             "report_session_count": metric_state["session_count"],
             "metric_state": metric_state,

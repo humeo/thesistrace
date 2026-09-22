@@ -15,9 +15,9 @@ EXPECTED_CHECKSUMS = {
         "5": "c108d8430db5949afce51e5f17a6f88242a15164b834e5358ebb4517880cc691",
         "20": "ba3006a470cefea9bf194baef1328bc4e3343d9f1c32b8ccd14c96fac43c8b5e",
     },
-    # Decision evidence now carries independent allocation and quantity limits.
+    # Decision state now explicitly identifies Framework and its retained selection.
     # The independently specified financial boundaries below remain unchanged.
-    "strategy": "559770f23b6365847fc3748bb31378453fa0841ac260478dccae0cc95210224c",
+    "strategy": "a40f8f528f2c0d0cb7013e5c9de7f2511cd5867492bda8af42e36a1f162dac49",
 }
 
 
@@ -64,8 +64,6 @@ def test_accepted_quantitative_boundaries_are_frozen(
         for horizon in ("1", "5", "20")
     } == {"1": 42, "5": 38, "20": 23}
 
-    # The accepted payload includes retained execution constraints.
-    assert strategy["checksum"] == EXPECTED_CHECKSUMS["strategy"]
     assert len(strategy["execution_constraints"]) == 50
     first_constraint = strategy["execution_constraints"][0]
     assert {key: first_constraint[key] for key in (
@@ -129,6 +127,8 @@ def test_accepted_quantitative_boundaries_are_frozen(
         "annualized_volatility": 0.11365945883188307,
         "sharpe": -1.6324393725923343,
     }
+    # Check representation identity after the independent financial boundaries.
+    assert strategy["checksum"] == EXPECTED_CHECKSUMS["strategy"]
 
 
 def test_independent_edge_fixture_freezes_numeric_and_missing_order() -> None:

@@ -12,6 +12,7 @@ from pydantic import (
 )
 
 from thesistrace.alpha_language.models import DiagnosticDetails, SourceRange
+from thesistrace.research_kernel.direct_strategy import PythonProgram
 from thesistrace.research_kernel.portfolio_weighting import PortfolioWeighting, VolatilityWindow
 from thesistrace.research_run.models import (
     Formula,
@@ -61,7 +62,7 @@ class _ResearchBatchAdmissionBase(BaseModel):
     start_date: NaturalDate
     end_date: NaturalDate
     universe: ResearchUniverse
-    neutralization: ResearchNeutralization
+    neutralization: ResearchNeutralization | None = None
 
     @model_validator(mode="after")
     def validate_research_period(self) -> _ResearchBatchAdmissionBase:
@@ -81,6 +82,7 @@ class FactorBatchItem(BaseModel):
 
 class FactorEvaluationBatchAdmissionCommand(_ResearchBatchAdmissionBase):
     batch_kind: Literal["factor_evaluation"]
+    neutralization: ResearchNeutralization
     factors: list[FactorBatchItem] = Field(
         min_length=MIN_RESEARCH_BATCH_ITEMS,
         max_length=MAX_RESEARCH_BATCH_ITEMS,
@@ -108,13 +110,35 @@ class StrategySweepItem(BaseModel):
     volatility_window: VolatilityWindow = 20
 
 
+class DirectStrategySweepItem(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    item_key: ItemKey
+    strategy_mode: Literal["direct"]
+    name: ResearchName | None = None
+    initial_cash_cny: InitialCash
+    program: PythonProgram
+
+
 class StrategySweepBatchAdmissionCommand(_ResearchBatchAdmissionBase):
     batch_kind: Literal["strategy_sweep"]
-    alpha: StrategySweepAlpha
-    strategies: list[StrategySweepItem] = Field(
+    alpha: StrategySweepAlpha | None = None
+    strategies: list[StrategySweepItem | DirectStrategySweepItem] = Field(
         min_length=MIN_RESEARCH_BATCH_ITEMS,
         max_length=MAX_RESEARCH_BATCH_ITEMS,
     )
+
+    @model_validator(mode="after")
+    def shared_signal_matches_strategy_mode(self):
+        modes = {item.strategy_mode for item in self.strategies}
+        if len(modes) != 1:
+            raise ValueError("A Strategy Sweep must use one strategy mode")
+        if modes == {"direct"}:
+            if self.alpha is not None or self.neutralization is not None:
+                raise ValueError("Direct Strategy Sweep cannot contain shared Alpha settings")
+        elif self.alpha is None or self.neutralization is None:
+            raise ValueError("Framework Strategy Sweep requires shared Alpha settings")
+        return self
 
 
 type ResearchBatchAdmissionCommand = Annotated[
@@ -153,7 +177,7 @@ class ResearchBatchScope(BaseModel):
     start_date: date
     end_date: date
     universe: ResearchUniverse
-    neutralization: ResearchNeutralization
+    neutralization: ResearchNeutralization | None
     numeric_execution_contract: str
     semantic_versions: dict[str, str]
     data_through_session: date

@@ -86,7 +86,7 @@ def test_explicit_research_period_projects_three_variable_length_result_values(
     result = build_result_payload(
         output,
         research_kind="strategy_backtest",
-        selection_interval=1,
+
     )
     payloads = result_publication_payloads(
         result, research_kind="strategy_backtest"

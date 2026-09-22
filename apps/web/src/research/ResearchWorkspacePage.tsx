@@ -16,6 +16,7 @@ import { coreFetch } from "../auth/coreFetch";
 import type { BrowserLocation } from "../auth/routing";
 import { ResearchFieldCatalog, type DataOverview } from "../data/DataPage";
 import { AlphaFormulaEditor, type AlphaFormulaEditorHandle } from "./AlphaFormulaEditor";
+import { PythonStrategyAuthoring } from "./PythonStrategyAuthoring";
 import { buildResearchDatePresets } from "./dateRange";
 import {
   createDiagnosticsScheduler,
@@ -38,6 +39,7 @@ import {
   researchInputs,
   researchDraftKey,
   selectResearchKind,
+  selectStrategyMode,
   type ResearchDraft,
 } from "./draft";
 
@@ -395,6 +397,7 @@ export function ResearchDraftWorkspace({
   const exposureEditor = useRef<AlphaFormulaEditorHandle>(null);
   const [validationAttempted, setValidationAttempted] = useState(false);
   const [pendingInput, setPendingInput] = useState<ResearchInputField | null>(null);
+  const direct = draft.researchKind === "strategy_backtest" && draft.strategyMode === "direct";
   const inputIssues = validationAttempted ? researchInputIssues(researchInputs(draft)) : [];
   const inputError = (field: ResearchInputField) => inputIssues.find((issue) => issue.field === field)?.message;
   useEffect(() => {
@@ -436,21 +439,21 @@ export function ResearchDraftWorkspace({
     key: string; checking: boolean; message: string; issues: ResearchRunAdmissionRejection["issues"];
   } | null>(null);
   const specController = useRef<AbortController | null>(null);
-  const specKey = JSON.stringify(researchSpec(researchInputs(draft)));
+  const specKey = JSON.stringify(researchInputs(draft));
   const diagnostics = useRef(createDiagnosticsScheduler());
   const handledGlobalNew = useRef(false);
   const admissionGeneration = useRef(0);
   const admissionController = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    diagnostics.current.diagnose(draft.formula, setDiagnosticState);
-  }, [draft.formula]);
+    diagnostics.current.diagnose(direct ? "" : draft.formula, setDiagnosticState);
+  }, [draft.formula, direct]);
   useEffect(() => {
     exposureDiagnostics.current.diagnose(
-      draft.researchKind === "strategy_backtest" ? draft.exposureExpression : "",
+      draft.researchKind === "strategy_backtest" && !direct ? draft.exposureExpression : "",
       setExposureDiagnosticState,
     );
-  }, [draft.researchKind, draft.exposureExpression]);
+  }, [draft.researchKind, draft.exposureExpression, direct]);
   useEffect(() => {
     specController.current?.abort();
   }, [specKey]);
@@ -504,7 +507,7 @@ export function ResearchDraftWorkspace({
     try {
       const response = await coreFetch("/api/research/diagnostics", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: key, signal: controller.signal,
+        body: JSON.stringify(researchSpec(researchInputs(draft))), signal: controller.signal,
       });
       if (!response.ok) throw new Error("Configuration check is unavailable. Try again.");
       const result = await response.json() as { valid: boolean; issues: ResearchRunAdmissionRejection["issues"] };
@@ -551,7 +554,7 @@ export function ResearchDraftWorkspace({
       if (response.status === 422) {
         const rejection = (await response.json()) as ResearchRunAdmissionRejection;
         if (generation !== admissionGeneration.current) return;
-        setAdmissionFeedback({ formula: begun.command.formula, issues: rejection.issues });
+        setAdmissionFeedback({ key: JSON.stringify(researchInputs(begun.draft)), issues: rejection.issues });
         return;
       }
       if (!response.ok) throw new Error(`Research Run request failed (${response.status})`);
@@ -577,7 +580,7 @@ export function ResearchDraftWorkspace({
       if (reason instanceof DOMException && reason.name === "AbortError") return;
       if (generation !== admissionGeneration.current) return;
       setAdmissionFeedback({
-        formula: begun.command.formula,
+        key: JSON.stringify(researchInputs(begun.draft)),
         issues: [{
           code: "RUN_UNAVAILABLE",
           field: "run",
@@ -598,15 +601,23 @@ export function ResearchDraftWorkspace({
   const previewDiagnostics = diagnosticState.kind === "complete"
     ? diagnosticState.result.diagnostics
     : [];
-  const admissionDiagnostics = admissionFeedback?.formula === draft.formula
+  const admissionDiagnostics = admissionFeedback?.key === specKey
     ? admissionFeedback.issues.flatMap(issueAsFormulaDiagnostic)
     : [];
   const serverDiagnostics = admissionDiagnostics.length > 0
     ? admissionDiagnostics
     : previewDiagnostics;
-  const visibleIssues = admissionFeedback?.formula === draft.formula
+  const visibleIssues = admissionFeedback?.key === specKey
     ? admissionFeedback.issues
     : [];
+  function programError(field: ResearchInputField): string | undefined {
+    const serverField = {
+      programSource: "program.source", programParameters: "program.parameters",
+      programFields: "program.data_requirements", programHistorySessions: "program.data_requirements",
+    }[field as string];
+    const issues = [...visibleIssues, ...(specFeedback?.key === specKey ? specFeedback.issues : [])];
+    return inputError(field) ?? issues.find(issue => issue.field === serverField)?.message;
+  }
   return (
     <section ref={workspace} aria-label="Research" className="page-section research-workspace">
       <header className="research-workspace-header">
@@ -660,6 +671,16 @@ export function ResearchDraftWorkspace({
                 </span>
               </label>
             </fieldset>
+        {draft.researchKind === "strategy_backtest" && <div className="research-parameter-field research-strategy-mode">
+          <label htmlFor="strategy-mode">Strategy mode</label>
+          <select id="strategy-mode" value={draft.strategyMode} onChange={event => {
+            const mode = event.target.value;
+            if (mode === "framework" || mode === "direct") updateDraft(current => selectStrategyMode(current, mode));
+          }}>
+            <option value="framework">Framework · Built-in strategy</option>
+            <option value="direct">Direct · Python</option>
+          </select>
+        </div>}
         <div className="research-quick-settings">
             <ResearchDateFields
               startError={inputError("startDate")} endError={inputError("endDate")}
@@ -693,7 +714,10 @@ export function ResearchDraftWorkspace({
         <header><h2>Browse fields</h2><button className="button button-quiet" type="button" aria-label="Close field browser" onClick={closeFields}><X aria-hidden="true" size={18} /></button></header>
         {fieldsOpen && <ResearchFieldCatalog catalog={catalog} />}
       </aside>
-      <section className="research-editor-panel" aria-label="Alpha authoring">
+      <section className="research-editor-panel" aria-label={direct ? "Python authoring" : "Alpha authoring"}>
+        {direct ? <PythonStrategyAuthoring inputs={draft} error={programError}
+          onChange={changes => updateDraft(current => ({ ...current, ...changes }))}
+          fieldsButton={<button className="button button-quiet" type="button" ref={fieldsTrigger} aria-expanded={fieldsOpen} aria-controls="research-fields-panel" onClick={() => setFieldsOpen(open => !open)}>Browse fields</button>} /> : <>
         <div className="formula-workbench">
           <header className="formula-heading">
             <h2 id="alpha-formula-title">Alpha formula</h2>
@@ -722,6 +746,7 @@ export function ResearchDraftWorkspace({
         {diagnosticState.kind === "unavailable" ? (
           <p className="inline-status inline-status-error" role="status">Formula validation is unavailable.</p>
         ) : null}
+        </>}
         {storageError !== null ? <p className="inline-status inline-status-error" role="alert">{storageError}</p> : null}
         {visibleIssues.length > 0 ? (
           <ul aria-label="Run issues" className="formula-diagnostics">
@@ -731,10 +756,10 @@ export function ResearchDraftWorkspace({
           </ul>
         ) : null}
         {draft.researchKind === "strategy_backtest" && <p className="research-spec-feedback">
-          Framework · Built-in strategy. Decide after the close; simulate trades at the next trading session’s open.
+          {direct ? "Direct · Python strategy." : "Framework · Built-in strategy."} Decide after the close; simulate trades at the next trading session’s open.
         </p>}
         <div className="research-selection-settings">
-          {draft.researchKind === "strategy_backtest" && <>
+          {draft.researchKind === "strategy_backtest" && !direct && <>
                 <ResearchNumberStepper
                   actionLabel="number of holdings"
                   id="research-holdings-count"
@@ -779,7 +804,7 @@ export function ResearchDraftWorkspace({
                   {(validationAttempted || draft.initialCashCny !== "") && !isValidInitialCash(draft.initialCashCny) && <small id="initial-cash-help" className="inline-status-error">Enter 0.01–1,000,000,000 CNY, with up to two decimal places.</small>}
                 </div>
             </>}
-            <div className="research-parameter-field">
+            {!direct && <div className="research-parameter-field">
               <div className="research-parameter-heading"><label htmlFor="research-neutralization">Neutralization</label></div>
               <select id="research-neutralization" aria-invalid={Boolean(inputError("neutralization"))} aria-describedby={inputError("neutralization") ? "neutralization-error" : undefined} onChange={(event) => updateDraft((current) => ({ ...current, neutralization: event.target.value }))} value={draft.neutralization}>
                 <option value="">Not selected</option>
@@ -787,9 +812,9 @@ export function ResearchDraftWorkspace({
                 <option value="industry">Industry</option>
               </select>
               {inputError("neutralization") && <small id="neutralization-error" className="inline-status-error">{inputError("neutralization")}</small>}
-            </div>
+            </div>}
 
-            {draft.researchKind === "strategy_backtest" ? (
+            {draft.researchKind === "strategy_backtest" && !direct ? (
               <>
                 <div className="research-parameter-field research-weighting-field">
                   <div className="research-parameter-heading"><label htmlFor="portfolio-weighting">Portfolio weighting</label>
@@ -915,7 +940,7 @@ type ResearchRunAdmissionIssue = {
 
 type ResearchRunAdmissionRejection = { issues: ResearchRunAdmissionIssue[] };
 type AdmissionFeedback = {
-  formula: string;
+  key: string;
   issues: ResearchRunAdmissionIssue[];
 };
 
@@ -1025,6 +1050,8 @@ const INPUT_SELECTORS: Record<Exclude<ResearchInputField, "formula" | "exposureE
   universe: "#research-universe", neutralization: "#research-neutralization", initialCashCny: "#initial-cash",
   holdingsCount: "#research-holdings-count", selectionEverySessions: "#research-selection-sessions",
   volatilityWindow: "#volatility-window",
+  programSource: "#python-source", programParameters: "#python-parameters",
+  programFields: "#python-fields", programHistorySessions: "#python-history",
 };
 
 function ResearchPositionSizing({ ref, catalog, expression, diagnostics, onChange, error }: {

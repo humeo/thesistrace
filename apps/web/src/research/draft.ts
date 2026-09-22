@@ -1,3 +1,5 @@
+import { DIRECT_EXAMPLE, parseProgramFields, parseProgramParameters, type PythonProgram } from "./pythonStrategy";
+
 export type PortfolioWeighting = "equal_weight" | "rank_weight" | "inverse_volatility";
 
 export type EditorState = {
@@ -7,7 +9,11 @@ export type EditorState = {
 
 export type ResearchInputs = {
   researchKind: "factor_evaluation" | "strategy_backtest";
-  strategyMode: "framework";
+  strategyMode: "framework" | "direct";
+  programSource: string;
+  programParameters: string;
+  programFields: string;
+  programHistorySessions: string;
   name: string;
   formula: string;
   hypothesis: string;
@@ -33,12 +39,10 @@ type CommonResearchRunAdmissionCommand = {
   request_id: string;
   folder_id: string;
   name: string | null;
-  formula: string;
   hypothesis: string | null;
   start_date: string;
   end_date: string;
   universe: string;
-  neutralization: string;
 };
 
 export type ResearchRunAdmissionCommand = ResearchSpec & Pick<
@@ -46,25 +50,32 @@ export type ResearchRunAdmissionCommand = ResearchSpec & Pick<
 >;
 
 type CommonFrozenResearchAuthorableInput = {
-  formula: string;
   hypothesis: string | null;
   start_date: string;
   end_date: string;
   universe: "top300" | "top1000" | "top2000" | "top3000";
-  neutralization: "none" | "industry";
 };
 
 export type FrozenResearchAuthorableInput = CommonFrozenResearchAuthorableInput & ({
   research_kind: "factor_evaluation";
+  formula: string;
+  neutralization: "none" | "industry";
 } | {
   research_kind: "strategy_backtest";
   strategy_mode: "framework";
+  formula: string;
+  neutralization: "none" | "industry";
   initial_cash_cny: string;
   holdings_count: number;
   selection_every_sessions: number;
   exposure_expression: string;
   weighting: PortfolioWeighting;
   volatility_window: number;
+} | {
+  research_kind: "strategy_backtest";
+  strategy_mode: "direct";
+  initial_cash_cny: string;
+  program: PythonProgram;
 });
 
 export type ResearchDraft = ResearchInputs & {
@@ -73,7 +84,7 @@ export type ResearchDraft = ResearchInputs & {
   pendingAdmission: PendingResearchRun | null;
 };
 
-const MAX_DRAFT_BYTES = 64 * 1024;
+const MAX_DRAFT_BYTES = 2 * 1024 * 1024;
 const MAX_FORMULA_LENGTH = 4_096;
 export const MAX_HYPOTHESIS_LENGTH = 1_024;
 const MAX_TEXT_LENGTH = 10_000;
@@ -82,6 +93,7 @@ export function emptyResearchDraft(): ResearchDraft {
   return {
     researchKind: "factor_evaluation",
     strategyMode: "framework",
+    programSource: "", programParameters: "", programFields: "", programHistorySessions: "",
     name: "",
     formula: "",
     hypothesis: "",
@@ -151,7 +163,9 @@ export function selectResearchKind(
 ): ResearchDraft {
   return researchKind === "factor_evaluation" ? {
     ...draft,
-    researchKind,
+    researchKind, strategyMode: "framework",
+    programSource: "", programParameters: "", programFields: "", programHistorySessions: "",
+    neutralization: draft.neutralization || "none",
     initialCashCny: "",
     holdingsCount: "",
     selectionEverySessions: "",
@@ -164,6 +178,22 @@ export function selectResearchKind(
     initialCashCny: draft.researchKind === "factor_evaluation" ? "100000" : draft.initialCashCny,
     holdingsCount: draft.researchKind === "factor_evaluation" ? "10" : draft.holdingsCount,
     selectionEverySessions: draft.researchKind === "factor_evaluation" ? "5" : draft.selectionEverySessions,
+  };
+}
+
+export function selectStrategyMode(draft: ResearchDraft, mode: ResearchInputs["strategyMode"]): ResearchDraft {
+  if (draft.strategyMode === mode) return draft;
+  return mode === "direct" ? {
+    ...draft, strategyMode: mode, formula: "", neutralization: "", holdingsCount: "",
+    selectionEverySessions: "", exposureExpression: "", weighting: "equal_weight", volatilityWindow: "",
+    programSource: DIRECT_EXAMPLE, programParameters: '{"improvement": 0.02}',
+    programFields: "price.close.adjusted", programHistorySessions: "6",
+    editor: { anchor: 0, head: 0 }, pendingAdmission: null,
+  } : {
+    ...draft, strategyMode: mode, programSource: "", programParameters: "", programFields: "", programHistorySessions: "",
+    formula: "", neutralization: "none", holdingsCount: "10", selectionEverySessions: "5",
+    exposureExpression: "1", weighting: "equal_weight", volatilityWindow: "20",
+    editor: { anchor: 0, head: 0 }, pendingAdmission: null,
   };
 }
 
@@ -191,37 +221,38 @@ export function beginResearchRun(
 }
 
 export type ResearchSpec = Omit<CommonResearchRunAdmissionCommand, "request_id" | "folder_id" | "name"> & (
-  { research_kind: "factor_evaluation" } | {
-    research_kind: "strategy_backtest";
-    strategy_mode: "framework";
-    initial_cash_cny: string;
-    holdings_count: number;
-    selection_every_sessions: number;
-    exposure_expression: string;
-  weighting: PortfolioWeighting;
-  volatility_window: number;
+  { research_kind: "factor_evaluation"; formula: string; neutralization: string } | {
+    research_kind: "strategy_backtest"; strategy_mode: "framework";
+    formula: string; neutralization: string; initial_cash_cny: string;
+    holdings_count: number; selection_every_sessions: number; exposure_expression: string;
+    weighting: PortfolioWeighting; volatility_window: number;
+  } | {
+    research_kind: "strategy_backtest"; strategy_mode: "direct";
+    initial_cash_cny: string; program: PythonProgram;
   }
 );
 
 export function researchSpec(inputs: ResearchInputs): ResearchSpec {
   const common = {
-    formula: inputs.formula,
     hypothesis: inputs.hypothesis.trim() === "" ? null : inputs.hypothesis,
-    start_date: inputs.startDate,
-    end_date: inputs.endDate,
-    universe: inputs.universe,
-    neutralization: inputs.neutralization,
+    start_date: inputs.startDate, end_date: inputs.endDate, universe: inputs.universe,
   };
-  return inputs.researchKind === "factor_evaluation" ? {
-    ...common, research_kind: "factor_evaluation",
-  } : {
-    ...common, research_kind: "strategy_backtest", strategy_mode: inputs.strategyMode,
+  if (inputs.researchKind === "strategy_backtest" && inputs.strategyMode === "direct") return {
+    ...common, research_kind: "strategy_backtest", strategy_mode: "direct",
     initial_cash_cny: inputs.initialCashCny,
-    holdings_count: Number(inputs.holdingsCount),
-    selection_every_sessions: Number(inputs.selectionEverySessions),
-    exposure_expression: inputs.exposureExpression,
-    weighting: inputs.weighting,
-    volatility_window: Number(inputs.volatilityWindow),
+    program: {
+      source: inputs.programSource, parameters: parseProgramParameters(inputs.programParameters),
+      data_requirements: { field_ids: parseProgramFields(inputs.programFields), history_sessions: Number(inputs.programHistorySessions) },
+    },
+  };
+  const alpha = { ...common, formula: inputs.formula, neutralization: inputs.neutralization };
+  return inputs.researchKind === "factor_evaluation" ? {
+    ...alpha, research_kind: "factor_evaluation",
+  } : {
+    ...alpha, research_kind: "strategy_backtest", strategy_mode: "framework",
+    initial_cash_cny: inputs.initialCashCny, holdings_count: Number(inputs.holdingsCount),
+    selection_every_sessions: Number(inputs.selectionEverySessions), exposure_expression: inputs.exposureExpression,
+    weighting: inputs.weighting, volatility_window: Number(inputs.volatilityWindow),
   };
 }
 
@@ -261,25 +292,37 @@ export function isValidInitialCash(value: string): boolean {
   return BigInt(whole + fraction.padEnd(2, "0")) <= 100000000000n;
 }
 
-export type ResearchInputField = "formula" | "hypothesis" | "startDate" | "endDate" | "universe" | "neutralization" | "initialCashCny" | "holdingsCount" | "selectionEverySessions" | "exposureExpression" | "volatilityWindow";
+export type ResearchInputField = "programSource" | "programParameters" | "programFields" | "programHistorySessions" | "formula" | "hypothesis" | "startDate" | "endDate" | "universe" | "neutralization" | "initialCashCny" | "holdingsCount" | "selectionEverySessions" | "exposureExpression" | "volatilityWindow";
 export type ResearchInputIssue = { field: ResearchInputField; message: string };
 
 export function researchInputIssues(inputs: ResearchInputs): ResearchInputIssue[] {
   const issues: ResearchInputIssue[] = [];
-  if (!inputs.formula.trim()) issues.push({ field: "formula", message: "Enter an Alpha formula." });
+  const direct = inputs.researchKind === "strategy_backtest" && inputs.strategyMode === "direct";
+  if (!direct && !inputs.formula.trim()) issues.push({ field: "formula", message: "Enter an Alpha formula." });
   if (!/^\d{4}-\d{2}-\d{2}$/.test(inputs.startDate)) issues.push({ field: "startDate", message: "Choose a start date." });
   if (!/^\d{4}-\d{2}-\d{2}$/.test(inputs.endDate)) issues.push({ field: "endDate", message: "Choose an end date." });
   else if (inputs.startDate > inputs.endDate) issues.push({ field: "endDate", message: "End date must be on or after start date." });
   if (!["top300", "top1000", "top2000", "top3000"].includes(inputs.universe)) issues.push({ field: "universe", message: "Choose a stock universe." });
-  if (!["none", "industry"].includes(inputs.neutralization)) issues.push({ field: "neutralization", message: "Choose a neutralization method." });
-  if (inputs.researchKind === "strategy_backtest") {
+  if (!direct && !["none", "industry"].includes(inputs.neutralization)) issues.push({ field: "neutralization", message: "Choose a neutralization method." });
+  if (inputs.researchKind === "strategy_backtest" && !isValidInitialCash(inputs.initialCashCny)) issues.push({ field: "initialCashCny", message: "Initial cash must be 0.01–1,000,000,000 CNY, with up to two decimal places." });
+  if (inputs.researchKind === "strategy_backtest" && !direct) {
     const holdings = Number(inputs.holdingsCount), interval = Number(inputs.selectionEverySessions);
     if (!Number.isInteger(holdings) || holdings < 1 || holdings > 100) issues.push({ field: "holdingsCount", message: "Holdings count must be a whole number from 1 to 100." });
     if (!Number.isInteger(interval) || interval < 1 || interval > 20) issues.push({ field: "selectionEverySessions", message: "Selection interval must be a whole number from 1 to 20 trading days." });
-    if (!isValidInitialCash(inputs.initialCashCny)) issues.push({ field: "initialCashCny", message: "Initial cash must be 0.01–1,000,000,000 CNY, with up to two decimal places." });
     if (!isValidVolatilityWindow(inputs.volatilityWindow)) issues.push({ field: "volatilityWindow", message: "Volatility window must be a whole number from 1 to 252." });
     if (!inputs.exposureExpression.trim()) issues.push({ field: "exposureExpression", message: "Enter a position sizing formula." });
     else if (Number(inputs.exposureExpression) < 0 || Number(inputs.exposureExpression) > 1) issues.push({ field: "exposureExpression", message: "Position sizing formula must return a value between 0 and 1." });
+  }
+  if (direct) {
+    if (!inputs.programSource.trim() || new TextEncoder().encode(inputs.programSource).byteLength > 65536) issues.push({ field: "programSource", message: "Enter Python source within 64 KiB." });
+    try {
+      const parameters = parseProgramParameters(inputs.programParameters);
+      if (new TextEncoder().encode(JSON.stringify(parameters)).byteLength > 65536) throw new Error();
+    } catch { issues.push({ field: "programParameters", message: "Enter a parameters JSON object within 64 KiB." }); }
+    const fields = parseProgramFields(inputs.programFields);
+    if (fields.length > 32 || new Set(fields).size !== fields.length || fields.some(field => field.length > 200)) issues.push({ field: "programFields", message: "Declare up to 32 unique canonical field IDs." });
+    const history = Number(inputs.programHistorySessions);
+    if (!Number.isInteger(history) || history < 1 || history > 253) issues.push({ field: "programHistorySessions", message: "History must be a whole number from 1 to 253 sessions, including the decision day." });
   }
   if (Array.from(inputs.hypothesis).length > MAX_HYPOTHESIS_LENGTH) issues.push({ field: "hypothesis", message: "Keep notes within 1,024 characters." });
   return issues;
@@ -305,26 +348,24 @@ export function useResearchAsDraft(
   confirmDiscard: (message: string) => boolean,
 ): boolean {
   const current = loadResearchDraft(storage, researcherId, folderId);
+  const direct = input.research_kind === "strategy_backtest" && input.strategy_mode === "direct";
+  const framework = input.research_kind === "strategy_backtest" && input.strategy_mode === "framework";
   const nextInputs: ResearchInputs = {
-    ...researchInputs(current),
-    formula: input.formula,
-    hypothesis: input.hypothesis ?? "",
-    startDate: input.start_date,
-    endDate: input.end_date,
-    universe: input.universe,
-    neutralization: input.neutralization,
-    researchKind: input.research_kind,
-    strategyMode: input.research_kind === "strategy_backtest" ? input.strategy_mode : "framework",
+    ...researchInputs(emptyResearchDraft()), name: current.name,
+    formula: "formula" in input ? input.formula : "",
+    hypothesis: input.hypothesis ?? "", startDate: input.start_date, endDate: input.end_date,
+    universe: input.universe, neutralization: "neutralization" in input ? input.neutralization : "",
+    researchKind: input.research_kind, strategyMode: direct ? "direct" : "framework",
     initialCashCny: input.research_kind === "strategy_backtest" ? input.initial_cash_cny : "",
-    holdingsCount: input.research_kind === "strategy_backtest"
-      ? String(input.holdings_count)
-      : "",
-    exposureExpression: input.research_kind === "strategy_backtest" ? input.exposure_expression : "1",
-    volatilityWindow: input.research_kind === "strategy_backtest" ? String(input.volatility_window) : "20",
-    weighting: input.research_kind === "strategy_backtest" ? input.weighting : "equal_weight",
-    selectionEverySessions: input.research_kind === "strategy_backtest"
-      ? String(input.selection_every_sessions)
-      : "",
+    holdingsCount: framework ? String(input.holdings_count) : "",
+    exposureExpression: framework ? input.exposure_expression : direct ? "" : "1",
+    volatilityWindow: framework ? String(input.volatility_window) : direct ? "" : "20",
+    weighting: framework ? input.weighting : "equal_weight",
+    selectionEverySessions: framework ? String(input.selection_every_sessions) : "",
+    programSource: direct ? input.program.source : "",
+    programParameters: direct ? JSON.stringify(input.program.parameters) : "",
+    programFields: direct ? input.program.data_requirements.field_ids.join("\n") : "",
+    programHistorySessions: direct ? String(input.program.data_requirements.history_sessions) : "",
   };
   if (
     wouldOverwriteUnexecutedAuthorableValue(current, nextInputs) &&
@@ -333,7 +374,7 @@ export function useResearchAsDraft(
   persistResearchDraft(storage, researcherId, folderId, {
     ...current,
     ...nextInputs,
-    editor: { anchor: input.formula.length, head: input.formula.length },
+    editor: { anchor: nextInputs.formula.length, head: nextInputs.formula.length },
     pendingAdmission: null,
   });
   return true;
@@ -354,6 +395,7 @@ function wouldOverwriteUnexecutedAuthorableValue(
     "neutralization",
     "researchKind",
     "strategyMode",
+    "programSource", "programParameters", "programFields", "programHistorySessions",
     "initialCashCny",
     "holdingsCount",
     "selectionEverySessions",
@@ -408,6 +450,7 @@ function readInputs(value: unknown): ResearchInputs | null {
   const keys = [
     "researchKind",
     "strategyMode",
+    "programSource", "programParameters", "programFields", "programHistorySessions",
     "name",
     "formula",
     "hypothesis",
@@ -426,11 +469,13 @@ function readInputs(value: unknown): ResearchInputs | null {
   const strings = value as Record<(typeof keys)[number], string>;
   if (
     !["factor_evaluation", "strategy_backtest"].includes(strings.researchKind) ||
-    strings.strategyMode !== "framework" ||
+    !["framework", "direct"].includes(strings.strategyMode) ||
     !["equal_weight", "rank_weight", "inverse_volatility"].includes(strings.weighting) ||
     strings.formula.length > MAX_FORMULA_LENGTH ||
     strings.exposureExpression.length > MAX_FORMULA_LENGTH ||
-    keys.some((key) => strings[key].length > MAX_TEXT_LENGTH)
+    keys.some((key) => key === "programSource" || key === "programParameters"
+      ? new TextEncoder().encode(strings[key]).byteLength > (key === "programSource" ? 65536 : MAX_DRAFT_BYTES)
+      : strings[key].length > MAX_TEXT_LENGTH)
   ) return null;
   return Object.fromEntries(keys.map((key) => [key, strings[key]])) as ResearchInputs;
 }

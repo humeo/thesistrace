@@ -26,7 +26,7 @@ def test_frozen_target_can_change_selection_outside_the_builtin_schedule():
     state["pending_target"] = {
         "decision_session": SESSIONS[1],
         "execution": "next_research_session_open",
-        "contract_checksum": state["target_selection"]["contract_checksum"],
+        "contract_checksum": state["decision_state"]["selection"]["contract_checksum"],
         "reason": "better_candidate",
         "allocation": {
             "mode": "rebalance",
@@ -45,7 +45,7 @@ def test_frozen_target_can_change_selection_outside_the_builtin_schedule():
         (fill["instrument_id"], fill["side"], fill["quantity"])
         for fill in result["fills"] if fill["session"] == SESSIONS[2]
     ] == [(A, "sell", 10000), (B, "buy", 10000)]
-    assert result["target_selection"]["selected_instrument_ids"] == [A]
+    assert result["decision_state"]["selection"]["selected_instrument_ids"] == [A]
     assert result["pending_target"] is None
     assert [(item["instrument_id"], item["execution_shares"])
             for item in result["positions"]] == [(B, 10000)]
@@ -69,7 +69,7 @@ def test_local_reduction_keeps_other_holdings_and_freezes_quantity_before_open()
     state["pending_target"] = {
         "decision_session": SESSIONS[1],
         "execution": "next_research_session_open",
-        "contract_checksum": state["target_selection"]["contract_checksum"],
+        "contract_checksum": state["decision_state"]["selection"]["contract_checksum"],
         "reason": "local_reduction",
         "allocation": None,
         "position_limits": {A: 4000},
@@ -110,7 +110,7 @@ def test_final_allocation_and_share_ceiling_produce_one_difference_without_buyba
     state = copy.deepcopy(prefix.resumable)
     state["pending_target"] = {
         "decision_session": SESSIONS[1], "execution": "next_research_session_open",
-        "contract_checksum": state["target_selection"]["contract_checksum"],
+        "contract_checksum": state["decision_state"]["selection"]["contract_checksum"],
         "reason": "new_portfolio_with_reduction",
         "allocation": {
             "mode": "rebalance", "instrument_ids": [A],
@@ -143,7 +143,7 @@ def test_explicit_increase_can_use_cash_released_by_same_decision_local_exit():
     ).resumable
     state["pending_target"] = {
         "decision_session": SESSIONS[1], "execution": "next_research_session_open",
-        "contract_checksum": state["target_selection"]["contract_checksum"],
+        "contract_checksum": state["decision_state"]["selection"]["contract_checksum"],
         "reason": "better_candidate_with_local_exit",
         "allocation": {
             "mode": "increase", "instrument_ids": [B],

@@ -9,6 +9,7 @@ import tempfile
 import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import lru_cache
 from pathlib import Path
 
 import wasmtime
@@ -23,7 +24,11 @@ from thesistrace.research_kernel.strategy_program_assets import (
     unpack_runtime,
     verified_archive,
 )
-from thesistrace.research_kernel.strategy_program_guest import AVAILABLE_MODULES
+from thesistrace.research_kernel.strategy_program_guest import (
+    AVAILABLE_MODULES,
+    BOOTSTRAP_READY,
+    BOOTSTRAP_READY_FD,
+)
 
 SOURCE_BYTES = 65_536
 INPUT_BYTES = 4 * 1024 * 1024
@@ -34,10 +39,18 @@ DIAGNOSTIC_BYTES = 65_536
 MEMORY_BYTES = 128 * 1024 * 1024
 FUEL = 16_000_000_000
 WALL_SECONDS = 3
+BOOTSTRAP_WALL_SECONDS = 10
 MAX_JSON_DEPTH = 32
 
 
-class StrategyProgramError(ValueError):
+class StrategyProgramFailure(ValueError):
+    """A bounded, owner-visible program diagnostic, including across a child wire."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message[:512])
+
+
+class StrategyProgramError(StrategyProgramFailure):
     def __init__(
         self, message: str, *, source: str, session: str | None, line: int | None = None,
     ) -> None:
@@ -74,6 +87,8 @@ def _check_json(value: object, depth: int = 0) -> None:
             raise ValueError("Program JSON integers must fit the exact interoperable range")
         return
     if type(value) is float and math.isfinite(value):
+        if value.is_integer() and abs(value) > 2**53 - 1:
+            raise ValueError("Program JSON integers must fit the exact interoperable range")
         return
     if type(value) is dict and all(type(key) is str for key in value):
         for key, item in value.items():
@@ -87,7 +102,7 @@ def _check_json(value: object, depth: int = 0) -> None:
     raise ValueError("Program values must be finite JSON values with string object keys")
 
 
-def _encode(value: object, limit: int, name: str) -> bytes:
+def encode_program_json(value: object, limit: int, name: str) -> bytes:
     _check_json(value)
     encoded = canonical_json_bytes(value)
     if len(encoded) > limit:
@@ -124,7 +139,7 @@ class PythonStrategyRuntime:
 
     def identity(self) -> dict[str, object]:
         return {
-            "contract": "python-strategy/v1", "python": PYTHON_VERSION,
+            "contract": "python-strategy/v2", "python": PYTHON_VERSION,
             "wasmtime": WASMTIME_VERSION, "archive_sha256": ARCHIVE_SHA256,
             "bootstrap_sha256": hashlib.sha256(self._bootstrap.encode()).hexdigest(),
             "modules": list(AVAILABLE_MODULES), "source_bytes": SOURCE_BYTES,
@@ -132,6 +147,7 @@ class PythonStrategyRuntime:
             "state_bytes": STATE_BYTES, "parameter_bytes": PARAMETER_BYTES,
             "diagnostic_bytes": DIAGNOSTIC_BYTES,
             "memory_bytes": MEMORY_BYTES, "fuel": FUEL, "wall_seconds": WALL_SECONDS,
+            "bootstrap_wall_seconds": BOOTSTRAP_WALL_SECONDS,
             "json_depth": MAX_JSON_DEPTH,
             "clock": "decision_session_15:00_UTC+08:00",
             "random": "sha256_of_canonical_invocation/v1",
@@ -155,9 +171,9 @@ class PythonStrategyRuntime:
                 raise ValueError("Program source must contain at most 65536 UTF-8 bytes")
             if type(state) is not dict or type(parameters) is not dict:
                 raise ValueError("Program state and parameters must be explicit JSON objects")
-            _encode(state, STATE_BYTES, "state")
-            _encode(parameters, PARAMETER_BYTES, "parameters")
-            payload = _encode({
+            encode_program_json(state, STATE_BYTES, "state")
+            encode_program_json(parameters, PARAMETER_BYTES, "parameters")
+            payload = encode_program_json({
                 "source": source, "context": context, "state": state,
                 "parameters": parameters, "operation": operation,
             }, INPUT_BYTES, "input")
@@ -192,7 +208,7 @@ class PythonStrategyRuntime:
                 raise ValueError("Program must return exactly output and state")
             if type(returned["state"]) is not dict:
                 raise ValueError("Program must return an explicit JSON object state")
-            _encode(returned["state"], STATE_BYTES, "state")
+            encode_program_json(returned["state"], STATE_BYTES, "state")
             return ProgramResult(returned["output"], returned["state"], diagnostics)
         except StrategyProgramError:
             raise
@@ -218,8 +234,30 @@ class PythonStrategyRuntime:
             linker = wasmtime.Linker(self._engine)
             linker.define_wasi()
             linker.allow_shadowing = True
-            self._link_inputs(linker, payload, session, stdout, stderr)
-            timeout = threading.Timer(WALL_SECONDS, self._engine.increment_epoch)
+            expired = threading.Event()
+            phase = "bootstrap"
+
+            def interrupt():
+                expired.set()
+                self._engine.increment_epoch()
+
+            timeout = threading.Timer(BOOTSTRAP_WALL_SECONDS, interrupt)
+
+            def start_program():
+                nonlocal timeout, phase
+                timeout.cancel()
+                timeout.join()
+                if expired.is_set():
+                    raise wasmtime.Trap("Python bootstrap wall time exceeded")
+                phase = "program"
+                timeout = threading.Timer(WALL_SECONDS, interrupt)
+                timeout.daemon = True
+                timeout.start()
+
+            self._link_inputs(
+                linker, payload, session, stdout, stderr,
+                on_ready=start_program,
+            )
             timeout.daemon = True
             timeout.start()
             try:
@@ -229,9 +267,9 @@ class PythonStrategyRuntime:
                 if error.code != 0:
                     raise ValueError("Python guest exited without a valid result") from error
             except wasmtime.Trap as error:
-                raise ValueError(
-                    "Python guest exceeded its resource or capability limits"
-                ) from error
+                message = (f"Python {phase} exceeded its wall time limit" if expired.is_set()
+                           else "Python guest exceeded its resource or capability limits")
+                raise ValueError(message) from error
             finally:
                 timeout.cancel()
                 timeout.join()
@@ -241,7 +279,9 @@ class PythonStrategyRuntime:
         return bytes(stdout)
 
     @staticmethod
-    def _link_inputs(linker, payload, session, stdout, stderr) -> None:
+    def _link_inputs(
+        linker, payload, session, stdout, stderr, *, on_ready,
+    ) -> None:
         i32, i64 = wasmtime.ValType.i32(), wasmtime.ValType.i64()
         fixed_ns = (
             int(datetime.fromisoformat(session).replace(hour=7, tzinfo=UTC).timestamp())
@@ -250,6 +290,7 @@ class PythonStrategyRuntime:
         )
         seed = hashlib.sha256(payload).digest()
         random_counter = 0
+        program_started = False
 
         def memory(caller, pointer, length):
             value = caller.get("memory")
@@ -282,6 +323,26 @@ class PythonStrategyRuntime:
             return 0
 
         def write(caller, descriptor, vectors, count, written):
+            nonlocal program_started
+            if descriptor == BOOTSTRAP_READY_FD and not program_started:
+                if count != 1:
+                    raise wasmtime.Trap("Invalid bootstrap readiness signal")
+                vector_memory = memory(caller, vectors, 8)
+                pointer, length = struct.unpack(
+                    "<II", vector_memory.read(caller, vectors, vectors + 8),
+                )
+                if length != len(BOOTSTRAP_READY):
+                    raise wasmtime.Trap("Invalid bootstrap readiness signal")
+                value = memory(caller, pointer, length)
+                if bytes(value.read(caller, pointer, pointer + length)) != BOOTSTRAP_READY:
+                    raise wasmtime.Trap("Invalid bootstrap readiness signal")
+                # No researcher source runs before the trusted first signal.
+                # Once consumed, this descriptor is denied like all file writes;
+                # repeating the signal cannot extend the program deadline.
+                program_started = True
+                on_ready()
+                memory(caller, written, 4).write(caller, struct.pack("<I", length), written)
+                return 0
             if descriptor not in {1, 2}:
                 return 76  # WASI ENOTCAPABLE; guest files never have write authority.
             if not 0 <= count <= 1024:
@@ -314,3 +375,9 @@ class PythonStrategyRuntime:
         define("random_get", [i32, i32], random_bytes)
         define("fd_write", [i32, i32, i32, i32], write)
         define("poll_oneoff", [i32, i32, i32, i32], deny_blocking)
+
+
+@lru_cache(maxsize=1)
+def get_strategy_runtime() -> PythonStrategyRuntime:
+    """Share only the verified library and compiled Wasm, never a Python guest."""
+    return PythonStrategyRuntime()

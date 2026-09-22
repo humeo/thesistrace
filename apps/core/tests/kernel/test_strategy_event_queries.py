@@ -45,6 +45,53 @@ def test_event_filters_are_specific_to_the_section() -> None:
     assert query.filters()["target_id"] == "target_abc"
 
 
+def test_large_direct_target_survives_worker_wire_publication_and_complete_record_page():
+    import json
+
+    from thesistrace.strategy_event_wire import EventMessageAssembler, strategy_event_messages
+    from thesistrace.strategy_evidence import (
+        StrategyEventPageRead,
+        StrategyEvidenceSource,
+        read_strategy_event_partition,
+        strategy_event_payload,
+        strategy_event_response,
+        validated_event_rows,
+    )
+
+    instruments = [f"equity:{i:06d}.SH" for i in range(1000)]
+    target = {
+        "target_id": "target_" + "a" * 64, "decision_session": "2026-08-03",
+        "contract_checksum": "b" * 64, "reason": "diversified_candidates",
+        "execution": "next_research_session_open", "position_limits": {},
+        "allocation": {
+            "mode": "rebalance", "instrument_ids": instruments,
+            "relative_weights": dict.fromkeys(instruments, "1/1000"), "exposure": 1.0,
+        },
+    }
+    assert 32 * 1024 < len(json.dumps(target)) < 1024 * 1024
+    message = {"strategy_events": {"strategy_targets": [target] * 200}}
+    assembler = EventMessageAssembler()
+    restored = None
+    for frame in strategy_event_messages(message):
+        assert len(json.dumps(frame).encode()) < 16 * 1024 * 1024
+        restored = assembler.accept(frame)
+    assert restored == message
+    assert validated_event_rows("strategy_targets", [target]) == [target]
+    from thesistrace.publication.serialization import parquet_bytes
+    payload = strategy_event_payload("strategy_targets", [target])
+    assert read_strategy_event_partition(
+        "strategy_targets", parquet_bytes(payload.rows, payload.contract),
+    ) == [target]
+    page = strategy_event_response(
+        StrategyTargetsQuery(section="strategy_targets"),
+        StrategyEventPageRead(status="recorded", rows=[target]),
+        source=StrategyEvidenceSource(kind="research_run", id="run", snapshot_id="c" * 64),
+        encode_cursor=lambda value: value,
+    )
+    assert page.rows[0].model_dump(mode="json") == target
+    assert page.next_cursor is None
+
+
 def test_event_reader_skips_old_partitions_and_keeps_same_session_rows() -> None:
     from thesistrace.strategy_evidence import read_strategy_event_page
 

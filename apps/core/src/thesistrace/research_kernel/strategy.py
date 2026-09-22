@@ -7,13 +7,7 @@ from decimal import Decimal, DecimalException, localcontext
 from fractions import Fraction
 from statistics import stdev
 
-from thesistrace.research_kernel.builtin_framework import (
-    BUILTIN_FRAMEWORK_MODULES,
-    BuiltinFramework,
-    BuiltinFrameworkState,
-)
-from thesistrace.research_kernel.common_inputs import CLOSE_FIELD_ID
-from thesistrace.research_kernel.exposure import evaluate_exposure_series, require_exposure_value
+from thesistrace.research_kernel.daily_strategy import prepare_daily_strategy
 from thesistrace.research_kernel.numeric import (
     ACCOUNTING_CONTEXT,
     MAX_INITIAL_CASH_CNY,
@@ -22,7 +16,8 @@ from thesistrace.research_kernel.numeric import (
 )
 from thesistrace.research_kernel.serialization import canonical_json_bytes
 from thesistrace.research_kernel.series_plan import CommonInputObserver
-from thesistrace.research_kernel.terminal_state_schema import PendingTarget, TargetSelection
+from thesistrace.research_kernel.strategy_program_runtime import StrategyProgramError
+from thesistrace.research_kernel.terminal_state_schema import PendingTarget
 from thesistrace.research_series import (
     AlignedResearchData,
     ColumnarResearchSeries,
@@ -66,7 +61,7 @@ class _StrategyExecution:
 
 def transition_strategy(
     research_data: AlignedResearchData,
-    alpha_matrix: dict[str, object],
+    alpha_matrix: dict[str, object] | None,
     definition: dict[str, object],
     *,
     origin_session: str,
@@ -88,7 +83,7 @@ def transition_strategy(
 
 def transition_columnar_strategy(
     research_data: ColumnarResearchSeries,
-    alpha_matrix: dict[str, object],
+    alpha_matrix: dict[str, object] | None,
     definition: dict[str, object],
     *,
     origin_session: str,
@@ -111,7 +106,7 @@ def transition_columnar_strategy(
 
 def _transition_strategy(
     research_data: AlignedResearchData | ColumnarResearchSeries,
-    alpha_matrix: dict[str, object],
+    alpha_matrix: dict[str, object] | None,
     definition: dict[str, object],
     *,
     origin_session: str,
@@ -227,7 +222,7 @@ def market_rejection_reason(
 
 def run_strategy(
     research_data: AlignedResearchData | ColumnarResearchSeries,
-    alpha_matrix: dict[str, object],
+    alpha_matrix: dict[str, object] | None,
     definition: dict[str, object],
     *,
     origin_session: str | None = None,
@@ -258,7 +253,7 @@ def run_strategy(
 
 def run_strategy_with_metric_state(
     research_data: AlignedResearchData | ColumnarResearchSeries,
-    alpha_matrix: dict[str, object],
+    alpha_matrix: dict[str, object] | None,
     definition: dict[str, object],
     *,
     origin_session: str | None = None,
@@ -284,7 +279,7 @@ def run_strategy_with_metric_state(
 
 def _execute_strategy(
     research_data: AlignedResearchData | ColumnarResearchSeries,
-    alpha_matrix: dict[str, object],
+    alpha_matrix: dict[str, object] | None,
     definition: dict[str, object],
     *,
     origin_session: str | None = None,
@@ -312,28 +307,13 @@ def _execute_strategy(
         origin_index = processing_start - report_session_count
     report_calendar = calendar[processing_start:]
     strategy = definition["strategy"]
-    if strategy["mode"] != "framework" or strategy["modules"] != BUILTIN_FRAMEWORK_MODULES:
-        raise StrategyCalculationError("Unsupported Strategy implementation")
-    close_histories = None
-    if strategy["weighting"] == "inverse_volatility":
-        instruments = tuple(sorted(research_data.instruments))
-        if isinstance(research_data, ColumnarResearchSeries):
-            matrix = research_data.numeric_field_matrices(
-                (CLOSE_FIELD_ID,), instruments,
-            )[CLOSE_FIELD_ID]
-            close_histories = dict(zip(instruments, matrix, strict=True))
-        else:
-            close_field = research_data.fields[CLOSE_FIELD_ID]
-            close_histories = {
-                item: [close_field.get((session, item)) for session in calendar]
-                for item in instruments
-            }
-    exposure_values = evaluate_exposure_series(
-        research_data, strategy["exposure_expression"], observe_common=observe_common,
-    )
-    exposure = None if continuation is None else require_exposure_value(
-        continuation["target_exposure"], str(continuation["daily"][-1]["session"]),
-    )
+    try:
+        program = prepare_daily_strategy(
+            research_data, alpha_matrix, definition, observe_common=observe_common,
+        )
+    except ValueError as error:
+        raise StrategyCalculationError(str(error)) from error
+    decision_state = None if continuation is None else continuation["decision_state"]
     initial_cash = Decimal(str(strategy["initial_cash_cny"]))
     if (
         not initial_cash.is_finite() or initial_cash <= 0
@@ -357,29 +337,9 @@ def _execute_strategy(
     prices = research_data.execution_prices
     states = research_data.trading_states
     limits = research_data.price_limits
-    value_store = alpha_matrix.get("value_store")
-    alpha_by_session = (
-        value_store
-        if isinstance(value_store, Mapping)
-        else {str(item["session"]): item["values"] for item in alpha_matrix["sessions"]}
-    )
     contract_checksum = hashlib.sha256(canonical_json_bytes(definition)).hexdigest()
-    framework = BuiltinFramework(
-        holdings_count=int(strategy["holdings_count"]),
-        selection_interval=int(strategy["selection_interval"]),
-        weighting=strategy["weighting"],
-        volatility_window=int(strategy["volatility_window"]),
-        contract_checksum=contract_checksum,
-    )
-    target_selection = None if continuation is None else continuation["target_selection"]
-    if target_selection is not None:
-        target_selection = TargetSelection.model_validate(target_selection).model_dump(mode="json")
-        if target_selection["contract_checksum"] != contract_checksum:
-            raise StrategyCalculationError("Retained Selection differs from Strategy contract")
-    framework_state = (
-        BuiltinFrameworkState(TargetSelection.model_validate(target_selection), exposure)
-        if target_selection is not None else None
-    )
+    if continuation is not None and continuation["contract_checksum"] != contract_checksum:
+        raise StrategyCalculationError("Continuation differs from Strategy contract")
     pending_target = None if continuation is None else continuation["pending_target"]
     if pending_target is not None:
         pending_target = PendingTarget.model_validate(pending_target).model_dump(mode="json")
@@ -905,23 +865,20 @@ def _execute_strategy(
                     "valuation_events": unique_events(valuation_events),
                 }
             )
-        end_index = global_index + 1
-        close_windows = {} if close_histories is None else {
-            str(item["instrument_id"]): close_histories[str(item["instrument_id"])][
-                max(0, end_index - framework.volatility_window - 1):end_index
-            ] for item in alpha_by_session[session]
-        }
         try:
-            decision = framework.decide(
+            decision = program.decide(
                 session=session, report_index=report_index,
-                alpha_values=alpha_by_session[session], close_windows=close_windows,
-                exposure_value=exposure_values[session], previous=framework_state,
+                account={"cash_cny": canonical_decimal(net_cash),
+                         "post_open_net_nav_cny": canonical_decimal(net_nav),
+                         "positions": _position_payload(positions)},
+                fills=fills[event_fill_start:], rejections=rejections[event_rejection_start:],
+                previous=decision_state,
             )
+        except StrategyProgramError:
+            raise
         except ValueError as error:
             raise StrategyCalculationError(str(error)) from error
-        framework_state = decision.state
-        target_selection = framework_state.selection.model_dump(mode="json")
-        exposure = framework_state.exposure
+        decision_state = decision.state
         pending_target = decision.target.model_dump(mode="json") if decision.target else None
         diagnostics.extend(decision.diagnostics)
         if pending_target is not None:
@@ -934,9 +891,9 @@ def _execute_strategy(
 
     positions_payload = _position_payload(positions)
     payload = {
-        "alpha_checksum": alpha_matrix["checksum"],
-        "target_selection": target_selection,
-        "target_exposure": exposure,
+        "alpha_checksum": alpha_matrix["checksum"] if alpha_matrix is not None else None,
+        "decision_state": decision_state,
+        "contract_checksum": contract_checksum,
         "pending_target": pending_target,
         "initial_cash_cny": canonical_decimal(initial_cash),
         "daily": daily,

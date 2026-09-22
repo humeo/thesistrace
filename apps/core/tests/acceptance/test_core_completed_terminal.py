@@ -118,9 +118,12 @@ def test_fixed_exposure_publishes_and_tracks_its_first_entry(
         assert detail["input"]["exposure_expression"] == exposure
         result = detail["result"]
         account = result["terminal_strategy_state"]
-        assert account["target_exposure"] == (0.7 if exposure == "7 / 10" else float(exposure))
-        assert account["pending_target"]["allocation"]["exposure"] == account["target_exposure"]
-        assert account["target_selection"]["selected_instrument_ids"]
+        assert account["decision_state"]["exposure"] == (
+            0.7 if exposure == "7 / 10" else float(exposure)
+        )
+        assert (account["pending_target"]["allocation"]["exposure"]
+                == account["decision_state"]["exposure"])
+        assert account["decision_state"]["selection"]["selected_instrument_ids"]
         assert account["positions"] == []
         assert Decimal(account["net_nav"]) == Decimal("100000")
         assert account["pending_target"]["decision_session"] == sessions[0]
@@ -445,10 +448,10 @@ def test_common_statistics_publish_from_checkpoint_to_completed_result(
             run_detail = client.get(f"/api/research-runs/{run_id}").json()
             terminal = run_detail["result"]["terminal_strategy_state"]
             assert run_detail["input"]["exposure_expression"] == exposure
-            assert terminal["target_exposure"] == 0
+            assert terminal["decision_state"]["exposure"] == 0
             assert terminal["pending_target"]["allocation"]["mode"] == "reduce"
-            assert terminal["target_selection"]["signal_session"] == sessions[1]
-            assert tracked["observation"]["target_exposure"] == 1
+            assert terminal["decision_state"]["selection"]["signal_session"] == sessions[1]
+            assert tracked["observation"]["decision_state"]["exposure"] == 1
             assert tracked["observation"]["holdings"]
             observations = tracked["strategy"]["observations"][-2:]
             assert observations[0]["holdings_count"] == 0
@@ -666,10 +669,10 @@ def test_inverse_eligibility_is_published_and_preserved_in_track(tmp_path: Path)
         detail = client.get(f"/api/research-runs/{run_id}").json()
         assert detail["status"] == "succeeded", detail
         terminal = detail["result"]["terminal_strategy_state"]
-        selection = terminal["target_selection"]
+        selection = terminal["decision_state"]["selection"]
         assert selection["eligibility_exclusions"]["zero_volatility"] > 0
         assert selection["selected_instrument_ids"] == []
-        assert terminal["target_exposure"] == 1
+        assert terminal["decision_state"]["exposure"] == 1
         assert Decimal(terminal["net_cash"]) == Decimal("100000")
         started = client.post(
             f"/api/research-runs/{run_id}/daily-tracks", json={"request_id": "eligibility-track"}
@@ -680,9 +683,9 @@ def test_inverse_eligibility_is_published_and_preserved_in_track(tmp_path: Path)
         worker = _run_worker_once(settings, "tracking")
         assert worker.returncode == 0, worker.stdout + worker.stderr
         tracked = client.get(f"/api/daily-tracks/{track_id}").json()
-        assert tracked["observation"]["target_selection"] == selection
+        assert tracked["observation"]["decision_state"]["selection"] == selection
         assert tracked["observation"]["holdings"] == []
-        assert tracked["observation"]["target_exposure"] == 1
+        assert tracked["observation"]["decision_state"]["exposure"] == 1
 
 
 def _assert_published_run_events(client, run_id):

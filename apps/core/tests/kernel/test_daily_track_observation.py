@@ -35,19 +35,20 @@ def account(
                     "last_adjusted_price": "4.5",
                 }
             ],
-            "selection_phase": {
+            "research_phase": {
                 "origin_session": "2026-08-03",
                 "report_session_count": count,
-                "selection_interval": 5,
-                "completed_intervals": count - 1,
             },
-            "target_selection": {"eligibility_exclusions": {},
-                "signal_session": session,
-                "selected_instrument_ids": ["000001.SZ"],
-                "relative_weights": {"000001.SZ": "1"},
-                "signal_checksum": "signal", "contract_checksum": "contract",
+            "decision_state": {
+                "mode": "framework", "selection_interval": 5, "exposure": 1.0,
+                "selection": {"eligibility_exclusions": {},
+                    "signal_session": session,
+                    "selected_instrument_ids": ["000001.SZ"],
+                    "relative_weights": {"000001.SZ": "1"},
+                    "signal_checksum": "signal", "contract_checksum": "contract",
+                },
             },
-            "target_exposure": 1.0,
+            "contract_checksum": "contract",
             "pending_target": {
                 "decision_session": session, "reason": "selection",
                 "execution": "next_research_session_open", "contract_checksum": "contract",

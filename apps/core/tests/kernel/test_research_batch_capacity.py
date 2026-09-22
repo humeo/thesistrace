@@ -320,6 +320,7 @@ def _prepared_child(
             requested_end_date=calculation_sessions[-1],
             universe="top3000",
             neutralization="none",
+            is_direct=False,
             strategy={"holdings_count": 10},
             field_bindings={field_id: object()},
             expression_admission=SimpleNamespace(

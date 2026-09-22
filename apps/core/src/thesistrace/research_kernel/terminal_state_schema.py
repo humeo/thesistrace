@@ -1,25 +1,30 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from fractions import Fraction
-from math import isfinite
+from math import isfinite, lcm
 from typing import Annotated, Literal
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    JsonValue,
     StrictBool,
     StrictFloat,
     StrictInt,
     StrictStr,
+    TypeAdapter,
     model_validator,
 )
 
 from thesistrace.research_kernel.portfolio_weighting import EligibilityReason
+from thesistrace.research_kernel.strategy_program_runtime import STATE_BYTES, encode_program_json
 
 StrictNumber = StrictInt | StrictFloat
 EligibilityExclusions = dict[EligibilityReason, Annotated[StrictInt, Field(gt=0)]]
+_TARGET_RATIO = re.compile(r"[1-9][0-9]{0,127}(?:/[1-9][0-9]{0,127})?")
 
 
 class TerminalStateModel(BaseModel):
@@ -33,11 +38,9 @@ class TerminalPosition(TerminalStateModel):
     last_adjusted_price: StrictStr
 
 
-class SelectionPhase(TerminalStateModel):
+class ResearchPhase(TerminalStateModel):
     origin_session: StrictStr
-    report_session_count: StrictInt
-    selection_interval: StrictInt
-    completed_intervals: StrictInt
+    report_session_count: Annotated[StrictInt, Field(ge=1)]
 
 
 class TargetSelection(TerminalStateModel):
@@ -54,17 +57,50 @@ class TargetSelection(TerminalStateModel):
         return self
 
 
+class FrameworkDecisionState(TerminalStateModel):
+    mode: Literal["framework"]
+    selection: TargetSelection
+    selection_interval: Annotated[StrictInt, Field(ge=1, le=20)]
+    exposure: StrictFloat = Field(ge=0, le=1, allow_inf_nan=False)
+
+
+class DirectDecisionState(TerminalStateModel):
+    mode: Literal["direct"]
+    program_sha256: Annotated[StrictStr, Field(pattern=r"^[0-9a-f]{64}$")]
+    state: dict[str, JsonValue]
+
+    @model_validator(mode="after")
+    def explicit_state_is_bounded(self):
+        encode_program_json(self.state, STATE_BYTES, "state")
+        return self
+
+
+type DecisionState = Annotated[
+    FrameworkDecisionState | DirectDecisionState, Field(discriminator="mode"),
+]
+
+DECISION_STATE_ADAPTER = TypeAdapter(DecisionState)
+
+
 def _validate_target_weights(selected: list[str], weights: dict[str, str]) -> None:
     if len(selected) != len(set(selected)) or set(weights) != set(selected):
         raise ValueError("Pending target weights do not match the unique selection")
-    try:
-        ratios = [Fraction(weight) for weight in weights.values()]
-    except (ValueError, ZeroDivisionError):
-        raise ValueError("Target weights must be canonical positive ratios") from None
+    # Validate the bounded integer grammar before Fraction sees guest output.
+    # Fraction accepts compact exponents that can allocate huge host integers.
+    if any(_TARGET_RATIO.fullmatch(weight) is None for weight in weights.values()):
+        raise ValueError("Target weights must be canonical positive ratios of at most 128 digits")
+    ratios = [Fraction(weight) for weight in weights.values()]
     if any(str(ratio) != weight or not 0 < ratio <= 1
            for weight, ratio in zip(weights.values(), ratios, strict=True)):
         raise ValueError("Target weights must be canonical positive ratios")
-    if selected and sum(ratios) != 1:
+    total = Fraction()
+    denominator = 1
+    for ratio in ratios:
+        denominator = lcm(denominator, ratio.denominator)
+        if denominator.bit_length() > 4096:
+            raise ValueError("Target weights exceed the common denominator size limit")
+        total += ratio
+    if selected and total != 1:
         raise ValueError("Target weights must sum to one")
 
 
@@ -220,26 +256,29 @@ class TerminalStrategyStateValue(TerminalStateModel):
     net_nav: StrictStr
     cumulative_transaction_cost: StrictStr
     positions: list[TerminalPosition]
-    selection_phase: SelectionPhase
-    target_selection: TargetSelection
-    target_exposure: StrictFloat
+    research_phase: ResearchPhase
+    contract_checksum: Annotated[StrictStr, Field(pattern=r"^[0-9a-f]{64}$")]
+    decision_state: DecisionState
     pending_target: PendingTarget | None
     last_daily_observation: LastDailyObservation
     metric_state: StrategyMetricState
 
     @model_validator(mode="after")
     def continuation_sessions_must_match_boundary(self) -> TerminalStrategyStateValue:
-        if not isfinite(self.target_exposure) or not 0 <= self.target_exposure <= 1:
-            raise ValueError("Target Exposure must be finite and between zero and one")
-        if self.target_selection.signal_session > self.session:
-            raise ValueError("Retained Selection cannot come from the future")
+        if self.decision_state.mode == "framework":
+            selection = self.decision_state.selection
+            if selection.signal_session > self.session:
+                raise ValueError("Retained Selection cannot come from the future")
+            if selection.contract_checksum != self.contract_checksum:
+                raise ValueError("Retained Selection differs from the Strategy contract")
         if self.pending_target is not None and (
-            self.pending_target.contract_checksum != self.target_selection.contract_checksum
+            self.pending_target.contract_checksum != self.contract_checksum
         ):
             raise ValueError("Pending target differs from the Strategy contract")
         if (
             self.last_daily_observation.session != self.session
             or self.metric_state.last_session != self.session
+            or self.research_phase.report_session_count != self.metric_state.session_count
             or (
                 self.pending_target is not None
                 and self.pending_target.decision_session != self.session

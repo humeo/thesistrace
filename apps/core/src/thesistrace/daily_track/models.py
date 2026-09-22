@@ -24,7 +24,7 @@ from thesistrace.daily_track.observation_state import TrackingObservationState
 from thesistrace.research_kernel.common_inputs import common_input_references
 from thesistrace.research_kernel.common_observations import CommonInputObservation
 from thesistrace.research_kernel.portfolio_weighting import PortfolioWeighting, VolatilityWindow
-from thesistrace.research_kernel.terminal_state_schema import PendingTarget, TargetSelection
+from thesistrace.research_kernel.terminal_state_schema import DecisionState, PendingTarget
 from thesistrace.strategy_evidence import (
     StrategyAdjustmentsPage,
     StrategyAdjustmentsQuery,
@@ -189,9 +189,9 @@ class InitialStrategyState(BaseModel):
     net_nav: str
     cumulative_transaction_cost: str
     positions: list[dict[str, object]]
-    selection_phase: dict[str, object]
-    target_selection: TargetSelection
-    target_exposure: float = Field(ge=0, le=1, allow_inf_nan=False)
+    research_phase: dict[str, object]
+    decision_state: DecisionState
+    contract_checksum: str
     pending_target: dict[str, object] | None
     last_daily_observation: dict[str, object]
     metric_state: dict[str, object]
@@ -214,6 +214,8 @@ class TrackingOrigin(BaseModel):
 
     @property
     def expression_trees(self) -> tuple[dict[str, object], ...]:
+        if self.immutable_input["strategy"]["kind"] == "direct":
+            return ()
         return (
             self.immutable_input["alpha_expression"],
             self.immutable_input["strategy"]["exposure_expression"],
@@ -393,13 +395,11 @@ class DailyTrackOriginPosition(BaseModel):
     last_adjusted_price: str
 
 
-class DailyTrackOriginSelectionPhase(BaseModel):
+class DailyTrackOriginResearchPhase(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     origin_session: str
     report_session_count: int
-    selection_interval: int
-    completed_intervals: int
 
 
 class DailyTrackOriginAccount(BaseModel):
@@ -412,9 +412,9 @@ class DailyTrackOriginAccount(BaseModel):
     net_nav: str
     cumulative_transaction_cost: str
     positions: list[DailyTrackOriginPosition]
-    selection_phase: DailyTrackOriginSelectionPhase
-    target_selection: TargetSelection
-    target_exposure: float = Field(ge=0, le=1, allow_inf_nan=False)
+    research_phase: DailyTrackOriginResearchPhase
+    decision_state: DecisionState
+    contract_checksum: str
     pending_target: PendingTarget | None
 
 
@@ -622,9 +622,9 @@ class DailyTrackOriginAccountSummary(BaseModel):
     gross_nav: str
     net_nav: str
     cumulative_transaction_cost: str
-    selection_phase: DailyTrackOriginSelectionPhase
-    target_selection: TargetSelection
-    target_exposure: float = Field(ge=0, le=1, allow_inf_nan=False)
+    research_phase: DailyTrackOriginResearchPhase
+    decision_state: DecisionState
+    contract_checksum: str
     pending_target: PendingTarget | None
 
 
@@ -642,21 +642,35 @@ class DailyTrackOriginResultSection(BaseModel):
 
 
 class DailyTrackFrozenResearchInput(BaseModel):
-    strategy_mode: Literal["framework"]
+    strategy_mode: Literal["framework", "direct"]
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    formula: Annotated[str, Field(max_length=4096)]
+    formula: Annotated[str, Field(max_length=4096)] | None = Field(
+        default=None, exclude_if=lambda v: v is None,
+    )
     hypothesis: Annotated[str, Field(max_length=1024)] | None
     start_date: date
     end_date: date
     universe: str
-    neutralization: str
+    neutralization: str | None = Field(default=None, exclude_if=lambda v: v is None)
     initial_cash_cny: str
-    holdings_count: int
-    selection_every_sessions: int
-    exposure_expression: str
-    weighting: PortfolioWeighting
-    volatility_window: VolatilityWindow
+    holdings_count: int | None = Field(default=None, exclude_if=lambda v: v is None)
+    selection_every_sessions: int | None = Field(default=None, exclude_if=lambda v: v is None)
+    exposure_expression: str | None = Field(default=None, exclude_if=lambda v: v is None)
+    weighting: PortfolioWeighting | None = Field(default=None, exclude_if=lambda v: v is None)
+    volatility_window: VolatilityWindow | None = Field(default=None, exclude_if=lambda v: v is None)
+    program: dict[str, object] | None = Field(default=None, exclude_if=lambda v: v is None)
+
+    @model_validator(mode="after")
+    def active_strategy_only(self):
+        from pydantic import TypeAdapter
+
+        from thesistrace.research_definition import ResearchSpec
+
+        TypeAdapter(ResearchSpec).validate_python({
+            **self.model_dump(exclude_none=True), "research_kind": "strategy_backtest",
+        })
+        return self
 
 
 class DailyTrackProvenanceResultSection(BaseModel):
@@ -753,11 +767,10 @@ class DailyTrackObservation(BaseModel):
     transaction_cost_cny: str
     session_count: int
     holdings: list[DailyTrackHolding]
-    target_exposure: float = Field(ge=0, le=1)
-    target_selection: TargetSelection
-    selection_interval: int
+    decision_state: DecisionState
+    selection_interval: int | None
     pending_target_session: str | None
-    sessions_until_next_signal: int
+    sessions_until_next_signal: int | None
     returns: list[DailyTrackObservationPoint]
 
 
@@ -782,21 +795,37 @@ class KernelRunInputSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     research_kind: Literal["strategy_backtest"]
-    alpha_expression: dict[str, object]
+    alpha_expression: dict[str, object] | None
     field_bindings: dict[str, str]
     effective_lookback: int
     universe: str
-    neutralization: str
-    holdings_count: int
-    selection_interval: int
-    exposure_expression: dict[str, object]
-    weighting: PortfolioWeighting
-    volatility_window: VolatilityWindow
-    initial_cash_cny: str
-    commission_rate_all_in: str
-    commission_min_cny: str
-    stamp_duty_sell_rate: str
-    transfer_fee_rate: str
+    neutralization: str | None
+    strategy: dict[str, object]
+
+    @model_validator(mode="after")
+    def strategy_matches_mode(self):
+        from thesistrace.research_kernel.kernel_run import (
+            DirectStrategyRunInput,
+            strategy_input_from_snapshot,
+        )
+
+        strategy = strategy_input_from_snapshot(self.strategy)
+        if isinstance(strategy, DirectStrategyRunInput):
+            if self.alpha_expression is not None or self.neutralization is not None:
+                raise ValueError("Direct Checkpoint cannot contain Alpha settings")
+            declared = strategy.program_snapshot().data_requirements
+            if (set(self.field_bindings) != set(declared.field_ids)
+                    or self.effective_lookback != declared.history_sessions - 1):
+                raise ValueError("Direct Checkpoint data declaration differs")
+        elif self.alpha_expression is None or self.neutralization not in {"none", "industry"}:
+            raise ValueError("Framework Checkpoint requires Alpha settings")
+        return self
+
+    @property
+    def expression_trees(self):
+        if self.strategy["mode"] == "direct":
+            return ()
+        return (self.alpha_expression, self.strategy["exposure_expression"])
 
 
 class KernelStateCheckpoint(BaseModel):
@@ -804,12 +833,12 @@ class KernelStateCheckpoint(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["daily-track-checkpoint-v3"]
+    schema_version: Literal["daily-track-checkpoint-v4"]
     tracking_observation_state: TrackingObservationState
     origin_session: str
     boundary_session: str
     run_input: KernelRunInputSnapshot
-    alpha_state: dict[str, object]
+    alpha_state: dict[str, object] | None
     strategy_state: dict[str, object]
     common_input_observations: list[CommonInputObservation]
     continuation_sha256: str
@@ -820,9 +849,10 @@ class KernelStateCheckpoint(BaseModel):
     def observation_boundary_matches(self) -> KernelStateCheckpoint:
         if self.tracking_observation_state.boundary_session != self.boundary_session:
             raise ValueError("Checkpoint observation boundary differs")
-        references = common_input_references(
-            self.run_input.alpha_expression, self.run_input.exposure_expression,
-        )
+        direct = self.run_input.strategy["mode"] == "direct"
+        if (self.alpha_state is None) != direct or (direct and self.pending_alpha_sessions != 0):
+            raise ValueError("Checkpoint Alpha state differs from its strategy mode")
+        references = common_input_references(*self.run_input.expression_trees)
         delta = self.strategy_state.get("retained_delta")
         if not isinstance(delta, list) or any(
             not isinstance(row, dict) or not isinstance(row.get("session"), str) for row in delta

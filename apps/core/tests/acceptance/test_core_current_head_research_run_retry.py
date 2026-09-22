@@ -1143,7 +1143,7 @@ def _reference_result(
     return build_result_payload(
         output,
         research_kind=research_kind,
-        selection_interval=(1 if research_kind == "strategy_backtest" else None),
+
     )
 
 

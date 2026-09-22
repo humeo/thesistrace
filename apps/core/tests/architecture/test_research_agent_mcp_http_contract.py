@@ -140,7 +140,7 @@ async def _exercise_oversized_request_auth_order() -> None:
         enable_research_agent_http=True,
         research_agent_http=_configuration(token_verifier=_AcceptingVerifier()),
     )
-    body = b"request-body-canary" * 10000
+    body = b"request-body-canary" + b"x" * RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app),
         base_url="https://core.test",

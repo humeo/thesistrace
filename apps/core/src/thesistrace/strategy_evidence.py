@@ -109,9 +109,9 @@ def validated_event_rows(section: str, rows: Sequence[Mapping[str, object]]) -> 
     if not 1 <= len(rows) <= EVENT_PARTITION_ROWS:
         raise ValueError("Strategy evidence partition size is invalid")
     result = [EVENT_MODELS[section].model_validate(row).model_dump(mode="json") for row in rows]
-    from thesistrace.strategy_event_wire import MAX_EVENT_RECORD_BYTES
+    from thesistrace.strategy_event_wire import event_record_byte_limit
 
-    if any(len(json.dumps(row, separators=(",", ":")).encode()) > MAX_EVENT_RECORD_BYTES
+    if any(len(json.dumps(row, separators=(",", ":")).encode()) > event_record_byte_limit(section)
            for row in result):
         raise ValueError("Strategy event record exceeds its transport and page bound")
     keys = [event_order(section, row) for row in result]
@@ -210,22 +210,27 @@ class StrategyEvidencePublication:
         }
 
 
-def strategy_event_record_count(payloads: Mapping[str, object]) -> int:
+def strategy_event_record_count(
+    payloads: Mapping[str, object], *, section: str | None = None,
+) -> int:
     """Count validated builder descriptors for the permanent evidence byte allowance."""
+    if section is not None and section not in EVENT_MODELS:
+        raise ValueError("Unknown Strategy evidence section")
     if not set(EVENT_MODELS) & set(payloads):
         return 0
     if not set(EVENT_MODELS) <= set(payloads):
         raise ValueError("Strategy evidence section set is incomplete")
     count = 0
-    for section in EVENT_MODELS:
-        descriptor = payloads[section]
+    for name in EVENT_MODELS:
+        descriptor = payloads[name]
         if not isinstance(descriptor, JsonPayload):
             raise ValueError("Strategy event count requires a publication descriptor")
         for part in descriptor.value["partitions"]:
             size = part["row_count"]
             if type(size) is not int or not 1 <= size <= EVENT_PARTITION_ROWS:
                 raise ValueError("Strategy event partition count is invalid")
-            count += size
+            if section is None or section == name:
+                count += size
     return count
 
 
@@ -721,7 +726,8 @@ def strategy_event_response(
     source: StrategyEvidenceSource,
     encode_cursor: Callable[[str], str],
 ):
-    from thesistrace._paging import fit_page
+    from thesistrace._paging import BUSINESS_PAGE_BYTES, fit_page
+    from thesistrace.strategy_event_wire import MAX_TARGET_RECORD_BYTES
 
     def build(rows):
         has_more = len(rows) < len(read.rows) or read.next_after is not None
@@ -738,7 +744,9 @@ def strategy_event_response(
             next_cursor=cursor,
         )
 
-    return fit_page(read.rows, build)
+    return fit_page(read.rows, build, byte_budget=BUSINESS_PAGE_BYTES + (
+        MAX_TARGET_RECORD_BYTES if query.section == "strategy_targets" else 0
+    ))
 
 
 type StrategyEventQueryInput = Annotated[

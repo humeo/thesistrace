@@ -33,11 +33,11 @@ const run = {
     },
     terminal_strategy_state: {
       session: "2026-08-04", net_cash: "100000", gross_cash: "100000", net_nav: "100000", gross_nav: "100000",
-      cumulative_transaction_cost: "0", positions: [], target_exposure: 1, pending_target: null,
-      target_selection: { signal_session: "2026-08-03", eligibility_exclusions: {} },
-      selection_phase: { origin_session: "2026-08-03", report_session_count: 2, selection_interval: 10, completed_intervals: 0 },
+      cumulative_transaction_cost: "0", positions: [], pending_target: null, contract_checksum: "contract",
+      decision_state: { mode: "framework", selection: { signal_session: "2026-08-03", eligibility_exclusions: {} }, selection_interval: 10, exposure: 1 },
+      research_phase: { origin_session: "2026-08-03", report_session_count: 2 },
     },
-    provenance: { schema_version: "research-result-v2", research_run_id: "run_evidence", immutable_input_sha256: "a".repeat(64),
+    provenance: { schema_version: "research-result-v3", research_run_id: "run_evidence", immutable_input_sha256: "a".repeat(64),
       calculation_contracts: {}, semantic_versions: {}, research_kind: "strategy_backtest" },
   },
 };
