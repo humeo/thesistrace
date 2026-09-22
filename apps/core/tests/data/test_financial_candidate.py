@@ -1793,7 +1793,7 @@ def test_daily_reprojection_repairs_002296_published_quarantine_without_new_sour
         row["availability_status"]
         for row in rows
         if row["source_report_period"] == "20260331"
-    } == {"available"}
+    } == {"available", "superseded"}
     assert store.quarantined_row_count(repaired.manifest_sha256) == (
         store.quarantined_row_count(prior.manifest_sha256) - 2
     )
@@ -2154,7 +2154,10 @@ def test_targeted_daily_rebuild_appends_only_changed_rows_to_immutable_tables(
             continue
         assert checkpoint.batch_sha256 is not None
         payload = raw.read(checkpoint.batch_sha256)
-        items = [*payload["items"]]
+        # A complete snapshot contains the new revision; earlier snapshots
+        # retain the replaced payload. Two competing unmarked rows would be
+        # a genuine source conflict, not an accepted incremental update.
+        items = [row for row in payload["items"] if row[3] != "20260630"]
         items.append(
             [
                 checkpoint.ts_code,
@@ -2248,7 +2251,7 @@ def test_targeted_daily_rebuild_appends_only_changed_rows_to_immutable_tables(
     for checkpoint in accepted:
         assert checkpoint.batch_sha256 is not None
         payload = raw.read(checkpoint.batch_sha256)
-        items = [*payload["items"]]
+        items = [row for row in payload["items"] if row[3] != "20260630"]
         items.append(
             [
                 checkpoint.ts_code,
@@ -2740,13 +2743,13 @@ def test_projector_resolves_update_markers_without_choosing_payload_order(
         versions = FinancialVersionProjector().project(ordered, SESSIONS)
         assert len(versions) == 2
         resolved = flags == ("0", "1")
-        assert {version.availability_status for version in versions} == {
-            "available" if resolved else "quarantined"
-        }
+        assert {version.availability_status for version in versions} == (
+            {"available", "superseded"} if resolved else {"quarantined"}
+        )
         assert {version.source()["revenue"] for version in versions} == {"100", "101"}
-        assert {version.effective_available_session for version in versions} == {
-            "2010-04-21" if resolved else ""
-        }
+        assert {version.effective_available_session for version in versions} == (
+            {"2010-04-21", ""} if resolved else {""}
+        )
 
 
 def test_projector_prefers_later_announcement_for_601231_competing_latest_rows() -> None:
@@ -2774,7 +2777,7 @@ def test_projector_prefers_later_announcement_for_601231_competing_latest_rows()
     for ordered in (observations, tuple(reversed(observations))):
         versions = FinancialVersionProjector().project(ordered, sessions)
         assert len(versions) == 2
-        assert {version.availability_status for version in versions} == {"available"}
+        assert {version.availability_status for version in versions} == {"available", "superseded"}
         assert {version.source()["ann_date"] for version in versions} == {
             "20260729", "20260827",
         }
@@ -2914,7 +2917,7 @@ def test_latest_marked_statement_resolves_without_dropping_source_evidence(
     rows = store.read_table(candidate.manifest_sha256, "income_statement_versions")
     assert len(rows) == 2
     assert {row["update_flag"] for row in rows} == {"0", "1"}
-    assert {row["availability_status"] for row in rows} == {"available"}
+    assert {row["availability_status"] for row in rows} == {"available", "superseded"}
     assert raw.read(digest)["items"] == items
     field = "financial.income.total_revenue.latest_fy"
     resolved = FinancialSeriesResolver(store).resolve(
@@ -2965,7 +2968,7 @@ def test_formula_prefers_later_announcement_when_latest_markers_compete(
     rows = store.read_table(candidate.manifest_sha256, "income_statement_versions")
     assert len(rows) == 2
     assert {row["ann_date"] for row in rows} == {"20100419", "20100420"}
-    assert {row["availability_status"] for row in rows} == {"available"}
+    assert {row["availability_status"] for row in rows} == {"available", "superseded"}
     field = "financial.income.total_revenue.latest_fy"
     resolved = FinancialSeriesResolver(store).resolve(
         manifest_sha256=candidate.manifest_sha256,
@@ -2975,6 +2978,189 @@ def test_formula_prefers_later_announcement_when_latest_markers_compete(
     )
     assert resolved[field] == {("2010-04-21", "equity:000001.SZ"): "101"}
     assert raw.read(digest)["items"] == items
+
+
+def _with_income_snapshot(
+    root: Path, snapshot: CompletedFinancialCollection, items: list[list[object]],
+    observed_at: str,
+) -> CompletedFinancialCollection:
+    raw = RawFinancialBatchStore(root)
+    checkpoint = snapshot.shards[0]
+    payload = raw.read(checkpoint.batch_sha256)
+    fields = payload["returned_fields"]
+    payload.update(
+        items=items, row_count=len(items), source_date_extent=["20100420", "20100420"],
+        payload_sha256=hashlib.sha256(canonical_json_bytes(
+            {"fields": fields, "items": items},
+        )).hexdigest(),
+    )
+    return replace(snapshot, idempotency_key=f"snapshot-{observed_at}", shards=(replace(
+        checkpoint, batch_sha256=raw.store(canonical_json_bytes(payload)),
+        collected_at=observed_at, first_observed_at=observed_at,
+    ), *snapshot.shards[1:]))
+
+
+@pytest.mark.parametrize("priority", ("update_flag", "ann_date"))
+@pytest.mark.parametrize("reverse", (False, True))
+def test_later_nonwinning_snapshot_row_cannot_replace_the_unchanged_winner(
+    tmp_path: Path, priority: str, reverse: bool,
+) -> None:
+    fields = (*FIELDS, "total_revenue")
+    snapshot = _empty_complete_snapshot(
+        tmp_path, _market_generation(tmp_path), idempotency_key="snapshot-winner", fields=fields,
+    )
+    winner = ["000001.SZ", "20100420", "20100420", "20091231", "1", "1", "4",
+              "100", "1", "100"]
+    other = ["000001.SZ", "20100419" if priority == "ann_date" else "20100420",
+             "20100420", "20091231", "1", "1", "4", "99",
+             "1" if priority == "ann_date" else "0", "99"]
+    batches = []
+    for observed_at, value in (("2010-04-20T08:00:00+00:00", "99"),
+                               ("2010-04-21T08:00:00+00:00", "200")):
+        changed = [*other[:7], value, other[8], value]
+        items = [winner, changed]
+        if reverse:
+            items.reverse()
+        batches.append(_with_income_snapshot(tmp_path, snapshot, items, observed_at))
+    store = FinancialCandidateStore(tmp_path)
+    initial = store.materialize(batches[0], observation_through_session=SESSIONS[-1])
+    updated = store.rebuild(
+        batches[1], prior_candidate_manifest_sha256=initial.manifest_sha256,
+        observation_through_session=SESSIONS[-1],
+    )
+    field = "financial.income.total_revenue.latest_fy"
+    resolver = FinancialSeriesResolver(store)
+    request = dict(manifest_sha256=updated.manifest_sha256, field_ids=(field,),
+                   sessions=("2010-04-21", "2010-04-22"),
+                   instrument_ids=("equity:000001.SZ",))
+    assert resolver.resolve(**request)[field] == {
+        ("2010-04-21", "equity:000001.SZ"): "100",
+        ("2010-04-22", "equity:000001.SZ"): "100",
+    }
+    assert resolver.resolve_table(**request)[field].to_pylist() == ["100", "100"]
+    assert store.validate(updated.manifest_sha256) == updated
+    raw = RawFinancialBatchStore(tmp_path)
+    assert [len(raw.read(batch.shards[0].batch_sha256)["items"]) for batch in batches] == [2, 2]
+
+
+@pytest.mark.parametrize("middle", ("correction", "unmarked_winner", "conflict"))
+def test_snapshot_winner_changes_and_returns_without_rewriting_earlier_values(
+    tmp_path: Path, middle: str,
+) -> None:
+    fields = (*FIELDS, "total_revenue")
+    snapshot = _empty_complete_snapshot(
+        tmp_path, _market_generation(tmp_path), idempotency_key="snapshot-return", fields=fields,
+    )
+    first = ["000001.SZ", "20100420", "20100420", "20091231", "1", "1", "4",
+             "100", "1", "100"]
+    second = [*first[:7], "110", "0" if middle == "unmarked_winner" else "1", "110"]
+    initial_items = [first, second] if middle == "unmarked_winner" else [first]
+    middle_items = [first, second] if middle == "conflict" else [second]
+    store = FinancialCandidateStore(tmp_path)
+    candidate = None
+    batches = []
+    for observed_at, items in (
+        ("2010-04-20T08:00:00+00:00", initial_items),
+        ("2010-04-21T08:00:00+00:00", middle_items),
+        ("2026-04-24T08:00:00+00:00", [first, [*first[:7], "80", "0", "80"]]),
+    ):
+        batch = _with_income_snapshot(tmp_path, snapshot, items, observed_at)
+        batches.append(batch)
+        if candidate is None:
+            candidate = store.materialize(batch, observation_through_session=SESSIONS[-1])
+        else:
+            candidate = store.rebuild(
+                batch, prior_candidate_manifest_sha256=candidate.manifest_sha256,
+                observation_through_session=SESSIONS[-1],
+            )
+    assert candidate is not None
+    assert store.validate(candidate.manifest_sha256) == candidate
+    field = "financial.income.total_revenue.latest_fy"
+    resolver = FinancialSeriesResolver(store)
+    request = dict(manifest_sha256=candidate.manifest_sha256, field_ids=(field,),
+                   sessions=("2010-04-21", "2010-04-22", "2026-04-27"),
+                   instrument_ids=("equity:000001.SZ",))
+    assert resolver.resolve_table(**request)[field].to_pylist() == [
+        "100", None if middle == "conflict" else "110", "100",
+    ]
+    assert resolver.resolve_table(**{**request, "sessions": ("2026-04-27",)})[
+        field
+    ].to_pylist() == ["100"]
+    originals = store.read_table(candidate.manifest_sha256, "income_statement_versions")
+    assert any(row["total_revenue"] == "100" and row["first_observed_at"] ==
+               "2010-04-20T08:00:00+00:00" for row in originals)
+    assert all(RawFinancialBatchStore(tmp_path).read(batch.shards[0].batch_sha256)
+               for batch in batches)
+
+
+def test_saved_snapshot_reprojection_repairs_the_published_nonwinner_and_stays_repaired(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fields = (*FIELDS, "total_revenue")
+    snapshot = _empty_complete_snapshot(
+        tmp_path, _market_generation(tmp_path), idempotency_key="saved-snapshot", fields=fields,
+    )
+    winner = ["000001.SZ", "20100420", "20100420", "20091231", "1", "1", "4",
+              "100", "1", "100"]
+    first = _with_income_snapshot(tmp_path, snapshot, [winner], "2010-04-20T08:00:00+00:00")
+    later = _with_income_snapshot(
+        tmp_path, snapshot, [winner, [*winner[:7], "200", "0", "200"]],
+        "2010-04-21T08:00:00+00:00",
+    )
+    original_project = FinancialVersionProjector.project
+
+    def legacy_projector(projector, observations, sessions):
+        return tuple(
+            replace(version, availability_status="available", coverage_role="in_coverage",
+                    revision_basis="observed_correction", effective_available_session="2010-04-22")
+            if version.source()["revenue"] == "200" else version
+            for version in original_project(projector, observations, sessions)
+        )
+
+    store = FinancialCandidateStore(tmp_path)
+    with monkeypatch.context() as legacy:
+        legacy.setattr(FinancialVersionProjector, "project", legacy_projector)
+        initial = store.materialize(first, observation_through_session=SESSIONS[-1])
+        broken = store.rebuild(
+            later, prior_candidate_manifest_sha256=initial.manifest_sha256,
+            observation_through_session=SESSIONS[-1],
+        )
+        broken = store.rebuild_daily(
+            replace(later, idempotency_key="broken-snapshot-discovery", target_count=0, shards=()),
+            prior_candidate_manifest_sha256=broken.manifest_sha256,
+            discovery=FinancialDiscoveryPublication(
+                baseline_session=SESSIONS[-1], attempted_through_session=SESSIONS[-1],
+                complete_through_session=SESSIONS[-1], source_lineage_sha256="e" * 64,
+                readiness_status="ready", pending_instrument_count=0, discovery_gap_count=0,
+                earliest_unresolved_date=None,
+            ),
+        )
+    field = "financial.income.total_revenue.latest_fy"
+    resolver = FinancialSeriesResolver(store)
+    request = dict(field_ids=(field,), sessions=("2010-04-21", "2010-04-22"),
+                   instrument_ids=("equity:000001.SZ",))
+    assert resolver.resolve_table(manifest_sha256=broken.manifest_sha256, **request)[
+        field
+    ].to_pylist() == ["100", "200"]
+    assert store.validate_stored(broken.manifest_sha256) == broken
+    repair = dict(prior_candidate_manifest_sha256=broken.manifest_sha256,
+                  generation_manifest_sha256=snapshot.generation_manifest_sha256,
+                  idempotency_key="repair-snapshot-timeline",
+                  finished_at=datetime(2026, 8, 13, 10, tzinfo=UTC))
+    repaired = store.reproject_saved(**repair)
+    assert store.reproject_saved(**repair) == repaired
+    assert repaired.raw_batch_count == broken.raw_batch_count
+    assert resolver.resolve_table(manifest_sha256=repaired.manifest_sha256, **request)[
+        field
+    ].to_pylist() == ["100", "100"]
+    assert resolver.resolve_table(manifest_sha256=broken.manifest_sha256, **request)[
+        field
+    ].to_pylist() == ["100", "200"]
+    assert store.validate_daily_instrument(
+        _targeted_instrument_collection(later, idempotency_key="same-snapshot-after-repair"),
+        prior_candidate_manifest_sha256=repaired.manifest_sha256,
+        observation_through_session=SESSIONS[-1],
+    ).canonical_changed is False
 
 
 def test_latest_marker_does_not_backdate_a_later_observed_correction() -> None:
@@ -3016,11 +3202,11 @@ def test_projector_preserves_equal_values_with_different_update_flags() -> None:
     for ordered in (observations, tuple(reversed(observations))):
         versions = FinancialVersionProjector().project(ordered, SESSIONS)
         assert len(versions) == 2
-        assert {version.availability_status for version in versions} == {"available"}
+        assert {version.availability_status for version in versions} == {"available", "superseded"}
         assert {version.source()["revenue"] for version in versions} == {"100"}
         assert {version.source()["update_flag"] for version in versions} == {"0", "1"}
         assert {version.raw_batch_sha256 for version in versions} == {"a" * 64, "b" * 64}
-        assert {version.effective_available_session for version in versions} == {"2010-04-21"}
+        assert {version.effective_available_session for version in versions} == {"2010-04-21", ""}
 
 
 @pytest.mark.parametrize("damage", [None, "raw", "object"])

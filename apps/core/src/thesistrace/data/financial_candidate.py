@@ -377,6 +377,9 @@ class FinancialVersionProjector:
         if sessions != sorted(set(sessions)):
             raise FinancialCandidateError("FINANCIAL_RESEARCH_SESSIONS_INVALID")
         exact: dict[str, CanonicalFinancialVersion] = {}
+        snapshots: dict[
+            tuple[str, str], dict[str, dict[str, CanonicalFinancialVersion]]
+        ] = defaultdict(lambda: defaultdict(dict))
         for observation in observations:
             source = observation.source()
             if source.get("ts_code") != observation.ts_code:
@@ -420,98 +423,71 @@ class FinancialVersionProjector:
                 previous.raw_batch_sha256,
             ):
                 exact[version.source_row_sha256] = version
+            if published:
+                group = snapshots[(version.logical_revision_group_sha256, published)]
+                snapshot = group[observed_at]
+                repeated = snapshot.get(version.source_row_sha256)
+                if repeated is None or version.raw_batch_sha256 < repeated.raw_batch_sha256:
+                    snapshot[version.source_row_sha256] = version
 
-        by_group: dict[tuple[str, str], list[CanonicalFinancialVersion]] = defaultdict(list)
-        canonical: list[CanonicalFinancialVersion] = []
+        # Retain original source identities and first observations independently
+        # of their eligibility. A nonwinner must never create a PIT transition.
+        canonical: dict[str, CanonicalFinancialVersion] = {}
         for version in exact.values():
-            if not version.source_published_date:
-                canonical.append(
-                    replace(
-                        version,
-                        availability_status="quarantined",
-                        coverage_role="quarantined",
-                    )
-                )
-            else:
-                by_group[
-                    (version.logical_revision_group_sha256, version.source_published_date)
-                ].append(version)
-        for group in by_group.values():
-            ordered = sorted(
-                group,
-                key=lambda item: (
-                    item.first_observed_at,
-                    str(item.source().get("update_flag") or ""),
-                    item.source_row_sha256,
-                ),
+            status = "superseded" if version.source_published_date else "quarantined"
+            canonical[version.source_row_sha256] = replace(
+                version, availability_status=status, coverage_role=status,
             )
-            earliest_observation = ordered[0].first_observed_at
-            observations_by_time: dict[str, set[tuple[str, str]]] = defaultdict(set)
-            latest_by_time: dict[str, set[tuple[str, str]]] = defaultdict(set)
-            for version in ordered:
-                # A supplier update marker is evidence, not a different financial value.
-                content = {
-                    key: value for key, value in version.source().items()
-                    if key != "update_flag"
-                }
-                content_sha256 = _sha(content)
-                candidate = (
-                    _source_date(version.source().get("ann_date"), required=False),
-                    content_sha256,
+        for by_time in snapshots.values():
+            previous_state: frozenset[str] | None = None
+            for index, observed_at in enumerate(sorted(by_time)):
+                snapshot = by_time[observed_at]
+                marked = [version for version in snapshot.values()
+                          if str(version.source().get("update_flag") or "") == "1"]
+                preferred = marked or list(snapshot.values())
+                latest_ann_date = max(
+                    _source_date(version.source().get("ann_date"), required=False)
+                    for version in preferred
                 )
-                observations_by_time[version.first_observed_at].add(candidate)
-                if str(version.source().get("update_flag") or "") == "1":
-                    latest_by_time[version.first_observed_at].add(candidate)
-            for version in ordered:
-                # Preserve every source version. Query/seed selection already prefers
-                # update_flag=1 and then the greatest ann_date at the same effective
-                # session. Only conflicts tied at that ann_date remain ambiguous.
-                candidates = (
-                    latest_by_time[version.first_observed_at]
-                    or observations_by_time[version.first_observed_at]
-                )
-                latest_ann_date = max(ann_date for ann_date, _content in candidates)
-                competing = {
-                    content for ann_date, content in candidates
-                    if ann_date == latest_ann_date
-                }
-                if len(competing) > 1:
-                    canonical.append(
-                        replace(
-                            version,
-                            availability_status="quarantined",
-                            coverage_role="quarantined",
-                        )
-                    )
+                winners = [version for version in preferred if _source_date(
+                    version.source().get("ann_date"), required=False,
+                ) == latest_ann_date]
+                state = frozenset(version.source_row_sha256 for version in winners)
+                if state == previous_state:
                     continue
-                revision_basis = (
-                    "source_version"
-                    if version.first_observed_at == earliest_observation
-                    else "observed_correction"
-                )
-                if not version.source_available_session or (
-                    revision_basis == "observed_correction" and not version.first_observed_session
-                ):
-                    canonical.append(
-                        replace(
-                            version,
-                            revision_basis=revision_basis,
-                            availability_status="pending_calendar",
-                            coverage_role="pending_calendar",
-                        )
+                previous_state = state
+                # Markers alone are not conflicting financial payloads.
+                conflicting = len({_sha({key: value for key, value in version.source().items()
+                                         if key != "update_flag"}) for version in winners}) > 1
+                for version in winners:
+                    original = exact[version.source_row_sha256]
+                    if original.first_observed_at != observed_at:
+                        # A previously seen value can win again after another state.
+                        # Keep its original row and append a separately addressed
+                        # observation event, rather than rewriting the earlier PIT value.
+                        version = replace(version, source_row_sha256=_sha({
+                            "source_row_sha256": version.source_row_sha256,
+                            "observation_event_at": observed_at,
+                        }))
+                    basis = "source_version" if index == 0 else "observed_correction"
+                    status = "available"
+                    if conflicting:
+                        status = "quarantined"
+                    elif not version.source_available_session or (
+                        index and not version.first_observed_session
+                    ):
+                        status = "pending_calendar"
+                    effective = ""
+                    if status == "available":
+                        effective = version.source_available_session
+                        if index:
+                            effective = max(effective, version.first_observed_session)
+                    canonical[version.source_row_sha256] = replace(
+                        version, revision_basis=basis, availability_status=status,
+                        coverage_role="in_coverage" if status == "available" else status,
+                        effective_available_session=effective,
                     )
-                    continue
-                effective_session = version.source_available_session
-                if revision_basis == "observed_correction":
-                    effective_session = max(effective_session, version.first_observed_session)
-                canonical.append(
-                    replace(
-                        version,
-                        revision_basis=revision_basis,
-                        effective_available_session=effective_session,
-                    )
-                )
-        return tuple(canonical)
+        return tuple(canonical.values())
 
 
 class FinancialCandidateStore:
@@ -1759,7 +1735,7 @@ class FinancialCandidateStore:
                     )
                     if row["coverage_role"] != role:
                         raise FinancialCandidateError("FINANCIAL_STORED_AVAILABILITY_INVALID")
-                elif status in {"quarantined", "pending_calendar"}:
+                elif status in {"quarantined", "pending_calendar", "superseded"}:
                     if effective or row["coverage_role"] != status:
                         raise FinancialCandidateError("FINANCIAL_STORED_AVAILABILITY_INVALID")
                     if status == "quarantined":
