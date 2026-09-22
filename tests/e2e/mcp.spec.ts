@@ -8,10 +8,10 @@ test("MCP product connects an external client through login, consent, discovery 
   const base = process.env.THESISTRACE_TEST_WEB_ORIGIN!;
   await page.goto("/connections/mcp");
   await expect(page.getByRole("heading", { name: "MCP", exact: true })).toBeVisible();
-  await expect(page.getByRole("region", { name: "QuantTrace MCP", exact: true }).getByRole("status")).toContainText("Service available");
+  await expect(page.getByRole("region", { name: "Quantgrove MCP", exact: true }).getByRole("status")).toContainText("Service available");
   await expect(page.getByText("No authorized apps yet")).toBeVisible();
   await page.getByText("View setup prompt", { exact: true }).click();
-  await expect(page.locator(".mcp-agent-prompt")).toContainText(`Add QuantTrace MCP to Codex using ${base}/mcp`);
+  await expect(page.locator(".mcp-agent-prompt")).toContainText(`Add Quantgrove MCP to Codex using ${base}/mcp`);
   await expect(page.locator(".mcp-agent-prompt")).not.toContainText(".example");
   await page.screenshot({ path: testInfo.outputPath("mcp-desktop.png"), fullPage: true, animations: "disabled" });
   await page.setViewportSize({ width: 390, height: 844 });
@@ -24,7 +24,7 @@ test("MCP product connects an external client through login, consent, discovery 
   const callback = createServer((request, response) => {
     receive(new URL(request.url!, "http://127.0.0.1"));
     response.writeHead(200, { "content-type": "text/html", "cache-control": "no-store" });
-    response.end("<p>Authorization complete. Return to ThesisTrace.</p>");
+    response.end("<p>Authorization complete. Return to Quantgrove.</p>");
   });
   await new Promise<void>(resolve => callback.listen(0, "127.0.0.1", resolve));
   const external = await apiRequest.newContext({ baseURL: base });
@@ -44,17 +44,17 @@ test("MCP product connects an external client through login, consent, discovery 
       code_challenge_method: "S256", code_challenge: createHash("sha256").update(verifier).digest("base64url") });
     await page.context().clearCookies();
     await page.goto(`/api/auth/oauth2/authorize?${query}`);
-    await expect(page.getByRole("heading", { name: "Welcome to QuantTrace" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Welcome to Quantgrove" })).toBeVisible();
     await page.getByLabel("Email", { exact: true }).fill(researcher.email);
     await page.getByRole("button", { name: "Continue with email", exact: true }).click();
     await expect(page.getByLabel("Verification code")).toBeVisible();
     await page.getByLabel("Verification code").fill(await emailCode(researcher.email));
     await page.getByRole("button", { name: "Verify and continue", exact: true }).click();
-    await expect(page.getByRole("heading", { name: "Allow MCP acceptance client to access QuantTrace?" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Allow MCP acceptance client to access Quantgrove?" })).toBeVisible();
     await expect(page.getByText("Create research runs and batches", { exact: true })).toHaveCount(0);
     await page.screenshot({ path: testInfo.outputPath("mcp-consent.png"), fullPage: true, animations: "disabled" });
     await page.getByRole("button", { name: "Allow access" }).click();
-    await expect(page.getByText("Authorization complete. Return to ThesisTrace.")).toBeVisible();
+    await expect(page.getByText("Authorization complete. Return to Quantgrove.")).toBeVisible();
     const returned = await received;
     expect(returned.searchParams.get("state")).toBe("mcp-acceptance");
     const issued = await external.post(`${base}/api/auth/oauth2/token`, { form: {

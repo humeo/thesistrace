@@ -1,3 +1,4 @@
+import { fontStylesheet, serveBrandAssets } from "./brand-assets";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
@@ -10,7 +11,7 @@ test.beforeAll(async()=>{
   const chunk=(Array.isArray(result)?result:[result]).flatMap(b=>b.output).find(o=>o.type==="chunk"&&o.isEntry);
   if(chunk?.type!=="chunk")throw new Error("entry missing"); script=chunk.code;
 });
-for(const width of [1200,390]) {
+for(const width of [1200,390,320]) {
   test(`email-only signup and existing-account login at ${width}px`,async({page})=>{
     let authenticated=false,failSend=true;
     const submitted: unknown[]=[];
@@ -18,8 +19,7 @@ for(const width of [1200,390]) {
     await page.route("http://auth.fixture/**",async route=>{
       const path=new URL(route.request().url()).pathname;
       let body: unknown = {};
-      if(path === "/quanttrace-logo.png") { await route.fulfill({contentType:"image/png",body:readFileSync(new URL("../public/quanttrace-logo.png",import.meta.url))}); return; }
-      if(path==="/login") {await route.fulfill({contentType:"text/html",body:`<style>${styles}</style><div id="root"></div>`});return;}
+      if(path==="/login") {await route.fulfill({contentType:"text/html",body:`${fontStylesheet}<style>${styles}</style><div id="root"></div>`});return;}
       if(path==="/api/auth/get-session")body=authenticated?{session:{id:"00000000-0000-4000-8000-000000000002"},user}:null;
       else if(path==="/api/auth/operator/capability") {await route.fulfill({status:404,body:""});return;}
       else if(path==="/api/auth/email-otp/send-verification-otp") {
@@ -34,9 +34,12 @@ for(const width of [1200,390]) {
       else throw new Error(`unexpected request ${path}`);
       await route.fulfill({contentType:"application/json",body:JSON.stringify(body)});
     });
+    await serveBrandAssets(page);
     await page.setViewportSize({width,height:850});
     await page.goto("http://auth.fixture/login?returnTo=%2Fresearch");await page.addScriptTag({content:script});
-    await expect(page.getByRole("heading",{name:"Welcome to QuantTrace"})).toBeVisible();
+    await expect(page.getByRole("heading",{name:"Welcome to Quantgrove"})).toBeVisible();
+    await page.evaluate(() => document.fonts.ready);
+    await page.screenshot({path:test.info().outputPath(`email-login-${width}.png`)});
     await expect(page.locator('input[type="password"]')).toHaveCount(0);
     await page.getByLabel("Email",{exact:true}).fill("Researcher@Example.com");
     await page.getByRole("button",{name:"Continue with email"}).click();

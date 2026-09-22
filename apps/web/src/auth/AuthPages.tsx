@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 
 import { useAuth } from "./AuthProvider";
+import { Brand, BrandMark } from "../brand/Brand";
 import { safeReturnTo, type BrowserLocation, type InitialAuthSecret } from "./routing";
 
 type Navigate = (path: string, options?: Readonly<{ replace?: boolean }>) => void;
@@ -70,14 +71,13 @@ function LoginPage() {
   return (
     <div className="login-page">
       <a className="login-brand" href="/">
-        <img src="/quanttrace-logo.png" alt="" width={28} height={28} />
-        <span>QuantTrace</span>
+        <Brand size={28} />
       </a>
       <main className="login-main">
       <section className="login-content" aria-labelledby="login-title">
       <header className="login-heading">
-        <img src="/quanttrace-logo.png" alt="" width={48} height={48} />
-        <h1 id="login-title">{sent ? "Check your email" : "Welcome to QuantTrace"}</h1>
+        <BrandMark size={48} />
+        <h1 id="login-title">{sent ? "Check your email" : "Welcome to Quantgrove"}</h1>
         <p>{sent ? "Enter the six-digit code from your email." : "Sign in or create an account with your email."}</p>
       </header>
       <form className="auth-form" onSubmit={(event) => void submit(event)}>
@@ -160,7 +160,7 @@ function LoginPage() {
       )}
       </section>
       </main>
-      <footer className="login-footer">QuantTrace · Quantitative research workspace</footer>
+      <footer className="login-footer">Quantgrove · Quantitative research workspace</footer>
     </div>
   );
 }
@@ -219,7 +219,7 @@ function AcceptInvitationPage({ secret, clearSecret }: {
   }
 
   return (
-    <AuthSurface eyebrow="Invitation" title="Create your ThesisTrace access">
+    <AuthSurface eyebrow="Invitation" title="Create your Quantgrove access">
       {loading ? <p role="status">Checking invitation…</p> : null}
       {!loading && email !== null ? (
         <form className="auth-form" onSubmit={(event) => void submit(event)}>
@@ -302,8 +302,7 @@ export function AuthSurface({ eyebrow, title, children }: {
     <main className="auth-page">
       <section aria-labelledby="auth-title" className="auth-panel">
         <a className="auth-brand" href="/login">
-          <img src="/quanttrace-logo.png" alt="" width={30} height={30} />
-          <span>QuantTrace</span>
+          <Brand />
         </a>
         <header>
           <span className="auth-eyebrow">{eyebrow}</span>

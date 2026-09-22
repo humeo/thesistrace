@@ -1,9 +1,11 @@
-/* Linear Product Workbench. Third-party aesthetic reference adapted through DESIGN.md. */
+/* Console palette and geometry are preserved; public surfaces use scoped brand tokens. */
 :root {
   color: #f7f8f8;
   background: #010102;
   color-scheme: dark;
-  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-body: Inter, "Noto Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-display: "Source Serif 4", "Noto Serif SC", Georgia, "Songti SC", STSong, serif;
+  font-family: var(--font-body);
   font-synthesis: none;
   line-height: 1.5;
   --ink: #f7f8f8;
@@ -33,6 +35,39 @@
   --sidebar-header-height: 48px;
   --mono: "Geist Mono", "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
+
+/* These tokens never inherit into the authenticated console. */
+.landing-page, .login-page, .auth-page {
+  color-scheme: light;
+  --canvas: #faf9f4;
+  --surface-1: #ffffff;
+  --surface-2: #f1f3ec;
+  --surface-3: #ffffff;
+  --surface-4: #e8ede4;
+  --ink: #1f1f1f;
+  --ink-muted: #50594f;
+  --ink-soft: #626b61;
+  --ink-faint: #626b61;
+  --line: #e2e4da;
+  --line-strong: #878f80;
+  --line-tertiary: #d9d6cc;
+  --primary: #0f3d2e;
+  --primary-hover: #164f3d;
+  --primary-control-hover: #164f3d;
+  --primary-focus: #0f3d2e;
+  --success: #276749;
+  --warning: #80551e;
+  --danger: #a33a32;
+  --danger-action: #a33a32;
+  --danger-action-hover: #862f29;
+  color: var(--ink);
+  background: var(--canvas);
+}
+html:has(.landing-page, .login-page, .auth-page) {
+  color-scheme: light;
+  background: #faf9f4;
+}
+.quantgrove-wordmark { font-family: var(--font-display); }
 
 * { box-sizing: border-box; }
 html { min-width: 320px; overflow-x: clip; scrollbar-gutter: stable; background: var(--canvas); }
@@ -1307,7 +1342,8 @@ code { font-family: var(--mono); }
 
 /* Type and shared controls */
 h1, h2, h3 { margin: 0; color: var(--ink); font-family: inherit; }
-h1 { font-size: 28px; font-weight: 600; line-height: 1.2; letter-spacing: -.6px; }
+h1 { font-family: var(--font-display); font-size: 28px; font-weight: 600; line-height: 1.2; letter-spacing: -.6px; }
+.chat-assistant-markdown h1 { font-family: var(--font-body); }
 h2 { font-size: 20px; font-weight: 500; line-height: 1.3; letter-spacing: -.3px; }
 h3 { font-size: 14px; font-weight: 500; }
 .page-hero, .page-header, .research-run-header {
@@ -1872,6 +1908,7 @@ select { color-scheme: dark; }
   letter-spacing: .02em;
 }
 .auth-form { display: grid; gap: 9px; }
+.auth-form input { border-color: var(--line-strong); }
 .auth-intro { margin: 0 0 24px; color: var(--ink-muted); font-size: 14px; line-height: 1.65; }
 .auth-code-input[aria-invalid="true"] { border-color: var(--danger); }
 .auth-code-hint { margin: 3px 0 0; color: var(--ink-soft); font-size: 12px; line-height: 1.5; }
@@ -2417,7 +2454,7 @@ select { color-scheme: dark; }
 .research-run-facts p + p { border-left: 1px solid var(--line); }
 .research-run-facts p:nth-child(4n + 1) { border-left: 0; }
 .research-run-facts p:nth-child(n + 5) { border-top: 1px solid var(--line); }
-.research-run-facts strong { display: block; margin-bottom: 5px; font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+.research-run-facts strong { display: block; margin-bottom: 5px; font-family: var(--font-body); }
 .research-run-facts a { color: #aab3ff; text-underline-offset: 3px; }
 .research-run-execution-facts {
   gap: 1px;
@@ -3215,7 +3252,7 @@ select { color-scheme: dark; }
     margin-bottom: 4px;
     color: var(--ink-soft);
     content: attr(data-label);
-    font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-family: var(--font-body);
     font-size: 9px;
     font-weight: 500;
     white-space: normal;

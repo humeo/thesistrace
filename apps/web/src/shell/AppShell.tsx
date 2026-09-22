@@ -8,6 +8,7 @@ import {
 } from "react";
 
 import { AccountMenu } from "../auth/AccountMenu";
+import { Brand } from "../brand/Brand";
 import { McpIcon } from "./McpIcon";
 import { SessionHistoryList } from "../chat/SessionHistoryList";
 import type { SessionHistoryController } from "../chat/useSessionHistory";
@@ -130,9 +131,8 @@ export function AppShell({
           role={mobileViewport && isNavigationOpen ? "dialog" : undefined}
         >
           <div className="sidebar-brand-row">
-            <a className="brand" aria-label="QuantTrace home" href="/">
-              <img className="brand-mark" src="/quanttrace-logo.png" alt="" width={30} height={30} />
-              <span className="sidebar-label">QuantTrace</span>
+            <a className="brand" aria-label="Quantgrove home" href="/">
+              <Brand className="brand-mark" wordmarkClassName="sidebar-label" inverse />
             </a>
             <button aria-controls="primary-navigation" aria-expanded={!isCollapsed}
               aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}

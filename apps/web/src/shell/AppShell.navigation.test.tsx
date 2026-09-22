@@ -94,7 +94,7 @@ test("brand opens the landing page through browser navigation", async () => {
   document.body.append(container);
   root = createRoot(container);
   await act(async () => root!.render(<Routes />));
-  const home = document.querySelector<HTMLAnchorElement>('[aria-label="QuantTrace home"]')!;
+  const home = document.querySelector<HTMLAnchorElement>('[aria-label="Quantgrove home"]')!;
   expect(home.getAttribute("href")).toBe("/");
   const event = new MouseEvent("click", { bubbles: true, cancelable: true });
   await act(async () => home.dispatchEvent(event));
@@ -132,7 +132,7 @@ test("mobile focus wraps through the account trigger, excluding closed menu cont
   expect(open).not.toBeNull();
   expect(open.closest(".context-bar")).toBeNull();
   await act(async () => open.click());
-  const home = document.querySelector<HTMLAnchorElement>('[aria-label="QuantTrace home"]')!;
+  const home = document.querySelector<HTMLAnchorElement>('[aria-label="Quantgrove home"]')!;
   const account = document.querySelector<HTMLElement>('[aria-label="Account menu"]')!;
   await act(async () => {
     home.focus();

@@ -849,9 +849,9 @@ function invitationEmail(
 ): ResendEmail {
   const link = `${publicOrigin}/accept-invitation#token=${encodeURIComponent(token)}`;
   return {
-    html: `<p>You have been invited to ThesisTrace.</p><p><a href="${link}">Accept invitation</a></p>`,
-    subject: "Your ThesisTrace invitation",
-    text: `You have been invited to ThesisTrace. Accept the invitation: ${link}`,
+    html: `<p>You have been invited to Quantgrove.</p><p><a href="${link}">Accept invitation</a></p>`,
+    subject: "Your Quantgrove invitation",
+    text: `You have been invited to Quantgrove. Accept the invitation: ${link}`,
     to: email,
   };
 }
