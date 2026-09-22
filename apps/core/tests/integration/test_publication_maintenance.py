@@ -451,6 +451,7 @@ def test_killed_process_releases_ownership_without_bypassing_cooldown(maintenanc
     import select
     import subprocess
     import sys
+    from time import monotonic
 
     from thesistrace.publication import PublicationMaintenance
 
@@ -487,7 +488,15 @@ PublicationMaintenance(db, s3, bucket=os.environ['THESISTRACE_S3_BUCKET']).run_o
         assert PublicationMaintenance(database, s3, bucket=bucket).run_once()["status"] == "busy"
         process.kill()
         process.wait(timeout=10)
-        assert PublicationMaintenance(database, s3, bucket=bucket).run_once()["status"] == "idle"
+        # Process exit precedes PostgreSQL observing the disconnected session.
+        # Wait for ownership release, then still require the durable cooldown.
+        deadline = monotonic() + 10
+        while True:
+            released = PublicationMaintenance(database, s3, bucket=bucket).run_once()
+            if released["status"] != "busy" or monotonic() >= deadline:
+                break
+            Event().wait(0.01)
+        assert released["status"] == "idle"
     finally:
         if process.poll() is None:
             process.kill()
