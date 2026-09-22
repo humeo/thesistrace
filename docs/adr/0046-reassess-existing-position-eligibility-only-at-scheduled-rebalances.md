@@ -1,3 +1,3 @@
-# Reassess existing-position eligibility only at scheduled Rebalances
+# Reassess holding eligibility at Strategy-defined target updates
 
-Existing holdings are retargeted for eligibility only at Target Selection Updates, and any resulting sale remains subject to the ordinary Open Execution Model. Eligibility changes between selection updates do not themselves trigger liquidation; Exposure Adjustments are independently governed allocation decisions and explicit terminal delisting remains a separate accounting event.
+Existing-Position Eligibility belongs to the selected Strategy's target construction, with the periodic built-in policy retaining its scheduled Target Selection Updates. The next contract in [ADR-0250](0250-admit-strategy-programs-with-explicit-simulation-coordinates.md) also permits condition-driven target updates and daily Risk Adjustments, so an eligibility change is neither a universal immediate-liquidation rule nor a reason to block an explicit risk exit. Every requested sale remains subject to the shared Open Execution Model, while terminal delisting remains a separate accounting event.

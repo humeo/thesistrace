@@ -1,3 +1,3 @@
-# Use latest annual flow fields and latest reported stock fields
+# Preserve annual flow and latest-reported stock field meanings
 
-Revenue, net profit, and operating cash flow use the latest visible full-year facts, while assets, liabilities, and equity use the latest visible reported balance sheet. ThesisTrace avoids implicit TTM construction because cumulative interim periods require a distinct meaning and reconstruction contract.
+The existing revenue, net_profit and operating_cash_flow fields select the latest visible full-year facts, while assets, liabilities and equity select the latest visible reported balance sheet. New statement-derived TTM fields use distinct identities and the reconstruction contract in [ADR-0243](0243-give-statement-derived-ttm-flows-distinct-field-identities.md), preserving accepted annual meanings rather than implicitly converting them when the catalog grows.

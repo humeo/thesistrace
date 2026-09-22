@@ -1,3 +1,3 @@
-# Use consolidated statements for the six financial fields
+# Use consolidated scope for statement-derived financial fields
 
-The six current Session-Aligned Financial Fields use consolidated Tushare statements, with `net_profit` attributable to parent owners. Other report scopes remain evidence but never act as fallback inputs, sacrificing alternate views for one comparable point-in-time meaning.
+Statement-derived Session-Aligned Financial Fields use consolidated Tushare statements with explicit period and owner-attribution semantics; the existing net_profit field remains attributable to parent owners. Other report scopes remain evidence rather than fallback inputs, while separately named annual and TTM fields preserve their own meanings instead of imposing the original six-field catalog on later research.

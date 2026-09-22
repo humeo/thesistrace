@@ -13,8 +13,10 @@ Each claim atomically records new execution authority and a monotonic sequence i
 durable per-pool Researcher history, which survives Run, Folder, and Chat deletion.
 Rollback records no opportunity; a committed claim counts even if its Worker fails
 before computation. Effective leases include cancellation pending confirmed exit;
-expired executions cannot renew themselves. No runtime compatibility or schema
-migration path is introduced: fresh environments initialize the current contract.
+expired executions cannot renew themselves. Runtime execution uses only the
+current contract; fresh environments initialize it,
+while existing supported Product State upgrades through explicit, data-preserving
+[migration 0004](../database-migrations.md#0004-fair-research-execution-opportunities).
 
 This replaces ADR-0202's global FIFO decision. A Batch's valid starting claim or
 Attempt counts as one slot, including pending cancellation despite a changed fence;
