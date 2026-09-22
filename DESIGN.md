@@ -32,7 +32,7 @@ The [user-provided brand board](docs/design/quantgrove-brand-reference.png) defi
 | --- | --- |
 | Public landing | Ivory canvas, forest-green actions, editorial serif headings, botanical/stone photograph; preserve real product content, research preview and English/Chinese switching. |
 | Login, invitation, password recovery and access states | Light brand treatment; preserve form structure, field order, validation, authentication behavior and recovery paths. |
-| Console, including Chat, Data, Research, Research Runs, batches, Daily Tracks, MCP and Operator | **Fonts, logo and visible product name only.** Preserve the current dark palette, layout, component styling, navigation and interactions. |
+| Console, including Chat, Data, Research, Research Runs, batches, Daily Tracks, MCP and Operator | Preserve the dark palette, layout, component styling, navigation and interactions. Branding and neutral loading states are implemented; Chinese/English interface localization and an account-menu language control are approved for the next increment below. |
 | Email, browser title, metadata, accessible names and favicon | Use Quantgrove consistently. Email uses its own email-safe markup and system fonts. |
 
 The public landing prototype is a visual reference. Its console layouts and mock data must not replace production console pages.
@@ -62,7 +62,7 @@ The approved loading-state correction is an exception to console style preservat
 - In console content and controls, change font families only. Keep existing font sizes, weights, line heights, letter spacing, component dimensions and responsive rules. The sidebar brand lockup has its own optical sizing below.
 - Serif styling applies to page main headings, not every heading inside assistant Markdown, tool output, charts or data cards. Body content stays sans-serif; numeric alignment remains tabular where currently used.
 - Chinese headings use natural spacing, not Latin negative tracking. Allow Chinese/English content to wrap without clipping or squeezing controls.
-- The landing retains its existing language contract: English by default, `?lang=zh` for Chinese, synchronized URL, document language, title and description. This change does not add console or authentication-page translation/settings.
+- The landing retains English as the initial default and `?lang=zh` for Chinese, with synchronized document language, title and description. The approved localization increment below extends language selection across the landing, authentication and console surfaces.
 - Chinese hero copy: **让想法，在证据中生长。** English hero copy: **Ideas grow through evidence.** Supporting copy explains the actual Alpha, backtesting and daily-observation product.
 
 ## Public-page visual tokens
@@ -97,7 +97,20 @@ These tokens apply only inside the landing and authentication surfaces. They do 
 - Preserve all current page layouts, content widths, spacing, form structure, table density, dialogs, popovers and responsive breakpoints.
 - Preserve chart colors/grid, CodeMirror dark syntax and selection theme, button/status colors, A2UI and Markdown presentation. Font-family updates do not authorize a component restyle.
 - Use the inverse logo on dark surfaces. In the expanded sidebar and mobile drawer, pair a 24px mark with a 20px serif wordmark (24px line height, 600 weight, -0.02em tracking) and an 8px gap. Preserve the brand link's 30px minimum height and the existing header geometry. The collapsed desktop rail retains its existing expand control and hides the full brand link.
-- Any broader console redesign or localization requires a separate product decision.
+- Any console redesign beyond the approved language control and translated presentation requires a separate product decision.
+
+## Chinese/English interface localization — approved, not yet implemented
+
+- Use one interface-language module for the landing, authentication and console, with `en` and `zh-CN`. Start in English when no explicit choice exists; remember the user's choice in the current browser. The landing's explicit language query takes precedence for that page. Cross-device preference synchronization is outside this increment.
+- Put `English / 简体中文` in the existing account menu. Keep it reachable in expanded, collapsed and mobile navigation, including keyboard access. Changing language updates text in place without changing console URLs, remounting authenticated pages or refetching research data.
+- Keep both languages' interface resources bundled and ready before display. Organize resources by product module using i18next/react-i18next. Check translation keys, interpolation parameters and current Catalog coverage during validation; missing translations must not silently produce a partially translated release.
+- Translate application-owned navigation, controls, empty/loading/error states, dialogs, help, charts, editor assistance and accessible labels. Preserve user-authored names and notes, stored chat messages and model-authored A2UI content. Interface language does not alter Agent instructions or reply-language policy; replies continue to follow the conversation and the user's explicit requests.
+- Use stable field IDs, builtin identifiers, industry codes, benchmark IDs and system-folder identities for translated display. Data and the Research Kernel remain authoritative for field/operator meaning, units, availability and calculation semantics. Display dictionaries cannot add allowed fields or redefine those facts. Field search includes both languages and formula identifiers while preserving selected values and filters.
+- Keep translated text out of protocol values, business conditions, React keys and persistence. In particular, preserve `Untitled`, session-recency identities, raw Research Purpose filter values, formula identifiers and system-folder stored names; translate their presentation only.
+- Store error/status identities and parameters rather than already translated strings. Existing visible errors update when the language changes. Supplement necessary public error codes and Alpha Diagnostic details where the current UI lacks a structured reason, preserving specific causes, HTTP status, authorization and successful results. Do not parse English sentences to recover error identity or change business rules, persistence schemas or resource identities.
+- Preserve CodeMirror and chart instances, editor selection/undo history, chart zoom, Chat drafts and active turns, Research form state, filters, open dialogs and focus. Use the libraries' supported in-place localization configuration rather than making locale a lifecycle identity.
+- Centralize displayed numbers and timestamps while preserving precision, currency, signs and each value's time semantics. A Research Session date remains a date; changing language does not change timezone or the Research Calendar. Browser-owned date-picker chrome remains governed by the browser; application labels and accessibility text follow the interface language.
+- Validate both languages in initial, pending, failure and completed states, including switching during active editing and streaming. Reuse the existing local fonts and responsive geometry; verify 320px/390px and desktop rendering without adding a new page layout.
 
 ## Accessibility and interaction
 
@@ -108,7 +121,7 @@ These tokens apply only inside the landing and authentication surfaces. They do 
 
 ## Implementation and acceptance
 
-Reuse React/Vite, native CSS, Phosphor icons, CodeMirror and Lightweight Charts. No new component framework, runtime theme switch or localization framework is required. Keep public styles scoped; limit console changes to font families, branding and the loading-state correction above.
+Reuse React/Vite, native CSS, Phosphor icons, CodeMirror and Lightweight Charts. No new component framework or runtime theme switch is required. Use i18next/react-i18next for the approved localization increment. Keep public styles scoped; limit console changes to branding, fonts, neutral loading states and the localized presentation described above.
 
 Implementation order: this specification → brand and font assets → landing/authentication → console branding → verification. Preserve unrelated working-tree changes.
 

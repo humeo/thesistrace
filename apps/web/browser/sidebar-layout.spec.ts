@@ -68,3 +68,40 @@ test('Chat actions remain usable while independent research content scrolls', as
  await expect(menu).toBeHidden();
  await expect(actions).toBeFocused();
 });
+
+for (const width of [1200, 390, 320]) {
+ test(`interface language changes in place and stays keyboard accessible at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 850 });
+  if (width < 768) await page.getByRole('button', { name: 'Open navigation' }).click();
+  const initialUrl = page.url();
+  const sidebarWidth = (await page.locator('.application-sidebar').boundingBox())!.width;
+  await page.getByLabel('Account menu').click();
+  const chinese = page.getByRole('button', { name: '简体中文', exact: true });
+  if (width < 768) expect((await chinese.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await chinese.click();
+  await expect(chinese).toBeFocused();
+  await expect(chinese).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('link', { name: '数据', exact: true })).toBeVisible();
+  await expect(page.getByLabel('账户菜单')).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
+  expect(page.url()).toBe(initialUrl);
+  expect((await page.locator('.application-sidebar').boundingBox())!.width).toBe(sidebarWidth);
+  await chinese.press('Tab');
+  await expect(page.getByLabel('账户菜单')).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(chinese).toBeFocused();
+  await chinese.press('Escape');
+  await expect(page.getByLabel('账户菜单')).toBeFocused();
+  await expect(page.getByLabel('账户菜单')).toHaveAttribute('aria-expanded', 'false');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: test.info().outputPath(`language-zh-${width}.png`) });
+  await page.reload();
+  await page.addScriptTag({ content: script });
+  if (width < 768) await page.getByRole('button', { name: '打开导航' }).click();
+  await page.getByLabel('账户菜单').click();
+  await expect(page.getByRole('button', { name: '简体中文', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('button', { name: 'English', exact: true }).click();
+  await expect(page.getByRole('link', { name: 'Data', exact: true })).toBeVisible();
+  await expect(page.locator('html')).toHaveAttribute('lang', 'en');
+ });
+}

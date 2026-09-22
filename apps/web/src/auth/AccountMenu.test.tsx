@@ -24,3 +24,17 @@ test("shows only the compact account identity and supported actions", () => {
   expect(markup).not.toContain("Settings");
   expect(markup).not.toContain("Profile");
 });
+
+test("offers both interface languages without hiding the current identity", () => {
+  const markup = renderToStaticMarkup(
+    <AccountMenuContent
+      session={{ displayLabel: "研究员", email: "researcher@example.test", operator: false,
+        researcherId: "00000000-0000-4000-8000-000000000001" }}
+      signOut={async () => ({ ok: true })}
+    />,
+  );
+  expect(markup).toContain("English");
+  expect(markup).toContain("简体中文");
+  expect(markup).toContain('aria-pressed="true"');
+  expect(markup).toContain("研究员");
+});

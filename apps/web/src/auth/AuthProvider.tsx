@@ -25,12 +25,12 @@ import {
   type PublicSession,
 } from "./session";
 
-type AuthResult = Readonly<{ ok: true }> | Readonly<{ ok: false; message: string }>;
+import type { AuthErrorCode, AuthResult, InvitationInspection } from "./errors";
 
 type AuthContextValue = Readonly<{
   state: AuthState;
   acceptInvitation: (token: string, password: string) => Promise<AuthResult>;
-  inspectInvitation: (token: string) => Promise<Readonly<{ email: string }> | null>;
+  inspectInvitation: (token: string) => Promise<InvitationInspection>;
   retry: () => Promise<void>;
   sendCode: (email: string) => Promise<AuthResult>;
   signIn: (email: string, otp: string) => Promise<AuthResult>;
@@ -144,10 +144,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const result = await authClient.signIn.emailOtp({ email: email.trim().toLowerCase(), otp });
       if (result.error !== null) {
-        if (result.error.code === "ACCOUNT_INACTIVE") return failure("This account is inactive. Please contact the operator.");
-        if (result.error.status === 429) return failure("Too many attempts. Please wait before trying again.");
-        if (result.error.status >= 500) return failure("Authentication is temporarily unavailable.");
-        return failure("The code is incorrect or has expired. Please request a new code.");
+        if (result.error.code === "ACCOUNT_INACTIVE") return failure("accountInactive");
+        if (result.error.status === 429 || result.error.code === "TOO_MANY_ATTEMPTS") return failure("tooManyAttempts");
+        if (result.error.status >= 500) return failure("unavailable");
+        if (result.error.code === "INVALID_OTP" || result.error.code === "OTP_EXPIRED") return failure("invalidCode");
+        return failure("operationFailed");
       }
       if (isOAuthRedirect(result.data)) {
         // Better Auth owns the OAuth redirect; do not race it with workspace bootstrap.
@@ -157,36 +158,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await refreshSession(true);
       return { ok: true };
     } catch {
-      return failure("Authentication is temporarily unavailable.");
+      return failure("unavailable");
     }
   }, [refreshSession]);
 
   const sendCode = useCallback(async (email: string): Promise<AuthResult> => {
     try {
       const result = await authJson("/api/auth/email-otp/send-verification-otp", {email: email.trim().toLowerCase(), type: "sign-in"});
-      if (!result.ok) return failure(result.status === 429 ? "Too many requests. Please wait before trying again." : "The verification code could not be sent. Please try again.");
+      if (!result.ok) return failure(result.status === 429 ? "tooManyRequests" : "codeDeliveryFailed");
       return {ok: true};
-    } catch { return failure("The verification code could not be sent. Please try again."); }
+    } catch { return failure("codeDeliveryFailed"); }
   }, []);
 
   const signOut = useCallback(async (): Promise<AuthResult> => {
     try {
       const result = await authClient.signOut();
-      if (result.error !== null) return failure("Logout could not be completed.");
+      if (result.error !== null) return failure("signOutFailed");
       readyResearcherId.current = null;
       dispatch({ type: "session-missing" });
       return { ok: true };
     } catch {
-      return failure("Logout could not be completed.");
+      return failure("signOutFailed");
     }
   }, []);
 
-  const inspectInvitation = useCallback(async (token: string) => {
-    const response = await authJson("/api/auth/researcher-invitation/inspect", { token });
-    if (!response.ok || !isRecord(response.data) || typeof response.data.email !== "string") {
-      return null;
+  const inspectInvitation = useCallback(async (token: string): Promise<InvitationInspection> => {
+    try {
+      const response = await authJson("/api/auth/researcher-invitation/inspect", { token });
+      if (!response.ok) return invitationFailure(response);
+      if (!isRecord(response.data) || typeof response.data.email !== "string") return failure("operationFailed");
+      return { ok: true, email: response.data.email };
+    } catch {
+      return failure("unavailable");
     }
-    return { email: response.data.email };
   }, []);
 
   const acceptInvitation = useCallback(async (
@@ -198,12 +202,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         password,
         token,
       });
-      if (!response.ok) return failure("This invitation is invalid or has expired.");
+      if (!response.ok) return invitationFailure(response);
       readyResearcherId.current = null;
       await refreshSession(true);
       return { ok: true };
     } catch {
-      return failure("Authentication is temporarily unavailable.");
+      return failure("unavailable");
     }
   }, [refreshSession]);
 
@@ -255,8 +259,15 @@ async function authJson(path: string, body: Record<string, string>): Promise<Rea
   return { data, ok: response.ok, status: response.status };
 }
 
-function failure(message: string): AuthResult {
-  return { ok: false, message };
+function failure(code: AuthErrorCode): Readonly<{ ok: false; code: AuthErrorCode }> {
+  return { ok: false, code };
+}
+
+function invitationFailure(response: Readonly<{ status: number; data: unknown }>) {
+  if (response.status === 429) return failure("tooManyRequests");
+  if (response.status >= 500) return failure("unavailable");
+  if (isRecord(response.data) && response.data.code === "INVITATION_INVALID") return failure("invitationExpired");
+  return failure("operationFailed");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -13,6 +13,7 @@ import {
 } from "./auth/routing";
 import { authenticatedResearcherId } from "./auth/session";
 import { CoreApp } from "./shell/CoreApp";
+import { synchronizeEntryLanguage, useTranslation } from "./i18n";
 import "./styles.css";
 
 const LandingPage = lazy(() => import('./landing/LandingPage'));
@@ -43,6 +44,7 @@ function consumeBrowserLocation(): ConsumedBrowserLocation {
 const initialLocation = consumeBrowserLocation();
 
 function BrowserRoutedApp() {
+  const { t } = useTranslation("auth");
   const { state, retry } = useAuth();
   const researcherId = authenticatedResearcherId(state);
   const [location, setLocation] = useState(browserLocation);
@@ -50,6 +52,7 @@ function BrowserRoutedApp() {
 
   const synchronizeLocation = useCallback(() => {
     const next = consumeBrowserLocation();
+    if (isAuthPath(next.location.pathname)) synchronizeEntryLanguage();
     setLocation(next.location);
     setSecret((current) => {
       if (next.secret !== null) return next.secret;
@@ -97,18 +100,18 @@ function BrowserRoutedApp() {
   }, [anonymousRedirect, authenticatedRedirect, navigate]);
 
   if (state.status === "loading") {
-    return <AuthStatus title="Checking access" message="Verifying your Quantgrove session…" />;
+    return <AuthStatus title={t("checkingAccess")} message={t("verifyingSession")} />;
   }
   if (state.status === "setup") {
-    return <AuthStatus title="Preparing workspace" message="Setting up your Research folders…" />;
+    return <AuthStatus title={t("preparingWorkspace")} message={t("preparingFolders")} />;
   }
   if (state.status === "setup-failure") {
     return (
       <AuthStatus
         action={() => void retry()}
-        actionLabel="Retry setup"
-        message="Your session is valid, but the Research workspace is not ready yet."
-        title="Workspace setup unavailable"
+        actionLabel={t("retrySetup")}
+        message={t("setupMessage")}
+        title={t("setupUnavailable")}
       />
     );
   }
@@ -116,14 +119,14 @@ function BrowserRoutedApp() {
     return (
       <AuthStatus
         action={() => void retry()}
-        actionLabel="Retry"
-        message="Your access state could not be verified. Existing session data has been retained."
-        title="Authentication unavailable"
+        actionLabel={t("retry")}
+        message={t("unavailableMessage")}
+        title={t("unavailable")}
       />
     );
   }
   if (anonymousRedirect !== null || authenticatedRedirect !== null) {
-    return <AuthStatus title="Opening Quantgrove" message="Redirecting…" />;
+    return <AuthStatus title={t("opening")} message={t("redirecting")} />;
   }
   if (state.status === "anonymous") {
     return (
@@ -136,7 +139,7 @@ function BrowserRoutedApp() {
     );
   }
   if (researcherId === null) {
-    return <AuthStatus title="Opening Quantgrove" message="Preparing product access…" />;
+    return <AuthStatus title={t("opening")} message={t("preparingAccess")} />;
   }
   return (
     <CoreApp
@@ -155,8 +158,9 @@ function AuthStatus({ title, message, action, actionLabel }: {
   action?: () => void;
   actionLabel?: string;
 }) {
+  const { t } = useTranslation("auth");
   return (
-    <AuthSurface eyebrow="Research workspace" title={title}>
+    <AuthSurface eyebrow={t("workspace")} title={title}>
       <p role="status">{message}</p>
       {action !== undefined ? (
         <button className="button-primary auth-submit" onClick={action} type="button">

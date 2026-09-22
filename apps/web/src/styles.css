@@ -1995,6 +1995,11 @@ select { color-scheme: dark; }
 }
 .account-action > svg, .account-action > img { flex-shrink: 0; }
 .account-action-chevron { margin-left: auto; color: var(--ink-soft); }
+.account-language { border-top: 1px solid var(--line); margin-top: 4px; padding: 10px 8px 4px; }
+.account-language > span { color: var(--ink-soft); font-size: 12px; }
+.account-language-options { display: flex; gap: 4px; margin-top: 8px; }
+.account-language-options > button { flex: 1; min-width: 0; min-height: 36px; padding: 6px; font-size: 12px; }
+.account-language-options > button[aria-pressed="true"] { color: var(--ink); background: var(--surface-3); border-color: var(--line-strong); }
 .account-action:hover, .account-action:hover:not(:disabled) { color: var(--ink); background: var(--line-strong); border-color: transparent; }
 @media (min-width: 769px) {
   .app-shell-collapsed .account-menu > summary { gap: 0; }
@@ -2938,6 +2943,7 @@ select { color-scheme: dark; }
   .auth-text-action,
   .account-menu > summary,
   .account-action,
+  .account-language-options > button,
   .account-password-form input,
   .account-password-form .button-primary,
   .operator-confirmation-field input,

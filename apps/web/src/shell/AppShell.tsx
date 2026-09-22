@@ -13,17 +13,18 @@ import { McpIcon } from "./McpIcon";
 import { SessionHistoryList } from "../chat/SessionHistoryList";
 import type { SessionHistoryController } from "../chat/useSessionHistory";
 import { handleWorkspaceNavigation, type WorkspaceNavigate } from "./navigation";
+import { useTranslation } from "../i18n";
 
 const resourceRoutes = [
 
-  { path: "/data", label: "Data", icon: Database },
-  { path: "/research", label: "Research", icon: Flask },
-  { path: "/research-runs", label: "Research Runs", icon: ChartLineUp },
-  { path: "/daily-tracks", label: "Daily Tracks", icon: ClockCounterClockwise },
-  { path: "/connections/mcp", label: "MCP", icon: McpIcon },
+  { path: "/data", label: "data", icon: Database },
+  { path: "/research", label: "research", icon: Flask },
+  { path: "/research-runs", label: "researchRuns", icon: ChartLineUp },
+  { path: "/daily-tracks", label: "dailyTracks", icon: ClockCounterClockwise },
+  { path: "/connections/mcp", label: "mcp", icon: McpIcon },
 ] as const;
 const operatorRoute = {
-  activeRoot: "/operator", path: "/operator/researchers", label: "Operator", icon: ShieldCheck,
+  activeRoot: "/operator", path: "/operator/researchers", label: "operator", icon: ShieldCheck,
 } as const;
 
 type WorkspaceContextValue = Readonly<{
@@ -51,6 +52,7 @@ type AppShellProps = {
 export function AppShell({
   currentPath, currentSessionId, isNewChat, children, isOperator, navigate, sessionHistory,
 }: AppShellProps) {
+  const { t } = useTranslation("navigation");
   const isChat = currentPath === "/chat";
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(224);
@@ -109,7 +111,7 @@ export function AppShell({
 
   const mobileNavigationToggle = (
     <button aria-controls="primary-navigation" aria-expanded={isNavigationOpen}
-      aria-label="Open navigation"
+      aria-label={t("open")}
       className="mobile-navigation-toggle"
       onClick={() => setIsNavigationOpen(true)} ref={mobileNavigationToggleRef} type="button">
       <List aria-hidden="true" size={19} weight="regular" />
@@ -122,7 +124,7 @@ export function AppShell({
         className={`app-shell${isChat ? " app-shell-chat" : ""}${currentPath === "/research" ? " app-shell-research" : ""}${isCollapsed ? " app-shell-collapsed" : ""}${isNavigationOpen ? " app-shell-navigation-open" : ""}${isResizing ? " app-shell-resizing" : ""}`}>
         <aside
           aria-hidden={mobileViewport && !isNavigationOpen ? true : undefined}
-          aria-label={mobileViewport && isNavigationOpen ? "Navigation" : undefined}
+          aria-label={mobileViewport && isNavigationOpen ? t("navigation") : undefined}
           aria-modal={mobileViewport && isNavigationOpen ? true : undefined}
           className="application-sidebar"
           id="primary-navigation"
@@ -131,32 +133,32 @@ export function AppShell({
           role={mobileViewport && isNavigationOpen ? "dialog" : undefined}
         >
           <div className="sidebar-brand-row">
-            <a className="brand" aria-label="Quantgrove home" href="/">
+            <a className="brand" aria-label={t("home")} href="/">
               <Brand className="brand-mark" wordmarkClassName="sidebar-label" inverse />
             </a>
             <button aria-controls="primary-navigation" aria-expanded={!isCollapsed}
-              aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              aria-label={t(isCollapsed ? "expand" : "collapse")}
               className="sidebar-toggle" onClick={() => setIsCollapsed((collapsed) => !collapsed)}
-              title={isCollapsed ? "Expand sidebar" : "Collapse sidebar"} type="button">
+              title={t(isCollapsed ? "expand" : "collapse")} type="button">
               <SidebarSimple aria-hidden="true" size={18} weight="regular" />
             </button>
-            <button aria-label="Close navigation" className="mobile-navigation-close"
+            <button aria-label={t("close")} className="mobile-navigation-close"
               onClick={closeNavigation} ref={mobileNavigationCloseRef} type="button">
               <X aria-hidden="true" size={18} weight="regular" />
             </button>
           </div>
           <a aria-current={isNewChat ? "page" : undefined} className="sidebar-new-chat" href="/chat"
             onClick={(event) => handleWorkspaceNavigation(event, () => openPage("/chat"))}
-            ref={newChatRef} title="New Chat">
+            ref={newChatRef} title={t("newChat")}>
             <NotePencil aria-hidden="true" size={18} weight="regular" />
-            <span className="sidebar-label">New Chat</span>
+            <span className="sidebar-label">{t("newChat")}</span>
           </a>
-          <nav aria-label="Workspace" className="resource-nav">
+          <nav aria-label={t("workspace")} className="resource-nav">
             {resourceRoutes.map((resource) => (
               <ResourceLink currentPath={currentPath} key={resource.path} navigate={openPage} resource={resource} />
             ))}
           </nav>
-          <section aria-label="Chats" className="chat-session-region">
+          <section aria-label={t("chats")} className="chat-session-region">
             <SessionHistoryList
               controller={sessionHistory}
               currentSessionId={currentSessionId}
@@ -170,14 +172,14 @@ export function AppShell({
             />
           </section>
           {isOperator ? (
-            <nav aria-label="Operator" className="resource-nav operator-nav">
+            <nav aria-label={t("operator")} className="resource-nav operator-nav">
               <ResourceLink currentPath={currentPath} navigate={openPage} resource={operatorRoute} />
             </nav>
           ) : null}
           <div className="sidebar-account-area"><AccountMenu /></div>
           {!mobileViewport && !isCollapsed ? (
             <div className="sidebar-resize-handle" role="separator" tabIndex={0}
-              aria-label="Resize sidebar" aria-orientation="vertical" aria-controls="primary-navigation"
+              aria-label={t("resize")} aria-orientation="vertical" aria-controls="primary-navigation"
               aria-valuemin={224} aria-valuemax={400} aria-valuenow={sidebarWidth}
               onPointerDown={(event) => {
                 if (event.button !== 0) return;
@@ -206,7 +208,7 @@ export function AppShell({
           {mobileNavigationToggle}
           {isChat ? children : <main className="main-content">{children}</main>}
         </div>
-        <button aria-label="Close navigation" className="navigation-backdrop"
+        <button aria-label={t("close")} className="navigation-backdrop"
           onClick={closeNavigation} type="button" />
       </div>
     </WorkspaceContext>
@@ -216,15 +218,16 @@ export function AppShell({
 function ResourceLink({ currentPath, navigate, resource }: {
   currentPath: string;
   navigate: WorkspaceNavigate;
-  resource: Readonly<{ icon: ComponentType<IconProps>; label: string; path: string; activeRoot?: string }>;
+  resource: Readonly<{ icon: ComponentType<IconProps>; label: typeof resourceRoutes[number]["label"] | typeof operatorRoute.label; path: string; activeRoot?: string }>;
 }) {
+  const { t } = useTranslation("navigation");
   const Icon = resource.icon;
   const isCurrent = isResourceCurrent(currentPath, resource);
   return (
     <a aria-current={isCurrent ? "page" : undefined} href={resource.path}
-      onClick={(event) => handleWorkspaceNavigation(event, () => navigate(resource.path))} title={resource.label}>
+      onClick={(event) => handleWorkspaceNavigation(event, () => navigate(resource.path))} title={t(resource.label)}>
       <Icon aria-hidden="true" size={18} weight={isCurrent ? "fill" : "regular"} />
-      <span className="sidebar-label">{resource.label}</span>
+      <span className="sidebar-label">{t(resource.label)}</span>
     </a>
   );
 }

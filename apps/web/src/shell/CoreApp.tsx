@@ -6,6 +6,7 @@ import { useSessionHistory } from "../chat/useSessionHistory";
 import type { WorkspaceNavigate } from "./navigation";
 
 import { AppShell } from "./AppShell";
+import { useTranslation } from "../i18n";
 
 const McpPage = lazy(() => import("../mcp/McpPage").then(({ McpPage }) => ({ default: McpPage })));
 const McpAuthorizePage = lazy(() => import("../mcp/McpAuthorizePage").then(({ McpAuthorizePage }) => ({ default: McpAuthorizePage })));
@@ -51,7 +52,20 @@ export function CoreApp({ location, navigate, isOperator, researcherId }: {
   isOperator: boolean;
   researcherId: string;
 }) {
+  const { t } = useTranslation("common");
+  const { t: navigationText } = useTranslation("navigation");
   const currentPath = location.pathname;
+  useEffect(() => {
+    const title = currentPath.startsWith("/research-runs/batches") ? "researchBatches"
+      : currentPath.startsWith("/research-runs") ? "researchRuns"
+      : currentPath.startsWith("/daily-tracks") ? "dailyTracks"
+      : currentPath.startsWith("/operator") ? "operator"
+      : currentPath.startsWith("/connections/mcp") ? "mcp"
+      : currentPath === "/research" ? "research"
+      : currentPath === "/data" ? "data" : "chats";
+    document.title = `${navigationText(title)} · Quantgrove`;
+    document.querySelector('meta[name="description"]')?.setAttribute("content", `${navigationText("workspace")} · Quantgrove`);
+  }, [currentPath, navigationText]);
   const sessionHistory = useSessionHistory(researcherId);
   const thread = useMemo(() => currentPath === "/chat"
     ? readBrowserChatThread(location.search) : null, [currentPath, location]);
@@ -70,8 +84,8 @@ export function CoreApp({ location, navigate, isOperator, researcherId }: {
     >
       <Suspense
         fallback={currentPath === "/chat"
-          ? <main aria-busy="true" aria-label="Loading Chat" className="chat-main" />
-          : <section className="state-section"><p>Loading workspace…</p></section>}
+          ? <main aria-busy="true" aria-label={t("loadingChat")} className="chat-main" />
+          : <section className="state-section"><p>{t("loadingWorkspace")}</p></section>}
       >
         {thread === null ? null : <ChatPage key={thread.id ?? "invalid"} researcherId={researcherId} thread={thread} />}
         {currentPath === "/data" ? <DataPage /> : null}
@@ -95,9 +109,9 @@ export function CoreApp({ location, navigate, isOperator, researcherId }: {
         {currentPath === "/operator/data" && isOperator ? <OperatorDataPage /> : null}
         {(currentPath === "/operator/researchers" || currentPath === "/operator/data")
         && !isOperator ? (
-          <section aria-label="Not found" className="page-section state-section">
-            <h1>Not found</h1>
-            <p>The requested resource is not available.</p>
+          <section aria-label={t("notFound")} className="page-section state-section">
+            <h1>{t("notFound")}</h1>
+            <p>{t("resourceUnavailable")}</p>
           </section>
         ) : null}
         {currentPath !== "/chat" && currentPath !== "/data" &&
@@ -107,7 +121,7 @@ export function CoreApp({ location, navigate, isOperator, researcherId }: {
         currentPath !== "/operator/data" &&
         !currentPath.startsWith("/research-runs") &&
         !currentPath.startsWith("/daily-tracks") ? (
-          <div aria-label="Resource outlet" />
+          <div aria-label={t("resourceOutlet")} />
         ) : null}
       </Suspense>
     </AppShell>

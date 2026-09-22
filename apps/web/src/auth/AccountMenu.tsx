@@ -7,12 +7,12 @@ import {
 
 import { useAuth } from "./AuthProvider";
 import type { PublicSession } from "./session";
-
-type AccountActionResult = Readonly<{ ok: true }> | Readonly<{ ok: false; message: string }>;
+import { changeInterfaceLanguage, interfaceLocale, useTranslation } from "../i18n";
+import type { AuthErrorCode, AuthResult } from "./errors";
 
 type AccountMenuContentProps = Readonly<{
   session: PublicSession;
-  signOut: () => Promise<AccountActionResult>;
+  signOut: () => Promise<AuthResult>;
 }>;
 
 export function AccountMenu() {
@@ -31,9 +31,11 @@ export function AccountMenuContent({
   session,
   signOut,
 }: AccountMenuContentProps) {
+  const { t } = useTranslation(["common", "auth"]);
+  const locale = interfaceLocale();
   const [open, setOpen] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
+  const [message, setMessage] = useState<AuthErrorCode | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const summaryRef = useRef<HTMLElement>(null);
   const initials = session.displayLabel.trim().split(/\s+/u)
@@ -88,7 +90,7 @@ export function AccountMenuContent({
     const result = await signOut();
     if (!result.ok) {
       setSigningOut(false);
-      setMessage(result.message);
+      setMessage(result.code);
     }
   }
 
@@ -101,7 +103,7 @@ export function AccountMenuContent({
     >
       <summary
         aria-expanded={open}
-        aria-label="Account menu"
+        aria-label={t("accountMenu")}
         ref={summaryRef}
       >
         {identity}
@@ -111,7 +113,7 @@ export function AccountMenuContent({
         <div className="account-identity">
           {identity}
         </div>
-        {message !== null ? <p className="account-message" role="status">{message}</p> : null}
+        {message !== null ? <p className="account-message" role="status">{t(`auth:errors.${message}`)}</p> : null}
         <a
           className="button account-action"
           href="https://discord.gg/tdwxubVhMJ"
@@ -119,7 +121,7 @@ export function AccountMenuContent({
           rel="noopener noreferrer"
         >
           <img src="/brand/discord-symbol-white.svg" alt="" width={20} height={16} />
-          <span>Join Discord</span>
+          <span>{t("joinCommunity")}</span>
           <CaretRight className="account-action-chevron" aria-hidden="true" size={16} />
         </a>
         <button
@@ -129,9 +131,18 @@ export function AccountMenuContent({
           type="button"
         >
           <SignOut aria-hidden="true" size={20} />
-          <span>{signingOut ? "Logging out…" : "Log out"}</span>
+          <span>{t(signingOut ? "signingOut" : "signOut")}</span>
           <CaretRight className="account-action-chevron" aria-hidden="true" size={16} />
         </button>
+        <div className="account-language" role="group" aria-label={t("language")}>
+          <span>{t("language")}</span>
+          <div className="account-language-options">
+            <button type="button" lang="en" aria-pressed={locale === "en"}
+              onClick={() => changeInterfaceLanguage("en")}>English</button>
+            <button type="button" lang="zh-CN" aria-pressed={locale === "zh-CN"}
+              onClick={() => changeInterfaceLanguage("zh-CN")}>简体中文</button>
+          </div>
+        </div>
       </div>
     </details>
   );

@@ -1,27 +1,27 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Brand } from '../brand/Brand';
-import { copy, type Language } from './copy';
+import { changeInterfaceLanguage, interfaceLocale, publicLanguageCode, synchronizeEntryLanguage, useTranslation, type InterfaceLocale } from '../i18n';
 import './landing.css';
 export default function Landing() {
-    const [language, setLanguage] = useState<Language>(() => new URLSearchParams(location.search).get('lang') === 'zh' ? 'zh' : 'en');
-    const t = copy[language];
+    const { t: translate } = useTranslation('landing');
+    const language = interfaceLocale();
+    const t = translate('page', { returnObjects: true });
+    const loginHref = `/login?lang=${publicLanguageCode(language)}`;
     const [stage, setStage] = useState(0);
     const previewRef = useRef<HTMLElement>(null);
     useEffect(() => {
-        document.documentElement.lang = language === 'zh' ? 'zh-CN' : 'en';
         document.title = `${t.brand} — ${t.descriptor}`;
         document.querySelector('meta[name="description"]')?.setAttribute('content', t.meta);
     }, [language, t]);
     useEffect(() => {
-        const synchronize = () => setLanguage(new URLSearchParams(location.search).get('lang') === 'zh' ? 'zh' : 'en');
-        window.addEventListener('popstate', synchronize);
-        return () => window.removeEventListener('popstate', synchronize);
+        window.addEventListener('popstate', synchronizeEntryLanguage);
+        return () => window.removeEventListener('popstate', synchronizeEntryLanguage);
     }, []);
-    const changeLanguage = (next: Language) => {
+    const changeLanguage = (next: InterfaceLocale) => {
         const url = new URL(location.href);
-        url.searchParams.set('lang', next);
+        url.searchParams.set('lang', publicLanguageCode(next));
         history.replaceState(null, '', url);
-        setLanguage(next);
+        changeInterfaceLanguage(next);
     };
     const selectStage = (index: number) => {
         setStage(index);
@@ -35,9 +35,9 @@ export default function Landing() {
         <div className="qt-language" role="group" aria-label="Language / 语言">
           <button type="button" lang="en" aria-label="English" aria-pressed={language === 'en'} onClick={() => changeLanguage('en')}>EN</button>
           <span aria-hidden="true">/</span>
-          <button type="button" lang="zh-CN" aria-pressed={language === 'zh'} onClick={() => changeLanguage('zh')}>中文</button>
+          <button type="button" lang="zh-CN" aria-pressed={language === 'zh-CN'} onClick={() => changeLanguage('zh-CN')}>中文</button>
         </div>
-        <a className="qt-login" href="/login">{t.login}<span aria-hidden="true">↗</span></a>
+        <a className="qt-login" href={loginHref}>{t.login}<span aria-hidden="true">↗</span></a>
       </nav>
     </header>
     <main id="top">
@@ -46,7 +46,7 @@ export default function Landing() {
           <h1 id="hero-title">{t.headline[0]}<span className="qt-headline-ending">{t.headline[1]}</span></h1>
           <p className="qt-descriptor">{t.descriptor}</p>
           <p className="qt-subtitle">{t.subtitle}</p>
-          <div className="qt-hero-actions"><a className="qt-primary" href="/login">{t.start}</a><a className="qt-secondary" href="#preview">{t.viewExample}</a></div>
+          <div className="qt-hero-actions"><a className="qt-primary" href={loginHref}>{t.start}</a><a className="qt-secondary" href="#preview">{t.viewExample}</a></div>
         </div>
         <img className="qt-hero-image" src="/brand/quantgrove-botanical.jpg" alt="" width={570} height={760} fetchPriority="high" />
       </section>
@@ -74,7 +74,7 @@ export default function Landing() {
         <h2 id="value-title">{t.valueTitle}</h2>
         <div className="qt-value-reasons">{t.reasons.map(([title, body]) => <article key={title}><h3>{title}</h3><p>{body}</p></article>)}</div>
       </section>
-      <section className="qt-access"><h2>{t.accessTitle}</h2><p>{t.accessBody}</p><a className="qt-primary" href="/login">{t.login}</a></section>
+      <section className="qt-access"><h2>{t.accessTitle}</h2><p>{t.accessBody}</p><a className="qt-primary" href={loginHref}>{t.login}</a></section>
     </main>
     <footer><a className="qt-brand" href="#top" aria-label={t.home}><Brand className="qt-logo" size={24} /></a><p>{t.footer}</p><a className="qt-footer-community" href="https://discord.gg/tdwxubVhMJ" target="_blank" rel="noopener noreferrer">{t.community}</a></footer>
   </div>;
