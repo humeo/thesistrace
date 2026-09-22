@@ -417,6 +417,9 @@ def _execute_strategy(
     target_events = ([] if continuation is None else [
         dict(item) for item in continuation.get("target_events", [])
     ])
+    framework_events = ([] if continuation is None else [
+        dict(item) for item in continuation.get("framework_events", [])
+    ])
     for session in report_calendar:
         if cancellation_check is not None:
             cancellation_check()
@@ -881,6 +884,14 @@ def _execute_strategy(
         decision_state = decision.state
         pending_target = decision.target.model_dump(mode="json") if decision.target else None
         diagnostics.extend(decision.diagnostics)
+        if decision.framework is not None:
+            framework_events.append({
+                "decision_id": strategy_event_id("framework", contract_checksum, session),
+                "decision_session": session,
+                "target_id": (strategy_event_id("target", contract_checksum, session)
+                              if pending_target is not None else None),
+                **decision.framework.model_dump(mode="json"),
+            })
         if pending_target is not None:
             target_events.append({
                 "target_id": strategy_event_id("target", contract_checksum, session),
@@ -899,6 +910,7 @@ def _execute_strategy(
         "daily": daily,
         "positions": positions_payload,
         "target_events": target_events,
+        "framework_events": framework_events,
         "orders": orders,
         "child_orders": child_orders,
         "fills": fills,

@@ -37,12 +37,15 @@ from thesistrace.research_kernel.strategy_events import (
     StrategyChildOrderEvent,
     StrategyExecutionConstraintEvent,
     StrategyFillEvent,
+    StrategyFrameworkEvent,
     StrategyOrderEvent,
     StrategyTargetEvent,
 )
 
 EVENT_PARTITION_ROWS = 512
-_JSON_FIELDS = frozenset({"allocation", "position_limits"})
+_JSON_FIELDS = frozenset({
+    "allocation", "position_limits", "modules", "universe", "alpha", "proposal", "risk_adjustment",
+})
 _INTEGER_FIELDS = frozenset(
     {
         "unrounded_quantity",
@@ -62,12 +65,15 @@ def _field(name: str, section: str) -> pa.Field:
         data_type = pa.string()
     nullable = name in _NULLABLE_FIELDS or (
         section == "strategy_execution_constraints" and name == "order_id"
+    ) or (
+        section == "strategy_framework" and name == "target_id"
     )
     return pa.field(name, data_type, nullable=nullable)
 
 
 def event_session_field(section: str) -> str:
-    return "decision_session" if section == "strategy_targets" else "session"
+    return ("decision_session" if section in {"strategy_targets", "strategy_framework"}
+            else "session")
 
 
 EVENT_CONTRACTS = {
@@ -295,8 +301,8 @@ def event_matches(
         return False
     instrument = filters.get("instrument_id")
     if instrument is not None:
-        if section == "strategy_targets":
-            if instrument not in StrategyTargetEvent.model_validate(row).instrument_ids:
+        if section in {"strategy_targets", "strategy_framework"}:
+            if instrument not in EVENT_MODELS[section].model_validate(row).instrument_ids:
                 return False
         elif row["instrument_id"] != instrument:
             return False
@@ -311,6 +317,10 @@ def _validate_event_relationships(evidence: Mapping, covered: set[str]) -> None:
     """Parents executing together must reconcile before any part is staged."""
     try:
         targets = {row["target_id"]: row for row in evidence["strategy_targets"]}
+        for row in evidence["strategy_framework"]:
+            if row["target_id"] is not None:
+                if targets[row["target_id"]]["decision_session"] != row["decision_session"]:
+                    raise ValueError("Framework evidence differs from its final target Session")
         orders = {row["order_id"]: row for row in evidence["strategy_orders"]}
         children = {row["child_order_id"]: row for row in evidence["strategy_child_orders"]}
         fills = evidence["strategy_fills"]
@@ -520,6 +530,12 @@ class StrategyTargetsQuery(StrategyEventQuery):
     target_id: EventFilterIdentity | None = None
 
 
+class StrategyFrameworkQuery(StrategyEventQuery):
+    section: Literal["strategy_framework"]
+    target_id: EventFilterIdentity | None = None
+    decision_id: EventFilterIdentity | None = None
+
+
 class StrategyOrdersQuery(StrategyEventQuery):
     section: Literal["strategy_orders"]
     target_id: EventFilterIdentity | None = None
@@ -689,6 +705,10 @@ class StrategyTargetsPage(StrategyEventPage[StrategyTargetEvent]):
     section: Literal["strategy_targets"] = "strategy_targets"
 
 
+class StrategyFrameworkPage(StrategyEventPage[StrategyFrameworkEvent]):
+    section: Literal["strategy_framework"] = "strategy_framework"
+
+
 class StrategyOrdersPage(StrategyEventPage[StrategyOrderEvent]):
     section: Literal["strategy_orders"] = "strategy_orders"
 
@@ -710,6 +730,7 @@ class StrategyExecutionConstraintsPage(StrategyEventPage[StrategyExecutionConstr
 
 
 EVENT_PAGE_MODELS = {
+    "strategy_framework": StrategyFrameworkPage,
     "strategy_targets": StrategyTargetsPage,
     "strategy_orders": StrategyOrdersPage,
     "strategy_child_orders": StrategyChildOrdersPage,
@@ -727,7 +748,7 @@ def strategy_event_response(
     encode_cursor: Callable[[str], str],
 ):
     from thesistrace._paging import BUSINESS_PAGE_BYTES, fit_page
-    from thesistrace.strategy_event_wire import MAX_TARGET_RECORD_BYTES
+    from thesistrace.strategy_event_wire import event_record_byte_limit
 
     def build(rows):
         has_more = len(rows) < len(read.rows) or read.next_after is not None
@@ -745,17 +766,20 @@ def strategy_event_response(
         )
 
     return fit_page(read.rows, build, byte_budget=BUSINESS_PAGE_BYTES + (
-        MAX_TARGET_RECORD_BYTES if query.section == "strategy_targets" else 0
+        event_record_byte_limit(query.section)
+        if query.section in {"strategy_targets", "strategy_framework"} else 0
     ))
 
 
 type StrategyEventQueryInput = Annotated[
     StrategyTargetsQuery | StrategyOrdersQuery | StrategyChildOrdersQuery
-    | StrategyFillsQuery | StrategyAdjustmentsQuery | StrategyExecutionConstraintsQuery,
+    | StrategyFillsQuery | StrategyAdjustmentsQuery | StrategyExecutionConstraintsQuery
+    | StrategyFrameworkQuery,
     Field(discriminator="section"),
 ]
 type StrategyEventPageResponse = Annotated[
     StrategyTargetsPage | StrategyOrdersPage | StrategyChildOrdersPage
-    | StrategyFillsPage | StrategyAdjustmentsPage | StrategyExecutionConstraintsPage,
+    | StrategyFillsPage | StrategyAdjustmentsPage | StrategyExecutionConstraintsPage
+    | StrategyFrameworkPage,
     Field(discriminator="section"),
 ]

@@ -227,3 +227,62 @@ test("expired trading evidence is distinct from an empty query", async ({ page }
   await expect(page.getByText("没有匹配的委托记录。")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "下一页" })).toBeDisabled();
 });
+
+test.describe("Framework touch interactions", () => {
+  test.use({ hasTouch: true });
+
+test("Framework evidence separates signal expiry, proposal, cancellation and final execution", async ({ page }) => {
+  const records = [{
+    decision_id: "framework_no_update", decision_session: "2026-08-03", target_id: null,
+    modules: { universe_selection: "dataset_universe/v1", alpha: "python:signals", portfolio_construction: "python:portfolio", risk_management: "python:risk" },
+    universe: { instrument_ids: ["equity:600000.SH"], updated: false, reason: null },
+    alpha: { kind: "signals", signals: [], updated: false, reason: null,
+      expired_signals: ["equity:000001.SZ"], removed_signals: [] },
+    proposal: target, risk_adjustment: { mode: "replace", reason: "cooldown", target: null },
+  }, {
+    decision_id: "framework_target", decision_session: "2026-08-04", target_id: "target_a",
+    modules: { universe_selection: "dataset_universe/v1", alpha: "alpha_formula/v1", portfolio_construction: "periodic_top_n/v1", risk_management: "no_risk/v1" },
+    universe: { instrument_ids: ["equity:600000.SH"], updated: true, reason: "dataset_universe" },
+    alpha: { kind: "formula", values: [{ instrument_id: "equity:600000.SH", value: 1 }] },
+    proposal: target, risk_adjustment: null,
+  }];
+  const reads: Record<string, unknown>[] = [];
+  await page.route("https://events.test/**", route => {
+    if (new URL(route.request().url()).pathname === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    const query = route.request().postDataJSON() as Record<string, unknown>;
+    reads.push(query);
+    return route.fulfill({ json: { section: query.section, status: "recorded",
+      rows: query.section === "strategy_framework" ? records : query.section === "strategy_targets" ? [target] : [fill], next_cursor: null } });
+  });
+  await page.goto("https://events.test/");
+  await page.addStyleTag({ content: styles });
+  await page.addScriptTag({ content: script });
+  await page.getByText("Trading events", { exact: true }).click();
+  await page.getByLabel("事件类型").selectOption("strategy_framework");
+  const table = page.getByRole("table", { name: "Framework 决策" });
+  await table.getByRole("button", { name: /查看原始记录/ }).first().click();
+  await expect(page.getByRole("region", { name: "候选选择", exact: true })).toContainText("保留仍可用");
+  for (const summary of await page.locator(".framework-decision-details summary").all()) {
+    const bounds = await summary.boundingBox();
+    expect(bounds!.height).toBeGreaterThanOrEqual(44);
+    expect(bounds!.width).toBeGreaterThanOrEqual(44);
+  }
+  await expect(page.getByRole("region", { name: "信号", exact: true })).toContainText("本日到期：000001.SZ");
+  await expect(page.getByRole("region", { name: "组合建议", exact: true })).toContainText("70.00%");
+  await expect(page.getByRole("region", { name: "风险调整", exact: true })).toContainText("明确取消");
+  await expect(page.getByRole("button", { name: "查看目标", exact: true })).toHaveCount(0);
+  expect(JSON.parse(await page.locator("pre").innerText())).toEqual(records[0]);
+  await page.screenshot({ path: "../../.local/browser-tests/framework-stage-evidence.png", fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await table.getByRole("button", { name: /查看原始记录/ }).nth(1).click();
+  await expect(page.getByRole("region", { name: "信号", exact: true })).toContainText("本日公式计算值");
+  await page.getByRole("button", { name: "查看目标", exact: true }).click();
+  await expect.poll(() => reads.at(-1)?.target_id).toBe("target_a");
+  await page.getByRole("button", { name: /查看原始记录/ }).click();
+  await page.getByRole("button", { name: "查看成交", exact: true }).click();
+  await expect(page.getByRole("table", { name: "成交", exact: true })).toBeVisible();
+  expect(reads.at(-1)?.target_id).toBe("target_a");
+});
+
+});

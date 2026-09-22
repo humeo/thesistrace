@@ -10,6 +10,14 @@ from thesistrace.research_kernel.builtin_framework import (
     alpha_values_by_session,
 )
 from thesistrace.research_kernel.direct_strategy import PythonProgram, program_context
+from thesistrace.research_kernel.framework_evidence import (
+    FormulaEvidence,
+    FrameworkEvidence,
+    PositionLimitEvidence,
+    ReplacementEvidence,
+    SignalEvidence,
+    UniverseEvidence,
+)
 from thesistrace.research_kernel.strategy_decision import DailyDecision, program_target
 from thesistrace.research_kernel.strategy_program_runtime import (
     StrategyProgramError,
@@ -156,10 +164,11 @@ class FrameworkStrategy:
             "expired_signals": [], "removed_signals": [], "proposal": None,
             "retained_proposal": previous["retained_proposal"] if previous else None,
         }
-        universe = self._universe(view, daily, module_states, diagnostics)
+        universe_evidence = self._universe(view, daily, module_states, diagnostics)
+        universe = universe_evidence.instrument_ids
         view["universe_changed"] = universe != view["universe"]
         view["universe"] = universe
-        self._signals(view, daily, module_states, diagnostics)
+        alpha_evidence = self._signals(view, daily, module_states, diagnostics)
         if self._portfolio is None:
             output, context = self._invoke(
                 "portfolio_construction", view, daily, module_states, diagnostics,
@@ -181,11 +190,17 @@ class FrameworkStrategy:
             diagnostics.extend(result.diagnostics)
         proposal = target.model_dump(mode="json") if target else None
         view["proposal"] = proposal
+        risk_evidence = None
         if "risk_management" in self._programs:
             output, context = self._invoke(
                 "risk_management", view, daily, module_states, diagnostics,
             )
             target = self._risk(output, context, target)
+            if output is not None:
+                risk_evidence = (
+                    ReplacementEvidence(mode="replace", reason=output["reason"], target=target)
+                    if output["mode"] == "replace" else PositionLimitEvidence.model_validate(output)
+                )
         state = {
             "mode": "framework", "contract_checksum": self._checksum,
             "selection_interval": (
@@ -197,7 +212,17 @@ class FrameworkStrategy:
             ),
         }
         state = FrameworkModulesDecisionState.model_validate(state).model_dump(mode="json")
-        return DailyDecision(state=state, target=target, diagnostics=tuple(diagnostics))
+        return DailyDecision(
+            state=state, target=target, diagnostics=tuple(diagnostics),
+            framework=FrameworkEvidence(
+                modules={name: ("python:" + module.program.source_sha256
+                                if isinstance(module, PythonModule) else module)
+                         for name in BUILTIN_FRAMEWORK_MODULES
+                         for module in (getattr(self._modules, name),)},
+                universe=universe_evidence, alpha=alpha_evidence,
+                proposal=proposal, risk_adjustment=risk_evidence,
+            ),
+        )
 
     def _risk(self, output, context, proposal):
         if output is None:
@@ -233,15 +258,23 @@ class FrameworkStrategy:
     def _universe(self, view, daily, module_states, diagnostics):
         available = set(self._data.universe_members[daily["session"]])
         if "universe_selection" not in self._programs:
-            return list(self._data.universe_members[daily["session"]])
+            return UniverseEvidence(
+                instrument_ids=list(self._data.universe_members[daily["session"]]),
+                updated=True, reason="dataset_universe",
+            )
         output, _ = self._invoke("universe_selection", view, daily, module_states, diagnostics)
         if output is None:
-            return [item for item in view["universe"] if item in available]
+            return UniverseEvidence(
+                instrument_ids=[item for item in view["universe"] if item in available],
+                updated=False, reason=None,
+            )
         try:
             update = UniverseUpdate.model_validate(output)
             if not set(update.instrument_ids) <= available:
                 raise ValueError("Universe contains an unavailable current candidate")
-            return update.instrument_ids
+            return UniverseEvidence(
+                instrument_ids=update.instrument_ids, updated=True, reason=update.reason,
+            )
         except ValueError as error:
             self._fail("universe_selection", daily["session"], error)
 
@@ -264,18 +297,26 @@ class FrameworkStrategy:
                 "valid_for_sessions": 1,
             } for row in self._alpha[session] if row["instrument_id"] in selected]
             view["signals_updated"] = True
-            return
+            return FormulaEvidence(values=[
+                {"instrument_id": row["instrument_id"], "value": row["value"]}
+                for row in view["signals"]
+            ])
         output, _ = self._invoke("alpha", view, daily, module_states, diagnostics)
-        if output is None:
-            return
-        try:
-            update = SignalUpdate.model_validate(output)
-            if any(signal.instrument_id not in selected for signal in update.signals):
-                raise ValueError("Signal instrument must belong to the selected Universe")
-            view["signals"] = [{
-                **signal.model_dump(), "created_session": session,
-                "created_session_number": ordinal,
-            } for signal in update.signals]
-            view["signals_updated"] = True
-        except ValueError as error:
-            self._fail("alpha", session, error)
+        reason = None
+        if output is not None:
+            try:
+                update = SignalUpdate.model_validate(output)
+                if any(signal.instrument_id not in selected for signal in update.signals):
+                    raise ValueError("Signal instrument must belong to the selected Universe")
+                view["signals"] = [{
+                    **signal.model_dump(), "created_session": session,
+                    "created_session_number": ordinal,
+                } for signal in update.signals]
+                view["signals_updated"] = True
+                reason = update.reason
+            except ValueError as error:
+                self._fail("alpha", session, error)
+        return SignalEvidence(
+            signals=view["signals"], updated=view["signals_updated"], reason=reason,
+            expired_signals=expired, removed_signals=removed,
+        )

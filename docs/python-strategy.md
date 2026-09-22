@@ -220,3 +220,27 @@ do not increase the program's source, parameter, state or execution limits.
 
 Verification selection and commands are maintained only in
 [AGENTS.md](../AGENTS.md#testing).
+
+### Framework decision evidence
+
+`strategy_framework` is a Trading Event section on Run and DailyTrack, with the
+same ownership, retention and cursor rules as the execution sections. One record
+per completed Close contains the four frozen module identities, current Universe
+selection and update reason, the Alpha module's observed output, the new portfolio
+proposal or `null`, and the explicit Risk Adjustment or `null`. Builtin Alpha
+records the formula values consumed by the portfolio; Python Alpha records active
+Strategy Signals with their creation Session and lifetime, new-output status,
+expired instruments and instruments removed by Universe selection. An expired
+signal is evidence of lifecycle processing, not an instruction to sell.
+
+A `replace` Risk Adjustment with a null target is explicit cancellation; a null
+Risk Adjustment leaves the current proposal alone. Position limits are recorded
+before intersection with the proposal. `target_id` links the final Target Decision
+when one exists, and is null for NoUpdate or cancellation. The final target and
+actual orders/fills remain separate event sections. Direct emits no Framework
+records. The result UI shows these stages separately and can follow the target
+to actual execution.
+
+Records are complete, typed and limited to 4 MiB each; worker frames and business
+pages preserve whole records. They are never added to authoritative continuation
+state and are not required to advance after Trading Event retention expires.

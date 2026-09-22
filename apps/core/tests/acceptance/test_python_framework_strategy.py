@@ -96,6 +96,21 @@ def test_framework_run_reuse_and_track_preserve_frozen_modules_and_account(tmp_p
         assert detail['result']['terminal_strategy_state']['decision_state']['module_states'] == (
             expected
         )
+        event_path = f'/api/research-runs/{run_id}/events/query'
+        events = client.post(event_path, json={'section': 'strategy_framework', 'limit': 50})
+        assert events.status_code == 200, events.text
+        original_events = events.json()['rows']
+        assert [row['decision_session'] for row in original_events] == list(SESSIONS[:3])
+        assert original_events[0]['universe']['reason'] == 'visible_candidates'
+        assert original_events[0]['alpha']['kind'] == ('formula' if builtin_alpha else 'signals')
+        assert original_events[0]['risk_adjustment'] is None
+        for row in original_events:
+            if row['target_id'] is not None:
+                target = client.post(event_path, json={
+                    'section': 'strategy_targets', 'target_id': row['target_id'],
+                })
+                assert target.status_code == 200, target.text
+                assert target.json()['rows'][0]['decision_session'] == row['decision_session']
         reused = deepcopy(detail['input'])
         reused['modules']['portfolio_construction']['program']['parameters']['edited'] = True
         response = client.post('/api/research-runs', json={
@@ -131,6 +146,15 @@ def test_framework_run_reuse_and_track_preserve_frozen_modules_and_account(tmp_p
         terminal = full_result['result']['terminal_strategy_state']
         assert track['observation']['net_asset_value_cny'] == terminal['net_nav']
         assert track['observation']['decision_state'] == terminal['decision_state']
+        track_events = client.post(f'/api/daily-tracks/{track_id}/events/query', json={
+            'section': 'strategy_framework', 'limit': 50,
+        })
+        full_events = client.post(f"/api/research-runs/{full.json()['id']}/events/query", json={
+            'section': 'strategy_framework', 'limit': 50,
+        })
+        assert track_events.status_code == full_events.status_code == 200
+        assert track_events.json()['rows'] == full_events.json()['rows']
+        assert track_events.json()['rows'][:3] == original_events
         assert runtime.research_runs.get_detail(UUID(int=1234), run_id) is None
         assert runtime.daily_tracks.get(UUID(int=1234), track_id) is None
 

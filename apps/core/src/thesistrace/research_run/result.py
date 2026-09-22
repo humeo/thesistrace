@@ -166,7 +166,7 @@ def read_strategy_reporting_bundle(
 
 def result_bundle_byte_budget(
     research_period_session_count: int, *, strategy_event_count: int = 0,
-    strategy_target_count: int = 0,
+    strategy_target_count: int = 0, strategy_framework_count: int = 0,
 ) -> int:
     if (
         isinstance(research_period_session_count, bool)
@@ -177,26 +177,37 @@ def result_bundle_byte_budget(
     blocks = (
         research_period_session_count + RESULT_BUDGET_SESSION_BLOCK - 1
     ) // RESULT_BUDGET_SESSION_BLOCK
-    from thesistrace.strategy_event_wire import MAX_EVENT_RECORD_BYTES, MAX_TARGET_RECORD_BYTES
+    from thesistrace.strategy_event_wire import (
+        MAX_EVENT_RECORD_BYTES,
+        MAX_FRAMEWORK_RECORD_BYTES,
+        MAX_TARGET_RECORD_BYTES,
+    )
 
     if type(strategy_event_count) is not int or strategy_event_count < 0:
         raise ResearchResultError("Result budget requires a non-negative Strategy event count")
     if (type(strategy_target_count) is not int
             or not 0 <= strategy_target_count <= strategy_event_count):
         raise ResearchResultError("Result budget requires a valid Strategy target count")
+    if (type(strategy_framework_count) is not int
+            or not 0 <= strategy_framework_count <= strategy_event_count - strategy_target_count):
+        raise ResearchResultError("Result budget requires a valid Framework event count")
     return (blocks * RESULT_BUDGET_BYTE_BLOCK
-            + (strategy_event_count - strategy_target_count) * MAX_EVENT_RECORD_BYTES
-            + strategy_target_count * MAX_TARGET_RECORD_BYTES)
+            + (strategy_event_count - strategy_target_count - strategy_framework_count)
+            * MAX_EVENT_RECORD_BYTES
+            + strategy_target_count * MAX_TARGET_RECORD_BYTES
+            + strategy_framework_count * MAX_FRAMEWORK_RECORD_BYTES)
 
 
 def enforce_result_bundle_budget(
     exact_bytes: int,
     research_period_session_count: int,
     *, strategy_event_count: int = 0, strategy_target_count: int = 0,
+    strategy_framework_count: int = 0,
 ) -> int:
     budget = result_bundle_byte_budget(
         research_period_session_count, strategy_event_count=strategy_event_count,
         strategy_target_count=strategy_target_count,
+        strategy_framework_count=strategy_framework_count,
     )
     if isinstance(exact_bytes, bool) or not isinstance(exact_bytes, int) or exact_bytes < 0:
         raise ResearchResultError("Result Bundle exact bytes are invalid")

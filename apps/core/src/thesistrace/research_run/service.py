@@ -686,6 +686,9 @@ class ResearchRunService:
             prepared.exact_bytes, completed_sessions,
             strategy_event_count=strategy_event_record_count(payloads),
             strategy_target_count=strategy_event_record_count(payloads, section="strategy_targets"),
+            strategy_framework_count=strategy_event_record_count(
+                payloads, section="strategy_framework",
+            ),
         )
         with self._database.transaction() as transaction:
             lock_publication_mutation(transaction)
@@ -862,6 +865,9 @@ class ResearchRunService:
             prepared.exact_bytes, completed_sessions,
             strategy_event_count=strategy_event_record_count(payloads),
             strategy_target_count=strategy_event_record_count(payloads, section="strategy_targets"),
+            strategy_framework_count=strategy_event_record_count(
+                payloads, section="strategy_framework",
+            ),
         )
         with self._database.transaction() as transaction:
             lock_publication_mutation(transaction)
@@ -3581,6 +3587,9 @@ class ResearchRunService:
             int(progress["completed_research_sessions"]),
             strategy_event_count=strategy_event_record_count(payloads),
             strategy_target_count=strategy_event_record_count(payloads, section="strategy_targets"),
+            strategy_framework_count=strategy_event_record_count(
+                payloads, section="strategy_framework",
+            ),
         )
         holding_prepared = None
         if claim.immutable_input.research_kind == "strategy_backtest":

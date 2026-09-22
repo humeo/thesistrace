@@ -550,7 +550,7 @@ def test_strategy_reporting_does_not_download_permanent_event_history():
         _legal_result(), research_kind="strategy_backtest",
     ))
     event_names = {
-        "strategy_targets", "strategy_orders", "strategy_child_orders",
+        "strategy_framework", "strategy_targets", "strategy_orders", "strategy_child_orders",
         "strategy_fills", "strategy_adjustments", "strategy_fills.part-000000",
     }
 

@@ -1,11 +1,13 @@
 import { Fragment, useId, useState } from "react";
+import { FrameworkDecisionDetails, type FrameworkRecord } from "./FrameworkDecisionDetails";
 
 export const eventSections = {
+  strategy_framework: "Framework 决策",
   strategy_targets: "调仓目标", strategy_orders: "委托", strategy_child_orders: "子委托",
   strategy_fills: "成交", strategy_adjustments: "估值调整", strategy_execution_constraints: "执行约束",
 } as const;
 export type EventSection = keyof typeof eventSections;
-type EventValue = string | number | null | EventValue[] | { [key: string]: EventValue };
+type EventValue = string | number | boolean | null | EventValue[] | { [key: string]: EventValue };
 export type EventRow = Record<string, EventValue>;
 export type EventRelation = { target_id?: string; order_id?: string; child_order_id?: string };
 type Navigate = (section: EventSection, relation: EventRelation, context: string) => void;
@@ -19,10 +21,18 @@ const labels: Record<string, string> = {
   buy: "买入", sell: "卖出",
 };
 const idFields: Record<EventSection, string> = {
+  strategy_framework: "decision_id",
   strategy_targets: "target_id", strategy_orders: "order_id", strategy_child_orders: "child_order_id",
   strategy_fills: "fill_id", strategy_adjustments: "adjustment_id", strategy_execution_constraints: "constraint_id",
 };
 const columns: Record<EventSection, { key: string; label: string; numeric?: boolean }[]> = {
+  strategy_framework: [
+    { key: "decision_session", label: "决策日期" },
+    { key: "universe.instrument_ids", label: "候选数", numeric: true },
+    { key: "proposal.reason", label: "组合建议" },
+    { key: "risk_adjustment.mode", label: "风险调整" },
+    { key: "target_id", label: "最终目标" },
+  ],
   strategy_targets: [
     { key: "decision_session", label: "决策日期" }, { key: "reason", label: "原因" },
     { key: "allocation.mode", label: "作用范围" },
@@ -63,6 +73,9 @@ function cellValue(path: string, row: EventRow) {
   const value = nested && parent !== null && typeof parent === "object" && !Array.isArray(parent)
     ? parent[nested] : nested ? undefined : parent;
   const key = nested ?? section;
+  if (path === "proposal.reason" && parent === null) return "NoUpdate";
+  if (path === "target_id" && row.decision_id) return value ? "已形成" : "NoUpdate";
+  if (path === "risk_adjustment.mode" && value) return value === "replace" ? "替换／取消" : "局部上限";
   if (path === "allocation.mode" && parent === null) return labels.local;
   if (value == null) return "—";
   if (key === "instrument_id") return instrumentLabel(String(value));
@@ -85,12 +98,13 @@ function EventRecord({ row, section, navigate }: { row: EventRow; section: Event
   const targetId = row.target_id == null ? undefined : String(row.target_id);
   const orderId = row.order_id == null ? undefined : String(row.order_id);
   const childId = row.child_order_id == null ? undefined : String(row.child_order_id);
-  const context = section === "strategy_targets"
-    ? String(row.decision_session) + " 的调仓目标"
+  const context = section === "strategy_targets" || section === "strategy_framework"
+    ? String(row.decision_session) + " 的" + eventSections[section]
     : String(row.session) + " · " + instrumentLabel(String(row.instrument_id)) + " · " + eventSections[section];
   const linkedFills = section === "strategy_targets" ? { target_id: targetId }
     : section === "strategy_child_orders" ? { child_order_id: childId } : { order_id: orderId };
   return <div className="strategy-event-record">
+    {section === "strategy_framework" && <FrameworkDecisionDetails row={row as FrameworkRecord} />}
     <div className="strategy-event-record-toolbar"><span>原始记录</span>
       <button type="button" onClick={async () => {
         setCopyError(false);

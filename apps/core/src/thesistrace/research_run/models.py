@@ -109,6 +109,8 @@ from thesistrace.strategy_evidence import (
     StrategyExecutionConstraintsQuery,
     StrategyFillsPage,
     StrategyFillsQuery,
+    StrategyFrameworkPage,
+    StrategyFrameworkQuery,
     StrategyOrdersPage,
     StrategyOrdersQuery,
     StrategyTargetsPage,
@@ -156,7 +158,7 @@ type ResearchRunStatus = Literal[
     "queued", "running", "cancelling", "succeeded", "failed", "cancelled"
 ]
 type ResearchRunResultSection = Literal[
-    "strategy_targets", "strategy_orders", "strategy_child_orders",
+    "strategy_framework", "strategy_targets", "strategy_orders", "strategy_child_orders",
     "strategy_fills", "strategy_adjustments", "strategy_execution_constraints",
     "daily_holdings_status", "daily_holdings",
     "factor",
@@ -179,7 +181,7 @@ FACTOR_RESULT_SECTIONS: tuple[ResearchRunResultSection, ...] = (
     "common_input_observations",
 )
 STRATEGY_RESULT_SECTIONS: tuple[ResearchRunResultSection, ...] = (
-    "strategy_targets", "strategy_orders", "strategy_child_orders",
+    "strategy_framework", "strategy_targets", "strategy_orders", "strategy_child_orders",
     "strategy_fills", "strategy_adjustments", "strategy_execution_constraints",
     "daily_holdings_status", "daily_holdings",
     "strategy_summary",
@@ -941,6 +943,10 @@ class ProvenanceResultSectionInput(_ResearchRunResultSectionInput):
     section: Literal["provenance"]
 
 
+class RunStrategyFrameworkInput(_ResearchRunResultSectionInput, StrategyFrameworkQuery):
+    pass
+
+
 class RunStrategyTargetsInput(_ResearchRunResultSectionInput, StrategyTargetsQuery):
     pass
 
@@ -985,6 +991,7 @@ type ResearchRunResultSectionInput = Annotated[
     | TerminalPositionsResultSectionInput
     | ProvenanceResultSectionInput
     | CommonInputObservationsResultSectionInput
+    | RunStrategyFrameworkInput
     | RunStrategyTargetsInput
     | RunStrategyOrdersInput
     | RunStrategyChildOrdersInput
@@ -1154,6 +1161,7 @@ type ResearchRunResultSectionResponse = Annotated[
     | TerminalPositionsResultSection
     | ProvenanceResultSection
     | CommonInputObservationsResultSection
+    | StrategyFrameworkPage
     | StrategyTargetsPage
     | StrategyOrdersPage
     | StrategyChildOrdersPage

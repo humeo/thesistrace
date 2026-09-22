@@ -8,6 +8,7 @@ from typing import Annotated, Literal
 
 from pydantic import AfterValidator, Field, StrictInt, StrictStr, model_validator
 
+from thesistrace.research_kernel.framework_evidence import FrameworkEvidence, ReplacementEvidence
 from thesistrace.research_kernel.terminal_state_schema import (
     PendingTarget,
     TerminalStateModel,
@@ -32,7 +33,24 @@ RejectionReason = Literal["suspension", "data_unavailable", "upper_limit_buy", "
 StrategyEventSection = Literal[
     "strategy_targets", "strategy_orders", "strategy_child_orders", "strategy_fills",
     "strategy_adjustments", "strategy_execution_constraints",
+    "strategy_framework",
 ]
+
+
+class StrategyFrameworkEvent(FrameworkEvidence):
+    decision_id: StrictStr
+    decision_session: Session
+    target_id: StrictStr | None
+
+    @model_validator(mode="after")
+    def stage_decisions_match_session(self):
+        targets = [self.proposal]
+        if isinstance(self.risk_adjustment, ReplacementEvidence):
+            targets.append(self.risk_adjustment.target)
+        if any(target is not None and target.decision_session != self.decision_session
+               for target in targets):
+            raise ValueError("Framework evidence contains a decision from another Session")
+        return self
 
 
 class StrategyTargetEvent(PendingTarget):
@@ -154,6 +172,7 @@ class StrategyExecutionConstraintEvent(TerminalStateModel):
 
 
 EVENT_MODELS = {
+    "strategy_framework": StrategyFrameworkEvent,
     "strategy_targets": StrategyTargetEvent,
     "strategy_orders": StrategyOrderEvent,
     "strategy_child_orders": StrategyChildOrderEvent,
@@ -162,6 +181,7 @@ EVENT_MODELS = {
     "strategy_execution_constraints": StrategyExecutionConstraintEvent,
 }
 EVENT_ID_FIELDS = {
+    "strategy_framework": "decision_id",
     "strategy_targets": "target_id", "strategy_orders": "order_id",
     "strategy_child_orders": "child_order_id", "strategy_fills": "fill_id",
     "strategy_adjustments": "adjustment_id",
@@ -175,6 +195,7 @@ def strategy_event_rows(
     """Select this completed segment only; never reconstruct absent historical trades."""
     covered = set(sessions)
     candidates = {
+        "strategy_framework": strategy["framework_events"],
         "strategy_targets": strategy["target_events"],
         "strategy_orders": strategy["orders"],
         "strategy_child_orders": strategy["child_orders"],
@@ -187,7 +208,8 @@ def strategy_event_rows(
     }
     result = {}
     for section, rows in candidates.items():
-        session_key = "decision_session" if section == "strategy_targets" else "session"
+        session_key = ("decision_session" if section in {"strategy_targets", "strategy_framework"}
+                       else "session")
         model = EVENT_MODELS[section]
         selected = [model.model_validate(row).model_dump(mode="json") for row in rows
                     if row[session_key] in covered]

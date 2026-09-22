@@ -44,6 +44,16 @@ def test_framework_portfolio_program_matches_direct_condition_triggered_executio
         (SESSIONS[2], B, "buy", 10000),
     ]
     assert result["daily"] == expected["daily"]
+    assert expected["framework_events"] == []
+    assert [row["decision_session"] for row in result["framework_events"]] == list(SESSIONS)
+    first = result["framework_events"][0]
+    assert first["universe"]["instrument_ids"] == [A, B]
+    assert first["alpha"]["kind"] == "formula"
+    assert first["proposal"]["allocation"]["instrument_ids"] == [A]
+    assert first["risk_adjustment"] is None
+    assert first["target_id"] == result["target_events"][0]["target_id"]
+    assert result["framework_events"][2]["proposal"] is None
+    assert result["framework_events"][2]["target_id"] is None
     assert result["positions"] == expected["positions"]
     assert Decimal(result["daily"][-1]["net_nav"]) == Decimal("200000")
     assert result["decision_state"]["module_states"]["portfolio_construction"] == {"count": 4}
@@ -130,6 +140,16 @@ def decide(context, state, parameters):
         [B] if replacement is None else [A]
     )
     assert (result["pending_target"] is None) is (replacement is None)
+    trace = result["framework_events"][0]
+    assert trace["proposal"]["allocation"]["instrument_ids"] == [A]
+    assert trace["risk_adjustment"]["mode"] == "replace"
+    assert trace["risk_adjustment"]["reason"] == "explicit_override"
+    if replacement is None:
+        assert trace["risk_adjustment"]["target"] is None
+        assert trace["target_id"] is None
+    else:
+        assert trace["risk_adjustment"]["target"]["allocation"]["instrument_ids"] == [B]
+        assert trace["target_id"] == result["target_events"][0]["target_id"]
 
 
 @pytest.mark.parametrize("stage", [
@@ -239,6 +259,13 @@ def decide(context, state, parameters):
     assert result["pending_target"]["allocation"]["instrument_ids"] == [B]
     state = result["decision_state"]
     assert state["universe"] == [B]
+    expired = result["framework_events"][2]
+    assert expired["alpha"]["kind"] == "signals"
+    assert expired["alpha"]["expired_signals"] == [A]
+    assert expired["alpha"]["signals"] == []
+    assert expired["proposal"] is None
+    assert expired["target_id"] is None
+    assert result["framework_events"][3]["universe"]["instrument_ids"] == [B]
     assert state["module_states"]["alpha"] == {"count": 4}
     assert state["module_states"]["portfolio_construction"] == {
         "expired": [A], "updates": [True, False, False, True],

@@ -8,6 +8,7 @@ from collections.abc import Callable, Iterator, Mapping
 EVENT_FRAME_ROWS = 512
 MAX_EVENT_RECORD_BYTES = 24 * 1024
 MAX_TARGET_RECORD_BYTES = 2 * 1024 * 1024
+MAX_FRAMEWORK_RECORD_BYTES = 4 * 1024 * 1024
 MAX_EVENT_FRAME_BYTES = 8 * 1024 * 1024
 MAX_EVENT_SEGMENT_BYTES = 64 * 1024 * 1024
 _EVENT_SECTIONS = frozenset(
@@ -18,6 +19,7 @@ _EVENT_SECTIONS = frozenset(
         "strategy_fills",
         "strategy_adjustments",
         "strategy_execution_constraints",
+        "strategy_framework",
     }
 )
 
@@ -45,6 +47,8 @@ def _replace_events(message: Mapping, key: str, value: object) -> dict:
 
 
 def event_record_byte_limit(section: str) -> int:
+    if section == "strategy_framework":
+        return MAX_FRAMEWORK_RECORD_BYTES
     return MAX_TARGET_RECORD_BYTES if section == "strategy_targets" else MAX_EVENT_RECORD_BYTES
 
 

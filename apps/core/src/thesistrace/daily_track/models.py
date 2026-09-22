@@ -35,6 +35,8 @@ from thesistrace.strategy_evidence import (
     StrategyExecutionConstraintsQuery,
     StrategyFillsPage,
     StrategyFillsQuery,
+    StrategyFrameworkPage,
+    StrategyFrameworkQuery,
     StrategyOrdersPage,
     StrategyOrdersQuery,
     StrategyTargetsPage,
@@ -43,7 +45,7 @@ from thesistrace.strategy_evidence import (
 
 RequestId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
 type DailyTrackResultSection = Literal[
-    "strategy_targets", "strategy_orders", "strategy_child_orders",
+    "strategy_framework", "strategy_targets", "strategy_orders", "strategy_child_orders",
     "strategy_fills", "strategy_adjustments", "strategy_execution_constraints",
     "daily_holdings_status", "daily_holdings",
     "strategy_summary",
@@ -53,7 +55,7 @@ type DailyTrackResultSection = Literal[
     "common_input_observations",
 ]
 DAILY_TRACK_RESULT_SECTIONS: tuple[DailyTrackResultSection, ...] = (
-    "strategy_targets", "strategy_orders", "strategy_child_orders",
+    "strategy_framework", "strategy_targets", "strategy_orders", "strategy_child_orders",
     "strategy_fills", "strategy_adjustments", "strategy_execution_constraints",
     "daily_holdings_status", "daily_holdings",
     "strategy_summary",
@@ -100,6 +102,10 @@ class DailyTrackProvenanceResultSectionInput(_DailyTrackResultSectionInput):
     section: Literal["provenance"]
 
 
+class TrackStrategyFrameworkInput(_DailyTrackResultSectionInput, StrategyFrameworkQuery):
+    pass
+
+
 class TrackStrategyTargetsInput(_DailyTrackResultSectionInput, StrategyTargetsQuery):
     pass
 
@@ -140,6 +146,7 @@ type DailyTrackResultSectionInput = Annotated[
     | DailyTrackOriginResultSectionInput
     | DailyTrackProvenanceResultSectionInput
     | DailyTrackCommonInputObservationsResultSectionInput
+    | TrackStrategyFrameworkInput
     | TrackStrategyTargetsInput
     | TrackStrategyOrdersInput
     | TrackStrategyChildOrdersInput
@@ -696,6 +703,7 @@ type DailyTrackResultSectionResponse = Annotated[
     | DailyTrackOriginResultSection
     | DailyTrackProvenanceResultSection
     | DailyTrackCommonInputObservationsResultSection
+    | StrategyFrameworkPage
     | StrategyTargetsPage
     | StrategyOrdersPage
     | StrategyChildOrdersPage

@@ -12,6 +12,11 @@ from thesistrace.research_kernel.direct_strategy import (
     PythonProgram,
     program_context,
 )
+from thesistrace.research_kernel.framework_evidence import (
+    FormulaEvidence,
+    FrameworkEvidence,
+    UniverseEvidence,
+)
 from thesistrace.research_kernel.framework_strategy import FrameworkStrategy
 from thesistrace.research_kernel.serialization import canonical_json_bytes
 from thesistrace.research_kernel.strategy_decision import DailyDecision
@@ -42,6 +47,7 @@ class _BuiltinDailyStrategy:
         if alpha_matrix is None:
             raise ValueError("Builtin Framework requires an Alpha matrix")
         self._alpha = alpha_values_by_session(alpha_matrix)
+        self._data = data
         self._portfolio = PreparedBuiltinPortfolio(
             data, strategy, checksum, observe_common=observe_common,
         )
@@ -62,6 +68,15 @@ class _BuiltinDailyStrategy:
                    "selection_interval": self._portfolio.policy.selection_interval,
                    "exposure": result.state.exposure},
             target=result.target, diagnostics=result.diagnostics,
+            framework=FrameworkEvidence(
+                modules=dict(BUILTIN_FRAMEWORK_MODULES),
+                universe=UniverseEvidence(
+                    instrument_ids=list(self._data.universe_members[session]),
+                    updated=True, reason="dataset_universe",
+                ),
+                alpha=FormulaEvidence(values=[dict(row) for row in self._alpha[session]]),
+                proposal=result.target, risk_adjustment=None,
+            ),
         )
 
 

@@ -1814,14 +1814,14 @@ def test_v1_inventory_scopes_descriptions_annotations_and_schemas_are_exact() ->
     canonical = _canonical_v1_contract()
 
     assert sha256(canonical).hexdigest() == (
-        "480faf9c8f98774f15418f0a03fe9f127dd63dee46cfb3148398d9838716c04f"
+        "1f3cd7a1049c5fa6ce3e58ade0510433c3c8daf497611e28d16d52cd59c8b953"
     )
-    assert len(canonical) == 246652
+    assert len(canonical) == 268072
 
 
 def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None:
     assert RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES == 16 * 1024 * 1024
-    assert RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES == 8 * 1024 * 1024
+    assert RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES == 16 * 1024 * 1024
     assert RESEARCH_AGENT_RATE_WINDOW_SECONDS == 60
     assert RESEARCH_AGENT_MAX_CALLS_PER_WINDOW == 120
     assert RESEARCH_AGENT_MAX_CONCURRENT_CALLS == 4
@@ -1929,12 +1929,13 @@ def test_wire_envelope_carries_twenty_maximum_python_programs_and_explicit_state
     )
 
 
-def test_wire_response_preserves_maximum_target_page_in_both_mcp_representations():
-    # Complete-record pages can use 2 MiB plus 32 KiB metadata. Backslashes
+@pytest.mark.parametrize("page_mebibytes", [2, 4])
+def test_wire_response_preserves_complete_event_pages_in_both_mcp_representations(page_mebibytes):
+    # Targets use 2 MiB and Framework uses 4 MiB plus 32 KiB metadata. Backslashes
     # exercise the extra escaping in MCP's text representation.
-    payload = {"page": "\\" * ((2 * 1024 * 1024 + 32 * 1024) // 2 - 16)}
+    payload = {"page": "\\" * ((page_mebibytes * 1024 * 1024 + 32 * 1024) // 2 - 16)}
     encoded = json.dumps(payload, separators=(",", ":"))
-    assert len(encoded) <= 2 * 1024 * 1024 + 32 * 1024
+    assert len(encoded) <= page_mebibytes * 1024 * 1024 + 32 * 1024
     result = CallToolResult(
         content=[TextContent(type="text", text=encoded)], structured_content=payload,
     )
@@ -2219,7 +2220,7 @@ async def _exercise_in_memory_protocol() -> None:
                 assert tool.annotations.read_only_hint is False
                 assert tool.annotations.idempotent_hint is False
                 assert tool.input_schema["discriminator"]["propertyName"] == "section"
-                expected_section_count = 17 if tool.name == "get_research_run_result" else 13
+                expected_section_count = 18 if tool.name == "get_research_run_result" else 14
                 assert len(tool.input_schema["oneOf"]) == expected_section_count
                 for branch in tool.input_schema["oneOf"]:
                     definition = tool.input_schema["$defs"][branch["$ref"].rsplit("/", 1)[-1]]
@@ -2289,9 +2290,11 @@ async def _exercise_in_memory_protocol() -> None:
             if "StrategyBacktest" in branch["$ref"]
         )
         strategy_schema = submit_schema["$defs"][strategy_ref.rsplit("/", 1)[-1]]
-        assert {"initial_cash_cny", "holdings_count", "selection_every_sessions"} <= set(
-            strategy_schema["required"]
+        assert "initial_cash_cny" in strategy_schema["required"]
+        assert {"modules", "holdings_count", "selection_every_sessions"} <= set(
+            strategy_schema["properties"]
         )
+        assert not {"holdings_count", "selection_every_sessions"} & set(strategy_schema["required"])
         assert strategy_schema["properties"]["initial_cash_cny"]["type"] == "string"
         result_schema = tools["get_research_run_result"].input_schema
         collection_schemas = [

@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 
+from thesistrace.research_kernel.framework_evidence import FrameworkEvidence
 from thesistrace.research_kernel.terminal_state_schema import PendingTarget
 
 
@@ -10,6 +11,7 @@ class DailyDecision:
     state: dict[str, object]
     target: PendingTarget | None
     diagnostics: tuple[dict[str, object], ...]
+    framework: FrameworkEvidence | None = None
 
 
 def program_target(output, context, contract_checksum) -> PendingTarget | None:
