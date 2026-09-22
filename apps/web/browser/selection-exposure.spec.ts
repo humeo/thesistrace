@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import { build } from "vite";
+import { fontStylesheet, serveBrandAssets } from "./brand-assets";
 
 let script: string;
 const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
@@ -40,12 +41,14 @@ test(`Exposure, ${weighting}, retained draft and submission share one source`, a
       submissions.push(route.request().postDataJSON());
       return route.fulfill({ json: { id: "run_exposure" }, status: 202 });
     }
-    return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    return route.fulfill({ contentType: "text/html", body: `${fontStylesheet}<div id="root"></div>` });
   });
   const mount = async () => {
+    await serveBrandAssets(page);
     await page.goto("https://exposure.test/");
     await page.addStyleTag({ content: styles });
     await page.addScriptTag({ content: script });
+    await page.evaluate(() => document.fonts.ready);
   };
   await mount();
   await page.getByRole("button", { name: "Run settings", exact: true }).click();
@@ -100,22 +103,24 @@ test("configuration checks show rejection and recover from an unavailable servic
       checks++;
       if (checks === 1) return route.fulfill({ json: {
         valid: false, issues: [{ code: "EXPOSURE_OUT_OF_RANGE", field: "exposure_expression",
-          message: "Exposure must be between zero and one.", severity: "error", range: null }],
+          message: "Exposure must be between zero and one.", severity: "error", range: null, details: { kind: "literal", expected: [0, 1], actual: "outside_finite_range" } }],
       } });
       if (checks === 2) return route.fulfill({ status: 503, body: "Unavailable" });
       return route.fulfill({ json: { valid: true, issues: [] } });
     }
-    return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    return route.fulfill({ contentType: "text/html", body: `${fontStylesheet}<div id="root"></div>` });
   });
-  await page.goto("https://exposure.test/");
+  await serveBrandAssets(page);
+    await page.goto("https://exposure.test/");
   await page.addStyleTag({ content: styles });
   await page.addScriptTag({ content: script });
+    await page.evaluate(() => document.fonts.ready);
   await page.getByRole("button", { name: "Run settings", exact: true }).click();
   await page.getByLabel("Exposure expression", { exact: true }).fill("1 + 0.1");
   await page.getByRole("button", { name: "Run settings", exact: true }).click();
   const check = page.getByRole("button", { name: "Check configuration" });
   await check.click();
-  await expect(page.getByLabel("Configuration issues")).toContainText("exposure_expression");
+  await expect(page.getByLabel("Configuration issues")).toContainText("Position sizing formula");
   await page.getByRole("button", { name: "Run settings", exact: true }).click();
   await page.getByLabel("Exposure expression", { exact: true }).fill("0.3");
   await page.getByRole("button", { name: "Run settings", exact: true }).click();
@@ -134,12 +139,14 @@ test("Exposure completion excludes stock scope and keeps daily expression in the
     if (new URL(route.request().url()).pathname === "/api/alpha/diagnostics") {
       return route.fulfill({ json: { valid: true, diagnostics: [] } });
     }
-    return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    return route.fulfill({ contentType: "text/html", body: `${fontStylesheet}<div id="root"></div>` });
   });
   const mount = async () => {
+    await serveBrandAssets(page);
     await page.goto("https://exposure.test/");
     await page.addStyleTag({ content: styles });
     await page.addScriptTag({ content: script });
+    await page.evaluate(() => document.fonts.ready);
   };
   await mount();
   await page.getByRole("button", { name: "Run settings", exact: true }).click();
@@ -174,11 +181,13 @@ for (const weighting of ["equal_weight", "rank_weight"] as const) {
         submissions.push(route.request().postDataJSON());
         return route.fulfill({ json: { id: "run_window" }, status: 202 });
       }
-      return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+      return route.fulfill({ contentType: "text/html", body: `${fontStylesheet}<div id="root"></div>` });
     });
+    await serveBrandAssets(page);
     await page.goto("https://exposure.test/");
     await page.addStyleTag({ content: styles });
     await page.addScriptTag({ content: script });
+    await page.evaluate(() => document.fonts.ready);
     await page.getByRole("button", { name: "Run settings", exact: true }).click();
     const selector = page.getByLabel("Portfolio weighting", { exact: false });
     await selector.selectOption("inverse_volatility");
@@ -195,18 +204,20 @@ for (const weighting of ["equal_weight", "rank_weight"] as const) {
   });
 }
 
-for (const width of [1280, 390]) {
+for (const width of [1280, 390, 320]) {
   test(`Research workbench keeps settings compact and keyboard accessible at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 964 });
     await page.route("https://exposure.test/**", route => {
       if (new URL(route.request().url()).pathname === "/api/alpha/diagnostics") {
         return route.fulfill({ json: { valid: true, diagnostics: [] } });
       }
-      return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+      return route.fulfill({ contentType: "text/html", body: `${fontStylesheet}<div id="root"></div>` });
     });
+    await serveBrandAssets(page);
     await page.goto("https://exposure.test/");
     await page.addStyleTag({ content: styles });
     await page.addScriptTag({ content: script });
+    await page.evaluate(() => document.fonts.ready);
     const dialog = page.getByRole("region", { name: "Run settings", exact: true });
     const trigger = page.getByRole("button", { name: "Run settings", exact: true });
     await expect(dialog).not.toBeVisible();
@@ -270,8 +281,8 @@ for (const width of [1280, 390]) {
     await expect(fields).toBeVisible();
     await expect(fields.getByRole("searchbox", { name: "Search fields" })).toBeFocused();
     await fields.getByRole("searchbox").fill("close");
-    await expect(fields.getByRole("button", { name: "复权收盘价" })).toBeVisible();
-    await expect(fields.locator("#data-field-detail")).toContainText("Adjusted Close");
+    await expect(fields.getByRole("button", { name: "Adjusted close" })).toBeVisible();
+    await expect(fields.locator("#data-field-detail")).toContainText("causal cumulative-adjusted close");
     await fields.getByRole("searchbox").fill("not_a_field");
     await expect(fields.getByText("No fields match these filters.")).toBeVisible();
     await fields.getByRole("button", { name: "Clear search" }).click();
@@ -284,10 +295,61 @@ for (const width of [1280, 390]) {
     await expect(fields).not.toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await page.screenshot({ path: `../../.local/browser-tests/research-workbench-${width}.png`, fullPage: true });
+    await page.getByRole("button", { name: "简体中文", exact: true }).click();
+    await page.evaluate(() => document.fonts.ready);
+    await expect(page.getByRole("textbox", { name: "Alpha 公式", exact: true })).toHaveText("close");
+    await expect(page.getByLabel("备注", { exact: true })).toHaveValue("Compare the signal across market regimes.");
+    await expect(page.getByRole("button", { name: "运行评估", exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: test.info().outputPath(`research-zh-${width}.png`), fullPage: true });
   });
 }
 
-for (const width of [1280, 390]) {
+test("switching during configuration validation preserves inputs and translates the eventual failure", async ({ page }) => {
+  let finish!: () => void;
+  const pending = new Promise<void>((resolve) => { finish = resolve; });
+  const requests: unknown[] = [];
+  await page.route("https://exposure.test/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/api/alpha/diagnostics") return route.fulfill({ json: { valid: true, diagnostics: [] } });
+    if (path === "/api/research/diagnostics") {
+      requests.push(route.request().postDataJSON());
+      await pending;
+      return route.fulfill({ json: { valid: false, issues: [{
+        code: "WINDOW_OUT_OF_RANGE", field: "formula", message: "Window must be between 1 and 252",
+        severity: "error", details: { kind: "window", expected: [1, 252], actual: "253" },
+        range: { start: { offset: 15, line: 1, column: 16 }, end: { offset: 18, line: 1, column: 19 } },
+      }] } });
+    }
+    return route.fulfill({ contentType: "text/html", body: `${fontStylesheet}<div id="root"></div>` });
+  });
+  await serveBrandAssets(page);
+  await page.goto("https://exposure.test/");
+  await page.addStyleTag({ content: styles });
+  await page.addScriptTag({ content: script });
+  await page.getByLabel("Alpha formula", { exact: true }).fill("ts_mean(close, 253)");
+  await page.getByRole("button", { name: "Run settings", exact: true }).click();
+  const cash = page.locator("#initial-cash");
+  await cash.fill("250000");
+  await page.getByRole("button", { name: "Check configuration" }).click();
+  await expect(page.getByText("Checking configuration…", { exact: true })).toBeVisible();
+  await cash.focus();
+  await page.getByRole("button", { name: "简体中文", exact: true }).dispatchEvent("click");
+  await expect(page.getByText("正在检查配置…", { exact: true })).toBeVisible();
+  await expect(cash).toBeFocused();
+  await expect(page.getByRole("region", { name: "运行设置", exact: true })).toBeVisible();
+  await expect(page.getByLabel("初始资金（CNY）", { exact: true })).toHaveValue("250000");
+  finish();
+  await expect(page.getByLabel("配置问题")).toContainText("窗口必须在 1 到 252 之间，实际为 253。");
+  await page.getByRole("button", { name: "English", exact: true }).click();
+  await expect(page.getByLabel("Configuration issues")).toContainText("Window must be between 1 and 252; received 253.");
+  await expect(page.getByLabel("Alpha formula", { exact: true })).toHaveText("ts_mean(close, 253)");
+  expect(requests).toHaveLength(1);
+  expect(requests[0]).toMatchObject({ formula: "ts_mean(close, 253)", initial_cash_cny: "250000" });
+  expect(requests[0]).not.toHaveProperty("locale");
+});
+
+for (const width of [1280, 390, 320]) {
   test(`Missing required settings are reachable from Run at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 964 });
     let submissions = 0;
@@ -295,11 +357,13 @@ for (const width of [1280, 390]) {
       const path = new URL(route.request().url()).pathname;
       if (path === "/api/alpha/diagnostics") return route.fulfill({ json: { valid: true, diagnostics: [] } });
       if (path === "/api/research-runs") { submissions++; return route.fulfill({ status: 202, json: { id: "run_valid" } }); }
-      return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+      return route.fulfill({ contentType: "text/html", body: `${fontStylesheet}<div id="root"></div>` });
     });
+    await serveBrandAssets(page);
     await page.goto("https://exposure.test/");
     await page.addStyleTag({ content: styles });
     await page.addScriptTag({ content: script });
+    await page.evaluate(() => document.fonts.ready);
     await expect(page.getByLabel("Holdings count", { exact: true })).toBeVisible();
     await expect(page.getByLabel("Selection interval (trading days)", { exact: true })).toHaveValue("5");
     await page.getByRole("button", { name: "Run settings", exact: true }).click();

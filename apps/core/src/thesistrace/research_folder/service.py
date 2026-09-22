@@ -1,3 +1,4 @@
+from typing import Literal
 from uuid import UUID, uuid4
 
 from psycopg.errors import ForeignKeyViolation
@@ -15,7 +16,11 @@ BATCH_RESEARCH_FOLDER_ID = "folder_batch_research"
 
 
 class ResearchFolderConflict(RuntimeError):
-    pass
+    def __init__(self, code: Literal[
+        "SYSTEM_FOLDER_RENAME_FORBIDDEN", "SYSTEM_FOLDER_DELETE_FORBIDDEN", "FOLDER_NOT_EMPTY",
+    ]) -> None:
+        self.code = code
+        super().__init__(code)
 
 
 class ResearchFolderService:
@@ -75,7 +80,7 @@ class ResearchFolderService:
             if current is None:
                 return None
             if current["is_default"] or folder_id == BATCH_RESEARCH_FOLDER_ID:
-                raise ResearchFolderConflict("System Research Folder cannot be renamed")
+                raise ResearchFolderConflict("SYSTEM_FOLDER_RENAME_FORBIDDEN")
             row = transaction.execute(
                 """
                 UPDATE research_folders.folders
@@ -103,7 +108,7 @@ class ResearchFolderService:
                     return False
                 if current["is_default"] or folder_id == BATCH_RESEARCH_FOLDER_ID:
                     raise ResearchFolderConflict(
-                        "System Research Folder cannot be deleted"
+                        "SYSTEM_FOLDER_DELETE_FORBIDDEN"
                     )
                 row = transaction.execute(
                     """
@@ -114,5 +119,5 @@ class ResearchFolderService:
                     (researcher_id, folder_id),
                 ).fetchone()
         except ForeignKeyViolation as error:
-            raise ResearchFolderConflict("A nonempty Folder cannot be deleted") from error
+            raise ResearchFolderConflict("FOLDER_NOT_EMPTY") from error
         return row is not None

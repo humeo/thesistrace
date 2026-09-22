@@ -519,10 +519,10 @@ describe("browser Research Draft", () => {
 
   it("builds exact data-bounded quick date ranges", () => {
     expect(buildResearchDatePresets("2010-01-04", "2026-08-13")).toEqual([
-      { label: "1Y", accessibleLabel: "Use last 1 year", startDate: "2025-08-13", endDate: "2026-08-13" },
-      { label: "3Y", accessibleLabel: "Use last 3 years", startDate: "2023-08-13", endDate: "2026-08-13" },
-      { label: "5Y", accessibleLabel: "Use last 5 years", startDate: "2021-08-13", endDate: "2026-08-13" },
-      { label: "Max", accessibleLabel: "Use all available data", startDate: "2010-01-04", endDate: "2026-08-13" },
+      { id: "1Y", startDate: "2025-08-13", endDate: "2026-08-13" },
+      { id: "3Y", startDate: "2023-08-13", endDate: "2026-08-13" },
+      { id: "5Y", startDate: "2021-08-13", endDate: "2026-08-13" },
+      { id: "Max", startDate: "2010-01-04", endDate: "2026-08-13" },
     ]);
     expect(buildResearchDatePresets("2024-01-01", "2024-02-29")[0]).toMatchObject({
       startDate: null,

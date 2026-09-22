@@ -327,6 +327,15 @@ class CurrentDataRerunOrigin(BaseModel):
         return self
 
 
+class ResearchAdmissionDetails(BaseModel):
+    """Facts needed to present an admission rejection independently of its English message."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    kind: Literal["quota", "coverage", "warmup"]
+    expected: str | int
+    actual: str | list[str]
+
+
 class ResearchRunAdmissionIssue(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -335,7 +344,7 @@ class ResearchRunAdmissionIssue(BaseModel):
     message: str
     severity: Literal["error"] = "error"
     range: SourceRange | None = None
-    details: DiagnosticDetails | None = None
+    details: DiagnosticDetails | ResearchAdmissionDetails | None = None
 
 
 class ResearchSpecDiagnostics(BaseModel):

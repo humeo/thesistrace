@@ -103,11 +103,15 @@ def test_custom_folder_mutations_and_database_guards_are_transactional() -> None
         )
         assert renamed.status_code == 200
         assert renamed.json() == {**folder, "name": "Signals"}
-        assert client.patch(
-            f"/api/research-folders/{DEFAULT_FOLDER_ID}",
-            json={"name": "Other"},
-        ).status_code == 409
-        assert client.delete(f"/api/research-folders/{DEFAULT_FOLDER_ID}").status_code == 409
+        for system_id in (DEFAULT_FOLDER_ID, BATCH_RESEARCH_FOLDER_ID):
+            rename_system = client.patch(
+                f"/api/research-folders/{system_id}", json={"name": "Other"},
+            )
+            assert rename_system.status_code == 409
+            assert rename_system.json() == {"detail": {"code": "SYSTEM_FOLDER_RENAME_FORBIDDEN"}}
+            delete_system = client.delete(f"/api/research-folders/{system_id}")
+            assert delete_system.status_code == 409
+            assert delete_system.json() == {"detail": {"code": "SYSTEM_FOLDER_DELETE_FORBIDDEN"}}
 
         sessions = (date(2026, 8, 3), date(2026, 8, 4))
         snapshot = DatasetAdmissionSnapshot(
@@ -151,7 +155,7 @@ def test_custom_folder_mutations_and_database_guards_are_transactional() -> None
 
         nonempty = client.delete(f"/api/research-folders/{folder['id']}")
         assert nonempty.status_code == 409
-        assert nonempty.json() == {"detail": "A nonempty Folder cannot be deleted"}
+        assert nonempty.json() == {"detail": {"code": "FOLDER_NOT_EMPTY"}}
         assert client.get("/api/research-folders").json()["items"][-1]["name"] == "Signals"
 
         second = client.post("/api/research-folders", json={"name": "Disposable"}).json()

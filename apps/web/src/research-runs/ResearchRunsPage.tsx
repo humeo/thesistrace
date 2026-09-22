@@ -1,3 +1,4 @@
+import { i18n } from "../i18n";
 import { CurrentDataRerunOrigin, type RerunOrigin } from "../analysis/CurrentDataRerun";
 import { DailyHoldings } from "../analysis/DailyHoldings";
 import { StrategyEvents } from "../analysis/StrategyEvents";
@@ -1067,7 +1068,7 @@ export function UseAsDraftPanel({
         researcherId,
         targetFolderId,
         input,
-        confirmDiscard,
+        () => confirmDiscard(i18n.t("research:useDraftConfirm")),
       )) return;
       navigate(targetFolderId === "folder_default"
         ? "/research"

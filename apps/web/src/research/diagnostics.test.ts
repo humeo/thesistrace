@@ -1,5 +1,5 @@
-import { expect, test } from "vitest";
-import { formatFormulaDiagnostic, type DiagnosticDetails } from "./diagnostics";
+import { expect, test, vi } from "vitest";
+import { createDiagnosticsScheduler, formatFormulaDiagnostic, type DiagnosticDetails, type DiagnosticState } from "./diagnostics";
 
 test.each([
   ["UNKNOWN_IDENTIFIER", { kind: "identifier", expected: ["close"], actual: "closes" }, "Unknown Alpha identifier: closes", "未知 Alpha 标识：closes"],
@@ -30,4 +30,18 @@ test("integer diagnostic literals survive the JSON boundary exactly", () => {
   const diagnostic = JSON.parse('{"code":"WINDOW_OUT_OF_RANGE","details":{"kind":"window","expected":[1,252],"actual":"9007199254740993"}}');
   expect(formatFormulaDiagnostic(diagnostic, "en")).toBe("Window must be between 1 and 252; received 9007199254740993.");
   expect(formatFormulaDiagnostic(diagnostic, "zh-CN")).toBe("窗口必须在 1 到 252 之间，实际为 9007199254740993。");
+});
+
+test("a malformed formula response becomes an unavailable validation state", async () => {
+  vi.useFakeTimers();
+  const scheduler = createDiagnosticsScheduler(async () => Response.json({ valid: false, diagnostics: [{ code: "SYNTAX_ERROR", message: "private", range: null }] }), 0);
+  const states: DiagnosticState[] = [];
+  try {
+    scheduler.diagnose("close", (state) => states.push(state));
+    await vi.runAllTimersAsync();
+    expect(states.at(-1)).toEqual({ kind: "unavailable", result: null });
+  } finally {
+    scheduler.dispose();
+    vi.useRealTimers();
+  }
 });

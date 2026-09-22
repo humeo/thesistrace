@@ -11,12 +11,15 @@ import {
 } from "@phosphor-icons/react";
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode, type Ref } from "react";
 
+import { Trans } from "react-i18next";
 import type { AlphaCatalog } from "../alphaCatalog";
 import { coreFetch } from "../auth/coreFetch";
 import type { BrowserLocation } from "../auth/routing";
 import { interfaceLocale, useTranslation } from "../i18n";
 import { ResearchFieldCatalog, type DataOverview } from "../data/DataPage";
-import { AlphaFormulaEditor, type AlphaFormulaEditorHandle } from "./AlphaFormulaEditor";
+import { AlphaFormulaEditor, type AlphaFormulaEditorHandle, type EditorDiagnostic } from "./AlphaFormulaEditor";
+import { folderDisplayName, folderMutationError, type FolderError } from "./folders";
+import { formatResearchIssue, readResearchIssues, researchIssueField, type ResearchRunAdmissionIssue } from "./admission";
 import { buildResearchDatePresets } from "./dateRange";
 import {
   createDiagnosticsScheduler,
@@ -58,9 +61,10 @@ type WorkspaceResources = {
 };
 
 export function ResearchWorkspacePage({ location, researcherId }: { location: BrowserLocation; researcherId: string }) {
+  const { t } = useTranslation("research");
   const [resources, setResources] = useState<WorkspaceResources | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [folderError, setFolderError] = useState<string | null>(null);
+  const [error, setError] = useState<"unavailable" | null>(null);
+  const [folderError, setFolderError] = useState<FolderError | null>(null);
   const resourceRequest = useRef<AbortController | null>(null);
 
   const load = useCallback(async () => {
@@ -91,10 +95,10 @@ export function ResearchWorkspacePage({ location, researcherId }: { location: Br
         catalog: catalog as AlphaCatalog,
         data: data as DataOverview,
       });
-    } catch (reason: unknown) {
+    } catch {
       if (controller.signal.aborted) return;
       setResources(null);
-      setError(reason instanceof Error ? reason.message : "Research workspace unavailable");
+      setError("unavailable");
     }
   }, [location]);
 
@@ -104,14 +108,14 @@ export function ResearchWorkspacePage({ location, researcherId }: { location: Br
   }, [load]);
 
   if (error !== null) return (
-    <section aria-label="Research" className="page-section state-section">
-      <p role="alert">{error}</p>
-      <button onClick={() => void load()}>Retry</button>
+    <section aria-label={t("title")} className="page-section state-section">
+      <p role="alert">{t(error)}</p>
+      <button onClick={() => void load()}>{t("retry")}</button>
     </section>
   );
   if (resources === null) return (
-    <section aria-label="Research" className="page-section state-section">
-      <p>Opening Research…</p>
+    <section aria-label={t("title")} className="page-section state-section">
+      <p>{t("opening")}</p>
     </section>
   );
   async function createFolder(name: string): Promise<void> {
@@ -134,7 +138,7 @@ export function ResearchWorkspacePage({ location, researcherId }: { location: Br
       });
       window.history.replaceState(null, "", `/research?folder=${folder.id}`);
     } catch {
-      setFolderError("Research Folders unavailable");
+      setFolderError("unavailable");
     }
   }
 
@@ -157,14 +161,14 @@ export function ResearchWorkspacePage({ location, researcherId }: { location: Br
         folders: current.folders.map((folder) => folder.id === renamed.id ? renamed : folder),
       });
     } catch {
-      setFolderError("Research Folders unavailable");
+      setFolderError("unavailable");
     }
   }
 
   async function deleteFolder(folder: ResearchFolder): Promise<void> {
     const currentResources = resources;
     if (currentResources === null) return;
-    if (!window.confirm(`Delete the empty ${folder.name} Folder and its browser Draft?`)) return;
+    if (!window.confirm(t("deleteFolderConfirm", { name: folderDisplayName(folder) }))) return;
     setFolderError(null);
     try {
       const response = await coreFetch(`/api/research-folders/${folder.id}`, { method: "DELETE" });
@@ -182,12 +186,12 @@ export function ResearchWorkspacePage({ location, researcherId }: { location: Br
       });
       window.history.replaceState(null, "", "/research");
     } catch {
-      setFolderError("Research Folders unavailable");
+      setFolderError("unavailable");
     }
   }
 
   return (
-    <section aria-label="Research workspace" className="research-folder-layout">
+    <section aria-label={t("workspace")} className="research-folder-layout">
       <ResearchDraftWorkspace
         key={`${researcherId}:${resources.folder.id}`}
         researcherId={researcherId}
@@ -217,35 +221,36 @@ export function ResearchFolderNavigation({
 }: {
   activeFolder: ResearchFolder;
   folders: ResearchFolder[];
-  error: string | null;
+  error: FolderError | null;
   onCreate: (name: string) => Promise<void>;
   onRename: (folderId: string, name: string) => Promise<void>;
   onDelete: (folder: ResearchFolder) => Promise<void>;
 }) {
+  const { t } = useTranslation("research");
   const [newName, setNewName] = useState("");
   const [renameName, setRenameName] = useState(activeFolder.name);
   useEffect(() => setRenameName(activeFolder.name), [activeFolder.id, activeFolder.name]);
   return (
     <div className="research-folder-control">
-      <details aria-label="Research Folders" className="research-folder-navigation">
+      <details aria-label={t("folderMenu")} className="research-folder-navigation">
         <summary>
           <FolderSimple aria-hidden="true" size={18} weight="regular" />
-          <span>{activeFolder.name} folder</span>
+          <span>{t("activeFolder", { name: folderDisplayName(activeFolder) })}</span>
           <CaretDown aria-hidden="true" className="folder-menu-caret" size={16} weight="regular" />
         </summary>
         <div className="folder-menu-panel">
           <div className="folder-navigation-heading">
-            <span>Folders</span>
+            <span>{t("folders")}</span>
           </div>
-          <nav aria-label="Research Folder navigation">
+          <nav aria-label={t("folderNavigation")}>
             {folders.map((folder) => (
               <a
                 aria-current={folder.id === activeFolder.id ? "page" : undefined}
                 href={folder.is_default ? "/research" : `/research?folder=${folder.id}`}
                 key={folder.id}
               >
-                <span>{folder.name}</span>
-                {folder.is_default ? <small>Default</small> : null}
+                <span>{folderDisplayName(folder)}</span>
+                {folder.is_default ? <small>{t("defaultFolder")}</small> : null}
               </a>
             ))}
           </nav>
@@ -254,38 +259,28 @@ export function ResearchFolderNavigation({
             if (newName.trim() === "") return;
             void onCreate(newName).then(() => setNewName(""));
           }}>
-            <label htmlFor="new-folder-name">New Folder</label>
+            <label htmlFor="new-folder-name">{t("newFolder")}</label>
             <div className="folder-inline-action">
               <input id="new-folder-name" maxLength={120} onChange={(event) => setNewName(event.target.value)} value={newName} />
-              <button aria-label="Create Folder" disabled={newName.trim() === ""} type="submit">
+              <button aria-label={t("createFolder")} disabled={newName.trim() === ""} type="submit">
                 <Plus aria-hidden="true" size={16} weight="regular" />
-                Create
+                {t("create")}
               </button>
             </div>
           </form>
           {!activeFolder.is_default ? (
-            <section aria-label="Selected Folder actions" className="folder-actions">
-              <label htmlFor="rename-folder-name">Folder name</label>
+            <section aria-label={t("folderActions")} className="folder-actions">
+              <label htmlFor="rename-folder-name">{t("folderName")}</label>
               <input id="rename-folder-name" maxLength={120} onChange={(event) => setRenameName(event.target.value)} value={renameName} />
-              <button disabled={renameName.trim() === "" || renameName.trim() === activeFolder.name} onClick={() => void onRename(activeFolder.id, renameName)}>Rename Folder</button>
-              <button className="folder-delete" onClick={() => void onDelete(activeFolder)}>Delete Folder</button>
+              <button disabled={renameName.trim() === "" || renameName.trim() === activeFolder.name} onClick={() => void onRename(activeFolder.id, renameName)}>{t("renameFolder")}</button>
+              <button className="folder-delete" onClick={() => void onDelete(activeFolder)}>{t("deleteFolder")}</button>
             </section>
           ) : null}
-          {error !== null ? <p className="inline-status inline-status-error" role="alert">{error}</p> : null}
+          {error !== null ? <p className="inline-status inline-status-error" role="alert">{t(`folderErrors.${error}`)}</p> : null}
         </div>
       </details>
     </div>
   );
-}
-
-async function folderMutationError(response: Response): Promise<string> {
-  try {
-    const payload = (await response.json()) as { detail?: unknown };
-    if (typeof payload.detail === "string") return payload.detail;
-  } catch {
-    // The public status remains enough when an upstream response has no JSON body.
-  }
-  return `Folder request failed (${response.status})`;
 }
 
 function nextBoundedInteger(
@@ -323,6 +318,7 @@ function ResearchNumberStepper({
   onChange: (value: string) => void;
   value: string;
 }) {
+  const { t } = useTranslation("research");
   const numericValue = value.trim() === "" ? null : Number(value);
   const hasFiniteValue = numericValue !== null && Number.isFinite(numericValue);
   const canDecrease = hasFiniteValue && numericValue > minimum;
@@ -334,7 +330,7 @@ function ResearchNumberStepper({
       <div className="research-number-stepper">
         <button
           aria-controls={id}
-          aria-label={`Decrease ${actionLabel}`}
+          aria-label={t("decrease", { label: actionLabel })}
           disabled={!canDecrease}
           onClick={() => onChange(nextBoundedInteger(value, minimum, maximum, -1))}
           type="button"
@@ -356,7 +352,7 @@ function ResearchNumberStepper({
         />
         <button
           aria-controls={id}
-          aria-label={`Increase ${actionLabel}`}
+          aria-label={t("increase", { label: actionLabel })}
           disabled={!canIncrease}
           onClick={() => onChange(nextBoundedInteger(value, minimum, maximum, 1))}
           type="button"
@@ -387,9 +383,9 @@ export function ResearchDraftWorkspace({
 }) {
   const [draft, setDraft] = useState<ResearchDraft>(() =>
     loadResearchDraft(storage, researcherId, folder.id));
-  useTranslation("diagnostics");
+  const { t } = useTranslation("research");
   const locale = interfaceLocale();
-  const [storageError, setStorageError] = useState<string | null>(null);
+  const [storageError, setStorageError] = useState<"failed" | "accepted" | null>(null);
   const [diagnosticState, setDiagnosticState] = useState<DiagnosticState>({ kind: "idle", result: null });
   const [admissionFeedback, setAdmissionFeedback] = useState<AdmissionFeedback | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -400,7 +396,10 @@ export function ResearchDraftWorkspace({
   const [validationAttempted, setValidationAttempted] = useState(false);
   const [pendingInput, setPendingInput] = useState<ResearchInputField | null>(null);
   const inputIssues = validationAttempted ? researchInputIssues(researchInputs(draft)) : [];
-  const inputError = (field: ResearchInputField) => inputIssues.find((issue) => issue.field === field)?.message;
+  const inputError = (field: ResearchInputField) => {
+    const issue = inputIssues.find((item) => item.field === field);
+    return issue === undefined ? undefined : t(`inputErrors.${issue.code}`);
+  };
   useEffect(() => {
     if (pendingInput === null) return;
     if (pendingInput === "formula") alphaEditor.current?.focus();
@@ -437,7 +436,7 @@ export function ResearchDraftWorkspace({
   const [exposureDiagnosticState, setExposureDiagnosticState] = useState<DiagnosticState>({ kind: "idle", result: null });
   const exposureDiagnostics = useRef(createDiagnosticsScheduler(coreFetch, undefined, "exposure"));
   const [specFeedback, setSpecFeedback] = useState<{
-    key: string; checking: boolean; message: string; issues: ResearchRunAdmissionRejection["issues"];
+    key: string; checking: boolean; status: "checking" | "valid" | "invalid" | "unavailable"; issues: ResearchRunAdmissionRejection["issues"];
   } | null>(null);
   const specController = useRef<AbortController | null>(null);
   const specKey = JSON.stringify(researchSpec(researchInputs(draft)));
@@ -479,7 +478,7 @@ export function ResearchDraftWorkspace({
         persistResearchDraft(storage, researcherId, folder.id, next);
         setStorageError(null);
       } catch {
-        setStorageError("This Draft could not be retained in this browser.");
+        setStorageError("failed");
       }
       return next;
     });
@@ -488,7 +487,7 @@ export function ResearchDraftWorkspace({
   function startNewResearch(): void {
     if (
       hasUnexecutedChanges(draft) &&
-      !confirmDiscard("Start a new Research and discard unexecuted browser changes?")
+      !confirmDiscard(t("discardConfirm"))
     ) return;
     storage.removeItem(researchDraftKey(researcherId, folder.id));
     setDraft(emptyResearchDraft());
@@ -504,7 +503,7 @@ export function ResearchDraftWorkspace({
     const controller = new AbortController();
     specController.current = controller;
     const key = specKey;
-    setSpecFeedback({ key, checking: true, message: "Checking configuration…", issues: [] });
+    setSpecFeedback({ key, checking: true, status: "checking", issues: [] });
     try {
       const response = await coreFetch("/api/research/diagnostics", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -512,14 +511,17 @@ export function ResearchDraftWorkspace({
       });
       if (!response.ok) throw new Error("Configuration check is unavailable. Try again.");
       const result = await response.json() as { valid: boolean; issues: ResearchRunAdmissionRejection["issues"] };
+      if (typeof result.valid !== "boolean") throw new Error("Invalid configuration response");
+      const issues = readResearchIssues(result.issues);
+      if (result.valid !== (issues.length === 0)) throw new Error("Inconsistent configuration response");
       if (controller.signal.aborted) return;
       setSpecFeedback({
-        key, checking: false, issues: result.issues,
-        message: result.valid ? "Configuration is valid. Data and capacity are checked again when submitted." : "Resolve the configuration issues below.",
+        key, checking: false, issues,
+        status: result.valid ? "valid" : "invalid",
       });
     } catch {
       if (controller.signal.aborted) return;
-      setSpecFeedback({ key, checking: false, issues: [], message: "Configuration check is unavailable. Try again." });
+      setSpecFeedback({ key, checking: false, issues: [], status: "unavailable" });
     }
   }
 
@@ -534,7 +536,7 @@ export function ResearchDraftWorkspace({
       persistResearchDraft(storage, researcherId, folder.id, begun.draft);
       setStorageError(null);
     } catch {
-      setStorageError("This Draft could not be retained in this browser.");
+      setStorageError("failed");
       return;
     }
     setDraft(begun.draft);
@@ -554,8 +556,10 @@ export function ResearchDraftWorkspace({
       if (generation !== admissionGeneration.current) return;
       if (response.status === 422) {
         const rejection = (await response.json()) as ResearchRunAdmissionRejection;
+        const issues = readResearchIssues(rejection.issues);
+        if (issues.length === 0) throw new Error("Empty research rejection");
         if (generation !== admissionGeneration.current) return;
-        setAdmissionFeedback({ formula: begun.command.formula, issues: rejection.issues });
+        setAdmissionFeedback({ formula: begun.command.formula, issues });
         return;
       }
       if (!response.ok) throw new Error(`Research Run request failed (${response.status})`);
@@ -570,7 +574,7 @@ export function ResearchDraftWorkspace({
           begun.command.request_id,
         );
       } catch {
-        setStorageError("The accepted Run is safe, but this Draft could not be retained in this browser.");
+        setStorageError("accepted");
         return;
       }
       if (next === null) return;
@@ -613,31 +617,31 @@ export function ResearchDraftWorkspace({
     ? admissionFeedback.issues
     : [];
   return (
-    <section ref={workspace} aria-label="Research" className="page-section research-workspace">
+    <section ref={workspace} aria-label={t("title")} className="page-section research-workspace">
       <header className="research-workspace-header">
         {folderNavigation}
         <label className="research-name-field" htmlFor="research-name">
-          <span className="visually-hidden">Draft name</span>
+          <span className="visually-hidden">{t("draftName")}</span>
           <input
-            aria-label="Research name"
+            aria-label={t("name")}
             autoComplete="off"
             id="research-name"
             maxLength={200}
             onChange={(event) => updateDraft((current) => ({ ...current, name: event.target.value }))}
-            placeholder="Untitled research"
+            placeholder={t("untitled")}
             type="text"
             value={draft.name}
           />
         </label>
         <button className="button research-new" disabled={submitting} onClick={startNewResearch} type="button">
           <Plus aria-hidden="true" size={17} weight="regular" />
-          New research
+          {t("newResearch")}
         </button>
       </header>
 
-      <section className="research-setup" aria-label="Research setup">
+      <section className="research-setup" aria-label={t("setup")}>
             <fieldset className="research-kind-control">
-              <legend className="visually-hidden">Research type</legend>
+              <legend className="visually-hidden">{t("kind")}</legend>
               <label className="research-kind-option">
                 <input
                   checked={draft.researchKind === "factor_evaluation"}
@@ -647,7 +651,7 @@ export function ResearchDraftWorkspace({
                   value="factor_evaluation"
                 />
                 <span>
-                  <strong>Factor Evaluation</strong>
+                  <strong>{t("factor_evaluation")}</strong>
 
                 </span>
               </label>
@@ -660,7 +664,7 @@ export function ResearchDraftWorkspace({
                   value="strategy_backtest"
                 />
                 <span>
-                  <strong>Strategy Backtest</strong>
+                  <strong>{t("strategy_backtest")}</strong>
 
                 </span>
               </label>
@@ -679,13 +683,13 @@ export function ResearchDraftWorkspace({
               startDate={draft.startDate}
             />
             <div className="research-parameter-field research-universe-field">
-              <div className="research-parameter-heading"><label htmlFor="research-universe">Universe</label><ResearchParameterHelp label="Universe" text="Top stocks ranked by average traded value over the latest 20 trading days. Membership changes over time. These are liquidity rankings, not index constituents." /></div>
+              <div className="research-parameter-heading"><label htmlFor="research-universe">{t("universe")}</label><ResearchParameterHelp helpId="universe" text={t("universeHelp")} /></div>
               <select id="research-universe" aria-invalid={Boolean(inputError("universe"))} aria-describedby={inputError("universe") ? "universe-error" : undefined} onChange={(event) => updateDraft((current) => ({ ...current, universe: event.target.value }))} value={draft.universe}>
-                <option value="">Not selected</option>
-                <option value="top300">Top 300</option>
-                <option value="top1000">Top 1000</option>
-                <option value="top2000">Top 2000</option>
-                <option value="top3000">Top 3000</option>
+                <option value="">{t("notSelected")}</option>
+                <option value="top300">{t("top", { count: 300 })}</option>
+                <option value="top1000">{t("top", { count: 1000 })}</option>
+                <option value="top2000">{t("top", { count: 2000 })}</option>
+                <option value="top3000">{t("top", { count: 3000 })}</option>
               </select>
               {inputError("universe") && <small id="universe-error" className="inline-status-error">{inputError("universe")}</small>}
             </div>
@@ -693,16 +697,16 @@ export function ResearchDraftWorkspace({
         </div>
       </section>
 
-      <aside ref={fieldsPanel} id="research-fields-panel" className="research-fields-panel" aria-label="Field browser" hidden={!fieldsOpen}
+      <aside ref={fieldsPanel} id="research-fields-panel" className="research-fields-panel" aria-label={t("fieldBrowser")} hidden={!fieldsOpen}
         onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); closeFields(); } }}>
-        <header><h2>Browse fields</h2><button className="button button-quiet" type="button" aria-label="Close field browser" onClick={closeFields}><X aria-hidden="true" size={18} /></button></header>
+        <header><h2>{t("browseFields")}</h2><button className="button button-quiet" type="button" aria-label={t("closeFields")} onClick={closeFields}><X aria-hidden="true" size={18} /></button></header>
         {fieldsOpen && <ResearchFieldCatalog catalog={catalog} />}
       </aside>
-      <section className="research-editor-panel" aria-label="Alpha authoring">
+      <section className="research-editor-panel" aria-label={t("authoring")}>
         <div className="formula-workbench">
           <header className="formula-heading">
-            <h2 id="alpha-formula-title">Alpha formula</h2>
-            <button className="button button-quiet" type="button" ref={fieldsTrigger} aria-expanded={fieldsOpen} aria-controls="research-fields-panel" onClick={() => setFieldsOpen((open) => !open)}>Browse fields</button>
+            <h2 id="alpha-formula-title">{t("formula")}</h2>
+            <button className="button button-quiet" type="button" ref={fieldsTrigger} aria-expanded={fieldsOpen} aria-controls="research-fields-panel" onClick={() => setFieldsOpen((open) => !open)}>{t("browseFields")}</button>
           </header>
           {inputError("formula") && <p className="research-formula-error inline-status-error">{inputError("formula")}</p>}
           <AlphaFormulaEditor
@@ -713,10 +717,10 @@ export function ResearchDraftWorkspace({
             onChange={(formula, editor) => updateDraft((current) => ({ ...current, formula, editor }))}
             selection={draft.editor}
           />
-          <footer className="formula-status"><span>Ctrl + Space to autocomplete</span><span>{coverage ? `Market data through ${coverage.end}` : "Market data not ready for research"}</span></footer>
+          <footer className="formula-status"><span>{t("autocomplete")}</span><span>{coverage ? t("marketThrough", { date: coverage.end }) : t("marketNotReady")}</span></footer>
         </div>
         {diagnosticState.kind === "complete" && diagnosticState.result.diagnostics.length > 0 ? (
-          <ul aria-label="Formula diagnostics" className="formula-diagnostics">
+          <ul aria-label={t("formulaDiagnostics")} className="formula-diagnostics">
             {diagnosticState.result.diagnostics.map((diagnostic) => (
               <li key={`${diagnostic.code}-${diagnostic.range.start.offset}`}>
                 <code>{diagnostic.code}</code> {formatFormulaDiagnostic(diagnostic, locale)}
@@ -725,22 +729,22 @@ export function ResearchDraftWorkspace({
           </ul>
         ) : null}
         {diagnosticState.kind === "unavailable" ? (
-          <p className="inline-status inline-status-error" role="status">Formula validation is unavailable.</p>
+          <p className="inline-status inline-status-error" role="status">{t("diagnosticsUnavailable")}</p>
         ) : null}
-        {storageError !== null ? <p className="inline-status inline-status-error" role="alert">{storageError}</p> : null}
+        {storageError !== null ? <p className="inline-status inline-status-error" role="alert">{t(`storage.${storageError}`)}</p> : null}
         {visibleIssues.length > 0 ? (
-          <ul aria-label="Run issues" className="formula-diagnostics">
+          <ul aria-label={t("runIssues")} className="formula-diagnostics">
             {visibleIssues.map((issue, index) => (
-              <li key={`${issue.code}-${index}`}><code>{issue.code}</code> {issue.details === null ? issue.message : formatFormulaDiagnostic(issue, locale)}</li>
+              <li key={`${issue.code}-${index}`}><code>{issue.code}</code> {formatResearchIssue(issue, locale)}</li>
             ))}
           </ul>
         ) : null}
         <div className="research-selection-settings">
           {draft.researchKind === "strategy_backtest" && <>
                 <ResearchNumberStepper
-                  actionLabel="number of holdings"
+                  actionLabel={t("holdingsAction")}
                   id="research-holdings-count"
-                  label="Holdings count"
+                  label={t("holdings")}
                   error={inputError("holdingsCount")}
                   maximum={100}
                   minimum={1}
@@ -748,9 +752,9 @@ export function ResearchDraftWorkspace({
                   value={draft.holdingsCount}
                 />
                 <ResearchNumberStepper
-                  actionLabel="selection interval"
+                  actionLabel={t("intervalAction")}
                   id="research-selection-sessions"
-                  label="Selection interval (trading days)"
+                  label={t("interval")}
                   error={inputError("selectionEverySessions")}
                   maximum={20}
                   minimum={1}
@@ -760,14 +764,14 @@ export function ResearchDraftWorkspace({
           </>}
           <button className="button" type="button"
             aria-expanded={settingsOpen} aria-controls="research-parameters" onClick={() => setSettingsOpen((open) => !open)}>
-            <SlidersHorizontal aria-hidden="true" size={18} /> Run settings
+            <SlidersHorizontal aria-hidden="true" size={18} /> {t("settings")}
           </button>
         </div>
-      <section className="research-run-settings research-inline-settings" id="research-parameters" aria-label="Run settings" hidden={!settingsOpen}>
+      <section className="research-run-settings research-inline-settings" id="research-parameters" aria-label={t("settings")} hidden={!settingsOpen}>
           <div className="run-configuration-grid">
             {draft.researchKind === "strategy_backtest" && <>
                 <div className="research-parameter-field">
-                  <div className="research-parameter-heading"><label htmlFor="initial-cash">Initial cash (CNY)</label><ResearchParameterHelp label="Initial cash (CNY)" text="0.01–1,000,000,000 CNY, up to two decimal places." /></div>
+                  <div className="research-parameter-heading"><label htmlFor="initial-cash">{t("initialCash")}</label><ResearchParameterHelp helpId="cash" text={t("cashHelp")} /></div>
                   <input id="initial-cash"
                     aria-describedby={(validationAttempted || draft.initialCashCny !== "") && !isValidInitialCash(draft.initialCashCny) ? "initial-cash-help" : undefined}
                     aria-invalid={(validationAttempted || draft.initialCashCny !== "") && !isValidInitialCash(draft.initialCashCny)}
@@ -778,15 +782,15 @@ export function ResearchDraftWorkspace({
                     value={draft.initialCashCny}
                   />
 
-                  {(validationAttempted || draft.initialCashCny !== "") && !isValidInitialCash(draft.initialCashCny) && <small id="initial-cash-help" className="inline-status-error">Enter 0.01–1,000,000,000 CNY, with up to two decimal places.</small>}
+                  {(validationAttempted || draft.initialCashCny !== "") && !isValidInitialCash(draft.initialCashCny) && <small id="initial-cash-help" className="inline-status-error">{t("cashInvalid")}</small>}
                 </div>
             </>}
             <div className="research-parameter-field">
-              <div className="research-parameter-heading"><label htmlFor="research-neutralization">Neutralization</label></div>
+              <div className="research-parameter-heading"><label htmlFor="research-neutralization">{t("neutralization")}</label></div>
               <select id="research-neutralization" aria-invalid={Boolean(inputError("neutralization"))} aria-describedby={inputError("neutralization") ? "neutralization-error" : undefined} onChange={(event) => updateDraft((current) => ({ ...current, neutralization: event.target.value }))} value={draft.neutralization}>
-                <option value="">Not selected</option>
-                <option value="none">None</option>
-                <option value="industry">Industry</option>
+                <option value="">{t("notSelected")}</option>
+                <option value="none">{t("none")}</option>
+                <option value="industry">{t("industry")}</option>
               </select>
               {inputError("neutralization") && <small id="neutralization-error" className="inline-status-error">{inputError("neutralization")}</small>}
             </div>
@@ -794,19 +798,11 @@ export function ResearchDraftWorkspace({
             {draft.researchKind === "strategy_backtest" ? (
               <>
                 <div className="research-parameter-field research-weighting-field">
-                  <div className="research-parameter-heading"><label htmlFor="portfolio-weighting">Portfolio weighting</label>
-                    <ResearchParameterHelp label="Portfolio weighting" text={<span className="research-help-content">
-                      <span>Splits the invested amount across selected stocks. Position sizing formula sets the total amount invested.</span>
-                      <span>{draft.weighting === "inverse_volatility"
-                        ? "Lower-volatility stocks receive more weight."
-                        : draft.weighting === "rank_weight"
-                          ? "Higher-ranked stocks receive more weight; tied scores share rank weight."
-                          : "Equal weight gives every selected stock the same share."}</span>
-                      <span><strong>Example</strong>{draft.weighting === "inverse_volatility"
-                        ? "Two stocks with volatility of 1% and 2% receive about 66.7% and 33.3% of the invested amount."
-                        : draft.weighting === "rank_weight"
-                          ? "Three stocks with distinct scores receive 50%, 33.3% and 16.7% of the invested amount, from highest to lowest rank."
-                          : "A 100,000 CNY account at 50% exposure invests 50,000 CNY. With 10 stocks, each targets 5,000 CNY."}</span>
+                  <div className="research-parameter-heading"><label htmlFor="portfolio-weighting">{t("weighting")}</label>
+                    <ResearchParameterHelp helpId="weighting" text={<span className="research-help-content">
+                      <span>{t("weightingHelp")}</span>
+                      <span>{t(`weightingDescriptions.${draft.weighting}`)}</span>
+                      <span><strong>{t("example")}</strong>{t(`weightingExamples.${draft.weighting}`)}</span>
                     </span>} />
                   </div>
                   <select id="portfolio-weighting"
@@ -822,15 +818,15 @@ export function ResearchDraftWorkspace({
                       }
                     }}
                   >
-                    <option value="equal_weight">Equal weight</option>
-                    <option value="rank_weight">Rank weight</option>
-                    <option value="inverse_volatility">Inverse volatility</option>
+                    <option value="equal_weight">{t("weightings.equal_weight")}</option>
+                    <option value="rank_weight">{t("weightings.rank_weight")}</option>
+                    <option value="inverse_volatility">{t("weightings.inverse_volatility")}</option>
                   </select>
 
                 </div>
                 {draft.weighting === "inverse_volatility" && (
                   <div className="research-parameter-field research-weighting-field">
-                  <div className="research-parameter-heading"><label htmlFor="volatility-window">Volatility window (sessions)</label><ResearchParameterHelp label="Volatility window (sessions)" text="Default 20, range 1–252. Uses adjusted Close returns through selection Close and population standard deviation. Zero volatility, insufficient history and unavailable returns are excluded; the next eligible stock is selected." /></div>
+                  <div className="research-parameter-heading"><label htmlFor="volatility-window">{t("volatilityWindow")}</label><ResearchParameterHelp helpId="volatility" text={t("volatilityHelp")} /></div>
                     <input id="volatility-window" type="number" min={1} max={252} step={1}
                       aria-invalid={!isValidVolatilityWindow(draft.volatilityWindow)}
                       aria-describedby={!isValidVolatilityWindow(draft.volatilityWindow) ? "volatility-window-help" : undefined}
@@ -838,61 +834,61 @@ export function ResearchDraftWorkspace({
                       onChange={(event) => updateDraft((current) => ({ ...current, volatilityWindow: event.target.value }))}
                     />
 
-                  {!isValidVolatilityWindow(draft.volatilityWindow) && <small id="volatility-window-help" className="inline-status-error">Enter a whole number from 1 to 252.</small>}
+                  {!isValidVolatilityWindow(draft.volatilityWindow) && <small id="volatility-window-help" className="inline-status-error">{t("windowInvalid")}</small>}
                 </div>
                 )}
                 <ResearchPositionSizing ref={exposureEditor} catalog={catalog} expression={draft.exposureExpression} error={inputError("exposureExpression")}
                   diagnostics={exposureDiagnosticState.kind === "complete" ? exposureDiagnosticState.result.diagnostics : []}
                   onChange={(exposureExpression) => updateDraft((current) => ({ ...current, exposureExpression }))} />
                 {exposureDiagnosticState.kind === "complete" && !exposureDiagnosticState.result.valid ? (
-                  <ul aria-label="Exposure diagnostics" className="formula-diagnostics research-spec-feedback">
+                  <ul aria-label={t("exposureDiagnostics")} className="formula-diagnostics research-spec-feedback">
                     {exposureDiagnosticState.result.diagnostics.map((issue) => (
                       <li key={`${issue.code}-${issue.range.start.offset}`}>{formatFormulaDiagnostic(issue, locale)}</li>
                     ))}
                   </ul>
                 ) : null}
-                {exposureDiagnosticState.kind === "unavailable" ? <p className="research-spec-feedback">Exposure check is unavailable.</p> : null}
+                {exposureDiagnosticState.kind === "unavailable" ? <p className="research-spec-feedback">{t("exposureUnavailable")}</p> : null}
               </>
             ) : null}
           </div>
       </section>
 
         <details className="research-notes">
-          <summary>Notes</summary>
-          <label htmlFor="research-notes">Notes</label>
+          <summary>{t("notes")}</summary>
+          <label htmlFor="research-notes">{t("notes")}</label>
           <textarea
             aria-describedby="research-notes-limit"
             aria-invalid={Array.from(draft.hypothesis).length > MAX_HYPOTHESIS_LENGTH}
             id="research-notes"
             onChange={(event) => updateDraft((current) => ({ ...current, hypothesis: event.target.value }))}
-            placeholder="Optional context for this research"
+            placeholder={t("notesPlaceholder")}
             rows={2}
             value={draft.hypothesis}
           />
           <p id="research-notes-limit">
-            {Array.from(draft.hypothesis).length} / {MAX_HYPOTHESIS_LENGTH} characters
+            {t("characters", { used: Array.from(draft.hypothesis).length, maximum: MAX_HYPOTHESIS_LENGTH })}
           </p>
         </details>
       </section>
 
             {specFeedback?.key === specKey ? (
               <div className="research-spec-feedback" role="status">
-                <p>{specFeedback.message}</p>
-                {specFeedback.issues.length > 0 ? <ul aria-label="Configuration issues">
-                  {specFeedback.issues.map((issue, index) => <li key={`${issue.field}-${issue.code}-${index}`}><strong>{issue.field}</strong>: {issue.details === null ? issue.message : formatFormulaDiagnostic(issue, locale)}</li>)}
+                <p>{t(`configuration.${specFeedback.status}`)}</p>
+                {specFeedback.issues.length > 0 ? <ul aria-label={t("configurationIssues")}>
+                  {specFeedback.issues.map((issue, index) => <li key={`${issue.field}-${issue.code}-${index}`}><strong>{researchIssueField(issue.field, locale)}</strong>: {formatResearchIssue(issue, locale)}</li>)}
                 </ul> : null}
               </div>
             ) : null}
             {inputIssues.length > 0 && <div className="research-input-issues" role="alert">
-              <p>Complete these settings to continue:</p>
-              <ul>{inputIssues.map((issue) => <li key={issue.field}><button type="button" onClick={() => focusInput(issue.field)}>{issue.message}</button></li>)}</ul>
+              <p>{t("completeSettings")}</p>
+              <ul>{inputIssues.map((issue) => <li key={issue.field}><button type="button" onClick={() => focusInput(issue.field)}>{t(`inputErrors.${issue.code}`)}</button></li>)}</ul>
             </div>}
             <footer className="research-action-bar">
               <button
                 className="button" type="button"
                 disabled={submitting || (specFeedback?.key === specKey && specFeedback.checking)}
                 onClick={() => void checkConfiguration()}
-              >Check configuration</button>
+              >{t("check")}</button>
               <button
                 className="button button-primary"
                 disabled={submitting}
@@ -900,21 +896,12 @@ export function ResearchDraftWorkspace({
                 type="button"
               >
                 <Play aria-hidden="true" size={17} weight="fill" />
-                {submitting ? "Running…" : draft.researchKind === "strategy_backtest" ? "Run backtest" : "Run evaluation"}
+                {t(submitting ? "running" : draft.researchKind === "strategy_backtest" ? "runBacktest" : "runEvaluation")}
               </button>
             </footer>
     </section>
   );
 }
-
-type ResearchRunAdmissionIssue = {
-  code: string;
-  field: string;
-  message: string;
-  severity: "error";
-  range: FormulaDiagnostic["range"] | null;
-  details: FormulaDiagnostic["details"];
-};
 
 type ResearchRunAdmissionRejection = { issues: ResearchRunAdmissionIssue[] };
 type AdmissionFeedback = {
@@ -922,9 +909,9 @@ type AdmissionFeedback = {
   issues: ResearchRunAdmissionIssue[];
 };
 
-function issueAsFormulaDiagnostic(issue: ResearchRunAdmissionIssue): FormulaDiagnostic[] {
+function issueAsFormulaDiagnostic(issue: ResearchRunAdmissionIssue): EditorDiagnostic[] {
   if (issue.field !== "formula" || issue.range === null) return [];
-  return [{ code: issue.code, message: issue.message, severity: issue.severity, range: issue.range, details: issue.details }];
+  return [{ ...issue, range: issue.range }];
 }
 
 export function ResearchDateFields({
@@ -944,6 +931,7 @@ export function ResearchDateFields({
   endDate: string;
   onChange: (range: { startDate: string; endDate: string }) => void;
 }) {
+  const { t } = useTranslation("research");
   const startDateInput = useRef<HTMLInputElement>(null);
   const endDateInput = useRef<HTMLInputElement>(null);
   const commitDateRange = () => onChange({
@@ -952,45 +940,45 @@ export function ResearchDateFields({
   });
   const presets = buildResearchDatePresets(coverageStart, coverageEnd);
   return (
-    <div aria-label="Research dates" className="research-date-range" role="group">
+    <div aria-label={t("dates")} className="research-date-range" role="group">
       <div className="research-date-field">
-        <label htmlFor="research-start-date">Start date</label>
+        <label htmlFor="research-start-date">{t("startDate")}</label>
         <div className="research-date-control">
-          <input id="research-start-date" aria-invalid={Boolean(startError)} aria-describedby={startError ? "start-date-error" : undefined} ref={startDateInput} aria-label="Research start date" max={endDate || coverageEnd || undefined} min={coverageStart ?? undefined} onBlur={commitDateRange} onChange={commitDateRange} onClick={() => startDateInput.current?.showPicker()} type="date" value={startDate} />
-          <button aria-label="Open start date calendar" onClick={() => startDateInput.current?.showPicker()} type="button">
+          <input id="research-start-date" aria-invalid={Boolean(startError)} aria-describedby={startError ? "start-date-error" : undefined} ref={startDateInput} aria-label={t("startDateInput")} max={endDate || coverageEnd || undefined} min={coverageStart ?? undefined} onBlur={commitDateRange} onChange={commitDateRange} onClick={() => startDateInput.current?.showPicker()} type="date" value={startDate} />
+          <button aria-label={t("openStartCalendar")} onClick={() => startDateInput.current?.showPicker()} type="button">
             <CalendarBlank aria-hidden="true" size={18} weight="regular" />
           </button>
         </div>
         {startError && <small id="start-date-error" className="inline-status-error">{startError}</small>}
       </div>
       <div className="research-date-field">
-        <label htmlFor="research-end-date">End date</label>
+        <label htmlFor="research-end-date">{t("endDate")}</label>
         <div className="research-date-control">
-          <input id="research-end-date" aria-invalid={Boolean(endError)} aria-describedby={endError ? "end-date-error" : undefined} ref={endDateInput} aria-label="Research end date" max={coverageEnd ?? undefined} min={startDate || coverageStart || undefined} onBlur={commitDateRange} onChange={commitDateRange} onClick={() => endDateInput.current?.showPicker()} type="date" value={endDate} />
-          <button aria-label="Open end date calendar" onClick={() => endDateInput.current?.showPicker()} type="button">
+          <input id="research-end-date" aria-invalid={Boolean(endError)} aria-describedby={endError ? "end-date-error" : undefined} ref={endDateInput} aria-label={t("endDateInput")} max={coverageEnd ?? undefined} min={startDate || coverageStart || undefined} onBlur={commitDateRange} onChange={commitDateRange} onClick={() => endDateInput.current?.showPicker()} type="date" value={endDate} />
+          <button aria-label={t("openEndCalendar")} onClick={() => endDateInput.current?.showPicker()} type="button">
             <CalendarBlank aria-hidden="true" size={18} weight="regular" />
           </button>
         </div>
         {endError && <small id="end-date-error" className="inline-status-error">{endError}</small>}
       </div>
-      <div aria-label="Quick date ranges" className="research-date-presets" role="group">
+      <div aria-label={t("quickDates")} className="research-date-presets" role="group">
         {presets.map((preset) => {
           const active = preset.startDate !== null &&
             preset.startDate === startDate &&
             preset.endDate === endDate;
           return (
             <button
-              aria-label={preset.accessibleLabel}
+              aria-label={t(`presetLabels.${preset.id}`)}
               aria-pressed={active}
               disabled={preset.startDate === null || preset.endDate === null}
-              key={preset.label}
+              key={preset.id}
               onClick={() => {
                 if (preset.startDate === null || preset.endDate === null) return;
                 onChange({ startDate: preset.startDate, endDate: preset.endDate });
               }}
               type="button"
             >
-              {preset.label}
+              {t(`presets.${preset.id}`)}
             </button>
           );
         })}
@@ -999,7 +987,8 @@ export function ResearchDateFields({
   );
 }
 
-function ResearchParameterHelp({ label, text }: { label: string; text: ReactNode }) {
+function ResearchParameterHelp({ helpId, text }: { helpId: "cash" | "weighting" | "volatility" | "exposure" | "universe"; text: ReactNode }) {
+  const { t } = useTranslation("research");
   const id = useId();
   const button = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
@@ -1013,7 +1002,7 @@ function ResearchParameterHelp({ label, text }: { label: string; text: ReactNode
     setOpen(true);
   };
   return <span className="research-parameter-help" onMouseEnter={show} onMouseLeave={() => setOpen(false)}>
-    <button ref={button} type="button" aria-label={{ "Initial cash (CNY)": "Cash requirements", "Portfolio weighting": "Weighting help", "Volatility window (sessions)": "Volatility calculation help", "Exposure expression": "Exposure formula help", "Universe": "Stock universe help" }[label]} aria-describedby={open ? id : undefined}
+    <button ref={button} type="button" aria-label={t(`helpLabels.${helpId}`)} aria-describedby={open ? id : undefined}
       onFocus={show} onBlur={() => setOpen(false)}
       onClick={show} onKeyDown={(event) => {
         if (event.key === "Escape") { event.preventDefault(); setOpen(false); }
@@ -1035,17 +1024,18 @@ function ResearchPositionSizing({ ref, catalog, expression, diagnostics, onChang
   error?: string;
   catalog: AlphaCatalog; expression: string; diagnostics: FormulaDiagnostic[]; onChange: (expression: string) => void;
 }) {
+  const { t } = useTranslation("research");
   const [selection, setSelection] = useState({ anchor: 0, head: 0 });
   return <div className="research-exposure-expression">
-    <div className="research-parameter-heading"><h3>Position sizing formula</h3>
-      <ResearchParameterHelp label="Exposure expression" text={<span className="research-help-content">
-        <span>Sets the fraction of account equity invested. The rest stays in cash; Portfolio weighting divides the invested amount among stocks.</span>
-        <span><strong>Fixed exposure</strong><code>0.5</code> targets 50%: 50,000 CNY in a 100,000 CNY account. Use <code>1</code> for 100% or <code>0</code> to stay in cash.</span>
-        <span><strong>Market-based example</strong>
+    <div className="research-parameter-heading"><h3>{t("positionSizing")}</h3>
+      <ResearchParameterHelp helpId="exposure" text={<span className="research-help-content">
+        <span>{t("positionSizingHelp")}</span>
+        <span><strong>{t("fixedExposure")}</strong><Trans t={t} i18nKey="fixedExposureExample" components={{ code: <code /> }} /></span>
+        <span><strong>{t("marketExposure")}</strong>
           <code className="research-help-formula">{"if_else(\n  universe_advancing_fraction() > 0.5,\n  1, 0.3\n)"}</code>
-          Targets 100% when more than half the valid stocks in your Universe rose that session; otherwise 30%.
+          {t("marketExposureExample")}
         </span>
-        <span>Output must be 0–1. Calculated each Close; changes trade at the next Open.</span>
+        <span>{t("exposureRules")}</span>
       </span>} />
     </div>
     <AlphaFormulaEditor ref={ref} catalog={catalog} context="exposure" diagnostics={diagnostics} formula={expression} selection={selection}

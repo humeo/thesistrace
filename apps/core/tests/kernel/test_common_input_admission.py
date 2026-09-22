@@ -51,6 +51,11 @@ def test_common_industry_requires_its_calculation_history_and_points_to_formula(
     assert issue.range is not None
     assert issue.range.start.offset == 0
     assert issue.range.end.offset == len(command.formula)
+    assert issue.details is not None
+    assert issue.details.model_dump(mode="json") == {
+        "kind": "coverage", "expected": "equity.industry_membership",
+        "actual": ["2026-08-05", "2026-08-07"],
+    }
     ready = replace(snapshot, family_coverage={
         **snapshot.family_coverage,
         "equity.industry_membership": DatasetCoverage(
@@ -59,6 +64,18 @@ def test_common_industry_requires_its_calculation_history_and_points_to_formula(
     })
     admitted = _admitted_input(command, compiled, ready, execution_memory_bytes=1536 * 1024**2)
     assert admitted.expression_admission.effective_lookback == 3
+
+
+def test_warmup_rejection_publishes_required_sessions_and_research_start():
+    command, compiled, snapshot = inputs("ts_mean(close, 6)")
+    with pytest.raises(ResearchRunAdmissionRejected) as caught:
+        _admitted_input(command, compiled, snapshot, execution_memory_bytes=1536 * 1024**2)
+    issue = caught.value.issues[0]
+    assert issue.code == "INSUFFICIENT_CALCULATION_WARMUP"
+    assert issue.details is not None
+    assert issue.details.model_dump(mode="json") == {
+        "kind": "warmup", "expected": 5, "actual": "2026-08-07",
+    }
 
 
 def test_neutralization_without_common_industry_keeps_requested_period_coverage():

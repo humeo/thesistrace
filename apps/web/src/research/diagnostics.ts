@@ -2,23 +2,25 @@ import { coreFetch } from "../auth/coreFetch";
 import { i18n, interfaceLocale, type InterfaceLocale } from "../i18n";
 import { diagnosticsEn } from "../i18n/messages/diagnostics";
 
-type SourcePosition = { offset: number; line: number; column: number };
-export type DiagnosticDetails = {
-  kind: "syntax" | "identifier" | "callability" | "arity" | "value_type" | "window" | "literal" | "resource_limit" | "common_input";
-  expected: string | number | (string | number)[];
-  actual: string | number | (string | number)[];
-};
-export type FormulaDiagnostic = {
-  code: string;
-  message: string;
-  severity: "error";
-  range: { start: SourcePosition; end: SourcePosition };
-  details: DiagnosticDetails | null;
-};
+const fact = z.union([z.string(), z.number(), z.array(z.union([z.string(), z.number()]))]);
+const position = z.object({ offset: z.number().int().nonnegative(), line: z.number().int().positive(), column: z.number().int().positive() });
+export const sourceRangeSchema = z.object({ start: position, end: position }).refine(range => range.end.offset >= range.start.offset);
+export const diagnosticDetailsSchema = z.object({
+  kind: z.enum(["syntax", "identifier", "callability", "arity", "value_type", "window", "literal", "resource_limit", "common_input"]),
+  expected: fact, actual: fact,
+});
+const formulaDiagnosticSchema = z.object({
+  code: z.string(), message: z.string(), severity: z.literal("error"),
+  range: sourceRangeSchema, details: diagnosticDetailsSchema,
+});
+const diagnosticsSchema = z.object({ valid: z.boolean(), diagnostics: z.array(formulaDiagnosticSchema) })
+  .refine(result => result.valid === (result.diagnostics.length === 0));
+export type DiagnosticDetails = z.infer<typeof diagnosticDetailsSchema>;
+export type FormulaDiagnostic = z.infer<typeof formulaDiagnosticSchema>;
 
 /** Core supplies facts; the view translates them without interpreting a server sentence. */
 export function formatFormulaDiagnostic(
-  diagnostic: Pick<FormulaDiagnostic, "code" | "details">,
+  diagnostic: { code: string; details: DiagnosticDetails | null },
   locale: InterfaceLocale = interfaceLocale(),
 ): string {
   const t = i18n.getFixedT(locale, "diagnostics");
@@ -146,7 +148,7 @@ export function createDiagnosticsScheduler(
           signal: controller.signal,
         });
         if (!response.ok) throw new Error("Formula diagnostics unavailable");
-        const result = (await response.json()) as FormulaDiagnostics;
+        const result = diagnosticsSchema.parse(await response.json());
         if (selectedGeneration === generation) publish({ kind: "complete", result });
       } catch (reason: unknown) {
         if (selectedGeneration !== generation) return;
@@ -164,3 +166,4 @@ export function createDiagnosticsScheduler(
 
   return { diagnose, dispose };
 }
+import { z } from "zod";

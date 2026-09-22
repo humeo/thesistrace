@@ -1,14 +1,13 @@
 export type ResearchDatePreset = {
-  label: "1Y" | "3Y" | "5Y" | "Max";
-  accessibleLabel: string;
+  id: "1Y" | "3Y" | "5Y" | "Max";
   startDate: string | null;
   endDate: string | null;
 };
 
 const RESEARCH_DATE_HORIZONS = [
-  { label: "1Y", accessibleLabel: "Use last 1 year", years: 1 },
-  { label: "3Y", accessibleLabel: "Use last 3 years", years: 3 },
-  { label: "5Y", accessibleLabel: "Use last 5 years", years: 5 },
+  { id: "1Y", years: 1 },
+  { id: "3Y", years: 3 },
+  { id: "5Y", years: 5 },
 ] as const;
 
 export function buildResearchDatePresets(
@@ -23,12 +22,11 @@ export function buildResearchDatePresets(
     ? { startDate: coverageStart, endDate: coverageEnd }
     : null;
 
-  const horizonPresets = RESEARCH_DATE_HORIZONS.map(({ label, accessibleLabel, years }) => {
+  const horizonPresets = RESEARCH_DATE_HORIZONS.map(({ id, years }) => {
     const candidate = coverage === null ? null : subtractCalendarYears(coverage.endDate, years);
     const available = candidate !== null && coverage !== null && candidate > coverage.startDate;
     return {
-      label,
-      accessibleLabel,
+      id,
       startDate: available ? candidate : null,
       endDate: available ? coverage.endDate : null,
     };
@@ -37,8 +35,7 @@ export function buildResearchDatePresets(
   return [
     ...horizonPresets,
     {
-      label: "Max",
-      accessibleLabel: "Use all available data",
+      id: "Max",
       startDate: coverage?.startDate ?? null,
       endDate: coverage?.endDate ?? null,
     },

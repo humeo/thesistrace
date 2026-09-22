@@ -128,6 +128,7 @@ from thesistrace.research_run.models import (
     OrganizeResearchRunCommand,
     ProvenanceResultSection,
     ProvenanceResultSectionInput,
+    ResearchAdmissionDetails,
     ResearchKind,
     ResearchRunAdmissionAccepted,
     ResearchRunAdmissionCommand,
@@ -1081,6 +1082,9 @@ class ResearchRunService:
                     ResearchRunAdmissionIssue(
                         code="DAILY_RUN_QUOTA_EXCEEDED",
                         field="request_id",
+                        details=ResearchAdmissionDetails(
+                            kind="quota", expected=policy.daily_run_limit, actual=policy.timezone,
+                        ),
                         message=(
                             "Daily ResearchRun submission limit of "
                             f"{policy.daily_run_limit} reached. "
@@ -4566,6 +4570,12 @@ def _admitted_input(
                 }
             issues.append(ResearchRunAdmissionIssue(
                 code=code, field=field, range=issue_range,
+                details=ResearchAdmissionDetails(
+                    kind="coverage", expected=family_id,
+                    actual=[] if coverage is None else [
+                        coverage.start.isoformat(), coverage.end.isoformat(),
+                    ],
+                ),
                 message=(
                     f"Formula requires {family_id} coverage for its calculation period; "
                     f"current coverage is {available}."
@@ -4585,6 +4595,10 @@ def _admitted_input(
                 ResearchRunAdmissionIssue(
                     code="INSUFFICIENT_CALCULATION_WARMUP",
                     field="start_date",
+                    details=ResearchAdmissionDetails(
+                        kind="warmup", expected=requirements.effective_lookback,
+                        actual=sessions[0].isoformat(),
+                    ),
                     message=str(error),
                 )
             ]

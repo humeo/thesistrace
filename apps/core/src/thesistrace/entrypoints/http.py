@@ -996,7 +996,7 @@ def create_app(
                 _researcher_id(request), folder_id, command
             )
         except ResearchFolderConflict as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
+            raise HTTPException(status_code=409, detail={"code": error.code}) from error
         if folder is None:
             raise HTTPException(status_code=404, detail="Research Folder not found")
         return folder
@@ -1009,7 +1009,7 @@ def create_app(
         try:
             deleted = _runtime(request).research_folders.delete(_researcher_id(request), folder_id)
         except ResearchFolderConflict as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
+            raise HTTPException(status_code=409, detail={"code": error.code}) from error
         if not deleted:
             raise HTTPException(status_code=404, detail="Research Folder not found")
 

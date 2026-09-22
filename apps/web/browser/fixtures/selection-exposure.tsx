@@ -1,3 +1,6 @@
+import { changeInterfaceLanguage } from "../../src/i18n";
+import catalog from "./data-field-catalog.json";
+import type { AlphaCatalog } from "../../src/alphaCatalog";
 import { createRoot } from "react-dom/client";
 import { ResearchDraftWorkspace } from "../../src/research/ResearchWorkspacePage";
 import { emptyResearchDraft, persistResearchDraft, researchDraftKey } from "../../src/research/draft";
@@ -11,16 +14,13 @@ if (localStorage.getItem(researchDraftKey(researcherId, folder.id)) === null) {
     initialCashCny: "100000", holdingsCount: "10", selectionEverySessions: "5",
   });
 }
-createRoot(document.getElementById("root")!).render(<ResearchDraftWorkspace
-  researcherId={researcherId} folder={folder} catalog={{
-    fields: [{ identifier: "close", field_id: "price.close.adjusted", value_type: "numeric_series",
-      display_name: "复权收盘价", research_category: "market", research_purpose: "行情", description: "Adjusted Close", unit: "CNY", family_id: "price", availability: "ready",
-      report_period_selection: "", applicable_company_types: [], missingness: "", example: "close" }],
-    builtins: [
-      { identifier: "rank", result_type: "numeric_series", description: "Stock cross-sectional rank", parameters: [], examples: [], missing_value_behavior: "", numeric_behavior: "" },
-      { identifier: "universe_return", result_type: "common_series", description: "Common Universe return", parameters: [], examples: [], missing_value_behavior: "", numeric_behavior: "" },
-    ], industries: [],
-  }}
+createRoot(document.getElementById("root")!).render(<>
+<nav aria-label="Fixture language"><button onClick={() => changeInterfaceLanguage("en")}>English</button><button onClick={() => changeInterfaceLanguage("zh-CN")}>简体中文</button></nav>
+<ResearchDraftWorkspace
+  researcherId={researcherId} folder={folder} catalog={{ ...catalog,
+    fields: catalog.fields.filter(field => field.identifier === "close"),
+    builtins: catalog.builtins.filter(builtin => ["rank", "universe_return"].includes(builtin.identifier)),
+  } as AlphaCatalog}
   data={{
     market_coverage: { start: "2025-01-01", end: "2026-08-12" }, financial_coverage: null,
     industry_coverage: null, benchmark_coverage: null, benchmark_snapshot_sha256: null,
@@ -30,4 +30,4 @@ createRoot(document.getElementById("root")!).render(<ResearchDraftWorkspace
     market_research_readiness: true, benchmark_research_readiness: false,
     financial_research_readiness: "not_ready", industry_research_readiness: false,
   }}
-/>);
+/></>);

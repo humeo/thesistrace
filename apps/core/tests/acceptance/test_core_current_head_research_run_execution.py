@@ -4712,7 +4712,7 @@ def test_insufficient_warmup_is_rejected_before_run_creation(tmp_path: Path) -> 
                 "message": "Research Period requires 1 sessions before 2026-08-03",
                 "severity": "error",
                 "range": None,
-                "details": None,
+                "details": {"kind": "warmup", "expected": 1, "actual": "2026-08-03"},
             }
         ]
         assert client.get("/api/research-runs").json()["items"] == []

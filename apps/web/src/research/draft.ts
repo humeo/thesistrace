@@ -258,26 +258,27 @@ export function isValidInitialCash(value: string): boolean {
 }
 
 export type ResearchInputField = "formula" | "hypothesis" | "startDate" | "endDate" | "universe" | "neutralization" | "initialCashCny" | "holdingsCount" | "selectionEverySessions" | "exposureExpression" | "volatilityWindow";
-export type ResearchInputIssue = { field: ResearchInputField; message: string };
+export type ResearchInputIssueCode = "formulaRequired" | "startRequired" | "endRequired" | "dateOrder" | "universeRequired" | "neutralizationRequired" | "holdingsRange" | "intervalRange" | "cashRange" | "volatilityRange" | "exposureRequired" | "exposureRange" | "notesLength";
+export type ResearchInputIssue = { field: ResearchInputField; code: ResearchInputIssueCode };
 
 export function researchInputIssues(inputs: ResearchInputs): ResearchInputIssue[] {
   const issues: ResearchInputIssue[] = [];
-  if (!inputs.formula.trim()) issues.push({ field: "formula", message: "Enter an Alpha formula." });
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(inputs.startDate)) issues.push({ field: "startDate", message: "Choose a start date." });
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(inputs.endDate)) issues.push({ field: "endDate", message: "Choose an end date." });
-  else if (inputs.startDate > inputs.endDate) issues.push({ field: "endDate", message: "End date must be on or after start date." });
-  if (!["top300", "top1000", "top2000", "top3000"].includes(inputs.universe)) issues.push({ field: "universe", message: "Choose a stock universe." });
-  if (!["none", "industry"].includes(inputs.neutralization)) issues.push({ field: "neutralization", message: "Choose a neutralization method." });
+  if (!inputs.formula.trim()) issues.push({ field: "formula", code: "formulaRequired" });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(inputs.startDate)) issues.push({ field: "startDate", code: "startRequired" });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(inputs.endDate)) issues.push({ field: "endDate", code: "endRequired" });
+  else if (inputs.startDate > inputs.endDate) issues.push({ field: "endDate", code: "dateOrder" });
+  if (!["top300", "top1000", "top2000", "top3000"].includes(inputs.universe)) issues.push({ field: "universe", code: "universeRequired" });
+  if (!["none", "industry"].includes(inputs.neutralization)) issues.push({ field: "neutralization", code: "neutralizationRequired" });
   if (inputs.researchKind === "strategy_backtest") {
     const holdings = Number(inputs.holdingsCount), interval = Number(inputs.selectionEverySessions);
-    if (!Number.isInteger(holdings) || holdings < 1 || holdings > 100) issues.push({ field: "holdingsCount", message: "Holdings count must be a whole number from 1 to 100." });
-    if (!Number.isInteger(interval) || interval < 1 || interval > 20) issues.push({ field: "selectionEverySessions", message: "Selection interval must be a whole number from 1 to 20 trading days." });
-    if (!isValidInitialCash(inputs.initialCashCny)) issues.push({ field: "initialCashCny", message: "Initial cash must be 0.01–1,000,000,000 CNY, with up to two decimal places." });
-    if (!isValidVolatilityWindow(inputs.volatilityWindow)) issues.push({ field: "volatilityWindow", message: "Volatility window must be a whole number from 1 to 252." });
-    if (!inputs.exposureExpression.trim()) issues.push({ field: "exposureExpression", message: "Enter a position sizing formula." });
-    else if (Number(inputs.exposureExpression) < 0 || Number(inputs.exposureExpression) > 1) issues.push({ field: "exposureExpression", message: "Position sizing formula must return a value between 0 and 1." });
+    if (!Number.isInteger(holdings) || holdings < 1 || holdings > 100) issues.push({ field: "holdingsCount", code: "holdingsRange" });
+    if (!Number.isInteger(interval) || interval < 1 || interval > 20) issues.push({ field: "selectionEverySessions", code: "intervalRange" });
+    if (!isValidInitialCash(inputs.initialCashCny)) issues.push({ field: "initialCashCny", code: "cashRange" });
+    if (!isValidVolatilityWindow(inputs.volatilityWindow)) issues.push({ field: "volatilityWindow", code: "volatilityRange" });
+    if (!inputs.exposureExpression.trim()) issues.push({ field: "exposureExpression", code: "exposureRequired" });
+    else if (Number(inputs.exposureExpression) < 0 || Number(inputs.exposureExpression) > 1) issues.push({ field: "exposureExpression", code: "exposureRange" });
   }
-  if (Array.from(inputs.hypothesis).length > MAX_HYPOTHESIS_LENGTH) issues.push({ field: "hypothesis", message: "Keep notes within 1,024 characters." });
+  if (Array.from(inputs.hypothesis).length > MAX_HYPOTHESIS_LENGTH) issues.push({ field: "hypothesis", code: "notesLength" });
   return issues;
 }
 
@@ -298,7 +299,7 @@ export function useResearchAsDraft(
   researcherId: string,
   folderId: string,
   input: FrozenResearchAuthorableInput,
-  confirmDiscard: (message: string) => boolean,
+  confirmDiscard: () => boolean,
 ): boolean {
   const current = loadResearchDraft(storage, researcherId, folderId);
   const nextInputs: ResearchInputs = {
@@ -323,7 +324,7 @@ export function useResearchAsDraft(
   };
   if (
     wouldOverwriteUnexecutedAuthorableValue(current, nextInputs) &&
-    !confirmDiscard("Use this Research as Draft and discard unexecuted browser changes?")
+    !confirmDiscard()
   ) return false;
   persistResearchDraft(storage, researcherId, folderId, {
     ...current,

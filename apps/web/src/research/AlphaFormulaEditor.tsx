@@ -17,6 +17,7 @@ import type { AlphaCatalog } from "../alphaCatalog";
 import { i18n, interfaceLocale, useTranslation, type InterfaceLocale } from "../i18n";
 import { builtinDisplay, catalogLabel, fieldDisplay } from "../i18n/catalog";
 import { alphaLanguageExtensions } from "./alpha-language";
+import { formatResearchIssue, type ResearchRunAdmissionIssue } from "./admission";
 import { formatFormulaDiagnostic, type FormulaDiagnostic } from "./diagnostics";
 import type { EditorState as StoredEditorState } from "./draft";
 
@@ -63,6 +64,7 @@ const alphaEditorTheme = EditorView.theme({
 }, { dark: true });
 
 export type AlphaFormulaEditorHandle = { focus: () => void };
+export type EditorDiagnostic = FormulaDiagnostic | (ResearchRunAdmissionIssue & { range: FormulaDiagnostic["range"] });
 
 export function AlphaFormulaEditor({
   ref,
@@ -76,7 +78,7 @@ export function AlphaFormulaEditor({
   ref?: Ref<AlphaFormulaEditorHandle>;
   catalog: AlphaCatalog;
   context?: "signal" | "exposure";
-  diagnostics: FormulaDiagnostic[];
+  diagnostics: EditorDiagnostic[];
   formula: string;
   selection: StoredEditorState;
   onChange: (formula: string, selection: StoredEditorState) => void;
@@ -163,7 +165,7 @@ export function AlphaFormulaEditor({
       from: Math.min(position(diagnostic.range.start.offset), maximum),
       to: Math.min(position(Math.max(diagnostic.range.end.offset, diagnostic.range.start.offset)), maximum),
       severity: diagnostic.severity,
-      message: formatFormulaDiagnostic(diagnostic, locale),
+      message: "field" in diagnostic ? formatResearchIssue(diagnostic, locale) : formatFormulaDiagnostic(diagnostic, locale),
       source: diagnostic.code,
     }));
     editor.dispatch(setDiagnostics(editor.state, mapped));
