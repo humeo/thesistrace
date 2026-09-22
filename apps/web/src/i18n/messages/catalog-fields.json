@@ -1,0 +1,1814 @@
+{
+  "en": {
+    "price.open.adjusted": {
+      "name": "Adjusted open",
+      "description": "causal cumulative-adjusted open"
+    },
+    "price.high.adjusted": {
+      "name": "Adjusted high",
+      "description": "causal cumulative-adjusted high"
+    },
+    "price.low.adjusted": {
+      "name": "Adjusted low",
+      "description": "causal cumulative-adjusted low"
+    },
+    "price.close.adjusted": {
+      "name": "Adjusted close",
+      "description": "causal cumulative-adjusted close"
+    },
+    "market.volume.shares": {
+      "name": "Traded shares",
+      "description": "traded share volume"
+    },
+    "market.turnover.cny": {
+      "name": "Turnover amount",
+      "description": "turnover amount"
+    },
+    "price.close.raw": {
+      "name": "Unadjusted close",
+      "description": "unadjusted close from the daily price source"
+    },
+    "market.capitalization.total": {
+      "name": "Total market capitalization",
+      "description": "total market capitalization"
+    },
+    "market.capitalization.float": {
+      "name": "Float market capitalization",
+      "description": "circulating market capitalization"
+    },
+    "market.shares.total": {
+      "name": "Total shares",
+      "description": "total outstanding shares"
+    },
+    "market.shares.float": {
+      "name": "Float shares",
+      "description": "unrestricted circulating shares"
+    },
+    "market.shares.free_float": {
+      "name": "Free-float shares",
+      "description": "free float shares under supplier definition"
+    },
+    "market.turnover.float_ratio": {
+      "name": "Turnover ratio",
+      "description": "traded shares divided by unrestricted circulating shares"
+    },
+    "market.turnover.free_float_ratio": {
+      "name": "Free-float turnover ratio",
+      "description": "traded shares divided by free float shares"
+    },
+    "market.volume.ratio": {
+      "name": "Volume ratio",
+      "description": "supplier volume ratio against its moving average"
+    },
+    "market.valuation.pe": {
+      "name": "Price / earnings",
+      "description": "market capitalization divided by supplier annual net profit; losses yield missing"
+    },
+    "market.valuation.pe_ttm": {
+      "name": "Price / TTM earnings",
+      "description": "market capitalization divided by supplier TTM net profit; losses yield missing"
+    },
+    "market.valuation.pb": {
+      "name": "Price / book",
+      "description": "market capitalization divided by net assets excluding other equity instruments"
+    },
+    "market.valuation.ps": {
+      "name": "Price / sales",
+      "description": "market capitalization divided by latest annual operating revenue"
+    },
+    "market.valuation.ps_ttm": {
+      "name": "Price / TTM sales",
+      "description": "market capitalization divided by TTM operating revenue"
+    },
+    "market.dividend.yield_annual": {
+      "name": "Dividend yield",
+      "description": "supplier yield from cash dividends with ex-dates in previous calendar year"
+    },
+    "market.dividend.yield_ttm": {
+      "name": "Trailing dividend yield",
+      "description": "supplier trailing dividend yield with ex-date and report-period restrictions"
+    },
+    "financial.income.total_revenue.latest_fy": {
+      "name": "Total revenue",
+      "description": "latest visible full-year consolidated total revenue"
+    },
+    "financial.income.net_profit_parent.latest_fy": {
+      "name": "Net profit attributable to parent",
+      "description": "latest visible full-year consolidated net profit attributable to parent owners"
+    },
+    "financial.cashflow.operating_cash_flow.latest_fy": {
+      "name": "Net operating cash flow",
+      "description": "latest visible full-year consolidated net operating cash flow"
+    },
+    "financial.balance_sheet.total_assets.latest_reported": {
+      "name": "Total assets",
+      "description": "latest visible quarterly or annual consolidated total assets"
+    },
+    "financial.balance_sheet.total_liabilities.latest_reported": {
+      "name": "Total liabilities",
+      "description": "latest visible quarterly or annual consolidated total liabilities"
+    },
+    "financial.balance_sheet.equity_parent.latest_reported": {
+      "name": "Equity attributable to parent",
+      "description": "latest visible quarterly or annual consolidated equity attributable to parent owners"
+    },
+    "financial.balance_sheet.monetary_funds.latest_reported": {
+      "name": "Monetary funds",
+      "description": "Ending balance in the latest visible report; not necessarily unrestricted available cash."
+    },
+    "financial.balance_sheet.accounts_receivable.latest_reported": {
+      "name": "Accounts receivable",
+      "description": "Ending balance in the latest visible report; distinct from combined notes and accounts receivable."
+    },
+    "financial.balance_sheet.notes_receivable.latest_reported": {
+      "name": "Notes receivable",
+      "description": "Ending balance in the latest visible report; similar items such as receivables financing are not substituted."
+    },
+    "financial.balance_sheet.other_receivables.latest_reported": {
+      "name": "Other receivables",
+      "description": "Ending balance in the latest visible report; distinct from the total other-receivables column."
+    },
+    "financial.balance_sheet.prepayments.latest_reported": {
+      "name": "Prepayments",
+      "description": "Ending balance in the latest visible report; a report-period balance, not cash paid for purchases during the period."
+    },
+    "financial.balance_sheet.inventories.latest_reported": {
+      "name": "Inventories",
+      "description": "Ending balance in the latest visible report; industry applicability and non-null source coverage require separate checks."
+    },
+    "financial.balance_sheet.accounts_payable.latest_reported": {
+      "name": "Accounts payable",
+      "description": "Ending balance in the latest visible report; distinct from combined notes and accounts payable."
+    },
+    "financial.balance_sheet.contract_assets.latest_reported": {
+      "name": "Contract assets",
+      "description": "Ending balance in the latest visible report; not automatically added to accounts receivable. Missing values before the item existed are not filled with zero."
+    },
+    "financial.balance_sheet.contract_liabilities.latest_reported": {
+      "name": "Contract liabilities",
+      "description": "Revenue contract liabilities in the latest visible report; neither total orders nor guaranteed future revenue. Not applicable to insurers, where the source column may mean insurance contract liabilities."
+    },
+    "financial.balance_sheet.goodwill.latest_reported": {
+      "name": "Goodwill",
+      "description": "Ending balance in the latest visible report; distinct from impairment losses for the period."
+    },
+    "financial.balance_sheet.short_term_borrowings.latest_reported": {
+      "name": "Short-term borrowings",
+      "description": "Ending balance in the latest visible report; does not include all short-term debt maturities."
+    },
+    "financial.balance_sheet.long_term_borrowings.latest_reported": {
+      "name": "Long-term borrowings",
+      "description": "Ending balance in the latest visible report; distinct from all noncurrent liabilities."
+    },
+    "financial.balance_sheet.bonds_payable.latest_reported": {
+      "name": "Bonds payable",
+      "description": "Ending balance in the latest visible report; does not provide individual maturity dates."
+    },
+    "financial.balance_sheet.noncurrent_liabilities_due_1y.latest_reported": {
+      "name": "Noncurrent liabilities due within one year",
+      "description": "Ending balance in the latest visible report; not all of this amount is interest-bearing borrowing."
+    },
+    "financial.balance_sheet.other_equity_instruments.latest_reported": {
+      "name": "Other equity instruments",
+      "description": "Ending balance in the latest visible report; distinct from investments in other equity instruments and not limited to preferred shares."
+    },
+    "financial.cashflow.cash_equivalents.latest_reported": {
+      "name": "Ending cash and cash equivalents",
+      "description": "Ending balance in the cash flow statement; selected from the latest visible quarterly or annual report."
+    },
+    "financial.cashflow.cash_paid_capex.ttm": {
+      "name": "Cash paid for long-term assets",
+      "description": "Trailing twelve-month flow through the latest visible report, covering fixed, intangible and other long-term assets. Operating cash flow less this amount is not directly FCFF or FCFE."
+    },
+    "financial.cashflow.cash_received_sales.ttm": {
+      "name": "Cash received from goods and services",
+      "description": "Trailing twelve-month flow through the latest visible report; gross cash receipts, not net operating cash flow."
+    },
+    "financial.cashflow.cash_paid_goods.ttm": {
+      "name": "Cash paid for goods and services",
+      "description": "Trailing twelve-month flow through the latest visible report; distinct from operating cost."
+    },
+    "financial.cashflow.cash_received_asset_disposals.ttm": {
+      "name": "Net cash received from asset disposals",
+      "description": "Trailing twelve-month flow through the latest visible report; net cash, not disposal profit."
+    },
+    "financial.cashflow.cash_paid_acquisitions.ttm": {
+      "name": "Net cash paid for acquisitions",
+      "description": "Trailing twelve-month flow through the latest visible report; the source column means net cash paid to acquire subsidiaries and other business units."
+    },
+    "financial.cashflow.cash_paid_investments.ttm": {
+      "name": "Cash paid for investments",
+      "description": "Trailing twelve-month flow through the latest visible report; distinct from all investing cash outflows."
+    },
+    "financial.cashflow.cash_received_borrowing.ttm": {
+      "name": "Cash received from borrowings",
+      "description": "Trailing twelve-month flow through the latest visible report; does not include all financing sources."
+    },
+    "financial.cashflow.cash_paid_debt_repayment.ttm": {
+      "name": "Cash paid for debt repayment",
+      "description": "Trailing twelve-month flow through the latest visible report; the source spelling prepay does not imply early repayment."
+    },
+    "financial.income.operating_revenue.ttm": {
+      "name": "Operating revenue",
+      "description": "Trailing twelve-month flow through the latest visible report; distinct from the total-revenue scope of revenue."
+    },
+    "financial.income.consolidated_net_profit.ttm": {
+      "name": "Consolidated net profit",
+      "description": "Trailing twelve-month flow through the latest visible report, including minority interests; distinct from the parent-attributable scope of net_profit."
+    },
+    "financial.income.operating_cost.ttm": {
+      "name": "Operating cost",
+      "description": "Trailing twelve-month flow through the latest visible report; distinct from total operating cost."
+    },
+    "financial.income.rd_expense.ttm": {
+      "name": "R&D expense",
+      "description": "Trailing twelve-month flow through the latest visible report; distinct from total R&D investment in fina_indicator.rd_exp."
+    },
+    "financial.income.investment_income.ttm": {
+      "name": "Net investment income",
+      "description": "Trailing twelve-month flow through the latest visible report; not automatically classified as nonrecurring profit or loss."
+    },
+    "financial.income.fair_value_gain.ttm": {
+      "name": "Net fair-value gains",
+      "description": "Trailing twelve-month flow through the latest visible report; a profit-and-loss component, not cash flow."
+    },
+    "financial.income.nonoperating_income.ttm": {
+      "name": "Nonoperating income",
+      "description": "Trailing twelve-month flow through the latest visible report; not all of it is a nonrecurring item."
+    },
+    "financial.income.nonoperating_expense.ttm": {
+      "name": "Nonoperating expense",
+      "description": "Trailing twelve-month flow through the latest visible report; distinct from net nonoperating income and the nonrecurring-item deduction calculation."
+    },
+    "financial.income.total_revenue.ttm": {
+      "name": "TTM total revenue",
+      "description": "TTM reconstructed from matched visible reports, with the same revenue scope as revenue and a trailing twelve-month period; distinct from operating revenue in operating_revenue_ttm."
+    },
+    "financial.income.net_profit_parent.ttm": {
+      "name": "TTM net profit attributable to parent",
+      "description": "TTM reconstructed from matched visible reports, attributable to parent owners; distinct from consolidated net profit in consolidated_net_profit_ttm."
+    },
+    "financial.cashflow.operating_cash_flow.ttm": {
+      "name": "TTM net operating cash flow",
+      "description": "TTM reconstructed from matched visible reports, with the same consolidated cash flow scope as operating_cash_flow and a trailing twelve-month period."
+    },
+    "financial.indicator.eps": {
+      "name": "Basic EPS",
+      "description": "supplier basic earnings per share"
+    },
+    "financial.indicator.bps": {
+      "name": "Book value per share",
+      "description": "supplier book value per share"
+    },
+    "financial.indicator.current_ratio": {
+      "name": "Current ratio",
+      "description": "current assets divided by current liabilities"
+    },
+    "financial.indicator.roe": {
+      "name": "Return on equity",
+      "description": "supplier return on equity; not annualized"
+    },
+    "financial.indicator.q_roe": {
+      "name": "Quarterly return on equity",
+      "description": "supplier single-quarter return on equity"
+    },
+    "financial.indicator.netprofit_yoy": {
+      "name": "Parent net profit YoY growth",
+      "description": "parent-attributable net profit YoY growth"
+    },
+    "financial.indicator.gross_profit": {
+      "name": "Gross profit",
+      "description": "supplier cumulative operating revenue less operating cost; amount, not margin ratio"
+    },
+    "financial.indicator.impai_ttm": {
+      "name": "Cumulative impairment loss / total revenue",
+      "description": "supplier cumulative impairment loss / total revenue; source name does not mean TTM"
+    },
+    "financial.indicator.q_impair_to_gr_ttm": {
+      "name": "Quarterly impairment loss / total revenue",
+      "description": "supplier single-quarter impairment loss / single-quarter total revenue"
+    },
+    "financial.indicator.total_revenue_ps": {
+      "name": "Total revenue per share",
+      "description": "supplier cumulative total revenue per ending share"
+    },
+    "financial.indicator.revenue_ps": {
+      "name": "Operating revenue per share",
+      "description": "supplier cumulative operating revenue per ending share"
+    },
+    "financial.indicator.capital_rese_ps": {
+      "name": "Capital reserve per share",
+      "description": "supplier ending capital reserve per share"
+    },
+    "financial.indicator.surplus_rese_ps": {
+      "name": "Surplus reserve per share",
+      "description": "supplier ending surplus reserve per share"
+    },
+    "financial.indicator.undist_profit_ps": {
+      "name": "Undistributed profit per share",
+      "description": "supplier ending undistributed profit per share"
+    },
+    "financial.indicator.diluted2_eps": {
+      "name": "EPS using ending shares",
+      "description": "supplier cumulative parent net profit per ending share; not diluted EPS"
+    },
+    "financial.indicator.ocfps": {
+      "name": "Operating cash flow per share",
+      "description": "supplier cumulative operating net cashflow per ending share"
+    },
+    "financial.indicator.retainedps": {
+      "name": "Retained earnings per share",
+      "description": "supplier ending retained earnings per share"
+    },
+    "financial.indicator.cfps": {
+      "name": "Net cash flow per share",
+      "description": "supplier cumulative net cashflow per ending share; not operating cashflow"
+    },
+    "financial.indicator.ebit_ps": {
+      "name": "EBIT per share",
+      "description": "supplier cumulative supplier EBIT per ending share"
+    },
+    "financial.indicator.q_eps": {
+      "name": "Quarterly EPS",
+      "description": "supplier supplier single-quarter earnings per share"
+    },
+    "financial.indicator.salescash_to_or": {
+      "name": "Sales cash receipts / operating revenue",
+      "description": "supplier cumulative sales and service cash receipts / operating revenue"
+    },
+    "financial.indicator.ocf_to_or": {
+      "name": "Operating cash flow / operating revenue",
+      "description": "supplier cumulative operating net cashflow / operating revenue"
+    },
+    "financial.indicator.ocf_to_opincome": {
+      "name": "Operating cash flow / operating activity income",
+      "description": "supplier cumulative operating net cashflow / operating activity net income"
+    },
+    "financial.indicator.capitalized_to_da": {
+      "name": "Capital expenditure / depreciation and amortization",
+      "description": "supplier cumulative supplier capital expenditure / depreciation and amortization"
+    },
+    "financial.indicator.ocf_to_profit": {
+      "name": "Operating cash flow / operating profit",
+      "description": "supplier cumulative operating net cashflow / operating profit"
+    },
+    "financial.indicator.q_salescash_to_or": {
+      "name": "Quarterly sales cash receipts / operating revenue",
+      "description": "supplier single-quarter sales and service cash receipts / operating revenue"
+    },
+    "financial.indicator.q_ocf_to_sales": {
+      "name": "Quarterly operating cash flow / operating revenue",
+      "description": "supplier single-quarter operating net cashflow / operating revenue"
+    },
+    "financial.indicator.q_ocf_to_or": {
+      "name": "Quarterly operating cash flow / operating activity income",
+      "description": "supplier single-quarter operating net cashflow / operating activity net income"
+    },
+    "financial.indicator.net_profit_margin": {
+      "name": "Net profit margin",
+      "description": "supplier report cumulative: consolidated net income / operating revenue"
+    },
+    "financial.indicator.gross_profit_margin": {
+      "name": "Gross profit margin",
+      "description": "supplier report cumulative: gross profit / operating revenue"
+    },
+    "financial.indicator.profit_to_gr": {
+      "name": "Net profit / total revenue",
+      "description": "supplier report cumulative: consolidated net income / total revenue"
+    },
+    "financial.indicator.cogs_of_sales": {
+      "name": "Operating cost / operating revenue",
+      "description": "supplier report cumulative: operating cost / operating revenue"
+    },
+    "financial.indicator.expense_of_sales": {
+      "name": "Period expenses / operating revenue",
+      "description": "supplier report cumulative: period expenses / operating revenue; historical R&D classification retained"
+    },
+    "financial.indicator.saleexp_to_gr": {
+      "name": "Selling expense / total revenue",
+      "description": "supplier report cumulative: selling expense / total revenue"
+    },
+    "financial.indicator.adminexp_of_gr": {
+      "name": "Administrative expense / total revenue",
+      "description": "supplier report cumulative: administrative expense / total revenue; historical R&D classification retained"
+    },
+    "financial.indicator.finaexp_of_gr": {
+      "name": "Finance expense / total revenue",
+      "description": "supplier report cumulative: finance expense / total revenue"
+    },
+    "financial.indicator.gc_of_gr": {
+      "name": "Total operating cost / total revenue",
+      "description": "supplier report cumulative: total operating cost / total revenue"
+    },
+    "financial.indicator.op_of_gr": {
+      "name": "Operating profit / total revenue",
+      "description": "supplier report cumulative: operating profit / total revenue"
+    },
+    "financial.indicator.ebit_of_gr": {
+      "name": "EBIT / total revenue",
+      "description": "supplier report cumulative: EBIT / total revenue"
+    },
+    "financial.indicator.opincome_of_ebt": {
+      "name": "Operating activity income / total profit",
+      "description": "supplier report cumulative: operating activity net income / total profit"
+    },
+    "financial.indicator.investincome_of_ebt": {
+      "name": "Value-change income / total profit",
+      "description": "supplier report cumulative: value-change net income / total profit; not investment income alone"
+    },
+    "financial.indicator.n_op_profit_of_ebt": {
+      "name": "Net nonoperating income / total profit",
+      "description": "supplier report cumulative: nonoperating receipts less expenses / total profit"
+    },
+    "financial.indicator.tax_to_ebt": {
+      "name": "Income tax / total profit",
+      "description": "supplier report cumulative: income tax / total profit"
+    },
+    "financial.indicator.dtprofit_to_profit": {
+      "name": "Deducted net profit / parent net profit",
+      "description": "supplier report cumulative: deducted net profit / parent net income"
+    },
+    "financial.indicator.op_to_ebt": {
+      "name": "Operating profit / total profit",
+      "description": "supplier report cumulative: operating profit / total profit"
+    },
+    "financial.indicator.nop_to_ebt": {
+      "name": "Nonoperating profit / total profit",
+      "description": "supplier report cumulative: supplier nonoperating net profit / total profit"
+    },
+    "financial.indicator.profit_to_op": {
+      "name": "Total profit / revenue",
+      "description": "supplier report cumulative: total profit / total revenue in retained samples; supplier label says revenue"
+    },
+    "financial.indicator.q_net_profit_margin": {
+      "name": "Quarterly net profit margin",
+      "description": "supplier single quarter: consolidated net income / operating revenue"
+    },
+    "financial.indicator.q_gross_profit_margin": {
+      "name": "Quarterly gross profit margin",
+      "description": "supplier single quarter: gross profit / operating revenue"
+    },
+    "financial.indicator.q_exp_to_sales": {
+      "name": "Quarterly period expenses / operating revenue",
+      "description": "supplier single quarter: period expenses / operating revenue; historical expense classification retained"
+    },
+    "financial.indicator.q_profit_to_gr": {
+      "name": "Quarterly net profit / total revenue",
+      "description": "supplier single quarter: consolidated net income / total revenue"
+    },
+    "financial.indicator.q_saleexp_to_gr": {
+      "name": "Quarterly selling expense / total revenue",
+      "description": "supplier single quarter: selling expense / total revenue"
+    },
+    "financial.indicator.q_adminexp_to_gr": {
+      "name": "Quarterly administrative expense / total revenue",
+      "description": "supplier single quarter: administrative expense / total revenue; historical expense classification retained"
+    },
+    "financial.indicator.q_finaexp_to_gr": {
+      "name": "Quarterly finance expense / total revenue",
+      "description": "supplier single quarter: finance expense / total revenue"
+    },
+    "financial.indicator.q_gc_to_gr": {
+      "name": "Quarterly total operating cost / total revenue",
+      "description": "supplier single quarter: total operating cost / total revenue"
+    },
+    "financial.indicator.q_op_to_gr": {
+      "name": "Quarterly operating profit / total revenue",
+      "description": "supplier single quarter: operating profit / total revenue"
+    },
+    "financial.indicator.q_opincome_to_ebt": {
+      "name": "Quarterly operating activity income / total profit",
+      "description": "supplier single quarter: operating activity net income / total profit"
+    },
+    "financial.indicator.q_investincome_to_ebt": {
+      "name": "Quarterly value-change income / total profit",
+      "description": "supplier single quarter: value-change net income / total profit"
+    },
+    "financial.indicator.q_dtprofit_to_profit": {
+      "name": "Quarterly deducted net profit / parent net profit",
+      "description": "supplier single quarter: deducted net profit / parent net income"
+    },
+    "financial.indicator.debt_to_assets": {
+      "name": "Liabilities / assets",
+      "description": "supplier report end: total liabilities / total assets"
+    },
+    "financial.indicator.ca_to_assets": {
+      "name": "Current assets / total assets",
+      "description": "supplier report end: current assets / total assets"
+    },
+    "financial.indicator.nca_to_assets": {
+      "name": "Noncurrent assets / total assets",
+      "description": "supplier report end: noncurrent assets / total assets"
+    },
+    "financial.indicator.tbassets_to_totalassets": {
+      "name": "Tangible net equity / total assets (supplier)",
+      "description": "supplier report end: supplier tangible net-equity amount / total assets"
+    },
+    "financial.indicator.int_to_talcap": {
+      "name": "Interest-bearing debt / invested capital",
+      "description": "supplier report end: interest-bearing debt / invested capital"
+    },
+    "financial.indicator.eqt_to_talcapital": {
+      "name": "Parent equity / invested capital",
+      "description": "supplier report end: parent equity / invested capital"
+    },
+    "financial.indicator.currentdebt_to_debt": {
+      "name": "Current liabilities / total liabilities",
+      "description": "supplier report end: current liabilities / total liabilities"
+    },
+    "financial.indicator.longdeb_to_debt": {
+      "name": "Noncurrent liabilities / total liabilities",
+      "description": "supplier report end: noncurrent liabilities / total liabilities"
+    },
+    "financial.indicator.assets_to_eqt": {
+      "name": "Equity multiplier",
+      "description": "supplier report end: total assets / consolidated equity"
+    },
+    "financial.indicator.debt_to_eqt": {
+      "name": "Debt / equity",
+      "description": "supplier report end: total liabilities / consolidated equity"
+    },
+    "financial.indicator.quick_ratio": {
+      "name": "Quick ratio",
+      "description": "supplier report end: current assets less inventory / current liabilities"
+    },
+    "financial.indicator.eqt_to_debt": {
+      "name": "Parent equity / total liabilities",
+      "description": "supplier report end: parent equity / total liabilities"
+    },
+    "financial.indicator.eqt_to_interestdebt": {
+      "name": "Parent equity / interest-bearing debt",
+      "description": "supplier report end: parent equity / interest-bearing debt"
+    },
+    "financial.indicator.tangibleasset_to_debt": {
+      "name": "Tangible net equity / total liabilities (supplier)",
+      "description": "supplier report end: supplier tangible net-equity amount / total liabilities"
+    },
+    "financial.indicator.tangasset_to_intdebt": {
+      "name": "Tangible net equity / interest-bearing debt (supplier)",
+      "description": "supplier report end: supplier tangible net-equity amount / interest-bearing debt"
+    },
+    "financial.indicator.tangibleasset_to_netdebt": {
+      "name": "Tangible net equity / net debt (supplier)",
+      "description": "supplier report end: supplier tangible net-equity amount / net debt"
+    },
+    "financial.indicator.cash_to_liqdebt": {
+      "name": "Monetary funds / current liabilities",
+      "description": "supplier report end: monetary funds / current liabilities"
+    },
+    "financial.indicator.cash_to_liqdebt_withinterest": {
+      "name": "Monetary funds / interest-bearing current liabilities",
+      "description": "supplier report end: monetary funds / interest-bearing current liabilities"
+    },
+    "financial.indicator.ocf_to_shortdebt": {
+      "name": "Operating cash flow / current liabilities",
+      "description": "supplier report cumulative: cumulative operating net cashflow / ending current liabilities"
+    },
+    "financial.indicator.ocf_to_debt": {
+      "name": "Operating cash flow / total liabilities",
+      "description": "supplier report cumulative: cumulative operating net cashflow / ending total liabilities"
+    },
+    "financial.indicator.ocf_to_interestdebt": {
+      "name": "Operating cash flow / interest-bearing debt",
+      "description": "supplier report cumulative: cumulative operating net cashflow / ending interest- bearing debt"
+    },
+    "financial.indicator.ocf_to_netdebt": {
+      "name": "Operating cash flow / net debt",
+      "description": "supplier report cumulative: cumulative operating net cashflow / ending net debt"
+    },
+    "financial.indicator.ebitda_to_debt": {
+      "name": "EBITDA / total liabilities",
+      "description": "supplier report cumulative: cumulative EBITDA / ending total liabilities"
+    },
+    "financial.indicator.op_to_liqdebt": {
+      "name": "Operating profit / current liabilities",
+      "description": "supplier report cumulative: cumulative operating profit / ending current liabilities"
+    },
+    "financial.indicator.op_to_debt": {
+      "name": "Operating profit / total liabilities",
+      "description": "supplier report cumulative: cumulative operating profit / ending total liabilities"
+    },
+    "financial.indicator.basic_eps_yoy": {
+      "name": "Basic EPS YoY growth",
+      "description": "supplier report yoy: basic EPS"
+    },
+    "financial.indicator.dt_eps_yoy": {
+      "name": "Diluted EPS YoY growth",
+      "description": "supplier report yoy: diluted EPS"
+    },
+    "financial.indicator.ocfps_yoy": {
+      "name": "Operating cash flow per share YoY growth",
+      "description": "supplier report yoy: operating net cashflow per share; not total net cashflow per share"
+    },
+    "financial.indicator.op_yoy": {
+      "name": "Operating profit YoY growth",
+      "description": "supplier report yoy: operating profit"
+    },
+    "financial.indicator.ebt_yoy": {
+      "name": "Total profit YoY growth",
+      "description": "supplier report yoy: total profit"
+    },
+    "financial.indicator.dt_netprofit_yoy": {
+      "name": "Deducted parent net profit YoY growth",
+      "description": "supplier report yoy: parent deducted net profit; retain supplier rounding and adjustments"
+    },
+    "financial.indicator.ocf_yoy": {
+      "name": "Operating cash flow YoY growth",
+      "description": "supplier report yoy: operating net cashflow"
+    },
+    "financial.indicator.roe_yoy": {
+      "name": "Diluted ROE YoY growth",
+      "description": "supplier report yoy: diluted ROE; not percentage-point change or ordinary ROE growth"
+    },
+    "financial.indicator.tr_yoy": {
+      "name": "Total revenue YoY growth",
+      "description": "supplier report yoy: total revenue"
+    },
+    "financial.indicator.or_yoy": {
+      "name": "Operating revenue YoY growth",
+      "description": "supplier report yoy: operating revenue"
+    },
+    "financial.indicator.equity_yoy": {
+      "name": "Net assets YoY growth",
+      "description": "supplier report yoy: supplier net assets; parent-equity sample has a historical adjustment discrepancy"
+    },
+    "financial.indicator.bps_ytd_growth": {
+      "name": "Book value per share YTD growth",
+      "description": "supplier report year start growth: book value per share compared with preceding year end"
+    },
+    "financial.indicator.assets_ytd_growth": {
+      "name": "Total assets YTD growth",
+      "description": "supplier report year start growth: total assets compared with preceding year end"
+    },
+    "financial.indicator.equity_parent_ytd_growth": {
+      "name": "Parent equity YTD growth",
+      "description": "supplier report year start growth: parent equity compared with preceding year end"
+    },
+    "financial.indicator.q_gr_yoy": {
+      "name": "Quarterly total revenue YoY growth",
+      "description": "supplier single quarter yoy: single-quarter total revenue versus same quarter last year"
+    },
+    "financial.indicator.q_sales_yoy": {
+      "name": "Quarterly operating revenue YoY growth",
+      "description": "supplier single quarter yoy: single-quarter operating revenue versus same quarter last year"
+    },
+    "financial.indicator.q_op_yoy": {
+      "name": "Quarterly operating profit YoY growth",
+      "description": "supplier single quarter yoy: single-quarter operating profit versus same quarter last year"
+    },
+    "financial.indicator.q_profit_yoy": {
+      "name": "Quarterly net profit YoY growth",
+      "description": "supplier single quarter yoy: single-quarter consolidated net profit versus same quarter last year"
+    },
+    "financial.indicator.q_netprofit_yoy": {
+      "name": "Quarterly parent net profit YoY growth",
+      "description": "supplier single quarter yoy: single-quarter parent net profit versus same quarter last year"
+    },
+    "financial.indicator.q_gr_qoq": {
+      "name": "Quarterly total revenue QoQ growth",
+      "description": "supplier single quarter qoq: single-quarter total revenue versus preceding quarter"
+    },
+    "financial.indicator.q_sales_qoq": {
+      "name": "Quarterly operating revenue QoQ growth",
+      "description": "supplier single quarter qoq: single-quarter operating revenue versus preceding quarter"
+    },
+    "financial.indicator.q_op_qoq": {
+      "name": "Quarterly operating profit QoQ growth",
+      "description": "supplier single quarter qoq: single-quarter operating profit versus preceding quarter"
+    },
+    "financial.indicator.q_profit_qoq": {
+      "name": "Quarterly net profit QoQ growth",
+      "description": "supplier single quarter qoq: single-quarter consolidated net profit versus preceding quarter"
+    },
+    "financial.indicator.q_netprofit_qoq": {
+      "name": "Quarterly parent net profit QoQ growth",
+      "description": "supplier single quarter qoq: single-quarter parent net profit versus preceding quarter"
+    },
+    "financial.indicator.dt_eps": {
+      "name": "Diluted EPS",
+      "description": "supplier report cumulative: diluted EPS; distinct from profit divided by ending shares"
+    },
+    "financial.indicator.extra_item": {
+      "name": "Nonrecurring profit or loss",
+      "description": "supplier report cumulative: nonrecurring profit or loss; retain supplier adjustment and rounding"
+    },
+    "financial.indicator.profit_dedt": {
+      "name": "Net profit excluding nonrecurring items",
+      "description": "supplier report cumulative: deducted net profit; retain supplier definition and adjustments"
+    },
+    "financial.indicator.op_income": {
+      "name": "Operating activity net income",
+      "description": "supplier report cumulative: operating activity net income; not operating profit or net cashflow"
+    },
+    "financial.indicator.valuechange_income": {
+      "name": "Value-change net income",
+      "description": "supplier report cumulative: value-change net income; distinct from investment income alone"
+    },
+    "financial.indicator.interest_expense": {
+      "name": "Interest expense",
+      "description": "supplier report cumulative: interest expense, despite source spelling interst_income"
+    },
+    "financial.indicator.daa": {
+      "name": "Depreciation and amortization",
+      "description": "supplier report cumulative: depreciation and amortization"
+    },
+    "financial.indicator.ebit": {
+      "name": "EBIT",
+      "description": "supplier report cumulative: earnings before interest and tax"
+    },
+    "financial.indicator.ebitda": {
+      "name": "EBITDA",
+      "description": "supplier report cumulative: earnings before interest, tax, depreciation and amortization"
+    },
+    "financial.indicator.profit_prefin_exp": {
+      "name": "Operating profit before finance expense",
+      "description": "supplier report cumulative: operating profit before finance expense"
+    },
+    "financial.indicator.non_op_profit": {
+      "name": "Nonoperating net profit",
+      "description": "supplier report cumulative: nonoperating net profit; not gross nonoperating receipts"
+    },
+    "financial.indicator.current_exint": {
+      "name": "Non-interest current liabilities",
+      "description": "supplier report end: non-interest current liabilities; supplier component classification retained"
+    },
+    "financial.indicator.noncurrent_exint": {
+      "name": "Non-interest noncurrent liabilities",
+      "description": "supplier report end: non-interest noncurrent liabilities; supplier component classification retained"
+    },
+    "financial.indicator.interestdebt": {
+      "name": "Interest-bearing debt",
+      "description": "supplier report end: interest-bearing debt; total liabilities less supplier non- interest liabilities"
+    },
+    "financial.indicator.netdebt": {
+      "name": "Net debt",
+      "description": "supplier report end: interest-bearing debt less monetary funds"
+    },
+    "financial.indicator.tangible_asset": {
+      "name": "Tangible net equity (supplier)",
+      "description": "supplier report end: tangible net-equity amount; not total assets less intangible assets"
+    },
+    "financial.indicator.working_capital": {
+      "name": "Working capital",
+      "description": "supplier report end: current assets less current liabilities"
+    },
+    "financial.indicator.networking_capital": {
+      "name": "Net operating working capital",
+      "description": "supplier report end: current assets less monetary funds and non-interest current liabilities"
+    },
+    "financial.indicator.invest_capital": {
+      "name": "Invested capital",
+      "description": "supplier report end: consolidated equity plus interest-bearing debt"
+    },
+    "financial.indicator.retained_earnings": {
+      "name": "Retained earnings",
+      "description": "supplier report end: surplus reserve plus undistributed profit"
+    },
+    "financial.indicator.fixed_assets": {
+      "name": "Aggregate fixed assets",
+      "description": "supplier report end: fixed-asset aggregate including construction and investment property in samples"
+    },
+    "financial.indicator.q_opincome": {
+      "name": "Quarterly operating activity net income",
+      "description": "supplier single quarter: single-quarter operating activity net income"
+    },
+    "financial.indicator.q_investincome": {
+      "name": "Quarterly value-change net income",
+      "description": "supplier single quarter: single-quarter value-change net income"
+    },
+    "financial.indicator.q_dtprofit": {
+      "name": "Quarterly net profit excluding nonrecurring items",
+      "description": "supplier single quarter: single-quarter deducted net profit; supplier adjustments retained"
+    },
+    "financial.indicator.invturn_days": {
+      "name": "Inventory turnover days",
+      "description": "supplier report cumulative: inventory turnover days; report months times30 divided by rounded turnover"
+    },
+    "financial.indicator.arturn_days": {
+      "name": "Receivables turnover days",
+      "description": "supplier report cumulative: receivable turnover days; report months times30 divided by rounded turnover"
+    },
+    "financial.indicator.turn_days": {
+      "name": "Operating cycle",
+      "description": "supplier report cumulative: inventory plus receivable turnover days; not cash conversion cycle"
+    },
+    "financial.indicator.inv_turn": {
+      "name": "Inventory turnover",
+      "description": "supplier report cumulative: operating cost / year-start and ending average inventory"
+    },
+    "financial.indicator.ar_turn": {
+      "name": "Receivables turnover",
+      "description": "supplier report cumulative: operating revenue / year-start and ending average receivables"
+    },
+    "financial.indicator.ca_turn": {
+      "name": "Current asset turnover",
+      "description": "supplier report cumulative: total revenue / year-start and ending average current assets"
+    },
+    "financial.indicator.fa_turn": {
+      "name": "Fixed asset turnover",
+      "description": "supplier report cumulative: total revenue / year-start and ending average fixed assets"
+    },
+    "financial.indicator.assets_turn": {
+      "name": "Total asset turnover",
+      "description": "supplier report cumulative: total revenue / year-start and ending average total assets"
+    },
+    "financial.indicator.total_fa_trun": {
+      "name": "Aggregate fixed asset turnover",
+      "description": "supplier report cumulative: total revenue / average supplier fixed-asset aggregate"
+    },
+    "financial.indicator.dp_assets_to_eqt": {
+      "name": "DuPont equity multiplier",
+      "description": "supplier report cumulative: year-start and ending average assets / average parent equity"
+    },
+    "financial.indicator.longdebt_to_workingcapital": {
+      "name": "Long-term debt / working capital",
+      "description": "supplier report end: long-term debt / working capital; supplier debt classification retained"
+    },
+    "financial.indicator.roe_dt": {
+      "name": "ROE excluding nonrecurring items",
+      "description": "supplier report cumulative: deducted net profit / year-start and ending average parent equity"
+    },
+    "financial.indicator.roa": {
+      "name": "Return on assets (EBIT)",
+      "description": "supplier report cumulative: EBIT / year-start and ending average total assets"
+    },
+    "financial.indicator.npta": {
+      "name": "Net profit / average total assets",
+      "description": "supplier report cumulative: consolidated net profit / year-start and ending average total assets"
+    },
+    "financial.indicator.roa_dp": {
+      "name": "DuPont return on assets",
+      "description": "supplier report cumulative: parent net profit / year-start and ending average total assets"
+    },
+    "financial.indicator.roic": {
+      "name": "Return on invested capital",
+      "description": "supplier report cumulative: after-tax EBIT / year-start and ending average invested capital"
+    },
+    "financial.indicator.roe_yearly": {
+      "name": "Annualized return on equity",
+      "description": "supplier report annualized: annualized parent profit / average parent equity; not TTM"
+    },
+    "financial.indicator.roa2_yearly": {
+      "name": "Annualized return on assets (EBIT)",
+      "description": "supplier report annualized: annualized EBIT / average total assets; not TTM"
+    },
+    "financial.indicator.roa_yearly": {
+      "name": "Annualized net profit / total assets",
+      "description": "supplier report annualized: annualized consolidated net profit / average total assets; not TTM"
+    },
+    "financial.indicator.roic_yearly": {
+      "name": "Annualized return on invested capital",
+      "description": "supplier report annualized: annualized after-tax EBIT / average invested capital; not TTM"
+    },
+    "financial.indicator.q_dt_roe": {
+      "name": "Quarterly ROE excluding nonrecurring items",
+      "description": "supplier single quarter: single-quarter deducted net profit / previous-quarter and ending average parent equity"
+    },
+    "financial.indicator.q_npta": {
+      "name": "Quarterly net profit / average assets",
+      "description": "supplier single quarter: single-quarter consolidated net profit / previous-quarter and ending average assets"
+    },
+    "financial.indicator.rd_exp": {
+      "name": "Total R&D investment",
+      "description": "supplier cumulative research investment including expensed and capitalized spending; not income statement R&D expense alone"
+    },
+    "financial.indicator.roe_waa": {
+      "name": "Weighted-average return on equity",
+      "description": "supplier cumulative weighted return on equity; not simple average-balance ROE"
+    },
+    "financial.indicator.roe_avg": {
+      "name": "Average ROE for issuance eligibility",
+      "description": "supplier issuance-condition average ROE for the report period; not a three-year rolling average or an alias of weighted ROE"
+    },
+    "financial.indicator.cash_ratio": {
+      "name": "Conservative quick ratio",
+      "description": "supplier conservative quick ratio at report end; liquid-asset component scope is supplier-defined, not monetary funds alone divided by liabilities"
+    },
+    "financial.indicator.ebit_to_interest": {
+      "name": "EBIT / interest expense",
+      "description": "supplier cumulative interest coverage; sampled denominator includes capitalized interest and deducts interest income, unlike expensed interest alone"
+    },
+    "financial.indicator.fcff": {
+      "name": "Free cash flow to firm",
+      "description": "supplier cumulative free cashflow to firm; not operating cashflow minus capex alone; historical differences from the statement free-cashflow column are retained"
+    },
+    "financial.indicator.fcfe": {
+      "name": "Free cash flow to equity",
+      "description": "supplier cumulative free cashflow to equity; sampled firm cashflow plus borrowing and bond proceeds less debt repayment; not interchangeable with FCFF"
+    },
+    "financial.indicator.fcff_ps": {
+      "name": "Free cash flow to firm per share",
+      "description": "supplier cumulative free cashflow to firm per ending share; read the original per-share value without reconstructing it from other fields"
+    },
+    "financial.indicator.fcfe_ps": {
+      "name": "Free cash flow to equity per share",
+      "description": "supplier cumulative free cashflow to equity per ending share; read the original per-share value without reconstructing it from other fields"
+    }
+  },
+  "zh-CN": {
+    "price.open.adjusted": {
+      "name": "复权开盘价",
+      "description": "仅使用当时已知信息计算的累计复权开盘价。"
+    },
+    "price.high.adjusted": {
+      "name": "复权最高价",
+      "description": "仅使用当时已知信息计算的累计复权最高价。"
+    },
+    "price.low.adjusted": {
+      "name": "复权最低价",
+      "description": "仅使用当时已知信息计算的累计复权最低价。"
+    },
+    "price.close.adjusted": {
+      "name": "复权收盘价",
+      "description": "仅使用当时已知信息计算的累计复权收盘价。"
+    },
+    "market.volume.shares": {
+      "name": "成交股数",
+      "description": "成交的股票数量。"
+    },
+    "market.turnover.cny": {
+      "name": "成交金额",
+      "description": "成交金额。"
+    },
+    "price.close.raw": {
+      "name": "未复权收盘价",
+      "description": "日行情来源中的未复权收盘价。"
+    },
+    "market.capitalization.total": {
+      "name": "总市值",
+      "description": "总市值。"
+    },
+    "market.capitalization.float": {
+      "name": "流通市值",
+      "description": "流通市值。"
+    },
+    "market.shares.total": {
+      "name": "总股本",
+      "description": "已发行总股数。"
+    },
+    "market.shares.float": {
+      "name": "流通股本",
+      "description": "无限售条件的流通股数。"
+    },
+    "market.shares.free_float": {
+      "name": "自由流通股本",
+      "description": "按供应商定义计算的自由流通股数。"
+    },
+    "market.turnover.float_ratio": {
+      "name": "换手率",
+      "description": "成交股数除以无限售条件的流通股数。"
+    },
+    "market.turnover.free_float_ratio": {
+      "name": "自由流通换手率",
+      "description": "成交股数除以自由流通股数。"
+    },
+    "market.volume.ratio": {
+      "name": "量比",
+      "description": "供应商计算的成交量相对于其移动平均值的比率。"
+    },
+    "market.valuation.pe": {
+      "name": "市盈率",
+      "description": "总市值除以供应商年度净利润；亏损时为缺失值。"
+    },
+    "market.valuation.pe_ttm": {
+      "name": "滚动市盈率",
+      "description": "总市值除以供应商最近十二个月净利润；亏损时为缺失值。"
+    },
+    "market.valuation.pb": {
+      "name": "市净率",
+      "description": "总市值除以扣除其他权益工具后的净资产。"
+    },
+    "market.valuation.ps": {
+      "name": "市销率",
+      "description": "总市值除以最新年度营业收入。"
+    },
+    "market.valuation.ps_ttm": {
+      "name": "滚动市销率",
+      "description": "总市值除以最近十二个月营业收入。"
+    },
+    "market.dividend.yield_annual": {
+      "name": "股息率",
+      "description": "供应商按上一日历年除权日范围内现金股息计算的股息率。"
+    },
+    "market.dividend.yield_ttm": {
+      "name": "滚动股息率",
+      "description": "供应商计算的滚动股息率，受除权日和报告期条件约束。"
+    },
+    "financial.income.total_revenue.latest_fy": {
+      "name": "营业总收入",
+      "description": "最新可见完整年度的合并营业总收入。"
+    },
+    "financial.income.net_profit_parent.latest_fy": {
+      "name": "归母净利润",
+      "description": "最新可见完整年度合并报表中归属于母公司所有者的净利润。"
+    },
+    "financial.cashflow.operating_cash_flow.latest_fy": {
+      "name": "经营现金流净额",
+      "description": "最新可见完整年度的合并经营活动现金流量净额。"
+    },
+    "financial.balance_sheet.total_assets.latest_reported": {
+      "name": "资产总计",
+      "description": "最新可见季报或年报的合并资产总计。"
+    },
+    "financial.balance_sheet.total_liabilities.latest_reported": {
+      "name": "负债合计",
+      "description": "最新可见季报或年报的合并负债合计。"
+    },
+    "financial.balance_sheet.equity_parent.latest_reported": {
+      "name": "归母权益",
+      "description": "最新可见季报或年报中归属于母公司所有者的合并权益。"
+    },
+    "financial.balance_sheet.monetary_funds.latest_reported": {
+      "name": "货币资金",
+      "description": "最新可见报告期的期末存量；不自动等于无限制可用现金。"
+    },
+    "financial.balance_sheet.accounts_receivable.latest_reported": {
+      "name": "应收账款",
+      "description": "最新可见报告期的期末存量；不同于应收票据及应收账款合计。"
+    },
+    "financial.balance_sheet.notes_receivable.latest_reported": {
+      "name": "应收票据",
+      "description": "最新可见报告期的期末存量；不以应收融资等相近科目替代。"
+    },
+    "financial.balance_sheet.other_receivables.latest_reported": {
+      "name": "其他应收款",
+      "description": "最新可见报告期的期末存量；不同于其他应收款合计列。"
+    },
+    "financial.balance_sheet.prepayments.latest_reported": {
+      "name": "预付款项",
+      "description": "最新可见报告期的期末存量；报告期余额，不是当期采购现金。"
+    },
+    "financial.balance_sheet.inventories.latest_reported": {
+      "name": "存货",
+      "description": "最新可见报告期的期末存量；行业适用性与源非空覆盖需分别核验。"
+    },
+    "financial.balance_sheet.accounts_payable.latest_reported": {
+      "name": "应付账款",
+      "description": "最新可见报告期的期末存量；不同于应付票据及应付账款合计。"
+    },
+    "financial.balance_sheet.contract_assets.latest_reported": {
+      "name": "合同资产",
+      "description": "最新可见报告期的期末存量；不自动并入应收账款；科目出现前缺失不填零。"
+    },
+    "financial.balance_sheet.contract_liabilities.latest_reported": {
+      "name": "合同负债",
+      "description": "最新可见报告期的收入合同负债；不是订单总额或必然实现的收入。不适用于保险公司，来源列可能表示保险合同负债。"
+    },
+    "financial.balance_sheet.goodwill.latest_reported": {
+      "name": "商誉",
+      "description": "最新可见报告期的期末存量；余额不同于当期减值损失。"
+    },
+    "financial.balance_sheet.short_term_borrowings.latest_reported": {
+      "name": "短期借款",
+      "description": "最新可见报告期的期末存量；不是全部短期到期债务。"
+    },
+    "financial.balance_sheet.long_term_borrowings.latest_reported": {
+      "name": "长期借款",
+      "description": "最新可见报告期的期末存量；不是全部非流动负债。"
+    },
+    "financial.balance_sheet.bonds_payable.latest_reported": {
+      "name": "应付债券",
+      "description": "最新可见报告期的期末存量；报告期余额，不含逐笔到期日。"
+    },
+    "financial.balance_sheet.noncurrent_liabilities_due_1y.latest_reported": {
+      "name": "一年内到期的非流动负债",
+      "description": "最新可见报告期的期末存量；不能全部当作有息借款。"
+    },
+    "financial.balance_sheet.other_equity_instruments.latest_reported": {
+      "name": "其他权益工具",
+      "description": "最新可见报告期的期末存量；不同于其他权益工具投资，且不只包含优先股。"
+    },
+    "financial.cashflow.cash_equivalents.latest_reported": {
+      "name": "期末现金及现金等价物",
+      "description": "最新可见报告期的期末存量；现金流量表中的期末存量，仍选最新季报或年报。"
+    },
+    "financial.cashflow.cash_paid_capex.ttm": {
+      "name": "购建长期资产付现",
+      "description": "截至最新可见报告期的最近十二个月流量；含固定、无形及其他长期资产；经营现金流减它不直接称 FCFF/FCFE。"
+    },
+    "financial.cashflow.cash_received_sales.ttm": {
+      "name": "销售商品及劳务收现",
+      "description": "截至最新可见报告期的最近十二个月流量；是收现总额，不是经营现金净流量。"
+    },
+    "financial.cashflow.cash_paid_goods.ttm": {
+      "name": "购买商品及劳务付现",
+      "description": "截至最新可见报告期的最近十二个月流量；不同于营业成本。"
+    },
+    "financial.cashflow.cash_received_asset_disposals.ttm": {
+      "name": "处置长期资产收现净额",
+      "description": "截至最新可见报告期的最近十二个月流量；是现金净额，不是处置利润。"
+    },
+    "financial.cashflow.cash_paid_acquisitions.ttm": {
+      "name": "取得子公司等付现净额",
+      "description": "截至最新可见报告期的最近十二个月流量；源列含义为取得子公司及其他营业单位的现金净支出。"
+    },
+    "financial.cashflow.cash_paid_investments.ttm": {
+      "name": "投资付现",
+      "description": "截至最新可见报告期的最近十二个月流量；不同于全部投资现金流出。"
+    },
+    "financial.cashflow.cash_received_borrowing.ttm": {
+      "name": "借款收现",
+      "description": "截至最新可见报告期的最近十二个月流量；不包含全部融资来源。"
+    },
+    "financial.cashflow.cash_paid_debt_repayment.ttm": {
+      "name": "偿债付现",
+      "description": "截至最新可见报告期的最近十二个月流量；不按 prepay 拼写解释为提前还款。"
+    },
+    "financial.income.operating_revenue.ttm": {
+      "name": "营业收入",
+      "description": "截至最新可见报告期的最近十二个月流量；与现有 revenue 的营业总收入分开。"
+    },
+    "financial.income.consolidated_net_profit.ttm": {
+      "name": "合并净利润",
+      "description": "截至最新可见报告期的最近十二个月流量；包含少数股东损益，与现有 net_profit 的归母口径分开。"
+    },
+    "financial.income.operating_cost.ttm": {
+      "name": "营业成本",
+      "description": "截至最新可见报告期的最近十二个月流量；不同于营业总成本。"
+    },
+    "financial.income.rd_expense.ttm": {
+      "name": "研发费用",
+      "description": "截至最新可见报告期的最近十二个月流量；与 fina_indicator.rd_exp 的研发投入合计分开。"
+    },
+    "financial.income.investment_income.ttm": {
+      "name": "投资净收益",
+      "description": "截至最新可见报告期的最近十二个月流量；不自动认定为非经常性损益。"
+    },
+    "financial.income.fair_value_gain.ttm": {
+      "name": "公允价值变动净收益",
+      "description": "截至最新可见报告期的最近十二个月流量；是损益组成项，不是现金流。"
+    },
+    "financial.income.nonoperating_income.ttm": {
+      "name": "营业外收入",
+      "description": "截至最新可见报告期的最近十二个月流量；不能全部等同于扣非事项。"
+    },
+    "financial.income.nonoperating_expense.ttm": {
+      "name": "营业外支出",
+      "description": "截至最新可见报告期的最近十二个月流量；与净营业外收支及扣非计算分开。"
+    },
+    "financial.income.total_revenue.ttm": {
+      "name": "营业总收入 TTM",
+      "description": "匹配可见报告重构 TTM；与 revenue 使用同一收入范围，期间改为最近十二个月；不同于 operating_revenue_ttm 的营业收入。"
+    },
+    "financial.income.net_profit_parent.ttm": {
+      "name": "归母净利润 TTM",
+      "description": "匹配可见报告重构 TTM；归母口径；与 consolidated_net_profit_ttm 的合并净利润分开。"
+    },
+    "financial.cashflow.operating_cash_flow.ttm": {
+      "name": "经营现金流净额 TTM",
+      "description": "匹配可见报告重构 TTM；与 operating_cash_flow 使用同一合并现金流口径，期间为最近十二个月。"
+    },
+    "financial.indicator.eps": {
+      "name": "基本每股收益",
+      "description": "供应商提供的基本每股收益。"
+    },
+    "financial.indicator.bps": {
+      "name": "每股净资产",
+      "description": "供应商提供的每股净资产。"
+    },
+    "financial.indicator.current_ratio": {
+      "name": "流动比率",
+      "description": "流动资产除以流动负债。"
+    },
+    "financial.indicator.roe": {
+      "name": "净资产收益率",
+      "description": "供应商提供的净资产收益率，未经年化。"
+    },
+    "financial.indicator.q_roe": {
+      "name": "单季净资产收益率",
+      "description": "供应商提供的单季度净资产收益率。"
+    },
+    "financial.indicator.netprofit_yoy": {
+      "name": "归母净利润同比增长率",
+      "description": "归属于母公司所有者的净利润同比增长率。"
+    },
+    "financial.indicator.gross_profit": {
+      "name": "毛利",
+      "description": "供应商提供的累计营业收入减营业成本；是金额，不是毛利率。"
+    },
+    "financial.indicator.impai_ttm": {
+      "name": "累计资产减值损失占营业总收入",
+      "description": "供应商提供的累计资产减值损失除以营业总收入；来源名称不表示 TTM。"
+    },
+    "financial.indicator.q_impair_to_gr_ttm": {
+      "name": "单季资产减值损失占营业总收入",
+      "description": "供应商提供的单季度资产减值损失除以单季度营业总收入。"
+    },
+    "financial.indicator.total_revenue_ps": {
+      "name": "每股营业总收入",
+      "description": "供应商提供的累计营业总收入除以期末股数。"
+    },
+    "financial.indicator.revenue_ps": {
+      "name": "每股营业收入",
+      "description": "供应商提供的累计营业收入除以期末股数。"
+    },
+    "financial.indicator.capital_rese_ps": {
+      "name": "每股资本公积",
+      "description": "供应商提供的期末每股资本公积。"
+    },
+    "financial.indicator.surplus_rese_ps": {
+      "name": "每股盈余公积",
+      "description": "供应商提供的期末每股盈余公积。"
+    },
+    "financial.indicator.undist_profit_ps": {
+      "name": "每股未分配利润",
+      "description": "供应商提供的期末每股未分配利润。"
+    },
+    "financial.indicator.diluted2_eps": {
+      "name": "期末摊薄每股收益",
+      "description": "供应商提供的累计归母净利润除以期末股数；不是稀释每股收益。"
+    },
+    "financial.indicator.ocfps": {
+      "name": "每股经营现金净流量",
+      "description": "供应商提供的累计经营现金净流量除以期末股数。"
+    },
+    "financial.indicator.retainedps": {
+      "name": "每股留存收益",
+      "description": "供应商提供的期末每股留存收益。"
+    },
+    "financial.indicator.cfps": {
+      "name": "每股现金净流量",
+      "description": "供应商提供的累计现金净流量除以期末股数；不是经营现金流。"
+    },
+    "financial.indicator.ebit_ps": {
+      "name": "每股息税前利润",
+      "description": "供应商口径的累计息税前利润除以期末股数。"
+    },
+    "financial.indicator.q_eps": {
+      "name": "单季每股收益",
+      "description": "供应商提供的单季度每股收益。"
+    },
+    "financial.indicator.salescash_to_or": {
+      "name": "销售及劳务收现/营业收入",
+      "description": "供应商提供的累计销售商品及劳务收现除以营业收入。"
+    },
+    "financial.indicator.ocf_to_or": {
+      "name": "经营现金净流量/营业收入",
+      "description": "供应商提供的累计经营现金净流量除以营业收入。"
+    },
+    "financial.indicator.ocf_to_opincome": {
+      "name": "经营现金净流量/经营活动净收益",
+      "description": "供应商提供的累计经营现金净流量除以经营活动净收益。"
+    },
+    "financial.indicator.capitalized_to_da": {
+      "name": "资本支出/折旧摊销",
+      "description": "供应商口径的累计资本支出除以折旧与摊销。"
+    },
+    "financial.indicator.ocf_to_profit": {
+      "name": "经营现金净流量/营业利润",
+      "description": "供应商提供的累计经营现金净流量除以营业利润。"
+    },
+    "financial.indicator.q_salescash_to_or": {
+      "name": "单季销售及劳务收现/营业收入",
+      "description": "供应商提供的单季度销售商品及劳务收现除以营业收入。"
+    },
+    "financial.indicator.q_ocf_to_sales": {
+      "name": "单季经营现金净流量/营业收入",
+      "description": "供应商提供的单季度经营现金净流量除以营业收入。"
+    },
+    "financial.indicator.q_ocf_to_or": {
+      "name": "单季经营现金净流量/经营活动净收益",
+      "description": "供应商提供的单季度经营现金净流量除以经营活动净收益。"
+    },
+    "financial.indicator.net_profit_margin": {
+      "name": "销售净利率",
+      "description": "供应商报告期累计口径：合并净利润除以营业收入。"
+    },
+    "financial.indicator.gross_profit_margin": {
+      "name": "销售毛利率",
+      "description": "供应商报告期累计口径：毛利除以营业收入。"
+    },
+    "financial.indicator.profit_to_gr": {
+      "name": "净利润/营业总收入",
+      "description": "供应商报告期累计口径：合并净利润除以营业总收入。"
+    },
+    "financial.indicator.cogs_of_sales": {
+      "name": "销售成本占比",
+      "description": "供应商报告期累计口径：营业成本除以营业收入。"
+    },
+    "financial.indicator.expense_of_sales": {
+      "name": "销售期间费用占比",
+      "description": "供应商报告期累计口径：期间费用除以营业收入；保留历史研发费用分类。"
+    },
+    "financial.indicator.saleexp_to_gr": {
+      "name": "销售费用/营业总收入",
+      "description": "供应商报告期累计口径：销售费用除以营业总收入。"
+    },
+    "financial.indicator.adminexp_of_gr": {
+      "name": "管理费用/营业总收入",
+      "description": "供应商报告期累计口径：管理费用除以营业总收入；保留历史研发费用分类。"
+    },
+    "financial.indicator.finaexp_of_gr": {
+      "name": "财务费用/营业总收入",
+      "description": "供应商报告期累计口径：财务费用除以营业总收入。"
+    },
+    "financial.indicator.gc_of_gr": {
+      "name": "营业总成本/营业总收入",
+      "description": "供应商报告期累计口径：营业总成本除以营业总收入。"
+    },
+    "financial.indicator.op_of_gr": {
+      "name": "营业利润/营业总收入",
+      "description": "供应商报告期累计口径：营业利润除以营业总收入。"
+    },
+    "financial.indicator.ebit_of_gr": {
+      "name": "息税前利润/营业总收入",
+      "description": "供应商报告期累计口径：息税前利润除以营业总收入。"
+    },
+    "financial.indicator.opincome_of_ebt": {
+      "name": "经营活动净收益/利润总额",
+      "description": "供应商报告期累计口径：经营活动净收益除以利润总额。"
+    },
+    "financial.indicator.investincome_of_ebt": {
+      "name": "价值变动净收益/利润总额",
+      "description": "供应商报告期累计口径：价值变动净收益除以利润总额；不只包含投资收益。"
+    },
+    "financial.indicator.n_op_profit_of_ebt": {
+      "name": "营业外收支净额/利润总额",
+      "description": "供应商报告期累计口径：营业外收入减营业外支出，再除以利润总额。"
+    },
+    "financial.indicator.tax_to_ebt": {
+      "name": "所得税/利润总额",
+      "description": "供应商报告期累计口径：所得税除以利润总额。"
+    },
+    "financial.indicator.dtprofit_to_profit": {
+      "name": "扣非净利润/净利润",
+      "description": "供应商报告期累计口径：扣非净利润除以归母净利润。"
+    },
+    "financial.indicator.op_to_ebt": {
+      "name": "营业利润/利润总额",
+      "description": "供应商报告期累计口径：营业利润除以利润总额。"
+    },
+    "financial.indicator.nop_to_ebt": {
+      "name": "非营业利润/利润总额",
+      "description": "供应商报告期累计口径：供应商定义的非营业净利润除以利润总额。"
+    },
+    "financial.indicator.profit_to_op": {
+      "name": "利润总额/营业收入",
+      "description": "供应商报告期累计口径：留存样本中为利润总额除以营业总收入；供应商标签称为营业收入。"
+    },
+    "financial.indicator.q_net_profit_margin": {
+      "name": "单季销售净利率",
+      "description": "供应商单季度口径：合并净利润除以营业收入。"
+    },
+    "financial.indicator.q_gross_profit_margin": {
+      "name": "单季销售毛利率",
+      "description": "供应商单季度口径：毛利除以营业收入。"
+    },
+    "financial.indicator.q_exp_to_sales": {
+      "name": "单季销售期间费用占比",
+      "description": "供应商单季度口径：期间费用除以营业收入；保留历史费用分类。"
+    },
+    "financial.indicator.q_profit_to_gr": {
+      "name": "单季净利润/营业总收入",
+      "description": "供应商单季度口径：合并净利润除以营业总收入。"
+    },
+    "financial.indicator.q_saleexp_to_gr": {
+      "name": "单季销售费用/营业总收入",
+      "description": "供应商单季度口径：销售费用除以营业总收入。"
+    },
+    "financial.indicator.q_adminexp_to_gr": {
+      "name": "单季管理费用/营业总收入",
+      "description": "供应商单季度口径：管理费用除以营业总收入；保留历史费用分类。"
+    },
+    "financial.indicator.q_finaexp_to_gr": {
+      "name": "单季财务费用/营业总收入",
+      "description": "供应商单季度口径：财务费用除以营业总收入。"
+    },
+    "financial.indicator.q_gc_to_gr": {
+      "name": "单季营业总成本/营业总收入",
+      "description": "供应商单季度口径：营业总成本除以营业总收入。"
+    },
+    "financial.indicator.q_op_to_gr": {
+      "name": "单季营业利润/营业总收入",
+      "description": "供应商单季度口径：营业利润除以营业总收入。"
+    },
+    "financial.indicator.q_opincome_to_ebt": {
+      "name": "单季经营活动净收益/利润总额",
+      "description": "供应商单季度口径：经营活动净收益除以利润总额。"
+    },
+    "financial.indicator.q_investincome_to_ebt": {
+      "name": "单季价值变动净收益/利润总额",
+      "description": "供应商单季度口径：价值变动净收益除以利润总额。"
+    },
+    "financial.indicator.q_dtprofit_to_profit": {
+      "name": "单季扣非净利润/净利润",
+      "description": "供应商单季度口径：扣非净利润除以归母净利润。"
+    },
+    "financial.indicator.debt_to_assets": {
+      "name": "资产负债比率",
+      "description": "供应商报告期末口径：负债合计除以资产总计。"
+    },
+    "financial.indicator.ca_to_assets": {
+      "name": "流动资产占总资产比",
+      "description": "供应商报告期末口径：流动资产除以资产总计。"
+    },
+    "financial.indicator.nca_to_assets": {
+      "name": "非流动资产占总资产比",
+      "description": "供应商报告期末口径：非流动资产除以资产总计。"
+    },
+    "financial.indicator.tbassets_to_totalassets": {
+      "name": "有形净资产/总资产（供应商口径）",
+      "description": "供应商报告期末口径：供应商定义的有形净资产额除以资产总计。"
+    },
+    "financial.indicator.int_to_talcap": {
+      "name": "有息债务/全部投入资本",
+      "description": "供应商报告期末口径：有息债务除以投入资本。"
+    },
+    "financial.indicator.eqt_to_talcapital": {
+      "name": "归母权益/全部投入资本",
+      "description": "供应商报告期末口径：归母权益除以投入资本。"
+    },
+    "financial.indicator.currentdebt_to_debt": {
+      "name": "流动负债占总负债比",
+      "description": "供应商报告期末口径：流动负债除以负债合计。"
+    },
+    "financial.indicator.longdeb_to_debt": {
+      "name": "非流动负债占总负债比",
+      "description": "供应商报告期末口径：非流动负债除以负债合计。"
+    },
+    "financial.indicator.assets_to_eqt": {
+      "name": "权益乘数",
+      "description": "供应商报告期末口径：资产总计除以合并权益。"
+    },
+    "financial.indicator.debt_to_eqt": {
+      "name": "产权比率",
+      "description": "供应商报告期末口径：负债合计除以合并权益。"
+    },
+    "financial.indicator.quick_ratio": {
+      "name": "速动比率",
+      "description": "供应商报告期末口径：流动资产减存货，再除以流动负债。"
+    },
+    "financial.indicator.eqt_to_debt": {
+      "name": "归母权益/负债合计",
+      "description": "供应商报告期末口径：归母权益除以负债合计。"
+    },
+    "financial.indicator.eqt_to_interestdebt": {
+      "name": "归母权益/有息债务",
+      "description": "供应商报告期末口径：归母权益除以有息债务。"
+    },
+    "financial.indicator.tangibleasset_to_debt": {
+      "name": "有形净资产/负债合计（供应商口径）",
+      "description": "供应商报告期末口径：供应商定义的有形净资产额除以负债合计。"
+    },
+    "financial.indicator.tangasset_to_intdebt": {
+      "name": "有形净资产/有息债务（供应商口径）",
+      "description": "供应商报告期末口径：供应商定义的有形净资产额除以有息债务。"
+    },
+    "financial.indicator.tangibleasset_to_netdebt": {
+      "name": "有形净资产/净债务（供应商口径）",
+      "description": "供应商报告期末口径：供应商定义的有形净资产额除以净债务。"
+    },
+    "financial.indicator.cash_to_liqdebt": {
+      "name": "货币资金/流动负债",
+      "description": "供应商报告期末口径：货币资金除以流动负债。"
+    },
+    "financial.indicator.cash_to_liqdebt_withinterest": {
+      "name": "货币资金/有息流动负债",
+      "description": "供应商报告期末口径：货币资金除以有息流动负债。"
+    },
+    "financial.indicator.ocf_to_shortdebt": {
+      "name": "经营现金净流量/流动负债",
+      "description": "供应商报告期累计口径：累计经营现金净流量除以期末流动负债。"
+    },
+    "financial.indicator.ocf_to_debt": {
+      "name": "经营现金净流量/负债合计",
+      "description": "供应商报告期累计口径：累计经营现金净流量除以期末负债合计。"
+    },
+    "financial.indicator.ocf_to_interestdebt": {
+      "name": "经营现金净流量/有息债务",
+      "description": "供应商报告期累计口径：累计经营现金净流量除以期末有息债务。"
+    },
+    "financial.indicator.ocf_to_netdebt": {
+      "name": "经营现金净流量/净债务",
+      "description": "供应商报告期累计口径：累计经营现金净流量除以期末净债务。"
+    },
+    "financial.indicator.ebitda_to_debt": {
+      "name": "息税折旧摊销前利润/负债合计",
+      "description": "供应商报告期累计口径：累计息税折旧摊销前利润除以期末负债合计。"
+    },
+    "financial.indicator.op_to_liqdebt": {
+      "name": "营业利润/流动负债",
+      "description": "供应商报告期累计口径：累计营业利润除以期末流动负债。"
+    },
+    "financial.indicator.op_to_debt": {
+      "name": "营业利润/负债合计",
+      "description": "供应商报告期累计口径：累计营业利润除以期末负债合计。"
+    },
+    "financial.indicator.basic_eps_yoy": {
+      "name": "基本每股收益同比增长率",
+      "description": "供应商报告期同比口径：基本每股收益增长率。"
+    },
+    "financial.indicator.dt_eps_yoy": {
+      "name": "稀释每股收益同比增长率",
+      "description": "供应商报告期同比口径：稀释每股收益增长率。"
+    },
+    "financial.indicator.ocfps_yoy": {
+      "name": "每股经营现金净流量同比增长率",
+      "description": "供应商报告期同比口径：每股经营现金净流量增长率；不是每股现金净流量增长率。"
+    },
+    "financial.indicator.op_yoy": {
+      "name": "营业利润同比增长率",
+      "description": "供应商报告期同比口径：营业利润增长率。"
+    },
+    "financial.indicator.ebt_yoy": {
+      "name": "利润总额同比增长率",
+      "description": "供应商报告期同比口径：利润总额增长率。"
+    },
+    "financial.indicator.dt_netprofit_yoy": {
+      "name": "归母扣非净利润同比增长率",
+      "description": "供应商报告期同比口径：归母扣非净利润增长率；保留供应商的舍入和调整。"
+    },
+    "financial.indicator.ocf_yoy": {
+      "name": "经营现金净流量同比增长率",
+      "description": "供应商报告期同比口径：经营现金净流量增长率。"
+    },
+    "financial.indicator.roe_yoy": {
+      "name": "摊薄净资产收益率同比增长率",
+      "description": "供应商报告期同比口径：摊薄净资产收益率增长率；不是百分点变化，也不是普通净资产收益率增长。"
+    },
+    "financial.indicator.tr_yoy": {
+      "name": "营业总收入同比增长率",
+      "description": "供应商报告期同比口径：营业总收入增长率。"
+    },
+    "financial.indicator.or_yoy": {
+      "name": "营业收入同比增长率",
+      "description": "供应商报告期同比口径：营业收入增长率。"
+    },
+    "financial.indicator.equity_yoy": {
+      "name": "净资产同比增长率",
+      "description": "供应商报告期同比口径：供应商定义的净资产增长率；归母权益样本存在历史调整差异。"
+    },
+    "financial.indicator.bps_ytd_growth": {
+      "name": "每股净资产较年初增长率",
+      "description": "供应商报告期较年初增长口径：每股净资产相对上一年末的增长率。"
+    },
+    "financial.indicator.assets_ytd_growth": {
+      "name": "总资产较年初增长率",
+      "description": "供应商报告期较年初增长口径：资产总计相对上一年末的增长率。"
+    },
+    "financial.indicator.equity_parent_ytd_growth": {
+      "name": "归母权益较年初增长率",
+      "description": "供应商报告期较年初增长口径：归母权益相对上一年末的增长率。"
+    },
+    "financial.indicator.q_gr_yoy": {
+      "name": "单季营业总收入同比增长率",
+      "description": "供应商单季度同比口径：单季度营业总收入相对上年同季度的增长率。"
+    },
+    "financial.indicator.q_sales_yoy": {
+      "name": "单季营业收入同比增长率",
+      "description": "供应商单季度同比口径：单季度营业收入相对上年同季度的增长率。"
+    },
+    "financial.indicator.q_op_yoy": {
+      "name": "单季营业利润同比增长率",
+      "description": "供应商单季度同比口径：单季度营业利润相对上年同季度的增长率。"
+    },
+    "financial.indicator.q_profit_yoy": {
+      "name": "单季净利润同比增长率",
+      "description": "供应商单季度同比口径：单季度合并净利润相对上年同季度的增长率。"
+    },
+    "financial.indicator.q_netprofit_yoy": {
+      "name": "单季归母净利润同比增长率",
+      "description": "供应商单季度同比口径：单季度归母净利润相对上年同季度的增长率。"
+    },
+    "financial.indicator.q_gr_qoq": {
+      "name": "单季营业总收入环比增长率",
+      "description": "供应商单季度环比口径：单季度营业总收入相对上一季度的增长率。"
+    },
+    "financial.indicator.q_sales_qoq": {
+      "name": "单季营业收入环比增长率",
+      "description": "供应商单季度环比口径：单季度营业收入相对上一季度的增长率。"
+    },
+    "financial.indicator.q_op_qoq": {
+      "name": "单季营业利润环比增长率",
+      "description": "供应商单季度环比口径：单季度营业利润相对上一季度的增长率。"
+    },
+    "financial.indicator.q_profit_qoq": {
+      "name": "单季净利润环比增长率",
+      "description": "供应商单季度环比口径：单季度合并净利润相对上一季度的增长率。"
+    },
+    "financial.indicator.q_netprofit_qoq": {
+      "name": "单季归母净利润环比增长率",
+      "description": "供应商单季度环比口径：单季度归母净利润相对上一季度的增长率。"
+    },
+    "financial.indicator.dt_eps": {
+      "name": "稀释每股收益",
+      "description": "供应商报告期累计口径：稀释每股收益；不同于利润除以期末股数。"
+    },
+    "financial.indicator.extra_item": {
+      "name": "非经常损益额",
+      "description": "供应商报告期累计口径：非经常性损益；保留供应商的调整和舍入。"
+    },
+    "financial.indicator.profit_dedt": {
+      "name": "扣非净利润",
+      "description": "供应商报告期累计口径：扣非净利润；保留供应商的定义和调整。"
+    },
+    "financial.indicator.op_income": {
+      "name": "经营活动净收益",
+      "description": "供应商报告期累计口径：经营活动净收益；不是营业利润或现金净流量。"
+    },
+    "financial.indicator.valuechange_income": {
+      "name": "价值变动净收益",
+      "description": "供应商报告期累计口径：价值变动净收益；不只包含投资收益。"
+    },
+    "financial.indicator.interest_expense": {
+      "name": "利息费用",
+      "description": "供应商报告期累计口径：利息费用；来源列虽然拼写为 interst_income，含义仍为利息费用。"
+    },
+    "financial.indicator.daa": {
+      "name": "折旧与摊销",
+      "description": "供应商报告期累计口径：折旧与摊销。"
+    },
+    "financial.indicator.ebit": {
+      "name": "息税前利润",
+      "description": "供应商报告期累计口径：息税前利润。"
+    },
+    "financial.indicator.ebitda": {
+      "name": "息税折旧摊销前利润",
+      "description": "供应商报告期累计口径：息税折旧摊销前利润。"
+    },
+    "financial.indicator.profit_prefin_exp": {
+      "name": "扣财务费用前营业利润",
+      "description": "供应商报告期累计口径：扣除财务费用前的营业利润。"
+    },
+    "financial.indicator.non_op_profit": {
+      "name": "非营业利润",
+      "description": "供应商报告期累计口径：非营业净利润；不是营业外收入总额。"
+    },
+    "financial.indicator.current_exint": {
+      "name": "无息流动负债",
+      "description": "供应商报告期末口径：无息流动负债；保留供应商的构成分类。"
+    },
+    "financial.indicator.noncurrent_exint": {
+      "name": "无息非流动负债",
+      "description": "供应商报告期末口径：无息非流动负债；保留供应商的构成分类。"
+    },
+    "financial.indicator.interestdebt": {
+      "name": "有息债务额",
+      "description": "供应商报告期末口径：有息债务，即负债合计减去供应商定义的无息负债。"
+    },
+    "financial.indicator.netdebt": {
+      "name": "净债务额",
+      "description": "供应商报告期末口径：有息债务减货币资金。"
+    },
+    "financial.indicator.tangible_asset": {
+      "name": "有形净资产（供应商口径）",
+      "description": "供应商报告期末口径：有形净资产额；不是资产总计减无形资产。"
+    },
+    "financial.indicator.working_capital": {
+      "name": "营运资金额",
+      "description": "供应商报告期末口径：流动资产减流动负债。"
+    },
+    "financial.indicator.networking_capital": {
+      "name": "营运流动资本",
+      "description": "供应商报告期末口径：流动资产减货币资金，再减无息流动负债。"
+    },
+    "financial.indicator.invest_capital": {
+      "name": "全部投入资本",
+      "description": "供应商报告期末口径：合并权益加有息债务。"
+    },
+    "financial.indicator.retained_earnings": {
+      "name": "留存收益额",
+      "description": "供应商报告期末口径：盈余公积加未分配利润。"
+    },
+    "financial.indicator.fixed_assets": {
+      "name": "固定资产合计",
+      "description": "供应商报告期末口径：固定资产合计；样本中包含在建工程和投资性房地产。"
+    },
+    "financial.indicator.q_opincome": {
+      "name": "单季经营活动净收益",
+      "description": "供应商单季度口径：单季度经营活动净收益。"
+    },
+    "financial.indicator.q_investincome": {
+      "name": "单季价值变动净收益",
+      "description": "供应商单季度口径：单季度价值变动净收益。"
+    },
+    "financial.indicator.q_dtprofit": {
+      "name": "单季扣非净利润",
+      "description": "供应商单季度口径：单季度扣非净利润；保留供应商调整。"
+    },
+    "financial.indicator.invturn_days": {
+      "name": "存货周转天数",
+      "description": "供应商报告期累计口径：存货周转天数；报告月数乘以 30，再除以舍入后的周转率。"
+    },
+    "financial.indicator.arturn_days": {
+      "name": "应收账款周转天数",
+      "description": "供应商报告期累计口径：应收账款周转天数；报告月数乘以 30，再除以舍入后的周转率。"
+    },
+    "financial.indicator.turn_days": {
+      "name": "营业周转周期",
+      "description": "供应商报告期累计口径：存货周转天数加应收账款周转天数；不是现金转换周期。"
+    },
+    "financial.indicator.inv_turn": {
+      "name": "存货周转率",
+      "description": "供应商报告期累计口径：营业成本除以年初与期末的平均存货。"
+    },
+    "financial.indicator.ar_turn": {
+      "name": "应收账款周转率",
+      "description": "供应商报告期累计口径：营业收入除以年初与期末的平均应收账款。"
+    },
+    "financial.indicator.ca_turn": {
+      "name": "流动资产周转率",
+      "description": "供应商报告期累计口径：营业总收入除以年初与期末的平均流动资产。"
+    },
+    "financial.indicator.fa_turn": {
+      "name": "固定资产周转率",
+      "description": "供应商报告期累计口径：营业总收入除以年初与期末的平均固定资产。"
+    },
+    "financial.indicator.assets_turn": {
+      "name": "总资产周转率",
+      "description": "供应商报告期累计口径：营业总收入除以年初与期末的平均资产总计。"
+    },
+    "financial.indicator.total_fa_trun": {
+      "name": "固定资产合计周转率",
+      "description": "供应商报告期累计口径：营业总收入除以供应商定义的平均固定资产合计。"
+    },
+    "financial.indicator.dp_assets_to_eqt": {
+      "name": "杜邦权益乘数",
+      "description": "供应商报告期累计口径：年初与期末的平均资产除以平均归母权益。"
+    },
+    "financial.indicator.longdebt_to_workingcapital": {
+      "name": "长期债务/营运资金",
+      "description": "供应商报告期末口径：长期债务除以营运资金；保留供应商的债务分类。"
+    },
+    "financial.indicator.roe_dt": {
+      "name": "扣非净资产收益率",
+      "description": "供应商报告期累计口径：扣非净利润除以年初与期末的平均归母权益。"
+    },
+    "financial.indicator.roa": {
+      "name": "总资产报酬率",
+      "description": "供应商报告期累计口径：息税前利润除以年初与期末的平均资产总计。"
+    },
+    "financial.indicator.npta": {
+      "name": "总资产净利润指标",
+      "description": "供应商报告期累计口径：合并净利润除以年初与期末的平均资产总计。"
+    },
+    "financial.indicator.roa_dp": {
+      "name": "杜邦总资产净利率",
+      "description": "供应商报告期累计口径：归母净利润除以年初与期末的平均资产总计。"
+    },
+    "financial.indicator.roic": {
+      "name": "投入资本回报率",
+      "description": "供应商报告期累计口径：税后息税前利润除以年初与期末的平均投入资本。"
+    },
+    "financial.indicator.roe_yearly": {
+      "name": "年化净资产收益率",
+      "description": "供应商报告期年化口径：年化归母净利润除以平均归母权益；不是 TTM。"
+    },
+    "financial.indicator.roa2_yearly": {
+      "name": "年化总资产收益率",
+      "description": "供应商报告期年化口径：年化息税前利润除以平均资产总计；不是 TTM。"
+    },
+    "financial.indicator.roa_yearly": {
+      "name": "年化总资产净利率",
+      "description": "供应商报告期年化口径：年化合并净利润除以平均资产总计；不是 TTM。"
+    },
+    "financial.indicator.roic_yearly": {
+      "name": "年化投入资本回报率",
+      "description": "供应商报告期年化口径：年化税后息税前利润除以平均投入资本；不是 TTM。"
+    },
+    "financial.indicator.q_dt_roe": {
+      "name": "单季扣非净资产收益率",
+      "description": "供应商单季度口径：单季度扣非净利润除以上季度末与本期末的平均归母权益。"
+    },
+    "financial.indicator.q_npta": {
+      "name": "单季总资产净利润指标",
+      "description": "供应商单季度口径：单季度合并净利润除以上季度末与本期末的平均资产。"
+    },
+    "financial.indicator.rd_exp": {
+      "name": "研发投入总额",
+      "description": "供应商提供的累计研发投入，包含费用化与资本化支出；不只是利润表研发费用。"
+    },
+    "financial.indicator.roe_waa": {
+      "name": "加权平均净资产收益率",
+      "description": "供应商提供的累计加权净资产收益率；不是用简单平均权益计算的净资产收益率。"
+    },
+    "financial.indicator.roe_avg": {
+      "name": "增发条件平均净资产收益率",
+      "description": "供应商用于增发条件的报告期平均净资产收益率；不是三年滚动平均，也不是加权净资产收益率的别名。"
+    },
+    "financial.indicator.cash_ratio": {
+      "name": "保守速动比率",
+      "description": "供应商提供的期末保守速动比率；流动性资产构成由供应商定义，不是单纯的货币资金除以负债。"
+    },
+    "financial.indicator.ebit_to_interest": {
+      "name": "息税前利润/利息费用",
+      "description": "供应商提供的累计利息保障倍数；样本分母包含资本化利息并扣除利息收入，不同于仅使用费用化利息。"
+    },
+    "financial.indicator.fcff": {
+      "name": "企业自由现金流",
+      "description": "供应商提供的累计企业自由现金流；不只是经营现金流减资本支出；保留其与报表自由现金流列的历史差异。"
+    },
+    "financial.indicator.fcfe": {
+      "name": "股权自由现金流",
+      "description": "供应商提供的累计股权自由现金流；样本为企业现金流加借款和发债收现、再减偿债付现；不能与 FCFF 互换。"
+    },
+    "financial.indicator.fcff_ps": {
+      "name": "每股企业自由现金流",
+      "description": "供应商提供的累计每股企业自由现金流，使用期末股数；直接读取原始每股值，不从其他字段重构。"
+    },
+    "financial.indicator.fcfe_ps": {
+      "name": "每股股东自由现金流",
+      "description": "供应商提供的累计每股股权自由现金流，使用期末股数；直接读取原始每股值，不从其他字段重构。"
+    }
+  }
+}

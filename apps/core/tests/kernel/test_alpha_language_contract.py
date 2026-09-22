@@ -733,3 +733,47 @@ def test_browser_field_fixture_matches_the_current_public_catalog() -> None:
     expected = alpha_language.catalog(generation_manifest_sha256="a" * 64).model_dump(mode="json")
     assert json.loads(fixture.read_text()) == expected
     assert len(expected["fields"]) == 226
+
+
+def test_bilingual_display_metadata_covers_the_authoritative_catalog() -> None:
+    import json
+    from pathlib import Path
+
+    from thesistrace.benchmark import BENCHMARK_ID
+
+    messages = Path(__file__).resolve().parents[4] / "apps/web/src/i18n/messages"
+    fields = json.loads((messages / "catalog-fields.json").read_text())
+    metadata = json.loads((messages / "catalog-meta.json").read_text())
+    # No availability filter: temporarily unavailable fields also require reviewed translations.
+    catalog = alpha_language.catalog()
+    for locale in ("en", "zh-CN"):
+        assert set(fields[locale]) == {field.field_id for field in catalog.fields}
+        assert set(metadata[locale]["builtins"]) == {
+            builtin.identifier for builtin in catalog.builtins
+        }
+        assert set(metadata[locale]["industries"]) == {
+            str(industry.code) for industry in catalog.industries
+        }
+        assert set(metadata[locale]["benchmarks"]) == {BENCHMARK_ID}
+        for display_key, authority_key in (
+            ("purposes", "research_purpose"), ("units", "unit"),
+            ("availability", "availability"), ("reportPeriods", "report_period_selection"),
+            ("missingness", "missingness"), ("reportingScopes", "reporting_scope"),
+        ):
+            assert set(metadata[locale][display_key]) == {
+                getattr(field, authority_key) for field in catalog.fields
+            }, display_key
+
+    # Authority changes require revisiting the translations, not merely keeping the same IDs.
+    for field in catalog.fields:
+        assert fields["zh-CN"][field.field_id]["name"] == field.display_name
+        source_locale = "zh-CN" if any("\u4e00" <= c <= "\u9fff" for c in field.description) else "en"
+        assert fields[source_locale][field.field_id]["description"] == field.description.strip()
+    for builtin in catalog.builtins:
+        assert metadata["en"]["builtins"][builtin.identifier] == {
+            "description": builtin.description,
+            "missing": builtin.missing_value_behavior,
+            "numeric": builtin.numeric_behavior,
+        }
+    for industry in catalog.industries:
+        assert metadata["zh-CN"]["industries"][str(industry.code)] == industry.name

@@ -34,7 +34,7 @@ test.beforeAll(async () => {
   script = chunk.code;
 });
 
-for (const width of [1280, 390]) {
+for (const width of [1280, 390, 320]) {
   test(`Data fields use one snapshot, show partial sources and filter at ${width}px`, async ({ page }) => {
     const requests: string[] = [];
     const fieldsFor = (family: string) => catalog.fields
@@ -94,15 +94,20 @@ for (const width of [1280, 390]) {
     await expect(page.locator(".data-explorer-table tbody tr")).toHaveCount(25);
     await page.getByRole("button", { name: "Next", exact: true }).click();
     await expect(page.getByRole("status").filter({ hasText: "Showing" })).toHaveText("Showing 26–50 of 226");
+    const secondPageIdentifiers = await page.locator(".data-explorer-table tbody td:first-of-type").allTextContents();
+    await page.getByRole("button", { name: "简体中文", exact: true }).click();
+    await expect(page.getByRole("status").filter({ hasText: "显示第" })).toHaveText("显示第 26–50 项，共 226 项");
+    expect(await page.locator(".data-explorer-table tbody td:first-of-type").allTextContents()).toEqual(secondPageIdentifiers);
+    await page.getByRole("button", { name: "English", exact: true }).click();
     await page.getByRole("button", { name: "Previous", exact: true }).click();
     await page.getByRole("button", { name: "Financial 204", exact: true }).click();
-    const liabilities = page.getByRole("row").filter({ has: page.getByRole("button", { name: "负债合计", exact: true }) });
+    const liabilities = page.getByRole("row").filter({ has: page.getByRole("button", { name: "Total liabilities", exact: true }) });
     await liabilities.getByRole("cell", { name: "liabilities", exact: true }).click();
-    await expect(page.getByRole("complementary", { name: "Field details" }).getByRole("heading")).toHaveText("负债合计");
-    await page.getByRole("button", { name: "资产总计", exact: true }).press("Enter");
-    await expect(page.getByRole("complementary", { name: "Field details" }).getByRole("heading")).toHaveText("资产总计");
+    await expect(page.getByRole("complementary", { name: "Field details" }).getByRole("heading")).toHaveText("Total liabilities");
+    await page.getByRole("button", { name: "Total assets", exact: true }).press("Enter");
+    await expect(page.getByRole("complementary", { name: "Field details" }).getByRole("heading")).toHaveText("Total assets");
     await liabilities.getByRole("cell", { name: "CNY", exact: true }).click({ position: { x: 2, y: 2 } });
-    await expect(page.getByRole("complementary", { name: "Field details" }).getByRole("heading")).toHaveText("负债合计");
+    await expect(page.getByRole("complementary", { name: "Field details" }).getByRole("heading")).toHaveText("Total liabilities");
     await page.getByRole("searchbox", { name: "Search fields" }).fill("no_matching_field");
     await page.getByRole("button", { name: "Clear search", exact: true }).click();
     await expect(page.getByRole("searchbox", { name: "Search fields" })).toHaveValue("");
@@ -132,9 +137,11 @@ for (const width of [1280, 390]) {
     await expect(page.locator(".data-field-dataset .data-field-table tbody tr")).toContainText("turnover_rate_f");
     await page.getByRole("searchbox", { name: "Search fields" }).fill("close_raw");
     await expect(page.locator(".data-field-dataset .data-field-table tbody tr")).toHaveCount(1);
-    await expect(page.locator(".data-field-dataset .data-field-table tbody tr")).toContainText("未复权收盘价");
+    await expect(page.locator(".data-field-dataset .data-field-table tbody tr")).toContainText("Unadjusted close");
     await page.getByRole("searchbox", { name: "Search fields" }).fill("营业总收入");
-    await expect(page.locator(".data-field-dataset .data-field-table tbody tr")).toHaveCount(22);
+    // Chinese descriptions now also find turnover ratios whose denominator is total revenue.
+    await expect(page.locator(".data-field-dataset .data-field-table tbody tr")).toHaveCount(25);
+    await expect(page.getByRole("status").filter({ hasText: "Showing" })).toHaveText("Showing 1–25 of 27");
     await expect(page.locator(".data-field-dataset .data-field-table tbody tr").first()).toContainText("revenue");
     await page.getByRole("searchbox", { name: "Search fields" }).fill("");
     await page.getByRole("searchbox", { name: "Search fields" }).fill("期末现金");
@@ -149,12 +156,31 @@ for (const width of [1280, 390]) {
     await expect(page.getByText("No fields match these filters.")).toHaveCount(1);
     await expect(page.getByRole("complementary", { name: "Field details" })).toHaveCount(0);
     await page.getByRole("searchbox", { name: "Search fields" }).fill("close_raw");
-    await page.getByRole("button", { name: "未复权收盘价", exact: true }).click();
+    await page.getByRole("button", { name: "Unadjusted close", exact: true }).click();
     await expect(page.getByRole("complementary", { name: "Field details" })).toContainText("close_raw");
     await expect(page.getByRole("complementary", { name: "Field details" })).toContainText("Missing values");
     await page.getByRole("button", { name: "Financial 204", exact: true }).click();
     await expect(page.getByText("No fields match these filters.")).toBeVisible();
     await page.getByRole("button", { name: "All fields", exact: true }).click();
+    await page.getByRole("combobox", { name: "Research purpose" }).selectOption("行情");
+    await page.getByRole("searchbox", { name: "Search fields" }).fill("Unadjusted close");
+    await expect(page.locator(".data-explorer-table tbody tr")).toHaveCount(1);
+    await page.getByRole("button", { name: "Unadjusted close", exact: true }).click();
+    await page.getByRole("button", { name: "简体中文", exact: true }).click();
+    await expect(page.getByRole("searchbox", { name: "搜索字段" })).toHaveValue("Unadjusted close");
+    await expect(page.getByRole("combobox", { name: "研究用途" })).toHaveValue("行情");
+    await expect(page.getByRole("complementary", { name: "字段详情" })).toContainText("close_raw");
+    await expect(page.getByRole("complementary", { name: "字段详情" }).getByRole("heading")).toHaveText("未复权收盘价");
+    await page.getByRole("searchbox", { name: "搜索字段" }).fill("未复权收盘价");
+    await expect(page.locator(".data-explorer-table tbody tr")).toHaveCount(1);
+    await page.getByRole("searchbox", { name: "搜索字段" }).fill("close_raw");
+    await expect(page.locator(".data-explorer-table tbody tr")).toHaveCount(1);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+    await page.screenshot({ path: test.info().outputPath(`data-zh-${width}.png`), fullPage: true });
+    await page.getByRole("button", { name: "English", exact: true }).click();
+    await expect(page.getByRole("combobox", { name: "Research purpose" })).toHaveValue("行情");
+    expect(requests).toEqual(["/api/data"]);
+    await page.getByRole("combobox", { name: "Research purpose" }).selectOption("");
     const editor = page.locator(".cm-content");
     await editor.click();
     await editor.pressSequentially("turnover_rate_");

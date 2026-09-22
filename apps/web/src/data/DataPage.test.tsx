@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { AlphaCatalog } from "../alphaCatalog";
 import { DataOverviewView, loadDataPage, type DataOverview } from "./DataPage";
+import { changeInterfaceLanguage } from "../i18n";
 
 const overview: DataOverview = {
   generation_manifest_sha256: "b".repeat(64),
@@ -101,6 +102,21 @@ const catalog: AlphaCatalog = {
 };
 
 describe("DataOverviewView", () => {
+  it("displays the same canonical fields and coverage in either interface language", () => {
+    const render = () => renderToStaticMarkup(createElement(DataOverviewView, { catalog, overview, onRefresh: vi.fn() }));
+    try {
+      changeInterfaceLanguage("en");
+      expect(render()).toContain("Adjusted close");
+      changeInterfaceLanguage("zh-CN");
+      const chinese = render();
+      expect(chinese).toContain("研究字段");
+      expect(chinese).toContain("复权收盘价");
+      expect(chinese).toContain("沪深300");
+      expect(chinese).toContain("2026-08-07");
+      expect(chinese).toContain("close");
+    } finally { changeInterfaceLanguage("en"); }
+  });
+
   it("renders dataset coverage and the formula fields owned by each dataset", () => {
     const markup = renderToStaticMarkup(createElement(DataOverviewView, {
       catalog,
@@ -238,7 +254,7 @@ describe("DataOverviewView", () => {
     const unavailable = vi.fn<typeof fetch>().mockRejectedValue(new Error("network detail"));
     await expect(loadDataPage(unavailable)).resolves.toEqual({
       resources: null,
-      error: "Data unavailable",
+      error: "unavailable",
     });
 
     const recovered = vi.fn<typeof fetch>()
@@ -274,7 +290,7 @@ it("explains the research Universe scope and formal industry choices for common 
   expect(markup).toContain("not a full industry or official index");
   expect(markup).toContain("does not change the stock selection Universe");
   expect(markup).toContain("801010");
-  expect(markup).toContain("农林牧渔");
+  expect(markup).toContain("Agriculture, forestry, livestock &amp; fisheries");
   expect(markup).toContain("data coverage is checked for the chosen research period");
 });
 
@@ -294,7 +310,7 @@ it("groups fields by research category across different source families", () => 
       }],
     },
   }));
-  expect(markup).toContain("净资产收益率");
+  expect(markup).toContain("Return on equity");
   expect(markup).toContain("3 fields");
   expect(markup).toContain("Search fields");
   expect(markup).toContain("Research purpose");

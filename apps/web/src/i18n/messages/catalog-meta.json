@@ -1,0 +1,376 @@
+{
+  "en": {
+    "builtins": {
+      "universe_return": {
+        "description": "Within the selected research Universe, equal-weight one-session adjusted Close return. This is not an official index.",
+        "missing": "Two positive finite Closes required; no valid members means missing.",
+        "numeric": "Historical Universe members; zero returns count in the breadth denominator."
+      },
+      "universe_advancing_fraction": {
+        "description": "Within the selected research Universe, fraction of valid members with positive adjusted Close return. This is not an official index.",
+        "missing": "Two positive finite Closes required; no valid members means missing.",
+        "numeric": "Historical Universe members; zero returns count in the breadth denominator."
+      },
+      "industry_return": {
+        "description": "Within the selected research Universe, restricted to the specified SW2021 L1 historical members: equal-weight one-session adjusted Close return. This is not an official index.",
+        "missing": "Two positive finite Closes required; no valid members means missing.",
+        "numeric": "Historical Universe members; zero returns count in the breadth denominator."
+      },
+      "industry_advancing_fraction": {
+        "description": "Within the selected research Universe, restricted to the specified SW2021 L1 historical members: fraction of valid members with positive adjusted Close return. This is not an official index.",
+        "missing": "Two positive finite Closes required; no valid members means missing.",
+        "numeric": "Historical Universe members; zero returns count in the breadth denominator."
+      },
+      "if_else": {
+        "description": "Choose compatible branches using comparisons >, >=, <, <=, ==, != and Boolean and/or/not. Boolean values cannot be used as numbers.",
+        "missing": "Unknown condition produces missing; only the selected branch determines each value.",
+        "numeric": "Both branches are validated and counted in dependencies and work."
+      },
+      "abs": {
+        "description": "Absolute numeric value.",
+        "missing": "Missing input produces a missing result.",
+        "numeric": "Returns the non-negative magnitude of each finite input."
+      },
+      "log": {
+        "description": "Natural logarithm; non-positive inputs are missing.",
+        "missing": "Missing or non-positive input produces a missing result.",
+        "numeric": "Returns the natural logarithm of each positive finite input."
+      },
+      "sign": {
+        "description": "Map a numeric value to -1, 0, or 1.",
+        "missing": "Missing input produces a missing result.",
+        "numeric": "Maps negative, zero, and positive finite values to -1, 0, and 1."
+      },
+      "rank": {
+        "description": "Ascending cross-sectional rank within the selected Universe.",
+        "missing": "Missing and non-finite values stay missing and do not enter the denominator.",
+        "numeric": "Average ordinal ranks map to 0 through 1; ties share rank and one value is 0.5."
+      },
+      "lag": {
+        "description": "Value from a prior Research Session.",
+        "missing": "Sessions without the requested history are missing.",
+        "numeric": "Returns the value exactly window Research Sessions earlier."
+      },
+      "delta": {
+        "description": "Difference from a prior Research Session.",
+        "missing": "Missing current or lagged input produces a missing result.",
+        "numeric": "Subtracts the value window Research Sessions earlier."
+      },
+      "pct_change": {
+        "description": "Fractional change from a prior Research Session.",
+        "missing": "Missing input or a zero lagged value produces a missing result.",
+        "numeric": "Returns current divided by lagged value minus one."
+      },
+      "ts_mean": {
+        "description": "Complete-window rolling mean.",
+        "missing": "Any missing value in the complete window produces a missing result.",
+        "numeric": "Returns the arithmetic mean over the complete window."
+      },
+      "ts_sum": {
+        "description": "Complete-window rolling sum.",
+        "missing": "Any missing value in the complete window produces a missing result.",
+        "numeric": "Returns the sum over the complete window."
+      },
+      "ts_std": {
+        "description": "Complete-window population standard deviation.",
+        "missing": "Any missing value in the complete window produces a missing result.",
+        "numeric": "Returns population standard deviation over the complete window."
+      },
+      "ts_min": {
+        "description": "Complete-window rolling minimum.",
+        "missing": "Any missing value in the complete window produces a missing result.",
+        "numeric": "Returns the minimum finite value over the complete window."
+      },
+      "ts_max": {
+        "description": "Complete-window rolling maximum.",
+        "missing": "Any missing value in the complete window produces a missing result.",
+        "numeric": "Returns the maximum finite value over the complete window."
+      }
+    },
+    "industries": {
+      "801010": "Agriculture, forestry, livestock & fisheries",
+      "801030": "Basic chemicals",
+      "801040": "Steel",
+      "801050": "Nonferrous metals",
+      "801080": "Electronics",
+      "801110": "Home appliances",
+      "801120": "Food & beverages",
+      "801130": "Textiles & apparel",
+      "801140": "Light manufacturing",
+      "801150": "Pharmaceuticals & biotechnology",
+      "801160": "Utilities",
+      "801170": "Transportation",
+      "801180": "Real estate",
+      "801200": "Commerce & retail",
+      "801210": "Consumer services",
+      "801230": "Conglomerates",
+      "801710": "Construction materials",
+      "801720": "Construction & decoration",
+      "801730": "Electrical equipment",
+      "801740": "Defense & military",
+      "801750": "Computers",
+      "801760": "Media",
+      "801770": "Telecommunications",
+      "801780": "Banking",
+      "801790": "Non-bank financials",
+      "801880": "Automobiles",
+      "801890": "Machinery",
+      "801950": "Coal",
+      "801960": "Oil & petrochemicals",
+      "801970": "Environmental protection",
+      "801980": "Beauty & personal care"
+    },
+    "purposes": {
+      "估值": "Valuation",
+      "利润与现金流基础值": "Earnings & cash flow fundamentals",
+      "利润与现金流金额": "Earnings & cash flow amounts",
+      "单季度增长": "Quarterly growth",
+      "单季度指标": "Quarterly metrics",
+      "同比增长": "Year-over-year growth",
+      "收入与利润结构": "Revenue & earnings composition",
+      "每股指标": "Per-share metrics",
+      "流动性": "Liquidity",
+      "现金流": "Cash flow",
+      "现金流与资本支出比率": "Cash flow & capital expenditure ratios",
+      "盈利": "Earnings",
+      "盈利能力": "Profitability",
+      "股息": "Dividends",
+      "股本": "Share capital",
+      "营运效率": "Operating efficiency",
+      "行情": "Market prices",
+      "财务结构与偿债": "Capital structure & solvency",
+      "资产与资本基础值": "Asset & capital fundamentals",
+      "资产负债": "Balance sheet",
+      "较年初增长": "Year-to-date growth"
+    },
+    "units": {
+      "CNY/share": "CNY/share",
+      "shares": "shares",
+      "CNY": "CNY",
+      "ratio": "ratio",
+      "multiple": "multiple",
+      "day": "days"
+    },
+    "availability": {
+      "after_close": "After close",
+      "next_research_session_after_source_publication": "Next Research Session after source publication",
+      "announcement_aligned_with_observed_revisions": "Aligned to announcements and observed revisions"
+    },
+    "reportPeriods": {
+      "research-session": "Research Session",
+      "latest_visible_full_year": "Latest full year visible on each Research Session",
+      "latest_visible_quarterly_or_annual": "Latest quarterly or annual report visible on each Research Session",
+      "latest_visible_ttm": "Latest visible trailing twelve months",
+      "latest_visible_report_cumulative": "Latest visible cumulative report period",
+      "latest_visible_report_end": "Latest visible report end",
+      "latest_visible_supplier_report": "Latest visible supplier report",
+      "latest_visible_single_quarter": "Latest visible single quarter",
+      "latest_visible_report_yoy": "Latest visible report, year over year",
+      "latest_visible_report_year_start_growth": "Latest visible report, growth from year start",
+      "latest_visible_single_quarter_yoy": "Latest visible single quarter, year over year",
+      "latest_visible_single_quarter_qoq": "Latest visible single quarter, quarter over quarter",
+      "latest_visible_report_annualized": "Latest visible report, annualized"
+    },
+    "missingness": {
+      "missing_when_no_valid_session_bar": "Missing when no valid session bar exists",
+      "missing_when_no_exact_session_source_value": "Missing when no source value exists for the exact session",
+      "missing_when_no_visible_eligible_fact": "Missing when no eligible fact is visible",
+      "missing_when_latest_report_value_absent_or_conflicting": "Missing when the latest report value is absent or conflicting"
+    },
+    "reportingScopes": {
+      "market-observation": "Market observation",
+      "report_type_1_consolidated": "Consolidated report (report type 1)",
+      "supplier_defined": "Supplier defined"
+    },
+    "benchmarks": {
+      "csi300-price-index-open": "CSI 300"
+    }
+  },
+  "zh-CN": {
+    "builtins": {
+      "universe_return": {
+        "description": "在所选研究股票池内，按历史成分股计算单个研究交易日的等权复权收盘收益率；不是官方指数。",
+        "missing": "需要两个正且有限的收盘价；没有有效成分股时为缺失值。",
+        "numeric": "使用股票池的历史成分股；零收益也计入市场宽度的分母。"
+      },
+      "universe_advancing_fraction": {
+        "description": "在所选研究股票池内，复权收盘收益率为正的有效成分股占比；不是官方指数。",
+        "missing": "需要两个正且有限的收盘价；没有有效成分股时为缺失值。",
+        "numeric": "使用股票池的历史成分股；零收益也计入市场宽度的分母。"
+      },
+      "industry_return": {
+        "description": "在所选研究股票池内，限定指定 SW2021 一级行业的历史成分股，计算单个研究交易日的等权复权收盘收益率；不是官方指数。",
+        "missing": "需要两个正且有限的收盘价；没有有效成分股时为缺失值。",
+        "numeric": "使用股票池的历史成分股；零收益也计入市场宽度的分母。"
+      },
+      "industry_advancing_fraction": {
+        "description": "在所选研究股票池内，限定指定 SW2021 一级行业的历史成分股，计算复权收盘收益率为正的有效成分股占比；不是官方指数。",
+        "missing": "需要两个正且有限的收盘价；没有有效成分股时为缺失值。",
+        "numeric": "使用股票池的历史成分股；零收益也计入市场宽度的分母。"
+      },
+      "if_else": {
+        "description": "使用比较符 >、>=、<、<=、==、!= 及布尔运算 and/or/not，在类型兼容的分支之间选择。布尔值不能作为数值使用。",
+        "missing": "条件未知时结果缺失；每个值只由选中的分支决定。",
+        "numeric": "两个分支均会进行验证，并计入依赖与工作量。"
+      },
+      "abs": {
+        "description": "数值的绝对值。",
+        "missing": "输入缺失时结果缺失。",
+        "numeric": "返回每个有限输入值的非负绝对值。"
+      },
+      "log": {
+        "description": "自然对数；非正输入为缺失值。",
+        "missing": "输入缺失或不大于零时结果缺失。",
+        "numeric": "返回每个正且有限输入值的自然对数。"
+      },
+      "sign": {
+        "description": "将数值映射为 -1、0 或 1。",
+        "missing": "输入缺失时结果缺失。",
+        "numeric": "将负数、零和正数的有限值分别映射为 -1、0 和 1。"
+      },
+      "rank": {
+        "description": "在所选股票池内进行横截面升序排名。",
+        "missing": "缺失值和非有限值仍为缺失，不计入分母。",
+        "numeric": "平均序数排名映射到 0 至 1；相同值共享排名，仅有一个值时为 0.5。"
+      },
+      "lag": {
+        "description": "之前某个研究交易日的值。",
+        "missing": "没有所需历史数据的交易日为缺失值。",
+        "numeric": "返回恰好 window 个研究交易日之前的值。"
+      },
+      "delta": {
+        "description": "相对于之前某个研究交易日的差值。",
+        "missing": "当前值或滞后值缺失时结果缺失。",
+        "numeric": "当前值减去 window 个研究交易日之前的值。"
+      },
+      "pct_change": {
+        "description": "相对于之前某个研究交易日的变化比率。",
+        "missing": "输入缺失或滞后值为零时结果缺失。",
+        "numeric": "当前值除以滞后值，再减一。"
+      },
+      "ts_mean": {
+        "description": "完整窗口的滚动平均值。",
+        "missing": "完整窗口中任一值缺失时结果缺失。",
+        "numeric": "返回完整窗口内的算术平均值。"
+      },
+      "ts_sum": {
+        "description": "完整窗口的滚动求和。",
+        "missing": "完整窗口中任一值缺失时结果缺失。",
+        "numeric": "返回完整窗口内的总和。"
+      },
+      "ts_std": {
+        "description": "完整窗口的总体标准差。",
+        "missing": "完整窗口中任一值缺失时结果缺失。",
+        "numeric": "返回完整窗口内的总体标准差。"
+      },
+      "ts_min": {
+        "description": "完整窗口的滚动最小值。",
+        "missing": "完整窗口中任一值缺失时结果缺失。",
+        "numeric": "返回完整窗口内有限值的最小值。"
+      },
+      "ts_max": {
+        "description": "完整窗口的滚动最大值。",
+        "missing": "完整窗口中任一值缺失时结果缺失。",
+        "numeric": "返回完整窗口内有限值的最大值。"
+      }
+    },
+    "industries": {
+      "801010": "农林牧渔",
+      "801030": "基础化工",
+      "801040": "钢铁",
+      "801050": "有色金属",
+      "801080": "电子",
+      "801110": "家用电器",
+      "801120": "食品饮料",
+      "801130": "纺织服饰",
+      "801140": "轻工制造",
+      "801150": "医药生物",
+      "801160": "公用事业",
+      "801170": "交通运输",
+      "801180": "房地产",
+      "801200": "商贸零售",
+      "801210": "社会服务",
+      "801230": "综合",
+      "801710": "建筑材料",
+      "801720": "建筑装饰",
+      "801730": "电力设备",
+      "801740": "国防军工",
+      "801750": "计算机",
+      "801760": "传媒",
+      "801770": "通信",
+      "801780": "银行",
+      "801790": "非银金融",
+      "801880": "汽车",
+      "801890": "机械设备",
+      "801950": "煤炭",
+      "801960": "石油石化",
+      "801970": "环保",
+      "801980": "美容护理"
+    },
+    "purposes": {
+      "估值": "估值",
+      "利润与现金流基础值": "利润与现金流基础值",
+      "利润与现金流金额": "利润与现金流金额",
+      "单季度增长": "单季度增长",
+      "单季度指标": "单季度指标",
+      "同比增长": "同比增长",
+      "收入与利润结构": "收入与利润结构",
+      "每股指标": "每股指标",
+      "流动性": "流动性",
+      "现金流": "现金流",
+      "现金流与资本支出比率": "现金流与资本支出比率",
+      "盈利": "盈利",
+      "盈利能力": "盈利能力",
+      "股息": "股息",
+      "股本": "股本",
+      "营运效率": "营运效率",
+      "行情": "行情",
+      "财务结构与偿债": "财务结构与偿债",
+      "资产与资本基础值": "资产与资本基础值",
+      "资产负债": "资产负债",
+      "较年初增长": "较年初增长"
+    },
+    "units": {
+      "CNY/share": "元/股",
+      "shares": "股",
+      "CNY": "元",
+      "ratio": "比率",
+      "multiple": "倍",
+      "day": "天"
+    },
+    "availability": {
+      "after_close": "收盘后",
+      "next_research_session_after_source_publication": "来源发布后的下一个研究交易日",
+      "announcement_aligned_with_observed_revisions": "按公告及已观察到的修订对齐"
+    },
+    "reportPeriods": {
+      "research-session": "研究交易日",
+      "latest_visible_full_year": "每个研究交易日可见的最新完整年度",
+      "latest_visible_quarterly_or_annual": "每个研究交易日可见的最新季报或年报",
+      "latest_visible_ttm": "最新可见的最近十二个月",
+      "latest_visible_report_cumulative": "最新可见报告期累计值",
+      "latest_visible_report_end": "最新可见报告期末",
+      "latest_visible_supplier_report": "最新可见的供应商报告",
+      "latest_visible_single_quarter": "最新可见单季度",
+      "latest_visible_report_yoy": "最新可见报告期同比",
+      "latest_visible_report_year_start_growth": "最新可见报告期较年初增长",
+      "latest_visible_single_quarter_yoy": "最新可见单季度同比",
+      "latest_visible_single_quarter_qoq": "最新可见单季度环比",
+      "latest_visible_report_annualized": "最新可见报告期年化值"
+    },
+    "missingness": {
+      "missing_when_no_valid_session_bar": "没有有效交易日行情时缺失",
+      "missing_when_no_exact_session_source_value": "没有对应交易日的来源值时缺失",
+      "missing_when_no_visible_eligible_fact": "没有可见且符合条件的事实值时缺失",
+      "missing_when_latest_report_value_absent_or_conflicting": "最新报告值缺失或冲突时缺失"
+    },
+    "reportingScopes": {
+      "market-observation": "市场观测",
+      "report_type_1_consolidated": "合并报表（报告类型 1）",
+      "supplier_defined": "供应商定义"
+    },
+    "benchmarks": {
+      "csi300-price-index-open": "沪深300"
+    }
+  }
+}
