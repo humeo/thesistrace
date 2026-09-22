@@ -57,7 +57,7 @@ The public landing prototype is a visual reference. Its console layouts and mock
 
 - Self-host licensed WOFF2 files. Use variable weights, `font-display: swap` and Unicode-range subsets; browsers request only the needed Chinese subsets. Keep license and source information with the assets.
 - System stacks remain available while fonts load. Do not depend on third-party font requests at runtime.
-- In the console, change font families only. Keep existing font sizes, weights, line heights, letter spacing, component dimensions and responsive rules.
+- In console content and controls, change font families only. Keep existing font sizes, weights, line heights, letter spacing, component dimensions and responsive rules. The sidebar brand lockup has its own optical sizing below.
 - Serif styling applies to page main headings, not every heading inside assistant Markdown, tool output, charts or data cards. Body content stays sans-serif; numeric alignment remains tabular where currently used.
 - Chinese headings use natural spacing, not Latin negative tracking. Allow Chinese/English content to wrap without clipping or squeezing controls.
 - The landing retains its existing language contract: English by default, `?lang=zh` for Chinese, synchronized URL, document language, title and description. This change does not add console or authentication-page translation/settings.
@@ -94,7 +94,7 @@ These tokens apply only inside the landing and authentication surfaces. They do 
 - Preserve the sidebar defaults: 224px expanded, 56px collapsed, 48px header; existing resize bounds and persistence remain authoritative.
 - Preserve all current page layouts, content widths, spacing, form structure, table density, dialogs, popovers and responsive breakpoints.
 - Preserve chart colors/grid, CodeMirror dark syntax and selection theme, button/status colors, A2UI and Markdown presentation. Font-family updates do not authorize a component restyle.
-- Use the inverse logo on dark surfaces. Full branding hides with the existing sidebar label; the compact mark remains visible.
+- Use the inverse logo on dark surfaces. In the expanded sidebar and mobile drawer, pair a 24px mark with a 20px serif wordmark (24px line height, 600 weight, -0.02em tracking) and an 8px gap. Preserve the brand link's 30px minimum height and the existing header geometry. The collapsed desktop rail retains its existing expand control and hides the full brand link.
 - Any broader console redesign or localization requires a separate product decision.
 
 ## Accessibility and interaction

@@ -143,6 +143,9 @@ code { font-family: var(--mono); }
   padding: 0 12px;
   border-bottom: 1px solid var(--line);
 }
+.sidebar-brand-row .brand { min-height: 30px; gap: 8px; }
+.sidebar-brand-row .brand-mark { width: 24px; height: 24px; }
+.sidebar-brand-row .quantgrove-wordmark { font-size: 20px; line-height: 1.2; letter-spacing: -.02em; }
 .sidebar-resize-handle { position: absolute; top: 0; bottom: 0; right: -4px; width: 8px; z-index: 61; cursor: col-resize; touch-action: none; }
 .sidebar-resize-handle:hover::after, .sidebar-resize-handle:focus-visible::after { content: ""; position: absolute; inset: 0 3px; background: var(--primary); }
 .sidebar-resize-handle:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
