@@ -4,6 +4,9 @@ export async function imageSmoke(run) {
   run.smoke_state = "/smoke-evidence/image-smoke-state.json";
   run.bootstrap_replay = "/smoke-evidence/tushare-financial-product-full-replay.json";
   await run.phase("image-smoke-images", () => run.buildImages());
+  await run.phase("image-python-strategy", () => run.composeRun([
+    "initialize", "python", "/smoke/tests/production_python_strategy.py",
+  ], {stdoutFile: run.evidence_dir + "/python-strategy.json", stderrFile: run.evidence_dir + "/python-strategy.stderr.log"}));
   await run.phase("image-smoke-infrastructure", () => run.compose(["up", "--detach", "--no-build", "--wait", "--wait-timeout", "300", "postgres", "rustfs"]));
   await run.phase("image-smoke-rustfs-s3-ready", () => run.waitForS3(true));
   await run.phase("image-smoke-initializers", () => run.compose(["up", "--detach", "--no-build", "initialize", "auth-initialize"]));

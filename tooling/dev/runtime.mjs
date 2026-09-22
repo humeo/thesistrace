@@ -17,6 +17,8 @@ try {
     if (action === 'bootstrap') {
       await run('mise', ['install'], { cwd: root });
       await run('uv', ['sync', '--project', 'apps/core', '--frozen'], { cwd: root });
+      await run('uv', ['run', '--no-sync', '--project', 'apps/core', 'python', '-m',
+        'thesistrace.research_kernel.strategy_program_assets'], { cwd: root });
       await run('mise', ['exec', '--', 'pnpm', 'install', '--frozen-lockfile'], { cwd: root });
     }
     const compose = deployment(mode);

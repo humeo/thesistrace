@@ -14,5 +14,6 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY apps/core/src ./src
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev
+RUN python -m thesistrace.research_kernel.strategy_program_assets
 
 CMD ["thesistrace-core-api", "--host", "0.0.0.0", "--port", "8100"]

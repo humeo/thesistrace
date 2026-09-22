@@ -8,6 +8,9 @@ export async function imageQualification(run) {
   run.smoke_state = "/smoke-evidence/image-smoke-state.json";
   run.bootstrap_replay = "/smoke-evidence/tushare-financial-product-full-replay.json";
   await run.phase("image-smoke-images", () => run.buildImages());
+  await run.phase("image-python-strategy", () => run.composeRun([
+    "initialize", "python", "/smoke/tests/production_python_strategy.py",
+  ], {stdoutFile: run.evidence_dir + "/python-strategy.json", stderrFile: run.evidence_dir + "/python-strategy.stderr.log"}));
   run.backend_image = run.project_name + "-initialize";
   run.image_revision = (await run.exec("docker", ["image", "inspect", run.backend_image, "--format", "{{.Id}}"], {capture: true})).trim();
   await run.phase("image-smoke-fresh-named-volume-mount", () => run.composeRun(["--entrypoint", "/bin/true", "batch-research-worker"], {base: true}));

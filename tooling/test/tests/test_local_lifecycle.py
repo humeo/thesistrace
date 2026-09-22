@@ -81,6 +81,8 @@ raise SystemExit(0)
 
 def _fake_test_runtime_commands(tmp_path: Path) -> tuple[Path, dict[str, str]]:
     command_log = tmp_path / "commands.log"
+    # PATH-restricted checks must still use the interpreter running this suite.
+    (tmp_path / "python3").symlink_to(sys.executable)
     docker = tmp_path / "docker"
     docker.write_text(
         """#!/usr/bin/env python3
@@ -778,6 +780,7 @@ def test_core_has_one_operational_output_schema_and_no_log_files() -> None:
         "entrypoints/diagnose.py",
         "entrypoints/live_tushare.py",
         "strategy_event_wire.py",
+        "research_kernel/strategy_program_assets.py",  # Explicit dependency installation receipt.
         "entrypoints/tracking_child.py",
         "migrations/financial_indicator.py",  # Explicit data-preserving upgrade receipt.
         "migrations/publication_maintenance_0002.py",  # Explicit migration receipt.
@@ -2703,7 +2706,9 @@ def test_current_architecture_documents_only_the_active_data_and_schema_contract
         "`Create draft` is the sole reuse action",
         "Attempt starts",
         "pins the Data Generation frozen at Run",
-        "There is no upgrade, downgrade, fallback",
+        "startup never migrates",
+        "Runtime compatibility",
+        "manual fingerprint bypasses are not supported",
     ):
         assert current in architecture
 
