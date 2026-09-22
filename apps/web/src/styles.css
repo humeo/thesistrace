@@ -1486,8 +1486,7 @@ select { color-scheme: dark; }
   justify-items: center;
   gap: 16px;
   color: var(--ink-soft);
-  background:
-    linear-gradient(90deg, transparent, rgb(94 106 210 / .05), transparent);
+  background: var(--canvas);
   border: 1px solid var(--line);
   border-radius: 12px;
 }

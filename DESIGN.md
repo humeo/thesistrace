@@ -37,6 +37,8 @@ The [user-provided brand board](docs/design/quantgrove-brand-reference.png) defi
 
 The public landing prototype is a visual reference. Its console layouts and mock data must not replace production console pages.
 
+The approved loading-state correction is an exception to console style preservation: route and page loading states use the console canvas and a text status, without gradients or large contrasting skeleton panels. Ready-page layouts and styling remain unchanged.
+
 ## Brand assets and naming
 
 - The visible product name is **Quantgrove** in both languages. Do not introduce a Chinese transliteration or retain the old Chinese product name.
@@ -106,7 +108,7 @@ These tokens apply only inside the landing and authentication surfaces. They do 
 
 ## Implementation and acceptance
 
-Reuse React/Vite, native CSS, Phosphor icons, CodeMirror and Lightweight Charts. No new component framework, runtime theme switch or localization framework is required. Keep public styles scoped; change console rules only for font families and branding.
+Reuse React/Vite, native CSS, Phosphor icons, CodeMirror and Lightweight Charts. No new component framework, runtime theme switch or localization framework is required. Keep public styles scoped; limit console changes to font families, branding and the loading-state correction above.
 
 Implementation order: this specification → brand and font assets → landing/authentication → console branding → verification. Preserve unrelated working-tree changes.
 

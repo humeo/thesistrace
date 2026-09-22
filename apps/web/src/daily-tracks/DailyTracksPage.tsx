@@ -320,11 +320,8 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
 }
 
 function TrackLoading({ detail }: { detail: boolean }) {
-  return <section className="track-loading" aria-label="Daily Tracks" aria-busy="true">
+  return <section className="state-section" aria-label="Daily Tracks" aria-busy="true">
     <p role="status">{detail ? "Loading DailyTrack…" : "Loading DailyTracks…"}</p>
-    <div aria-hidden="true" className="track-loading-header" />
-    <div aria-hidden="true" className="track-loading-strip"><span /><span /><span /><span /></div>
-    <div aria-hidden="true" className="track-loading-content" />
   </section>;
 }
 
