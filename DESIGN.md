@@ -32,7 +32,7 @@ The [user-provided brand board](docs/design/quantgrove-brand-reference.png) defi
 | --- | --- |
 | Public landing | Ivory canvas, forest-green actions, editorial serif headings, botanical/stone photograph; preserve real product content, research preview and English/Chinese switching. |
 | Login, invitation, password recovery and access states | Light brand treatment; preserve form structure, field order, validation, authentication behavior and recovery paths. |
-| Console, including Chat, Data, Research, Research Runs, batches, Daily Tracks, MCP and Operator | Preserve the dark palette, layout, component styling, navigation and interactions. Branding and neutral loading states are implemented; Chinese/English interface localization and an account-menu language control are approved for the next increment below. |
+| Console, including Chat, Data, Research, Research Runs, batches, Daily Tracks, MCP and Operator | Preserve the dark palette, layout, component styling, navigation and interactions. Use the shared Chinese/English interface resources and the account-menu language control described below, alongside the established branding and neutral loading states. |
 | Email, browser title, metadata, accessible names and favicon | Use Quantgrove consistently. Email uses its own email-safe markup and system fonts. |
 
 The public landing prototype is a visual reference. Its console layouts and mock data must not replace production console pages.
@@ -62,7 +62,7 @@ The approved loading-state correction is an exception to console style preservat
 - In console content and controls, change font families only. Keep existing font sizes, weights, line heights, letter spacing, component dimensions and responsive rules. The sidebar brand lockup has its own optical sizing below.
 - Serif styling applies to page main headings, not every heading inside assistant Markdown, tool output, charts or data cards. Body content stays sans-serif; numeric alignment remains tabular where currently used.
 - Chinese headings use natural spacing, not Latin negative tracking. Allow Chinese/English content to wrap without clipping or squeezing controls.
-- The landing retains English as the initial default and `?lang=zh` for Chinese, with synchronized document language, title and description. The approved localization increment below extends language selection across the landing, authentication and console surfaces.
+- The landing retains English as the initial default and `?lang=zh` for Chinese, with synchronized document language, title and description. The shared localization module extends language selection across the landing, authentication and console surfaces.
 - Chinese hero copy: **让想法，在证据中生长。** English hero copy: **Ideas grow through evidence.** Supporting copy explains the actual Alpha, backtesting and daily-observation product.
 
 ## Public-page visual tokens
@@ -99,7 +99,7 @@ These tokens apply only inside the landing and authentication surfaces. They do 
 - Use the inverse logo on dark surfaces. In the expanded sidebar and mobile drawer, pair a 24px mark with a 20px serif wordmark (24px line height, 600 weight, -0.02em tracking) and an 8px gap. Preserve the brand link's 30px minimum height and the existing header geometry. The collapsed desktop rail retains its existing expand control and hides the full brand link.
 - Any console redesign beyond the approved language control and translated presentation requires a separate product decision.
 
-## Chinese/English interface localization — approved, not yet implemented
+## Chinese/English interface localization
 
 - Use one interface-language module for the landing, authentication and console, with `en` and `zh-CN`. Start in English when no explicit choice exists; remember the user's choice in the current browser. The landing's explicit language query takes precedence for that page. Cross-device preference synchronization is outside this increment.
 - Put `English / 简体中文` in the existing account menu. Keep it reachable in expanded, collapsed and mobile navigation, including keyboard access. Changing language updates text in place without changing console URLs, remounting authenticated pages or refetching research data.
@@ -121,7 +121,7 @@ These tokens apply only inside the landing and authentication surfaces. They do 
 
 ## Implementation and acceptance
 
-Reuse React/Vite, native CSS, Phosphor icons, CodeMirror and Lightweight Charts. No new component framework or runtime theme switch is required. Use i18next/react-i18next for the approved localization increment. Keep public styles scoped; limit console changes to branding, fonts, neutral loading states and the localized presentation described above.
+Reuse React/Vite, native CSS, Phosphor icons, CodeMirror and Lightweight Charts. No new component framework or runtime theme switch is required. Use i18next/react-i18next for interface localization. Keep public styles scoped; limit console changes to branding, fonts, neutral loading states and the localized presentation described above.
 
 Implementation order: this specification → brand and font assets → landing/authentication → console branding → verification. Preserve unrelated working-tree changes.
 
