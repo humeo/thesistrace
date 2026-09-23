@@ -66,9 +66,10 @@ print(json.dumps({
     assert process.stdout is not None
     assert process.stderr is not None
     try:
-        process.stdin.write(b"x" * (RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES + 1))
-        process.stdin.flush()
-        returncode = process.wait(timeout=10)
+        completed_stdout, completed_stderr = process.communicate(
+            input=b"x" * (RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES + 1), timeout=10,
+        )
+        returncode = process.returncode
     except Exception as error:
         returncode, completed_stdout, completed_stderr = _finish_stdio_claim_probe(
             process
@@ -78,9 +79,6 @@ print(json.dumps({
             f"returncode={returncode}, "
             f"stdout={completed_stdout!r}, stderr={completed_stderr!r}"
         ) from error
-    else:
-        completed_stdout = process.stdout.read(4096)
-        completed_stderr = process.stderr.read(4096)
     finally:
         if not process.stdin.closed:
             process.stdin.close()
