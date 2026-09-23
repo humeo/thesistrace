@@ -336,6 +336,7 @@ def _execute_strategy(
     try:
         program = prepare_daily_strategy(
             research_data, alpha_matrix, definition, observe_common=observe_common,
+            continuation=continuation,
         )
     except ValueError as error:
         raise StrategyCalculationError(str(error)) from error
@@ -839,6 +840,7 @@ def _execute_strategy(
                     "turnover": turnover,
                     "target_weights": {
                         instrument_id: float(target_values[instrument_id] / pre_net_nav)
+                        if pre_net_nav != 0 else 0.0
                         for instrument_id in target_values
                     },
                     "actual_weights": {
@@ -882,8 +884,10 @@ def _execute_strategy(
                 "gross_nav": canonical_decimal(gross_nav),
                 "net_nav": canonical_decimal(net_nav),
                 "close_risk_nav_cny": canonical_decimal(close_risk_nav),
-                "gross_return": float(gross_nav / previous_gross_nav - 1),
-                "net_return": float(net_nav / previous_net_nav - 1),
+                "gross_return": float(gross_nav / previous_gross_nav - 1)
+                if previous_gross_nav != 0 else 0.0,
+                "net_return": float(net_nav / previous_net_nav - 1)
+                if previous_net_nav != 0 else 0.0,
                 "gross_cash": canonical_decimal(gross_cash),
                 "net_cash": canonical_decimal(net_cash),
                 "cumulative_transaction_cost": canonical_decimal(cumulative_cost),
@@ -1459,7 +1463,8 @@ def strategy_metrics(
     gross_cagr = cagr(gross_nav[-1] / initial_cash, investment_intervals)
     net_cagr = cagr(net_nav[-1] / initial_cash, investment_intervals)
     net_returns = [
-        float(net_nav[index] / net_nav[index - 1] - 1) for index in range(1, len(net_nav))
+        float(net_nav[index] / net_nav[index - 1] - 1) if net_nav[index - 1] != 0 else 0.0
+        for index in range(1, len(net_nav))
     ]
     volatility = stdev(net_returns) * math.sqrt(252) if len(net_returns) >= 2 else None
     return_mean = math.fsum(net_returns) / len(net_returns) if net_returns else None
@@ -1669,7 +1674,7 @@ def advance_strategy_metric_state(
             )
         else:
             prior_net_nav = Decimal(str(state["last_net_nav"]))
-            net_return = float(net_nav / prior_net_nav - 1)
+            net_return = float(net_nav / prior_net_nav - 1) if prior_net_nav != 0 else 0.0
             return_count = int(state["return_count"]) + 1
             state["return_count"] = return_count
             _add_binary64(state, "return_sum", net_return)

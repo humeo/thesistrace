@@ -63,12 +63,29 @@ class HoldingExpiryObservation(TerminalStateModel):
     maximum_holding_sessions: Annotated[StrictInt, Field(ge=1)]
 
 
+class TakeProfitObservation(TerminalStateModel):
+    reason: Literal["take_profit"]
+    instrument_id: StrictStr
+    holding_return: StrictStr | None
+    cycle_ended: StrictBool
+    profit_threshold: StrictStr
+    cumulative_reduction: StrictStr
+    baseline_execution_shares: Annotated[StrictInt, Field(gt=0)]
+    baseline_adjusted_units: StrictStr
+    target_adjusted_units: StrictStr
+    executed_reduction_units: StrictStr
+    remaining_reduction_units: StrictStr
+    execution_shares: Annotated[StrictInt, Field(ge=0)]
+    position_limit: Annotated[StrictInt, Field(ge=0)] | None
+
+
 class HoldingRiskEvidence(TerminalStateModel):
     mode: Literal["holding_risk"] = "holding_risk"
     reason: Reason
     position_limits: dict[StrictStr, Annotated[StrictInt, Field(ge=0)]]
     observations: list[Annotated[
-        StopLossObservation | HoldingExpiryObservation, Field(discriminator="reason"),
+        StopLossObservation | HoldingExpiryObservation | TakeProfitObservation,
+        Field(discriminator="reason"),
     ]] = Field(min_length=1, max_length=6000)
 
 

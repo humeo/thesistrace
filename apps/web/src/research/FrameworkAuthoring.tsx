@@ -1,3 +1,5 @@
+import { TakeProfitAuthoring } from "./TakeProfitAuthoring";
+import type { TakeProfitTierDraft } from "./takeProfit";
 import type { ReactNode } from "react";
 import type { ResearchInputField } from "./draft";
 import {
@@ -17,8 +19,10 @@ const explanations: Record<FrameworkStage, string> = {
   risk_management: "Inspect actual holdings and the new proposal at every Close. Adjustments combine into one final target before execution.",
 };
 
-export function FrameworkAuthoring({ modules, selectModule, updateProgram, stopLossThreshold, updateStopLoss, maximumHoldingSessions, updateMaximumHoldingSessions, minimumHoldingSessions, updateMinimumHoldingSessions, error, fieldsButton, alphaEditor }: {
+export function FrameworkAuthoring({ modules, selectModule, updateProgram, stopLossThreshold, updateStopLoss, maximumHoldingSessions, updateMaximumHoldingSessions, minimumHoldingSessions, updateMinimumHoldingSessions, takeProfitTiers, updateTakeProfitTiers, error, fieldsButton, alphaEditor }: {
   modules: FrameworkModulesDraft;
+  takeProfitTiers: TakeProfitTierDraft[];
+  updateTakeProfitTiers: (tiers: TakeProfitTierDraft[]) => void;
   stopLossThreshold: string;
   updateStopLoss: (value: string) => void;
   maximumHoldingSessions: string;
@@ -48,6 +52,7 @@ export function FrameworkAuthoring({ modules, selectModule, updateProgram, stopL
         inputs={modules[stage].program} onChange={changes => updateProgram(stage, changes)}
         error={field => error(`${stage}.${field}`)} fieldsButton={fieldsButton()} />
         : stage === "alpha" ? alphaEditor : stage === "risk_management" ? <div className="research-parameter-field">
+          <TakeProfitAuthoring tiers={takeProfitTiers} onChange={updateTakeProfitTiers} error={error} />
           <label htmlFor="stop-loss-threshold">Stop loss (%)</label>
           <input id="stop-loss-threshold" type="text" inputMode="decimal" placeholder="Off" maxLength={128}
             value={stopLossThreshold} onChange={event => updateStopLoss(event.target.value)}

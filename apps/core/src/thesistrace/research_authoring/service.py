@@ -101,6 +101,10 @@ CURRENT_RESEARCH_AUTHORING_CONSTRAINTS = ResearchAuthoringConstraints(
             "holding at zero for the next Open. Maximum holding sessions requests exit at "
             "the Nth Close. Minimum holding sessions reserves younger positions and slots "
             "during ordinary portfolio changes; risk caps can override retention. "
+            "Take-profit tiers require strictly increasing positive profit thresholds "
+            "and cumulative "
+            "reduction fractions at most one. First trigger freezes the holding baseline; "
+            "actual fills advance progress and ordinary additions remain capped until full exit. "
             "no_risk/v1 disables built-in risk."
         ),
         maximum_active_signals=MAX_ACTIVE_SIGNALS,

@@ -69,8 +69,8 @@ def columnar_fixture(canonical) -> ColumnarResearchData:
     )
 
 
-@pytest.mark.parametrize("holding_periods", [False, True])
-def test_builtin_holding_risk_survives_columnar_tracking_checkpoint(holding_periods):
+@pytest.mark.parametrize("policy", ["stop_loss", "holding_periods", "take_profit"])
+def test_builtin_holding_risk_survives_columnar_tracking_checkpoint(policy):
     from thesistrace.research_kernel.builtin_framework import BUILTIN_FRAMEWORK_MODULES
 
     _, canonical = build_fixture(session_count=26)
@@ -79,7 +79,11 @@ def test_builtin_holding_risk_survives_columnar_tracking_checkpoint(holding_peri
     modules = {**BUILTIN_FRAMEWORK_MODULES, "risk_management": {
             "kind": "builtin_risk/v1", "stop_loss_threshold": 0.01,
     }}
-    if holding_periods:
+    if policy == "take_profit":
+        modules["risk_management"] = {"kind": "builtin_risk/v1", "take_profit_tiers": [
+            {"profit_threshold": 0.0001, "cumulative_reduction": 0.3},
+        ]}
+    if policy == "holding_periods":
         modules["portfolio_construction"] = {
             "kind": "periodic_top_n/v1", "minimum_holding_sessions": 3,
         }

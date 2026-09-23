@@ -228,3 +228,46 @@ it("locates contradictory holding limits at maximum and omits minimum for Python
   expect(JSON.stringify(researchSpec(custom))).not.toContain("minimum_holding_sessions");
   expect(researchInputIssues(custom).some(issue => issue.field === "maximumHoldingSessions")).toBe(false);
 });
+
+it("freezes and reuses cumulative take-profit tiers with independent percentages", () => {
+  const current = { ...draft(), takeProfitTiers: [
+    { profitThreshold: "10", cumulativeReduction: "30" },
+    { profitThreshold: "20", cumulativeReduction: "60" },
+  ] };
+  expect(researchInputIssues(current)).toEqual([]);
+  const spec = researchSpec(current);
+  expect(spec).toMatchObject({ modules: { risk_management: {
+    kind: "builtin_risk/v1", take_profit_tiers: [
+      { profit_threshold: 0.1, cumulative_reduction: 0.3 },
+      { profit_threshold: 0.2, cumulative_reduction: 0.6 },
+    ],
+  } } });
+  const saved = storage();
+  persistResearchDraft(saved, "researcher", "folder", current);
+  expect(loadResearchDraft(saved, "researcher", "folder").takeProfitTiers).toEqual(current.takeProfitTiers);
+  expect(useResearchAsDraft(saved, "researcher", "reuse", spec as FrozenResearchAuthorableInput, () => true)).toBe(true);
+  expect(researchSpec(loadResearchDraft(saved, "researcher", "reuse"))).toEqual(spec);
+});
+
+it.each(["", "0", "-1", "Infinity", "1e2", "NaN"])("locates invalid take-profit threshold %s", profitThreshold => {
+  const issues = researchInputIssues({ ...draft(), takeProfitTiers: [{ profitThreshold, cumulativeReduction: "30" }] });
+  expect(issues.some(issue => issue.field === "takeProfitTiers.0.profitThreshold")).toBe(true);
+});
+
+it("locates non-increasing tiers and rejects cumulative reductions above 100%", () => {
+  expect(researchInputIssues({ ...draft(), takeProfitTiers: [
+    { profitThreshold: "10", cumulativeReduction: "30" },
+    { profitThreshold: "10", cumulativeReduction: "30" },
+    { profitThreshold: "20", cumulativeReduction: "101" },
+  ] }).map(issue => issue.field)).toEqual([
+    "takeProfitTiers.1.profitThreshold", "takeProfitTiers.1.cumulativeReduction", "takeProfitTiers.2.cumulativeReduction",
+  ]);
+});
+
+it("does not apply retained built-in take-profit inputs to Python risk or Direct", () => {
+  const current = { ...draft(), takeProfitTiers: [{ profitThreshold: "", cumulativeReduction: "" }] };
+  const custom = selectFrameworkModule(current, "risk_management", "python");
+  expect(researchInputIssues(custom).some(issue => issue.field.startsWith("takeProfitTiers."))).toBe(false);
+  expect(JSON.stringify(researchSpec(custom))).not.toContain("take_profit_tiers");
+  expect(JSON.stringify(researchSpec(selectStrategyMode(current, "direct")))).not.toContain("take_profit_tiers");
+});

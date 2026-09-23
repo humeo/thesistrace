@@ -303,19 +303,25 @@ test("Custom fees and slippage survive Run reuse and DailyTrack refresh", { tag:
   expect((await source.json()).input.costs).toEqual(costs);
 });
 
-for (const holdingPeriods of [false, true]) {
-test(`${holdingPeriods ? "Holding periods" : "Close stop loss"} survives Run reuse and DailyTrack refresh`, { tag: "@isolated" }, async ({ page }, testInfo) => {
+for (const policyName of ["Close stop loss", "Holding periods", "Cumulative take profit"]) {
+const holdingPeriods = policyName === "Holding periods";
+const takeProfit = policyName === "Cumulative take profit";
+test(`${policyName} survives Run reuse and DailyTrack refresh`, { tag: "@isolated" }, async ({ page }, testInfo) => {
   test.setTimeout(240_000);
   publishFinancialTrackHead("lagged");
-  if (holdingPeriods) await page.setViewportSize({ width: 390, height: 844 });
+  if (holdingPeriods || takeProfit) await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/research?new");
   await fillCompleteDraft(page, { name: "Close cost stop loss", formula: "close" });
-  if (holdingPeriods) {
+  if (takeProfit) {
+    await page.getByRole("button", { name: "Add take-profit tier", exact: true }).click();
+    await page.getByLabel("Profit threshold (%)", { exact: true }).fill("0.01");
+    await page.getByLabel("Cumulative reduction (%)", { exact: true }).fill("30");
+  } else if (holdingPeriods) {
     await page.getByLabel("Minimum holding (trading sessions)", { exact: true }).fill("2");
     await page.getByLabel("Maximum holding (trading sessions)", { exact: true }).fill("2");
   } else await page.getByLabel("Stop loss (%)", { exact: true }).fill("1");
   await page.getByRole("button", { name: "Run settings", exact: true }).click();
-  await page.getByLabel("Price slippage (basis points)", { exact: true }).fill(holdingPeriods ? "0" : "1000");
+  await page.getByLabel("Price slippage (basis points)", { exact: true }).fill(holdingPeriods || takeProfit ? "0" : "1000");
   if (holdingPeriods) {
     await page.getByLabel("Holdings count").fill("1");
     await page.getByLabel("Selection interval (trading days)").fill("1");
@@ -329,7 +335,9 @@ test(`${holdingPeriods ? "Holding periods" : "Close stop loss"} survives Run reu
   await expect(page.locator(".research-run-facts").getByText(/Status\s+succeeded/)).toBeVisible({ timeout: 90_000 });
   const accepted = await page.request.get(`/api/research-runs/${runId}`);
   expect(accepted.ok()).toBe(true);
-  const policy = holdingPeriods ? { kind: "builtin_risk/v1", maximum_holding_sessions: 2 }
+  const policy = takeProfit ? { kind: "builtin_risk/v1", take_profit_tiers: [
+    { profit_threshold: 0.0001, cumulative_reduction: 0.3 },
+  ] } : holdingPeriods ? { kind: "builtin_risk/v1", maximum_holding_sessions: 2 }
     : { kind: "builtin_risk/v1", stop_loss_threshold: 0.01 };
   expect((await accepted.json()).input.modules.risk_management).toEqual(policy);
   await page.getByText("Close risk and holdings", { exact: true }).click();
@@ -339,7 +347,16 @@ test(`${holdingPeriods ? "Holding periods" : "Close stop loss"} survives Run reu
   });
   expect(events.ok()).toBe(true);
   const rows = (await events.json()).rows;
-  if (holdingPeriods) {
+  if (takeProfit) {
+    const trigger = rows.find((row: { risk_adjustment: { observations?: { reason: string }[] } | null }) =>
+      row.risk_adjustment?.observations?.some(item => item.reason === "take_profit"));
+    expect(trigger).toBeTruthy();
+    await page.getByText("Trading events", { exact: true }).click();
+    await page.getByLabel("事件类型").selectOption("strategy_framework");
+    await page.getByRole("button", { name: `查看原始记录：${trigger.decision_session}`, exact: true }).click();
+    await expect(page.getByLabel("持仓风险触发依据", { exact: true })).toContainText("累计减仓 30%");
+    await expect(page.getByLabel("持仓风险触发依据", { exact: true })).toContainText("禁止普通补仓");
+  } else if (holdingPeriods) {
     expect(rows[1].portfolio_retentions[0].holding_age).toBe(1);
     await page.getByText("Trading events", { exact: true }).click();
     await page.getByLabel("事件类型").selectOption("strategy_framework");
@@ -348,7 +365,11 @@ test(`${holdingPeriods ? "Holding periods" : "Close stop loss"} survives Run reu
   } else expect(rows.some((row: { risk_adjustment: { mode: string } | null }) => row.risk_adjustment?.mode === "holding_risk")).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("close-stop-loss-result.png"), fullPage: true });
   await page.getByRole("button", { name: "Create draft", exact: true }).click();
-  if (holdingPeriods) {
+  if (takeProfit) {
+    await expect(page.getByLabel("Profit threshold (%)", { exact: true })).toHaveValue("0.01");
+    await expect(page.getByLabel("Cumulative reduction (%)", { exact: true })).toHaveValue("30");
+    await page.getByLabel("Cumulative reduction (%)", { exact: true }).fill("60");
+  } else if (holdingPeriods) {
     await expect(page.getByLabel("Minimum holding (trading sessions)", { exact: true })).toHaveValue("2");
     await expect(page.getByLabel("Maximum holding (trading sessions)", { exact: true })).toHaveValue("2");
     await page.getByLabel("Minimum holding (trading sessions)", { exact: true }).fill("1");
@@ -367,6 +388,8 @@ test(`${holdingPeriods ? "Holding periods" : "Close stop loss"} survives Run reu
   expect(tracked.ok()).toBe(true);
   const trackRows = (await tracked.json()).rows;
   expect(trackRows.slice(0, rows.length)).toEqual(rows);
+  if (takeProfit) expect(trackRows.some((row: { risk_adjustment: { observations?: { reason: string; executed_reduction_units?: string }[] } | null }) =>
+    row.risk_adjustment?.observations?.some(item => item.reason === "take_profit" && Number(item.executed_reduction_units) > 0))).toBe(true);
   if (holdingPeriods) expect(trackRows.some((row: { risk_adjustment: { observations: { reason: string; holding_age: number }[] } | null }) =>
     row.risk_adjustment?.observations.some(observation => observation.reason === "maximum_holding_period" && observation.holding_age === 2))).toBe(true);
   await page.getByRole("tab", { name: /^Holdings/ }).click();

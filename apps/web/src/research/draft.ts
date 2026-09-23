@@ -1,3 +1,4 @@
+import { readTakeProfitDraft, takeProfitDraft, takeProfitIssues, type TakeProfitField, type TakeProfitTierDraft } from "./takeProfit";
 import { costFields, costInputError, defaultSimulationCosts, readCostInputs, type CostField, type SimulationCosts } from "./simulationCosts";
 import {
   DIRECT_EXAMPLE, emptyProgramInputs, programDraft, programInputFields, programInputIssues,
@@ -20,6 +21,7 @@ export type ResearchInputs = ProgramInputs & {
   researchKind: "factor_evaluation" | "strategy_backtest";
   strategyMode: "framework" | "direct";
   frameworkModules: FrameworkModulesDraft;
+  takeProfitTiers: TakeProfitTierDraft[];
   stopLossThreshold: string;
   maximumHoldingSessions: string;
   minimumHoldingSessions: string;
@@ -98,7 +100,7 @@ export type ResearchDraft = ResearchInputs & {
 };
 
 const MAX_DRAFT_BYTES = 2 * 1024 * 1024;
-const DRAFT_STORAGE_SCHEMA = "research-draft/v5";
+const DRAFT_STORAGE_SCHEMA = "research-draft/v6";
 const MAX_FORMULA_LENGTH = 4_096;
 export const MAX_HYPOTHESIS_LENGTH = 1_024;
 const MAX_TEXT_LENGTH = 10_000;
@@ -107,6 +109,7 @@ export function emptyResearchDraft(): ResearchDraft {
   return {
     researchKind: "factor_evaluation",
     strategyMode: "framework",
+    takeProfitTiers: [],
     stopLossThreshold: "",
     maximumHoldingSessions: "",
     minimumHoldingSessions: "",
@@ -351,7 +354,7 @@ export function isValidInitialCash(value: string): boolean {
   return BigInt(whole + fraction.padEnd(2, "0")) <= 100000000000n;
 }
 
-export type ResearchInputField = `costs.${CostField}` | ProgramInputField | `${FrameworkStage}.${ProgramInputField}`
+export type ResearchInputField = TakeProfitField | `costs.${CostField}` | ProgramInputField | `${FrameworkStage}.${ProgramInputField}`
   | "formula" | "hypothesis" | "startDate" | "endDate" | "universe" | "neutralization" | "initialCashCny"
   | "stopLossThreshold" | "maximumHoldingSessions" | "minimumHoldingSessions" | "holdingsCount" | "selectionEverySessions" | "exposureExpression" | "volatilityWindow";
 export type ResearchInputIssue = { field: ResearchInputField; message: string };
@@ -382,6 +385,7 @@ export function researchInputIssues(inputs: ResearchInputs): ResearchInputIssue[
   }
   if (inputs.researchKind === "strategy_backtest" && inputs.strategyMode === "framework"
     && inputs.frameworkModules.risk_management.kind === "builtin") {
+    issues.push(...takeProfitIssues(inputs.takeProfitTiers));
     const message = stopLossInputError(inputs.stopLossThreshold);
     if (message) issues.push({ field: "stopLossThreshold", message });
     const holdingMessage = holdingSessionsInputError(inputs.maximumHoldingSessions);
@@ -461,6 +465,8 @@ export function useResearchAsDraft(
     selectionEverySessions: framework && input.selection_every_sessions !== undefined ? String(input.selection_every_sessions) : "",
     ...(direct ? programDraft(input.program) : emptyProgramInputs()),
     frameworkModules: framework ? frameworkDraft(input.modules) : builtinModulesDraft(),
+    takeProfitTiers: framework && typeof input.modules.risk_management !== "string" && input.modules.risk_management.kind === "builtin_risk/v1"
+      ? takeProfitDraft(input.modules.risk_management.take_profit_tiers ?? []) : [],
     stopLossThreshold: framework ? frozenStopLossPercentage(input.modules) : "",
     maximumHoldingSessions: framework ? frozenMaximumHoldingSessions(input.modules) : "",
     minimumHoldingSessions: framework ? frozenMinimumHoldingSessions(input.modules) : "",
@@ -494,7 +500,7 @@ function wouldOverwriteUnexecutedAuthorableValue(
     "researchKind",
     "strategyMode",
     "programSource", "programParameters", "programFields", "programHistorySessions",
-    "frameworkModules", "costs", "stopLossThreshold", "maximumHoldingSessions", "minimumHoldingSessions",
+    "frameworkModules", "costs", "takeProfitTiers", "stopLossThreshold", "maximumHoldingSessions", "minimumHoldingSessions",
     "initialCashCny",
     "holdingsCount",
     "selectionEverySessions",
@@ -596,6 +602,8 @@ function readInputs(value: unknown): ResearchInputs | null {
       ? new TextEncoder().encode(strings[key]).byteLength > (key === "programSource" ? 65536 : MAX_DRAFT_BYTES)
       : strings[key].length > MAX_TEXT_LENGTH)
   ) return null;
+  const takeProfitTiers = readTakeProfitDraft(value.takeProfitTiers);
+  if (takeProfitTiers === null) return null;
   const costs = readCostInputs(value.costs);
   if (costs === null) return null;
   const modules = value.frameworkModules;
@@ -611,7 +619,7 @@ function readInputs(value: unknown): ResearchInputs | null {
       || inputs.programFields.length > MAX_TEXT_LENGTH || inputs.programHistorySessions.length > MAX_TEXT_LENGTH) return null;
     parsedModules[stage] = { kind: module.kind, program: inputs };
   }
-  return { ...Object.fromEntries(keys.map((key) => [key, strings[key]])), frameworkModules: parsedModules, costs } as ResearchInputs;
+  return { ...Object.fromEntries(keys.map((key) => [key, strings[key]])), frameworkModules: parsedModules, costs, takeProfitTiers } as ResearchInputs;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

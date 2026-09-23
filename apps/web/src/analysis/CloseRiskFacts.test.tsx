@@ -61,3 +61,18 @@ test("explains retained shares, occupied slots and risk exceptions from frozen o
     expect(markup).toContain(text);
   }
 });
+
+test("shows cumulative intent separately from actual take-profit fills", () => {
+  const markup = renderToStaticMarkup(<FrameworkDecisionDetails row={{
+    decision_session: "2026-08-05", modules: {},
+    universe: { instrument_ids: [], updated: false, reason: null },
+    alpha: { kind: "formula", values: [] }, proposal: null, target_id: "profit-target",
+    risk_adjustment: { mode: "holding_risk", reason: "take_profit", position_limits: { "equity:600001.SH": 400 },
+      observations: [{ reason: "take_profit", instrument_id: "equity:600001.SH", cycle_ended: false,
+        holding_return: "0.2", profit_threshold: "0.2", cumulative_reduction: "0.6",
+        baseline_execution_shares: 1000, baseline_adjusted_units: "500", target_adjusted_units: "200",
+        executed_reduction_units: "150", remaining_reduction_units: "150", execution_shares: 700, position_limit: 400 }] },
+  }} />);
+  for (const text of ["累计减仓 60%", "首次基准 1000 股", "实际卖出 150", "待减 150", "禁止普通补仓"]) expect(markup).toContain(text);
+  expect(markup).not.toContain("下一开盘尝试退出");
+});

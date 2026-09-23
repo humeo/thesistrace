@@ -1,3 +1,4 @@
+import type { TakeProfitField } from "./takeProfit";
 import {
   CalendarBlank,
   CaretDown,
@@ -628,6 +629,12 @@ export function ResearchDraftWorkspace({
     ? admissionFeedback.issues
     : [];
   function programError(field: ResearchInputField): string | undefined {
+    if (field.startsWith("takeProfitTiers.")) {
+      const [, index, key] = field.split(".");
+      const serverKey = key === "profitThreshold" ? "profit_threshold" : "cumulative_reduction";
+      const issues = [...visibleIssues, ...(specFeedback?.key === specKey ? specFeedback.issues : [])];
+      return inputError(field) ?? issues.find(issue => issue.field.includes(`take_profit_tiers.${index}.${serverKey}`))?.message;
+    }
     if (field === "stopLossThreshold" || field === "maximumHoldingSessions" || field === "minimumHoldingSessions") {
       const issues = [...visibleIssues, ...(specFeedback?.key === specKey ? specFeedback.issues : [])];
       const serverField = { stopLossThreshold: "stop_loss_threshold", maximumHoldingSessions: "maximum_holding_sessions", minimumHoldingSessions: "minimum_holding_sessions" }[field];
@@ -776,6 +783,8 @@ export function ResearchDraftWorkspace({
         {direct ? <PythonStrategyAuthoring inputs={draft} error={programError}
           onChange={changes => updateDraft(current => ({ ...current, ...changes }))}
           fieldsButton={fieldsButton()} /> : draft.researchKind === "strategy_backtest" ? <FrameworkAuthoring
+          takeProfitTiers={draft.takeProfitTiers}
+          updateTakeProfitTiers={takeProfitTiers => updateDraft(current => ({ ...current, takeProfitTiers }))}
           stopLossThreshold={draft.stopLossThreshold}
           maximumHoldingSessions={draft.maximumHoldingSessions}
           minimumHoldingSessions={draft.minimumHoldingSessions}
@@ -1089,7 +1098,7 @@ function ResearchParameterHelp({ label, text }: { label: string; text: ReactNode
   </span>;
 }
 
-const INPUT_SELECTORS: Record<Exclude<ResearchInputField, "formula" | "exposureExpression" | `${FrameworkStage}.${ProgramInputField}` | `costs.${CostField}`>, string> = {
+const INPUT_SELECTORS: Record<Exclude<ResearchInputField, TakeProfitField | "formula" | "exposureExpression" | `${FrameworkStage}.${ProgramInputField}` | `costs.${CostField}`>, string> = {
   hypothesis: "#research-notes", startDate: "#research-start-date", endDate: "#research-end-date",
   universe: "#research-universe", neutralization: "#research-neutralization", initialCashCny: "#initial-cash",
   holdingsCount: "#research-holdings-count", selectionEverySessions: "#research-selection-sessions",
@@ -1099,6 +1108,10 @@ const INPUT_SELECTORS: Record<Exclude<ResearchInputField, "formula" | "exposureE
 };
 
 function inputSelector(field: Exclude<ResearchInputField, "formula" | "exposureExpression">): string {
+  if (field.startsWith("takeProfitTiers.")) {
+    const [, index, key] = field.split(".");
+    return `#take-profit-${index}-${key}`;
+  }
   if (field.startsWith("costs.")) return `#cost-${field.slice(6)}`;
   const [stage, input] = field.split(".");
   if (frameworkStages.includes(stage as FrameworkStage) && programInputFields.includes(input as ProgramInputField)) {

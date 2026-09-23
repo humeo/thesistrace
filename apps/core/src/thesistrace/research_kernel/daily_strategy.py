@@ -26,7 +26,9 @@ from thesistrace.research_kernel.strategy_program_runtime import (
 )
 
 
-def prepare_daily_strategy(research_data, alpha_matrix, definition, *, observe_common=None):
+def prepare_daily_strategy(
+    research_data, alpha_matrix, definition, *, observe_common=None, continuation=None,
+):
     checksum = hashlib.sha256(canonical_json_bytes(definition)).hexdigest()
     strategy = definition["strategy"]
     if strategy["mode"] == "framework" and strategy["modules"] == BUILTIN_FRAMEWORK_MODULES:
@@ -36,9 +38,12 @@ def prepare_daily_strategy(research_data, alpha_matrix, definition, *, observe_c
     if strategy["mode"] == "direct":
         return _DirectDailyStrategy(research_data, strategy, checksum)
     if strategy["mode"] == "framework":
-        return FrameworkStrategy(
+        program = FrameworkStrategy(
             research_data, alpha_matrix, strategy, checksum, observe_common=observe_common,
         )
+        if continuation is not None:
+            program.validate_continuation(continuation)
+        return program
     raise ValueError("Unsupported Strategy implementation")
 
 

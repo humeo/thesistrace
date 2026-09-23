@@ -1,3 +1,4 @@
+import { takeProfitDraft } from "./takeProfit";
 import { frameworkStageLabels, frameworkStages, frozenStopLossPercentage, type FrameworkModules } from "./frameworkModules";
 import type { PythonProgram } from "./pythonStrategy";
 import { costFields, type SimulationCosts } from "./simulationCosts";
@@ -30,6 +31,7 @@ export function FrozenFrameworkModules({ modules }: { modules: FrameworkModules 
         : module.kind === "builtin_risk/v1" ? <div key={stage}>
           {module.stop_loss_threshold !== undefined && <p><strong>Risk Management · Stop loss</strong> {frozenStopLossPercentage(modules)}%</p>}
           {module.maximum_holding_sessions !== undefined && <p><strong>Maximum holding (trading sessions)</strong> {module.maximum_holding_sessions}</p>}
+          {module.take_profit_tiers && <div><strong>Cumulative take profit</strong><ol>{takeProfitDraft(module.take_profit_tiers).map((tier, index) => <li key={index}>Profit {tier.profitThreshold}% → cumulative reduction {tier.cumulativeReduction}%</li>)}</ol><p>Baseline freezes at the first trigger. No ordinary additions until full exit.</p></div>}
           <p>Evaluated at Close; the next Open determines execution.</p>
         </div> : module.kind === "periodic_top_n/v1" ? <p key={stage}><strong>Minimum holding (trading sessions)</strong> {module.minimum_holding_sessions}</p>
           : <FrozenPythonProgram key={stage} title={`${frameworkStageLabels[stage]} · Frozen Python source and parameters`} program={module.program} />;

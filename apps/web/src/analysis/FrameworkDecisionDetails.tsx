@@ -1,3 +1,4 @@
+import { TakeProfitFacts, type TakeProfitObservation } from "./TakeProfitFacts";
 import Decimal from "decimal.js";
 
 type Proposal = {
@@ -24,7 +25,7 @@ export type FrameworkRecord = {
         close_market_value_cny: string; holding_return: string; stop_loss_threshold: string;
         execution_shares: number; holding_age: number } | { reason: "maximum_holding_period";
         instrument_id: string; execution_shares: number; holding_age: number;
-        maximum_holding_sessions: number })[] }
+        maximum_holding_sessions: number } | TakeProfitObservation)[] }
     | { mode: "limit_positions"; reason: string; position_limits: Record<string, number> } | null;
   target_id: string | null;
 };
@@ -99,11 +100,13 @@ export function FrameworkDecisionDetails({ row }: { row: FrameworkRecord }) {
           <Limits limits={risk.position_limits} />
           {risk.mode === "holding_risk" && <ul aria-label="持仓风险触发依据">{risk.observations.map(item => <li key={`${item.instrument_id}:${item.reason}`}>
             <strong>{stock(item.instrument_id)}</strong>
+            {item.reason === "take_profit" ? <TakeProfitFacts item={item} /> : <>
             {item.reason === "stop_loss" ? <>
             <p>剩余取得成本 {new Decimal(item.remaining_acquisition_cost_cny).toString()} 元；收盘研究市值 {new Decimal(item.close_market_value_cny).toString()} 元。</p>
             <p>持仓收益 {new Decimal(item.holding_return).mul(100).toString()}%；止损阈值 {new Decimal(item.stop_loss_threshold).mul(100).toString()}%。</p>
             </> : <p>已达到最长持仓期限：{item.maximum_holding_sessions} 个研究交易日。</p>}
             <p>判断时持仓 {item.execution_shares} 股，持有 {item.holding_age} 个研究交易日。下一开盘尝试退出，实际成交与拒绝由关联记录说明。</p>
+            </>}
           </li>)}</ul>}</>
           : risk.target ? <><p>替换本日组合建议。</p><Portfolio value={risk.target} /></>
             : <p>明确取消本日组合建议，不产生新目标。</p>}

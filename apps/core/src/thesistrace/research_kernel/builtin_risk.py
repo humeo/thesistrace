@@ -3,9 +3,24 @@
 from decimal import Decimal, localcontext
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictInt,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from thesistrace.research_kernel.numeric import ACCOUNTING_CONTEXT, canonical_decimal
+
+
+class TakeProfitTier(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    profit_threshold: float = Field(gt=0, allow_inf_nan=False)
+    cumulative_reduction: float = Field(gt=0, le=1, allow_inf_nan=False)
 
 
 class BuiltinRiskModule(BaseModel):
@@ -18,10 +33,30 @@ class BuiltinRiskModule(BaseModel):
     maximum_holding_sessions: StrictInt | None = Field(
         default=None, ge=1, exclude_if=lambda value: value is None,
     )
+    take_profit_tiers: list[TakeProfitTier] = Field(
+        default_factory=list, max_length=100, exclude_if=lambda value: not value,
+    )
+
+    @field_validator("take_profit_tiers")
+    @classmethod
+    def increasing_tiers(cls, tiers):
+        errors = []
+        for index in range(1, len(tiers)):
+            for field in ("profit_threshold", "cumulative_reduction"):
+                value = getattr(tiers[index], field)
+                if value <= getattr(tiers[index - 1], field):
+                    errors.append({
+                        "type": "value_error", "loc": (index, field), "input": value,
+                        "ctx": {"error": ValueError("Take-profit tiers must strictly increase")},
+                    })
+        if errors:
+            raise ValidationError.from_exception_data(cls.__name__, errors)
+        return tiers
 
     @model_validator(mode="after")
     def require_enabled_policy(self):
-        if self.stop_loss_threshold is None and self.maximum_holding_sessions is None:
+        if (self.stop_loss_threshold is None and self.maximum_holding_sessions is None
+                and not self.take_profit_tiers):
             raise ValueError("builtin_risk requires at least one enabled policy")
         return self
 

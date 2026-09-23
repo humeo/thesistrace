@@ -37,6 +37,7 @@ from thesistrace.research_kernel.strategy_program_runtime import (
     StrategyProgramError,
     get_strategy_runtime,
 )
+from thesistrace.research_kernel.take_profit import TakeProfitState, take_profit_decision
 from thesistrace.research_kernel.terminal_state_schema import (
     MAX_ACTIVE_SIGNALS,
     MAX_SIGNAL_VALIDITY_SESSIONS,
@@ -146,6 +147,27 @@ class FrameworkStrategy:
                                data, strategy, checksum, observe_common=observe_common,
                            ))
 
+    def validate_continuation(self, continuation):
+        """Validate resumable risk facts before any Open, including empty refreshes."""
+        risk = self._modules.risk_management
+        if not isinstance(risk, BuiltinRiskModule) or not risk.take_profit_tiers:
+            return
+        restored = FrameworkModulesDecisionState.model_validate(continuation["decision_state"])
+        if restored.contract_checksum != self._checksum:
+            raise ValueError("Framework state differs from the frozen modules")
+        state = TakeProfitState.model_validate(restored.module_states["risk_management"])
+        positions = {position["instrument_id"]: position for position in continuation["positions"]}
+        for item, cycle in state.take_profit_cycles.items():
+            position = positions.get(item)
+            if (position is None
+                    or cycle.highest_triggered_tier >= len(risk.take_profit_tiers)
+                    or cycle.holding_cycle_started_session != position[
+                        "holding_cycle_started_session"
+                    ]
+                    or cycle.last_execution_shares != position["execution_shares"]
+                    or cycle.last_adjusted_units != position["adjusted_units"]):
+                raise ValueError("Take-profit continuation differs from its actual holding cycle")
+
     def _invoke(self, stage, view, daily, module_states, diagnostics):
         program = self._programs[stage]
         try:
@@ -253,15 +275,27 @@ class FrameworkStrategy:
                 )
         elif isinstance(self._modules.risk_management, BuiltinRiskModule):
             observations = self._modules.risk_management.holding_observations(account)
+            risk_limits = {row["instrument_id"]: 0 for row in observations}
+            if self._modules.risk_management.take_profit_tiers:
+                risk_state, profit_limits, profit_observations = take_profit_decision(
+                    tiers=self._modules.risk_management.take_profit_tiers, account=account,
+                    previous=module_states["risk_management"], fills=fills,
+                )
+                module_states["risk_management"] = risk_state
+                observations.extend(profit_observations)
+                for item, maximum in profit_limits.items():
+                    risk_limits[item] = min(maximum, risk_limits.get(item, maximum))
             if observations:
                 reason = "+".join(dict.fromkeys(row["reason"] for row in observations))
                 limits = dict(target.position_limits) if target else {}
-                limits.update({row["instrument_id"]: 0 for row in observations})
-                target = PendingTarget(
-                    decision_session=session, execution="next_research_session_open",
-                    contract_checksum=self._checksum, reason=reason,
-                    allocation=target.allocation if target else None, position_limits=limits,
-                )
+                for item, maximum in risk_limits.items():
+                    limits[item] = min(maximum, limits.get(item, maximum))
+                if risk_limits:
+                    target = PendingTarget(
+                        decision_session=session, execution="next_research_session_open",
+                        contract_checksum=self._checksum, reason=reason,
+                        allocation=target.allocation if target else None, position_limits=limits,
+                    )
                 risk_evidence = HoldingRiskEvidence(
                     reason=reason, position_limits=limits, observations=observations,
                 )

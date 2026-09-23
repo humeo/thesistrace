@@ -121,12 +121,13 @@ async def _get_origin_through_mcp(settings, track_id, stderr_path):
         )
 
 
-@pytest.mark.parametrize('builtin_alpha,builtin_risk,holding_periods', [
-    (False, False, False), (True, False, False), (False, True, False), (True, True, False),
-    (True, True, True),
+@pytest.mark.parametrize('builtin_alpha,builtin_risk,holding_periods,take_profit', [
+    (False, False, False, False), (True, False, False, False),
+    (False, True, False, False), (True, True, False, False),
+    (True, True, True, False), (True, True, False, True),
 ])
 def test_framework_run_reuse_and_track_preserve_frozen_modules_and_account(
-    tmp_path, builtin_alpha, builtin_risk, holding_periods,
+    tmp_path, builtin_alpha, builtin_risk, holding_periods, take_profit,
 ):
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
@@ -147,8 +148,16 @@ def test_framework_run_reuse_and_track_preserve_frozen_modules_and_account(
             submitted.update(holdings_count=1, selection_every_sessions=1,
                              weighting='equal_weight', volatility_window=20,
                              exposure_expression='1')
+        if take_profit:
+            submitted['modules']['risk_management'] = {
+                'kind': 'builtin_risk/v1', 'take_profit_tiers': [
+                    {'profit_threshold': 0.0001, 'cumulative_reduction': 0.3},
+                    {'profit_threshold': 0.5, 'cumulative_reduction': 0.6},
+                ],
+            }
         costs = {**default_simulation_costs().model_dump(),
-                 'commission_min_cny': '2', 'slippage_bps': '1000' if builtin_risk else '15'}
+                 'commission_min_cny': '2',
+                 'slippage_bps': '0' if take_profit else ('1000' if builtin_risk else '15')}
         submitted['costs'] = costs
         diagnosed = client.post('/api/research/diagnostics', json={
             key: value for key, value in submitted.items()
@@ -175,6 +184,11 @@ def test_framework_run_reuse_and_track_preserve_frozen_modules_and_account(
         actual_states = (
             detail['result']['terminal_strategy_state']['decision_state']['module_states']
         )
+        if take_profit:
+            cycles = actual_states['risk_management']['take_profit_cycles']
+            assert cycles
+            assert any(float(cycle['executed_reduction_units']) > 0 for cycle in cycles.values())
+            expected['risk_management'] = actual_states['risk_management']
         if holding_periods:
             assert (actual_states['portfolio_construction']['selection']['signal_session']
                     == SESSIONS[2])
@@ -188,12 +202,17 @@ def test_framework_run_reuse_and_track_preserve_frozen_modules_and_account(
         assert original_events[0]['universe']['reason'] == 'visible_candidates'
         assert original_events[0]['alpha']['kind'] == ('formula' if builtin_alpha else 'signals')
         assert original_events[0]['risk_adjustment'] is None
-        if builtin_risk:
+        if builtin_risk and not take_profit:
             triggered = original_events[1]['risk_adjustment']
             assert triggered['mode'] == 'holding_risk'
             assert triggered['observations'][0]['holding_age'] == 1
             assert triggered['observations'][0]['stop_loss_threshold'] == '1e-2'
             assert detail['result']['terminal_strategy_state']['positions'] == []
+        if take_profit:
+            observation = original_events[1]['risk_adjustment']['observations'][0]
+            assert observation['reason'] == 'take_profit'
+            assert observation['cumulative_reduction'] == '3e-1'
+            assert float(observation['remaining_reduction_units']) > 0
         if holding_periods:
             retention = original_events[1]['portfolio_retentions'][0]
             assert retention['holding_age'] == 1

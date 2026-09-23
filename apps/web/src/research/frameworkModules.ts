@@ -1,3 +1,4 @@
+import { takeProfitSpec, type TakeProfitTier, type TakeProfitTierDraft } from "./takeProfit";
 import Decimal from "decimal.js";
 import { emptyProgramInputs, programDraft, programSpec, type ProgramInputs, type PythonProgram } from "./pythonStrategy";
 
@@ -15,7 +16,7 @@ export const frameworkStageLabels: Record<FrameworkStage, string> = {
 };
 export type ModuleDraft = { kind: "builtin" | "python"; program: ProgramInputs };
 export type FrameworkModulesDraft = Record<FrameworkStage, ModuleDraft>;
-export type BuiltinRiskModule = { kind: "builtin_risk/v1"; stop_loss_threshold?: number; maximum_holding_sessions?: number };
+export type BuiltinRiskModule = { kind: "builtin_risk/v1"; stop_loss_threshold?: number; maximum_holding_sessions?: number; take_profit_tiers?: TakeProfitTier[] };
 export type BuiltinPortfolioModule = { kind: "periodic_top_n/v1"; minimum_holding_sessions: number };
 export type FrameworkModules = {
   [Stage in FrameworkStage]: typeof builtinFrameworkModules[Stage] | { kind: "python"; program: PythonProgram }
@@ -29,14 +30,15 @@ export function builtinModulesDraft(): FrameworkModulesDraft {
   }])) as FrameworkModulesDraft;
 }
 export function frameworkSpec(draft: FrameworkModulesDraft, policies: {
-  stopLossThreshold: string; maximumHoldingSessions: string; minimumHoldingSessions: string;
+  stopLossThreshold: string; maximumHoldingSessions: string; minimumHoldingSessions: string; takeProfitTiers: TakeProfitTierDraft[];
 }): FrameworkModules {
-  const { stopLossThreshold, maximumHoldingSessions, minimumHoldingSessions } = policies;
+  const { stopLossThreshold, maximumHoldingSessions, minimumHoldingSessions, takeProfitTiers } = policies;
   return Object.fromEntries(frameworkStages.map(stage => [stage, draft[stage].kind === "builtin"
     ? stage === "portfolio_construction" && minimumHoldingSessions !== ""
       ? { kind: "periodic_top_n/v1", minimum_holding_sessions: holdingSessionsInputError(minimumHoldingSessions) ? Number.NaN : Number(minimumHoldingSessions) }
-    : stage === "risk_management" && (stopLossThreshold !== "" || maximumHoldingSessions !== "")
+    : stage === "risk_management" && (stopLossThreshold !== "" || maximumHoldingSessions !== "" || takeProfitTiers.length > 0)
       ? { kind: "builtin_risk/v1",
+        ...(takeProfitTiers.length ? { take_profit_tiers: takeProfitSpec(takeProfitTiers) } : {}),
         ...(stopLossThreshold !== "" ? { stop_loss_threshold: stopLossInputError(stopLossThreshold) ? Number.NaN : new Decimal(stopLossThreshold).div(100).toNumber() } : {}),
         ...(maximumHoldingSessions !== "" ? { maximum_holding_sessions: holdingSessionsInputError(maximumHoldingSessions) ? Number.NaN : Number(maximumHoldingSessions) } : {}) }
       : builtinFrameworkModules[stage] : { kind: "python", program: programSpec(draft[stage].program) }])) as FrameworkModules;
