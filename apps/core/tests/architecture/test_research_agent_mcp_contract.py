@@ -902,6 +902,18 @@ def test_registry_catalog_paginates_fields_and_builtins_as_one_collection() -> N
 
 
 def test_registry_context_paginates_folders_and_invalidates_changed_collections() -> None:
+    from thesistrace.data.overview import describe_family_fields
+
+    families = [family.model_copy(update={
+        "available_field_ids": family.supported_field_ids,
+        "coverage_start": date(2024, 1, 2), "coverage_end": date(2024, 1, 31),
+        "readiness": "ready",
+    }) for family in describe_family_fields(None)]
+
+    class DataReader(_DataOverviewReader):
+        def overview(self) -> DataOverview:
+            return super().overview().model_copy(update={"field_families": families})
+
     folders = [
         ResearchFolderSummary(
             id=f"folder_{i:03}",
@@ -916,15 +928,19 @@ def test_registry_context_paginates_folders_and_invalidates_changed_collections(
         def list(self, researcher_id: UUID) -> ResearchFolderList:
             return ResearchFolderList(items=folders)
 
-    registry = _registry(research_folders=FolderReader())
+    registry = _registry(research_folders=FolderReader(), data_overview=DataReader())
     first = registry.get_research_context()
+    assert first.data_overview == DataReader().overview()
+    assert len(first.model_dump_json().encode("utf-8")) <= 64 * 1024
     assert len(first.folders.items) == 20
     assert first.folders.next_cursor
     seen = list(first.folders.items)
     cursor = first.folders.next_cursor
     while cursor is not None:
         page = registry.get_research_context(folder_cursor=cursor)
-        assert len(page.model_dump_json().encode("utf-8")) <= 32 * 1024
+        assert len(page.model_dump_json().encode("utf-8")) <= 64 * 1024
+        assert page.data_overview == first.data_overview
+        assert page.authoring_constraints == first.authoring_constraints
         seen.extend(page.folders.items)
         cursor = page.folders.next_cursor
     assert seen == folders
@@ -1833,9 +1849,9 @@ def test_v1_inventory_scopes_descriptions_annotations_and_schemas_are_exact() ->
     canonical = _canonical_v1_contract()
 
     assert sha256(canonical).hexdigest() == (
-        "12ed5bf12f96f4fadb0aa0c705881bde37a96bf7303bc2b66055ccb65c93fa1a"
+        "3192733e7f2e05cf474b947382cb57dd6e5f1b8f3b840e55ea6d5a2537994b1f"
     )
-    assert len(canonical) == 302045
+    assert len(canonical) == 302134
 
 
 def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None:

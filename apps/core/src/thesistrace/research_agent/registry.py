@@ -344,6 +344,10 @@ class ResearchAgentExpectedFailure(RuntimeError):
         self.retry_after_seconds = retry_after_seconds
 
 
+# Context repeats the complete Dataset families and current authoring constraints
+# beside each folder page. Keep that fixed metadata within an explicit bound.
+RESEARCH_CONTEXT_PAGE_BYTES = 64 * 1024
+
 READ_ONLY_TOOL_ANNOTATIONS = ToolAnnotations(
     read_only_hint=True,
     destructive_hint=False,
@@ -873,6 +877,7 @@ class ResearchAgentCapabilityRegistry:
                 query={"tool": "get_research_context"},
                 cursor=request.folder_cursor,
                 limit=request.folder_limit,
+                byte_budget=RESEARCH_CONTEXT_PAGE_BYTES,
                 build=lambda kept, next_cursor: ResearchContext(
                     data_overview=overview,
                     authoring_constraints=constraints,
