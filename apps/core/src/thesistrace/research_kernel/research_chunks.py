@@ -689,7 +689,6 @@ def _execute_strategy_chunk_from_validated_alpha_factor(
     if not isinstance(metric_state, Mapping):
         raise ValueError("Strategy calculation metric state is invalid")
     metric_state = dict(metric_state)
-    metric_state["cumulative_cost"] = str(Decimal(str(metric_state["cumulative_cost"])).normalize())
     strategy_seconds = monotonic() - strategy_started
     finalize_started = monotonic()
     completed_count = alpha_factor_outcome.completed_research_session_count

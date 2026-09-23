@@ -1758,7 +1758,7 @@ def advance_strategy_metric_state(
             float(item["value"]),
         )
     state["turnover_count"] = int(state.get("turnover_count", 0)) + len(turnover_events)
-    state["cumulative_cost"] = str(cumulative_cost)
+    state["cumulative_cost"] = canonical_decimal(cumulative_cost)
     state["upper_limit_buy_rejections"] = rejection_counts["upper_limit_buy"]
     state["lower_limit_sell_rejections"] = rejection_counts["lower_limit_sell"]
     state["suspension_rejections"] = rejection_counts["suspension"]

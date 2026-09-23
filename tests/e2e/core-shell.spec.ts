@@ -303,9 +303,10 @@ test("Custom fees and slippage survive Run reuse and DailyTrack refresh", { tag:
   expect((await source.json()).input.costs).toEqual(costs);
 });
 
-for (const policyName of ["Close stop loss", "Holding periods", "Cumulative take profit", "Portfolio drawdown"]) {
+for (const policyName of ["Close stop loss", "Holding periods", "Cumulative take profit", "Portfolio drawdown", "Combined risk rules"]) {
 const holdingPeriods = policyName === "Holding periods";
-const drawdown = policyName === "Portfolio drawdown";
+const combined = policyName === "Combined risk rules";
+const drawdown = policyName === "Portfolio drawdown" || combined;
 const takeProfit = policyName === "Cumulative take profit";
 test(`${policyName} survives Run reuse and DailyTrack refresh`, { tag: "@isolated" }, async ({ page }, testInfo) => {
   test.setTimeout(240_000);
@@ -317,6 +318,14 @@ test(`${policyName} survives Run reuse and DailyTrack refresh`, { tag: "@isolate
     await page.getByLabel("Drawdown threshold (%)", { exact: true }).fill("1");
     await page.getByLabel("Maximum stock exposure (%)", { exact: true }).fill("30");
     await page.getByLabel("Cooldown (trading sessions)", { exact: true }).fill("2");
+    if (combined) {
+      await page.getByLabel("Stop loss (%)", { exact: true }).fill("1");
+      await page.getByLabel("Minimum holding (trading sessions)", { exact: true }).fill("3");
+      await page.getByLabel("Maximum holding (trading sessions)", { exact: true }).fill("5");
+      await page.getByRole("button", { name: "Add take-profit tier", exact: true }).click();
+      await page.getByLabel("Profit threshold (%)", { exact: true }).fill("1");
+      await page.getByLabel("Cumulative reduction (%)", { exact: true }).fill("30");
+    }
   } else if (takeProfit) {
     await page.getByRole("button", { name: "Add take-profit tier", exact: true }).click();
     await page.getByLabel("Profit threshold (%)", { exact: true }).fill("0.01");
@@ -340,7 +349,10 @@ test(`${policyName} survives Run reuse and DailyTrack refresh`, { tag: "@isolate
   await expect(page.locator(".research-run-facts").getByText(/Status\s+succeeded/)).toBeVisible({ timeout: 90_000 });
   const accepted = await page.request.get(`/api/research-runs/${runId}`);
   expect(accepted.ok()).toBe(true);
-  const policy = drawdown ? { kind: "builtin_risk/v1", portfolio_drawdown: {
+  const policy = drawdown ? { kind: "builtin_risk/v1", ...(combined ? {
+    stop_loss_threshold: 0.01, maximum_holding_sessions: 5,
+    take_profit_tiers: [{ profit_threshold: 0.01, cumulative_reduction: 0.3 }],
+  } : {}), portfolio_drawdown: {
     drawdown_threshold: 0.01, maximum_stock_exposure: 0.3, cooldown_sessions: 2,
   } } : takeProfit ? { kind: "builtin_risk/v1", take_profit_tiers: [
     { profit_threshold: 0.0001, cumulative_reduction: 0.3 },
@@ -363,6 +375,28 @@ test(`${policyName} survives Run reuse and DailyTrack refresh`, { tag: "@isolate
     await page.getByRole("button", { name: `查看原始记录：${trigger.decision_session}`, exact: true }).click();
     await expect(page.getByLabel("风险判断依据", { exact: true })).toContainText("股票目标上限 30%");
     await expect(page.getByLabel("风险判断依据", { exact: true })).toContainText("历史最大回撤不重置");
+    if (combined) {
+      expect(trigger.risk_adjustment.observations.some((item: { reason: string }) => item.reason === "stop_loss")).toBe(true);
+      await expect(page.getByLabel("风险判断依据", { exact: true })).toContainText("止损");
+      await expect(page.getByLabel("组合建议", { exact: true })).toContainText("NoUpdate");
+      await page.getByRole("button", { name: `查看原始记录：${rows[0].decision_session}`, exact: true }).click();
+      await expect(page.getByLabel("组合建议", { exact: true })).toContainText("目标仓位 100.00%");
+      await page.getByRole("button", { name: `查看原始记录：${trigger.decision_session}`, exact: true }).click();
+      await page.getByRole("button", { name: "查看目标", exact: true }).click();
+      await page.getByRole("button", { name: `查看原始记录：${trigger.decision_session}`, exact: true }).click();
+      const target = JSON.parse(await page.getByLabel("原始 JSON", { exact: true }).innerText());
+      expect(target.target_id).toBe(trigger.target_id);
+      expect(target.maximum_stock_exposure).toBe(0.3);
+      expect(Object.values(target.position_limits).every(value => value === 0)).toBe(true);
+      await expect(page.getByRole("table", { name: "调仓目标", exact: true })).toContainText("≤ 0");
+      const fills = await page.request.post(`/api/research-runs/${runId}/events/query`, {
+        headers: sameOriginHeaders(), data: { section: "strategy_fills", limit: 50 },
+      });
+      expect(fills.ok()).toBe(true);
+      expect((await fills.json()).rows.every((row: { side: string }) => row.side === "buy")).toBe(true);
+      expect((await (await page.request.get(`/api/research-runs/${runId}`)).json()).result.terminal_strategy_state.pending_target).not.toBeNull();
+      await page.screenshot({ path: testInfo.outputPath("combined-risk-reasons.png"), fullPage: true });
+    }
   } else if (takeProfit) {
     const trigger = rows.find((row: { risk_adjustment: { observations?: { reason: string }[] } | null }) =>
       row.risk_adjustment?.observations?.some(item => item.reason === "take_profit"));
@@ -409,6 +443,23 @@ test(`${policyName} survives Run reuse and DailyTrack refresh`, { tag: "@isolate
   expect(tracked.ok()).toBe(true);
   const trackRows = (await tracked.json()).rows;
   expect(trackRows.slice(0, rows.length)).toEqual(rows);
+  if (combined) {
+    const fills = await page.request.post(`/api/daily-tracks/${trackId}/events/query`, {
+      headers: sameOriginHeaders(), data: { section: "strategy_fills", limit: 50 },
+    });
+    expect(fills.ok()).toBe(true);
+    const sale = (await fills.json()).rows.find((row: { side: string }) => row.side === "sell");
+    expect(sale).toBeTruthy();
+    await page.getByRole("tab", { name: /^Holdings/ }).click();
+    await page.getByText("Trading events", { exact: true }).click();
+    await page.getByLabel("事件类型").selectOption("strategy_fills");
+    await page.getByRole("button", { name: `查看原始记录：${sale.session} ${sale.instrument_id.replace(/^equity:/, "")}`, exact: true }).click();
+    const renderedFill = JSON.parse(await page.getByLabel("原始 JSON", { exact: true }).innerText());
+    expect(renderedFill).toMatchObject({ side: "sell", quantity: sale.quantity, session: sale.session, execution_price: sale.execution_price });
+    await expect(page.getByLabel("成交价格与费用明细", { exact: true })).toContainText("原始 Open");
+    await expect(page.getByLabel("成交价格与费用明细", { exact: true })).toContainText("模拟成交价");
+    await page.screenshot({ path: testInfo.outputPath("combined-next-open-fill.png"), fullPage: true });
+  }
   if (drawdown) expect(trackRows.some((row: { risk_adjustment: { observations?: { reason: string; completed_cooldown_sessions?: number }[] } | null }) =>
     row.risk_adjustment?.observations?.some(item => item.reason === "portfolio_drawdown" && Number(item.completed_cooldown_sessions) >= 2))).toBe(true);
   if (takeProfit) expect(trackRows.some((row: { risk_adjustment: { observations?: { reason: string; executed_reduction_units?: string }[] } | null }) =>
@@ -424,6 +475,23 @@ test(`${policyName} survives Run reuse and DailyTrack refresh`, { tag: "@isolate
   const source = await page.request.get(`/api/research-runs/${runId}`);
   expect(source.ok()).toBe(true);
   expect((await source.json()).input.modules.risk_management).toEqual(policy);
+  if (combined) {
+    if (!/^run_[a-f0-9]+$/.test(runId)) throw new Error("Unexpected test Run identity");
+    execFileSync("docker", ["exec", testContainer("postgres"), "psql",
+      "--username", "thesistrace_owner", "--dbname", "thesistrace",
+      "--set", "ON_ERROR_STOP=1", "--command",
+      `UPDATE publication.payload_retention
+       SET published_at = now() - interval '8 days', expires_at = now() - interval '1 second'
+       WHERE manifest_sha256 = (SELECT result_manifest_sha256 FROM research_runs.runs WHERE id = '${runId}')`,
+    ], { stdio: ["ignore", "pipe", "pipe"] });
+    await page.goto(runUrl);
+    await expect(page.locator(".research-run-facts").getByText(/Status\s+succeeded/)).toBeVisible();
+    await page.getByText("Trading events", { exact: true }).click();
+    await page.getByLabel("事件类型").selectOption("strategy_fills");
+    await expect(page.getByRole("status").filter({ hasText: "交易明细已过期" })).toBeVisible();
+    await expect(page.getByText("本次查询没有匹配的记录。", { exact: true })).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath("combined-expired-events.png"), fullPage: true });
+  }
 });
 }
 
