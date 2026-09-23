@@ -1329,7 +1329,7 @@ def _execute_strategy_item_messages(
                     final_alpha_continuation["completed_research_session_count"]
                 ),
                 "continuation": {
-                    "schema_version": "research-chunk-continuation-v3",
+                    "schema_version": "research-chunk-continuation-v4",
                     "research_kind": "strategy_backtest",
                     **final_alpha_continuation,
                     **strategy_continuation,

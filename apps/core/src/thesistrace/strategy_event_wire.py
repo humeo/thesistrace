@@ -5,12 +5,15 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Iterator, Mapping
 
-EVENT_FRAME_ROWS = 512
-MAX_EVENT_RECORD_BYTES = 24 * 1024
-MAX_TARGET_RECORD_BYTES = 2 * 1024 * 1024
-MAX_FRAMEWORK_RECORD_BYTES = 4 * 1024 * 1024
-MAX_EVENT_FRAME_BYTES = 8 * 1024 * 1024
-MAX_EVENT_SEGMENT_BYTES = 64 * 1024 * 1024
+from thesistrace.research_kernel.strategy_event_limits import (
+    EVENT_FRAME_ROWS,
+    MAX_EVENT_FRAME_BYTES,
+    MAX_EVENT_RECORD_BYTES,
+    MAX_EVENT_SEGMENT_BYTES,
+    MAX_FRAMEWORK_RECORD_BYTES,
+    MAX_TARGET_RECORD_BYTES,
+)
+
 _EVENT_SECTIONS = frozenset(
     {
         "strategy_targets",

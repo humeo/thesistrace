@@ -58,7 +58,7 @@ def project_tracking_checkpoint(
         prior_observation_state, strategy_state["retained_delta"],
     )
     return {
-        "schema_version": "daily-track-checkpoint-v4",
+        "schema_version": "daily-track-checkpoint-v5",
         "tracking_observation_state": observation_state.model_dump(mode="json"),
         "origin_session": state.origin_session,
         "boundary_session": state.boundary_session,

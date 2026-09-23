@@ -851,7 +851,7 @@ class KernelStateCheckpoint(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["daily-track-checkpoint-v4"]
+    schema_version: Literal["daily-track-checkpoint-v5"]
     tracking_observation_state: TrackingObservationState
     origin_session: str
     boundary_session: str

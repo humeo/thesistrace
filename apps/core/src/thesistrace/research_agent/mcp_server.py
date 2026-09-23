@@ -48,7 +48,7 @@ type ResearchAgentSubjectFactory = Callable[[ServerRequestContext[object]], str]
 type ResearchAgentTransport = Literal["stdio", "streamable_http"]
 # Twenty 64 KiB sources plus 64 KiB parameter objects, including JSON's
 # six-byte ASCII escaping, must fit the same contract accepted over HTTP.
-RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES = 16 * 1024 * 1024
+RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES = 64 * 1024 * 1024
 # Complete 4 MiB Framework pages plus both MCP representations and text escaping.
 RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES = 16 * 1024 * 1024
 RESEARCH_AGENT_RATE_WINDOW_SECONDS = 60

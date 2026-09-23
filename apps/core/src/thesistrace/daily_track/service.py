@@ -116,19 +116,20 @@ from thesistrace.research_kernel import (
     equivalence_bytes,
     first_divergence,
 )
+from thesistrace.research_kernel.capacity import DecisionMode
 from thesistrace.research_kernel.common_inputs import (
     common_input_references,
     requires_common_industry,
 )
-from thesistrace.research_kernel.strategy_program_runtime import (
-    OUTPUT_BYTES,
-    StrategyProgramFailure,
-)
+from thesistrace.research_kernel.framework_strategy import FrameworkModules
+from thesistrace.research_kernel.strategy_program_runtime import STATE_BYTES, StrategyProgramFailure
+from thesistrace.research_kernel.terminal_state_schema import FRAMEWORK_STATE_BYTES
 from thesistrace.research_series import (
     research_sessions,
     slice_research_sessions,
 )
 from thesistrace.researcher.quota import QuotaPolicyLookup, unavailable_quota_policy
+from thesistrace.strategy_event_wire import MAX_TARGET_RECORD_BYTES
 from thesistrace.strategy_evidence import (
     StrategyEventPageRead,
     StrategyEventQuery,
@@ -517,7 +518,7 @@ class DailyTrackService:
         track_id = f"track_{uuid4().hex[:20]}"
         boundary = origin.initial_strategy_state.session
         provenance = {
-            "schema_version": "daily-track-activation-checkpoint-v3",
+            "schema_version": "daily-track-activation-checkpoint-v4",
             "daily_track_id": track_id,
             "seed_run_id": origin.seed_run_id,
             "boundary_session": boundary,
@@ -530,7 +531,7 @@ class DailyTrackService:
                 **StrategyEvidencePublication().finish(),
                 "checkpoint": CompressedJsonPayload(
                     {
-                        "schema_version": "daily-track-activation-checkpoint-v3",
+                        "schema_version": "daily-track-activation-checkpoint-v4",
                         "tracking_observation_state": initial_tracking_observation_state(
                             boundary, origin.initial_strategy_state.net_nav,
                         ).model_dump(mode="json"),
@@ -1213,6 +1214,7 @@ class DailyTrackService:
         admission = self._generation_store.open_admission(current.generation_manifest_sha256)
         origin = TrackingOrigin.model_validate(track["origin"])
         planning = _origin_planning_facts(origin)
+        decision_mode, python_program_count = _origin_decision_capacity(origin)
         maximum_universe_cardinality = self._generation_store.maximum_universe_cardinality(
             admission.generation.manifest_sha256,
             universe=origin_universe(origin),
@@ -1227,6 +1229,7 @@ class DailyTrackService:
             maximum_universe_cardinality=maximum_universe_cardinality,
             effective_lookback=planning["effective_lookback"],
             execution_memory_bytes=self._execution_memory_bytes,
+            decision_mode=decision_mode, python_program_count=python_program_count,
         )
         return not plan.capacity_blocked and len(plan.target_sessions) >= len(target_sessions)
 
@@ -2099,8 +2102,11 @@ class DailyTrackService:
                         ),
                     }
                 ),
-                byte_budget=BUSINESS_PAGE_BYTES + (
-                    OUTPUT_BYTES if account.decision_state.mode == "direct" else 0
+                byte_budget=(
+                    BUSINESS_PAGE_BYTES
+                    + MAX_TARGET_RECORD_BYTES
+                    + (FRAMEWORK_STATE_BYTES
+                       if account.decision_state.mode == "framework" else STATE_BYTES)
                 ),
             )
         if isinstance(query, DailyTrackProvenanceResultSectionInput):
@@ -2706,6 +2712,7 @@ class DailyTrackService:
                 )
                 planning_candidates = target_sessions[:MAX_CHUNK_SESSION_COUNT]
                 planning = _origin_planning_facts(origin)
+                decision_mode, python_program_count = _origin_decision_capacity(origin)
                 maximum_universe_cardinality = self._generation_store.maximum_universe_cardinality(
                     generation.manifest_sha256,
                     universe=origin_universe(origin),
@@ -2722,6 +2729,7 @@ class DailyTrackService:
                     maximum_universe_cardinality=maximum_universe_cardinality,
                     effective_lookback=planning["effective_lookback"],
                     execution_memory_bytes=execution_memory_bytes,
+                    decision_mode=decision_mode, python_program_count=python_program_count,
                 )
                 planned_target_sessions = tuple(value.isoformat() for value in plan.target_sessions)
                 if existing is None:
@@ -3402,7 +3410,7 @@ class DailyTrackService:
     ) -> Mapping[str, object] | None:
         if (
             self._working_cache is None
-            or predecessor.get("schema_version") != "daily-track-checkpoint-v4"
+            or predecessor.get("schema_version") != "daily-track-checkpoint-v5"
         ):
             return None
         try:
@@ -3427,7 +3435,7 @@ class DailyTrackService:
         if checkpoint.boundary_session != claim.target_sessions[-1]:
             raise RuntimeError("Tracking child returned an invalid Target boundary")
         provenance = {
-            "schema_version": "daily-track-checkpoint-v4",
+            "schema_version": "daily-track-checkpoint-v5",
             "daily_track_id": claim.track_id,
             "predecessor_manifest_sha256": claim.predecessor_manifest_sha256,
             "boundary_session": checkpoint.boundary_session,
@@ -3811,6 +3819,19 @@ def _origin_planning_facts(origin: TrackingOrigin) -> dict[str, int]:
     return facts
 
 
+def _origin_decision_capacity(origin: TrackingOrigin) -> tuple[DecisionMode, int]:
+    strategy = origin.immutable_input.get("strategy")
+    if not isinstance(strategy, Mapping):
+        raise RuntimeError("DailyTrack frozen strategy planning input is invalid")
+    kind = strategy.get("kind")
+    if kind == "direct":
+        return "direct", 1
+    if kind == "framework":
+        modules = FrameworkModules.model_validate(strategy.get("modules"))
+        return "framework", len(modules.programs())
+    raise RuntimeError("DailyTrack frozen strategy planning input is invalid")
+
+
 _TRACK_SELECT = """
 SELECT track.id, track.status, track.origin, track.blocked_reason,
        track.queue_position,
@@ -4156,9 +4177,9 @@ def _read_publication_json(
     value = decode_compressed_json(payload)
     value = _mapping_value(value, "DailyTrack product payload")
     schema = value.get("schema_version")
-    if schema == "daily-track-checkpoint-v4":
+    if schema == "daily-track-checkpoint-v5":
         KernelStateCheckpoint.model_validate(value)
-    elif schema == "daily-track-activation-checkpoint-v3":
+    elif schema == "daily-track-activation-checkpoint-v4":
         expected = {"schema_version", "terminal_strategy_state", "tracking_observation_state"}
         if set(value) != expected:
             raise RuntimeError("Activation checkpoint fields are invalid")

@@ -487,7 +487,7 @@ def empty_research_continuation(
     if research_kind not in {"factor_evaluation", "strategy_backtest"}:
         raise ValueError("Research Kind is invalid")
     continuation: dict[str, object] = {
-        "schema_version": "research-chunk-continuation-v3",
+        "schema_version": "research-chunk-continuation-v4",
         "research_kind": research_kind,
         **empty_alpha_factor_continuation(research_kind),
     }
@@ -1300,7 +1300,7 @@ def validated_research_continuation(
     )
     if (
         not isinstance(copied, dict)
-        or copied.get("schema_version") != "research-chunk-continuation-v3"
+        or copied.get("schema_version") != "research-chunk-continuation-v4"
         or copied.get("research_kind") != research_kind
         or research_kind not in {"factor_evaluation", "strategy_backtest"}
         or set(copied) != expected_keys

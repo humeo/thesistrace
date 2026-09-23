@@ -618,7 +618,7 @@ def test_alpha_factor_outcome_hot_path_has_a_performance_regression_gate(
     def reject_full_matrix_serialization(value: object) -> bytes:
         nonlocal research_continuation_serializations
         if isinstance(value, Mapping) and value.get("schema_version") == (
-            "research-chunk-continuation-v3"
+            "research-chunk-continuation-v4"
         ):
             research_continuation_serializations += 1
         if isinstance(value, Mapping) and set(value) == {
@@ -1244,7 +1244,7 @@ def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(
         )
         assert final.continuation["alpha_checksum"] == uninterrupted.continuation["alpha_checksum"]
         assert "alpha_checksum_state" not in final.continuation
-        assert final.continuation["schema_version"] == "research-chunk-continuation-v3"
+        assert final.continuation["schema_version"] == "research-chunk-continuation-v4"
         chunked_result = _read_staged_chunk_result(
             final.final_values,
             [list(calculation.strategy_daily_observations) for calculation in chunk_results],

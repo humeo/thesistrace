@@ -8,7 +8,7 @@
     "execution_slots_per_worker": 1
   },
   "fixed_limits": {
-    "request_bytes": 16777216,
+    "request_bytes": 67108864,
     "response_bytes": 16777216,
     "formula_characters": 4096,
     "calls_per_window": 120,
@@ -21,9 +21,10 @@
     "cursor_characters": 1024
   },
   "deterministic_payloads": {
-    "v1_contract_sha256": "1f3cd7a1049c5fa6ce3e58ade0510433c3c8daf497611e28d16d52cd59c8b953",
-    "v1_contract_bytes": 268072,
-    "maximum_factor_batch_call_bytes": 84536
+    "v1_contract_sha256": "2b607884941cc2332089a3a6e5708a8eaa136689ca0f1b4655ed169aa72f1dd5",
+    "v1_contract_bytes": 269111,
+    "maximum_factor_batch_call_bytes": 84536,
+    "maximum_framework_batch_call_bytes": 62887654
   },
   "observed": {
     "tests_passed": 4,
@@ -41,6 +42,6 @@
     "transport": "in-process deterministic MCP client",
     "network_access": false,
     "real_model": false,
-    "note": "Deterministic contract hash, size and response limit refreshed on 2026-09-23 for Framework modules and complete stage-evidence pages. Observed performance remains the prior 2026-09-07 measurement and does not qualify the increased limits. Maximum Python request and complete 4 MiB event-page wire envelopes have separate deterministic regressions in test_research_agent_mcp_contract.py. Business-page bounds and transport bounds are verified separately."
+    "note": "Deterministic contract hash and size refreshed on 2026-09-23 for Framework modules. The hash sorts semantically unordered JSON Schema anyOf alternatives so unrelated test imports cannot change it. Observed performance remains the prior 2026-09-07 measurement and does not qualify the increased request limit. Maximum Python request and complete 4 MiB event-page wire envelopes have separate deterministic regressions in test_research_agent_mcp_contract.py. Business-page bounds and transport bounds are verified separately."
   }
 }

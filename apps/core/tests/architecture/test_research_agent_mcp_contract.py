@@ -24,6 +24,7 @@ from thesistrace.daily_track import (
     DailyTrackDetailUnavailable,
     DailyTrackInvalidCursor,
     DailyTrackList,
+    DailyTrackOriginResultSection,
     DailyTrackPollingDetail,
     DailyTrackRefreshConflict,
     DailyTrackRefreshOutcome,
@@ -769,11 +770,29 @@ def _canonical_v1_contract() -> bytes:
         for capability in _registry(authority).accessible_capabilities()
     ]
     return json.dumps(
-        contract,
+        _canonical_contract_value(contract),
         ensure_ascii=True,
         separators=(",", ":"),
         sort_keys=True,
     ).encode()
+
+
+def _canonical_contract_value(value):
+    if isinstance(value, dict):
+        return {
+            key: (
+                sorted(
+                    (_canonical_contract_value(item) for item in member),
+                    key=lambda item: json.dumps(item, sort_keys=True),
+                )
+                if key == "anyOf" and isinstance(member, list)
+                else _canonical_contract_value(member)
+            )
+            for key, member in value.items()
+        }
+    if isinstance(value, list):
+        return [_canonical_contract_value(item) for item in value]
+    return value
 
 
 def test_local_operator_has_only_safe_default_scopes() -> None:
@@ -1814,13 +1833,13 @@ def test_v1_inventory_scopes_descriptions_annotations_and_schemas_are_exact() ->
     canonical = _canonical_v1_contract()
 
     assert sha256(canonical).hexdigest() == (
-        "1f3cd7a1049c5fa6ce3e58ade0510433c3c8daf497611e28d16d52cd59c8b953"
+        "2b607884941cc2332089a3a6e5708a8eaa136689ca0f1b4655ed169aa72f1dd5"
     )
-    assert len(canonical) == 268072
+    assert len(canonical) == 269111
 
 
 def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None:
-    assert RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES == 16 * 1024 * 1024
+    assert RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES == 64 * 1024 * 1024
     assert RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES == 16 * 1024 * 1024
     assert RESEARCH_AGENT_RATE_WINDOW_SECONDS == 60
     assert RESEARCH_AGENT_MAX_CALLS_PER_WINDOW == 120
@@ -1885,6 +1904,7 @@ def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None
         "v1_contract_sha256": sha256(canonical_contract).hexdigest(),
         "v1_contract_bytes": len(canonical_contract),
         "maximum_factor_batch_call_bytes": maximum_batch_bytes,
+        "maximum_framework_batch_call_bytes": 62_887_654,
     }
     assert evidence["observed"]["maximum_resident_set_bytes"] < (
         evidence["production_envelope"]["container_memory_bytes"] // 10
@@ -1927,6 +1947,94 @@ def test_wire_envelope_carries_twenty_maximum_python_programs_and_explicit_state
     assert _wire_response_bytes(context, method="tools/call", result=result) <= (
         RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES
     )
+
+
+def test_wire_envelope_carries_twenty_frameworks_with_four_maximum_programs():
+    from pydantic import TypeAdapter
+
+    prefix = (
+        "def decide(context, state, parameters):\n"
+        "    return {'output': None, 'state': state}\n#"
+    )
+    source = prefix + "\x01" * (65_536 - len(prefix.encode()))
+    program = {
+        "source": source, "parameters": {"payload": "\x7f" * (65_536 - len('{"payload":""}'))},
+        "data_requirements": {"field_ids": [], "history_sessions": 1},
+    }
+    modules = {stage: {"kind": "python", "program": program} for stage in (
+        "universe_selection", "alpha", "portfolio_construction", "risk_management",
+    )}
+    batch = {
+        "batch_kind": "strategy_sweep", "request_id": "maximum-framework-batch",
+        "start_date": "2026-08-03", "end_date": "2026-08-04", "universe": "top300",
+        "strategies": [{
+            "item_key": str(index), "strategy_mode": "framework", "initial_cash_cny": "100000",
+            "modules": modules,
+        } for index in range(20)],
+    }
+    TypeAdapter(ResearchBatchAdmissionCommand).validate_python(batch)
+    size = _wire_request_bytes(CallToolRequestParams(
+        name="submit_research_batch", arguments=batch,
+    ))
+    assert size == 62_887_654
+    assert size <= RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES
+
+
+def test_mcp_origin_result_preserves_large_legal_framework_state_and_pending_target():
+    checksum = "a" * 64
+    target = {
+        "decision_session": "2026-08-03",
+        "execution": "next_research_session_open",
+        "contract_checksum": checksum,
+        "reason": "risk_limit",
+        "allocation": None,
+        "position_limits": {"equity:600001.SH": 0},
+    }
+    origin = DailyTrackOriginResultSection.model_validate({
+        "track_id": "track_test",
+        "seed_run_id": "run_test",
+        "seed_research_available": True,
+        "result_checksum_sha256": "b" * 64,
+        "terminal_account": {
+            "session": "2026-08-03",
+            "gross_cash": "100000", "net_cash": "100000",
+            "gross_nav": "100000", "net_nav": "100000",
+            "cumulative_transaction_cost": "0",
+            "research_phase": {"origin_session": "2026-08-03", "report_session_count": 1},
+            "decision_state": {
+                "mode": "framework", "contract_checksum": checksum,
+                "selection_interval": None,
+                "module_states": {
+                    stage: {"payload": "x" * 240_000}
+                    for stage in (
+                        "universe_selection", "alpha",
+                        "portfolio_construction", "risk_management",
+                    )
+                },
+                "universe": [], "signals": [], "retained_proposal": target,
+            },
+            "contract_checksum": checksum,
+            "pending_target": target,
+        },
+        "positions": [],
+        "next_cursor": None,
+    })
+    reader = _DailyTrackReader()
+    reader.result_section = origin
+    anyio.run(_read_large_origin_through_mcp, reader, origin)
+
+
+async def _read_large_origin_through_mcp(
+    reader: _DailyTrackReader, origin: DailyTrackOriginResultSection,
+) -> None:
+    async with Client(_server(_registry(daily_tracks=reader), events=[])) as client:
+        response = await client.call_tool(
+            "get_daily_track_result", {"track_id": "track_test", "section": "origin"},
+        )
+    assert not response.is_error
+    assert response.structured_content == origin.model_dump(mode="json")
+    assert json.loads(response.content[0].text) == response.structured_content
+    assert len(response.content[0].text.encode()) > 900_000
 
 
 @pytest.mark.parametrize("page_mebibytes", [2, 4])

@@ -346,8 +346,8 @@ FIXED_COSTS = {
 }
 SEMANTIC_VERSIONS = {
     "factor": "factor-v1",
-    "strategy": "strategy-v4",
-    "kernel": "kernel-v7",
+    "strategy": "strategy-v5",
+    "kernel": "kernel-v8",
 }
 
 
@@ -4673,6 +4673,10 @@ def _admitted_input(
             maximum_universe_cardinality=universe_instrument_count,
             effective_lookback=requirements.effective_lookback,
             execution_memory_bytes=execution_memory_bytes,
+            decision_mode=("direct" if direct else "framework" if isinstance(
+                command, StrategyBacktestSpec,
+            ) else "factor_evaluation"),
+            python_program_count=len(programs),
         )
     except ResearchChunkCapacityError as error:
         raise ResearchRunAdmissionRejected(

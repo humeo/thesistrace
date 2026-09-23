@@ -8,6 +8,8 @@ from thesistrace.alpha_language.language import (
 from thesistrace.research_authoring.models import (
     ExposureAuthoringConstraints,
     FormulaAuthoringConstraints,
+    FrameworkAuthoringConstraints,
+    FrameworkStageConstraints,
     InitialCashConstraints,
     IntegerRange,
     PythonProgramConstraints,
@@ -18,6 +20,7 @@ from thesistrace.research_batch.models import (
     MIN_RESEARCH_BATCH_ITEMS,
     RESEARCH_BATCH_KINDS,
 )
+from thesistrace.research_kernel.builtin_framework import BUILTIN_FRAMEWORK_MODULES
 from thesistrace.research_kernel.numeric import MAX_INITIAL_CASH_CNY
 from thesistrace.research_kernel.strategy_program_assets import PYTHON_VERSION
 from thesistrace.research_kernel.strategy_program_guest import AVAILABLE_MODULES
@@ -30,6 +33,11 @@ from thesistrace.research_kernel.strategy_program_runtime import (
     SOURCE_BYTES,
     STATE_BYTES,
     WALL_SECONDS,
+)
+from thesistrace.research_kernel.terminal_state_schema import (
+    FRAMEWORK_STATE_BYTES,
+    MAX_ACTIVE_SIGNALS,
+    MAX_SIGNAL_VALIDITY_SESSIONS,
 )
 from thesistrace.research_run.models import (
     MAX_HOLDINGS_COUNT,
@@ -52,6 +60,32 @@ CURRENT_RESEARCH_AUTHORING_CONSTRAINTS = ResearchAuthoringConstraints(
         maximum_bootstrap_wall_seconds=BOOTSTRAP_WALL_SECONDS, maximum_fields=32,
         history_sessions=IntegerRange(minimum=1, maximum=253),
         python_version=PYTHON_VERSION, modules=AVAILABLE_MODULES,
+    ),
+    framework=FrameworkAuthoringConstraints(
+        stages=tuple(FrameworkStageConstraints(
+            stage=stage, builtin_identity=identity, output_contract={
+                "universe_selection": (
+                    "Return {reason, instrument_ids} to replace selected candidates; "
+                    "null retains the prior selection."
+                ),
+                "alpha": (
+                    "Return {reason, signals: [{instrument_id, value, valid_for_sessions}]} "
+                    "to update active signals; null retains unexpired signals. "
+                    "Validity is in Research Sessions."
+                ),
+                "portfolio_construction": (
+                    "Return a complete Target Decision {reason, allocation, position_limits}, "
+                    "or null for NoUpdate. Signals do not execute orders."
+                ),
+                "risk_management": (
+                    "Return null, {mode: limit_positions, reason, position_limits} for local "
+                    "caps, or {mode: replace, reason, target} to replace or cancel the proposal."
+                ),
+            }[stage],
+        ) for stage, identity in BUILTIN_FRAMEWORK_MODULES.items()),
+        maximum_active_signals=MAX_ACTIVE_SIGNALS,
+        signal_validity_sessions=IntegerRange(minimum=1, maximum=MAX_SIGNAL_VALIDITY_SESSIONS),
+        maximum_state_bytes=FRAMEWORK_STATE_BYTES,
     ),
     universes=RESEARCH_UNIVERSES,
     neutralizations=RESEARCH_NEUTRALIZATIONS,

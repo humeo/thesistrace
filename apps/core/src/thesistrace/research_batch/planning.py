@@ -5,10 +5,15 @@ from datetime import date
 
 from thesistrace.research_batch.models import ResearchBatchKind
 from thesistrace.research_kernel.capacity import (
+    CHUNK_TIME_TARGET_WORK,
     SessionCapacityPlan,
+    decision_segment_session_limit,
+    estimate_python_program_work,
     estimate_session_peak_bytes,
     estimate_session_work,
 )
+from thesistrace.research_kernel.strategy_program_runtime import STATE_BYTES
+from thesistrace.research_kernel.terminal_state_schema import FRAMEWORK_STATE_BYTES
 from thesistrace.research_run.models import ResearchExecutionChunk, ResearchExecutionPlan
 from thesistrace.research_run.service import PreparedResearchRunAdmission
 
@@ -84,6 +89,11 @@ def validate_research_batch_capacity(
         raise ValueError("Research Batch child scope is inconsistent")
     field_ids = {field_id for value in inputs for field_id in value.field_bindings}
     maximum_chunk_session_count = min(value.execution_plan.chunk_session_count for value in inputs)
+    if batch_kind == "strategy_sweep":
+        maximum_chunk_session_count = min(
+            maximum_chunk_session_count,
+            *(decision_segment_session_limit(value.strategy["kind"]) for value in inputs),
+        )
     if not research_calendar or research_calendar != tuple(sorted(set(research_calendar))):
         raise ValueError("Research Batch calendar is invalid")
     research_sessions = tuple(
@@ -164,6 +174,10 @@ def validate_research_batch_capacity(
                 maximum_universe_cardinality=maximum_execution_cardinality,
                 effective_lookback=value.expression_admission.effective_lookback,
                 execution_memory_bytes=execution_memory_bytes,
+                decision_mode=("factor_evaluation" if batch_kind == "factor_evaluation"
+                               else value.strategy["kind"]),
+                python_program_count=(0 if batch_kind == "factor_evaluation"
+                                      else len(value.programs)),
             )
             for value in inputs
         )
@@ -175,6 +189,13 @@ def validate_research_batch_capacity(
             )
             for value in inputs
         )
+        if batch_kind == "strategy_sweep":
+            ordinary_chunk_work += estimate_python_program_work(
+                program_count=sum(len(value.programs) for value in inputs),
+                session_count=session_count,
+            )
+        if ordinary_chunk_work > CHUNK_TIME_TARGET_WORK and session_count > 1:
+            continue
         resident_bytes = maximum_resident_cell_count * (
             _ARROW_SOURCE_AND_COORDINATE_BYTES
             + _DECIMAL_OPEN_OBJECT_BYTES
@@ -195,6 +216,7 @@ def validate_research_batch_capacity(
         )
         strategy_private_bytes = 0
         strategy_output_bytes = 0
+        retained_decision_state_bytes = 0
         if batch_kind == "strategy_sweep":
             strategy_private_bytes = strategy_sweep_private_artifact_capacity_bytes(
                 encoded_outcome_cell_count=(
@@ -207,6 +229,9 @@ def validate_research_batch_capacity(
                 chunk_count=1,
             )
             strategy_output_bytes = session_count * _STRATEGY_OBSERVATION_BYTES_PER_SESSION
+            states = [FRAMEWORK_STATE_BYTES if value.strategy["kind"] == "framework"
+                      else STATE_BYTES for value in inputs]
+            retained_decision_state_bytes = sum(states) - max(states)
         estimated_peak_bytes = (
             ordinary_chunk_peak_bytes
             + _BATCH_PROCESS_RUNTIME_MARGIN_BYTES
@@ -214,6 +239,7 @@ def validate_research_batch_capacity(
             + continuation_bytes
             + strategy_private_bytes
             + strategy_output_bytes
+            + retained_decision_state_bytes
         )
         if estimated_peak_bytes <= capacity_limit_bytes:
             return SessionCapacityPlan(

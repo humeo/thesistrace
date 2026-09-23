@@ -13,6 +13,25 @@ from thesistrace.research_run.service import ResearchRunAdmissionRejected
 pytestmark = pytest.mark.bounded_process
 
 
+def test_authoring_discovery_publishes_the_four_framework_module_contracts():
+    from thesistrace.research_authoring import ResearchAuthoringService
+
+    framework = ResearchAuthoringService().constraints().model_dump(mode="json")["framework"]
+    assert [(stage["stage"], stage["builtin_identity"]) for stage in framework["stages"]] == [
+        ("universe_selection", "dataset_universe/v1"),
+        ("alpha", "alpha_formula/v1"),
+        ("portfolio_construction", "periodic_top_n/v1"),
+        ("risk_management", "no_risk/v1"),
+    ]
+    assert "instrument_ids" in framework["stages"][0]["output_contract"]
+    assert "valid_for_sessions" in framework["stages"][1]["output_contract"]
+    assert "NoUpdate" in framework["stages"][2]["output_contract"]
+    assert "limit_positions" in framework["stages"][3]["output_contract"]
+    assert framework["maximum_active_signals"] == 3000
+    assert framework["signal_validity_sessions"] == {"minimum": 1, "maximum": 252}
+    assert framework["maximum_state_bytes"] == 3 * 1024 * 1024
+
+
 def framework_spec():
     modules = dict(BUILTIN_FRAMEWORK_MODULES)
     for stage, fields, history in (

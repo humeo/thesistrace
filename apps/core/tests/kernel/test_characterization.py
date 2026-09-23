@@ -17,7 +17,7 @@ EXPECTED_CHECKSUMS = {
     },
     # Decision state now explicitly identifies Framework and its retained selection.
     # The independently specified financial boundaries below remain unchanged.
-    "strategy": "a40f8f528f2c0d0cb7013e5c9de7f2511cd5867492bda8af42e36a1f162dac49",
+    "strategy": "2d6d32163488cf08bda65adfaef889b4681856975779e6acb27c1a0c02f1ba91",
 }
 
 

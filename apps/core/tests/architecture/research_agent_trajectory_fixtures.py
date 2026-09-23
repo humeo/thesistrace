@@ -236,7 +236,8 @@ def run_polling_payload(
             )
             if research_kind == "factor_evaluation"
             else (
-                "strategy_targets", "strategy_orders", "strategy_child_orders",
+                "strategy_framework", "strategy_targets", "strategy_orders",
+                "strategy_child_orders",
                 "strategy_fills", "strategy_adjustments", "strategy_execution_constraints",
                 "daily_holdings_status", "daily_holdings",
                 "strategy_summary",

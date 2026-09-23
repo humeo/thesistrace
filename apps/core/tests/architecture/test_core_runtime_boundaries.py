@@ -93,7 +93,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
         "publication": {"_postgres"},
         "research_series": set(),
         "strategy_evidence": {"_paging", "publication", "research_kernel", "strategy_event_wire"},
-        "strategy_event_wire": set(),
+        "strategy_event_wire": {"research_kernel"},
         "daily_holding_evidence": {"publication", "research_kernel"},
         "daily_holding_queries": {"daily_holding_evidence", "research_kernel"},
         "research_kernel": {"research_series"},
@@ -145,6 +145,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
             "research_series",
         },
         "research_batch": {
+            "research_definition",
             "daily_holding_evidence",
             "strategy_evidence",
             "_memory",

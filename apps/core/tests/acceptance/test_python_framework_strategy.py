@@ -1,18 +1,22 @@
+import json
 from copy import deepcopy
 from dataclasses import replace
 from uuid import UUID
 
+import anyio
 import pytest
+from core_runtime import TEST_RESEARCHER, drop_product_schemas
 from core_runtime import create_initialized_test_app as create_app
-from core_runtime import drop_product_schemas
 from fastapi.testclient import TestClient
 from test_core_current_head_research_run_execution import (
     _publish_head,
     _stored_tracking_activation,
 )
+from test_core_research_agent_mcp_runs import _mcp_client
 from test_python_direct_strategy import SESSIONS, SOURCE
 
 from thesistrace.daily_track import DailyTrackProgressionFailed
+from thesistrace.daily_track.models import DailyTrackOriginResultSectionInput
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.entrypoints.schema import initialize_core
 
@@ -65,6 +69,53 @@ def command(request_id, *, end=SESSIONS[2], builtin_alpha=False, fail_session=No
         'initial_cash_cny': '100000', 'modules': modules,
         **({'formula': '-close', 'neutralization': 'none'} if builtin_alpha else {}),
     }
+
+
+def test_framework_track_origin_keeps_a_large_legal_module_state(tmp_path):
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    _publish_head(settings, sessions=SESSIONS[:2], price_offset=0)
+    with TestClient(create_app(settings)) as client:
+        submitted = command('large-framework-state', end=SESSIONS[1])
+        submitted['modules']['risk_management']['program']['source'] = (
+            "def decide(context, state, parameters):\n"
+            "    return {'output': None, 'state': {'payload': 'x' * 200000}}"
+        )
+        admitted = client.post('/api/research-runs', json=submitted)
+        assert admitted.status_code == 202, admitted.text
+        run_id = admitted.json()['id']
+        runtime = client.app.state.core_runtime
+        assert runtime.research_runs.process_next()
+        detail = client.get(f'/api/research-runs/{run_id}').json()
+        assert detail['status'] == 'succeeded', detail
+        tracked = client.post(
+            f'/api/research-runs/{run_id}/daily-tracks',
+            json={'request_id': 'large-state-track'},
+        )
+        assert tracked.status_code == 201, tracked.text
+        origin = runtime.daily_tracks.get_result_section(
+            TEST_RESEARCHER.researcher_id,
+            DailyTrackOriginResultSectionInput(track_id=tracked.json()['id'], section='origin'),
+        )
+        assert origin.terminal_account.decision_state.module_states['risk_management'] == {
+            'payload': 'x' * 200000,
+        }
+        mcp_result = anyio.run(
+            _get_origin_through_mcp, settings, tracked.json()['id'],
+            tmp_path / 'framework-origin-mcp.stderr.log',
+        )
+        assert not mcp_result.is_error
+        assert (mcp_result.structured_content['terminal_account']['decision_state']
+                ['module_states']['risk_management']) == {'payload': 'x' * 200000}
+        assert json.loads(mcp_result.content[0].text) == mcp_result.structured_content
+
+
+async def _get_origin_through_mcp(settings, track_id, stderr_path):
+    async with _mcp_client(settings, stderr_path) as mcp:
+        return await mcp.call_tool(
+            'get_daily_track_result', {'track_id': track_id, 'section': 'origin'},
+        )
 
 
 @pytest.mark.parametrize('builtin_alpha', [False, True])
@@ -135,6 +186,16 @@ def test_framework_run_reuse_and_track_preserve_frozen_modules_and_account(tmp_p
         assert response.status_code == 202, response.text
         assert runtime.daily_tracks.process_next()
         track = client.get(f'/api/daily-tracks/{track_id}').json()
+        for ordinal in range(1, len(SESSIONS) + 1):
+            if track['strategy_session'] == SESSIONS[-1]:
+                break
+            continuation = client.post(
+                f'/api/daily-tracks/{track_id}/refresh',
+                json={'request_id': f'advance-{ordinal}'},
+            )
+            assert continuation.status_code == 202, continuation.text
+            assert runtime.daily_tracks.process_next()
+            track = client.get(f'/api/daily-tracks/{track_id}').json()
         assert track['strategy_session'] == SESSIONS[-1], track
         full = client.post('/api/research-runs', json=command(
             'full', end=SESSIONS[-1], builtin_alpha=builtin_alpha,

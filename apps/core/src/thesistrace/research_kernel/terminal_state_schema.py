@@ -161,6 +161,8 @@ class PendingTarget(TerminalStateModel):
 
 
 FRAMEWORK_STATE_BYTES = 3 * 1024 * 1024
+MAX_ACTIVE_SIGNALS = 3000
+MAX_SIGNAL_VALIDITY_SESSIONS = 252
 
 
 def _signal_session(value: str) -> str:
@@ -174,7 +176,7 @@ class ActiveStrategySignal(TerminalStateModel):
     value: StrictFloat = Field(allow_inf_nan=False)
     created_session: Annotated[StrictStr, AfterValidator(_signal_session)]
     created_session_number: Annotated[StrictInt, Field(ge=1)]
-    valid_for_sessions: Annotated[StrictInt, Field(ge=1, le=252)]
+    valid_for_sessions: Annotated[StrictInt, Field(ge=1, le=MAX_SIGNAL_VALIDITY_SESSIONS)]
 
 
 class FrameworkModulesDecisionState(TerminalStateModel):
@@ -183,7 +185,7 @@ class FrameworkModulesDecisionState(TerminalStateModel):
     selection_interval: Annotated[StrictInt, Field(ge=1, le=20)] | None
     module_states: dict[StrictStr, dict[str, JsonValue]]
     universe: list[StrictStr] = Field(max_length=3000)
-    signals: list[ActiveStrategySignal] = Field(max_length=3000)
+    signals: list[ActiveStrategySignal] = Field(max_length=MAX_ACTIVE_SIGNALS)
     retained_proposal: PendingTarget | None
 
     @model_validator(mode="after")

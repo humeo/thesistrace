@@ -217,14 +217,16 @@ platform authority. JSON permits finite numbers, strings, booleans, null, arrays
 and string-keyed objects. Integers must be within ±(2^53−1); strings must be valid
 UTF-8. Duplicate output keys and implicit or unserializable state are rejected.
 
-MCP transport accepts requests up to 16 MiB, including JSON escaping for a
-20-program Batch, and responses up to 8 MiB for complete targets and explicit
-state. Target evidence records have a 2 MiB limit; their pages reserve that
-capacity plus the ordinary 32 KiB page budget. Other event records retain their
-24 KiB limit. Worker event frames carry at most 512 records or 8 MiB of record
-bytes, within the existing 64 MiB acknowledged segment limit.
-Direct DailyTrack origin pages reserve the bounded 1 MiB program output
-in addition to the ordinary 32 KiB record-page budget. These transport bounds
+MCP transport accepts requests up to 64 MiB, including JSON escaping for a
+20-item Framework Batch with four Python programs per item, and responses up
+to 16 MiB for complete targets and explicit state. Target evidence records
+have a 2 MiB limit; their pages reserve that capacity plus the ordinary
+32 KiB page budget. Framework event records have a 4 MiB limit; other event
+records retain their 24 KiB limit. Worker event frames carry at most 512
+records or 8 MiB of record bytes, within the existing 64 MiB acknowledged
+segment limit. DailyTrack origin pages reserve the full current decision
+state (3 MiB for Framework modules or 256 KiB for Direct) and a 2 MiB pending
+target in addition to the ordinary 32 KiB page budget. These transport bounds
 do not increase the program's source, parameter, state or execution limits.
 
 Verification selection and commands are maintained only in

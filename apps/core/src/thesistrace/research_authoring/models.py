@@ -81,12 +81,32 @@ class PythonProgramConstraints(BaseModel):
     )
 
 
+class FrameworkStageConstraints(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    stage: Literal[
+        "universe_selection", "alpha", "portfolio_construction", "risk_management",
+    ]
+    builtin_identity: str
+    output_contract: str
+
+
+class FrameworkAuthoringConstraints(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    stages: tuple[FrameworkStageConstraints, ...]
+    maximum_active_signals: int
+    signal_validity_sessions: IntegerRange
+    maximum_state_bytes: int
+
+
 class ResearchAuthoringConstraints(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     research_kinds: tuple[ResearchKind, ...]
     strategy_modes: tuple[Literal["framework", "direct"], ...]
     python_program: PythonProgramConstraints
+    framework: FrameworkAuthoringConstraints
     universes: tuple[ResearchUniverse, ...]
     neutralizations: tuple[ResearchNeutralization, ...]
     initial_cash_cny: InitialCashConstraints

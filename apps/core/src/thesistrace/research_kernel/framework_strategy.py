@@ -23,7 +23,11 @@ from thesistrace.research_kernel.strategy_program_runtime import (
     StrategyProgramError,
     get_strategy_runtime,
 )
-from thesistrace.research_kernel.terminal_state_schema import FrameworkModulesDecisionState
+from thesistrace.research_kernel.terminal_state_schema import (
+    MAX_ACTIVE_SIGNALS,
+    MAX_SIGNAL_VALIDITY_SESSIONS,
+    FrameworkModulesDecisionState,
+)
 
 
 class PythonModule(BaseModel):
@@ -53,7 +57,7 @@ class ModuleOutput(BaseModel):
 
 
 class UniverseUpdate(ModuleOutput):
-    instrument_ids: list[StrictStr] = Field(max_length=3000)
+    instrument_ids: list[StrictStr] = Field(max_length=MAX_ACTIVE_SIGNALS)
 
     @model_validator(mode="after")
     def unique_instruments(self):
@@ -67,11 +71,11 @@ class SignalValue(BaseModel):
 
     instrument_id: StrictStr
     value: float = Field(allow_inf_nan=False)
-    valid_for_sessions: Annotated[StrictInt, Field(ge=1, le=252)]
+    valid_for_sessions: Annotated[StrictInt, Field(ge=1, le=MAX_SIGNAL_VALIDITY_SESSIONS)]
 
 
 class SignalUpdate(ModuleOutput):
-    signals: list[SignalValue] = Field(max_length=3000)
+    signals: list[SignalValue] = Field(max_length=MAX_ACTIVE_SIGNALS)
 
     @model_validator(mode="after")
     def unique_instruments(self):
