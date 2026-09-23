@@ -1122,6 +1122,7 @@ class TerminalStrategyStateResultSection(BaseModel):
     net_cash: str
     gross_nav: str
     net_nav: str
+    close_risk_nav_cny: str
     cumulative_transaction_cost: str
     research_phase: TerminalResearchPhase
     decision_state: DecisionState

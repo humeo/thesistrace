@@ -69,6 +69,25 @@ def test_three_value_result_codec_is_deterministic_and_reopens_parquet_rows() ->
     assert read_result_bundle(bundle, research_kind="strategy_backtest") == result
 
 
+def test_terminal_result_section_preserves_close_risk_nav_separately_from_open_nav() -> None:
+    from thesistrace.research_run.models import TerminalStrategyStateResultSection
+
+    terminal = _legal_result()["terminal_strategy_state"]
+    public_state = {
+        key: value for key, value in terminal.items()
+        if key not in {"positions", "last_daily_observation", "metric_state"}
+    }
+    public_state["close_risk_nav_cny"] = "9e+6"
+    section = TerminalStrategyStateResultSection.model_validate({
+        "run_id": "run-close-risk", **public_state,
+    })
+
+    result = section.model_dump(mode="json")
+    assert result["net_nav"] == "1e+7"
+    assert result["close_risk_nav_cny"] == "9e+6"
+    assert "positions" not in result
+
+
 def test_terminal_state_round_trip_preserves_absent_short_period_accumulators() -> None:
     result = _legal_result()
     metric_state = result["terminal_strategy_state"]["metric_state"]
