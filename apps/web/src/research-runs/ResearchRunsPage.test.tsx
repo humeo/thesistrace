@@ -141,6 +141,7 @@ describe("ResearchRunFacts", () => {
 
 describe("ResearchRunProgressView", () => {
   it.each([
+    ["queued", "Starting execution"],
     ["preparing_data", "Preparing data"],
     ["shared_alpha_factor", "Computing shared Alpha"],
     ["waiting_for_execution", "Waiting for earlier research in this batch"],

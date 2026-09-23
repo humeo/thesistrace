@@ -97,7 +97,7 @@ export const runsEn = {
     "succeeded": "Execution complete"
   },
   "progressPhases": {
-    "queued": "Waiting for a Research Worker",
+    "queued": "Starting execution",
     "preparing_data": "Preparing data",
     "shared_alpha_factor": "Computing shared Alpha",
     "waiting_for_execution": "Waiting for earlier research in this batch",
@@ -301,7 +301,7 @@ export const runsZh = {
     "succeeded": "执行完成"
   },
   "progressPhases": {
-    "queued": "等待研究 Worker",
+    "queued": "正在启动执行",
     "preparing_data": "正在准备数据",
     "shared_alpha_factor": "正在计算共享 Alpha",
     "waiting_for_execution": "等待本批次中更早的研究",

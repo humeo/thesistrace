@@ -530,6 +530,7 @@ test("Default Folder retains one local Research Draft with authoritative Formula
 test("Complete field catalog composes one Formula and starts its DailyTrack", { tag: "@isolated" }, async ({ page }, testInfo) => {
   test.setTimeout(180_000);
   const responses: string[] = [];
+  const scenarioErrors: unknown[] = [];
   let runId: string | undefined;
   let trackId: string | undefined;
   let workerPaused = false;
@@ -572,7 +573,7 @@ test("Complete field catalog composes one Formula and starts its DailyTrack", { 
     const search = page.getByRole("searchbox", { name: "Search fields" });
     await search.fill("close_raw");
     await expect(rows).toHaveCount(1);
-    await expect(rows).toContainText("未复权收盘价");
+    await expect(rows).toContainText("Unadjusted close");
     await search.fill("");
     await page.getByRole("combobox", { name: "Research purpose" }).selectOption("盈利");
     await expect(rows).toHaveCount(12);
@@ -607,7 +608,7 @@ test("Complete field catalog composes one Formula and starts its DailyTrack", { 
     await expect(page.locator(".research-run-facts").getByText(/Status\s+running/)).toBeVisible();
     await expect(page.getByRole("heading", { name: "Execution progress" })).toBeVisible();
     await expect(
-      page.locator("[aria-label='ResearchRun progress']").getByText(/^Running /),
+      page.locator("[aria-label='ResearchRun progress']").getByText("Starting execution", { exact: true }),
     ).toBeVisible();
     await expect(page.getByRole("heading", { name: "Name and folder" })).toBeVisible();
     expect(await page.locator("[aria-label='ResearchRun progress']").evaluate(
@@ -811,8 +812,10 @@ test("Complete field catalog composes one Formula and starts its DailyTrack", { 
     expect(finalObservation.holdings.length).toBeGreaterThan(0);
     await page.getByRole("button", { name: "Since tracking", exact: true }).click();
     await expect(page.getByRole("figure", { name: "Return since tracking began" })).toBeVisible();
+  } catch (error) {
+    scenarioErrors.push(error);
   } finally {
-    const cleanupErrors: unknown[] = [];
+    const cleanupErrors: unknown[] = [...scenarioErrors];
     const cleanup = async (action: () => void | Promise<void>) => {
       try {
         await action();
@@ -874,7 +877,7 @@ test("Complete field catalog composes one Formula and starts its DailyTrack", { 
         });
         expect([204, 404]).toContain(deleted.status());
       });
-      if (cleanupErrors.length > 0) throw new AggregateError(cleanupErrors, "E2E cleanup failed");
+      if (cleanupErrors.length > 0) throw new AggregateError(cleanupErrors, "Field catalog scenario or cleanup failed");
     } finally {
       await attachResponses(testInfo, responses);
     }
