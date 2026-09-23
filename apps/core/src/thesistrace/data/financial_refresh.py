@@ -15,6 +15,7 @@ from thesistrace.data.financial_candidate import (
     FinancialCandidateStore,
     FinancialDiscoveryPublication,
     FinancialFamilyCandidate,
+    PreparedDailyFinancial,
 )
 from thesistrace.data.financial_collection import (
     FinancialCollectionContract,
@@ -89,6 +90,20 @@ class FinancialRefreshService:
         expected_generation_manifest_sha256: str,
     ) -> FinancialRefreshOutcome:
         try:
+            return self._reproject(
+                idempotency_key=idempotency_key,
+                expected_generation_manifest_sha256=expected_generation_manifest_sha256,
+            )
+        finally:
+            self._candidates.close()
+
+    def _reproject(
+        self,
+        *,
+        idempotency_key: str,
+        expected_generation_manifest_sha256: str,
+    ) -> FinancialRefreshOutcome:
+        try:
             generation = self._generations.inspect_root(
                 expected_generation_manifest_sha256
             )
@@ -129,35 +144,14 @@ class FinancialRefreshService:
             if outcome is None:
                 prepared_at = self._validated_clock()
                 try:
-                    candidate = self._candidates.reproject_saved(
+                    prepared = self._candidates.prepare_reprojection(
                         prior_candidate_manifest_sha256=prior_candidate,
                         generation_manifest_sha256=expected_generation_manifest_sha256,
                         idempotency_key=idempotency_key,
                         finished_at=prepared_at,
                     )
-                    discovery = self._reprojection_discovery(candidate, prior_candidate)
-                    prior_coverage = self._candidates.family_reference(prior_candidate)[
-                        "dataset_coverage"
-                    ]
-                    if (
-                        discovery.readiness_status
-                        != prior_coverage["readiness_status"]
-                        or discovery.pending_instrument_count
-                        != prior_coverage["pending_instrument_count"]
-                        or discovery.earliest_unresolved_date
-                        != prior_coverage["earliest_unresolved_date"]
-                        or discovery.source_lineage_sha256
-                        != prior_coverage["source_lineage_sha256"]
-                    ):
-                        candidate = self._candidates.reproject_saved(
-                            prior_candidate_manifest_sha256=prior_candidate,
-                            generation_manifest_sha256=(
-                                expected_generation_manifest_sha256
-                            ),
-                            idempotency_key=idempotency_key,
-                            finished_at=prepared_at,
-                            discovery=discovery,
-                        )
+                    discovery = self._reprojection_discovery(prepared, prior_candidate)
+                    candidate = self._candidates.finalize_daily(prepared, discovery=discovery)
                 except FinancialCandidateError as error:
                     self._fail(idempotency_key, str(error))
                     raise
@@ -196,6 +190,7 @@ class FinancialRefreshService:
             prepared_at = self._validated_clock()
             operation_id = _publication_operation_id(idempotency_key, 0)
             with mounted_data_mutation_lock(self._database):
+                self._candidates.verify_for_publication(outcome.candidate.manifest_sha256)
                 composed = self._generations._compose_prevalidated_financial_candidate(
                     current.generation_manifest_sha256,
                     outcome.candidate.manifest_sha256,
@@ -250,16 +245,13 @@ class FinancialRefreshService:
 
     def _reprojection_discovery(
         self,
-        candidate: FinancialFamilyCandidate,
+        prepared: PreparedDailyFinancial,
         prior_candidate_manifest_sha256: str,
     ) -> FinancialDiscoveryPublication:
         coverage = self._candidates.family_reference(prior_candidate_manifest_sha256)[
             "dataset_coverage"
         ]
-        inventory = self._candidates.report_inventory(
-            candidate.manifest_sha256,
-            through=candidate.observation_through_session,
-        )
+        inventory = prepared.received_reports
         with self._database.transaction() as transaction:
             requirements = transaction.execute(
                 """
@@ -267,7 +259,7 @@ class FinancialRefreshService:
                 FROM data.financial_report_targets
                 WHERE endpoint <> 'fina_indicator' AND actual_date <= %s
                 """,
-                (candidate.observation_through_session,),
+                (prepared.discovery.attempted_through_session,),
             ).fetchall()
         missing_since: dict[str, date] = {}
         for requirement in requirements:

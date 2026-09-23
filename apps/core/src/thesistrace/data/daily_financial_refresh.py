@@ -1144,6 +1144,9 @@ class DailyFinancialRefreshService:
                     self._store.fail(idempotency_key, code, self._validated_clock())
                 raise FinancialDailyRefreshError(code, retryable=retryable) from error
 
+            finally:
+                self._candidates.close()
+
     def inspect(self, idempotency_key: str) -> dict[str, object]:
         operation = self._store.operation(idempotency_key)
         inspection = self._store.inspect(idempotency_key)
@@ -1285,11 +1288,16 @@ class DailyFinancialRefreshService:
             self._ownership_guard()
             operation = self._store.operation(idempotency_key)
         if operation["statement_instrument_ids"] is None:
+            inventory_started = perf_counter()
+            inventory = self._published_report_inventory(source_generation, target, indicators)
+            self._completed_stage(idempotency_key, "published_inventory", inventory_started)
+            planning_started = perf_counter()
             self._store.prepare_reports(
                 idempotency_key,
-                self._published_report_inventory(source_generation, target, indicators),
+                inventory,
                 self._validated_clock(),
             )
+            self._completed_stage(idempotency_key, "report_planning", planning_started)
             operation = self._store.operation(idempotency_key)
         if operation["indicator_collection"] is None:
             from thesistrace.data.financial_indicator_candidate import (
@@ -1370,11 +1378,20 @@ class DailyFinancialRefreshService:
                 raise FinancialDailyRefreshError("FINANCIAL_DISCOVERY_REPLAY_MISMATCH") from error
             self._financial_source_window_selector(discovery_start, discovery_end)
         attempted = self._store.attempted_instrument_ids(idempotency_key)
+        planned = self._store.planned_identities(idempotency_key)
         remaining = tuple(
             identity
-            for identity in self._store.planned_identities(idempotency_key)
+            for identity in planned
             if identity.instrument_id not in attempted
         )
+        loading_started = perf_counter()
+        self._candidates.prepare_instruments(
+            prior_candidate_manifest_sha256=prior_manifest,
+            generation_manifest_sha256=source_generation,
+            observation_through_session=target,
+            instrument_ids=frozenset(identity.instrument_id for identity in planned),
+        )
+        self._completed_stage(idempotency_key, "statement_values", loading_started)
         contract = self._candidates.collection_contract(prior_manifest)
         collector = DailyFinancialStatementCollector(
             self._database,
@@ -1471,29 +1488,24 @@ class DailyFinancialRefreshService:
         publication = self._store.publication_state(idempotency_key)
         self._ownership_guard()
         candidate_started = perf_counter()
-        candidate = self._candidates.rebuild_daily(
+        prepared = self._candidates.prepare_daily(
             snapshot,
             prior_candidate_manifest_sha256=prior_manifest,
             discovery=publication,
         )
-        received_reports = self._candidates.report_inventory(
-            candidate.manifest_sha256,
-            through=target,
-        )
+        self._completed_stage(idempotency_key, "candidate_prepare", candidate_started)
+        reconcile_started = perf_counter()
         candidate_publication = self._store.candidate_publication_state(
             idempotency_key,
-            received_reports,
+            prepared.received_reports,
         )
-        if candidate_publication != publication:
-            candidate = self._candidates.rebuild_daily(
-                snapshot,
-                prior_candidate_manifest_sha256=prior_manifest,
-                discovery=candidate_publication,
-            )
-            received_reports = self._candidates.report_inventory(
-                candidate.manifest_sha256,
-                through=target,
-            )
+        self._completed_stage(idempotency_key, "candidate_reconcile", reconcile_started)
+        finalize_started = perf_counter()
+        candidate = self._candidates.finalize_daily(prepared, discovery=candidate_publication)
+        received_reports = self._candidates.report_inventory(
+            candidate.manifest_sha256, through=target,
+        )
+        self._completed_stage(idempotency_key, "candidate_finalize", finalize_started)
         self._store.record_candidate(
             idempotency_key,
             candidate.manifest_sha256,
@@ -1678,6 +1690,7 @@ class DailyFinancialRefreshService:
             )
             with mounted_data_mutation_lock(self._database):
                 composition_started = perf_counter()
+                self._candidates.verify_for_publication(candidate.manifest_sha256)
                 composed = self._generations._compose_prevalidated_financial_candidate(
                     current.generation_manifest_sha256,
                     candidate.manifest_sha256,

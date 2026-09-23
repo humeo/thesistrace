@@ -5,9 +5,10 @@ import hashlib
 import json
 import tempfile
 from collections import defaultdict
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
+from itertools import groupby
 from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
@@ -86,179 +87,193 @@ _METADATA_FIELDS = (
 
 
 class _PublishedFinancialRowIndex:
-    """Task-local, disk-backed view of the latest published logical rows."""
+    """Immutable published metadata, selected wide rows and separate draft deltas."""
 
     def __init__(self, root: Path) -> None:
-        # Keep the current API/worker import graph free of optional task runtimes.
-        # SQLite is loaded only while building or validating a financial candidate.
         import sqlite3
 
         self._temporary = tempfile.TemporaryDirectory(
-            prefix=".financial-published-index-",
-            dir=root,
+            prefix=".financial-published-index-", dir=root,
         )
-        self._connection = sqlite3.connect(
-            str(Path(self._temporary.name) / "rows.sqlite3")
-        )
+        self._connection = sqlite3.connect(str(Path(self._temporary.name) / "rows.sqlite3"))
         self._connection.execute("PRAGMA journal_mode=OFF")
         self._connection.execute("PRAGMA synchronous=OFF")
         self._connection.execute("PRAGMA temp_store=FILE")
-        self._connection.executescript(
-            """
+        self._loaded_instruments: set[tuple[str, str]] = set()
+        self._connection.executescript("""
             CREATE TABLE logical_rows (
-                endpoint TEXT NOT NULL,
-                instrument_id TEXT NOT NULL,
-                source_row_sha256 TEXT NOT NULL,
-                source_report_period TEXT NOT NULL,
-                source_published_date TEXT NOT NULL,
-                source_report_type TEXT NOT NULL,
-                availability_status TEXT NOT NULL,
-                row_json BLOB NOT NULL
+                endpoint TEXT NOT NULL, instrument_id TEXT NOT NULL,
+                source_row_sha256 TEXT NOT NULL, source_report_period TEXT NOT NULL,
+                source_published_date TEXT NOT NULL, source_report_type TEXT NOT NULL,
+                availability_status TEXT NOT NULL, first_observed_at TEXT NOT NULL,
+                source_available_session TEXT NOT NULL, first_observed_session TEXT NOT NULL,
+                object_sha256 TEXT NOT NULL, object_byte_count INTEGER NOT NULL,
+                object_row_index INTEGER NOT NULL
             );
+            CREATE TABLE wide_rows (
+                endpoint TEXT NOT NULL, source_row_sha256 TEXT NOT NULL,
+                row_json BLOB NOT NULL, PRIMARY KEY (endpoint, source_row_sha256)
+            ) WITHOUT ROWID;
+            CREATE TEMP TABLE wanted_instruments (instrument_id TEXT PRIMARY KEY);
             CREATE TABLE delta_rows (
-                endpoint TEXT NOT NULL,
-                source_row_sha256 TEXT NOT NULL,
-                effective_available_session TEXT NOT NULL,
-                instrument_id TEXT NOT NULL,
-                source_report_period TEXT NOT NULL,
-                source_report_type TEXT NOT NULL,
-                source_company_type TEXT NOT NULL,
-                source_end_type TEXT NOT NULL,
-                row_json BLOB NOT NULL,
-                PRIMARY KEY (endpoint, source_row_sha256)
+                endpoint TEXT NOT NULL, source_row_sha256 TEXT NOT NULL,
+                effective_available_session TEXT NOT NULL, instrument_id TEXT NOT NULL,
+                source_report_period TEXT NOT NULL, source_report_type TEXT NOT NULL,
+                source_company_type TEXT NOT NULL, source_end_type TEXT NOT NULL,
+                source_published_date TEXT NOT NULL, availability_status TEXT NOT NULL,
+                row_json BLOB NOT NULL, PRIMARY KEY (endpoint, source_row_sha256)
             ) WITHOUT ROWID;
             CREATE INDEX delta_rows_by_sort_key ON delta_rows (
-                endpoint, effective_available_session, instrument_id,
-                source_report_period, source_report_type,
-                source_company_type, source_end_type, source_row_sha256
+                endpoint, effective_available_session, instrument_id, source_report_period,
+                source_report_type, source_company_type, source_end_type, source_row_sha256
             );
-            """
-        )
+        """)
 
     def add(self, endpoint: str, row: Mapping[str, object]) -> None:
         self._connection.execute(
-            """
-            INSERT INTO logical_rows(
-                endpoint, instrument_id, source_row_sha256,
-                source_report_period, source_published_date,
-                source_report_type, availability_status, row_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                endpoint,
-                str(row["instrument_id"]),
-                str(row["source_row_sha256"]),
-                str(row["source_report_period"]),
-                str(row["source_published_date"]),
-                str(row["source_report_type"]),
-                str(row["availability_status"]),
-                canonical_json_bytes(dict(row)),
-            ),
+            "INSERT INTO logical_rows VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (endpoint, *(str(row[key]) for key in (
+                "instrument_id", "source_row_sha256", "source_report_period",
+                "source_published_date", "source_report_type", "availability_status",
+                "first_observed_at", "source_available_session", "first_observed_session",
+                "_object_sha256",
+            )), int(row["_object_byte_count"]), int(row["_object_row_index"])),
         )
 
     def finish(self) -> None:
-        # Loading is append-only. Building the lookup index after the scan avoids
-        # hours of random B-tree maintenance while retaining bounded memory.
-        self._connection.execute(
-            """
+        # Build after bulk loading; no per-row B-tree maintenance on the global scan.
+        self._connection.execute("""
             CREATE INDEX IF NOT EXISTS logical_rows_by_instrument
             ON logical_rows (endpoint, instrument_id)
-            """
-        )
+        """)
         self._connection.commit()
 
+    def load_instruments(
+        self, endpoint: str, instrument_ids: frozenset[str],
+        contract: ParquetWriterContract, read_object: Callable[[str, int], bytes],
+    ) -> None:
+        missing = sorted(instrument for instrument in instrument_ids
+                         if (endpoint, instrument) not in self._loaded_instruments)
+        if not missing:
+            return
+        self._connection.execute("DELETE FROM wanted_instruments")
+        self._connection.executemany(
+            "INSERT INTO wanted_instruments VALUES (?)", ((instrument,) for instrument in missing),
+        )
+        locations = self._connection.execute("""
+            SELECT object_sha256, object_byte_count, object_row_index, source_row_sha256
+            FROM logical_rows JOIN wanted_instruments USING (instrument_id)
+            WHERE endpoint=? ORDER BY object_sha256, object_row_index
+        """, (endpoint,))
+        for (digest, byte_count), group in groupby(locations, key=lambda row: (row[0], row[1])):
+            selected = list(group)
+            content = read_object(digest, byte_count)
+            try:
+                table = pq.read_table(pa.BufferReader(content))
+                if table.schema != contract.schema:
+                    raise FinancialCandidateError("FINANCIAL_OBJECT_SCHEMA_INVALID")
+                record_parquet_scan(source="financial", row_count=table.num_rows,
+                                    column_count=table.num_columns)
+                table = table.take(pa.array([row[2] for row in selected], type=pa.int64()))
+                for location, row in zip(selected, table.to_pylist(), strict=True):
+                    if row["source_row_sha256"] != location[3]:
+                        raise FinancialCandidateError("FINANCIAL_OBJECT_BOUNDARY_INVALID")
+                    self._connection.execute(
+                        "INSERT OR REPLACE INTO wide_rows VALUES (?, ?, ?)",
+                        (endpoint, location[3], canonical_json_bytes(row)),
+                    )
+                del table, content
+            except (ArrowException, TypeError, ValueError) as error:
+                raise FinancialCandidateError("FINANCIAL_OBJECT_INVALID") from error
+        self._connection.commit()
+        self._loaded_instruments.update((endpoint, instrument) for instrument in missing)
+
     def rows(self, endpoint: str, instrument_id: str) -> tuple[dict[str, object], ...]:
-        values = self._connection.execute(
-            """
-            SELECT row_json FROM logical_rows
-            WHERE endpoint = ? AND instrument_id = ?
-            ORDER BY source_row_sha256
-            """,
-            (endpoint, instrument_id),
-        ).fetchall()
+        values = self._connection.execute("""
+            SELECT wide.row_json FROM logical_rows AS logical
+            JOIN wide_rows AS wide USING (endpoint, source_row_sha256)
+            WHERE logical.endpoint=? AND logical.instrument_id=?
+            ORDER BY logical.source_row_sha256
+        """, (endpoint, instrument_id))
         return tuple(json.loads(bytes(value[0])) for value in values)
 
+    def calendar_instruments(
+        self, sessions: list[str], instrument_ids: frozenset[str],
+    ) -> frozenset[str]:
+        affected: set[str] = set()
+        for instrument, published, observed, available_session, observed_session in (
+            self._connection.execute("""
+                SELECT instrument_id, source_published_date, first_observed_at,
+                       source_available_session, first_observed_session
+                FROM logical_rows WHERE availability_status IN ('pending_calendar', 'quarantined')
+            """)
+        ):
+            if instrument not in instrument_ids or not published:
+                continue
+            if (_next_session(sessions, _iso_date(published)) != available_session
+                    or _next_session(sessions, _market_date(observed)) != observed_session):
+                affected.add(instrument)
+        return frozenset(affected)
+
     def quarantined_hashes(self) -> set[str]:
-        return {
-            str(row[0])
-            for row in self._connection.execute(
-                """
-                SELECT source_row_sha256 FROM logical_rows
-                WHERE availability_status = 'quarantined'
-                """
-            )
-        }
+        return {str(row[0]) for row in self._connection.execute(
+            "SELECT source_row_sha256 FROM logical_rows WHERE availability_status='quarantined'",
+        )}
 
     def clear_deltas(self) -> None:
         self._connection.execute("DELETE FROM delta_rows")
 
     def add_delta(self, endpoint: str, row: Mapping[str, object]) -> None:
         self._connection.execute(
-            """
-            INSERT OR REPLACE INTO delta_rows(
-                endpoint, source_row_sha256, effective_available_session,
-                instrument_id, source_report_period, source_report_type,
-                source_company_type, source_end_type, row_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                endpoint,
-                str(row["source_row_sha256"]),
-                str(row["effective_available_session"]),
-                str(row["instrument_id"]),
-                str(row["source_report_period"]),
-                str(row["source_report_type"]),
-                str(row["source_company_type"]),
-                str(row["source_end_type"]),
-                canonical_json_bytes(dict(row)),
-            ),
+            "INSERT OR REPLACE INTO delta_rows VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (endpoint, *(str(row[key]) for key in (
+                "source_row_sha256", "effective_available_session", "instrument_id",
+                "source_report_period", "source_report_type", "source_company_type",
+                "source_end_type", "source_published_date", "availability_status",
+            )), canonical_json_bytes(dict(row))),
         )
 
     def delta_count(self, endpoint: str) -> int:
-        row = self._connection.execute(
-            "SELECT count(*) FROM delta_rows WHERE endpoint = ?",
-            (endpoint,),
-        ).fetchone()
-        assert row is not None
-        return int(row[0])
+        return self._connection.execute(
+            "SELECT count(*) FROM delta_rows WHERE endpoint=?", (endpoint,),
+        ).fetchone()[0]
 
     def deltas(self, endpoint: str) -> Iterator[dict[str, object]]:
-        rows = self._connection.execute(
-            """
-            SELECT row_json FROM delta_rows
-            WHERE endpoint = ?
-            ORDER BY effective_available_session, instrument_id,
-                     source_report_period, source_report_type,
-                     source_company_type, source_end_type, source_row_sha256
-            """,
-            (endpoint,),
-        )
-        for row in rows:
+        for row in self._connection.execute("""
+            SELECT row_json FROM delta_rows WHERE endpoint=?
+            ORDER BY effective_available_session, instrument_id, source_report_period,
+                     source_report_type, source_company_type, source_end_type, source_row_sha256
+        """, (endpoint,)):
             yield json.loads(bytes(row[0]))
 
-    def report_inventory(self, endpoint: str, through: str) -> set[tuple[str, str]]:
-        rows = (
-            {
-                "instrument_id": row[0],
-                "source_report_period": row[1],
-                "source_published_date": row[2],
-                "source_report_type": row[3],
-                "availability_status": row[4],
-            }
-            for row in self._connection.execute(
-                """
+    def report_inventory(
+        self, endpoint: str, through: str, *, include_deltas: bool = False,
+    ) -> set[tuple[str, str]]:
+        query = """SELECT instrument_id, source_report_period, source_published_date,
+                          source_report_type, availability_status
+                   FROM logical_rows AS logical WHERE endpoint=?"""
+        parameters = (endpoint,)
+        if include_deltas:
+            query += """ AND NOT EXISTS (
+                SELECT 1 FROM delta_rows AS delta
+                WHERE delta.endpoint=logical.endpoint
+                  AND delta.source_row_sha256=logical.source_row_sha256)
+                UNION ALL
                 SELECT instrument_id, source_report_period, source_published_date,
                        source_report_type, availability_status
-                FROM logical_rows WHERE endpoint = ?
-                """,
-                (endpoint,),
-            )
-        )
+                FROM delta_rows WHERE endpoint=?"""
+            parameters = (endpoint, endpoint)
+        rows = (dict(zip(
+            ("instrument_id", "source_report_period", "source_published_date",
+             "source_report_type", "availability_status"), row, strict=True,
+        )) for row in self._connection.execute(query, parameters))
         return set(_statement_report_inventory(rows, through))
 
     def close(self) -> None:
         self._connection.close()
         self._temporary.cleanup()
+
+
 _REQUIRED_SOURCE_FIELDS = {
     "ts_code",
     "ann_date",
@@ -329,6 +344,19 @@ class FinancialDiscoveryPublication:
     pending_instrument_count: int
     discovery_gap_count: int
     earliest_unresolved_date: str | None
+
+
+@dataclass(frozen=True)
+class PreparedDailyFinancial:
+    """Task-local, immutable draft metadata; it is not publication authority."""
+
+    family_template: bytes
+    discovery: FinancialDiscoveryPublication
+    reports: tuple[tuple[str, tuple[tuple[str, str], ...]], ...]
+
+    @property
+    def received_reports(self) -> dict[str, set[tuple[str, str]]]:
+        return {endpoint: set(reports) for endpoint, reports in self.reports}
 
 
 @dataclass(frozen=True)
@@ -498,14 +526,20 @@ class FinancialCandidateStore:
         self._market = MountedGenerationStore(self._root)
         self._daily_parent_evidence_cache_key: tuple[str, int, int] | None = None
         self._daily_parent_evidence_cache: list[dict[str, object]] = []
-        self._published_index_manifest_sha256: str | None = None
+        self._published_index_binding: tuple[object, ...] | None = None
         self._published_index: _PublishedFinancialRowIndex | None = None
+        self._verified_inventory: tuple[
+            str, str, tuple[tuple[str, tuple[tuple[str, str], ...]], ...]
+        ] | None = None
 
     def close(self) -> None:
         if self._published_index is not None:
             self._published_index.close()
         self._published_index = None
-        self._published_index_manifest_sha256 = None
+        self._published_index_binding = None
+        self._verified_inventory = None
+        self._daily_parent_evidence_cache_key = None
+        self._daily_parent_evidence_cache = []
 
     def _published_rows(
         self,
@@ -513,12 +547,16 @@ class FinancialCandidateStore:
         endpoint_fields: Mapping[str, tuple[str, ...]],
         sessions: list[str],
     ) -> _PublishedFinancialRowIndex:
-        if (
-            self._published_index is not None
-            and self._published_index_manifest_sha256 == manifest_sha256
-        ):
+        # The Family digest pins its source Generation; contract and calendar
+        # are also explicit so no caller can reuse a differently interpreted view.
+        binding = (manifest_sha256, tuple(sorted(endpoint_fields.items())), tuple(sessions))
+        if self._published_index is not None and self._published_index_binding == binding:
             return self._published_index
-        self.close()
+        if self._published_index is not None:
+            self._published_index.close()
+        self._published_index = None
+        self._published_index_binding = None
+        self._verified_inventory = None
         manifest = self._read_family(manifest_sha256)
         references = {
             _TABLE_ENDPOINTS[str(item["name"])]: item
@@ -535,13 +573,14 @@ class FinancialCandidateStore:
                     endpoint_fields[endpoint],
                     references[endpoint],
                     sessions,
+                    metadata_only=True,
                 ):
                     index.add(endpoint, row)
             index.finish()
         except Exception:
             index.close()
             raise
-        self._published_index_manifest_sha256 = manifest_sha256
+        self._published_index_binding = binding
         self._published_index = index
         return index
 
@@ -646,6 +685,22 @@ class FinancialCandidateStore:
         finished_at: datetime | str,
         discovery: FinancialDiscoveryPublication | None = None,
     ) -> FinancialFamilyCandidate:
+        prepared = self.prepare_reprojection(
+            prior_candidate_manifest_sha256=prior_candidate_manifest_sha256,
+            generation_manifest_sha256=generation_manifest_sha256,
+            idempotency_key=idempotency_key, finished_at=finished_at, discovery=discovery,
+        )
+        return self.finalize_daily(prepared, discovery=prepared.discovery)
+
+    def prepare_reprojection(
+        self,
+        *,
+        prior_candidate_manifest_sha256: str,
+        generation_manifest_sha256: str,
+        idempotency_key: str,
+        finished_at: datetime | str,
+        discovery: FinancialDiscoveryPublication | None = None,
+    ) -> PreparedDailyFinancial:
         """Rebuild current projections from retained receipts without source I/O."""
         prior = self.reopen(prior_candidate_manifest_sha256)
         prior_manifest = self._read_family(prior_candidate_manifest_sha256)
@@ -720,7 +775,7 @@ class FinancialCandidateStore:
             target_count=len(prior_checkpoints),
             shards=prior_checkpoints,
         )
-        return self._materialize_daily(
+        return self._prepare_daily_candidate(
             collection,
             prior_candidate_manifest_sha256=prior_candidate_manifest_sha256,
             prior_manifest=prior_manifest,
@@ -740,6 +795,19 @@ class FinancialCandidateStore:
         prior_candidate_manifest_sha256: str,
         discovery: FinancialDiscoveryPublication,
     ) -> FinancialFamilyCandidate:
+        prepared = self.prepare_daily(
+            collection, prior_candidate_manifest_sha256=prior_candidate_manifest_sha256,
+            discovery=discovery,
+        )
+        return self.finalize_daily(prepared, discovery=discovery)
+
+    def prepare_daily(
+        self,
+        collection: CompletedFinancialCollection,
+        *,
+        prior_candidate_manifest_sha256: str,
+        discovery: FinancialDiscoveryPublication,
+    ) -> PreparedDailyFinancial:
         prior = self.reopen(prior_candidate_manifest_sha256)
         _validate_discovery_publication(discovery)
         if prior.observation_through_session > discovery.attempted_through_session:
@@ -778,7 +846,7 @@ class FinancialCandidateStore:
         prior_entries = self._read_evidence_index(prior_manifest["raw_evidence"])
         prior_checkpoints = tuple(_checkpoint_from_evidence(item) for item in prior_entries)
         self._validate_historical_identities(prior_checkpoints, historical)
-        return self._materialize_daily(
+        return self._prepare_daily_candidate(
             collection,
             prior_candidate_manifest_sha256=prior_candidate_manifest_sha256,
             prior_manifest=prior_manifest,
@@ -852,7 +920,7 @@ class FinancialCandidateStore:
             any(delta_counts.values()), reports,
         )
 
-    def _materialize_daily(
+    def _prepare_daily_candidate(
         self,
         collection: CompletedFinancialCollection,
         *,
@@ -865,7 +933,7 @@ class FinancialCandidateStore:
         prior_sessions: list[str],
         current_lifecycles: Sequence[HistoricalInstrumentLifecycle],
         retained_evidence_reprojection: bool = False,
-    ) -> FinancialFamilyCandidate:
+    ) -> PreparedDailyFinancial:
         coverage_start = str(prior_manifest["dataset_coverage"]["start"])
         delta_counts, published, quarantine_hashes, quarantine_added, _reports = (
             self._daily_table_deltas(
@@ -953,10 +1021,75 @@ class FinancialCandidateStore:
             },
             "tables": table_references,
         }
+        inventory = self._inventory_with_deltas(
+            prior_candidate_manifest_sha256, endpoint_fields, prior_sessions,
+            discovery.attempted_through_session, published,
+        )
+        return PreparedDailyFinancial(
+            self._manifest_bytes(family), discovery, _frozen_report_inventory(inventory),
+        )
+
+    def finalize_daily(
+        self, prepared: PreparedDailyFinancial, *, discovery: FinancialDiscoveryPublication,
+    ) -> FinancialFamilyCandidate:
+        _validate_discovery_publication(discovery)
+        if (
+            discovery.baseline_session != prepared.discovery.baseline_session
+            or discovery.attempted_through_session != prepared.discovery.attempted_through_session
+            or discovery.discovery_gap_count != prepared.discovery.discovery_gap_count
+            or discovery.complete_through_session < prepared.discovery.complete_through_session
+        ):
+            raise FinancialCandidateError("FINANCIAL_COVERAGE_INVALID")
+        family = json.loads(prepared.family_template)
+        family["dataset_coverage"] = _discovery_coverage(
+            family["dataset_coverage"]["start"], discovery,
+        )
         content = self._manifest_bytes(family)
         sha256 = hashlib.sha256(content).hexdigest()
         self._store(self._manifest_path(sha256), sha256, content)
-        return self.validate(sha256)
+        candidate = self.validate(sha256)
+        if (
+            self._verified_inventory is None
+            or self._verified_inventory[:2] != (sha256, discovery.attempted_through_session)
+            or self._verified_inventory[2] != prepared.reports
+        ):
+            raise FinancialCandidateError("FINANCIAL_CANDIDATE_REPORT_INVENTORY_INVALID")
+        return candidate
+
+    def _inventory_with_deltas(self, prior_digest, fields, sessions, through, delta_index):
+        published = self._published_rows(prior_digest, fields, sessions)
+        return {
+            endpoint: published.report_inventory(
+                endpoint, through, include_deltas=delta_index is not None,
+            )
+            for endpoint in FINANCIAL_ENDPOINTS
+        }
+
+    def prepare_instruments(
+        self, *, prior_candidate_manifest_sha256: str, generation_manifest_sha256: str,
+        observation_through_session: str, instrument_ids: frozenset[str],
+    ) -> None:
+        """Load selected old values once per object before per-company collection."""
+        prior = self.reopen(prior_candidate_manifest_sha256)
+        manifest = self._read_family(prior_candidate_manifest_sha256)
+        fields = dict(self._manifest_collection_contract(manifest).endpoint_fields)
+        old_sessions = self._prevalidated_market_sessions(
+            str(manifest["source_generation_manifest_sha256"]), prior.observation_through_session,
+        )
+        sessions = self._prevalidated_market_sessions(
+            generation_manifest_sha256, observation_through_session,
+        )
+        if [day for day in sessions if day <= prior.observation_through_session] != old_sessions:
+            raise FinancialCandidateError("FINANCIAL_REFRESH_CALENDAR_MISMATCH")
+        identities = frozenset(item.instrument_id for item in
+            self._market.read_historical_ordinary_a_share_lifecycles(generation_manifest_sha256))
+        if not instrument_ids <= identities:
+            raise FinancialCandidateError("FINANCIAL_INSTRUMENT_IDENTITY_INVALID")
+        affected = instrument_ids | self._calendar_reprojection_instruments(
+            prior_candidate_manifest_sha256, old_sessions, sessions, identities,
+        )
+        published = self._published_rows(prior_candidate_manifest_sha256, fields, old_sessions)
+        self._load_published_instruments(published, affected, fields)
 
     def _daily_table_deltas(
         self,
@@ -1013,6 +1146,7 @@ class FinancialCandidateStore:
             endpoint_fields,
             prior_sessions,
         )
+        self._load_published_instruments(published, frozenset(affected), endpoint_fields)
         published.clear_deltas()
         quarantine_hashes = published.quarantined_hashes()
         prior_quarantine_hashes = set(quarantine_hashes)
@@ -1088,33 +1222,24 @@ class FinancialCandidateStore:
     ) -> frozenset[str]:
         if current_sessions == prior_sessions:
             return frozenset()
-        affected: set[str] = set()
-        columns = (
-            "instrument_id", "availability_status", "source_published_date",
-            "first_observed_at", "source_available_session", "first_observed_session",
+        manifest = self._read_family(prior_digest)
+        fields = dict(self._manifest_collection_contract(manifest).endpoint_fields)
+        return self._published_rows(prior_digest, fields, prior_sessions).calendar_instruments(
+            current_sessions, instrument_ids,
         )
+
+    def _read_indexed_object(self, digest: str, byte_count: int) -> bytes:
+        return self._read(
+            self._object_path(digest), digest, byte_count, GENERATION_OBJECT_MAX_BYTES,
+        )
+
+    def _load_published_instruments(self, published, instruments, endpoint_fields) -> None:
         for endpoint in FINANCIAL_ENDPOINTS:
-            table = self.read_financial_table(
-                prior_digest, endpoint, columns, (prior_sessions[-1],), instrument_ids,
-                compact_history=False,
+            published.load_instruments(
+                endpoint, instruments,
+                _table_contract(_ENDPOINT_TABLES[endpoint], endpoint_fields[endpoint]),
+                self._read_indexed_object,
             )
-            pending = table.filter(pc.is_in(table["availability_status"], value_set=pa.array(
-                ["pending_calendar", "quarantined"],
-            )))
-            for batch in pending.to_batches(max_chunksize=4096):
-                for row in batch.to_pylist():
-                    if not row["source_published_date"]:
-                        continue
-                    available = _next_session(
-                        current_sessions, _iso_date(row["source_published_date"]),
-                    )
-                    observed = _next_session(
-                        current_sessions, _market_date(row["first_observed_at"]),
-                    )
-                    if (available != row["source_available_session"]
-                            or observed != row["first_observed_session"]):
-                        affected.add(row["instrument_id"])
-        return frozenset(affected)
 
     def _materialize_incremental_table(
         self,
@@ -2086,11 +2211,24 @@ class FinancialCandidateStore:
             or prior.observation_through_session > descriptor.observation_through_session
         ):
             raise FinancialCandidateError("FINANCIAL_COVERAGE_INVALID")
+        self._verify_family_objects(prior_manifest)
+        inventory = self._inventory_with_deltas(
+            prior_manifest_sha256, endpoint_fields, prior_sessions,
+            descriptor.observation_through_session, published,
+        )
+        self._verified_inventory = (
+            manifest_sha256, descriptor.observation_through_session,
+            _frozen_report_inventory(inventory),
+        )
         return descriptor
 
     def report_inventory(self, manifest_sha256: str, *, through: str):
         """Report presence is independent of field nulls and session availability."""
         manifest = self._read_family(manifest_sha256)
+        verified = self._verified_inventory
+        if verified is not None and verified[:2] == (manifest_sha256, through):
+            self._verify_family_objects(manifest)
+            return {endpoint: set(reports) for endpoint, reports in verified[2]}
         descriptor = self._descriptor(manifest_sha256, manifest)
         endpoint_fields = dict(self._manifest_collection_contract(manifest).endpoint_fields)
         sessions = self._prevalidated_market_sessions(
@@ -2102,6 +2240,22 @@ class FinancialCandidateStore:
             endpoint: published.report_inventory(endpoint, through)
             for endpoint in FINANCIAL_ENDPOINTS
         }
+
+    def _verify_family_objects(self, manifest: Mapping[str, object]) -> None:
+        # Rehash physical objects, including fully overlaid base objects, without decoding values.
+        for reference in manifest["tables"]:
+            table = self._read_json(
+                self._manifest_path(reference["manifest_sha256"]),
+                reference["manifest_sha256"], reference["manifest_byte_count"],
+            )
+            for object_ref in table["objects"]:
+                self._read_indexed_object(object_ref["sha256"], object_ref["byte_count"])
+
+    def verify_for_publication(self, manifest_sha256: str) -> None:
+        """Recheck current bytes before reusing this task's source-to-candidate proof."""
+        if self._verified_inventory is None or self._verified_inventory[0] != manifest_sha256:
+            self.validate(manifest_sha256)
+        self._verify_family_objects(self._read_family(manifest_sha256))
 
     def read_table(self, manifest_sha256: str, table_name: str) -> tuple[dict[str, object], ...]:
         manifest = self._read_family(manifest_sha256)
@@ -2816,6 +2970,8 @@ class FinancialCandidateStore:
         source_fields: tuple[str, ...],
         reference: Mapping[str, object],
         sessions: list[str],
+        *,
+        metadata_only: bool = False,
     ) -> Iterator[dict[str, object]]:
         manifest_sha256 = str(reference.get("manifest_sha256"))
         manifest = self._read_json(
@@ -2868,12 +3024,25 @@ class FinancialCandidateStore:
                 GENERATION_OBJECT_MAX_BYTES,
             )
             try:
-                table = pq.read_table(pa.BufferReader(content))
-                if table.schema != contract.schema:
+                if pq.ParquetFile(pa.BufferReader(content)).schema_arrow != contract.schema:
                     raise FinancialCandidateError("FINANCIAL_OBJECT_SCHEMA_INVALID")
-                partition = canonicalize_parquet_rows(table.to_pylist(), contract)
-                if parquet_bytes(partition, contract) != content:
-                    raise FinancialCandidateError("FINANCIAL_OBJECT_ENCODING_INVALID")
+                table = pq.read_table(
+                    pa.BufferReader(content),
+                    columns=list(_METADATA_FIELDS) if metadata_only else None,
+                )
+                if metadata_only:
+                    record_parquet_scan(source="financial", row_count=table.num_rows,
+                                        column_count=table.num_columns)
+                    rows = table.to_pylist()
+                    partition = canonicalize_parquet_rows(
+                        rows, replace(contract, schema=table.schema),
+                    )
+                    if rows != partition:
+                        raise FinancialCandidateError("FINANCIAL_TABLE_ORDER_INVALID")
+                else:
+                    partition = canonicalize_parquet_rows(table.to_pylist(), contract)
+                    if parquet_bytes(partition, contract) != content:
+                        raise FinancialCandidateError("FINANCIAL_OBJECT_ENCODING_INVALID")
             except (ArrowException, ParquetContractError, TypeError, ValueError) as error:
                 raise FinancialCandidateError("FINANCIAL_OBJECT_INVALID") from error
             if (
@@ -2897,7 +3066,8 @@ class FinancialCandidateStore:
                     tuple(partition[0][key] for key in contract.sort_keys),
                     tuple(partition[-1][key] for key in contract.sort_keys),
                 )
-            for row in reversed(partition):
+            for position in reversed(range(len(partition))):
+                row = partition[position]
                 if layered is not None:
                     source_hash = str(row["source_row_sha256"])
                     _require_sha256(source_hash)
@@ -2905,7 +3075,11 @@ class FinancialCandidateStore:
                     if identity in seen:
                         continue
                     seen.add(identity)
-                yield row
+                yield (row | {
+                    "_object_sha256": object_ref["sha256"],
+                    "_object_byte_count": object_ref["byte_count"],
+                    "_object_row_index": position,
+                }) if metadata_only else row
             del partition, table, content
         previous = None
         for ordinal in sorted(boundaries):
@@ -3790,6 +3964,10 @@ def _coverage_complete_through(manifest: Mapping[str, object]) -> str:
         return date.fromisoformat(str(value)).isoformat()
     except ValueError as error:
         raise FinancialCandidateError("FINANCIAL_COVERAGE_INVALID") from error
+
+
+def _frozen_report_inventory(inventory):
+    return tuple((endpoint, tuple(sorted(inventory[endpoint]))) for endpoint in FINANCIAL_ENDPOINTS)
 
 
 def _statement_report_inventory(rows, through):

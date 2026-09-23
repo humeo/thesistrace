@@ -2694,10 +2694,15 @@ def test_daily_financial_refresh_publishes_other_stocks_when_one_stock_fails(
         database.close()
 
 
+@pytest.mark.parametrize("interrupt_phase", [
+    "instrument_checkpoint", "candidate_prepare", "candidate_finalize",
+])
 def test_daily_financial_refresh_resumes_after_each_durable_stock_checkpoint(
     core_settings: CoreSettings,
     tmp_path: Path,
+    interrupt_phase: str,
 ) -> None:
+    run_key = f"daily-resume-{interrupt_phase}"
     class DisclosureSource:
         def discover(
             self,
@@ -2770,14 +2775,14 @@ def test_daily_financial_refresh_resumes_after_each_durable_stock_checkpoint(
             sessions=("2010-01-04", "2026-08-07", "2026-08-13", "2026-08-14"),
             second_listed_to="",
         )
-        _establish_head(database, tmp_path, market, operation_id="daily-resume-market")
+        _establish_head(database, tmp_path, market, operation_id=f"{run_key}-market")
         contract = _executable_contract()
         prior = _initial_candidate(
             database,
             tmp_path,
             ExecutableStatementSource(),
             market,
-            idempotency_key="daily-resume-prior",
+            idempotency_key=f"{run_key}-prior",
             contract=contract,
         )
         source_generation = _financial_generation(tmp_path, market, prior)
@@ -2785,7 +2790,7 @@ def test_daily_financial_refresh_resumes_after_each_durable_stock_checkpoint(
             database,
             tmp_path,
             source_generation,
-            operation_id="daily-resume-source",
+            operation_id=f"{run_key}-source",
             expected=market,
         )
         statement_source = DailyStatementSource()
@@ -2793,7 +2798,7 @@ def test_daily_financial_refresh_resumes_after_each_durable_stock_checkpoint(
 
         def interrupt_after_first(event: dict[str, object]) -> None:
             nonlocal interrupted
-            if event.get("phase") == "instrument_checkpoint" and not interrupted:
+            if event.get("phase") == interrupt_phase and not interrupted:
                 interrupted = True
                 raise RuntimeError("interrupt after first stock checkpoint")
 
@@ -2808,12 +2813,20 @@ def test_daily_financial_refresh_resumes_after_each_durable_stock_checkpoint(
         )
         with pytest.raises(RuntimeError, match="interrupt after first stock checkpoint"):
             service.publish(
-                idempotency_key="daily-resume-publish",
+                idempotency_key=f"{run_key}-publish",
                 observation_through_session="2026-08-14",
             )
+        collected = ("000001.SZ",) if interrupt_phase == "instrument_checkpoint" else (
+            "000001.SZ", "000002.SZ",
+        )
         assert statement_source.requests == [
-            (endpoint, "000001.SZ", "complete-history") for endpoint in FINANCIAL_ENDPOINTS
+            (endpoint, ts_code, "complete-history")
+            for ts_code in collected for endpoint in FINANCIAL_ENDPOINTS
         ]
+        assert not list(tmp_path.glob(".financial-published-index-*"))
+        assert MountedDatasetHeadStore(tmp_path).current_pointer().generation_manifest_sha256 == (
+            source_generation
+        )
 
         outcome = DailyFinancialRefreshService(
             database,
@@ -2823,7 +2836,7 @@ def test_daily_financial_refresh_resumes_after_each_durable_stock_checkpoint(
             indicator_provider=TushareFinancialIndicatorProvider(FixtureIndicatorProvider()),
             clock=lambda: datetime(2026, 8, 14, 10, tzinfo=UTC),
         ).publish(
-            idempotency_key="daily-resume-publish",
+            idempotency_key=f"{run_key}-publish",
             observation_through_session="2026-08-14",
         )
 
@@ -2832,6 +2845,82 @@ def test_daily_financial_refresh_resumes_after_each_durable_stock_checkpoint(
             *((endpoint, "000001.SZ", "complete-history") for endpoint in FINANCIAL_ENDPOINTS),
             *((endpoint, "000002.SZ", "complete-history") for endpoint in FINANCIAL_ENDPOINTS),
         ]
+    finally:
+        database.close()
+
+
+@pytest.mark.parametrize("damage_phase", ["candidate_prepare", "candidate_finalize"])
+def test_damaged_prepared_financial_delta_never_moves_dataset_head(
+    core_settings: CoreSettings, tmp_path: Path, damage_phase: str,
+) -> None:
+    class UnexpectedMarketSource:
+        def collect(self, plan: object) -> object:
+            raise AssertionError("Financial queue work must not collect Market data")
+
+    database = _database(core_settings)
+    key = f"damaged-financial-{damage_phase}"
+    try:
+        market = _market_generation(
+            tmp_path, sessions=("2010-01-04", "2026-08-07", "2026-08-13", "2026-08-14"),
+        )
+        _establish_head(database, tmp_path, market, operation_id=f"{key}-market")
+        prior = _initial_candidate(
+            database, tmp_path, ExecutableStatementSource(), market,
+            idempotency_key=f"{key}-prior", contract=_executable_contract(),
+        )
+        source_generation = _financial_generation(tmp_path, market, prior)
+        _establish_head(
+            database, tmp_path, source_generation, operation_id=f"{key}-source", expected=market,
+        )
+        replay_path = tmp_path / "replay.json"
+        replay_path.write_text(json.dumps(_daily_financial_replay(
+            has_gap=False, has_statement_change=True,
+        )))
+        replay = ReplayTushareRefreshBundle((replay_path,))
+        prior_manifests = set((tmp_path / "manifests").rglob("*.json"))
+        damaged = False
+
+        def damage_delta(event: dict[str, object]) -> None:
+            nonlocal damaged
+            if event.get("phase") != damage_phase or damaged:
+                return
+            tables = [
+                value for path in set((tmp_path / "manifests").rglob("*.json")) - prior_manifests
+                if (value := json.loads(path.read_bytes())).get("format")
+                == "thesistrace-financial-version-table" and value["source_endpoint"] == "income"
+            ]
+            assert len(tables) == 1
+            digest = tables[0]["objects"][-1]["sha256"]
+            (tmp_path / "objects/sha256" / digest[:2] / f"{digest}.parquet").write_bytes(b"damaged")
+            damaged = True
+
+        service = DataRefreshService(
+            database, tmp_path, benchmark_mount_root=benchmark_mount_for_data_mount(tmp_path),
+            clock=lambda: datetime(2026, 8, 14, 10, tzinfo=UTC), lifecycle_event=damage_delta,
+            max_attempts=1,
+        )
+        service.submit_financial(idempotency_key=key, observation_through_session="2026-08-14")
+        with pytest.raises(DataRefreshError, match="REFRESH_INFRASTRUCTURE_FAILURE"):
+            service.process_next(
+                UnexpectedMarketSource(),  # type: ignore[arg-type]
+                benchmark_source=FixtureBenchmarkSource(), financial_disclosure_source=replay,
+                financial_source=replay,
+                indicator_provider=TushareFinancialIndicatorProvider(replay),
+            )
+        assert damaged
+        receipt = service.inspect(key)
+        assert receipt.status == "failed"
+        assert receipt.outcome == "infrastructure_failed"
+        assert MountedDatasetHeadStore(tmp_path).current_pointer().generation_manifest_sha256 == (
+            source_generation
+        )
+        with database.transaction() as transaction:
+            receipt = transaction.execute(
+                """SELECT status, failure_code FROM data.financial_daily_refresh_operations
+                   WHERE idempotency_key=%s""", (key,),
+            ).fetchone()
+        assert receipt == {"status": "failed", "failure_code": "RETRY_EXHAUSTED"}
+        assert not list(tmp_path.glob(".financial-published-index-*"))
     finally:
         database.close()
 
@@ -4924,10 +5013,16 @@ def test_daily_indicator_refresh_seeds_new_market_identity_before_rotation(
         }
         for phase in (
             "discovery",
+            "published_inventory",
+            "report_planning",
             "indicator_collection",
             "indicator_coverage",
             "indicator_build",
             "statements",
+            "statement_values",
+            "candidate_prepare",
+            "candidate_reconcile",
+            "candidate_finalize",
             "candidate",
             "composition",
             "publication",

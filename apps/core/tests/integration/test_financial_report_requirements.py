@@ -35,6 +35,7 @@ def test_refresh_retries_missing_report_without_announcements_and_preserves_prio
     core_settings,
     tmp_path,
 ):
+    import json
     from dataclasses import replace
     from datetime import UTC, datetime, timedelta
 
@@ -107,7 +108,7 @@ def test_refresh_retries_missing_report_without_announcements_and_preserves_prio
     try:
         market = _market_generation(
             tmp_path,
-            sessions=("2010-01-04", "2026-08-07", "2026-08-13", "2026-08-14"),
+            sessions=("2010-01-04", "2026-08-07", "2026-08-13", "2026-08-14", "2026-08-17"),
         )
         _establish_head(database, tmp_path, market, operation_id="structured-market")
         prior = _initial_candidate(
@@ -154,6 +155,16 @@ def test_refresh_retries_missing_report_without_announcements_and_preserves_prio
         )
         assert complete.status == "succeeded"
         assert complete.pending_instrument_count == 0
+        completed_families = [
+            document for path in (tmp_path / "manifests").rglob("*.json")
+            if (document := json.loads(path.read_bytes())).get("format")
+            == "thesistrace-financial-family-candidate"
+            and document.get("source_collection", {}).get("idempotency_key")
+            == "structured-complete"
+        ]
+        assert len(completed_families) == 1, (
+            "Resolving pending reports must seal one final candidate"
+        )
         assert (
             service.publish(
                 idempotency_key="structured-complete",
@@ -225,7 +236,22 @@ def test_refresh_retries_missing_report_without_announcements_and_preserves_prio
         assert FinancialIndicatorCandidateStore(tmp_path).reopen(digest)["unresolved_sources"] == {
             "equity:000002.SZ": "2026-04-20",
         }
+        now = datetime(2026, 8, 17, 10, tzinfo=UTC)
+        advanced = service.publish(
+            idempotency_key="structured-next-session", observation_through_session="2026-08-17",
+        )
+        assert advanced.pending_instrument_count == 1  # Only the genuinely absent 000002 report.
+        inventory = FinancialCandidateStore(tmp_path).report_inventory(
+            advanced.candidate.manifest_sha256, through="2026-08-17",
+        )
+        assert all(("equity:000001.SZ", "2026-06-30") in reports
+                   for reports in inventory.values())
         with database.transaction() as tx:
+            assert tx.execute(
+                """SELECT count(*) n FROM data.financial_report_targets
+                   WHERE instrument_id='equity:000001.SZ' AND endpoint<>'fina_indicator'
+                     AND resolved_evidence_sha256 IS NULL""",
+            ).fetchone()["n"] == 0
             assert (
                 tx.execute(
                     "SELECT count(*) n FROM data.financial_announcement_triggers"
