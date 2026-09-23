@@ -414,15 +414,20 @@ def _assert_other_storage_rejected(runtime, settings, plan, backup, receipt):
                       aws_access_key_id=settings.s3_access_key_id,
                       aws_secret_access_key=settings.s3_secret_access_key,
                       region_name=settings.s3_region)
+
+    def inventory(bucket_name):
+        return [row for page in s3.get_paginator("list_objects_v2").paginate(Bucket=bucket_name)
+                for row in page.get("Contents", [])]
+
     bucket = "cutover-other-" + uuid4().hex
     s3.create_bucket(Bucket=bucket)
-    original = s3.list_objects_v2(Bucket=settings.s3_bucket).get("Contents", [])
+    original = inventory(settings.s3_bucket)
     digest = receipt["pending_objects"][0]
     key = next(row["Key"] for row in original if digest in row["Key"])
     s3.copy_object(Bucket=bucket, Key=key,
                    CopySource={"Bucket": settings.s3_bucket, "Key": key})
     try:
-        other = s3.list_objects_v2(Bucket=bucket)["Contents"]
+        other = inventory(bucket)
         publication = Publication(runtime.database, s3, bucket=bucket)
         with pytest.raises(ValueError, match="environment"):
             apply_cutover(runtime.database, publication, plan=plan, backup_path=backup)
@@ -440,8 +445,8 @@ def _assert_other_storage_rejected(runtime, settings, plan, backup, receipt):
                 resume_cutover(runtime.database, publication, cutover_id=receipt["id"])
         finally:
             wrong_endpoint.close()
-        assert s3.list_objects_v2(Bucket=settings.s3_bucket)["Contents"] == original
-        assert s3.list_objects_v2(Bucket=bucket)["Contents"] == other
+        assert inventory(settings.s3_bucket) == original
+        assert inventory(bucket) == other
     finally:
         s3.delete_object(Bucket=bucket, Key=key)
         s3.delete_bucket(Bucket=bucket)
