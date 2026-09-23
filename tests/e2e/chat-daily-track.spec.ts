@@ -114,9 +114,17 @@ test("Chat DailyTrack replays lost Start and Retry responses while Tracking adva
     });
     const blocked = await track(page, id);
     expect(blocked.status).toBe("blocked");
+    expect(blocked.blocked_code).toBe("CAPACITY_EXCEEDED");
     expect(blocked.blocked_reason).toBe("DailyTrack target exceeds Tracking Worker capacity.");
     await send(page, reloadPrompt);
-    await expect(page.getByRole("article", { name: "Research surface" }).last()).toContainText(blocked.blocked_reason!);
+    await expect(page.getByRole("article", { name: "Research surface" }).last()).toContainText("The next calculation period exceeds available execution capacity.");
+    const beforeLanguageSwitch = trackFacts(researcher.id);
+    await page.locator(".account-menu > summary").click();
+    await page.getByRole("button", { name: "简体中文", exact: true }).click();
+    await expect(page.locator(".chat-a2ui-surface").last()).toContainText("下一计算区间超出可用执行容量。");
+    await page.getByRole("button", { name: "English", exact: true }).click();
+    await page.keyboard.press("Escape");
+    expect(trackFacts(researcher.id)).toEqual(beforeLanguageSwitch);
     setProxyMode("mcp-fault-proxy", 8150, "tool-call", "disconnect-submit");
     await send(page, "Retry the blocked DailyTrack in this Chat if it is eligible.", "Run failed");
     await expect((await revealToolActivity(page, "retry_daily_track", "failed")).last()).toBeVisible();
@@ -143,7 +151,7 @@ test("Chat DailyTrack replays lost Start and Retry responses while Tracking adva
 });
 
 type Track = Readonly<{
-  id: string; status: string; blocked_reason: string | null; strategy_session: string; data_through_session: string;
+  id: string; status: string; blocked_code: string | null; blocked_reason: string | null; strategy_session: string; data_through_session: string;
   origin: { seed_run_id: string };
   observation: { session: string; net_return: number | null; maximum_drawdown: number | null };
   strategy: { summary: { metrics: { sharpe: number | null } }; observations: Array<{ session: string; net_nav: string; net_cash: string; holdings_count: number; transaction_cost_cny: string }> };
