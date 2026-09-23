@@ -13,8 +13,8 @@ from psycopg.types.json import Jsonb
 from thesistrace._postgres.schema import _fingerprint
 from thesistrace.entrypoints.schema import CORE_SCHEMA_DEFINITIONS
 from thesistrace.migrations.research_cutover_inventory import DEPENDENTS, read_inventory
+from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.publication.service import lock_publication_mutation
-from thesistrace.research_kernel.serialization import canonical_json_bytes
 from thesistrace.research_run.service import SEMANTIC_VERSIONS
 
 

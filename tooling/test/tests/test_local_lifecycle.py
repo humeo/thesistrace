@@ -788,6 +788,7 @@ def test_core_has_one_operational_output_schema_and_no_log_files() -> None:
         "migrations/execution_opportunities_0004.py",  # Explicit migration CLI JSON receipt.
         "migrations/financial_disclosures_0005.py",  # Explicit data-preserving migration receipt.
         "migrations/rank_ic_0001.py",  # Explicit migration CLI JSON receipt.
+        "migrations/research_contract_cutover.py",  # Explicit scoped retirement CLI receipt.
     }
     assert not [
         path.relative_to(source_root).as_posix()
