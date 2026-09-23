@@ -28,6 +28,7 @@ from thesistrace.research_batch.models import (
     ResearchBatchItemSummary,
     ResearchBatchScope,
 )
+from thesistrace.research_definition import default_simulation_costs
 from thesistrace.research_run.models import (
     FactorResultSection,
     ResearchRunAuthorableInput,
@@ -213,6 +214,7 @@ def run_polling_payload(
     if research_kind == "strategy_backtest":
         input_payload.update({"volatility_window": 20, "weighting": "equal_weight",
             "strategy_mode": "framework",
+            "costs": default_simulation_costs(),
             "initial_cash_cny": "10000000", "holdings_count": 10, "selection_every_sessions": 5,
             "exposure_expression": "1",
         })

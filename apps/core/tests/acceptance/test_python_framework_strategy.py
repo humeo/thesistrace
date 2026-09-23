@@ -19,6 +19,7 @@ from thesistrace.daily_track import DailyTrackProgressionFailed
 from thesistrace.daily_track.models import DailyTrackOriginResultSectionInput
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.entrypoints.schema import initialize_core
+from thesistrace.research_definition import default_simulation_costs
 
 pytestmark = pytest.mark.skipif(
     not core_environment_is_configured(), reason="isolated Core runtime is not configured",
@@ -127,6 +128,9 @@ def test_framework_run_reuse_and_track_preserve_frozen_modules_and_account(tmp_p
     with TestClient(create_app(settings)) as client:
         runtime = client.app.state.core_runtime
         submitted = command('framework-run', builtin_alpha=builtin_alpha)
+        costs = {**default_simulation_costs().model_dump(),
+                 'commission_min_cny': '2', 'slippage_bps': '15'}
+        submitted['costs'] = costs
         diagnosed = client.post('/api/research/diagnostics', json={
             key: value for key, value in submitted.items()
             if key not in {'request_id', 'folder_id', 'name'}
@@ -140,6 +144,7 @@ def test_framework_run_reuse_and_track_preserve_frozen_modules_and_account(tmp_p
         detail = client.get(f'/api/research-runs/{run_id}').json()
         assert detail['status'] == 'succeeded', detail
         assert detail['input']['modules'] == submitted['modules']
+        assert detail['input']['costs'] == costs
         assert 'holdings_count' not in detail['input']
         expected = {stage: {'count': 3} for stage in submitted['modules']}
         if builtin_alpha:
@@ -163,6 +168,7 @@ def test_framework_run_reuse_and_track_preserve_frozen_modules_and_account(tmp_p
                 assert target.status_code == 200, target.text
                 assert target.json()['rows'][0]['decision_session'] == row['decision_session']
         reused = deepcopy(detail['input'])
+        reused['costs']['slippage_bps'] = '25'
         reused['modules']['portfolio_construction']['program']['parameters']['edited'] = True
         response = client.post('/api/research-runs', json={
             **reused, 'request_id': 'reuse', 'folder_id': 'folder_default',
@@ -171,6 +177,8 @@ def test_framework_run_reuse_and_track_preserve_frozen_modules_and_account(tmp_p
         assert runtime.research_runs.process_next()
         reused_detail = client.get(f"/api/research-runs/{response.json()['id']}").json()
         assert reused_detail['status'] == 'succeeded', reused_detail
+        assert reused_detail['input']['costs']['slippage_bps'] == '25'
+        assert client.get(f'/api/research-runs/{run_id}').json()['input']['costs'] == costs
         assert client.get(f'/api/research-runs/{run_id}').json()['input']['modules'] == (
             submitted['modules']
         )
@@ -197,9 +205,9 @@ def test_framework_run_reuse_and_track_preserve_frozen_modules_and_account(tmp_p
             assert runtime.daily_tracks.process_next()
             track = client.get(f'/api/daily-tracks/{track_id}').json()
         assert track['strategy_session'] == SESSIONS[-1], track
-        full = client.post('/api/research-runs', json=command(
+        full = client.post('/api/research-runs', json={**command(
             'full', end=SESSIONS[-1], builtin_alpha=builtin_alpha,
-        ))
+        ), 'costs': costs})
         assert full.status_code == 202, full.text
         assert runtime.research_runs.process_next()
         full_result = client.get(f"/api/research-runs/{full.json()['id']}").json()
@@ -216,6 +224,15 @@ def test_framework_run_reuse_and_track_preserve_frozen_modules_and_account(tmp_p
         assert track_events.status_code == full_events.status_code == 200
         assert track_events.json()['rows'] == full_events.json()['rows']
         assert track_events.json()['rows'][:3] == original_events
+        track_fills = client.post(f'/api/daily-tracks/{track_id}/events/query', json={
+            'section': 'strategy_fills', 'limit': 50,
+        })
+        full_fills = client.post(f"/api/research-runs/{full.json()['id']}/events/query", json={
+            'section': 'strategy_fills', 'limit': 50,
+        })
+        assert track_fills.status_code == full_fills.status_code == 200
+        assert track_fills.json()['rows']
+        assert track_fills.json()['rows'] == full_fills.json()['rows']
         assert runtime.research_runs.get_detail(UUID(int=1234), run_id) is None
         assert runtime.daily_tracks.get(UUID(int=1234), track_id) is None
 

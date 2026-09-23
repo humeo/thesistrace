@@ -43,6 +43,7 @@ def accepted_calculation_case() -> dict[str, object]:
             "commission_min_cny": "5",
             "stamp_duty_sell_rate": "0.0005",
             "transfer_fee_rate": "0.00001",
+            "slippage_bps": "0",
         },
     }
     research_data = aligned_market_data(
@@ -127,6 +128,7 @@ def accepted_kernel_run(
                 commission_min_cny=str(costs["commission_min_cny"]),
                 stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
                 transfer_fee_rate=str(costs["transfer_fee_rate"]),
+                slippage_bps=str(costs["slippage_bps"]),
             ),
             research_start_session=str(canonical["research_calendar"][20]),
             research_end_session=str(canonical["research_calendar"][-1]),

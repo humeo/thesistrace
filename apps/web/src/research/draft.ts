@@ -1,3 +1,4 @@
+import { costFields, costInputError, defaultSimulationCosts, readCostInputs, type CostField, type SimulationCosts } from "./simulationCosts";
 import {
   DIRECT_EXAMPLE, emptyProgramInputs, programDraft, programInputFields, programInputIssues,
   parseProgramParameters, programSpec, type ProgramInputField, type ProgramInputs, type PythonProgram,
@@ -27,6 +28,7 @@ export type ResearchInputs = ProgramInputs & {
   universe: string;
   neutralization: string;
   initialCashCny: string;
+  costs: SimulationCosts;
   holdingsCount: string;
   selectionEverySessions: string;
   exposureExpression: string;
@@ -72,6 +74,7 @@ export type FrozenResearchAuthorableInput = CommonFrozenResearchAuthorableInput 
   formula?: string;
   neutralization?: "none" | "industry";
   initial_cash_cny: string;
+  costs: SimulationCosts;
   holdings_count?: number;
   selection_every_sessions?: number;
   exposure_expression?: string;
@@ -81,6 +84,7 @@ export type FrozenResearchAuthorableInput = CommonFrozenResearchAuthorableInput 
   research_kind: "strategy_backtest";
   strategy_mode: "direct";
   initial_cash_cny: string;
+  costs: SimulationCosts;
   program: PythonProgram;
 });
 
@@ -91,7 +95,7 @@ export type ResearchDraft = ResearchInputs & {
 };
 
 const MAX_DRAFT_BYTES = 2 * 1024 * 1024;
-const DRAFT_STORAGE_SCHEMA = "research-draft/v2";
+const DRAFT_STORAGE_SCHEMA = "research-draft/v3";
 const MAX_FORMULA_LENGTH = 4_096;
 export const MAX_HYPOTHESIS_LENGTH = 1_024;
 const MAX_TEXT_LENGTH = 10_000;
@@ -108,7 +112,7 @@ export function emptyResearchDraft(): ResearchDraft {
     endDate: "",
     universe: "",
     neutralization: "none",
-    initialCashCny: "",
+    initialCashCny: "", costs: defaultSimulationCosts(),
     holdingsCount: "",
     selectionEverySessions: "",
     exposureExpression: "1",
@@ -182,7 +186,7 @@ export function selectResearchKind(
     researchKind, strategyMode: "framework",
     ...emptyProgramInputs(), frameworkModules: builtinModulesDraft(),
     neutralization: draft.neutralization || "none",
-    initialCashCny: "",
+    initialCashCny: "", costs: defaultSimulationCosts(),
     holdingsCount: "",
     selectionEverySessions: "",
     exposureExpression: "1",
@@ -272,12 +276,12 @@ export type ResearchSpec = Omit<CommonResearchRunAdmissionCommand, "request_id" 
   { research_kind: "factor_evaluation"; formula: string; neutralization: string } | {
     research_kind: "strategy_backtest"; strategy_mode: "framework";
     modules: FrameworkModules;
-    formula?: string; neutralization?: string; initial_cash_cny: string;
+    formula?: string; neutralization?: string; initial_cash_cny: string; costs: SimulationCosts;
     holdings_count?: number; selection_every_sessions?: number; exposure_expression?: string;
     weighting?: PortfolioWeighting; volatility_window?: number;
   } | {
     research_kind: "strategy_backtest"; strategy_mode: "direct";
-    initial_cash_cny: string; program: PythonProgram;
+    initial_cash_cny: string; costs: SimulationCosts; program: PythonProgram;
   }
 );
 
@@ -288,7 +292,7 @@ export function researchSpec(inputs: ResearchInputs): ResearchSpec {
   };
   if (inputs.researchKind === "strategy_backtest" && inputs.strategyMode === "direct") return {
     ...common, research_kind: "strategy_backtest", strategy_mode: "direct",
-    initial_cash_cny: inputs.initialCashCny,
+    initial_cash_cny: inputs.initialCashCny, costs: { ...inputs.costs },
     program: programSpec(inputs),
   };
   const alpha = { formula: inputs.formula, neutralization: inputs.neutralization };
@@ -296,7 +300,7 @@ export function researchSpec(inputs: ResearchInputs): ResearchSpec {
     ...common, ...alpha, research_kind: "factor_evaluation",
   } : {
     ...common, research_kind: "strategy_backtest", strategy_mode: "framework",
-    modules: frameworkSpec(inputs.frameworkModules), initial_cash_cny: inputs.initialCashCny,
+    modules: frameworkSpec(inputs.frameworkModules), initial_cash_cny: inputs.initialCashCny, costs: { ...inputs.costs },
     ...(usesBuiltinAlpha(inputs) ? alpha : {}),
     ...(usesBuiltinPortfolio(inputs) ? {
       holdings_count: Number(inputs.holdingsCount), selection_every_sessions: Number(inputs.selectionEverySessions),
@@ -341,7 +345,7 @@ export function isValidInitialCash(value: string): boolean {
   return BigInt(whole + fraction.padEnd(2, "0")) <= 100000000000n;
 }
 
-export type ResearchInputField = ProgramInputField | `${FrameworkStage}.${ProgramInputField}`
+export type ResearchInputField = `costs.${CostField}` | ProgramInputField | `${FrameworkStage}.${ProgramInputField}`
   | "formula" | "hypothesis" | "startDate" | "endDate" | "universe" | "neutralization" | "initialCashCny"
   | "holdingsCount" | "selectionEverySessions" | "exposureExpression" | "volatilityWindow";
 export type ResearchInputIssue = { field: ResearchInputField; message: string };
@@ -356,6 +360,12 @@ export function researchInputIssues(inputs: ResearchInputs): ResearchInputIssue[
   if (!["top300", "top1000", "top2000", "top3000"].includes(inputs.universe)) issues.push({ field: "universe", message: "Choose a stock universe." });
   if (usesBuiltinAlpha(inputs) && !["none", "industry"].includes(inputs.neutralization)) issues.push({ field: "neutralization", message: "Choose a neutralization method." });
   if (inputs.researchKind === "strategy_backtest" && !isValidInitialCash(inputs.initialCashCny)) issues.push({ field: "initialCashCny", message: "Initial cash must be 0.01–1,000,000,000 CNY, with up to two decimal places." });
+  if (inputs.researchKind === "strategy_backtest") {
+    for (const { key } of costFields) {
+      const message = costInputError(key, inputs.costs[key]);
+      if (message) issues.push({ field: `costs.${key}`, message });
+    }
+  }
   if (usesBuiltinPortfolio(inputs)) {
     const holdings = Number(inputs.holdingsCount), interval = Number(inputs.selectionEverySessions);
     if (!Number.isInteger(holdings) || holdings < 1 || holdings > 100) issues.push({ field: "holdingsCount", message: "Holdings count must be a whole number from 1 to 100." });
@@ -421,6 +431,7 @@ export function useResearchAsDraft(
     universe: input.universe, neutralization: "neutralization" in input ? input.neutralization ?? "" : "",
     researchKind: input.research_kind, strategyMode: direct ? "direct" : "framework",
     initialCashCny: input.research_kind === "strategy_backtest" ? input.initial_cash_cny : "",
+    costs: input.research_kind === "strategy_backtest" ? { ...input.costs } : defaultSimulationCosts(),
     holdingsCount: framework && input.holdings_count !== undefined ? String(input.holdings_count) : "",
     exposureExpression: framework ? input.exposure_expression ?? "" : direct ? "" : "1",
     volatilityWindow: framework ? input.volatility_window === undefined ? "" : String(input.volatility_window) : direct ? "" : "20",
@@ -458,7 +469,7 @@ function wouldOverwriteUnexecutedAuthorableValue(
     "researchKind",
     "strategyMode",
     "programSource", "programParameters", "programFields", "programHistorySessions",
-    "frameworkModules",
+    "frameworkModules", "costs",
     "initialCashCny",
     "holdingsCount",
     "selectionEverySessions",
@@ -560,6 +571,8 @@ function readInputs(value: unknown): ResearchInputs | null {
       ? new TextEncoder().encode(strings[key]).byteLength > (key === "programSource" ? 65536 : MAX_DRAFT_BYTES)
       : strings[key].length > MAX_TEXT_LENGTH)
   ) return null;
+  const costs = readCostInputs(value.costs);
+  if (costs === null) return null;
   const modules = value.frameworkModules;
   if (!isRecord(modules)) return null;
   const parsedModules = builtinModulesDraft();
@@ -573,7 +586,7 @@ function readInputs(value: unknown): ResearchInputs | null {
       || inputs.programFields.length > MAX_TEXT_LENGTH || inputs.programHistorySessions.length > MAX_TEXT_LENGTH) return null;
     parsedModules[stage] = { kind: module.kind, program: inputs };
   }
-  return { ...Object.fromEntries(keys.map((key) => [key, strings[key]])), frameworkModules: parsedModules } as ResearchInputs;
+  return { ...Object.fromEntries(keys.map((key) => [key, strings[key]])), frameworkModules: parsedModules, costs } as ResearchInputs;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

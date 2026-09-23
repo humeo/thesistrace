@@ -1140,10 +1140,10 @@ def _validate_strategy_shared_contract(
 
     def shared_contract(value: ImmutableRunInput) -> dict[str, object]:
         contract = value.canonical_value()
-        # Each Exposure has its own dependencies, warmup and admitted budget.
-        # The shared artifact binds Signal identity, not those Strategy requirements.
+        # Costs and Exposure belong to each Strategy. The shared artifact binds
+        # Signal identity, not execution costs, dependencies, warmup or budget.
         for name in (
-            "strategy", "field_bindings", "expression_admission", "execution_plan",
+            "strategy", "costs", "field_bindings", "expression_admission", "execution_plan",
         ):
             contract.pop(name)
         data = contract["data_admission"]

@@ -54,6 +54,11 @@ def test_framework_admission_freezes_only_active_modules_and_unions_declared_req
         field_ids=["price.close.adjusted", "price.open.adjusted"],
     )
     values = framework_spec()
+    values["costs"] = {
+        "commission_rate_all_in": "0.0002", "commission_min_cny": "1",
+        "stamp_duty_sell_rate": "0.0004", "transfer_fee_rate": "0.00002",
+        "slippage_bps": "10",
+    }
     spec = TypeAdapter(ResearchSpec).validate_python(values)
     assert service.diagnose_research_spec(spec).valid
     command = TypeAdapter(ResearchRunAdmissionCommand).validate_python({
@@ -63,6 +68,7 @@ def test_framework_admission_freezes_only_active_modules_and_unions_declared_req
         UUID(int=1), command, dataset=snapshot,
     ).immutable_input
     frozen = admitted.canonical_value()
+    assert frozen["costs"] == values["costs"]
     assert frozen["formula_source"] is None
     assert frozen["alpha_expression"] is None
     assert frozen["neutralization"] is None
@@ -82,6 +88,8 @@ def test_framework_admission_freezes_only_active_modules_and_unions_declared_req
         "start_date": date(2026, 8, 7), "end_date": date(2026, 8, 7),
     }
     kernel = admitted.kernel_strategy()
+    assert kernel.slippage_bps == "10"
+    assert kernel.commission_min_cny == "1"
     assert kernel.modules_snapshot().model_dump(mode="json") == values["modules"]
     from thesistrace.daily_track.models import DailyTrackFrozenResearchInput
     from thesistrace.research_run.models import ResearchRunAuthorableInput
@@ -92,6 +100,7 @@ def test_framework_admission_freezes_only_active_modules_and_unions_declared_req
         authorable.model_dump(exclude={"research_kind"}),
     )
     assert track_input.model_dump(mode="json")["modules"] == values["modules"]
+    assert track_input.model_dump(mode="json")["costs"] == values["costs"]
 
 
 @pytest.mark.parametrize("extra", [

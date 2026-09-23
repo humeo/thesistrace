@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, localcontext
 from typing import Annotated, Literal
 
 from pydantic import AfterValidator, Field, StrictInt, StrictStr, model_validator
 
 from thesistrace.research_kernel.framework_evidence import FrameworkEvidence, ReplacementEvidence
+from thesistrace.research_kernel.numeric import ACCOUNTING_CONTEXT
 from thesistrace.research_kernel.terminal_state_schema import (
     PendingTarget,
     TerminalStateModel,
@@ -99,6 +100,11 @@ class StrategyChildOrderEvent(TradeEvent):
 class StrategyFillEvent(StrategyChildOrderEvent):
     fill_id: StrictStr
     raw_open: DecimalEvidence
+    execution_price: DecimalEvidence
+    price_slippage: DecimalEvidence
+    commission_cny: DecimalEvidence
+    stamp_duty_cny: DecimalEvidence
+    transfer_fee_cny: DecimalEvidence
     adjusted_open: DecimalEvidence
     raw_notional: DecimalEvidence
     cost: DecimalEvidence
@@ -115,9 +121,22 @@ class StrategyFillEvent(StrategyChildOrderEvent):
         if self.execution_shares_delta != direction * self.quantity:
             raise ValueError("Fill execution share delta differs from its direction")
         if any(Decimal(value) <= 0 for value in (
-            self.raw_open, self.adjusted_open, self.raw_notional, self.research_settlement,
+            self.raw_open, self.execution_price, self.adjusted_open,
+            self.raw_notional, self.research_settlement,
         )) or Decimal(self.cost) < 0:
             raise ValueError("Fill amounts are invalid")
+        fees = tuple(Decimal(value) for value in (
+            self.commission_cny, self.stamp_duty_cny, self.transfer_fee_cny,
+        ))
+        with localcontext(ACCOUNTING_CONTEXT):
+            if any(value < 0 for value in fees) or sum(fees) != Decimal(self.cost):
+                raise ValueError("Fill fee components differ from its total cost")
+            if (Decimal(self.execution_price) - Decimal(self.raw_open)
+                    != Decimal(self.price_slippage)
+                    or direction * Decimal(self.price_slippage) < 0):
+                raise ValueError("Fill price slippage differs from its execution direction")
+        if self.side == "buy" and Decimal(self.stamp_duty_cny) != 0:
+            raise ValueError("Buy fills cannot charge sell-side stamp duty")
         settlement = Decimal(self.research_settlement)
         expected_cash = settlement.copy_negate() if direction == 1 else settlement
         if Decimal(self.gross_cash_delta) != expected_cash:

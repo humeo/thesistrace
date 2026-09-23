@@ -12,7 +12,11 @@ from pydantic import (
 )
 
 from thesistrace.alpha_language.models import DiagnosticDetails, SourceRange
-from thesistrace.research_definition import FrameworkConfiguration
+from thesistrace.research_definition import (
+    FrameworkConfiguration,
+    SimulationCosts,
+    default_simulation_costs,
+)
 from thesistrace.research_kernel.direct_strategy import PythonProgram
 from thesistrace.research_run.models import (
     Formula,
@@ -108,6 +112,7 @@ class DirectStrategySweepItem(BaseModel):
     strategy_mode: Literal["direct"]
     name: ResearchName | None = None
     initial_cash_cny: InitialCash
+    costs: SimulationCosts = Field(default_factory=default_simulation_costs)
     program: PythonProgram
 
 

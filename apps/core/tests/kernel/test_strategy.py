@@ -41,6 +41,7 @@ def test_a_share_quantity_child_order_and_cost_rules() -> None:
         "commission_min_cny": Decimal("5"),
         "stamp_duty_sell_rate": Decimal("0.0005"),
         "transfer_fee_rate": Decimal("0.00001"),
+        "slippage_bps": Decimal("0"),
     }
     assert transaction_cost(Decimal("1000"), "buy", costs) == Decimal("5.01000")
     assert transaction_cost(Decimal("1000"), "sell", costs) == Decimal("5.51000")
@@ -137,6 +138,7 @@ def test_top_n_strategy_runs_one_deterministic_net_primary_account() -> None:
             "commission_min_cny": "5",
             "stamp_duty_sell_rate": "0.0005",
             "transfer_fee_rate": "0.00001",
+            "slippage_bps": "0",
         },
     }
 
@@ -265,6 +267,7 @@ def test_unexplained_missing_held_open_fails_instead_of_becoming_suspension() ->
             "commission_min_cny": "5",
             "stamp_duty_sell_rate": "0.0005",
             "transfer_fee_rate": "0.00001",
+            "slippage_bps": "0",
         },
     }
     report_start = 0
@@ -475,5 +478,6 @@ def strategy_definition(*, selection_interval: int) -> dict[str, object]:
             "commission_min_cny": "5",
             "stamp_duty_sell_rate": "0.0005",
             "transfer_fee_rate": "0.00001",
+            "slippage_bps": "0",
         },
     }

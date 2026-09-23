@@ -20,6 +20,7 @@ from thesistrace.research_batch.models import (
     MIN_RESEARCH_BATCH_ITEMS,
     RESEARCH_BATCH_KINDS,
 )
+from thesistrace.research_definition import default_simulation_costs
 from thesistrace.research_kernel.builtin_framework import BUILTIN_FRAMEWORK_MODULES
 from thesistrace.research_kernel.numeric import MAX_INITIAL_CASH_CNY
 from thesistrace.research_kernel.strategy_program_assets import PYTHON_VERSION
@@ -52,6 +53,7 @@ from thesistrace.research_run.models import (
 CURRENT_RESEARCH_AUTHORING_CONSTRAINTS = ResearchAuthoringConstraints(
     research_kinds=RESEARCH_KINDS,
     strategy_modes=("framework", "direct"),
+    simulation_cost_defaults=default_simulation_costs(),
     python_program=PythonProgramConstraints(
         maximum_source_bytes=SOURCE_BYTES, maximum_parameter_bytes=PARAMETER_BYTES,
         maximum_state_bytes=STATE_BYTES, maximum_input_bytes=INPUT_BYTES,

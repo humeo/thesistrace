@@ -161,6 +161,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
             "research_series",
         },
         "research_authoring": {
+            "research_definition",
             "alpha_language",
             "research_kernel",
             "research_batch",

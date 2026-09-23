@@ -243,6 +243,66 @@ test("Direct Python authoring executes, reuses frozen source and explicitly adva
   expect(latest.observation.selection_interval).toBeNull();
 });
 
+test("Custom fees and slippage survive Run reuse and DailyTrack refresh", { tag: "@isolated" }, async ({ page }, testInfo) => {
+  test.setTimeout(240_000);
+  publishFinancialTrackHead("lagged");
+  await page.goto("/research?new");
+  await fillCompleteDraft(page, { name: "Custom execution costs", formula: "close" });
+  await page.getByRole("button", { name: "Run settings", exact: true }).click();
+  await page.getByLabel("Price slippage (basis points)", { exact: true }).fill("15");
+  await page.getByLabel("Minimum commission per child order (CNY)", { exact: true }).fill("2");
+  await page.getByRole("button", { name: "Run settings", exact: true }).click();
+  await page.getByRole("button", { name: "Run backtest", exact: true }).click();
+  await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
+  const runUrl = page.url();
+  const runId = runUrl.split("/").at(-1)!;
+  await expect(page.locator(".research-run-facts").getByText(/Status\s+succeeded/)).toBeVisible({ timeout: 90_000 });
+  const costs = { commission_rate_all_in: "0.0003", commission_min_cny: "2",
+    stamp_duty_sell_rate: "0.0005", transfer_fee_rate: "0.00001", slippage_bps: "15" };
+  const accepted = await page.request.get(`/api/research-runs/${runId}`);
+  expect(accepted.ok()).toBe(true);
+  expect((await accepted.json()).input.costs).toEqual(costs);
+  await page.getByText("Frozen fees and slippage", { exact: true }).click();
+  await expect(page.getByRole("group", { name: "Research execution conditions" })).toContainText("Price slippage (basis points) 15");
+  await page.getByText("Trading events", { exact: true }).click();
+  await page.getByLabel("事件类型").selectOption("strategy_fills");
+  const table = page.getByRole("table", { name: "成交", exact: true });
+  await expect(table.getByRole("columnheader", { name: "模拟成交价（元）" })).toBeVisible();
+  await table.getByRole("button", { name: /查看原始记录/ }).first().click();
+  await expect(page.getByRole("region", { name: "成交价格与费用明细" })).toContainText("每股滑点价差");
+  const fills = await page.request.post(`/api/research-runs/${runId}/events/query`, {
+    headers: sameOriginHeaders(), data: { section: "strategy_fills", limit: 50 },
+  });
+  expect(fills.ok()).toBe(true);
+  const originalFills = (await fills.json()).rows;
+  expect(originalFills.length).toBeGreaterThan(0);
+  for (const fill of originalFills) {
+    expect(Number(fill.execution_price)).not.toBe(Number(fill.raw_open));
+    expect(fill).toHaveProperty("commission_cny");
+    expect(fill).toHaveProperty("stamp_duty_cny");
+    expect(fill).toHaveProperty("transfer_fee_cny");
+  }
+  await page.screenshot({ path: testInfo.outputPath("custom-costs-fill.png"), fullPage: true });
+  await page.getByRole("button", { name: "Create draft", exact: true }).click();
+  await expect(page).toHaveURL(/\/research$/);
+  await page.getByRole("button", { name: "Run settings", exact: true }).click();
+  await expect(page.getByLabel("Price slippage (basis points)", { exact: true })).toHaveValue("15");
+  await page.getByLabel("Price slippage (basis points)", { exact: true }).fill("25");
+  await page.goto(runUrl);
+  await page.getByRole("button", { name: "Start Tracking", exact: true }).click();
+  await expect(page).toHaveURL(/\/daily-tracks\/track_[a-f0-9]+$/);
+  const trackId = page.url().split("/").at(-1)!;
+  await refreshPythonTrackThroughFixtureEnd(page, trackId);
+  const trackFills = await page.request.post(`/api/daily-tracks/${trackId}/events/query`, {
+    headers: sameOriginHeaders(), data: { section: "strategy_fills", limit: 50 },
+  });
+  expect(trackFills.ok()).toBe(true);
+  expect((await trackFills.json()).rows.slice(0, originalFills.length)).toEqual(originalFills);
+  const source = await page.request.get(`/api/research-runs/${runId}`);
+  expect(source.ok()).toBe(true);
+  expect((await source.json()).input.costs).toEqual(costs);
+});
+
 test("ResearchRun return keeps the selected Type without a document reload", async ({ page }) => {
   const documentRequests = recordDocumentRequests(page);
   await page.route("**/api/research-folders", async (route) => {

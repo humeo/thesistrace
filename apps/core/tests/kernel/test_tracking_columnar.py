@@ -93,6 +93,7 @@ def run_input(
             exposure_expression_json=json.dumps(exposure_compiled.expression).encode(),
             initial_cash_cny="10000000", commission_rate_all_in="0.0003",
             commission_min_cny="5", stamp_duty_sell_rate="0.0005", transfer_fee_rate="0.00001",
+            slippage_bps="0",
         ),
         research_start_session=data.sessions[20],
         research_end_session=data.sessions[-1],

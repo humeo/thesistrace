@@ -21,6 +21,7 @@ from thesistrace.daily_holding_queries import (
     HoldingStatusQuery,
 )
 from thesistrace.daily_track.observation_state import TrackingObservationState
+from thesistrace.research_definition import SimulationCosts
 from thesistrace.research_kernel.common_inputs import common_input_references
 from thesistrace.research_kernel.common_observations import CommonInputObservation
 from thesistrace.research_kernel.framework_strategy import FrameworkModules
@@ -660,6 +661,7 @@ class DailyTrackFrozenResearchInput(BaseModel):
     universe: str
     neutralization: str | None = Field(default=None, exclude_if=lambda v: v is None)
     initial_cash_cny: str
+    costs: SimulationCosts
     holdings_count: int | None = Field(default=None, exclude_if=lambda v: v is None)
     selection_every_sessions: int | None = Field(default=None, exclude_if=lambda v: v is None)
     exposure_expression: str | None = Field(default=None, exclude_if=lambda v: v is None)

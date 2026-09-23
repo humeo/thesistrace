@@ -1,3 +1,4 @@
+import { defaultSimulationCosts } from "./simulationCosts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { highlightTree } from "@lezer/highlight";
 import { describe, expect, it, vi } from "vitest";
@@ -207,7 +208,7 @@ describe("browser Research Draft", () => {
       request_id: "strategy-request",
       research_kind: "strategy_backtest", strategy_mode: "framework", modules: builtinFrameworkModules,
       holdings_count: 10,
-      initial_cash_cny: "100000",
+      initial_cash_cny: "100000", costs: defaultSimulationCosts(),
       selection_every_sessions: 2,
       exposure_expression: "1",
       weighting: "equal_weight", volatility_window: 20,
@@ -256,6 +257,7 @@ describe("browser Research Draft", () => {
     const otherBefore = storage.getItem(researchDraftKey(researcherId, "folder_other"));
 
     const confirmDiscard = vi.fn(() => false);
+    const frozenCosts = { ...defaultSimulationCosts(), commission_min_cny: "2", slippage_bps: "15" };
     const copied = useResearchAsDraft(storage, researcherId, "folder_target", {
       formula: "ts_mean(close, 20)",
       hypothesis: "Frozen hypothesis",
@@ -265,7 +267,7 @@ describe("browser Research Draft", () => {
       neutralization: "industry",
       research_kind: "strategy_backtest", strategy_mode: "framework", modules: builtinFrameworkModules,
       holdings_count: 25,
-      initial_cash_cny: "100000",
+      initial_cash_cny: "100000", costs: frozenCosts,
       selection_every_sessions: 5,
       exposure_expression: "1",
       weighting: "equal_weight", volatility_window: 20,
@@ -283,10 +285,15 @@ describe("browser Research Draft", () => {
       neutralization: "industry",
       holdingsCount: "25",
       initialCashCny: "100000",
+      costs: frozenCosts,
       selectionEverySessions: "5",
       editor: { anchor: 18, head: 18 },
       pendingAdmission: null,
     });
+    const edited = loadResearchDraft(storage, researcherId, "folder_target");
+    edited.costs.slippage_bps = "20";
+    persistResearchDraft(storage, researcherId, "folder_target", edited);
+    expect(frozenCosts.slippage_bps).toBe("15");
     expect(storage.getItem(researchDraftKey(researcherId, "folder_other"))).toBe(otherBefore);
   });
 
@@ -331,7 +338,7 @@ describe("browser Research Draft", () => {
       neutralization: "industry",
       research_kind: "strategy_backtest", strategy_mode: "framework", modules: builtinFrameworkModules,
       holdings_count: 25,
-      initial_cash_cny: "100000",
+      initial_cash_cny: "100000", costs: defaultSimulationCosts(),
       selection_every_sessions: 5,
       exposure_expression: "1",
       weighting: "equal_weight", volatility_window: 20,
@@ -370,7 +377,7 @@ describe("browser Research Draft", () => {
       neutralization: "none",
       research_kind: "strategy_backtest", strategy_mode: "framework", modules: builtinFrameworkModules,
       holdings_count: 10,
-      initial_cash_cny: "100000",
+      initial_cash_cny: "100000", costs: defaultSimulationCosts(),
       selection_every_sessions: 2,
       exposure_expression: "1",
       weighting: "equal_weight", volatility_window: 20,
@@ -410,7 +417,7 @@ describe("browser Research Draft", () => {
       neutralization: "none",
       research_kind: "strategy_backtest", strategy_mode: "framework", modules: builtinFrameworkModules,
       holdings_count: 10,
-      initial_cash_cny: "100000",
+      initial_cash_cny: "100000", costs: defaultSimulationCosts(),
       selection_every_sessions: 2,
       exposure_expression: "1",
       weighting: "equal_weight", volatility_window: 20,
@@ -683,7 +690,7 @@ it("restores a frozen Exposure source exactly when reusing a Run as a draft", ()
   expect(useResearchAsDraft(storage, "exposure", "folder_default", {
     research_kind: "strategy_backtest", strategy_mode: "framework", modules: builtinFrameworkModules, formula: "close", hypothesis: null,
     start_date: "2026-08-03", end_date: "2026-08-05", universe: "top300", neutralization: "none",
-    initial_cash_cny: "100000", holdings_count: 10, selection_every_sessions: 5,
+    initial_cash_cny: "100000", costs: defaultSimulationCosts(), holdings_count: 10, selection_every_sessions: 5,
     exposure_expression: "7 / 10",
     weighting: "equal_weight", volatility_window: 20,
   }, () => false)).toBe(true);

@@ -3853,6 +3853,7 @@ def _child_commands(
                 request_id=f"batch-strategy-{ordinal}", research_kind="strategy_backtest",
                 strategy_mode="direct", name=item.name, program=item.program,
                 initial_cash_cny=item.initial_cash_cny,
+                costs=item.costs,
                 **{name: value for name, value in common.items() if name != "neutralization"},
             )
         else:

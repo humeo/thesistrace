@@ -189,14 +189,34 @@ def transaction_cost(
     costs: dict[str, Decimal],
 ) -> Decimal:
     with accounting_context():
+        parts = transaction_cost_parts(raw_notional, side, costs)
+        return require_finite_decimal(sum(parts.values()))
+
+
+def transaction_cost_parts(
+    notional: Decimal, side: str, costs: dict[str, Decimal],
+) -> dict[str, Decimal]:
+    with accounting_context():
         commission = max(
-            raw_notional * costs["commission_rate_all_in"],
+            notional * costs["commission_rate_all_in"],
             costs["commission_min_cny"],
         )
-        total = commission + raw_notional * costs["transfer_fee_rate"]
-        if side == "sell":
-            total += raw_notional * costs["stamp_duty_sell_rate"]
-    return require_finite_decimal(total)
+        return {
+            "commission_cny": require_finite_decimal(commission),
+            "stamp_duty_cny": require_finite_decimal(
+                notional * costs["stamp_duty_sell_rate"] if side == "sell" else Decimal(0),
+            ),
+            "transfer_fee_cny": require_finite_decimal(notional * costs["transfer_fee_rate"]),
+        }
+
+
+def execution_price_factor(side: str, costs: dict[str, Decimal]) -> Decimal:
+    with accounting_context():
+        # Subtract before division so a legal value close to 10000 stays positive.
+        basis_points = (
+            10000 + costs["slippage_bps"] if side == "buy" else 10000 - costs["slippage_bps"]
+        )
+        return basis_points / 10000
 
 
 def market_rejection_reason(
@@ -332,6 +352,10 @@ def _execute_strategy(
                 "continuation Initial Cash differs from account baseline"
             )
     costs = {name: Decimal(str(value)) for name, value in definition["costs"].items()}
+    if any(not value.is_finite() or value < 0 for value in costs.values()):
+        raise StrategyCalculationError("Simulation costs must be finite and non-negative")
+    if costs["slippage_bps"] >= 10000:
+        raise StrategyCalculationError("Price slippage must be less than 10000 basis points")
 
     instruments = research_data.instruments
     prices = research_data.execution_prices
@@ -496,6 +520,7 @@ def _execute_strategy(
             if mode in {"local", "increase"}:
                 for item, position in positions.items():
                     target_values.setdefault(item, money(position.adjusted_units * marks[item]))
+            monetary_target_values = dict(target_values)
             position_limits = pending_target["position_limits"]
             for item, maximum in position_limits.items():
                 # Delisting can remove a holding during the Open mark above.
@@ -507,6 +532,12 @@ def _execute_strategy(
                     target_values[item] = min(target_values.get(item, Decimal(0)), capped_value)
             candidate_set = set(target_values)
             alpha_order = {instrument_id: index for index, instrument_id in enumerate(candidates)}
+            buy_deficits = {
+                item: target_values[item] - (
+                    money(positions[item].adjusted_units * marks[item])
+                    if item in positions else Decimal(0)
+                ) for item in candidates
+            }
 
             for instrument_id in sorted(positions):
                 if mode == "increase" and instrument_id not in position_limits:
@@ -522,14 +553,19 @@ def _execute_strategy(
                 if complete:
                     unrounded = position.execution_shares
                 else:
-                    reduction = current_value - desired_value
-                    unrounded = int(
-                        money(Decimal(position.execution_shares) * reduction / current_value)
+                    reduction = max(
+                        Decimal(0), current_value - monetary_target_values.get(instrument_id, 0),
                     )
+                    with accounting_context():
+                        settlement_value = current_value * execution_price_factor("sell", costs)
+                        unrounded = min(position.execution_shares, int(
+                            Decimal(position.execution_shares) * reduction / settlement_value,
+                        ))
                 if instrument_id in position_limits:
                     unrounded = max(
                         unrounded, position.execution_shares - position_limits[instrument_id],
                     )
+                complete = unrounded == position.execution_shares
                 quantity = legal_order_quantity(
                     instruments[instrument_id].board,
                     "sell",
@@ -601,12 +637,9 @@ def _execute_strategy(
                 candidates, key=lambda value: alpha_order[value],
             )):
                 price = prices.get((session, instrument_id))
-                current_value = (
-                    money(positions[instrument_id].adjusted_units * marks[instrument_id])
-                    if instrument_id in positions
-                    else Decimal(0)
-                )
-                deficit = target_values[instrument_id] - current_value
+                # One frozen decision has one direction per stock. A slipped sale
+                # must not create a new opposite intent from the post-sale value.
+                deficit = buy_deficits[instrument_id]
                 if mode == "increase":
                     deficit = min(deficit, buy_budget)
                 if price is None:
@@ -674,7 +707,9 @@ def _execute_strategy(
                     )
                 else:
                     raw_open = Decimal(price.raw_open)
-                    unrounded = int(deficit / raw_open) if deficit > 0 else 0
+                    with accounting_context():
+                        buy_price = raw_open * execution_price_factor("buy", costs)
+                        unrounded = int(deficit / buy_price) if deficit > 0 else 0
                     legal_quantity = (
                         legal_order_quantity(
                             instruments[instrument_id].board,
@@ -1154,6 +1189,10 @@ def execute_order(
     if price is None or raw_open is None:
         raise StrategyCalculationError(f"unexplained executable Open for {instrument_id}")
     adjusted_open = Decimal(price.adjusted_open)
+    with accounting_context():
+        execution_factor = execution_price_factor(side, costs)
+        execution_price = raw_open * execution_factor
+        price_slippage = execution_price - raw_open
     board = instruments[instrument_id].board
     total_cost = Decimal(0)
     total_quantity = 0
@@ -1172,8 +1211,10 @@ def execute_order(
         child_order_id = strategy_event_id(
             "child", order_id, total_quantity, total_quantity + child_quantity,
         )
-        raw_notional = money(Decimal(child_quantity) * raw_open)
-        child_cost = transaction_cost(raw_notional, side, costs)
+        raw_notional = money(Decimal(child_quantity) * execution_price)
+        fee_parts = transaction_cost_parts(raw_notional, side, costs)
+        with accounting_context():
+            child_cost = require_finite_decimal(sum(fee_parts.values()))
         total_cost = money(total_cost + child_cost)
         total_quantity += child_quantity
         child_orders.append(
@@ -1198,12 +1239,15 @@ def execute_order(
                 "side": side,
                 "quantity": child_quantity,
                 "raw_open": canonical_decimal(raw_open),
+                "execution_price": canonical_decimal(execution_price),
+                "price_slippage": canonical_decimal(price_slippage),
+                **{name: canonical_decimal(value) for name, value in fee_parts.items()},
                 "raw_notional": canonical_decimal(raw_notional),
                 "cost": canonical_decimal(child_cost),
             }
         )
     if side == "buy":
-        raw_notional = money(Decimal(total_quantity) * raw_open)
+        raw_notional = money(Decimal(total_quantity) * execution_price)
         with accounting_context():
             added_units = Decimal(total_quantity) / (adjusted_open / raw_open)
         position = positions.get(instrument_id)
@@ -1225,7 +1269,7 @@ def execute_order(
                 removed_units = (
                     position.adjusted_units * Decimal(total_quantity) / Decimal(before_shares)
                 )
-            settlement = removed_units * adjusted_open
+            settlement = removed_units * adjusted_open * execution_factor
         gross_cash = money(gross_cash + settlement)
         net_cash = money(net_cash + settlement - total_cost)
         if total_quantity == before_shares:
@@ -1280,13 +1324,15 @@ def affordable_quantity(
 ) -> int:
     step = 1 if board == "star" else 100
     minimum = 200 if board == "star" else 100
+    with accounting_context():
+        execution_price = raw_open * execution_price_factor("buy", costs)
 
     def is_affordable(candidate: int) -> bool:
         children = split_child_orders(board, candidate)
-        notional = money(Decimal(candidate) * raw_open)
+        notional = money(Decimal(candidate) * execution_price)
         total_cost = sum(
             (
-                transaction_cost(money(Decimal(child) * raw_open), "buy", costs)
+                transaction_cost(money(Decimal(child) * execution_price), "buy", costs)
                 for child in children
             ),
             Decimal(0),

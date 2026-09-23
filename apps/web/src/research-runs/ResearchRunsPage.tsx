@@ -4,7 +4,7 @@ import { StrategyEvents } from "../analysis/StrategyEvents";
 import { SelectionEligibilityView } from "../research/SelectionEligibility";
 import { isBuiltinFrameworkState, strategySelection, type StrategyDecisionState } from "../research/strategyDecisionState";
 import { FrameworkStateView } from "../research/FrameworkStateView";
-import { FrozenFrameworkModules, FrozenPythonProgram } from "../research/FrozenStrategyDefinition";
+import { FrozenFrameworkModules, FrozenPythonProgram, FrozenSimulationCosts } from "../research/FrozenStrategyDefinition";
 import {
   CaretDown,
   CaretLeft,
@@ -994,6 +994,7 @@ export function ResearchRunFacts({ run }: { run: ResearchRun }) {
             <>
               <p><strong>Strategy</strong> {direct ? "Direct · Python" : "Framework · Decision modules"}</p>
               <p><strong>Initial cash (CNY)</strong> {input.initial_cash_cny}</p>
+              <FrozenSimulationCosts costs={input.costs} />
               {input.strategy_mode === "direct" ? <FrozenPythonProgram program={input.program} /> : <>
               <FrozenFrameworkModules modules={input.modules} />
               {input.selection_every_sessions !== undefined && <>

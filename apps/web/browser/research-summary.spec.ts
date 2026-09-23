@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 import { expect, test } from "@playwright/test";
+import { defaultSimulationCosts } from "../src/research/simulationCosts";
 import { build } from "vite";
 
 let script: string;
@@ -84,7 +85,7 @@ test.describe("Frozen Framework touch controls", () => {
   test("frozen module source disclosures work on wide and narrow touch layouts", async ({ page }) => {
     const program = { source: "def decide(context, state, parameters):\n    return {'output': None, 'state': state}",
       parameters: { threshold: 0.03 }, data_requirements: { field_ids: [], history_sessions: 1 } };
-    const input = { research_kind: "strategy_backtest", strategy_mode: "framework", initial_cash_cny: "100000",
+    const input = { research_kind: "strategy_backtest", strategy_mode: "framework", initial_cash_cny: "100000", costs: defaultSimulationCosts(),
       hypothesis: null, start_date: "2026-08-03", end_date: "2026-08-04", universe: "top300", modules: {
         universe_selection: "dataset_universe/v1", alpha: { kind: "python", program },
         portfolio_construction: { kind: "python", program }, risk_management: "no_risk/v1",

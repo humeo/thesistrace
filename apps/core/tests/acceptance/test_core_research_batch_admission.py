@@ -21,6 +21,7 @@ from thesistrace.data import (
 )
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.fixture import build_minimal_canonical_fixture
+from thesistrace.research_definition import default_simulation_costs
 
 SESSIONS = (
     "2026-08-03",
@@ -98,6 +99,19 @@ def test_batch_admission_rejects_all_invalid_computation_before_product_state(
                 assert any(
                     issue["item_key"] == expected_item_key for issue in response.json()["issues"]
                 )
+            assert _counts(settings) == _empty_counts()
+
+        for field, invalid in (
+            ("commission_min_cny", "-1"), ("stamp_duty_sell_rate", "NaN"),
+            ("slippage_bps", "10000"), ("transfer_fee_rate", "Infinity"),
+        ):
+            command = _strategy_command(f"invalid-cost-{field}")
+            command["strategies"][1]["costs"] = {
+                **default_simulation_costs().model_dump(), field: invalid,
+            }
+            rejected = client.post("/api/research-batches", json=command)
+            assert rejected.status_code == 422, rejected.text
+            assert any(issue["item_key"] == "broad" for issue in rejected.json()["issues"])
             assert _counts(settings) == _empty_counts()
 
         duplicate_key = client.post(

@@ -1,3 +1,4 @@
+import { defaultSimulationCosts } from "../research/simulationCosts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { builtinFrameworkModules } from "../research/frameworkModules";
@@ -72,7 +73,7 @@ const STRATEGY_RUN: ResearchRun = {
     neutralization: "industry",
     research_kind: "strategy_backtest",
     holdings_count: 10,
-    initial_cash_cny: "100000",
+    initial_cash_cny: "100000", costs: defaultSimulationCosts(),
     selection_every_sessions: 2,
     strategy_mode: "framework", modules: builtinFrameworkModules,
     exposure_expression: "1",
@@ -81,11 +82,21 @@ const STRATEGY_RUN: ResearchRun = {
 };
 
 describe("ResearchRunFacts", () => {
+  it("shows accepted custom fees and slippage instead of current defaults", () => {
+    if (STRATEGY_RUN.input?.research_kind !== "strategy_backtest") throw new Error("Invalid fixture");
+    const markup = renderToStaticMarkup(<ResearchRunFacts run={{ ...STRATEGY_RUN, input: {
+      ...STRATEGY_RUN.input, costs: { ...defaultSimulationCosts(), commission_min_cny: "2", slippage_bps: "15" },
+    } }} />);
+    expect(markup).toContain("Frozen fees and slippage");
+    expect(markup).toContain("<strong>Minimum commission per child order (CNY)</strong> 2");
+    expect(markup).toContain("<strong>Price slippage (basis points)</strong> 15");
+    expect(markup).toContain("not charged again as a fee");
+  });
   it("shows each frozen Framework module without inactive Alpha or Portfolio fields", () => {
     const program = { source: "def decide(context, state, parameters): return {'output': None, 'state': state}",
       parameters: { improvement: 0.02 }, data_requirements: { field_ids: [], history_sessions: 1 } };
     const markup = renderToStaticMarkup(<ResearchRunFacts run={{ ...STRATEGY_RUN, input: {
-      research_kind: "strategy_backtest", strategy_mode: "framework", initial_cash_cny: "100000",
+      research_kind: "strategy_backtest", strategy_mode: "framework", initial_cash_cny: "100000", costs: defaultSimulationCosts(),
       start_date: "2026-08-01", end_date: "2026-08-05", universe: "top300", hypothesis: null,
       modules: { ...builtinFrameworkModules, alpha: { kind: "python", program },
         portfolio_construction: { kind: "python", program } },
@@ -103,7 +114,7 @@ describe("ResearchRunFacts", () => {
       ...STRATEGY_RUN, input: {
         research_kind: "strategy_backtest", strategy_mode: "direct",
         hypothesis: null, start_date: "2026-08-01", end_date: "2026-08-05",
-        universe: "top300", initial_cash_cny: "100000",
+        universe: "top300", initial_cash_cny: "100000", costs: defaultSimulationCosts(),
         program: { source: "def decide(context, state, parameters): pass",
           parameters: { improvement: 0.02 }, data_requirements: {
             field_ids: ["price.close.adjusted"], history_sessions: 6,
@@ -732,7 +743,7 @@ describe("UseAsDraftPanel", () => {
           neutralization: "none",
           research_kind: "strategy_backtest",
           holdings_count: 10,
-          initial_cash_cny: "100000",
+          initial_cash_cny: "100000", costs: defaultSimulationCosts(),
           selection_every_sessions: 2,
           strategy_mode: "framework", modules: builtinFrameworkModules,
           exposure_expression: "1",

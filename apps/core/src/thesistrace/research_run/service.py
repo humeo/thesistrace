@@ -338,16 +338,10 @@ class ResearchRunAdmissionRejected(ValueError):
 
 FIXED_STRATEGY_KIND = "framework"
 FIXED_EXECUTION = "next_open_full_fill"
-FIXED_COSTS = {
-    "commission_rate_all_in": "0.0003",
-    "commission_min_cny": "5",
-    "stamp_duty_sell_rate": "0.0005",
-    "transfer_fee_rate": "0.00001",
-}
 SEMANTIC_VERSIONS = {
     "factor": "factor-v1",
-    "strategy": "strategy-v5",
-    "kernel": "kernel-v8",
+    "strategy": "strategy-v6",
+    "kernel": "kernel-v9",
 }
 
 
@@ -3291,7 +3285,6 @@ class ResearchRunService:
             or (exposure is not None and strategy["exposure_expression"] != exposure.expression)
             or (immutable_input.programs
                 and strategy["environment"] != get_strategy_runtime().identity())
-            or immutable_input.costs != FIXED_COSTS
             or immutable_input.risk_free_rate != "0"
         )
         if common_contract_mismatch or strategy_contract_mismatch:
@@ -4696,7 +4689,7 @@ def _admitted_input(
                 "program_sha256": command.program.source_sha256, "environment": environment,
                 "initial_cash_cny": command.initial_cash_cny, "execution": FIXED_EXECUTION,
             },
-            "costs": FIXED_COSTS, "risk_free_rate": "0",
+            "costs": command.costs.model_dump(), "risk_free_rate": "0",
         }
     elif isinstance(command, StrategyBacktestSpec):
         portfolio_settings = {} if not command.has_builtin_portfolio else {
@@ -4714,7 +4707,7 @@ def _admitted_input(
                 "initial_cash_cny": command.initial_cash_cny,
                 "execution": FIXED_EXECUTION,
             },
-            "costs": FIXED_COSTS,
+            "costs": command.costs.model_dump(),
             "risk_free_rate": "0",
         }
     return ImmutableRunInput(

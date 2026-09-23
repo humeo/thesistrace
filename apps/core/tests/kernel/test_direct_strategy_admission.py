@@ -47,6 +47,11 @@ def service_and_snapshot(*, field_ids=None):
 def test_direct_diagnosis_and_admission_freeze_only_the_active_program():
     service, snapshot = service_and_snapshot()
     values = direct_spec()
+    values["costs"] = {
+        "commission_rate_all_in": "0.0002", "commission_min_cny": "1",
+        "stamp_duty_sell_rate": "0.0004", "transfer_fee_rate": "0.00002",
+        "slippage_bps": "10",
+    }
     spec = TypeAdapter(ResearchSpec).validate_python(values)
     assert service.diagnose_research_spec(spec).valid
     command = TypeAdapter(ResearchRunAdmissionCommand).validate_python(
@@ -60,6 +65,9 @@ def test_direct_diagnosis_and_admission_freeze_only_the_active_program():
         UUID(int=1), command, dataset=snapshot
     ).immutable_input
     frozen = admitted.canonical_value()
+    assert frozen["costs"] == values["costs"]
+    assert admitted.kernel_strategy().slippage_bps == "10"
+    assert admitted.authorable_value()["costs"] == values["costs"]
     assert frozen["formula_source"] is None
     assert frozen["alpha_expression"] is None
     assert frozen["neutralization"] is None

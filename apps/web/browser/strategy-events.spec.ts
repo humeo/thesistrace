@@ -31,7 +31,7 @@ const target = {
 };
 const order = { target_id: "target_a", order_id: "order_a", decision_session: "2026-08-03", session: "2026-08-04", instrument_id: "equity:600000.SH", side: "buy", reason: "selection", legal_quantity: 100, rejection_reason: null };
 const child = { ...order, child_order_id: "child_a", quantity: 100 };
-const fill = { ...child, fill_id: "fill_a", raw_open: "10", adjusted_open: "20", raw_notional: "1000", research_settlement: "1000", cost: "5", net_cash_delta: "-1005", adjusted_units_delta: "50", execution_shares_delta: 100 };
+const fill = { ...child, fill_id: "fill_a", raw_open: "10", adjusted_open: "20", execution_price: "10.01", price_slippage: "0.01", raw_notional: "1001", research_settlement: "1001", cost: "5", commission_cny: "5", stamp_duty_cny: "0", transfer_fee_cny: "0", cash_rounding_delta: "0", net_cash_delta: "-1006", adjusted_units_delta: "50", execution_shares_delta: 100 };
 
 test("troubleshooting table preserves unknown quantities and copies the exact record", async ({ page, context }) => {
   const reads: Record<string, unknown>[] = [];
@@ -138,7 +138,9 @@ test("trading evidence pages and follows target, order, child and fill relations
   await expect(page.getByRole("heading", { name: "成交", exact: true })).toBeFocused();
   await expect(page.getByRole("cell", { name: "5.00", exact: true })).toBeVisible();
   await page.getByRole("button", { name: /查看原始记录/ }).click();
-  expect(JSON.parse(await page.locator("pre").innerText()).net_cash_delta).toBe("-1005");
+  expect(JSON.parse(await page.locator("pre").innerText()).net_cash_delta).toBe("-1006");
+  await expect(page.getByRole("region", { name: "成交价格与费用明细" })).toContainText("模拟成交价（元）10.01");
+  await expect(page.getByRole("region", { name: "成交价格与费用明细" })).toContainText("每股滑点价差（元）0.01");
   expect(reads.at(-1)?.child_order_id).toBe("child_a");
   await expect(page.getByText("已到筛选结果末尾", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "返回子委托", exact: true }).click();

@@ -1100,7 +1100,7 @@ def _reference_result(
                 commission_rate_all_in="0.0003",
                 commission_min_cny="5",
                 stamp_duty_sell_rate="0.0005",
-                transfer_fee_rate="0.00001",
+                transfer_fee_rate="0.00001", slippage_bps="0",
             )
             if research_kind == "strategy_backtest"
             else None

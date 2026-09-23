@@ -15,9 +15,9 @@ EXPECTED_CHECKSUMS = {
         "5": "c108d8430db5949afce51e5f17a6f88242a15164b834e5358ebb4517880cc691",
         "20": "ba3006a470cefea9bf194baef1328bc4e3343d9f1c32b8ccd14c96fac43c8b5e",
     },
-    # Decision state now explicitly identifies Framework and its retained selection.
+    # Fill evidence now includes synthetic prices and three separate fee components.
     # The independently specified financial boundaries below remain unchanged.
-    "strategy": "2d6d32163488cf08bda65adfaef889b4681856975779e6acb27c1a0c02f1ba91",
+    "strategy": "6b0787961bbcf20783eb735b4538b7e80f9859adfe77619b43cf09b63039af31",
 }
 
 

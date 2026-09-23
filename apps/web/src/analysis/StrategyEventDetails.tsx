@@ -1,4 +1,5 @@
 import { Fragment, useId, useState } from "react";
+import Decimal from "decimal.js";
 import { FrameworkDecisionDetails, type FrameworkRecord } from "./FrameworkDecisionDetails";
 
 export const eventSections = {
@@ -52,7 +53,8 @@ const columns: Record<EventSection, { key: string; label: string; numeric?: bool
   strategy_fills: [
     { key: "session", label: "执行日期" }, { key: "instrument_id", label: "股票" },
     { key: "side", label: "方向" }, { key: "quantity", label: "成交股数", numeric: true },
-    { key: "raw_open", label: "成交价（元）", numeric: true },
+    { key: "raw_open", label: "原始开盘价（元）", numeric: true },
+    { key: "execution_price", label: "模拟成交价（元）", numeric: true },
     { key: "cost", label: "费用（元）", numeric: true },
   ],
   strategy_adjustments: [
@@ -85,8 +87,8 @@ function cellValue(path: string, row: EventRow) {
   if (key === "exposure") return (Number(value) * 100).toFixed(2) + "%";
   if (["side", "mode", "reason", "rejection_reason", "type"].includes(key)) return labels[String(value)] ?? String(value);
   if (key.endsWith("quantity")) return Number(value).toLocaleString("zh-CN");
-  if (["raw_open", "cost", "valuation_delta"].includes(key)) return Number(value).toLocaleString("zh-CN", {
-    minimumFractionDigits: 2, maximumFractionDigits: key === "raw_open" ? 6 : 2,
+  if (["raw_open", "execution_price", "cost", "valuation_delta"].includes(key)) return Number(value).toLocaleString("zh-CN", {
+    minimumFractionDigits: 2, maximumFractionDigits: ["raw_open", "execution_price"].includes(key) ? 6 : 2,
   });
   return String(value);
 }
@@ -105,6 +107,17 @@ function EventRecord({ row, section, navigate }: { row: EventRow; section: Event
     : section === "strategy_child_orders" ? { child_order_id: childId } : { order_id: orderId };
   return <div className="strategy-event-record">
     {section === "strategy_framework" && <FrameworkDecisionDetails row={row as FrameworkRecord} />}
+    {section === "strategy_fills" && <section aria-label="成交价格与费用明细">
+      <p>滑点已计入模拟成交价；Gross 与 Net 使用同一成交路径，差额仅为显式费用及舍入残差。</p>
+      <dl className="research-run-facts">{[
+        ["raw_open", "原始 Open"], ["execution_price", "模拟成交价"],
+        ["price_slippage", "每股滑点价差"], ["research_settlement", "研究结算金额"],
+        ["commission_cny", "佣金"], ["stamp_duty_cny", "卖出印花税"],
+        ["transfer_fee_cny", "过户费"], ["cost", "显式费用合计"],
+        ["cash_rounding_delta", "现金舍入残差"],
+      ].map(([key, label]) => <div key={key}><dt>{label}（元）</dt>
+        <dd>{new Decimal(String(row[key])).toString()}</dd></div>)}</dl>
+    </section>}
     <div className="strategy-event-record-toolbar"><span>原始记录</span>
       <button type="button" onClick={async () => {
         setCopyError(false);

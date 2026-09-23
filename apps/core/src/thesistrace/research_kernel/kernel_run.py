@@ -68,6 +68,7 @@ class StrategyRunInput:
     commission_min_cny: str
     stamp_duty_sell_rate: str
     transfer_fee_rate: str
+    slippage_bps: str
     weighting: PortfolioWeighting | None = None
     volatility_window: int | None = None
     exposure_expression_json: bytes | None = None
@@ -127,6 +128,7 @@ class StrategyRunInput:
             "commission_min_cny": self.commission_min_cny,
             "stamp_duty_sell_rate": self.stamp_duty_sell_rate,
             "transfer_fee_rate": self.transfer_fee_rate,
+            "slippage_bps": self.slippage_bps,
         }
         if "portfolio_construction" not in self.modules_snapshot().programs():
             snapshot.update({
@@ -149,6 +151,7 @@ class DirectStrategyRunInput:
     commission_min_cny: str
     stamp_duty_sell_rate: str
     transfer_fee_rate: str
+    slippage_bps: str
 
     def __post_init__(self) -> None:
         self.program_snapshot()
@@ -167,6 +170,7 @@ class DirectStrategyRunInput:
             "commission_min_cny": self.commission_min_cny,
             "stamp_duty_sell_rate": self.stamp_duty_sell_rate,
             "transfer_fee_rate": self.transfer_fee_rate,
+            "slippage_bps": self.slippage_bps,
         }
 
 
@@ -176,7 +180,7 @@ def strategy_input_from_snapshot(
     """Restore exactly one current strategy definition, without authoring defaults."""
     cost_names = {
         "initial_cash_cny", "commission_rate_all_in", "commission_min_cny",
-        "stamp_duty_sell_rate", "transfer_fee_rate",
+        "stamp_duty_sell_rate", "transfer_fee_rate", "slippage_bps",
     }
     costs = {name: value[name] for name in cost_names}
     if value.get("mode") == "direct":
@@ -748,6 +752,7 @@ def calculation_definition(
     strategy_contract = strategy.contract_snapshot()
     costs = {name: strategy_contract.pop(name) for name in (
         "commission_rate_all_in", "commission_min_cny", "stamp_duty_sell_rate", "transfer_fee_rate",
+        "slippage_bps",
     )}
     result = {"universe": run_input.universe, "strategy": strategy_contract, "costs": costs}
     if run_input.has_alpha:

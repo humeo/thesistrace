@@ -3,6 +3,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 from thesistrace.research_batch.models import ResearchBatchKind
+from thesistrace.research_definition import SimulationCosts
 from thesistrace.research_kernel.portfolio_weighting import PortfolioWeighting
 from thesistrace.research_run.models import (
     ResearchKind,
@@ -105,6 +106,13 @@ class ResearchAuthoringConstraints(BaseModel):
 
     research_kinds: tuple[ResearchKind, ...]
     strategy_modes: tuple[Literal["framework", "direct"], ...]
+    simulation_cost_defaults: SimulationCosts
+    simulation_cost_rules: str = (
+        "All costs are finite non-negative decimal strings. Slippage must be below "
+        "10000 basis points. Commission minimum applies separately to each filled "
+        "child order. Slippage changes buy/sell execution prices and is not a second fee. "
+        "These are simulation assumptions, frozen for the Run and its DailyTrack."
+    )
     python_program: PythonProgramConstraints
     framework: FrameworkAuthoringConstraints
     universes: tuple[ResearchUniverse, ...]

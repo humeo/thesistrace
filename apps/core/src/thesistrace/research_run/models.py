@@ -85,12 +85,13 @@ from thesistrace.research_definition import (
     SelectionInterval as SelectionInterval,
 )
 from thesistrace.research_definition import (
-    StrategyBacktestSpec as StrategyBacktestSpec,
-)
-from thesistrace.research_definition import (
+    SimulationCosts,
     authorable_research_input,
     kernel_strategy_from_frozen,
     spec_discriminator,
+)
+from thesistrace.research_definition import (
+    StrategyBacktestSpec as StrategyBacktestSpec,
 )
 from thesistrace.research_kernel.common_observations import CommonInputObservation
 from thesistrace.research_kernel.direct_strategy import PythonProgram
@@ -431,6 +432,8 @@ class ImmutableRunInput(BaseModel):
             value is None for value in strategy_values
         ):
             raise ValueError("Strategy Backtest immutable input requires Strategy values")
+        if self.costs is not None:
+            SimulationCosts.model_validate(self.costs)
         if self.is_direct:
             if any(value is not None for value in (
                 self.formula_source, self.alpha_expression, self.neutralization,
@@ -651,6 +654,7 @@ class ResearchRunAuthorableInput(BaseModel):
     initial_cash_cny: InitialCash | None = Field(
         default=None, exclude_if=lambda value: value is None,
     )
+    costs: SimulationCosts | None = Field(default=None, exclude_if=lambda value: value is None)
     holdings_count: int | None = Field(default=None, exclude_if=lambda value: value is None)
     volatility_window: VolatilityWindow | None = Field(
         default=None, exclude_if=lambda value: value is None,
@@ -671,6 +675,8 @@ class ResearchRunAuthorableInput(BaseModel):
 
     @model_validator(mode="after")
     def validate_research_kind_contract(self) -> ResearchRunAuthorableInput:
+        if self.research_kind == "strategy_backtest" and self.costs is None:
+            raise ValueError("Strategy authorable input requires frozen Simulation Costs")
         TypeAdapter(ResearchSpec).validate_python(self.model_dump(exclude_none=True))
         return self
 

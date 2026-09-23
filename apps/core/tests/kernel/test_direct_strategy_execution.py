@@ -59,6 +59,7 @@ def inputs():
             "commission_min_cny": "0",
             "stamp_duty_sell_rate": "0",
             "transfer_fee_rate": "0",
+            "slippage_bps": "0",
         },
     }
     return data, definition

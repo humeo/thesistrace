@@ -727,6 +727,7 @@ def _definition(
             "commission_min_cny": "5",
             "stamp_duty_sell_rate": "0.0005",
             "transfer_fee_rate": "0.00001",
+            "slippage_bps": "0",
         },
     }
 
@@ -755,7 +756,7 @@ def _kernel_run(
                 commission_rate_all_in="0.0003",
                 commission_min_cny="5",
                 stamp_duty_sell_rate="0.0005",
-                transfer_fee_rate="0.00001",
+                transfer_fee_rate="0.00001", slippage_bps="0",
             ),
             research_start_session=SESSIONS[0],
             research_end_session=SESSIONS[-1],

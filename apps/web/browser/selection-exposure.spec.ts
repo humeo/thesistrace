@@ -7,6 +7,55 @@ let script: string;
 const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
 
 for (const width of [1280, 390]) {
+  test(`fees remain editable, validate beside the field and submit exactly at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 964 });
+    const submissions: Record<string, unknown>[] = [];
+    await page.route("https://exposure.test/**", route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === "/api/alpha/diagnostics") return route.fulfill({ json: { valid: true, diagnostics: [] } });
+      if (path === "/api/research-runs") {
+        submissions.push(route.request().postDataJSON());
+        return route.fulfill({ status: 202, json: { id: "run_costs" } });
+      }
+      return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    });
+    const mount = async () => {
+      await page.goto("https://exposure.test/");
+      await page.addStyleTag({ content: styles });
+      await page.addScriptTag({ content: script });
+    };
+    await mount();
+    await page.getByRole("button", { name: "Run settings", exact: true }).click();
+    const slippage = page.getByLabel("Price slippage (basis points)", { exact: true });
+    await expect(slippage).toHaveValue("0");
+    await expect(page.getByLabel("Buy/sell commission rate", { exact: true })).toHaveValue("0.0003");
+    await expect(page.getByLabel("Minimum commission per child order (CNY)", { exact: true })).toHaveValue("5");
+    await slippage.fill("10000");
+    await page.getByRole("button", { name: "Run settings", exact: true }).click();
+    await page.getByRole("button", { name: "Run backtest", exact: true }).click();
+    await expect(slippage).toBeFocused();
+    await expect(slippage).toHaveAttribute("aria-invalid", "true");
+    await expect(page.locator("#cost-slippage_bps-error")).toContainText("below 10,000");
+    expect(submissions).toHaveLength(0);
+    await slippage.fill("15");
+    await page.getByLabel("Minimum commission per child order (CNY)", { exact: true }).fill("2");
+    await mount();
+    await page.getByLabel("Strategy mode", { exact: true }).selectOption("direct");
+    await page.getByRole("button", { name: "Run settings", exact: true }).click();
+    await expect(slippage).toHaveValue("15");
+    await expect(page.getByLabel("Minimum commission per child order (CNY)", { exact: true })).toHaveValue("2");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: `../../.local/browser-tests/simulation-costs-${width}.png`, fullPage: true });
+    await page.getByRole("button", { name: "Run backtest", exact: true }).click();
+    await expect.poll(() => submissions.length).toBe(1);
+    expect(submissions[0]).toMatchObject({ strategy_mode: "direct", costs: {
+      commission_rate_all_in: "0.0003", commission_min_cny: "2", stamp_duty_sell_rate: "0.0005",
+      transfer_fee_rate: "0.00001", slippage_bps: "15",
+    } });
+  });
+}
+
+for (const width of [1280, 390]) {
   test(`Framework modules retain independent drafts and locate errors at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 964 });
     const checks: Record<string, unknown>[] = [];

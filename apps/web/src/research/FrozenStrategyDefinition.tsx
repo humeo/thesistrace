@@ -1,5 +1,14 @@
 import { frameworkStageLabels, frameworkStages, type FrameworkModules } from "./frameworkModules";
 import type { PythonProgram } from "./pythonStrategy";
+import { costFields, type SimulationCosts } from "./simulationCosts";
+
+export function FrozenSimulationCosts({ costs }: { costs: SimulationCosts }) {
+  return <details className="research-run-fact-program">
+    <summary>Frozen fees and slippage</summary>
+    {costFields.map(({ key, label }) => <p key={key}><strong>{label}</strong> {costs[key]}</p>)}
+    <p>Minimum commission applies to each filled child order. Slippage changes execution prices and is not charged again as a fee.</p>
+  </details>;
+}
 
 export function FrozenPythonProgram({ program, title = "Frozen Python source and parameters" }: {
   program: PythonProgram; title?: string;

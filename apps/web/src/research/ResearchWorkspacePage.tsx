@@ -18,6 +18,8 @@ import { ResearchFieldCatalog, type DataOverview } from "../data/DataPage";
 import { AlphaFormulaEditor, type AlphaFormulaEditorHandle } from "./AlphaFormulaEditor";
 import { PythonStrategyAuthoring } from "./PythonStrategyAuthoring";
 import { FrameworkAuthoring } from "./FrameworkAuthoring";
+import { SimulationCostSettings } from "./SimulationCostSettings";
+import type { CostField } from "./simulationCosts";
 import { frameworkStages, type FrameworkStage } from "./frameworkModules";
 import { programInputFields, type ProgramInputField } from "./pythonStrategy";
 import { buildResearchDatePresets } from "./dateRange";
@@ -421,7 +423,7 @@ export function ResearchDraftWorkspace({
     setPendingInput(null);
   }, [pendingInput, settingsOpen]);
   function focusInput(field: ResearchInputField) {
-    if (["neutralization", "initialCashCny", "volatilityWindow", "exposureExpression"].includes(field)) setSettingsOpen(true);
+    if (field.startsWith("costs.") || ["neutralization", "initialCashCny", "volatilityWindow", "exposureExpression"].includes(field)) setSettingsOpen(true);
     setPendingInput(field);
   }
   function validateInputs(): boolean {
@@ -633,6 +635,11 @@ export function ResearchDraftWorkspace({
     }[input as ProgramInputField];
     const issues = [...visibleIssues, ...(specFeedback?.key === specKey ? specFeedback.issues : [])];
     return inputError(field) ?? issues.find(issue => issue.field === serverField || issue.field.startsWith(`${serverField}.`))?.message;
+  }
+  function costError(field: CostField): string | undefined {
+    const path = `costs.${field}` as const;
+    const issues = [...visibleIssues, ...(specFeedback?.key === specKey ? specFeedback.issues : [])];
+    return inputError(path) ?? issues.find(issue => issue.field === path)?.message;
   }
   const alphaAuthoring = <>
         <div className="formula-workbench">
@@ -901,6 +908,9 @@ export function ResearchDraftWorkspace({
               </>
             ) : null}
           </div>
+          {draft.researchKind === "strategy_backtest" && <SimulationCostSettings costs={draft.costs}
+            onChange={costs => updateDraft(current => ({ ...current, costs }))}
+            error={costError} />}
       </section>
 
         <details className="research-notes">
@@ -1068,7 +1078,7 @@ function ResearchParameterHelp({ label, text }: { label: string; text: ReactNode
   </span>;
 }
 
-const INPUT_SELECTORS: Record<Exclude<ResearchInputField, "formula" | "exposureExpression" | `${FrameworkStage}.${ProgramInputField}`>, string> = {
+const INPUT_SELECTORS: Record<Exclude<ResearchInputField, "formula" | "exposureExpression" | `${FrameworkStage}.${ProgramInputField}` | `costs.${CostField}`>, string> = {
   hypothesis: "#research-notes", startDate: "#research-start-date", endDate: "#research-end-date",
   universe: "#research-universe", neutralization: "#research-neutralization", initialCashCny: "#initial-cash",
   holdingsCount: "#research-holdings-count", selectionEverySessions: "#research-selection-sessions",
@@ -1078,6 +1088,7 @@ const INPUT_SELECTORS: Record<Exclude<ResearchInputField, "formula" | "exposureE
 };
 
 function inputSelector(field: Exclude<ResearchInputField, "formula" | "exposureExpression">): string {
+  if (field.startsWith("costs.")) return `#cost-${field.slice(6)}`;
   const [stage, input] = field.split(".");
   if (frameworkStages.includes(stage as FrameworkStage) && programInputFields.includes(input as ProgramInputField)) {
     return `#${stage}-${INPUT_SELECTORS[input as ProgramInputField].slice(1)}`;

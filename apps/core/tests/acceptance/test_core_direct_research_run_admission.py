@@ -487,13 +487,14 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
                 "commission_min_cny": "5",
                 "stamp_duty_sell_rate": "0.0005",
                 "transfer_fee_rate": "0.00001",
+                "slippage_bps": "0",
             },
             "risk_free_rate": "0",
             "numeric_execution_contract": "thesistrace-numeric-v1",
             "semantic_versions": {
                 "factor": "factor-v1",
-                "strategy": "strategy-v5",
-                "kernel": "kernel-v8",
+                "strategy": "strategy-v6",
+                "kernel": "kernel-v9",
             },
             "expression_admission": {
                 "effective_lookback": 0,

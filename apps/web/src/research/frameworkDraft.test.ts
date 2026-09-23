@@ -1,3 +1,4 @@
+import { defaultSimulationCosts } from "./simulationCosts";
 import { describe, expect, it } from "vitest";
 import {
   acceptPendingResearchRun, beginResearchRun, emptyResearchDraft, loadResearchDraft,
@@ -27,7 +28,7 @@ describe("Framework authoring contract", () => {
     const program = { source: "def decide(context, state, parameters): return {'output': None, 'state': state}",
       parameters, data_requirements: { field_ids: [], history_sessions: 1 } };
     const common = { research_kind: "strategy_backtest" as const, hypothesis: null, start_date: "2026-08-03",
-      end_date: "2026-08-28", universe: "top300" as const, initial_cash_cny: "100000" };
+      end_date: "2026-08-28", universe: "top300" as const, initial_cash_cny: "100000", costs: defaultSimulationCosts() };
     const frozen: FrozenResearchAuthorableInput = mode === "direct" ? { ...common, strategy_mode: mode, program }
       : { ...common, strategy_mode: mode, modules: { ...builtinFrameworkModules, alpha: { kind: "python", program },
         portfolio_construction: { kind: "python", program } } };

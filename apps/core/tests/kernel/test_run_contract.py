@@ -169,6 +169,7 @@ def test_kernel_run_input_rejects_string_alpha_expression(
                 commission_min_cny=str(costs["commission_min_cny"]),
                 stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
                 transfer_fee_rate=str(costs["transfer_fee_rate"]),
+                slippage_bps=str(costs["slippage_bps"]),
             ),
         )
 
@@ -229,6 +230,7 @@ def _run_input(
             commission_min_cny=str(costs["commission_min_cny"]),
             stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
             transfer_fee_rate=str(costs["transfer_fee_rate"]),
+            slippage_bps=str(costs["slippage_bps"]),
         ),
         research_start_session=str(calendar[20]) if include_period else None,
         research_end_session=str(calendar[-1]) if include_period else None,

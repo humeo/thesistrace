@@ -37,6 +37,7 @@ from thesistrace.entrypoints.runtime import (
     open_core_runtime,
 )
 from thesistrace.entrypoints.schema import initialize_core
+from thesistrace.research_definition import default_simulation_costs
 from thesistrace.research_run.execution import SupervisedResearchExecutor
 from thesistrace.research_run.models import (
     ResearchRunAdmissionCommand,
@@ -75,6 +76,8 @@ async def _exercise_research_runs(
         **_command("mcp-strategy", research_kind="strategy_backtest"),
         "end_date": long_strategy_end,
         "holdings_count": 51,
+        "costs": {**default_simulation_costs().model_dump(),
+                  "commission_min_cny": "2", "slippage_bps": "15"},
     }
     rejected_command = {**_command("mcp-rejected"), "formula": "unknown_alpha"}
 
@@ -105,6 +108,11 @@ async def _exercise_research_runs(
         }
         assert strategy.structured_content["outcome"] == "accepted"
         assert strategy.structured_content["replayed"] is False
+        frozen = await client.call_tool(
+            "get_research_run", {"run_id": strategy.structured_content["run_id"]},
+        )
+        assert frozen.is_error is False
+        assert frozen.structured_content["input"]["costs"] == strategy_command["costs"]
         assert rejected.structured_content["outcome"] == "rejected"
         assert rejected.structured_content["issues"][0]["code"] == "UNKNOWN_IDENTIFIER"
         assert rejected.structured_content["replayed"] is False
@@ -714,6 +722,11 @@ async def _assert_first_semantic_result_pages(
     assert provenance.structured_content["authoring_input"] == {
         "volatility_window": 20, "weighting": "equal_weight",
         "strategy_mode": "framework",
+        "modules": {
+            "universe_selection": "dataset_universe/v1", "alpha": "alpha_formula/v1",
+            "portfolio_construction": "periodic_top_n/v1", "risk_management": "no_risk/v1",
+        },
+        "costs": strategy_command["costs"],
         "formula": strategy_command["formula"],
         "hypothesis": strategy_command["hypothesis"],
         "start_date": strategy_command["start_date"],

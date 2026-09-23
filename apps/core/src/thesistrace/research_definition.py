@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from copy import deepcopy
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Annotated, Literal
 
 from pydantic import (
@@ -53,6 +53,44 @@ InitialCash = Annotated[
     ),
     AfterValidator(_normalize_initial_cash),
 ]
+
+
+def _nonnegative_cost(value: str) -> str:
+    try:
+        amount = Decimal(value)
+    except InvalidOperation as error:
+        raise ValueError("Simulation cost must be a decimal string") from error
+    if not amount.is_finite() or amount < 0:
+        raise ValueError("Simulation cost must be finite and non-negative")
+    return str(amount)
+
+
+CostAmount = Annotated[str, Field(strict=True, max_length=128), AfterValidator(_nonnegative_cost)]
+
+
+class SimulationCosts(BaseModel):
+    """Complete frozen assumptions shared by every Strategy execution mode."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    commission_rate_all_in: CostAmount
+    commission_min_cny: CostAmount
+    stamp_duty_sell_rate: CostAmount
+    transfer_fee_rate: CostAmount
+    slippage_bps: CostAmount
+
+    @model_validator(mode="after")
+    def positive_sell_price(self):
+        if Decimal(self.slippage_bps) >= 10000:
+            raise ValueError("Price slippage must be less than 10000 basis points")
+        return self
+
+
+def default_simulation_costs() -> SimulationCosts:
+    return SimulationCosts(
+        commission_rate_all_in="0.0003", commission_min_cny="5",
+        stamp_duty_sell_rate="0.0005", transfer_fee_rate="0.00001", slippage_bps="0",
+    )
 
 
 HoldingsCount = Annotated[
@@ -135,6 +173,7 @@ class FrameworkConfiguration(BaseModel):
         dict(BUILTIN_FRAMEWORK_MODULES),
     ))
     initial_cash_cny: InitialCash
+    costs: SimulationCosts = Field(default_factory=default_simulation_costs)
     holdings_count: HoldingsCount | None = None
     selection_every_sessions: SelectionInterval | None = None
     exposure_expression: Formula | None = None
@@ -187,6 +226,7 @@ class DirectStrategyBacktestSpec(_ResearchSpecBase):
     research_kind: Literal["strategy_backtest"]
     strategy_mode: Literal["direct"]
     initial_cash_cny: InitialCash
+    costs: SimulationCosts = Field(default_factory=default_simulation_costs)
     program: PythonProgram
 
     @property
@@ -247,6 +287,8 @@ def authorable_research_input(immutable: Mapping[str, object]) -> dict[str, obje
         "research_kind": immutable["research_kind"],
     }
     strategy = immutable.get("strategy")
+    if strategy is not None:
+        value["costs"] = deepcopy(immutable["costs"])
     if strategy is not None and strategy["kind"] == "direct":
         return {
             **value, "strategy_mode": "direct", "program": deepcopy(strategy["program"]),

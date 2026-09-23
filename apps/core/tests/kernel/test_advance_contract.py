@@ -213,6 +213,7 @@ def test_compact_advance_retains_only_bounded_strategy_alpha() -> None:
             "commission_min_cny": "5",
             "stamp_duty_sell_rate": "0.0005",
             "transfer_fee_rate": "0.00001",
+            "slippage_bps": "0",
         },
     }
     definition["alpha"] = {"expression": CLOSE_ADJUSTED}
@@ -283,6 +284,7 @@ def test_warm_continuation_with_short_data_slice_has_no_factor_state() -> None:
             "commission_min_cny": "5",
             "stamp_duty_sell_rate": "0.0005",
             "transfer_fee_rate": "0.00001",
+            "slippage_bps": "0",
         },
     }
     calendar = list(canonical["research_calendar"])
@@ -349,6 +351,7 @@ def test_cold_continuation_rebuild_uses_lookback_before_504_retained_sessions() 
             "commission_min_cny": "5",
             "stamp_duty_sell_rate": "0.0005",
             "transfer_fee_rate": "0.00001",
+            "slippage_bps": "0",
         },
     }
     calendar = list(canonical["research_calendar"])
@@ -732,6 +735,7 @@ def _run_input(
             commission_min_cny=str(costs["commission_min_cny"]),
             stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
             transfer_fee_rate=str(costs["transfer_fee_rate"]),
+            slippage_bps=str(costs["slippage_bps"]),
         ),
         research_start_session=research_start_session,
         research_end_session=research_end_session,
