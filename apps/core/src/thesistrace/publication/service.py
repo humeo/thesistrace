@@ -181,6 +181,11 @@ class Publication:
         self._bucket = bucket
         self._bucket_ready = False
 
+    @property
+    def storage_identity(self) -> dict[str, str]:
+        """Non-secret storage coordinates for explicit maintenance receipts."""
+        return {"endpoint": self._s3.meta.endpoint_url, "bucket": self._bucket}
+
     def storage_is_available(self) -> bool:
         return s3_storage_is_available(self._s3)
 
@@ -661,7 +666,8 @@ class Publication:
             return self.collect_pending_deletion_in_transaction(transaction) is not None
 
     def collect_pending_deletion_in_transaction(
-        self, transaction: PostgresTransaction, *, deadline: float | None = None
+        self, transaction: PostgresTransaction, *, deadline: float | None = None,
+        object_sha256: str | None = None,
     ) -> str | None:
         """Use the caller's maintenance connection and per-object transaction."""
         lock_publication_mutation(transaction)
@@ -669,10 +675,12 @@ class Publication:
             """
             SELECT object_sha256
             FROM publication.object_deletions
+            WHERE (%s::text IS NULL OR object_sha256 = %s)
             ORDER BY created_at, object_sha256
             FOR UPDATE SKIP LOCKED
             LIMIT 1
-            """
+            """,
+            (object_sha256, object_sha256),
         ).fetchone()
         if row is None:
             return None
