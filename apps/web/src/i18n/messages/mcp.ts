@@ -1,4 +1,8 @@
+import toolDetails from "./mcp-tool-details.json";
+
 export const mcpEn = {
+  toolDetails: toolDetails.en,
+  unrecognizedTool: "Display instructions are unavailable for this discovered tool.",
   subtitle: "Use your Quantgrove research tools in the AI assistant you already work with.",
   checking: "Checking…", available: "Service available", unavailable: "Service unavailable",
   checked: "Checked {{time}}", notChecked: "Not checked yet", checkService: "Check service",
@@ -31,9 +35,13 @@ export const mcpEn = {
   toolSet: "Tool set", toolCount_one: "{{countLabel}} tool", toolCount_other: "{{countLabel}} tools", unverified: "Unverified",
   discovering: "Discovering tools…", toolNotVerified: "Tool set not verified",
   waitingService: "Waiting for the MCP service.", checkAgain: "Check the connection again when the service is available.",
-  permission: "Permission:", effects: { Read: "Read", Create: "Create", Update: "Update" },
+  permission: "Permission:", effects: { Read: "Read", Create: "Create", Update: "Update", Cancel: "Cancel", Stop: "Stop" },
   groups: { preparation: "Research preparation", runs: "Research runs", batches: "Research batches", tracks: "Daily tracks", other: "Other tools" },
   toolNames: {
+    diagnose_research_spec: { title: "Check a research configuration", description: "Validate configuration without creating research." },
+    cancel_research_run: { title: "Cancel a research run", description: "Irreversibly cancel unfinished research." },
+    cancel_research_batch: { title: "Cancel a research batch", description: "Irreversibly cancel unfinished child work." },
+    stop_daily_track: { title: "Stop a daily track", description: "Irreversibly stop an active or blocked track." },
     get_research_context: { title: "Check research readiness", description: "Read dataset readiness and available research folders." },
     get_alpha_catalog: { title: "Explore formula building blocks", description: "Explore fields and operators for writing formulas." },
     diagnose_alpha_formula: { title: "Check an alpha formula", description: "Check a formula before submitting research." },
@@ -65,6 +73,8 @@ export const mcpEn = {
 } as const;
 
 export const mcpZh = {
+  toolDetails: toolDetails["zh-CN"],
+  unrecognizedTool: "此已发现工具暂无界面说明。",
   subtitle: "在常用的 AI 助手中使用 Quantgrove 研究工具。",
   checking: "正在检查…", available: "服务可用", unavailable: "服务不可用",
   checked: "检查于 {{time}}", notChecked: "尚未检查", checkService: "检查服务",
@@ -95,9 +105,13 @@ export const mcpZh = {
   toolSet: "工具列表", toolCount_one: "{{countLabel}} 个工具", toolCount_other: "{{countLabel}} 个工具", unverified: "未验证",
   discovering: "正在发现工具…", toolNotVerified: "工具列表未验证",
   waitingService: "等待 MCP 服务。", checkAgain: "服务可用后请再次检查连接。",
-  permission: "权限：", effects: { Read: "读取", Create: "创建", Update: "更新" },
+  permission: "权限：", effects: { Read: "读取", Create: "创建", Update: "更新", Cancel: "取消", Stop: "停止" },
   groups: { preparation: "研究准备", runs: "研究运行", batches: "研究批次", tracks: "每日跟踪", other: "其他工具" },
   toolNames: {
+    diagnose_research_spec: { title: "检查研究配置", description: "检查配置，不创建研究任务。" },
+    cancel_research_run: { title: "取消研究任务", description: "不可逆地取消未完成研究。" },
+    cancel_research_batch: { title: "取消研究批次", description: "不可逆地取消未完成的子任务。" },
+    stop_daily_track: { title: "停止每日跟踪", description: "不可逆地停止活动或已阻塞的跟踪。" },
     get_research_context: { title: "检查研究准备情况", description: "读取数据集准备状态和可用研究文件夹。" },
     get_alpha_catalog: { title: "探索公式构件", description: "查看编写公式可用的字段和运算符。" },
     diagnose_alpha_formula: { title: "检查 Alpha 公式", description: "提交研究前检查公式。" },

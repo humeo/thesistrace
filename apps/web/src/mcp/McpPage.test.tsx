@@ -40,6 +40,7 @@ async function mount() { await act(async () => root.render(<StrictMode><McpPage 
 describe("MCP product page", () => {
   it("has a translated presentation for each known MCP tool", () => {
     expect(Object.keys(mcpEn.toolNames).sort()).toEqual(Object.keys(toolPresentation).sort());
+    expect(Object.keys(mcpEn.toolNames).sort()).toEqual(Object.keys(mcpEn.toolDetails).sort());
   });
   it("discovers real tools and copies English setup without granting access", async () => {
     await mount();
@@ -59,6 +60,18 @@ describe("MCP product page", () => {
     await click(manual.querySelector<HTMLButtonElement>("button")!);
     expect(copied).toHaveBeenLastCalledWith(endpoint);
     expect(requested.every(path => !path.includes("revoke") && !path.includes("consent"))).toBe(true);
+  });
+  it("localizes expanded tool instructions while preserving discovery and protocol identifiers", async () => {
+    await mount();
+    const requestsBeforeSwitch = [...requested];
+    const tool = host.querySelector<HTMLDetailsElement>(".mcp-tool")!;
+    tool.open = true;
+    await act(async () => { await i18n.changeLanguage("zh-CN"); });
+    expect(tool.open).toBe(true);
+    expect(tool.textContent).toContain("folder_limit 默认为 20，最多 50");
+    expect(tool.textContent).toContain("get_research_context");
+    expect(tool.textContent).not.toContain("Live discovery description");
+    expect(requested).toEqual(requestsBeforeSwitch);
   });
   it("does not erase authorizations when a service check fails", async () => {
     apps = [{ id: "00000000-0000-4000-8000-000000000001", name: "Codex", client_id: "codex-client", scopes: ["research:read"], authorized_at: "2026-09-05T00:00:00Z" }];

@@ -802,6 +802,21 @@ def test_local_operator_has_only_safe_default_scopes() -> None:
     assert stop_authority.scopes == authority.scopes | {ResearchAgentScope.TRACKING_STOP}
 
 
+def test_bilingual_mcp_details_cover_the_current_discovery_contract() -> None:
+    authority = ResearchAgentAuthority(
+        subject="presentation-auditor",
+        researcher_id=TEST_RESEARCHER_ID,
+        scopes=frozenset(ResearchAgentScope),
+    )
+    capabilities = _registry(authority).accessible_capabilities()
+    messages = Path(__file__).resolve().parents[4] / "apps/web/src/i18n/messages"
+    details = json.loads((messages / "mcp-tool-details.json").read_text())
+    expected = {tool.name: tool.description for tool in capabilities}
+    assert details["en"] == expected
+    assert set(details["zh-CN"]) == set(expected)
+    assert all(text.strip() for text in details["zh-CN"].values())
+
+
 def test_discovery_schemas_are_independent_across_requests() -> None:
     first = _registry().accessible_capabilities()
     expected = [(tool.input_schema(), tool.output_schema()) for tool in first]

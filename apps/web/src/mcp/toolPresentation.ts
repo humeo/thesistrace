@@ -1,6 +1,10 @@
 // Presentation metadata only. The authenticated MCP discovery response owns
 // which tools appear; this table neither exposes tools nor grants permissions.
-export const toolPresentation: Record<string, { effect: "Read" | "Create" | "Update"; scope: string }> = {
+export const toolPresentation: Record<string, { effect: "Read" | "Create" | "Update" | "Cancel" | "Stop"; scope: string }> = {
+  diagnose_research_spec: { effect: "Read", scope: "research:read" },
+  cancel_research_run: { effect: "Cancel", scope: "research:cancel" },
+  cancel_research_batch: { effect: "Cancel", scope: "research:cancel" },
+  stop_daily_track: { effect: "Stop", scope: "tracking:stop" },
   get_research_context: { effect: "Read", scope: "research:read" },
   get_alpha_catalog: { effect: "Read", scope: "research:read" },
   diagnose_alpha_formula: { effect: "Read", scope: "research:read" },
