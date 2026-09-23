@@ -59,7 +59,7 @@ test("ResearchRun updates preserve one working events and holdings section", asy
   await page.addScriptTag({ content: script });
   await expect(page.getByText("Trading events", { exact: true })).toHaveCount(1);
   await page.getByText("Trading events", { exact: true }).click();
-  await expect(page.getByText("没有匹配的委托记录。")).toBeVisible();
+  await expect(page.getByText("No matching Orders records.")).toBeVisible();
   // Opening and dismissing the confirmation only updates the actual parent page;
   // it must not replace these independent sections or leave orphaned DOM nodes.
   for (let i = 0; i < 3; i++) {
@@ -67,7 +67,7 @@ test("ResearchRun updates preserve one working events and holdings section", asy
     await page.getByRole("button", { name: "Keep Research", exact: true }).click();
     await expect(page.getByText("Trading events", { exact: true })).toHaveCount(1);
     await expect(page.getByRole("button", { name: "Daily holdings", exact: true })).toHaveCount(1);
-    await expect(page.getByText("没有匹配的委托记录。")).toBeVisible();
+    await expect(page.getByText("No matching Orders records.")).toBeVisible();
   }
   await page.getByRole("button", { name: "Daily holdings", exact: true }).click();
   await expect(page.getByText("Daily holdings were not recorded for this result.")).toBeVisible();

@@ -57,7 +57,7 @@ test("common industry parameters are discoverable in the actual editor", async (
   await editor.press('Control+Space');
   const choice = page.getByRole('option').filter({ hasText: '801010' });
   await expect(choice).toBeVisible();
-  await expect(choice).toContainText('农林牧渔');
+  await expect(choice).toContainText('Agriculture, forestry, livestock & fisheries');
   await choice.click();
   await editor.press('End');
   await editor.press(')');
