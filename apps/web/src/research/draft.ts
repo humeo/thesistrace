@@ -4,7 +4,7 @@ import {
   parseProgramParameters, programSpec, type ProgramInputField, type ProgramInputs, type PythonProgram,
 } from "./pythonStrategy";
 import {
-  builtinModulesDraft, frameworkDraft, frameworkSpec, frameworkStages, frozenStopLossPercentage, stopLossInputError,
+  builtinModulesDraft, frameworkDraft, frameworkSpec, frameworkStages, frozenStopLossPercentage, stopLossInputError, frozenMaximumHoldingSessions, frozenMinimumHoldingSessions, holdingSessionsInputError,
   type FrameworkModules, type FrameworkModulesDraft, type FrameworkStage,
 } from "./frameworkModules";
 import { frameworkExample } from "./frameworkExamples";
@@ -21,6 +21,8 @@ export type ResearchInputs = ProgramInputs & {
   strategyMode: "framework" | "direct";
   frameworkModules: FrameworkModulesDraft;
   stopLossThreshold: string;
+  maximumHoldingSessions: string;
+  minimumHoldingSessions: string;
   name: string;
   formula: string;
   hypothesis: string;
@@ -96,7 +98,7 @@ export type ResearchDraft = ResearchInputs & {
 };
 
 const MAX_DRAFT_BYTES = 2 * 1024 * 1024;
-const DRAFT_STORAGE_SCHEMA = "research-draft/v4";
+const DRAFT_STORAGE_SCHEMA = "research-draft/v5";
 const MAX_FORMULA_LENGTH = 4_096;
 export const MAX_HYPOTHESIS_LENGTH = 1_024;
 const MAX_TEXT_LENGTH = 10_000;
@@ -106,6 +108,8 @@ export function emptyResearchDraft(): ResearchDraft {
     researchKind: "factor_evaluation",
     strategyMode: "framework",
     stopLossThreshold: "",
+    maximumHoldingSessions: "",
+    minimumHoldingSessions: "",
     ...emptyProgramInputs(), frameworkModules: builtinModulesDraft(),
     name: "",
     formula: "",
@@ -302,7 +306,7 @@ export function researchSpec(inputs: ResearchInputs): ResearchSpec {
     ...common, ...alpha, research_kind: "factor_evaluation",
   } : {
     ...common, research_kind: "strategy_backtest", strategy_mode: "framework",
-    modules: frameworkSpec(inputs.frameworkModules, inputs.stopLossThreshold), initial_cash_cny: inputs.initialCashCny, costs: { ...inputs.costs },
+    modules: frameworkSpec(inputs.frameworkModules, inputs), initial_cash_cny: inputs.initialCashCny, costs: { ...inputs.costs },
     ...(usesBuiltinAlpha(inputs) ? alpha : {}),
     ...(usesBuiltinPortfolio(inputs) ? {
       holdings_count: Number(inputs.holdingsCount), selection_every_sessions: Number(inputs.selectionEverySessions),
@@ -349,7 +353,7 @@ export function isValidInitialCash(value: string): boolean {
 
 export type ResearchInputField = `costs.${CostField}` | ProgramInputField | `${FrameworkStage}.${ProgramInputField}`
   | "formula" | "hypothesis" | "startDate" | "endDate" | "universe" | "neutralization" | "initialCashCny"
-  | "stopLossThreshold" | "holdingsCount" | "selectionEverySessions" | "exposureExpression" | "volatilityWindow";
+  | "stopLossThreshold" | "maximumHoldingSessions" | "minimumHoldingSessions" | "holdingsCount" | "selectionEverySessions" | "exposureExpression" | "volatilityWindow";
 export type ResearchInputIssue = { field: ResearchInputField; message: string };
 
 export function researchInputIssues(inputs: ResearchInputs): ResearchInputIssue[] {
@@ -380,6 +384,17 @@ export function researchInputIssues(inputs: ResearchInputs): ResearchInputIssue[
     && inputs.frameworkModules.risk_management.kind === "builtin") {
     const message = stopLossInputError(inputs.stopLossThreshold);
     if (message) issues.push({ field: "stopLossThreshold", message });
+    const holdingMessage = holdingSessionsInputError(inputs.maximumHoldingSessions);
+    if (holdingMessage) issues.push({ field: "maximumHoldingSessions", message: holdingMessage });
+  }
+  if (inputs.researchKind === "strategy_backtest" && inputs.strategyMode === "framework"
+    && inputs.frameworkModules.portfolio_construction.kind === "builtin") {
+    const message = holdingSessionsInputError(inputs.minimumHoldingSessions);
+    if (message) issues.push({ field: "minimumHoldingSessions", message });
+    if (inputs.frameworkModules.risk_management.kind === "builtin" && inputs.minimumHoldingSessions !== ""
+      && inputs.maximumHoldingSessions !== "" && Number(inputs.minimumHoldingSessions) > Number(inputs.maximumHoldingSessions)) {
+      issues.push({ field: "maximumHoldingSessions", message: "Maximum holding sessions must be at least minimum." });
+    }
   }
   if (direct) issues.push(...programInputIssues(inputs));
   else if (inputs.researchKind === "strategy_backtest") {
@@ -447,6 +462,8 @@ export function useResearchAsDraft(
     ...(direct ? programDraft(input.program) : emptyProgramInputs()),
     frameworkModules: framework ? frameworkDraft(input.modules) : builtinModulesDraft(),
     stopLossThreshold: framework ? frozenStopLossPercentage(input.modules) : "",
+    maximumHoldingSessions: framework ? frozenMaximumHoldingSessions(input.modules) : "",
+    minimumHoldingSessions: framework ? frozenMinimumHoldingSessions(input.modules) : "",
   };
   if (
     wouldOverwriteUnexecutedAuthorableValue(current, nextInputs) &&
@@ -477,7 +494,7 @@ function wouldOverwriteUnexecutedAuthorableValue(
     "researchKind",
     "strategyMode",
     "programSource", "programParameters", "programFields", "programHistorySessions",
-    "frameworkModules", "costs", "stopLossThreshold",
+    "frameworkModules", "costs", "stopLossThreshold", "maximumHoldingSessions", "minimumHoldingSessions",
     "initialCashCny",
     "holdingsCount",
     "selectionEverySessions",
@@ -551,7 +568,7 @@ function readInputs(value: unknown): ResearchInputs | null {
   if (!isRecord(value)) return null;
   const keys = [
     "researchKind",
-    "strategyMode", "stopLossThreshold",
+    "strategyMode", "stopLossThreshold", "maximumHoldingSessions", "minimumHoldingSessions",
     "programSource", "programParameters", "programFields", "programHistorySessions",
     "name",
     "formula",

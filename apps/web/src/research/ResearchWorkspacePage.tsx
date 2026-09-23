@@ -628,9 +628,10 @@ export function ResearchDraftWorkspace({
     ? admissionFeedback.issues
     : [];
   function programError(field: ResearchInputField): string | undefined {
-    if (field === "stopLossThreshold") {
+    if (field === "stopLossThreshold" || field === "maximumHoldingSessions" || field === "minimumHoldingSessions") {
       const issues = [...visibleIssues, ...(specFeedback?.key === specKey ? specFeedback.issues : [])];
-      return inputError(field) ?? issues.find(issue => issue.field.includes("stop_loss_threshold"))?.message;
+      const serverField = { stopLossThreshold: "stop_loss_threshold", maximumHoldingSessions: "maximum_holding_sessions", minimumHoldingSessions: "minimum_holding_sessions" }[field];
+      return inputError(field) ?? issues.find(issue => issue.field.includes(serverField))?.message;
     }
     const [stage, input] = field.includes(".") ? field.split(".") : [null, field];
     const serverField = (stage ? `modules.${stage}.` : "") + {
@@ -776,6 +777,10 @@ export function ResearchDraftWorkspace({
           onChange={changes => updateDraft(current => ({ ...current, ...changes }))}
           fieldsButton={fieldsButton()} /> : draft.researchKind === "strategy_backtest" ? <FrameworkAuthoring
           stopLossThreshold={draft.stopLossThreshold}
+          maximumHoldingSessions={draft.maximumHoldingSessions}
+          minimumHoldingSessions={draft.minimumHoldingSessions}
+          updateMinimumHoldingSessions={minimumHoldingSessions => updateDraft(current => ({ ...current, minimumHoldingSessions }))}
+          updateMaximumHoldingSessions={maximumHoldingSessions => updateDraft(current => ({ ...current, maximumHoldingSessions }))}
           updateStopLoss={stopLossThreshold => updateDraft(current => ({ ...current, stopLossThreshold }))}
           modules={draft.frameworkModules} error={programError} fieldsButton={fieldsButton} alphaEditor={alphaAuthoring}
           selectModule={(stage, kind) => updateDraft(current => selectFrameworkModule(current, stage, kind))}
@@ -1088,7 +1093,7 @@ const INPUT_SELECTORS: Record<Exclude<ResearchInputField, "formula" | "exposureE
   hypothesis: "#research-notes", startDate: "#research-start-date", endDate: "#research-end-date",
   universe: "#research-universe", neutralization: "#research-neutralization", initialCashCny: "#initial-cash",
   holdingsCount: "#research-holdings-count", selectionEverySessions: "#research-selection-sessions",
-  volatilityWindow: "#volatility-window", stopLossThreshold: "#stop-loss-threshold",
+  volatilityWindow: "#volatility-window", stopLossThreshold: "#stop-loss-threshold", maximumHoldingSessions: "#maximum-holding-sessions", minimumHoldingSessions: "#minimum-holding-sessions",
   programSource: "#python-source", programParameters: "#python-parameters",
   programFields: "#python-fields", programHistorySessions: "#python-history",
 };

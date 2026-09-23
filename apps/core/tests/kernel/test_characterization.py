@@ -17,7 +17,7 @@ EXPECTED_CHECKSUMS = {
     },
     # Account evidence includes cost, holding age and separate Close risk valuation.
     # The independently specified financial boundaries below remain unchanged.
-    "strategy": "f2ce23a749eeb8f22f3d87c64ccc75d4261b770a49e5c265ad98971fbb8f90bd",
+    "strategy": "73eb36432b5ca6f00913a3512402f960234ce21b280131e8c2e5cb7633be26bd",
 }
 
 

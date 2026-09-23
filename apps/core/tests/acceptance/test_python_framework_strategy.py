@@ -121,10 +121,12 @@ async def _get_origin_through_mcp(settings, track_id, stderr_path):
         )
 
 
-@pytest.mark.parametrize('builtin_alpha', [False, True])
-@pytest.mark.parametrize('builtin_risk', [False, True])
+@pytest.mark.parametrize('builtin_alpha,builtin_risk,holding_periods', [
+    (False, False, False), (True, False, False), (False, True, False), (True, True, False),
+    (True, True, True),
+])
 def test_framework_run_reuse_and_track_preserve_frozen_modules_and_account(
-    tmp_path, builtin_alpha, builtin_risk,
+    tmp_path, builtin_alpha, builtin_risk, holding_periods,
 ):
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
@@ -137,6 +139,14 @@ def test_framework_run_reuse_and_track_preserve_frozen_modules_and_account(
             submitted['modules']['risk_management'] = {
                 'kind': 'builtin_risk/v1', 'stop_loss_threshold': 0.01,
             }
+        if holding_periods:
+            submitted['modules']['portfolio_construction'] = {
+                'kind': 'periodic_top_n/v1', 'minimum_holding_sessions': 2,
+            }
+            submitted['modules']['risk_management']['maximum_holding_sessions'] = 3
+            submitted.update(holdings_count=1, selection_every_sessions=1,
+                             weighting='equal_weight', volatility_window=20,
+                             exposure_expression='1')
         costs = {**default_simulation_costs().model_dump(),
                  'commission_min_cny': '2', 'slippage_bps': '1000' if builtin_risk else '15'}
         submitted['costs'] = costs
@@ -156,15 +166,20 @@ def test_framework_run_reuse_and_track_preserve_frozen_modules_and_account(
         assert detail['status'] == 'succeeded', detail
         assert detail['input']['modules'] == submitted['modules']
         assert detail['input']['costs'] == costs
-        assert 'holdings_count' not in detail['input']
+        assert ('holdings_count' in detail['input']) == holding_periods
         expected = {stage: {'count': 3} for stage in submitted['modules']}
         if builtin_alpha:
             expected['alpha'] = {}
         if builtin_risk:
             expected['risk_management'] = {}
-        assert detail['result']['terminal_strategy_state']['decision_state']['module_states'] == (
-            expected
+        actual_states = (
+            detail['result']['terminal_strategy_state']['decision_state']['module_states']
         )
+        if holding_periods:
+            assert (actual_states['portfolio_construction']['selection']['signal_session']
+                    == SESSIONS[2])
+            expected['portfolio_construction'] = actual_states['portfolio_construction']
+        assert actual_states == expected
         event_path = f'/api/research-runs/{run_id}/events/query'
         events = client.post(event_path, json={'section': 'strategy_framework', 'limit': 50})
         assert events.status_code == 200, events.text
@@ -175,10 +190,14 @@ def test_framework_run_reuse_and_track_preserve_frozen_modules_and_account(
         assert original_events[0]['risk_adjustment'] is None
         if builtin_risk:
             triggered = original_events[1]['risk_adjustment']
-            assert triggered['mode'] == 'stop_loss'
+            assert triggered['mode'] == 'holding_risk'
             assert triggered['observations'][0]['holding_age'] == 1
             assert triggered['observations'][0]['stop_loss_threshold'] == '1e-2'
             assert detail['result']['terminal_strategy_state']['positions'] == []
+        if holding_periods:
+            retention = original_events[1]['portfolio_retentions'][0]
+            assert retention['holding_age'] == 1
+            assert retention['minimum_holding_sessions'] == 2
         for row in original_events:
             if row['target_id'] is not None:
                 target = client.post(event_path, json={
@@ -188,7 +207,10 @@ def test_framework_run_reuse_and_track_preserve_frozen_modules_and_account(
                 assert target.json()['rows'][0]['decision_session'] == row['decision_session']
         reused = deepcopy(detail['input'])
         reused['costs']['slippage_bps'] = '25'
-        reused['modules']['portfolio_construction']['program']['parameters']['edited'] = True
+        if holding_periods:
+            reused['modules']['portfolio_construction']['minimum_holding_sessions'] = 1
+        else:
+            reused['modules']['portfolio_construction']['program']['parameters']['edited'] = True
         response = client.post('/api/research-runs', json={
             **reused, 'request_id': 'reuse', 'folder_id': 'folder_default',
         })

@@ -204,7 +204,7 @@ class FrameworkConfiguration(BaseModel):
 
     @property
     def has_builtin_portfolio(self) -> bool:
-        return self.modules.portfolio_construction == "periodic_top_n/v1"
+        return self.modules.has_builtin_portfolio
 
 
 class StrategyBacktestSpec(_ResearchSpecBase, FrameworkConfiguration):
@@ -303,7 +303,7 @@ def authorable_research_input(immutable: Mapping[str, object]) -> dict[str, obje
             "strategy_mode": "framework", "initial_cash_cny": strategy["initial_cash_cny"],
             "modules": deepcopy(strategy["modules"]),
         })
-        if strategy["modules"]["portfolio_construction"] == "periodic_top_n/v1":
+        if FrameworkModules.model_validate(strategy["modules"]).has_builtin_portfolio:
             value.update({
                 "holdings_count": strategy["holdings_count"],
                 "selection_every_sessions": strategy["selection_every_sessions"],

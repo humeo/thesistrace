@@ -45,6 +45,7 @@ from thesistrace.research_kernel.strategy_events import (
 EVENT_PARTITION_ROWS = 512
 _JSON_FIELDS = frozenset({
     "allocation", "position_limits", "modules", "universe", "alpha", "proposal", "risk_adjustment",
+    "portfolio_retentions",
 })
 _INTEGER_FIELDS = frozenset(
     {
@@ -79,7 +80,7 @@ def event_session_field(section: str) -> str:
 EVENT_CONTRACTS = {
     section: ParquetWriterContract(
         name="research-result-" + section.replace("_", "-"),
-        version=2,
+        version=3 if section == "strategy_framework" else 2,
         schema=pa.schema([_field(name, section) for name in model.model_fields]),
         sort_keys=(event_session_field(section), EVENT_ID_FIELDS[section]),
     )

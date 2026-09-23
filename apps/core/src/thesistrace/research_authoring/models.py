@@ -97,6 +97,7 @@ class FrameworkAuthoringConstraints(BaseModel):
 
     stages: tuple[FrameworkStageConstraints, ...]
     builtin_risk_schema: dict[str, object]
+    builtin_portfolio_schema: dict[str, object]
     account_observation: str
     maximum_active_signals: int
     signal_validity_sessions: IntegerRange

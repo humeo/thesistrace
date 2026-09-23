@@ -45,6 +45,7 @@ class PositionLimitEvidence(TerminalStateModel):
 
 
 class StopLossObservation(TerminalStateModel):
+    reason: Literal["stop_loss"]
     instrument_id: StrictStr
     remaining_acquisition_cost_cny: StrictStr
     close_market_value_cny: StrictStr
@@ -54,17 +55,35 @@ class StopLossObservation(TerminalStateModel):
     holding_age: Annotated[StrictInt, Field(ge=1)]
 
 
-class StopLossEvidence(TerminalStateModel):
-    mode: Literal["stop_loss"] = "stop_loss"
-    reason: Reason = "stop_loss"
+class HoldingExpiryObservation(TerminalStateModel):
+    reason: Literal["maximum_holding_period"]
+    instrument_id: StrictStr
+    execution_shares: Annotated[StrictInt, Field(gt=0)]
+    holding_age: Annotated[StrictInt, Field(ge=1)]
+    maximum_holding_sessions: Annotated[StrictInt, Field(ge=1)]
+
+
+class HoldingRiskEvidence(TerminalStateModel):
+    mode: Literal["holding_risk"] = "holding_risk"
+    reason: Reason
     position_limits: dict[StrictStr, Annotated[StrictInt, Field(ge=0)]]
-    observations: list[StopLossObservation] = Field(min_length=1, max_length=3000)
+    observations: list[Annotated[
+        StopLossObservation | HoldingExpiryObservation, Field(discriminator="reason"),
+    ]] = Field(min_length=1, max_length=6000)
 
 
 class ReplacementEvidence(TerminalStateModel):
     mode: Literal["replace"]
     reason: Reason
     target: PendingTarget | None
+
+
+class HoldingRetentionEvidence(TerminalStateModel):
+    reason: Literal["minimum_holding_period"] = "minimum_holding_period"
+    instrument_id: StrictStr
+    execution_shares: Annotated[StrictInt, Field(gt=0)]
+    holding_age: Annotated[StrictInt, Field(ge=1)]
+    minimum_holding_sessions: Annotated[StrictInt, Field(ge=1)]
 
 
 class FrameworkEvidence(TerminalStateModel):
@@ -74,8 +93,10 @@ class FrameworkEvidence(TerminalStateModel):
     universe: UniverseEvidence
     alpha: Annotated[FormulaEvidence | SignalEvidence, Field(discriminator="kind")]
     proposal: PendingTarget | None
+    portfolio_retentions: list[HoldingRetentionEvidence] = Field(default_factory=list)
     risk_adjustment: Annotated[
-        PositionLimitEvidence | ReplacementEvidence | StopLossEvidence, Field(discriminator="mode"),
+        PositionLimitEvidence | ReplacementEvidence | HoldingRiskEvidence,
+        Field(discriminator="mode"),
     ] | None
 
     @model_validator(mode="after")
@@ -97,7 +118,7 @@ class FrameworkEvidence(TerminalStateModel):
             result.update(row.instrument_id for row in self.alpha.values)
         if self.proposal:
             result.update(self.proposal.instrument_ids)
-        if isinstance(self.risk_adjustment, (PositionLimitEvidence, StopLossEvidence)):
+        if isinstance(self.risk_adjustment, (PositionLimitEvidence, HoldingRiskEvidence)):
             result.update(self.risk_adjustment.position_limits)
         elif isinstance(self.risk_adjustment, ReplacementEvidence) and self.risk_adjustment.target:
             result.update(self.risk_adjustment.target.instrument_ids)

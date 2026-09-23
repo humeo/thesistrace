@@ -17,10 +17,14 @@ const explanations: Record<FrameworkStage, string> = {
   risk_management: "Inspect actual holdings and the new proposal at every Close. Adjustments combine into one final target before execution.",
 };
 
-export function FrameworkAuthoring({ modules, selectModule, updateProgram, stopLossThreshold, updateStopLoss, error, fieldsButton, alphaEditor }: {
+export function FrameworkAuthoring({ modules, selectModule, updateProgram, stopLossThreshold, updateStopLoss, maximumHoldingSessions, updateMaximumHoldingSessions, minimumHoldingSessions, updateMinimumHoldingSessions, error, fieldsButton, alphaEditor }: {
   modules: FrameworkModulesDraft;
   stopLossThreshold: string;
   updateStopLoss: (value: string) => void;
+  maximumHoldingSessions: string;
+  updateMaximumHoldingSessions: (value: string) => void;
+  minimumHoldingSessions: string;
+  updateMinimumHoldingSessions: (value: string) => void;
   selectModule: (stage: FrameworkStage, kind: "builtin" | "python") => void;
   updateProgram: (stage: FrameworkStage, changes: Partial<ProgramInputs>) => void;
   error: (field: ResearchInputField) => string | undefined;
@@ -51,6 +55,21 @@ export function FrameworkAuthoring({ modules, selectModule, updateProgram, stopL
             aria-describedby={error("stopLossThreshold") ? "stop-loss-help stop-loss-error" : "stop-loss-help"} />
           <p id="stop-loss-help" className="framework-module-help">Leave blank to disable. Uses actual acquisition cost including buy fees. Checks at Close and attempts to sell at the next Open; gaps or trading restrictions can increase the loss.</p>
           {error("stopLossThreshold") && <p id="stop-loss-error" className="inline-status-error">{error("stopLossThreshold")}</p>}
+          <label htmlFor="maximum-holding-sessions">Maximum holding (trading sessions)</label>
+          <input id="maximum-holding-sessions" type="text" inputMode="numeric" placeholder="Off" maxLength={16}
+            value={maximumHoldingSessions} onChange={event => updateMaximumHoldingSessions(event.target.value)}
+            aria-invalid={Boolean(error("maximumHoldingSessions"))}
+            aria-describedby={error("maximumHoldingSessions") ? "maximum-holding-help maximum-holding-error" : "maximum-holding-help"} />
+          <p id="maximum-holding-help" className="framework-module-help">Leave blank to disable. The first actual buy counts as session 1. At the Nth Close, request an exit at the next Open. Adding shares does not restart the count.</p>
+          {error("maximumHoldingSessions") && <p id="maximum-holding-error" className="inline-status-error">{error("maximumHoldingSessions")}</p>}
+        </div> : stage === "portfolio_construction" ? <div className="research-parameter-field">
+          <label htmlFor="minimum-holding-sessions">Minimum holding (trading sessions)</label>
+          <input id="minimum-holding-sessions" type="text" inputMode="numeric" placeholder="Off" maxLength={16}
+            value={minimumHoldingSessions} onChange={event => updateMinimumHoldingSessions(event.target.value)}
+            aria-invalid={Boolean(error("minimumHoldingSessions"))}
+            aria-describedby={error("minimumHoldingSessions") ? "minimum-holding-help minimum-holding-error" : "minimum-holding-help"} />
+          <p id="minimum-holding-help" className="framework-module-help">Leave blank to disable. Younger holdings retain their shares and occupy portfolio slots during ordinary changes. Risk exits can still reduce or sell them.</p>
+          {error("minimumHoldingSessions") && <p id="minimum-holding-error" className="inline-status-error">{error("minimumHoldingSessions")}</p>}
         </div> : null}
     </section>)}
   </div>;

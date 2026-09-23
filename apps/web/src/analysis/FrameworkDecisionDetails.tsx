@@ -3,7 +3,7 @@ import Decimal from "decimal.js";
 type Proposal = {
   reason: string;
   allocation: { mode: "rebalance" | "reduce" | "increase"; instrument_ids: string[];
-    relative_weights: Record<string, string>; exposure: number } | null;
+    relative_weights: Record<string, string>; exposure: number; retained_instrument_ids?: string[] } | null;
   position_limits: Record<string, number>;
 };
 type Signal = { instrument_id: string; value: number; created_session: string;
@@ -16,11 +16,15 @@ export type FrameworkRecord = {
     | { kind: "signals"; signals: Signal[]; updated: boolean; reason: string | null;
       expired_signals: string[]; removed_signals: string[] };
   proposal: Proposal | null;
+  portfolio_retentions?: { reason: "minimum_holding_period"; instrument_id: string;
+    execution_shares: number; holding_age: number; minimum_holding_sessions: number }[];
   risk_adjustment: { mode: "replace"; reason: string; target: Proposal | null }
-    | { mode: "stop_loss"; reason: string; position_limits: Record<string, number>;
-      observations: { instrument_id: string; remaining_acquisition_cost_cny: string;
+    | { mode: "holding_risk"; reason: string; position_limits: Record<string, number>;
+      observations: ({ reason: "stop_loss"; instrument_id: string; remaining_acquisition_cost_cny: string;
         close_market_value_cny: string; holding_return: string; stop_loss_threshold: string;
-        execution_shares: number; holding_age: number }[] }
+        execution_shares: number; holding_age: number } | { reason: "maximum_holding_period";
+        instrument_id: string; execution_shares: number; holding_age: number;
+        maximum_holding_sessions: number })[] }
     | { mode: "limit_positions"; reason: string; position_limits: Record<string, number> } | null;
   target_id: string | null;
 };
@@ -46,6 +50,7 @@ function Portfolio({ value }: { value: Proposal }) {
           {stock(id)}：{value.allocation!.relative_weights[id]}
         </li>)}</ul>
       </details>
+      {value.allocation.retained_instrument_ids?.length ? <p>保留原持仓：{value.allocation.retained_instrument_ids.map(stock).join("、")}；仅剩余资金按上述权重分配，风险调整仍可退出。</p> : null}
     </>}
     {Object.keys(value.position_limits).length > 0 && <Limits limits={value.position_limits} />}
   </>;
@@ -83,16 +88,21 @@ export function FrameworkDecisionDetails({ row }: { row: FrameworkRecord }) {
     </section>
     <section aria-label="组合建议"><h4>3 · 组合建议</h4>
       {row.proposal ? <Portfolio value={row.proposal} /> : <p>本日无新组合建议（NoUpdate）。</p>}
+      {row.portfolio_retentions?.length ? <ul aria-label="最短持仓保留依据">{row.portfolio_retentions.map(item => <li key={item.instrument_id}>
+        {stock(item.instrument_id)}：持有 {item.holding_age} 个研究交易日，未满最短 {item.minimum_holding_sessions} 日；组合保留 {item.execution_shares} 股并占用一个名额。风险调整仍可减仓或退出。
+      </li>)}</ul> : null}
     </section>
     <section aria-label="风险调整"><h4>4 · 风险调整</h4>
       {!risk ? <p>本日无风险调整。</p> : <>
         <p>原因：{risk.reason}</p>
         {risk.mode !== "replace" ? <><p>局部持仓上限；未列出的持仓数量不因此改变。</p>
           <Limits limits={risk.position_limits} />
-          {risk.mode === "stop_loss" && <ul aria-label="止损触发依据">{risk.observations.map(item => <li key={item.instrument_id}>
+          {risk.mode === "holding_risk" && <ul aria-label="持仓风险触发依据">{risk.observations.map(item => <li key={`${item.instrument_id}:${item.reason}`}>
             <strong>{stock(item.instrument_id)}</strong>
+            {item.reason === "stop_loss" ? <>
             <p>剩余取得成本 {new Decimal(item.remaining_acquisition_cost_cny).toString()} 元；收盘研究市值 {new Decimal(item.close_market_value_cny).toString()} 元。</p>
             <p>持仓收益 {new Decimal(item.holding_return).mul(100).toString()}%；止损阈值 {new Decimal(item.stop_loss_threshold).mul(100).toString()}%。</p>
+            </> : <p>已达到最长持仓期限：{item.maximum_holding_sessions} 个研究交易日。</p>}
             <p>判断时持仓 {item.execution_shares} 股，持有 {item.holding_age} 个研究交易日。下一开盘尝试退出，实际成交与拒绝由关联记录说明。</p>
           </li>)}</ul>}</>
           : risk.target ? <><p>替换本日组合建议。</p><Portfolio value={risk.target} /></>

@@ -28,7 +28,10 @@ def test_authoring_discovery_publishes_the_four_framework_module_contracts():
     assert "NoUpdate" in framework["stages"][2]["output_contract"]
     assert "limit_positions" in framework["stages"][3]["output_contract"]
     threshold = framework["builtin_risk_schema"]["properties"]["stop_loss_threshold"]
-    assert threshold["exclusiveMaximum"] == 1
+    assert threshold["anyOf"][0]["exclusiveMaximum"] == 1
+    portfolio = framework["builtin_portfolio_schema"]
+    assert portfolio["properties"]["minimum_holding_sessions"]["minimum"] == 1
+    assert "minimum_holding_sessions" in portfolio["required"]
     assert "close_risk_nav_cny" in framework["account_observation"]
     assert framework["maximum_active_signals"] == 3000
     assert framework["signal_validity_sessions"] == {"minimum": 1, "maximum": 252}
@@ -180,7 +183,8 @@ def test_framework_sweep_freezes_each_items_modules_without_a_dummy_shared_formu
     assert command.strategies[1].modules.alpha.program.parameters["threshold"] == 2
 
 
-def test_builtin_stop_loss_freezes_and_reuses_the_same_risk_module():
+@pytest.mark.parametrize("minimum", [None, 2])
+def test_builtin_holding_rules_freeze_and_reuse_the_same_modules(minimum):
     service, snapshot = service_and_snapshot()
     values = {
         "research_kind": "strategy_backtest", "strategy_mode": "framework",
@@ -192,6 +196,11 @@ def test_builtin_stop_loss_freezes_and_reuses_the_same_risk_module():
             "kind": "builtin_risk/v1", "stop_loss_threshold": 0.1,
         }},
     }
+    if minimum is not None:
+        values["modules"]["portfolio_construction"] = {
+            "kind": "periodic_top_n/v1", "minimum_holding_sessions": minimum,
+        }
+        values["modules"]["risk_management"]["maximum_holding_sessions"] = 5
     spec = TypeAdapter(ResearchSpec).validate_python(values)
     assert service.diagnose_research_spec(spec).valid
     command = TypeAdapter(ResearchRunAdmissionCommand).validate_python({

@@ -21,7 +21,10 @@ from thesistrace.research_batch.models import (
     RESEARCH_BATCH_KINDS,
 )
 from thesistrace.research_definition import default_simulation_costs
-from thesistrace.research_kernel.builtin_framework import BUILTIN_FRAMEWORK_MODULES
+from thesistrace.research_kernel.builtin_framework import (
+    BUILTIN_FRAMEWORK_MODULES,
+    BuiltinPortfolioModule,
+)
 from thesistrace.research_kernel.builtin_risk import BuiltinRiskModule
 from thesistrace.research_kernel.numeric import MAX_INITIAL_CASH_CNY
 from thesistrace.research_kernel.strategy_program_assets import PYTHON_VERSION
@@ -87,6 +90,7 @@ CURRENT_RESEARCH_AUTHORING_CONSTRAINTS = ResearchAuthoringConstraints(
             }[stage],
         ) for stage, identity in BUILTIN_FRAMEWORK_MODULES.items()),
         builtin_risk_schema=BuiltinRiskModule.model_json_schema(),
+        builtin_portfolio_schema=BuiltinPortfolioModule.model_json_schema(),
         account_observation=(
             "Direct and Framework programs receive cash_cny, post_open_net_nav_cny, "
             "close_risk_nav_cny and actual positions. Each position includes execution_shares, "
@@ -94,7 +98,10 @@ CURRENT_RESEARCH_AUTHORING_CONSTRAINTS = ResearchAuthoringConstraints(
             "remaining_acquisition_cost_cny, holding_cycle_started_session and holding_age. "
             "Age counts Research Sessions including the first actual buy. Builtin stop loss "
             "compares Close research value to remaining acquisition cost, then caps that "
-            "holding at zero for the next Open. no_risk/v1 disables built-in risk."
+            "holding at zero for the next Open. Maximum holding sessions requests exit at "
+            "the Nth Close. Minimum holding sessions reserves younger positions and slots "
+            "during ordinary portfolio changes; risk caps can override retention. "
+            "no_risk/v1 disables built-in risk."
         ),
         maximum_active_signals=MAX_ACTIVE_SIGNALS,
         signal_validity_sessions=IntegerRange(minimum=1, maximum=MAX_SIGNAL_VALIDITY_SESSIONS),

@@ -518,7 +518,9 @@ class ImmutableRunInput(BaseModel):
     @property
     def has_builtin_portfolio(self) -> bool:
         return (self.strategy is not None and self.strategy.get("kind") == "framework"
-                and self.strategy["modules"]["portfolio_construction"] == "periodic_top_n/v1")
+                and FrameworkModules.model_validate(
+                    self.strategy["modules"],
+                ).has_builtin_portfolio)
 
     @property
     def programs(self) -> dict[str, PythonProgram]:

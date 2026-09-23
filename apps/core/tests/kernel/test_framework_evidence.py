@@ -29,7 +29,7 @@ def event(index=0):
         "universe": {"instrument_ids": [], "updated": False, "reason": None},
         "alpha": {"kind": "signals", "signals": [], "updated": False, "reason": None,
                   "expired_signals": ["equity:600001.SH"], "removed_signals": []},
-        "proposal": None, "risk_adjustment": None,
+        "proposal": None, "risk_adjustment": None, "portfolio_retentions": [],
     }
 
 
@@ -123,3 +123,23 @@ def test_cancelled_large_portfolio_records_fit_the_result_publication_budget():
         len(content), len(rows), strategy_event_count=len(rows), strategy_target_count=0,
         strategy_framework_count=len(rows),
     )
+
+
+def test_minimum_holding_evidence_round_trips_with_reserved_allocation():
+    row = event()
+    row["target_id"] = "retained-target"
+    row["portfolio_retentions"] = [{
+        "reason": "minimum_holding_period", "instrument_id": "equity:600001.SH",
+        "execution_shares": 1000, "holding_age": 1, "minimum_holding_sessions": 3,
+    }]
+    row["proposal"] = {
+        "decision_session": row["decision_session"], "execution": "next_research_session_open",
+        "contract_checksum": "c" * 64, "reason": "selection", "position_limits": {},
+        "allocation": {"mode": "rebalance", "instrument_ids": [], "relative_weights": {},
+                       "exposure": 1.0, "retained_instrument_ids": ["equity:600001.SH"]},
+    }
+    payload = strategy_event_payload("strategy_framework", [row])
+    assert read_strategy_event_partition(
+        "strategy_framework", parquet_bytes(payload.rows, payload.contract),
+    ) == [row]
+    assert event_matches(row, "strategy_framework", {"instrument_id": "equity:600001.SH"})

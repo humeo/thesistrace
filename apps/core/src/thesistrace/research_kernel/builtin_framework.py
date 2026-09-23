@@ -8,7 +8,11 @@ import hashlib
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from fractions import Fraction
 from types import MappingProxyType
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 from thesistrace.research_kernel.common_inputs import CLOSE_FIELD_ID
 from thesistrace.research_kernel.exposure import evaluate_exposure_series, require_exposure_value
@@ -34,6 +38,13 @@ BUILTIN_FRAMEWORK_MODULES = MappingProxyType({
 })
 
 
+class BuiltinPortfolioModule(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    kind: Literal["periodic_top_n/v1"]
+    minimum_holding_sessions: StrictInt = Field(ge=1)
+
+
 @dataclass(frozen=True)
 class BuiltinFrameworkDecision:
     state: BuiltinPortfolioState
@@ -48,6 +59,7 @@ class BuiltinFramework:
     weighting: PortfolioWeighting
     volatility_window: int
     contract_checksum: str
+    minimum_holding_sessions: int | None = None
 
     def __post_init__(self) -> None:
         if not 1 <= self.holdings_count <= 100 or not 1 <= self.selection_interval <= 20:
@@ -62,16 +74,24 @@ class BuiltinFramework:
         close_windows: Mapping[str, Sequence[object]],
         exposure_value: object,
         previous: BuiltinPortfolioState | None,
+        account: Mapping[str, object] | None = None,
     ) -> BuiltinFrameworkDecision:
         exposure = require_exposure_value(exposure_value, session)
         selection_updated = report_index % self.selection_interval == 0
         selection = previous.selection if previous is not None else None
         diagnostics: tuple[dict[str, object], ...] = ()
+        retained = sorted(
+            str(position["instrument_id"]) for position in (account["positions"] if account else [])
+            if self.minimum_holding_sessions is not None
+            and position["holding_age"] < self.minimum_holding_sessions
+        )
         if selection_updated:
+            eligible = [item for item in alpha_values if item["instrument_id"] not in retained]
+            capacity = max(0, self.holdings_count - len(retained))
             exclusions = []
             if self.weighting == "inverse_volatility":
                 selected, weights, exclusions = inverse_volatility_selection(
-                    alpha_values, self.holdings_count, close_windows, self.volatility_window,
+                    eligible, capacity, close_windows, self.volatility_window,
                 )
                 diagnostics = tuple({
                     "session": session, "reason": "weighting_ineligible",
@@ -81,7 +101,7 @@ class BuiltinFramework:
                 } for item in exclusions)
             else:
                 selected, weights = select_portfolio(
-                    alpha_values, self.holdings_count, self.weighting,
+                    eligible, capacity, self.weighting,
                 )
             selection = TargetSelection(
                 signal_session=session,
@@ -100,6 +120,14 @@ class BuiltinFramework:
             reason = "selection" if selection_updated else (
                 "reduce" if exposure < previous.exposure else "increase"
             )
+            available_weights = {
+                item: Fraction(weight) for item, weight in selection.relative_weights.items()
+                if item not in retained
+            }
+            total_weight = sum(available_weights.values(), Fraction())
+            allocation_weights = {
+                item: str(weight / total_weight) for item, weight in available_weights.items()
+            }
             target = PendingTarget(
                 decision_session=session,
                 execution="next_research_session_open",
@@ -107,9 +135,11 @@ class BuiltinFramework:
                 reason=reason,
                 allocation=TargetAllocation(
                     mode="rebalance" if selection_updated else reason,
-                    instrument_ids=selection.selected_instrument_ids,
-                    relative_weights=selection.relative_weights,
+                    instrument_ids=[item for item in selection.selected_instrument_ids
+                                    if item not in retained],
+                    relative_weights=allocation_weights,
                     exposure=exposure,
+                    retained_instrument_ids=retained,
                 ),
                 position_limits={},
             )
@@ -139,6 +169,10 @@ class PreparedBuiltinPortfolio:
             selection_interval=int(strategy["selection_interval"]),
             weighting=strategy["weighting"], volatility_window=int(strategy["volatility_window"]),
             contract_checksum=checksum,
+            minimum_holding_sessions=(
+                strategy["modules"]["portfolio_construction"]["minimum_holding_sessions"]
+                if isinstance(strategy["modules"]["portfolio_construction"], dict) else None
+            ),
         )
         self._exposures = evaluate_exposure_series(
             data, strategy["exposure_expression"], observe_common=observe_common,
@@ -154,7 +188,7 @@ class PreparedBuiltinPortfolio:
                 self._closes = {item: [field.get((session, item)) for session in data.sessions]
                                 for item in instruments}
 
-    def decide(self, *, session, report_index, alpha_values, previous):
+    def decide(self, *, session, report_index, alpha_values, previous, account=None):
         state = None
         if previous:
             selection = TargetSelection.model_validate(previous["selection"])
@@ -172,4 +206,5 @@ class PreparedBuiltinPortfolio:
         return self.policy.decide(
             session=session, report_index=report_index, alpha_values=alpha_values,
             close_windows=close_windows, exposure_value=self._exposures[session], previous=state,
+            account=account,
         )

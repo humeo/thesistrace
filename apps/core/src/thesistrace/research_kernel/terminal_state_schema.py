@@ -127,10 +127,16 @@ class TargetAllocation(TerminalStateModel):
     instrument_ids: list[StrictStr]
     relative_weights: dict[StrictStr, StrictStr]
     exposure: StrictFloat
+    retained_instrument_ids: list[StrictStr] = Field(
+        default_factory=list, exclude_if=lambda value: not value,
+    )
 
     @model_validator(mode="after")
     def allocation_is_valid(self) -> TargetAllocation:
         _validate_target_weights(self.instrument_ids, self.relative_weights)
+        if (len(self.retained_instrument_ids) != len(set(self.retained_instrument_ids))
+                or set(self.retained_instrument_ids) & set(self.instrument_ids)):
+            raise ValueError("Retained holdings must be unique and separate from weighted targets")
         if not isfinite(self.exposure) or not 0 <= self.exposure <= 1:
             raise ValueError("Pending Exposure must be finite and between zero and one")
         return self
@@ -160,7 +166,8 @@ class PendingTarget(TerminalStateModel):
     @property
     def instrument_ids(self) -> frozenset[str]:
         return frozenset(self.position_limits) | (
-            frozenset(self.allocation.instrument_ids) if self.allocation else frozenset()
+            frozenset(self.allocation.instrument_ids + self.allocation.retained_instrument_ids)
+            if self.allocation else frozenset()
         )
 
 

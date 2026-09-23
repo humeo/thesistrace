@@ -579,9 +579,12 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
             {**item, "initial_cash_cny": "100000", "exposure_expression": exposure,
              "modules": {
                  "universe_selection": "dataset_universe/v1", "alpha": "alpha_formula/v1",
-                 "portfolio_construction": "periodic_top_n/v1",
+                 "portfolio_construction": "periodic_top_n/v1" if ordinal == 0 else {
+                     "kind": "periodic_top_n/v1", "minimum_holding_sessions": 1,
+                 },
                  "risk_management": "no_risk/v1" if ordinal == 0 else {
                      "kind": "builtin_risk/v1", "stop_loss_threshold": 0.01,
+                     "maximum_holding_sessions": 1,
                  },
              },
              "weighting": "inverse_volatility" if ordinal == 0 else "rank_weight",

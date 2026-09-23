@@ -2,10 +2,22 @@
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, StrictInt, StrictStr, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    StrictInt,
+    StrictStr,
+    ValidationError,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from thesistrace.research_kernel.builtin_framework import (
     BUILTIN_FRAMEWORK_MODULES,
+    BuiltinPortfolioModule,
     PreparedBuiltinPortfolio,
     alpha_values_by_session,
 )
@@ -14,10 +26,10 @@ from thesistrace.research_kernel.direct_strategy import PythonProgram, program_c
 from thesistrace.research_kernel.framework_evidence import (
     FormulaEvidence,
     FrameworkEvidence,
+    HoldingRiskEvidence,
     PositionLimitEvidence,
     ReplacementEvidence,
     SignalEvidence,
-    StopLossEvidence,
     UniverseEvidence,
 )
 from thesistrace.research_kernel.strategy_decision import DailyDecision, program_target
@@ -45,8 +57,27 @@ class FrameworkModules(BaseModel):
 
     universe_selection: Literal["dataset_universe/v1"] | PythonModule
     alpha: Literal["alpha_formula/v1"] | PythonModule
-    portfolio_construction: Literal["periodic_top_n/v1"] | PythonModule
+    portfolio_construction: Literal["periodic_top_n/v1"] | BuiltinPortfolioModule | PythonModule
     risk_management: Literal["no_risk/v1"] | BuiltinRiskModule | PythonModule
+
+    @field_validator("risk_management")
+    @classmethod
+    def holding_periods_are_consistent(cls, risk, info: ValidationInfo):
+        portfolio = info.data.get("portfolio_construction")
+        if (isinstance(portfolio, BuiltinPortfolioModule)
+                and isinstance(risk, BuiltinRiskModule)
+                and risk.maximum_holding_sessions is not None
+                and portfolio.minimum_holding_sessions > risk.maximum_holding_sessions):
+            raise ValidationError.from_exception_data(cls.__name__, [{
+                "type": "value_error", "loc": ("maximum_holding_sessions",),
+                "input": risk.maximum_holding_sessions,
+                "ctx": {"error": ValueError("Maximum holding sessions must be at least minimum")},
+            }])
+        return risk
+
+    @property
+    def has_builtin_portfolio(self) -> bool:
+        return not isinstance(self.portfolio_construction, PythonModule)
 
     def programs(self) -> dict[str, PythonProgram]:
         return {name: module.program for name in BUILTIN_FRAMEWORK_MODULES
@@ -188,6 +219,7 @@ class FrameworkStrategy:
             result = self._portfolio.decide(
                 session=session, report_index=report_index, alpha_values=view["signals"],
                 previous=module_states["portfolio_construction"],
+                account=account,
             )
             module_states["portfolio_construction"] = {
                 "selection": result.state.selection.model_dump(mode="json"),
@@ -196,6 +228,17 @@ class FrameworkStrategy:
             target = result.target
             diagnostics.extend(result.diagnostics)
         proposal = target.model_dump(mode="json") if target else None
+        retentions = []
+        portfolio_module = self._modules.portfolio_construction
+        if (isinstance(portfolio_module, BuiltinPortfolioModule)
+                and target is not None and target.allocation is not None):
+            retained = set(target.allocation.retained_instrument_ids)
+            retentions = [{
+                "instrument_id": position["instrument_id"],
+                "execution_shares": position["execution_shares"],
+                "holding_age": position["holding_age"],
+                "minimum_holding_sessions": portfolio_module.minimum_holding_sessions,
+            } for position in account["positions"] if position["instrument_id"] in retained]
         view["proposal"] = proposal
         risk_evidence = None
         if "risk_management" in self._programs:
@@ -209,17 +252,18 @@ class FrameworkStrategy:
                     if output["mode"] == "replace" else PositionLimitEvidence.model_validate(output)
                 )
         elif isinstance(self._modules.risk_management, BuiltinRiskModule):
-            observations = self._modules.risk_management.stop_loss_observations(account)
+            observations = self._modules.risk_management.holding_observations(account)
             if observations:
+                reason = "+".join(dict.fromkeys(row["reason"] for row in observations))
                 limits = dict(target.position_limits) if target else {}
                 limits.update({row["instrument_id"]: 0 for row in observations})
                 target = PendingTarget(
                     decision_session=session, execution="next_research_session_open",
-                    contract_checksum=self._checksum, reason="stop_loss",
+                    contract_checksum=self._checksum, reason=reason,
                     allocation=target.allocation if target else None, position_limits=limits,
                 )
-                risk_evidence = StopLossEvidence(
-                    position_limits=limits, observations=observations,
+                risk_evidence = HoldingRiskEvidence(
+                    reason=reason, position_limits=limits, observations=observations,
                 )
         state = {
             "mode": "framework", "contract_checksum": self._checksum,
@@ -237,12 +281,15 @@ class FrameworkStrategy:
             framework=FrameworkEvidence(
                 modules={name: ("python:" + module.program.source_sha256
                                 if isinstance(module, PythonModule) else (
-                                    module.kind if isinstance(module, BuiltinRiskModule) else module
+                                    module.kind if isinstance(
+                                        module, (BuiltinRiskModule, BuiltinPortfolioModule),
+                                    ) else module
                                 ))
                          for name in BUILTIN_FRAMEWORK_MODULES
                          for module in (getattr(self._modules, name),)},
                 universe=universe_evidence, alpha=alpha_evidence,
                 proposal=proposal, risk_adjustment=risk_evidence,
+                portfolio_retentions=retentions,
             ),
         )
 

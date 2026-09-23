@@ -303,15 +303,25 @@ test("Custom fees and slippage survive Run reuse and DailyTrack refresh", { tag:
   expect((await source.json()).input.costs).toEqual(costs);
 });
 
-test("Close stop loss survives Run reuse and DailyTrack refresh", { tag: "@isolated" }, async ({ page }, testInfo) => {
+for (const holdingPeriods of [false, true]) {
+test(`${holdingPeriods ? "Holding periods" : "Close stop loss"} survives Run reuse and DailyTrack refresh`, { tag: "@isolated" }, async ({ page }, testInfo) => {
   test.setTimeout(240_000);
   publishFinancialTrackHead("lagged");
+  if (holdingPeriods) await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/research?new");
   await fillCompleteDraft(page, { name: "Close cost stop loss", formula: "close" });
-  await page.getByLabel("Stop loss (%)", { exact: true }).fill("1");
+  if (holdingPeriods) {
+    await page.getByLabel("Minimum holding (trading sessions)", { exact: true }).fill("2");
+    await page.getByLabel("Maximum holding (trading sessions)", { exact: true }).fill("2");
+  } else await page.getByLabel("Stop loss (%)", { exact: true }).fill("1");
   await page.getByRole("button", { name: "Run settings", exact: true }).click();
-  await page.getByLabel("Price slippage (basis points)", { exact: true }).fill("1000");
+  await page.getByLabel("Price slippage (basis points)", { exact: true }).fill(holdingPeriods ? "0" : "1000");
+  if (holdingPeriods) {
+    await page.getByLabel("Holdings count").fill("1");
+    await page.getByLabel("Selection interval (trading days)").fill("1");
+  }
   await page.getByRole("button", { name: "Run settings", exact: true }).click();
+  if (holdingPeriods) await page.screenshot({ path: testInfo.outputPath("holding-periods-mobile-config.png"), fullPage: true });
   await page.getByRole("button", { name: "Run backtest", exact: true }).click();
   await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
   const runUrl = page.url();
@@ -319,7 +329,8 @@ test("Close stop loss survives Run reuse and DailyTrack refresh", { tag: "@isola
   await expect(page.locator(".research-run-facts").getByText(/Status\s+succeeded/)).toBeVisible({ timeout: 90_000 });
   const accepted = await page.request.get(`/api/research-runs/${runId}`);
   expect(accepted.ok()).toBe(true);
-  const policy = { kind: "builtin_risk/v1", stop_loss_threshold: 0.01 };
+  const policy = holdingPeriods ? { kind: "builtin_risk/v1", maximum_holding_sessions: 2 }
+    : { kind: "builtin_risk/v1", stop_loss_threshold: 0.01 };
   expect((await accepted.json()).input.modules.risk_management).toEqual(policy);
   await page.getByText("Close risk and holdings", { exact: true }).click();
   await expect(page.getByText(/Close Risk NAV \(CNY\):/)).toBeVisible();
@@ -328,11 +339,23 @@ test("Close stop loss survives Run reuse and DailyTrack refresh", { tag: "@isola
   });
   expect(events.ok()).toBe(true);
   const rows = (await events.json()).rows;
-  expect(rows.some((row: { risk_adjustment: { mode: string } | null }) => row.risk_adjustment?.mode === "stop_loss")).toBe(true);
+  if (holdingPeriods) {
+    expect(rows[1].portfolio_retentions[0].holding_age).toBe(1);
+    await page.getByText("Trading events", { exact: true }).click();
+    await page.getByLabel("事件类型").selectOption("strategy_framework");
+    await page.getByRole("button", { name: "查看原始记录：2026-08-05", exact: true }).click();
+    await expect(page.getByLabel("最短持仓保留依据", { exact: true })).toContainText("未满最短 2 日");
+  } else expect(rows.some((row: { risk_adjustment: { mode: string } | null }) => row.risk_adjustment?.mode === "holding_risk")).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("close-stop-loss-result.png"), fullPage: true });
   await page.getByRole("button", { name: "Create draft", exact: true }).click();
-  await expect(page.getByLabel("Stop loss (%)", { exact: true })).toHaveValue("1");
-  await page.getByLabel("Stop loss (%)", { exact: true }).fill("2");
+  if (holdingPeriods) {
+    await expect(page.getByLabel("Minimum holding (trading sessions)", { exact: true })).toHaveValue("2");
+    await expect(page.getByLabel("Maximum holding (trading sessions)", { exact: true })).toHaveValue("2");
+    await page.getByLabel("Minimum holding (trading sessions)", { exact: true }).fill("1");
+  } else {
+    await expect(page.getByLabel("Stop loss (%)", { exact: true })).toHaveValue("1");
+    await page.getByLabel("Stop loss (%)", { exact: true }).fill("2");
+  }
   await page.goto(runUrl);
   await page.getByRole("button", { name: "Start Tracking", exact: true }).click();
   await expect(page).toHaveURL(/\/daily-tracks\/track_[a-f0-9]+$/);
@@ -342,7 +365,10 @@ test("Close stop loss survives Run reuse and DailyTrack refresh", { tag: "@isola
     headers: sameOriginHeaders(), data: { section: "strategy_framework", limit: 50 },
   });
   expect(tracked.ok()).toBe(true);
-  expect((await tracked.json()).rows.slice(0, rows.length)).toEqual(rows);
+  const trackRows = (await tracked.json()).rows;
+  expect(trackRows.slice(0, rows.length)).toEqual(rows);
+  if (holdingPeriods) expect(trackRows.some((row: { risk_adjustment: { observations: { reason: string; holding_age: number }[] } | null }) =>
+    row.risk_adjustment?.observations.some(observation => observation.reason === "maximum_holding_period" && observation.holding_age === 2))).toBe(true);
   await page.getByRole("tab", { name: /^Holdings/ }).click();
   await page.getByText("Close risk and holdings", { exact: true }).click();
   const riskFacts = page.locator("details").filter({ has: page.getByText("Close risk and holdings", { exact: true }) });
@@ -353,6 +379,7 @@ test("Close stop loss survives Run reuse and DailyTrack refresh", { tag: "@isola
   expect(source.ok()).toBe(true);
   expect((await source.json()).input.modules.risk_management).toEqual(policy);
 });
+}
 
 test("ResearchRun return keeps the selected Type without a document reload", async ({ page }) => {
   const documentRequests = recordDocumentRequests(page);

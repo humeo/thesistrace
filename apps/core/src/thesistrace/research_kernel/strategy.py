@@ -498,12 +498,13 @@ def _execute_strategy(
             reason = pending_target["reason"]
             target_id = strategy_event_id("target", contract_checksum, signal_session)
             candidates = list(allocation["instrument_ids"]) if allocation is not None else []
+            retained = allocation.get("retained_instrument_ids", []) if allocation else []
             if ledger is not None:
                 execution_signal = {
                     "session": signal_session,
                     "selected_instrument_ids": candidates,
                 }
-            if allocation is not None and not candidates:
+            if allocation is not None and not candidates and not retained:
                 diagnostics.append(
                     {
                         "session": session,
@@ -515,20 +516,29 @@ def _execute_strategy(
                 money(pre_net_nav * Decimal(str(allocation["exposure"])))
                 if allocation is not None else Decimal(0)
             )
+            retained_values = {
+                item: money(positions[item].adjusted_units * marks[item])
+                for item in retained if item in positions
+            }
+            available_capital = max(Decimal(0), target_capital - sum(retained_values.values()))
             target_values = {}
             for instrument_id in candidates:
                 ratio = Fraction(allocation["relative_weights"][instrument_id])
                 target_values[instrument_id] = money(
-                    target_capital * ratio.numerator / ratio.denominator
+                    available_capital * ratio.numerator / ratio.denominator
                 )
-            actual_stock_value = sum_position_values(positions, marks)
+            actual_stock_value = (
+                sum_position_values(positions, marks) - sum(retained_values.values())
+            )
             if mode == "reduce":
-                ratio = (min(Decimal(1), target_capital / actual_stock_value)
+                ratio = (min(Decimal(1), available_capital / actual_stock_value)
                          if actual_stock_value else Decimal(0))
                 target_values = {
                     item: money(position.adjusted_units * marks[item] * ratio)
                     for item, position in positions.items()
+                    if item not in retained_values
                 }
+            target_values.update(retained_values)
             if mode in {"local", "increase"}:
                 for item, position in positions.items():
                     target_values.setdefault(item, money(position.adjusted_units * marks[item]))

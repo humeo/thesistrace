@@ -28,9 +28,11 @@ export function FrozenFrameworkModules({ modules }: { modules: FrameworkModules 
       const module = modules[stage];
       return typeof module === "string" ? <p key={stage}><strong>{frameworkStageLabels[stage]}</strong> <code>{module}</code></p>
         : module.kind === "builtin_risk/v1" ? <div key={stage}>
-          <p><strong>Risk Management · Stop loss</strong> {frozenStopLossPercentage(modules)}%</p>
-          <p>Evaluated at Close against actual acquisition cost; the next Open determines execution.</p>
-        </div> : <FrozenPythonProgram key={stage} title={`${frameworkStageLabels[stage]} · Frozen Python source and parameters`} program={module.program} />;
+          {module.stop_loss_threshold !== undefined && <p><strong>Risk Management · Stop loss</strong> {frozenStopLossPercentage(modules)}%</p>}
+          {module.maximum_holding_sessions !== undefined && <p><strong>Maximum holding (trading sessions)</strong> {module.maximum_holding_sessions}</p>}
+          <p>Evaluated at Close; the next Open determines execution.</p>
+        </div> : module.kind === "periodic_top_n/v1" ? <p key={stage}><strong>Minimum holding (trading sessions)</strong> {module.minimum_holding_sessions}</p>
+          : <FrozenPythonProgram key={stage} title={`${frameworkStageLabels[stage]} · Frozen Python source and parameters`} program={module.program} />;
     })}
   </div>;
 }

@@ -174,3 +174,57 @@ it("omits built-in stop loss when the risk module is Python or the strategy is D
   expect(JSON.stringify(researchSpec(pythonRisk))).not.toContain("stop_loss_threshold");
   expect(JSON.stringify(researchSpec(selectStrategyMode(current, "direct")))).not.toContain("stop_loss_threshold");
 });
+
+it("freezes, stores and reuses maximum holding sessions without enabling stop loss", () => {
+  const current = { ...draft(), maximumHoldingSessions: "3" };
+  expect(researchInputIssues(current)).toEqual([]);
+  const spec = researchSpec(current);
+  expect(spec).toMatchObject({ modules: { risk_management: {
+    kind: "builtin_risk/v1", maximum_holding_sessions: 3,
+  } } });
+  expect(JSON.stringify(spec)).not.toContain("stop_loss_threshold");
+  const saved = storage();
+  persistResearchDraft(saved, "researcher", "folder", current);
+  expect(loadResearchDraft(saved, "researcher", "folder").maximumHoldingSessions).toBe("3");
+  expect(useResearchAsDraft(saved, "researcher", "reuse", spec as FrozenResearchAuthorableInput, () => true)).toBe(true);
+  const reused = loadResearchDraft(saved, "researcher", "reuse");
+  expect(reused.maximumHoldingSessions).toBe("3");
+  expect(researchSpec(reused)).toEqual(spec);
+});
+
+it.each(["0", "-1", "1.5", "1e2", "Infinity", "9007199254740992"])("rejects invalid holding sessions %s", maximumHoldingSessions => {
+  expect(researchInputIssues({ ...draft(), maximumHoldingSessions })).toContainEqual({
+    field: "maximumHoldingSessions", message: "Enter a positive whole number of trading sessions, or leave blank to disable.",
+  });
+});
+
+it("freezes and reuses minimum holding eligibility separately from maximum holding risk", () => {
+  const current = { ...draft(), minimumHoldingSessions: "2", maximumHoldingSessions: "5" };
+  expect(researchInputIssues(current)).toEqual([]);
+  const spec = researchSpec(current);
+  expect(spec).toMatchObject({ modules: {
+    portfolio_construction: { kind: "periodic_top_n/v1", minimum_holding_sessions: 2 },
+    risk_management: { kind: "builtin_risk/v1", maximum_holding_sessions: 5 },
+  } });
+  const saved = storage();
+  expect(useResearchAsDraft(saved, "researcher", "reuse", spec as FrozenResearchAuthorableInput, () => true)).toBe(true);
+  const reused = loadResearchDraft(saved, "researcher", "reuse");
+  expect(reused.minimumHoldingSessions).toBe("2");
+  expect(researchSpec(reused)).toEqual(spec);
+});
+
+it.each(["0", "-1", "1.5", "Infinity"])("rejects invalid minimum holding sessions %s", minimumHoldingSessions => {
+  expect(researchInputIssues({ ...draft(), minimumHoldingSessions })).toContainEqual({
+    field: "minimumHoldingSessions", message: "Enter a positive whole number of trading sessions, or leave blank to disable.",
+  });
+});
+
+it("locates contradictory holding limits at maximum and omits minimum for Python Portfolio", () => {
+  const current = { ...draft(), minimumHoldingSessions: "3", maximumHoldingSessions: "2" };
+  expect(researchInputIssues(current)).toContainEqual({
+    field: "maximumHoldingSessions", message: "Maximum holding sessions must be at least minimum.",
+  });
+  const custom = selectFrameworkModule(current, "portfolio_construction", "python");
+  expect(JSON.stringify(researchSpec(custom))).not.toContain("minimum_holding_sessions");
+  expect(researchInputIssues(custom).some(issue => issue.field === "maximumHoldingSessions")).toBe(false);
+});

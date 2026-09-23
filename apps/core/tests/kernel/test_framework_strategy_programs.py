@@ -630,3 +630,27 @@ def test_checkpoint_rejects_corrupt_builtin_portfolio_state_in_a_mixed_framework
     corrupted["strategy_state"]["terminal"]["decision_state"]["selection_interval"] = None
     with pytest.raises(ValueError):
         restore_tracking_checkpoint(corrupted, research_data=bounded)
+
+
+def test_custom_risk_cap_can_exit_a_minimum_holding_reservation():
+    data, definition, matrix, _ = framework_inputs()
+    definition["strategy"]["selection_interval"] = 1
+    definition["strategy"]["modules"]["portfolio_construction"] = {
+        "kind": "periodic_top_n/v1", "minimum_holding_sessions": 3,
+    }
+    definition["strategy"]["modules"]["risk_management"] = python_module("""
+def decide(context, state, parameters):
+    output = None
+    if context['completed_sessions'] == 2:
+        held = context['account']['positions'][0]
+        assert held['holding_age'] == 1
+        assert context['framework']['proposal']['allocation']['retained_instrument_ids']
+        output = {'mode': 'limit_positions', 'reason': 'custom_risk_exit',
+                  'position_limits': {held['instrument_id']: 0}}
+    return {'output': output, 'state': {}}
+""")
+    result = transition_strategy(data, matrix, definition, origin_session=SESSIONS[0]).finalized
+    assert [(row["side"], row["session"]) for row in result["fills"]] == [
+        ("buy", SESSIONS[1]), ("sell", SESSIONS[2]), ("buy", SESSIONS[3]),
+    ]
+    assert result["positions"][0]["holding_age"] == 1
