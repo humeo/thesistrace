@@ -1,6 +1,8 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 
-import { STRATEGY_BENCHMARK_DISPLAY_NAME } from "../benchmark";
+import { catalogLabel } from "../i18n/catalog";
+import { i18n, useTranslation } from "../i18n";
+import { formatNumber } from "../i18n/format";
 
 import { OperatorPageNotFoundError } from "./operatorDirectoryClient";
 import { FinancialRefreshTelemetry } from "./FinancialRefreshTelemetry";
@@ -26,6 +28,7 @@ export function OperatorDatasetStatus({
   onAccessNotFound: () => void;
   reloadGeneration: number;
 }>) {
+  useTranslation("operator");
   const [data, setData] = useState<DatasetOperationalStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -219,6 +222,7 @@ export function OperatorDatasetStatusView({
   onReload: () => void;
   onAction: (action: DataRefreshStatusAction, trigger: HTMLButtonElement) => void;
 }>) {
+  const { t } = useTranslation("operator");
   return (
     <section
       aria-busy={loading || undefined}
@@ -227,19 +231,19 @@ export function OperatorDatasetStatusView({
     >
       <header className="operator-section-header operator-dataset-status-header">
         <div>
-          <h2 id="operator-dataset-status-heading">Current research Dataset</h2>
+          <h2 id="operator-dataset-status-heading">{t("data.status.heading")}</h2>
         </div>
-        <button onClick={onReload} type="button">Reload</button>
+        <button onClick={onReload} type="button">{t("data.status.reload")}</button>
       </header>
 
       {data === null ? (
         <div className={error ? "operator-load-state operator-load-error" : "operator-load-state"}>
           <p role={error ? "alert" : "status"}>
             {error
-              ? "Dataset status is temporarily unavailable."
-              : "Loading Dataset status…"}
+              ? t("data.status.unavailable")
+              : t("data.status.loading")}
           </p>
-          {error ? <button onClick={onReload} type="button">Try again</button> : null}
+          {error ? <button onClick={onReload} type="button">{t("data.status.tryAgain")}</button> : null}
         </div>
       ) : (
         <>
@@ -247,8 +251,7 @@ export function OperatorDatasetStatusView({
           <WorkerAvailability data={data} />
           {error ? (
             <p className="inline-status inline-status-error" role="alert">
-              Status refresh failed. Showing the last safe response; Reload or automatic
-              polling will try again while this page is visible.
+              {t("data.status.stale")}
             </p>
           ) : null}
           <LatestRefreshTable operations={data.latestByKind} />
@@ -268,43 +271,44 @@ export function OperatorDatasetStatusView({
 }
 
 function DatasetHeadSummary({ data }: Readonly<{ data: DatasetOperationalStatus }>) {
+  const { t } = useTranslation("operator");
   const head = data.head;
   return (
     <div className="operator-dataset-head">
       <dl>
         <div>
-          <dt>Data identity</dt>
-          <dd><code>{head.dataIdentity ?? "No Dataset Head"}</code></dd>
+          <dt>{t("data.status.identity")}</dt>
+          <dd><code>{head.dataIdentity ?? t("data.status.noHead")}</code></dd>
         </div>
         <div>
-          <dt>Data through</dt>
-          <dd>{head.dataThroughSession ?? "Unavailable"}</dd>
+          <dt>{t("data.status.dataThrough")}</dt>
+          <dd>{head.dataThroughSession ?? t("data.status.unavailableValue")}</dd>
         </div>
         <div>
-          <dt>Prepared</dt>
-          <dd>{datasetTimestamp(head.preparedAt) ?? "Not available"}</dd>
+          <dt>{t("data.status.prepared")}</dt>
+          <dd>{datasetTimestamp(head.preparedAt) ?? t("data.status.notAvailable")}</dd>
         </div>
       </dl>
-      <div aria-label="Current data coverage" role="group">
+      <div aria-label={t("data.status.coverage")} role="group">
         <DatasetFamilyStatus
-          name="Market"
-          status={<ReadinessStatus label="Market" ready={head.marketResearchReadiness} />}
+          name={t("data.status.market")}
+          status={<ReadinessStatus label={t("data.status.market")} ready={head.marketResearchReadiness} />}
         >
-          <DatasetFact label="Coverage start" value={head.marketCoverageStart} />
-          <DatasetFact label="Data through" value={head.dataThroughSession} />
-          <DatasetFact label="Last refresh" value={datasetTimestamp(head.marketLastRefreshAt)} />
+          <DatasetFact label={t("data.status.coverageStart")} value={head.marketCoverageStart} />
+          <DatasetFact label={t("data.status.dataThrough")} value={head.dataThroughSession} />
+          <DatasetFact label={t("data.status.lastRefresh")} value={datasetTimestamp(head.marketLastRefreshAt)} />
         </DatasetFamilyStatus>
         <DatasetFamilyStatus
-          name={`${STRATEGY_BENCHMARK_DISPLAY_NAME} Benchmark`}
-          note="Updates with Market Refresh"
-          status={<ReadinessStatus label="Benchmark" ready={head.benchmarkResearchReadiness} />}
+          name={t("data.status.benchmarkName", { name: catalogLabel("benchmarks", "csi300-price-index-open") })}
+          note={t("data.status.benchmarkNote")}
+          status={<ReadinessStatus label={t("data.status.benchmark")} ready={head.benchmarkResearchReadiness} />}
         >
-          <DatasetFact label="Coverage start" value={head.benchmarkCoverageStart} />
-          <DatasetFact label="Coverage end" value={head.benchmarkCoverageEnd} />
-          <DatasetFact label="Last publication" value={datasetTimestamp(head.benchmarkLastPublishedAt)} />
+          <DatasetFact label={t("data.status.coverageStart")} value={head.benchmarkCoverageStart} />
+          <DatasetFact label={t("data.status.coverageEnd")} value={head.benchmarkCoverageEnd} />
+          <DatasetFact label={t("data.status.lastPublication")} value={datasetTimestamp(head.benchmarkLastPublishedAt)} />
         </DatasetFamilyStatus>
         <DatasetFamilyStatus
-          name="Financial"
+          name={t("data.status.financial")}
           status={(
             <span className={`operator-state ${head.financialResearchReadiness === "ready"
               ? "operator-state-active"
@@ -314,24 +318,24 @@ function DatasetHeadSummary({ data }: Readonly<{ data: DatasetOperationalStatus 
             </span>
           )}
         >
-          <DatasetFact label="Coverage start" value={head.financialCoverageStart} />
-          <DatasetFact label="Disclosure list checked through" value={head.financialAttemptedThroughSession} />
-          <DatasetFact label="Disclosure list complete through" value={head.financialCompleteThroughSession} />
-          <DatasetFact label="Statement companies pending" value={head.financialPendingInstrumentCount} />
-          <DatasetFact label="Indicator companies pending" value={head.financialIndicatorPendingInstrumentCount} />
-          <DatasetFact label="Indicators checked through" value={head.financialIndicatorCheckedThroughSession} />
-          <DatasetFact label="Indicators complete through" value={head.financialIndicatorCompleteThroughSession} />
-          <DatasetFact label="Disclosure list gaps" value={head.financialDiscoveryGapCount} />
-          <DatasetFact label="Statements earliest unresolved" value={head.financialEarliestUnresolvedDate} />
-          <DatasetFact label="Last refresh" value={datasetTimestamp(head.financialLastRefreshAt)} />
+          <DatasetFact label={t("data.status.coverageStart")} value={head.financialCoverageStart} />
+          <DatasetFact label={t("data.status.disclosureChecked")} value={head.financialAttemptedThroughSession} />
+          <DatasetFact label={t("data.status.disclosureComplete")} value={head.financialCompleteThroughSession} />
+          <DatasetFact label={t("data.status.statementPending")} value={head.financialPendingInstrumentCount} />
+          <DatasetFact label={t("data.status.indicatorPending")} value={head.financialIndicatorPendingInstrumentCount} />
+          <DatasetFact label={t("data.status.indicatorChecked")} value={head.financialIndicatorCheckedThroughSession} />
+          <DatasetFact label={t("data.status.indicatorComplete")} value={head.financialIndicatorCompleteThroughSession} />
+          <DatasetFact label={t("data.status.disclosureGaps")} value={head.financialDiscoveryGapCount} />
+          <DatasetFact label={t("data.status.earliestUnresolved")} value={head.financialEarliestUnresolvedDate} />
+          <DatasetFact label={t("data.status.lastRefresh")} value={datasetTimestamp(head.financialLastRefreshAt)} />
         </DatasetFamilyStatus>
         <DatasetFamilyStatus
-          name="Industry"
-          status={<ReadinessStatus label="Industry" ready={head.industryResearchReadiness} />}
+          name={t("data.status.industry")}
+          status={<ReadinessStatus label={t("data.status.industry")} ready={head.industryResearchReadiness} />}
         >
-          <DatasetFact label="Coverage start" value={head.industryCoverageStart} />
-          <DatasetFact label="Observed through" value={head.industryObservationThroughSession} />
-          <DatasetFact label="Last refresh" value={datasetTimestamp(head.industryLastRefreshAt)} />
+          <DatasetFact label={t("data.status.coverageStart")} value={head.industryCoverageStart} />
+          <DatasetFact label={t("data.status.observedThrough")} value={head.industryObservationThroughSession} />
+          <DatasetFact label={t("data.status.lastRefresh")} value={datasetTimestamp(head.industryLastRefreshAt)} />
         </DatasetFamilyStatus>
       </div>
     </div>
@@ -344,8 +348,9 @@ function DatasetFamilyStatus({ name, status, note, children }: Readonly<{
   note?: string;
   children: ReactNode;
 }>) {
+  const { t } = useTranslation("operator");
   return (
-    <section aria-label={`${name} data status`} className="operator-data-family">
+    <section aria-label={t("data.status.familyLabel", { name })} className="operator-data-family">
       <header>
         <h3>{name}</h3>
         {status}
@@ -357,7 +362,8 @@ function DatasetFamilyStatus({ name, status, note, children }: Readonly<{
 }
 
 function DatasetFact({ label, value }: Readonly<{ label: string; value: ReactNode }>) {
-  return <div><dt>{label}</dt><dd>{value ?? <span className="operator-muted">Not available</span>}</dd></div>;
+  const { t } = useTranslation("operator");
+  return <div><dt>{label}</dt><dd>{value == null ? <span className="operator-muted">{t("data.status.notAvailable")}</span> : typeof value === "number" ? formatNumber(value) : value}</dd></div>;
 }
 
 function datasetTimestamp(value: string | null): ReactNode {
@@ -369,6 +375,7 @@ function datasetTimestamp(value: string | null): ReactNode {
 }
 
 function WorkerAvailability({ data }: Readonly<{ data: DatasetOperationalStatus }>) {
+  const { t } = useTranslation("operator");
   const worker = data.worker;
   const visibleOperations = [...data.latestByKind, ...data.operations];
   const accepted = visibleOperations.some((operation) => operation.status === "accepted");
@@ -379,26 +386,27 @@ function WorkerAvailability({ data }: Readonly<{ data: DatasetOperationalStatus 
       role={worker.available ? "status" : "alert"}
     >
       <strong>
-        Data Operator Worker {worker.available ? "available" : "unavailable"}
+        {worker.available ? t("data.status.workerAvailable") : t("data.status.workerUnavailable")}
       </strong>
       {worker.available ? null : (
         <span>
           {accepted
-            ? "Accepted work is durably queued but cannot start until the Worker recovers."
+            ? t("data.status.workerQueued")
             : running
-              ? "Running work will be recovered from its durable claim when the Worker recovers."
-              : "New work can be accepted durably but cannot start until the Worker recovers."}
+              ? t("data.status.workerRunning")
+              : t("data.status.workerNew")}
         </span>
       )}
-      <small>Last Worker heartbeat: {timestamp(worker.lastHeartbeatAt)}</small>
+      <small>{t("data.status.lastHeartbeatLabel")} {timestamp(worker.lastHeartbeatAt)}</small>
     </div>
   );
 }
 
 function ReadinessStatus({ label, ready }: Readonly<{ label: string; ready: boolean }>) {
+  const { t } = useTranslation("operator");
   return (
     <span className={`operator-state ${ready ? "operator-state-active" : ""}`}>
-      {label} {ready ? "ready" : "not ready"}
+      {t(ready ? "data.status.ready" : "data.status.notReady", { name: label })}
     </span>
   );
 }
@@ -406,32 +414,33 @@ function ReadinessStatus({ label, ready }: Readonly<{ label: string; ready: bool
 function LatestRefreshTable({
   operations,
 }: Readonly<{ operations: readonly DataRefreshOperationalStatus[] }>) {
+  const { t } = useTranslation("operator");
   return (
     <section aria-labelledby="operator-latest-refreshes-heading" className="operator-dataset-subsection">
       <header>
-        <h3 id="operator-latest-refreshes-heading">Latest by Refresh kind</h3>
+        <h3 id="operator-latest-refreshes-heading">{t("data.status.latestHeading")}</h3>
       </header>
       <div className="operator-table-scroll">
         <table
-          aria-label="Latest Data Refresh operations"
+          aria-label={t("data.status.latestTable")}
           className="operator-table operator-latest-refresh-table"
         >
-          <thead><tr><th>Kind</th><th>State</th><th>Target</th><th>Updated</th></tr></thead>
+          <thead><tr><th>{t("data.status.kind")}</th><th>{t("data.status.state")}</th><th>{t("data.status.target")}</th><th>{t("data.status.updated")}</th></tr></thead>
           <tbody>
             {refreshKinds.map((kind) => {
               const operation = operations.find((item) => item.kind === kind);
               return (
                 <tr key={kind}>
-                  <th data-label="Kind" scope="row">{kindText(kind)}</th>
-                  <td data-label="State">
+                  <th data-label={t("data.status.kind")} scope="row">{kindText(kind)}</th>
+                  <td data-label={t("data.status.state")}>
                     {operation === undefined
-                      ? <span className="operator-muted">No operation</span>
+                      ? <span className="operator-muted">{t("data.status.noOperation")}</span>
                       : <OperationState operation={operation} />}
                   </td>
-                  <td data-label="Target">
+                  <td data-label={t("data.status.target")}>
                     {operation === undefined ? "—" : operationTarget(operation)}
                   </td>
-                  <td data-label="Updated">
+                  <td data-label={t("data.status.updated")}>
                     {operation === undefined ? "—" : timestamp(operation.updatedAt)}
                   </td>
                 </tr>
@@ -461,54 +470,55 @@ function OperationHistoryTable({
   onAction: (action: DataRefreshStatusAction, trigger: HTMLButtonElement) => void;
   operations: readonly DataRefreshOperationalStatus[];
 }>) {
+  const { t } = useTranslation("operator");
   return (
     <section aria-labelledby="operator-operation-history-heading" className="operator-dataset-subsection">
       <header>
-        <h3 id="operator-operation-history-heading">Operation history</h3>
+        <h3 id="operator-operation-history-heading">{t("data.status.historyHeading")}</h3>
       </header>
       {operations.length === 0 ? (
         <p className="operator-empty">
           {cursorDepth === 0
-            ? "No Data Refresh operations have been accepted."
-            : "This older page no longer contains retained receipts. Return to a newer page."}
+            ? t("data.status.noHistory")
+            : t("data.status.noOlder")}
         </p>
       ) : (
         <div className="operator-table-scroll">
           <table
-            aria-label="Data Refresh operation history"
+            aria-label={t("data.status.historyTable")}
             className="operator-table operator-data-operation-table"
           >
             <thead>
               <tr>
-                <th>Operation</th><th>Kind</th><th>State</th><th>Target</th>
-                <th>Attempt / phase</th><th>Heartbeat</th><th>Created</th><th>Actions</th>
+                <th>{t("data.status.operation")}</th><th>{t("data.status.kind")}</th><th>{t("data.status.state")}</th><th>{t("data.status.target")}</th>
+                <th>{t("data.status.attemptPhase")}</th><th>{t("data.status.heartbeat")}</th><th>{t("data.status.created")}</th><th>{t("data.status.actions")}</th>
               </tr>
             </thead>
             <tbody>
               {operations.map((operation) => (
                 <tr key={operation.idempotencyKey}>
-                  <th data-label="Operation" scope="row"><code>{operation.idempotencyKey}</code></th>
-                  <td data-label="Kind">{kindText(operation.kind)}</td>
-                  <td data-label="State"><OperationState operation={operation} /></td>
-                  <td data-label="Target"><code>{operationTarget(operation)}</code></td>
-                  <td data-label="Attempt / phase">
+                  <th data-label={t("data.status.operation")} scope="row"><code>{operation.idempotencyKey}</code></th>
+                  <td data-label={t("data.status.kind")}>{kindText(operation.kind)}</td>
+                  <td data-label={t("data.status.state")}><OperationState operation={operation} /></td>
+                  <td data-label={t("data.status.target")}><code>{operationTarget(operation)}</code></td>
+                  <td data-label={t("data.status.attemptPhase")}>
                     <span className="operator-operation-phase">
-                      <strong>{operation.attemptCount}</strong>
-                      <small>{operation.phase === null ? "Not started" : phaseText(operation.phase)}</small>
+                      <strong>{formatNumber(operation.attemptCount)}</strong>
+                      <small>{operation.phase === null ? t("data.status.notStarted") : phaseText(operation.phase)}</small>
                     </span>
                   </td>
-                  <td data-label="Heartbeat">{timestamp(operation.lastHeartbeatAt)}</td>
-                  <td data-label="Created">{timestamp(operation.createdAt)}</td>
-                  <td data-label="Actions">
+                  <td data-label={t("data.status.heartbeat")}>{timestamp(operation.lastHeartbeatAt)}</td>
+                  <td data-label={t("data.status.created")}>{timestamp(operation.createdAt)}</td>
+                  <td data-label={t("data.status.actions")}>
                     <div className="operator-row-actions">
                       <OperationActionButton onAction={onAction} operation={operation} />
                       <button
-                        aria-label={`View details for ${operation.idempotencyKey}`}
+                        aria-label={t("data.status.detailsAria", { key: operation.idempotencyKey })}
                         className="operator-row-action"
                         onClick={(event) => onDetails(operation, event.currentTarget)}
                         type="button"
                       >
-                        Details
+                        {t("data.status.details")}
                       </button>
                     </div>
                   </td>
@@ -518,10 +528,10 @@ function OperationHistoryTable({
           </table>
         </div>
       )}
-      <nav aria-label="Data Refresh operation pages" className="operator-pagination">
-        <button disabled={cursorDepth === 0} onClick={onPrevious} type="button">Newer</button>
-        <span>Page {cursorDepth + 1}</span>
-        <button disabled={nextCursor === null} onClick={onNext} type="button">Older</button>
+      <nav aria-label={t("data.status.pages")} className="operator-pagination">
+        <button disabled={cursorDepth === 0} onClick={onPrevious} type="button">{t("data.status.newer")}</button>
+        <span>{t("data.status.page", { page: formatNumber(cursorDepth + 1) })}</span>
+        <button disabled={nextCursor === null} onClick={onNext} type="button">{t("data.status.older")}</button>
       </nav>
     </section>
   );
@@ -542,6 +552,7 @@ export function OperatorDataStatusDrawer({
   onAction: (action: DataRefreshStatusAction, trigger: HTMLButtonElement) => void;
   operation: DataRefreshOperationalStatus;
 }>) {
+  const { t } = useTranslation("operator");
   const dialog = useRef<HTMLDialogElement | null>(null);
   useEffect(() => {
     const element = dialog.current;
@@ -566,36 +577,36 @@ export function OperatorDataStatusDrawer({
         <header>
           <div>
             <p className="eyebrow">{kindText(operation.kind)}</p>
-            <h2 id="operator-data-operation-drawer-title">Operation details</h2>
+            <h2 id="operator-data-operation-drawer-title">{t("data.status.detailsTitle")}</h2>
           </div>
-          <button aria-label="Close operation details" onClick={onDismiss} type="button">Close</button>
+          <button aria-label={t("data.status.closeDetails")} onClick={onDismiss} type="button">{t("data.status.close")}</button>
         </header>
         <FinancialRefreshTelemetry progress={operation.financialProgress} />
         <dl className="operator-operation-details">
-          <Detail label="State" value={operationStateText(operation)} />
-          <Detail label="Target" code value={operationTarget(operation)} />
-          <Detail label="Idempotency key" code value={operation.idempotencyKey} />
-          <Detail label="Attempt" value={String(operation.attemptCount)} />
-          <Detail label="Phase" value={operation.phase === null ? "Not started" : phaseText(operation.phase)} />
-          <Detail label="Last heartbeat" value={operation.lastHeartbeatAt ?? "Not started"} />
-          <Detail label="Created" value={operation.createdAt} />
-          <Detail label="Started" value={operation.startedAt ?? "Not started"} />
-          <Detail label="Finished" value={operation.finishedAt ?? "Not finished"} />
-          <Detail label="Queue wait" value={durationText(operation.createdAt, operation.startedAt ?? operation.finishedAt)} />
-          <Detail label="Execution" value={operation.startedAt === null ? "Not started" : durationText(operation.startedAt, operation.finishedAt)} />
-          <Detail label="Updated" value={operation.updatedAt} />
-          <Detail label="Data through" value={operation.dataThroughSession ?? "Not published"} />
-          <Detail label="Last refresh" value={operation.lastRefreshAt ?? "Not completed"} />
-          <Detail label="Financial complete through" value={operation.financialCompleteThroughSession ?? "Not applicable"} />
-          <Detail label="Changed companies" value={countText(operation.matchedTriggerCount)} />
-          <Detail label="Checked without structured change" value={countText(operation.checkedNoStructuredChangeCount)} />
-          <Detail label="Accepted instruments" value={countText(operation.acceptedInstrumentCount)} />
-          <Detail label="Failed instruments" value={countText(operation.failedInstrumentCount)} />
-          <Detail label="Pending instruments" value={countText(operation.pendingInstrumentCount)} />
-          <Detail label="Disclosure list gaps" value={countText(operation.discoveryGapCount)} />
-          <Detail label="Outcome" value={operation.outcome === null ? "None" : outcomeText(operation.outcome)} />
-          <Detail label="Failure code" code value={operation.failureCode ?? "None"} />
-          <Detail label="Previous attempt failure" code value={operation.lastFailureCode ?? "None"} />
+          <Detail label={t("data.status.state")} value={operationStateText(operation)} />
+          <Detail label={t("data.status.target")} code value={operationTarget(operation)} />
+          <Detail label={t("data.common.idempotencyKey")} code value={operation.idempotencyKey} />
+          <Detail label={t("data.status.attempt")} value={formatNumber(operation.attemptCount)} />
+          <Detail label={t("data.status.phase")} value={operation.phase === null ? t("data.status.notStarted") : phaseText(operation.phase)} />
+          <Detail label={t("data.status.lastHeartbeat")} value={operation.lastHeartbeatAt ?? t("data.status.notStarted")} />
+          <Detail label={t("data.status.created")} value={operation.createdAt} />
+          <Detail label={t("data.status.started")} value={operation.startedAt ?? t("data.status.notStarted")} />
+          <Detail label={t("data.status.finished")} value={operation.finishedAt ?? t("data.status.notFinished")} />
+          <Detail label={t("data.status.queueWait")} value={durationText(operation.createdAt, operation.startedAt ?? operation.finishedAt)} />
+          <Detail label={t("data.status.execution")} value={operation.startedAt === null ? t("data.status.notStarted") : durationText(operation.startedAt, operation.finishedAt)} />
+          <Detail label={t("data.status.updated")} value={operation.updatedAt} />
+          <Detail label={t("data.status.dataThrough")} value={operation.dataThroughSession ?? t("data.status.notPublished")} />
+          <Detail label={t("data.status.lastRefresh")} value={operation.lastRefreshAt ?? t("data.status.notCompleted")} />
+          <Detail label={t("data.status.financialComplete")} value={operation.financialCompleteThroughSession ?? t("data.status.notApplicable")} />
+          <Detail label={t("data.status.changedCompanies")} value={countText(operation.matchedTriggerCount)} />
+          <Detail label={t("data.status.checkedNoChange")} value={countText(operation.checkedNoStructuredChangeCount)} />
+          <Detail label={t("data.status.acceptedInstruments")} value={countText(operation.acceptedInstrumentCount)} />
+          <Detail label={t("data.status.failedInstruments")} value={countText(operation.failedInstrumentCount)} />
+          <Detail label={t("data.status.pendingInstruments")} value={countText(operation.pendingInstrumentCount)} />
+          <Detail label={t("data.status.disclosureGaps")} value={countText(operation.discoveryGapCount)} />
+          <Detail label={t("data.status.outcome")} value={operation.outcome === null ? t("data.status.none") : outcomeText(operation.outcome)} />
+          <Detail label={t("data.status.failureCode")} code value={operation.failureCode ?? t("data.status.none")} />
+          <Detail label={t("data.status.previousFailure")} code value={operation.lastFailureCode ?? t("data.status.none")} />
         </dl>
         <footer className="operator-operation-drawer-actions">
           <OperationActionButton onAction={onAction} operation={operation} />
@@ -612,16 +623,17 @@ function OperationActionButton({
   onAction: (action: DataRefreshStatusAction, trigger: HTMLButtonElement) => void;
   operation: DataRefreshOperationalStatus;
 }>) {
+  const { t } = useTranslation("operator");
   const action = operation.status === "accepted"
     ? "cancel"
     : operation.status === "failed" || operation.status === "cancelled"
       ? "retry"
       : null;
   if (action === null) return null;
-  const label = action === "cancel" ? "Cancel" : "Retry";
+  const label = t(action === "cancel" ? "data.status.cancel" : "data.status.retry");
   return (
     <button
-      aria-label={`${label} operation ${operation.idempotencyKey}`}
+      aria-label={t("data.status.operationAria", { action: label, key: operation.idempotencyKey })}
       className={`operator-row-action${action === "cancel" ? " operator-row-action-danger" : ""}`}
       onClick={(event) => onAction({ action, operation }, event.currentTarget)}
       type="button"
@@ -646,43 +658,43 @@ export function datasetStatusNeedsPolling(data: DatasetOperationalStatus): boole
 }
 
 function operationStateText(operation: DataRefreshOperationalStatus): string {
-  if (operation.status === "accepted") return "Accepted · queued";
+  if (operation.status === "accepted") return i18n.t("operator:data.status.acceptedQueued");
   if (operation.status === "running") {
-    return `Running · ${operation.phase === null ? "Starting" : phaseText(operation.phase)}`;
+    return i18n.t("operator:data.status.runningPhase", { phase: operation.phase === null ? i18n.t("operator:data.status.starting") : phaseText(operation.phase) });
   }
-  if (operation.status === "cancelled") return "Cancelled";
+  if (operation.status === "cancelled") return i18n.t("operator:data.status.cancelled");
   if (operation.status === "failed") {
-    if (operation.outcome === "business_rejected") return "Failed · business rejected";
-    if (operation.outcome === "infrastructure_failed") return "Failed · infrastructure";
-    return "Failed";
+    if (operation.outcome === "business_rejected") return i18n.t("operator:data.status.failedBusiness");
+    if (operation.outcome === "infrastructure_failed") return i18n.t("operator:data.status.failedInfrastructure");
+    return i18n.t("operator:data.status.failed");
   }
-  if (operation.outcome === "published") return "Published";
-  if (operation.outcome === "no_change") return "No change";
-  return "Published · incomplete coverage";
+  if (operation.outcome === "published") return i18n.t("operator:data.status.published");
+  if (operation.outcome === "no_change") return i18n.t("operator:data.status.noChange");
+  return i18n.t("operator:data.status.publishedDegraded");
 }
 
 function kindText(kind: DataRefreshKind): string {
-  if (kind === "market") return "Market Refresh";
-  if (kind === "financial") return "Financial Refresh";
-  return "Industry Refresh";
+  if (kind === "market") return i18n.t("operator:data.market.title");
+  if (kind === "financial") return i18n.t("operator:data.financial.title");
+  return i18n.t("operator:data.industry.title");
 }
 
 function operationTarget(operation: DataRefreshOperationalStatus): string {
-  return operation.asOf ?? operation.observationThroughSession ?? "Unavailable";
+  return operation.asOf ?? operation.observationThroughSession ?? i18n.t("operator:data.status.unavailableValue");
 }
 
 function phaseText(phase: string): string {
   const labels: Readonly<Record<string, string>> = {
-    claim: "Claim",
-    current_head: "Current Head",
-    market: "Market collection",
-    validation: "Validation",
-    benchmark: "Benchmark",
-    materialization: "Materialization",
-    candidate_validation: "Candidate validation",
-    publication: "Publication",
-    financial: "Financial pipeline",
-    industry: "Industry pipeline",
+    claim: i18n.t("operator:data.status.phases.claim"),
+    current_head: i18n.t("operator:data.status.phases.current_head"),
+    market: i18n.t("operator:data.status.phases.market"),
+    validation: i18n.t("operator:data.status.phases.validation"),
+    benchmark: i18n.t("operator:data.status.phases.benchmark"),
+    materialization: i18n.t("operator:data.status.phases.materialization"),
+    candidate_validation: i18n.t("operator:data.status.phases.candidate_validation"),
+    publication: i18n.t("operator:data.status.phases.publication"),
+    financial: i18n.t("operator:data.status.phases.financial"),
+    industry: i18n.t("operator:data.status.phases.industry"),
   };
   return labels[phase] ?? phase;
 }
@@ -690,31 +702,31 @@ function phaseText(phase: string): string {
 function financialReadinessText(
   readiness: DatasetOperationalStatus["head"]["financialResearchReadiness"],
 ): string {
-  if (readiness === "ready") return "Financial ready";
-  if (readiness === "ready_with_pending") return "Financial ready with pending";
-  if (readiness === "ready_with_gaps") return "Financial ready with gaps";
-  return "Financial not ready";
+  if (readiness === "ready") return i18n.t("operator:data.status.financialReady");
+  if (readiness === "ready_with_pending") return i18n.t("operator:data.status.financialPending");
+  if (readiness === "ready_with_gaps") return i18n.t("operator:data.status.financialGaps");
+  return i18n.t("operator:data.status.financialNotReady");
 }
 
 function outcomeText(outcome: NonNullable<DataRefreshOperationalStatus["outcome"]>): string {
-  if (outcome === "published") return "Published";
-  if (outcome === "no_change") return "No change";
-  if (outcome === "degraded") return "Published · incomplete coverage";
-  if (outcome === "business_rejected") return "Business rejected";
-  return "Infrastructure failed";
+  if (outcome === "published") return i18n.t("operator:data.status.published");
+  if (outcome === "no_change") return i18n.t("operator:data.status.noChange");
+  if (outcome === "degraded") return i18n.t("operator:data.status.publishedDegraded");
+  if (outcome === "business_rejected") return i18n.t("operator:data.status.businessRejected");
+  return i18n.t("operator:data.status.infrastructureFailed");
 }
 
 function timestamp(value: string | null): React.ReactNode {
   return value === null
-    ? <span className="operator-muted">Not available</span>
+    ? <span className="operator-muted">{i18n.t("operator:data.status.notAvailable")}</span>
     : <time dateTime={value}>{value}</time>;
 }
 
 function countText(value: number | null): string {
-  return value === null ? "Not applicable" : String(value);
+  return value === null ? i18n.t("operator:data.status.notApplicable") : formatNumber(value);
 }
 
 function durationText(start: string, end: string | null): string {
   const seconds = Math.max(0, Math.floor(((end === null ? Date.now() : Date.parse(end)) - Date.parse(start)) / 1000));
-  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  return seconds < 60 ? i18n.t("operator:data.telemetry.durationSeconds", { seconds: formatNumber(seconds) }) : i18n.t("operator:data.telemetry.durationMinutes", { minutes: formatNumber(Math.floor(seconds / 60)), seconds: formatNumber(seconds % 60) });
 }

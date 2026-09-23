@@ -1,4 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import type { ParseKeys } from "i18next";
+import { i18n, useTranslation } from "../i18n";
+import { formatNumber } from "../i18n/format";
 
 import { OperatorPageNotFoundError } from "./operatorDirectoryClient";
 import { containDialogKeyboardFocus } from "./operatorDialog";
@@ -31,13 +34,14 @@ export function OperatorIndustryRefreshPanel({
   onAccessNotFound: () => void;
   onOperationAccepted?: () => void;
 }>) {
+  const { t } = useTranslation("operator");
   const [target, setTarget] = useState("");
   const [confirmation, setConfirmation] = useState<TrackedRequest | null>(null);
   const [pending, setPending] = useState<TrackedRequest | null>(null);
   const [operation, setOperation] = useState<TrackedOperation | null>(null);
   const [pollError, setPollError] = useState(false);
-  const [targetError, setTargetError] = useState<string | null>(null);
-  const [submissionError, setSubmissionError] = useState<string | null>(null);
+  const [targetError, setTargetError] = useState<ParseKeys<"operator"> | null>(null);
+  const [submissionError, setSubmissionError] = useState<ParseKeys<"operator"> | null>(null);
   const targetInput = useRef<HTMLInputElement | null>(null);
   const trigger = useRef<HTMLButtonElement | null>(null);
   const submissionGeneration = useRef(0);
@@ -154,7 +158,7 @@ export function OperatorIndustryRefreshPanel({
     const idempotencyKey = suggestIndustryRefreshKey(new Date());
     const nextTargetError = isIsoResearchSession(target)
       ? null
-      : "Choose a valid Research Session date.";
+      : "data.financial.targetInvalid";
     setTargetError(nextTargetError);
     if (nextTargetError !== null) {
       window.requestAnimationFrame(() => targetInput.current?.focus());
@@ -180,10 +184,10 @@ export function OperatorIndustryRefreshPanel({
     setPending(null);
     setSubmissionError(null);
     if (code === "conflict" || !isMarketRefreshIdempotencyKey(tracked.request.idempotencyKey)) {
-      setSubmissionError("Unable to create this refresh. Review the request again to start a new submission.");
+      setSubmissionError("data.common.rejectedRequest");
       focusAfterCommit.current = trigger.current;
     } else {
-      setTargetError("Choose a valid Research Session date.");
+      setTargetError("data.financial.targetInvalid");
       focusAfterCommit.current = targetInput.current;
     }
   }
@@ -214,7 +218,7 @@ export function OperatorIndustryRefreshPanel({
       <section aria-labelledby="operator-industry-refresh-heading" className="operator-section">
         <header className="operator-section-header">
           <div>
-            <h2 id="operator-industry-refresh-heading">Industry Refresh</h2>
+            <h2 id="operator-industry-refresh-heading">{t("data.industry.title")}</h2>
           </div>
         </header>
         <form
@@ -226,7 +230,7 @@ export function OperatorIndustryRefreshPanel({
         >
           <div className="operator-refresh-field">
             <label htmlFor="operator-industry-target">
-              Observation-through Research Session
+              {t("data.financial.targetLabel")}
             </label>
             <input
               aria-describedby={targetError === null
@@ -246,17 +250,17 @@ export function OperatorIndustryRefreshPanel({
               value={target}
             />
             <small id="operator-industry-target-help">
-              Select the observation-through Research Session.
+              {t("data.financial.targetHelp")}
             </small>
             {targetError === null ? null : (
               <small className="operator-field-error" id="operator-industry-target-error" role="alert">
-                {targetError}
+                {t(targetError)}
               </small>
             )}
           </div>
           {submissionError === null ? null : (
             <p className="inline-status inline-status-error operator-refresh-form-error" role="alert">
-              {submissionError}
+              {t(submissionError)}
             </p>
           )}
           <footer>
@@ -266,7 +270,7 @@ export function OperatorIndustryRefreshPanel({
               ref={trigger}
               type="submit"
             >
-              Review Refresh
+              {t("data.common.reviewRefresh")}
             </button>
           </footer>
         </form>
@@ -289,7 +293,7 @@ export function OperatorIndustryRefreshPanel({
             setPending(null);
             setPollError(false);
             setSubmissionError(
-              "Automatic receipt checks stopped. Retry with the same idempotency key to reconcile any accepted work.",
+              "data.common.stopped",
             );
             focusAfterCommit.current = trigger.current;
           }}
@@ -344,6 +348,7 @@ export function IndustryRefreshReconciliation({
   pollError: boolean;
   request: IndustryRefreshRequest;
 }>) {
+  const { t } = useTranslation("operator");
   return (
     <section
       aria-labelledby="operator-industry-refresh-reconciliation"
@@ -351,28 +356,27 @@ export function IndustryRefreshReconciliation({
     >
       <header aria-atomic="true" aria-live="polite" role="status">
         <div>
-          <p className="eyebrow">Latest Industry operation</p>
-          <h2 id="operator-industry-refresh-reconciliation">Confirming submission</h2>
+          <p className="eyebrow">{t("data.industry.latest")}</p>
+          <h2 id="operator-industry-refresh-reconciliation">{t("data.common.confirming")}</h2>
         </div>
-        <span className="operator-state">Checking</span>
+        <span className="operator-state">{t("data.common.checking")}</span>
       </header>
       <p>
-        Core submission had already started, but its response could not be confirmed.
-        Checking the exact idempotency key until its durable receipt is available.
+        {t("data.common.pendingDescription")}
       </p>
       <dl>
-        <div><dt>Idempotency key</dt><dd><code>{request.idempotencyKey}</code></dd></div>
-        <div><dt>Observation through</dt><dd>{request.observationThroughSession}</dd></div>
+        <div><dt>{t("data.common.idempotencyKey")}</dt><dd><code>{request.idempotencyKey}</code></dd></div>
+        <div><dt>{t("data.common.observationThrough")}</dt><dd>{request.observationThroughSession}</dd></div>
       </dl>
       {pollError ? (
         <p className="inline-status inline-status-error" role="alert">
-          Receipt unavailable; retrying while visible.
+          {t("data.industry.receiptUnavailable")}
         </p>
       ) : null}
       <footer className="operator-confirmation-actions">
-        <button onClick={onStop} type="button">Stop checking</button>
+        <button onClick={onStop} type="button">{t("data.common.stopChecking")}</button>
         <button className="button-primary" onClick={onRetry} type="button">
-          Retry exact request
+          {t("data.common.retryExact")}
         </button>
       </footer>
     </section>
@@ -383,24 +387,25 @@ export function IndustryRefreshReceipt({
   operation,
   pollError,
 }: Readonly<{ operation: IndustryRefreshOperation; pollError: boolean }>) {
+  const { t } = useTranslation("operator");
   const presentation = industryPresentation(operation);
   return (
     <section className={`operator-refresh-receipt operator-refresh-${presentation.tone}`}>
       <header aria-atomic="true" aria-live="polite" role="status">
-        <div><p className="eyebrow">Latest Industry operation</p><h2>{presentation.title}</h2></div>
+        <div><p className="eyebrow">{t("data.industry.latest")}</p><h2>{presentation.title}</h2></div>
         <span className="operator-state">{presentation.label}</span>
       </header>
       <p>{presentation.description}</p>
       <dl>
-        <div><dt>Idempotency key</dt><dd><code>{operation.idempotencyKey}</code></dd></div>
-        <div><dt>Observation through</dt><dd>{operation.observationThroughSession}</dd></div>
-        <div><dt>Data through</dt><dd>{operation.dataThroughSession ?? "Not completed"}</dd></div>
-        <div><dt>Attempts</dt><dd>{operation.attemptCount}</dd></div>
-        <div><dt>Failure</dt><dd><code>{operation.failureCode ?? operation.lastFailureCode ?? "None"}</code></dd></div>
+        <div><dt>{t("data.common.idempotencyKey")}</dt><dd><code>{operation.idempotencyKey}</code></dd></div>
+        <div><dt>{t("data.common.observationThrough")}</dt><dd>{operation.observationThroughSession}</dd></div>
+        <div><dt>{t("data.common.dataThrough")}</dt><dd>{operation.dataThroughSession ?? t("data.common.notCompleted")}</dd></div>
+        <div><dt>{t("data.common.attempts")}</dt><dd>{formatNumber(operation.attemptCount)}</dd></div>
+        <div><dt>{t("data.common.failure")}</dt><dd><code>{operation.failureCode ?? operation.lastFailureCode ?? t("data.common.none")}</code></dd></div>
       </dl>
       {pollError ? (
         <p className="inline-status inline-status-error" role="alert">
-          Status is temporarily unavailable. Showing the last known state and retrying while visible.
+          {t("data.common.statusUnavailable")}
         </p>
       ) : null}
     </section>
@@ -422,12 +427,13 @@ function IndustryRefreshDialog({
   onSucceeded: (operation: IndustryRefreshOperation) => void;
   request: IndustryRefreshRequest;
 }>) {
+  const { t } = useTranslation("operator");
   const dialog = useRef<HTMLDialogElement | null>(null);
   const dismissed = useRef(false);
   const mounted = useRef(true);
   const phase = useRef<"idle" | "proof" | "submission">("idle");
   const activeRequest = useRef<AbortController | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ParseKeys<"operator"> | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
@@ -525,21 +531,21 @@ function IndustryRefreshDialog({
         event.preventDefault();
         void submit();
       }}>
-        <header><p className="eyebrow">Confirm update</p><h2 id="operator-industry-refresh-title">Submit Industry Refresh?</h2></header>
-        <p id="operator-industry-refresh-description">Confirm the exact CLI-equivalent collection boundary before queuing.</p>
+        <header><p className="eyebrow">{t("data.common.confirmUpdate")}</p><h2 id="operator-industry-refresh-title">{t("data.industry.submitTitle")}</h2></header>
+        <p id="operator-industry-refresh-description">{t("data.industry.submitDescription")}</p>
         <dl className="operator-confirmation-target">
-          <div><dt>Kind</dt><dd><strong>Industry</strong></dd></div>
-          <div><dt>Observation through</dt><dd><code>{refreshRequest.observationThroughSession}</code></dd></div>
-          <div><dt>Idempotency key</dt><dd><code>{refreshRequest.idempotencyKey}</code></dd></div>
+          <div><dt>{t("data.common.kind")}</dt><dd><strong>{t("data.industry.kind")}</strong></dd></div>
+          <div><dt>{t("data.common.observationThrough")}</dt><dd><code>{refreshRequest.observationThroughSession}</code></dd></div>
+          <div><dt>{t("data.common.idempotencyKey")}</dt><dd><code>{refreshRequest.idempotencyKey}</code></dd></div>
         </dl>
         <div className="operator-confirmation-effect">
-          <span>Effect</span>
-          <p>The operation enters the shared durable FIFO. Collection and publication happen later in the Data Operator Worker.</p>
+          <span>{t("data.common.effect")}</span>
+          <p>{t("data.common.queueEffect")}</p>
         </div>
-        {error === null ? null : <p className="inline-status inline-status-error" role="alert">{error}</p>}
+        {error === null ? null : <p className="inline-status inline-status-error" role="alert">{t(error)}</p>}
         <footer className="operator-confirmation-actions">
-          <button onClick={dismiss} type="button">Cancel</button>
-          <button className="button-primary" disabled={submitting} type="submit">{submitting ? "Submitting…" : "Submit Refresh"}</button>
+          <button onClick={dismiss} type="button">{t("data.common.cancel")}</button>
+          <button className="button-primary" disabled={submitting} type="submit">{submitting ? t("data.common.submitting") : t("data.common.submitRefresh")}</button>
         </footer>
       </form>
     </dialog>
@@ -553,41 +559,41 @@ function industryPresentation(operation: IndustryRefreshOperation): Readonly<{
   tone: string;
 }> {
   if (operation.status === "accepted") return {
-    description: "Accepted is queued, not published. The shared Data Operator Worker claims it in FIFO order.",
-    label: "Accepted",
-    title: "Industry Refresh accepted",
+    description: i18n.t("operator:data.industry.acceptedDescription"),
+    label: i18n.t("operator:data.common.accepted"),
+    title: i18n.t("operator:data.industry.acceptedTitle"),
     tone: "pending",
   };
   if (operation.status === "running") return {
-    description: "Industry collection, validation, Canonical projection, and publication are running.",
-    label: "Running",
-    title: "Industry Refresh running",
+    description: i18n.t("operator:data.industry.runningDescription"),
+    label: i18n.t("operator:data.common.running"),
+    title: i18n.t("operator:data.industry.runningTitle"),
     tone: "running",
   };
   if (operation.outcome === "published") return {
-    description: "Industry Canonical data changed and a new immutable Dataset Generation was published.",
-    label: "Published",
-    title: "Industry data published",
+    description: i18n.t("operator:data.industry.publishedDescription"),
+    label: i18n.t("operator:data.common.published"),
+    title: i18n.t("operator:data.industry.publishedTitle"),
     tone: "published",
   };
   if (operation.outcome === "no_change") return {
-    description: "Collection completed and the Industry Canonical data did not change.",
-    label: "No change",
-    title: "Industry Refresh completed",
+    description: i18n.t("operator:data.industry.unchangedDescription"),
+    label: i18n.t("operator:data.common.noChange"),
+    title: i18n.t("operator:data.industry.unchangedTitle"),
     tone: "unchanged",
   };
   if (operation.outcome === "business_rejected") return {
-    description: "The requested Industry target was rejected by Dataset business rules and will not retry.",
-    label: "Rejected",
-    title: "Industry Refresh rejected",
+    description: i18n.t("operator:data.industry.rejectedDescription"),
+    label: i18n.t("operator:data.common.rejected"),
+    title: i18n.t("operator:data.industry.rejectedTitle"),
     tone: "failed",
   };
   return {
     description: operation.failureCode === "RETRY_EXHAUSTED"
-      ? "Infrastructure retries were exhausted without publishing the requested Industry Refresh."
-      : "An internal or infrastructure failure stopped the Industry Refresh before publication and will not retry automatically.",
-    label: "Failed",
-    title: "Industry Refresh failed",
+      ? i18n.t("operator:data.industry.retryExhaustedDescription")
+      : i18n.t("operator:data.industry.failedDescription"),
+    label: i18n.t("operator:data.common.failed"),
+    title: i18n.t("operator:data.industry.failedTitle"),
     tone: "failed",
   };
 }
@@ -596,14 +602,14 @@ function industryRefreshIsTerminal(operation: IndustryRefreshOperation): boolean
   return operation.status === "succeeded" || operation.status === "failed";
 }
 
-function industryMutationMessage(reason: unknown): string {
-  if (reason instanceof OperatorPageNotFoundError) return "Operator access is no longer available.";
-  if (!(reason instanceof OperatorMutationError)) return "Industry Refresh could not be submitted. Try again.";
-  if (reason.code === "invalid-otp") return "The verification code is incorrect or has expired.";
-  if (reason.code === "invalid-proof") return "Confirmation expired or was already used. Submit again.";
-  if (reason.code === "data-not-ready") return "The current Dataset is not ready for an Industry Refresh.";
-  if (reason.code === "rate-limited") return "Too many confirmation attempts. Wait one minute and try again.";
-  return "Industry Refresh service is unavailable. Try again.";
+function industryMutationMessage(reason: unknown): ParseKeys<"operator"> {
+  if (reason instanceof OperatorPageNotFoundError) return "data.common.accessLost";
+  if (!(reason instanceof OperatorMutationError)) return "data.industry.submitFailed";
+  if (reason.code === "invalid-otp") return "data.common.invalidOtp";
+  if (reason.code === "invalid-proof") return "data.common.invalidProof";
+  if (reason.code === "data-not-ready") return "data.industry.dataNotReady";
+  if (reason.code === "rate-limited") return "data.common.rateLimited";
+  return "data.industry.unavailable";
 }
 
 function submissionFailureIsUncertain(reason: unknown): boolean {

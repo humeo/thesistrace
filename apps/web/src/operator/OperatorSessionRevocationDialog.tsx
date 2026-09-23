@@ -1,5 +1,7 @@
 import { OperatorCodeField } from "./OperatorCodeField";
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "../i18n";
+import { formatNumber } from "../i18n/format";
 
 import { OperatorPageNotFoundError } from "./operatorDirectoryClient";
 import { containDialogKeyboardFocus } from "./operatorDialog";
@@ -28,10 +30,11 @@ export function OperatorSessionRevocationDialog({
   }>) => void;
   target: SessionRevocationTarget;
 }>) {
+  const { t } = useTranslation("operator");
   const dialog = useRef<HTMLDialogElement | null>(null);
   const request = useRef<AbortController | null>(null);
   const [otp, setOtp] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ReturnType<typeof sessionRevocationMessage> | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
@@ -96,36 +99,33 @@ export function OperatorSessionRevocationDialog({
         }}
       >
         <header>
-          <p className="eyebrow operator-danger-eyebrow">Session revocation</p>
-          <h2 id="operator-session-revocation-title">Revoke Login Sessions?</h2>
+          <p className="eyebrow operator-danger-eyebrow">{t("researchers.session.eyebrow")}</p>
+          <h2 id="operator-session-revocation-title">{t("researchers.session.title")}</h2>
         </header>
         <p id="operator-session-revocation-description">
-          Confirm the exact Researcher before removing every current Login Session.
+          {t("researchers.session.description")}
         </p>
         <dl className="operator-confirmation-target">
           <div>
-            <dt>Researcher</dt>
+            <dt>{t("researchers.session.researcher")}</dt>
             <dd><strong>{target.displayLabel}</strong><span>{target.email}</span></dd>
           </div>
           <div>
-            <dt>Researcher ID</dt>
+            <dt>{t("researchers.session.researcherId")}</dt>
             <dd><code>{target.researcherId}</code></dd>
           </div>
           <div>
-            <dt>Current Login Sessions</dt>
-            <dd><strong>{target.currentSessionCount}</strong></dd>
+            <dt>{t("researchers.session.current")}</dt>
+            <dd><strong>{formatNumber(target.currentSessionCount)}</strong></dd>
           </div>
         </dl>
         <div className="operator-confirmation-effect operator-confirmation-effect-danger">
-          <span>Effect</span>
-          <p>
-            Every current Login Session for this Researcher will be revoked. The
-            Researcher remains active and can sign in again.
-          </p>
+          <span>{t("researchers.common.effect")}</span>
+          <p>{t("researchers.session.effect")}</p>
         </div>
         <OperatorCodeField value={otp} onChange={setOtp} disabled={submitting} />
         {error === null ? null : (
-          <p className="inline-status inline-status-error" role="alert">{error}</p>
+          <p className="inline-status inline-status-error" role="alert">{t(error)}</p>
         )}
         <footer className="operator-confirmation-actions">
           <button
@@ -133,10 +133,10 @@ export function OperatorSessionRevocationDialog({
             onClick={() => onDismiss()}
             type="button"
           >
-            Cancel
+            {t("researchers.common.cancel")}
           </button>
           <button className="button-danger" disabled={submitting} type="submit">
-            {submitting ? "Revoking…" : "Revoke sessions"}
+            {submitting ? t("researchers.session.revoking") : t("researchers.session.revoke")}
           </button>
         </footer>
       </form>
@@ -144,28 +144,28 @@ export function OperatorSessionRevocationDialog({
   );
 }
 
-function sessionRevocationMessage(reason: unknown): string {
+function sessionRevocationMessage(reason: unknown) {
   if (reason instanceof OperatorPageNotFoundError) {
-    return "Operator access is no longer available.";
+    return "researchers.common.accessLost";
   }
   if (!(reason instanceof OperatorMutationError)) {
-    return "Login Sessions could not be revoked. Try again.";
+    return "researchers.session.failed";
   }
-  if (reason.code === "invalid-otp") return "The verification code is incorrect or has expired.";
+  if (reason.code === "invalid-otp") return "researchers.common.invalidOtp";
   if (reason.code === "invalid-proof") {
-    return "Confirmation expired or was already used. Submit again.";
+    return "researchers.common.invalidProof";
   }
   if (reason.code === "protected-target") {
-    return "The current Operator's Login Sessions cannot be revoked here.";
+    return "researchers.session.protectedTarget";
   }
   if (reason.code === "invalid-target") {
-    return "This Researcher is no longer available. Refresh the Console.";
+    return "researchers.session.invalidTarget";
   }
   if (reason.code === "rate-limited") {
-    return "Too many confirmation attempts. Wait one minute and try again.";
+    return "researchers.common.rateLimited";
   }
   if (reason.code === "request-invalid") {
-    return "The Session revocation request is invalid. Refresh the Console.";
+    return "researchers.session.requestInvalid";
   }
-  return "Session service is unavailable. Try again.";
+  return "researchers.session.unavailable";
 }

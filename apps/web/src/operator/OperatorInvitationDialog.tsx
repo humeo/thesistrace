@@ -1,5 +1,6 @@
 import { OperatorCodeField } from "./OperatorCodeField";
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "../i18n";
 
 import { OperatorPageNotFoundError } from "./operatorDirectoryClient";
 import { containDialogKeyboardFocus } from "./operatorDialog";
@@ -24,11 +25,12 @@ export function OperatorInvitationDialog({
   }>) => void;
   operation: InvitationMutationOperation;
 }>) {
+  const { t } = useTranslation("operator");
   const dialog = useRef<HTMLDialogElement | null>(null);
   const request = useRef<AbortController | null>(null);
   const [email, setEmail] = useState(initialEmail);
   const [otp, setOtp] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ReturnType<typeof operatorMutationMessage> | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const canonicalTarget = email.trim().toLowerCase();
   const reissue = operation === "reissue";
@@ -97,18 +99,18 @@ export function OperatorInvitationDialog({
         }}
       >
         <header>
-          <p className="eyebrow">Email confirmation</p>
+          <p className="eyebrow">{t("researchers.common.emailConfirmation")}</p>
           <h2 id="operator-invitation-title">
-            {reissue ? "Reissue Invitation?" : "Issue Invitation?"}
+            {reissue ? t("researchers.invitation.reissueTitle") : t("researchers.invitation.issueTitle")}
           </h2>
         </header>
         <p id="operator-invitation-description">
           {reissue
-            ? "Confirm the exact replacement before Auth invalidates the old link."
-            : "Confirm the exact recipient before Auth sends an invite-only access link."}
+            ? t("researchers.invitation.reissueDescription")
+            : t("researchers.invitation.issueDescription")}
         </p>
         <label className="operator-confirmation-field">
-          <span>Target email</span>
+          <span>{t("researchers.common.targetEmail")}</span>
           {reissue ? (
             <strong>{canonicalTarget}</strong>
           ) : (
@@ -123,16 +125,16 @@ export function OperatorInvitationDialog({
           )}
         </label>
         <div className="operator-confirmation-effect">
-          <span>Effect</span>
+          <span>{t("researchers.common.effect")}</span>
           <p>
             {reissue
-              ? "A new link will be sent. The old link becomes invalid only after delivery succeeds."
-              : "An optional 48-hour invitation link will be sent to this email."}
+              ? t("researchers.invitation.reissueEffect")
+              : t("researchers.invitation.issueEffect")}
           </p>
         </div>
         <OperatorCodeField autoFocus={false} value={otp} onChange={setOtp} disabled={submitting} />
         {error === null ? null : (
-          <p className="inline-status inline-status-error" role="alert">{error}</p>
+          <p className="inline-status inline-status-error" role="alert">{t(error)}</p>
         )}
         <footer className="operator-confirmation-actions">
           <button
@@ -140,12 +142,12 @@ export function OperatorInvitationDialog({
             onClick={() => onDismiss()}
             type="button"
           >
-            Cancel
+            {t("researchers.common.cancel")}
           </button>
           <button className="button-primary" disabled={submitting} type="submit">
             {submitting
-              ? reissue ? "Reissuing…" : "Sending…"
-              : reissue ? "Reissue Invitation" : "Send Invitation"}
+              ? reissue ? t("researchers.invitation.reissuing") : t("researchers.invitation.sending")
+              : reissue ? t("researchers.invitation.reissue") : t("researchers.invitation.send")}
           </button>
         </footer>
       </form>
@@ -153,30 +155,30 @@ export function OperatorInvitationDialog({
   );
 }
 
-function operatorMutationMessage(reason: unknown, reissue: boolean): string {
+function operatorMutationMessage(reason: unknown, reissue: boolean) {
   if (reason instanceof OperatorPageNotFoundError) {
-    return "Operator access is no longer available.";
+    return "researchers.common.accessLost";
   }
   if (!(reason instanceof OperatorMutationError)) {
-    return "Invitation could not be completed. Try again.";
+    return "researchers.invitation.failed";
   }
-  if (reason.code === "invalid-otp") return "The verification code is incorrect or has expired.";
+  if (reason.code === "invalid-otp") return "researchers.common.invalidOtp";
   if (reason.code === "invalid-proof") {
-    return "Confirmation expired or was already used. Submit again.";
+    return "researchers.common.invalidProof";
   }
   if (reason.code === "conflict") {
-    return "A Researcher or effective Invitation already exists for this email.";
+    return "researchers.invitation.conflict";
   }
   if (reason.code === "delivery-failed") {
     return reissue
-      ? "Delivery failed. The previous Invitation remains valid."
-      : "Delivery failed. No effective Invitation was created.";
+      ? "researchers.invitation.deliveryFailedReissue"
+      : "researchers.invitation.deliveryFailedIssue";
   }
   if (reason.code === "rate-limited") {
-    return "Too many confirmation attempts. Wait one minute and try again.";
+    return "researchers.common.rateLimited";
   }
   if (reason.code === "request-invalid") {
-    return "Enter a valid canonical email and try again.";
+    return "researchers.invitation.requestInvalid";
   }
-  return "Invitation service is unavailable. Try again.";
+  return "researchers.invitation.unavailable";
 }

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "../i18n";
 
 import { OperatorPageNotFoundError } from "./operatorDirectoryClient";
 import { containDialogKeyboardFocus } from "./operatorDialog";
@@ -25,12 +26,13 @@ export function OperatorMarketRefreshDialog({
   onSucceeded: (operation: MarketRefreshOperation) => void;
   request: MarketRefreshRequest;
 }>) {
+  const { t } = useTranslation("operator");
   const dialog = useRef<HTMLDialogElement | null>(null);
   const dismissed = useRef(false);
   const mounted = useRef(true);
   const phase = useRef<"idle" | "proof" | "submission">("idle");
   const request = useRef<AbortController | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ReturnType<typeof marketRefreshMutationMessage> | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
@@ -146,42 +148,39 @@ export function OperatorMarketRefreshDialog({
         }}
       >
         <header>
-          <p className="eyebrow">Confirm update</p>
-          <h2 id="operator-market-refresh-title">Submit Market Refresh?</h2>
+          <p className="eyebrow">{t("data.common.confirmUpdate")}</p>
+          <h2 id="operator-market-refresh-title">{t("data.market.submitTitle")}</h2>
         </header>
         <p id="operator-market-refresh-description">
-          Review the update date before submitting.
+          {t("data.market.submitDescription")}
         </p>
         <dl className="operator-confirmation-target">
           <div>
-            <dt>Kind</dt>
-            <dd><strong>Market</strong></dd>
+            <dt>{t("data.common.kind")}</dt>
+            <dd><strong>{t("data.market.kind")}</strong></dd>
           </div>
           <div>
-            <dt>As-of</dt>
+            <dt>{t("data.common.asOf")}</dt>
             <dd><code>{refreshRequest.asOf}</code></dd>
           </div>
           <div>
-            <dt>Idempotency key</dt>
+            <dt>{t("data.common.idempotencyKey")}</dt>
             <dd><code>{refreshRequest.idempotencyKey}</code></dd>
           </div>
         </dl>
         <div className="operator-confirmation-effect">
-          <span>Effect</span>
-          <p>
-            The operation will be accepted into the durable FIFO. Publication happens
-            later only if the Worker validates and publishes a changed Dataset.
-          </p>
+          <span>{t("data.common.effect")}</span>
+          <p>{t("data.market.effect")}</p>
         </div>
         {error === null ? null : (
-          <p className="inline-status inline-status-error" role="alert">{error}</p>
+          <p className="inline-status inline-status-error" role="alert">{t(error)}</p>
         )}
         <footer className="operator-confirmation-actions">
           <button onClick={dismiss} type="button">
-            Cancel
+            {t("data.common.cancel")}
           </button>
           <button className="button-primary" disabled={submitting} type="submit">
-            {submitting ? "Submitting…" : "Submit Refresh"}
+            {submitting ? t("data.common.submitting") : t("data.common.submitRefresh")}
           </button>
         </footer>
       </form>
@@ -189,24 +188,24 @@ export function OperatorMarketRefreshDialog({
   );
 }
 
-function marketRefreshMutationMessage(reason: unknown): string {
+function marketRefreshMutationMessage(reason: unknown) {
   if (reason instanceof OperatorPageNotFoundError) {
-    return "Operator access is no longer available.";
+    return "data.common.accessLost";
   }
   if (!(reason instanceof OperatorMutationError)) {
-    return "Market Refresh could not be submitted. Try again.";
+    return "data.market.submitFailed";
   }
-  if (reason.code === "invalid-otp") return "The verification code is incorrect or has expired.";
+  if (reason.code === "invalid-otp") return "data.common.invalidOtp";
   if (reason.code === "invalid-proof") {
-    return "Confirmation expired or was already used. Submit again.";
+    return "data.common.invalidProof";
   }
   if (reason.code === "data-not-ready") {
-    return "The current Dataset is not ready for a Market Refresh.";
+    return "data.market.dataNotReady";
   }
   if (reason.code === "rate-limited") {
-    return "Too many confirmation attempts. Wait one minute and try again.";
+    return "data.common.rateLimited";
   }
-  return "Market Refresh service is unavailable. Try again.";
+  return "data.market.unavailable";
 }
 
 function marketRefreshSubmissionFailureIsUncertain(reason: unknown): boolean {

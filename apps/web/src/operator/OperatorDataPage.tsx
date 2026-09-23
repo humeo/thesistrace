@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { i18n, useTranslation } from "../i18n";
+import { formatNumber } from "../i18n/format";
 
 import { OperatorConsoleNavigation } from "./OperatorConsoleNavigation";
 import { OperatorDatasetStatus } from "./OperatorDatasetStatus";
@@ -37,12 +39,13 @@ const noFieldErrors: MarketRefreshFieldErrors = {
 };
 
 export function OperatorDataPage() {
+  const { t } = useTranslation("operator");
   const [asOf, setAsOf] = useState("");
   const [confirmation, setConfirmation] = useState<TrackedMarketRefreshRequest | null>(null);
   const [pendingSubmission, setPendingSubmission] = useState<TrackedMarketRefreshRequest | null>(null);
   const [operation, setOperation] = useState<TrackedMarketRefreshOperation | null>(null);
   const [pollError, setPollError] = useState(false);
-  const [submissionError, setSubmissionError] = useState<string | null>(null);
+  const [submissionError, setSubmissionError] = useState<"rejectedRequest" | "stopped" | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [fieldErrors, setFieldErrors] = useState(noFieldErrors);
   const [datasetStatusReloadGeneration, setDatasetStatusReloadGeneration] = useState(0);
@@ -181,9 +184,9 @@ export function OperatorDataPage() {
 
   if (notFound) {
     return (
-      <section aria-label="Not found" className="page-section state-section">
-        <h1>Not found</h1>
-        <p>The requested resource is not available.</p>
+      <section aria-label={t("data.common.notFound")} className="page-section state-section">
+        <h1>{t("data.common.notFound")}</h1>
+        <p>{t("data.common.notFoundDescription")}</p>
       </section>
     );
   }
@@ -242,13 +245,13 @@ export function OperatorDataPage() {
       code === "conflict"
       || !isMarketRefreshIdempotencyKey(tracked.request.idempotencyKey)
     ) {
-      setSubmissionError("Unable to create this refresh. Review the request again to start a new submission.");
+      setSubmissionError("rejectedRequest");
       pendingFieldFocus.current = "asOf";
       return;
     }
     pendingFieldFocus.current = "asOf";
     setFieldErrors({
-      asOf: "The selected As-of date is not valid for Market Refresh.",
+      asOf: "selectedAsOfInvalid",
       idempotencyKey: null,
     });
   }
@@ -274,10 +277,10 @@ export function OperatorDataPage() {
 
   return (
     <>
-      <section aria-label="Operator Data" className="page-section operator-page">
+      <section aria-label={t("data.common.pageLabel")} className="page-section operator-page">
         <header className="page-hero">
           <div>
-            <h1>Data operations</h1>
+            <h1>{t("data.common.title")}</h1>
           </div>
         </header>
 
@@ -291,7 +294,7 @@ export function OperatorDataPage() {
         <section aria-labelledby="operator-market-refresh-heading" className="operator-section">
           <header className="operator-section-header">
             <div>
-              <h2 id="operator-market-refresh-heading">Market Refresh</h2>
+              <h2 id="operator-market-refresh-heading">{t("data.market.title")}</h2>
             </div>
           </header>
           <form
@@ -302,7 +305,7 @@ export function OperatorDataPage() {
             }}
           >
             <div className="operator-refresh-field">
-              <label htmlFor="operator-market-as-of">As-of</label>
+              <label htmlFor="operator-market-as-of">{t("data.common.asOf")}</label>
               <input
                 aria-describedby={fieldErrors.asOf === null
                   ? "operator-market-as-of-help"
@@ -321,17 +324,17 @@ export function OperatorDataPage() {
                 value={asOf}
               />
               <small id="operator-market-as-of-help">
-                Submitted at 18:00 Asia/Shanghai (+08:00); the exact timestamp is shown before submission.
+                {t("data.market.asOfHelp")}
               </small>
               {fieldErrors.asOf === null ? null : (
                 <small className="operator-field-error" id="operator-market-as-of-error" role="alert">
-                  {fieldErrors.asOf}
+                  {fieldErrors.asOf === "selectedAsOfInvalid" ? t("data.market.selectedAsOfInvalid") : t("data.market.asOfInvalid")}
                 </small>
               )}
             </div>
             {submissionError === null ? null : (
               <p className="inline-status inline-status-error operator-refresh-form-error" role="alert">
-                {submissionError}
+                {t(`data.common.${submissionError}`)}
               </p>
             )}
             <footer>
@@ -341,7 +344,7 @@ export function OperatorDataPage() {
                 ref={trigger}
                 type="submit"
               >
-                Review Refresh
+                {t("data.common.reviewRefresh")}
               </button>
             </footer>
           </form>
@@ -361,9 +364,7 @@ export function OperatorDataPage() {
               }
               setPendingSubmission(null);
               setPollError(false);
-              setSubmissionError(
-                "Automatic receipt checks stopped. Retry with the same idempotency key to reconcile any accepted work.",
-              );
+              setSubmissionError("stopped");
               focusAfterCommit.current = trigger.current;
             }}
             pollError={pollError}
@@ -418,6 +419,7 @@ function MarketRefreshReconciliation({
   pollError: boolean;
   request: MarketRefreshRequest;
 }>) {
+  const { t } = useTranslation("operator");
   return (
     <section
       aria-labelledby="operator-market-refresh-reconciliation"
@@ -425,28 +427,27 @@ function MarketRefreshReconciliation({
     >
       <header aria-atomic="true" aria-live="polite" role="status">
         <div>
-          <p className="eyebrow">Latest submitted operation</p>
-          <h2 id="operator-market-refresh-reconciliation">Confirming submission</h2>
+          <p className="eyebrow">{t("data.market.latest")}</p>
+          <h2 id="operator-market-refresh-reconciliation">{t("data.common.confirming")}</h2>
         </div>
-        <span className="operator-state">Checking</span>
+        <span className="operator-state">{t("data.common.checking")}</span>
       </header>
       <p>
-        Core submission had already started, but its response could not be confirmed.
-        Checking the exact idempotency key until its durable receipt is available.
+        {t("data.common.pendingDescription")}
       </p>
       <dl>
-        <div><dt>Idempotency key</dt><dd><code>{request.idempotencyKey}</code></dd></div>
-        <div><dt>Requested as-of</dt><dd><time>{request.asOf}</time></dd></div>
+        <div><dt>{t("data.common.idempotencyKey")}</dt><dd><code>{request.idempotencyKey}</code></dd></div>
+        <div><dt>{t("data.market.requestedAsOf")}</dt><dd><time>{request.asOf}</time></dd></div>
       </dl>
       {pollError ? (
         <p className="inline-status inline-status-error" role="alert">
-          The receipt is not available yet. Retrying while this page is visible.
+          {t("data.common.receiptUnavailable")}
         </p>
       ) : null}
       <footer className="operator-confirmation-actions">
-        <button onClick={onStop} type="button">Stop checking</button>
+        <button onClick={onStop} type="button">{t("data.common.stopChecking")}</button>
         <button className="button-primary" onClick={onRetry} type="button">
-          Retry exact request
+          {t("data.common.retryExact")}
         </button>
       </footer>
     </section>
@@ -460,6 +461,7 @@ export function MarketRefreshReceipt({
   operation: MarketRefreshOperation;
   pollError: boolean;
 }>) {
+  const { t } = useTranslation("operator");
   const presentation = refreshPresentation(operation);
   return (
     <section
@@ -468,32 +470,32 @@ export function MarketRefreshReceipt({
     >
       <header aria-atomic="true" aria-live="polite" role="status">
         <div>
-          <p className="eyebrow">Latest submitted operation</p>
+          <p className="eyebrow">{t("data.market.latest")}</p>
           <h2 id="operator-market-refresh-status">{presentation.title}</h2>
         </div>
         <span className="operator-state">{presentation.label}</span>
       </header>
       <p>{presentation.description}</p>
       <dl>
-        <div><dt>Idempotency key</dt><dd><code>{operation.idempotencyKey}</code></dd></div>
-        <div><dt>As-of</dt><dd><time>{operation.asOf}</time></dd></div>
-        <div><dt>Attempts</dt><dd>{operation.attemptCount}</dd></div>
+        <div><dt>{t("data.common.idempotencyKey")}</dt><dd><code>{operation.idempotencyKey}</code></dd></div>
+        <div><dt>{t("data.common.asOf")}</dt><dd><time>{operation.asOf}</time></dd></div>
+        <div><dt>{t("data.common.attempts")}</dt><dd>{formatNumber(operation.attemptCount)}</dd></div>
         <div>
-          <dt>Data through</dt>
-          <dd>{operation.dataThroughSession ?? "Not published"}</dd>
+          <dt>{t("data.common.dataThrough")}</dt>
+          <dd>{operation.dataThroughSession ?? t("data.common.notPublished")}</dd>
         </div>
         <div>
-          <dt>Last refresh</dt>
-          <dd>{operation.lastRefreshAt ?? "Not completed"}</dd>
+          <dt>{t("data.common.lastRefresh")}</dt>
+          <dd>{operation.lastRefreshAt ?? t("data.common.notCompleted")}</dd>
         </div>
         <div>
-          <dt>Failure</dt>
-          <dd><code>{operation.failureCode ?? operation.lastFailureCode ?? "None"}</code></dd>
+          <dt>{t("data.common.failure")}</dt>
+          <dd><code>{operation.failureCode ?? operation.lastFailureCode ?? t("data.common.none")}</code></dd>
         </div>
       </dl>
       {pollError ? (
         <p className="inline-status inline-status-error" role="alert">
-          Status is temporarily unavailable. Showing the last known state and retrying while visible.
+          {t("data.common.statusUnavailable")}
         </p>
       ) : null}
     </section>
@@ -508,40 +510,40 @@ function refreshPresentation(operation: MarketRefreshOperation): Readonly<{
 }> {
   if (operation.status === "accepted") {
     return {
-      description: "Accepted is queued, not published. The Data Operator Worker will claim it in FIFO order.",
-      label: "Accepted",
-      title: "Refresh accepted",
+      description: i18n.t("operator:data.market.acceptedDescription"),
+      label: i18n.t("operator:data.common.accepted"),
+      title: i18n.t("operator:data.market.acceptedTitle"),
       tone: "pending",
     };
   }
   if (operation.status === "running") {
     return {
-      description: "The Data Operator Worker is collecting and validating the requested Market target.",
-      label: "Running",
-      title: "Refresh running",
+      description: i18n.t("operator:data.market.runningDescription"),
+      label: i18n.t("operator:data.common.running"),
+      title: i18n.t("operator:data.market.runningTitle"),
       tone: "running",
     };
   }
   if (operation.status === "failed") {
     return {
-      description: "The operation reached a terminal failure without publishing a new Dataset.",
-      label: "Failed",
-      title: "Refresh failed",
+      description: i18n.t("operator:data.market.failedDescription"),
+      label: i18n.t("operator:data.common.failed"),
+      title: i18n.t("operator:data.market.failedTitle"),
       tone: "failed",
     };
   }
   if (operation.outcome === "published") {
     return {
-      description: "Validation completed and a new immutable Dataset Generation was published.",
-      label: "Published",
-      title: "Dataset published",
+      description: i18n.t("operator:data.market.publishedDescription"),
+      label: i18n.t("operator:data.common.published"),
+      title: i18n.t("operator:data.market.publishedTitle"),
       tone: "published",
     };
   }
   return {
-    description: "Validation completed successfully and the canonical Dataset did not change.",
-    label: "No change",
-    title: "Refresh completed",
+    description: i18n.t("operator:data.market.unchangedDescription"),
+    label: i18n.t("operator:data.common.noChange"),
+    title: i18n.t("operator:data.market.unchangedTitle"),
     tone: "unchanged",
   };
 }
@@ -572,7 +574,7 @@ export function marketRefreshPollGenerationIsCurrent(
     : trackedGeneration === activeOperationGeneration;
 }
 
-const marketRefreshKeyError = "Use 1–512 characters with no boundary whitespace, NUL, or unpaired surrogate.";
+const marketRefreshKeyError = "keyInvalid";
 
 function marketRefreshFieldErrors(
   asOf: string,
@@ -582,7 +584,7 @@ function marketRefreshFieldErrors(
   return {
     asOf: asOfCharacters.length === 0
       || marketRefreshAsOfForDate(asOf) === ""
-      ? "Choose a valid As-of date."
+      ? "asOfInvalid"
       : null,
     idempotencyKey: isMarketRefreshIdempotencyKey(idempotencyKey)
       ? null

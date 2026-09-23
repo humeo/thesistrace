@@ -290,7 +290,8 @@ function financialOperation(
   };
 }
 
-test("automatically keeps a submission key across confirmation retries and changes it for new work", async () => {
+test("keeps the submission key and visible confirmation error across a language switch and retry", async () => {
+  const { i18n } = await import("../i18n");
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const proof = vi.spyOn(refreshClient, "confirmFinancialRefreshProof")
     .mockRejectedValueOnce(new Error("temporary outage"))
@@ -315,6 +316,14 @@ test("automatically keeps a submission key across confirmation retries and chang
     await send("form");
     expect(host.querySelector('input[autocomplete="one-time-code"]')).toBeNull();
     await send("dialog form");
+    const confirmation = host.querySelector("dialog");
+    expect(confirmation?.textContent).toContain("Financial Refresh could not be submitted");
+    await act(async () => { await i18n.changeLanguage("zh-CN"); });
+    expect(host.querySelector("dialog")).toBe(confirmation);
+    expect(confirmation?.textContent).toContain("无法提交财务数据刷新");
+    expect(host.querySelector<HTMLInputElement>('input[type="date"]')?.value).toBe("2026-08-14");
+    expect(proof).toHaveBeenCalledTimes(1);
+    expect(submit).not.toHaveBeenCalled();
     await send("dialog form");
     expect(proof.mock.calls[0]![0].idempotencyKey).toBe(proof.mock.calls[1]![0].idempotencyKey);
     const firstKey = submit.mock.calls[0]![0].idempotencyKey;
@@ -324,6 +333,7 @@ test("automatically keeps a submission key across confirmation retries and chang
     expect(submit.mock.calls[1]![0].idempotencyKey).not.toBe(firstKey);
   } finally {
     await act(async () => root.unmount());
+    await i18n.changeLanguage("en");
     host.remove();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();

@@ -1,4 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import type { ParseKeys } from "i18next";
+import { i18n, useTranslation } from "../i18n";
+import { formatNumber } from "../i18n/format";
 
 import { OperatorPageNotFoundError } from "./operatorDirectoryClient";
 import { FinancialRefreshTelemetry } from "./FinancialRefreshTelemetry";
@@ -26,13 +29,14 @@ export function OperatorFinancialRefreshPanel({
   onAccessNotFound: () => void;
   onOperationAccepted?: () => void;
 }>) {
+  const { t } = useTranslation("operator");
   const [target, setTarget] = useState("");
   const [confirmation, setConfirmation] = useState<TrackedRequest | null>(null);
   const [pending, setPending] = useState<TrackedRequest | null>(null);
   const [operation, setOperation] = useState<TrackedOperation | null>(null);
   const [pollError, setPollError] = useState(false);
-  const [targetError, setTargetError] = useState<string | null>(null);
-  const [submissionError, setSubmissionError] = useState<string | null>(null);
+  const [targetError, setTargetError] = useState<ParseKeys<"operator"> | null>(null);
+  const [submissionError, setSubmissionError] = useState<ParseKeys<"operator"> | null>(null);
   const targetInput = useRef<HTMLInputElement | null>(null);
   const trigger = useRef<HTMLButtonElement | null>(null);
   const submissionGeneration = useRef(0);
@@ -149,7 +153,7 @@ export function OperatorFinancialRefreshPanel({
     const idempotencyKey = suggestFinancialRefreshKey(new Date());
     const nextTargetError = isIsoResearchSession(target)
       ? null
-      : "Choose a valid Research Session date.";
+      : "data.financial.targetInvalid";
     setTargetError(nextTargetError);
     if (nextTargetError !== null) {
       window.requestAnimationFrame(() => targetInput.current?.focus());
@@ -176,10 +180,10 @@ export function OperatorFinancialRefreshPanel({
     setPending(null);
     setSubmissionError(null);
     if (code === "conflict" || !isMarketRefreshIdempotencyKey(tracked.request.idempotencyKey)) {
-      setSubmissionError("Unable to create this refresh. Review the request again to start a new submission.");
+      setSubmissionError("data.common.rejectedRequest");
       focusAfterCommit.current = trigger.current;
     } else {
-      setTargetError("Choose a valid Research Session date.");
+      setTargetError("data.financial.targetInvalid");
       focusAfterCommit.current = targetInput.current;
     }
   }
@@ -210,7 +214,7 @@ export function OperatorFinancialRefreshPanel({
       <section aria-labelledby="operator-financial-refresh-heading" className="operator-section">
         <header className="operator-section-header">
           <div>
-            <h2 id="operator-financial-refresh-heading">Financial Refresh</h2>
+            <h2 id="operator-financial-refresh-heading">{t("data.financial.title")}</h2>
           </div>
         </header>
         <form
@@ -222,7 +226,7 @@ export function OperatorFinancialRefreshPanel({
         >
           <div className="operator-refresh-field">
             <label htmlFor="operator-financial-target">
-              Observation-through Research Session
+              {t("data.financial.targetLabel")}
             </label>
             <input
               aria-describedby={targetError === null
@@ -242,17 +246,17 @@ export function OperatorFinancialRefreshPanel({
               value={target}
             />
             <small id="operator-financial-target-help">
-              Select the observation-through Research Session.
+              {t("data.financial.targetHelp")}
             </small>
             {targetError === null ? null : (
               <small className="operator-field-error" id="operator-financial-target-error" role="alert">
-                {targetError}
+                {t(targetError)}
               </small>
             )}
           </div>
           {submissionError === null ? null : (
             <p className="inline-status inline-status-error operator-refresh-form-error" role="alert">
-              {submissionError}
+              {t(submissionError)}
             </p>
           )}
           <footer>
@@ -262,7 +266,7 @@ export function OperatorFinancialRefreshPanel({
               ref={trigger}
               type="submit"
             >
-              Review Refresh
+              {t("data.common.reviewRefresh")}
             </button>
           </footer>
         </form>
@@ -283,7 +287,7 @@ export function OperatorFinancialRefreshPanel({
             setPending(null);
             setPollError(false);
             setSubmissionError(
-              "Automatic receipt checks stopped. Retry with the same idempotency key to reconcile any accepted work.",
+              "data.common.stopped",
             );
             focusAfterCommit.current = trigger.current;
           }}
@@ -338,6 +342,7 @@ export function FinancialRefreshReconciliation({
   pollError: boolean;
   request: FinancialRefreshRequest;
 }>) {
+  const { t } = useTranslation("operator");
   return (
     <section
       aria-labelledby="operator-financial-refresh-reconciliation"
@@ -345,28 +350,27 @@ export function FinancialRefreshReconciliation({
     >
       <header aria-atomic="true" aria-live="polite" role="status">
         <div>
-          <p className="eyebrow">Latest Financial operation</p>
-          <h2 id="operator-financial-refresh-reconciliation">Confirming submission</h2>
+          <p className="eyebrow">{t("data.financial.latest")}</p>
+          <h2 id="operator-financial-refresh-reconciliation">{t("data.common.confirming")}</h2>
         </div>
-        <span className="operator-state">Checking</span>
+        <span className="operator-state">{t("data.common.checking")}</span>
       </header>
       <p>
-        Core submission had already started, but its response could not be confirmed.
-        Checking the exact idempotency key until its durable receipt is available.
+        {t("data.common.pendingDescription")}
       </p>
       <dl>
-        <div><dt>Idempotency key</dt><dd><code>{request.idempotencyKey}</code></dd></div>
-        <div><dt>Observation through</dt><dd>{request.observationThroughSession}</dd></div>
+        <div><dt>{t("data.common.idempotencyKey")}</dt><dd><code>{request.idempotencyKey}</code></dd></div>
+        <div><dt>{t("data.common.observationThrough")}</dt><dd>{request.observationThroughSession}</dd></div>
       </dl>
       {pollError ? (
         <p className="inline-status inline-status-error" role="alert">
-          Receipt unavailable; retrying while visible.
+          {t("data.financial.receiptUnavailable")}
         </p>
       ) : null}
       <footer className="operator-confirmation-actions">
-        <button onClick={onStop} type="button">Stop checking</button>
+        <button onClick={onStop} type="button">{t("data.common.stopChecking")}</button>
         <button className="button-primary" onClick={onRetry} type="button">
-          Retry exact request
+          {t("data.common.retryExact")}
         </button>
       </footer>
     </section>
@@ -377,30 +381,31 @@ export function FinancialRefreshReceipt({
   operation,
   pollError,
 }: Readonly<{ operation: FinancialRefreshOperation; pollError: boolean }>) {
+  const { t } = useTranslation("operator");
   const presentation = financialPresentation(operation);
-  const unknownDiagnostic = operation.status === "failed" ? "Unavailable" : "Pending";
+  const unknownDiagnostic = operation.status === "failed" ? t("data.common.unavailable") : t("data.common.pending");
   return (
     <section className={`operator-refresh-receipt operator-refresh-${presentation.tone}`}>
       <header aria-atomic="true" aria-live="polite" role="status">
-        <div><p className="eyebrow">Latest Financial operation</p><h2>{presentation.title}</h2></div>
+        <div><p className="eyebrow">{t("data.financial.latest")}</p><h2>{presentation.title}</h2></div>
         <span className="operator-state">{presentation.label}</span>
       </header>
       <p>{presentation.description}</p>
       <FinancialRefreshTelemetry progress={operation.progress} />
       <dl>
-        <div><dt>Idempotency key</dt><dd><code>{operation.idempotencyKey}</code></dd></div>
-        <div><dt>Observation through</dt><dd>{operation.observationThroughSession}</dd></div>
-        <div><dt>Complete through</dt><dd>{operation.financialCompleteThroughSession ?? "Not completed"}</dd></div>
-        <div><dt>Attempts</dt><dd>{operation.attemptCount}</dd></div>
-        <div><dt>Matched triggers</dt><dd>{operation.matchedTriggerCount ?? unknownDiagnostic}</dd></div>
-        <div><dt>Checked, no structured change</dt><dd>{operation.checkedNoStructuredChangeCount ?? unknownDiagnostic}</dd></div>
-        <div><dt>Pending instruments</dt><dd>{operation.pendingInstrumentCount ?? unknownDiagnostic}</dd></div>
-        <div><dt>Discovery gaps</dt><dd>{operation.discoveryGapCount ?? unknownDiagnostic}</dd></div>
-        <div><dt>Failure</dt><dd><code>{operation.failureCode ?? operation.lastFailureCode ?? "None"}</code></dd></div>
+        <div><dt>{t("data.common.idempotencyKey")}</dt><dd><code>{operation.idempotencyKey}</code></dd></div>
+        <div><dt>{t("data.common.observationThrough")}</dt><dd>{operation.observationThroughSession}</dd></div>
+        <div><dt>{t("data.financial.completeThrough")}</dt><dd>{operation.financialCompleteThroughSession ?? t("data.common.notCompleted")}</dd></div>
+        <div><dt>{t("data.common.attempts")}</dt><dd>{formatNumber(operation.attemptCount)}</dd></div>
+        <div><dt>{t("data.financial.matchedTriggers")}</dt><dd>{operation.matchedTriggerCount === null ? unknownDiagnostic : formatNumber(operation.matchedTriggerCount)}</dd></div>
+        <div><dt>{t("data.financial.checkedNoChange")}</dt><dd>{operation.checkedNoStructuredChangeCount === null ? unknownDiagnostic : formatNumber(operation.checkedNoStructuredChangeCount)}</dd></div>
+        <div><dt>{t("data.financial.pendingInstruments")}</dt><dd>{operation.pendingInstrumentCount === null ? unknownDiagnostic : formatNumber(operation.pendingInstrumentCount)}</dd></div>
+        <div><dt>{t("data.financial.discoveryGaps")}</dt><dd>{operation.discoveryGapCount === null ? unknownDiagnostic : formatNumber(operation.discoveryGapCount)}</dd></div>
+        <div><dt>{t("data.common.failure")}</dt><dd><code>{operation.failureCode ?? operation.lastFailureCode ?? t("data.common.none")}</code></dd></div>
       </dl>
       {pollError ? (
         <p className="inline-status inline-status-error" role="alert">
-          Status is temporarily unavailable. Showing the last known state and retrying while visible.
+          {t("data.common.statusUnavailable")}
         </p>
       ) : null}
     </section>
@@ -422,12 +427,13 @@ function FinancialRefreshDialog({
   onSucceeded: (operation: FinancialRefreshOperation) => void;
   request: FinancialRefreshRequest;
 }>) {
+  const { t } = useTranslation("operator");
   const dialog = useRef<HTMLDialogElement | null>(null);
   const dismissed = useRef(false);
   const mounted = useRef(true);
   const phase = useRef<"idle" | "proof" | "submission">("idle");
   const activeRequest = useRef<AbortController | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ParseKeys<"operator"> | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
@@ -524,21 +530,21 @@ function FinancialRefreshDialog({
         event.preventDefault();
         void submit();
       }}>
-        <header><p className="eyebrow">Confirm update</p><h2 id="operator-financial-refresh-title">Submit Financial Refresh?</h2></header>
-        <p id="operator-financial-refresh-description">Confirm the exact CLI-equivalent collection boundary before queuing.</p>
+        <header><p className="eyebrow">{t("data.common.confirmUpdate")}</p><h2 id="operator-financial-refresh-title">{t("data.financial.submitTitle")}</h2></header>
+        <p id="operator-financial-refresh-description">{t("data.financial.submitDescription")}</p>
         <dl className="operator-confirmation-target">
-          <div><dt>Kind</dt><dd><strong>Financial</strong></dd></div>
-          <div><dt>Observation through</dt><dd><code>{refreshRequest.observationThroughSession}</code></dd></div>
-          <div><dt>Idempotency key</dt><dd><code>{refreshRequest.idempotencyKey}</code></dd></div>
+          <div><dt>{t("data.common.kind")}</dt><dd><strong>{t("data.financial.kind")}</strong></dd></div>
+          <div><dt>{t("data.common.observationThrough")}</dt><dd><code>{refreshRequest.observationThroughSession}</code></dd></div>
+          <div><dt>{t("data.common.idempotencyKey")}</dt><dd><code>{refreshRequest.idempotencyKey}</code></dd></div>
         </dl>
         <div className="operator-confirmation-effect">
-          <span>Effect</span>
-          <p>The operation enters the shared durable FIFO. Collection and publication happen later in the Data Operator Worker.</p>
+          <span>{t("data.common.effect")}</span>
+          <p>{t("data.common.queueEffect")}</p>
         </div>
-        {error === null ? null : <p className="inline-status inline-status-error" role="alert">{error}</p>}
+        {error === null ? null : <p className="inline-status inline-status-error" role="alert">{t(error)}</p>}
         <footer className="operator-confirmation-actions">
-          <button onClick={dismiss} type="button">Cancel</button>
-          <button className="button-primary" disabled={submitting} type="submit">{submitting ? "Submitting…" : "Submit Refresh"}</button>
+          <button onClick={dismiss} type="button">{t("data.common.cancel")}</button>
+          <button className="button-primary" disabled={submitting} type="submit">{submitting ? t("data.common.submitting") : t("data.common.submitRefresh")}</button>
         </footer>
       </form>
     </dialog>
@@ -552,49 +558,49 @@ function financialPresentation(operation: FinancialRefreshOperation): Readonly<{
   tone: string;
 }> {
   if (operation.status === "accepted") return {
-    description: "Accepted is queued, not published. The shared Data Operator Worker claims it in FIFO order.",
-    label: "Accepted",
-    title: "Financial Refresh accepted",
+    description: i18n.t("operator:data.financial.acceptedDescription"),
+    label: i18n.t("operator:data.common.accepted"),
+    title: i18n.t("operator:data.financial.acceptedTitle"),
     tone: "pending",
   };
   if (operation.status === "running") return {
-    description: "Financial discovery, collection, Canonical projection, and publication are running.",
-    label: "Running",
-    title: "Financial Refresh running",
+    description: i18n.t("operator:data.financial.runningDescription"),
+    label: i18n.t("operator:data.common.running"),
+    title: i18n.t("operator:data.financial.runningTitle"),
     tone: "running",
   };
   if (operation.outcome === "degraded") return {
     description: operation.discoveryGapCount !== null && operation.discoveryGapCount > 0
-      ? "A usable Dataset was published, but discovery gaps remain; complete-through may lag the requested Session."
-      : "A usable Dataset was published, but some instruments remain pending and may require a later Refresh.",
-    label: "Published · incomplete coverage",
-    title: "Financial data published with unresolved coverage",
+      ? i18n.t("operator:data.financial.degradedGapsDescription")
+      : i18n.t("operator:data.financial.degradedPendingDescription"),
+    label: i18n.t("operator:data.financial.degradedLabel"),
+    title: i18n.t("operator:data.financial.degradedTitle"),
     tone: "warning",
   };
   if (operation.outcome === "published") return {
-    description: "Financial Canonical data changed and a new immutable Dataset Generation was published.",
-    label: "Published",
-    title: "Financial data published",
+    description: i18n.t("operator:data.financial.publishedDescription"),
+    label: i18n.t("operator:data.common.published"),
+    title: i18n.t("operator:data.financial.publishedTitle"),
     tone: "published",
   };
   if (operation.outcome === "no_change") return {
-    description: "Discovery completed and the Financial Canonical data did not change.",
-    label: "No change",
-    title: "Financial Refresh completed",
+    description: i18n.t("operator:data.financial.unchangedDescription"),
+    label: i18n.t("operator:data.common.noChange"),
+    title: i18n.t("operator:data.financial.unchangedTitle"),
     tone: "unchanged",
   };
   if (operation.outcome === "business_rejected") return {
-    description: "The requested Financial target was rejected by Dataset business rules and will not retry.",
-    label: "Rejected",
-    title: "Financial Refresh rejected",
+    description: i18n.t("operator:data.financial.rejectedDescription"),
+    label: i18n.t("operator:data.common.rejected"),
+    title: i18n.t("operator:data.financial.rejectedTitle"),
     tone: "failed",
   };
   return {
     description: operation.failureCode === "RETRY_EXHAUSTED"
-      ? "Infrastructure retries were exhausted without publishing the requested Financial Refresh."
-      : "An internal or infrastructure failure stopped the Financial Refresh before publication and will not retry automatically.",
-    label: "Failed",
-    title: "Financial Refresh failed",
+      ? i18n.t("operator:data.financial.retryExhaustedDescription")
+      : i18n.t("operator:data.financial.failedDescription"),
+    label: i18n.t("operator:data.common.failed"),
+    title: i18n.t("operator:data.financial.failedTitle"),
     tone: "failed",
   };
 }
@@ -603,14 +609,14 @@ function financialRefreshIsTerminal(operation: FinancialRefreshOperation): boole
   return operation.status === "succeeded" || operation.status === "failed";
 }
 
-function financialMutationMessage(reason: unknown): string {
-  if (reason instanceof OperatorPageNotFoundError) return "Operator access is no longer available.";
-  if (!(reason instanceof OperatorMutationError)) return "Financial Refresh could not be submitted. Try again.";
-  if (reason.code === "invalid-otp") return "The verification code is incorrect or has expired.";
-  if (reason.code === "invalid-proof") return "Confirmation expired or was already used. Submit again.";
-  if (reason.code === "data-not-ready") return "The current Dataset is not ready for a Financial Refresh.";
-  if (reason.code === "rate-limited") return "Too many confirmation attempts. Wait one minute and try again.";
-  return "Financial Refresh service is unavailable. Try again.";
+function financialMutationMessage(reason: unknown): ParseKeys<"operator"> {
+  if (reason instanceof OperatorPageNotFoundError) return "data.common.accessLost";
+  if (!(reason instanceof OperatorMutationError)) return "data.financial.submitFailed";
+  if (reason.code === "invalid-otp") return "data.common.invalidOtp";
+  if (reason.code === "invalid-proof") return "data.common.invalidProof";
+  if (reason.code === "data-not-ready") return "data.financial.dataNotReady";
+  if (reason.code === "rate-limited") return "data.common.rateLimited";
+  return "data.financial.unavailable";
 }
 
 function submissionFailureIsUncertain(reason: unknown): boolean {

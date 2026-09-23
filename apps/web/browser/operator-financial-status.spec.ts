@@ -30,9 +30,10 @@ test.beforeAll(async () => {
   script = chunk.code;
 });
 
-for (const width of [1280, 390]) {
+for (const width of [1280, 390, 320]) {
   test(`Financial pending indicators remain visible when statements are complete at ${width}px`, async ({ page }, testInfo) => {
     let complete = false;
+    let statusRequests = 0;
     await page.setViewportSize({ width, height: 1080 });
     await page.route("http://operator.test/**", async (route) => {
       const pathname = new URL(route.request().url()).pathname;
@@ -40,6 +41,7 @@ for (const width of [1280, 390]) {
         return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
       }
       if (pathname !== "/api/operator/data/status") return route.fulfill({ status: 404 });
+      statusRequests += 1;
       return route.fulfill({ json: {
         head: {
           data_identity: "d".repeat(64), prepared_at: "2026-09-17T07:20:25Z",
@@ -74,6 +76,16 @@ for (const width of [1280, 390]) {
     await expect(fact("Disclosure list complete through").locator("dd")).toHaveText("2026-09-11");
     await expect(fact("Indicators complete through").locator("dd")).toHaveText("2026-09-03");
     await financial.screenshot({ path: testInfo.outputPath("financial-pending.png") });
+    const requestsBeforeSwitch = statusRequests;
+    await page.getByRole("button", { name: "简体中文", exact: true }).click();
+    const chineseFinancial = page.getByRole("region", { name: "财务 数据状态", exact: true });
+    await expect(chineseFinancial).toContainText("财务已就绪，但有待处理项");
+    await expect(chineseFinancial).toContainText("待处理指标公司数");
+    await expect(chineseFinancial).toContainText("13");
+    expect(statusRequests).toBe(requestsBeforeSwitch);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await chineseFinancial.screenshot({ path: testInfo.outputPath("financial-pending-zh.png") });
+    await page.getByRole("button", { name: "English", exact: true }).click();
     complete = true;
     await page.getByRole("button", { name: "Reload", exact: true }).click();
     await expect(financial.getByText("Financial ready", { exact: true })).toBeVisible();

@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { i18n, useTranslation } from "../i18n";
+import type { ParseKeys } from "i18next";
 
 import type { DataRefreshOperationalStatus } from "./operatorDataStatusClient";
 import { OperatorPageNotFoundError } from "./operatorDirectoryClient";
@@ -32,6 +34,7 @@ export function OperatorDataRefreshActionDialog({
   onStateChanged: () => void;
   onSucceeded: (receipt: DataRefreshActionReceipt) => void;
 }>) {
+  const { t } = useTranslation("operator");
   const dialog = useRef<HTMLDialogElement | null>(null);
   const request = useRef<AbortController | null>(null);
   const [newKey] = useState(() => (
@@ -39,8 +42,8 @@ export function OperatorDataRefreshActionDialog({
       ? suggestDataRefreshRetryKey(action.operation.kind, now())
       : ""
   ));
-  const [keyError, setKeyError] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [keyError, setKeyError] = useState<"newKey" | "keyInvalid" | "retryConflict" | null>(null);
+  const [error, setError] = useState<ParseKeys<"operator"> | null>(null);
   const [stale, setStale] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
@@ -64,8 +67,8 @@ export function OperatorDataRefreshActionDialog({
     ) {
       setKeyError(
         newKey === action.operation.idempotencyKey
-          ? "Use a new key; Retry never reopens the source receipt."
-          : "Enter a non-empty key of at most 512 characters without boundary whitespace.",
+          ? "newKey"
+          : "keyInvalid",
       );
       return;
     }
@@ -98,7 +101,7 @@ export function OperatorDataRefreshActionDialog({
         if (mutationStarted) markStateUncertain();
       } else if (reason instanceof OperatorMutationError) {
         if (reason.code === "conflict" && action.action === "retry") {
-          setKeyError("Unable to create this retry. Close this dialog and try again.");
+          setKeyError("retryConflict");
         } else if (
           reason.code === "not-cancellable"
           || reason.code === "not-retryable"
@@ -115,7 +118,7 @@ export function OperatorDataRefreshActionDialog({
       } else if (mutationStarted) {
         markStateUncertain();
       } else {
-        setError("Confirmation is temporarily unavailable. Try again.");
+        setError("data.action.confirmationUnavailable");
       }
     } finally {
       request.current = null;
@@ -128,7 +131,7 @@ export function OperatorDataRefreshActionDialog({
   function markStateUncertain(): void {
     setStale(true);
     setError(
-      "The mutation response could not be confirmed. Dataset status was reloaded; inspect both receipts before acting again.",
+      "data.action.uncertain",
     );
     onStateChanged();
   }
@@ -159,40 +162,40 @@ export function OperatorDataRefreshActionDialog({
       >
         <header>
           <p className={retry ? "eyebrow" : "eyebrow operator-danger-eyebrow"}>
-            {retry ? "Immutable Retry" : "Queued work cancellation"}
+            {retry ? t("data.action.retryEyebrow") : t("data.action.cancelEyebrow")}
           </p>
           <h2 id={titleId}>
             {retry
-              ? `Retry ${operation.status === "failed" ? "failed" : "cancelled"} Refresh?`
-              : "Cancel queued Refresh?"}
+              ? t("data.action.retryTitle", { state: operation.status === "failed" ? t("data.action.failedState") : t("data.action.cancelledState") })
+              : t("data.action.cancelTitle")}
           </h2>
         </header>
         <p id={descriptionId}>
-          Review the exact receipt and effect before confirming this action.
+          {t("data.action.description")}
         </p>
         <dl className="operator-confirmation-target">
-          <div><dt>Kind</dt><dd><strong>{kindText(operation.kind)}</strong></dd></div>
-          <div><dt>Target</dt><dd><code>{operationTarget(operation)}</code></dd></div>
+          <div><dt>{t("data.common.kind")}</dt><dd><strong>{kindText(operation.kind)}</strong></dd></div>
+          <div><dt>{t("data.common.target")}</dt><dd><code>{operationTarget(operation)}</code></dd></div>
           <div>
-            <dt>Source idempotency key</dt>
+            <dt>{t("data.action.sourceKey")}</dt>
             <dd><code>{operation.idempotencyKey}</code></dd>
           </div>
         </dl>
         <div className={`operator-confirmation-effect${retry ? "" : " operator-confirmation-effect-danger"}`}>
-          <span>Effect</span>
+          <span>{t("data.common.effect")}</span>
           <p>
             {retry
-              ? `The original ${operation.status} receipt remains unchanged and inspectable. A new receipt will be accepted into the FIFO as new queued work; it is not processed or published yet.`
-              : "The Worker will never claim this queued receipt. No running or terminal operation can be changed, and no Dataset publication is implied."}
+              ? t("data.action.retryEffect", { status: operation.status === "failed" ? t("data.action.failedState") : t("data.action.cancelledState") })
+              : t("data.action.cancelEffect")}
           </p>
         </div>
-        {keyError === null ? null : <p role="alert">{keyError}</p>}
+        {keyError === null ? null : <p role="alert">{t(`data.action.${keyError}`)}</p>}
         {error === null ? null : (
-          <p className="inline-status inline-status-error" role="alert">{error}</p>
+          <p className="inline-status inline-status-error" role="alert">{t(error)}</p>
         )}
         <footer className="operator-confirmation-actions">
           <button disabled={submitting} onClick={onDismiss} type="button">
-            {stale ? "Close" : "Back"}
+            {stale ? t("data.action.close") : t("data.action.back")}
           </button>
           {stale ? null : (
             <button
@@ -201,8 +204,8 @@ export function OperatorDataRefreshActionDialog({
               type="submit"
             >
               {submitting
-                ? retry ? "Retrying…" : "Cancelling…"
-                : retry ? "Create Retry" : "Cancel queued operation"}
+                ? retry ? t("data.action.retrying") : t("data.action.cancelling")
+                : retry ? t("data.action.createRetry") : t("data.action.cancelQueued")}
             </button>
           )}
         </footer>
@@ -240,36 +243,36 @@ function operationTarget(operation: DataRefreshOperationalStatus): string {
 }
 
 function kindText(kind: DataRefreshOperationalStatus["kind"]): string {
-  if (kind === "market") return "Market Refresh";
-  if (kind === "financial") return "Financial Refresh";
-  return "Industry Refresh";
+  if (kind === "market") return i18n.t("operator:data.market.title");
+  if (kind === "financial") return i18n.t("operator:data.financial.title");
+  return i18n.t("operator:data.industry.title");
 }
 
 function dataRefreshStateChangedMessage(
   action: DataRefreshStatusAction["action"],
   code: "invalid-target" | "not-cancellable" | "not-retryable",
-): string {
+): ParseKeys<"operator"> {
   if (code === "not-cancellable") {
-    return "The Worker claimed this operation before Cancel won. Running or terminal work was not changed; status was reloaded.";
+    return "data.action.stateChangedCancel";
   }
   if (code === "not-retryable") {
-    return "This source receipt is no longer failed or cancelled. No Retry was created; status was reloaded.";
+    return "data.action.stateChangedRetry";
   }
-  return `The ${action === "cancel" ? "Cancel" : "Retry"} target no longer matches this receipt. No operation was changed; status was reloaded.`;
+  return `data.action.targetMismatch.${action}`;
 }
 
 function dataRefreshActionMessage(
   action: DataRefreshStatusAction["action"],
   reason: OperatorMutationError,
-): string {
+): ParseKeys<"operator"> {
   if (reason.code === "invalid-proof") {
-    return "Confirmation expired or was already used. Submit again.";
+    return "data.common.invalidProof";
   }
   if (reason.code === "rate-limited") {
-    return "Too many confirmation attempts. Wait one minute and try again.";
+    return "data.common.rateLimited";
   }
   if (reason.code === "request-invalid") {
-    return `The ${action === "cancel" ? "Cancel" : "Retry"} request is invalid. Reload Dataset status.`;
+    return `data.action.invalidRequest.${action}`;
   }
-  return `${action === "cancel" ? "Cancel" : "Retry"} is temporarily unavailable. Try again.`;
+  return `data.action.actionUnavailable.${action}`;
 }
