@@ -1,3 +1,4 @@
+import { fontStylesheet, serveBrandAssets } from "./brand-assets";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
@@ -33,8 +34,10 @@ test.beforeAll(async () => {
 });
 
 test.beforeEach(async ({ page }) => {
-  await page.setContent(`<style>${styles}</style><div id="root"></div>`);
+  await serveBrandAssets(page);
+  await page.setContent(`${fontStylesheet}<style>${styles}</style><div id="root"></div>`);
   await page.addScriptTag({ content: composerScript });
+  await page.evaluate(() => document.fonts.ready);
 });
 
 for (const mobile of [false, true]) {

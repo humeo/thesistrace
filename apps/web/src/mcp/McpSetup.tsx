@@ -17,17 +17,17 @@ export function McpSetup({ endpoint }: { endpoint: string }) {
     <ol className="mcp-setup-flow" aria-label="Connection steps">
       <li><strong>Add the server</strong><span>Use the setup prompt or manual instructions below.</span></li>
       <li><strong>Approve access</strong><span>Sign in with your email and review the requested permissions.</span></li>
-      <li><strong>Verify the tools</strong><span>Ask your assistant to list its QuantTrace tools.</span></li>
+      <li><strong>Verify the tools</strong><span>Ask your assistant to list its Quantgrove tools.</span></li>
     </ol>
     <div key={client} className="mcp-setup-details">
       <details><summary>View setup prompt</summary><p className="mcp-agent-prompt" lang="en">{prompt}</p></details>
       <details><summary>{client === "other" ? "Add the server manually" : "Add with a command"}</summary>
-        <div className="mcp-manual">{client === "other" ? <><p>In a client that supports remote MCP and account authorization, add the Server URL below, then sign in to QuantTrace when prompted.</p><div className="mcp-endpoint"><span>Server URL</span><code>{endpoint}</code><CopyButton text={endpoint} label="Copy URL" /></div><p>Name: <strong>QuantTrace</strong> · Transport: <strong>Streamable HTTP</strong></p></> : <>
+        <div className="mcp-manual">{client === "other" ? <><p>In a client that supports remote MCP and account authorization, add the Server URL below, then sign in to Quantgrove when prompted.</p><div className="mcp-endpoint"><span>Server URL</span><code>{endpoint}</code><CopyButton text={endpoint} label="Copy URL" /></div><p>Name: <strong>Quantgrove</strong> · Transport: <strong>Streamable HTTP</strong></p></> : <>
           <div className="mcp-section-heading"><h3><Terminal size={15} />1. Run in your terminal</h3><CopyButton text={addCommand(client, endpoint)} label="Copy command" /></div>
           <pre tabIndex={0} aria-label={`${clients[client]} add command`}><code>{addCommand(client, endpoint)}</code></pre>
           <h3>2. Sign in and authorize</h3>
-          {client === "codex" ? <div className="mcp-login-command"><code>codex mcp login quanttrace</code><CopyButton text="codex mcp login quanttrace" label="Copy login command" /></div> : <p>Open Claude Code and run <code>/mcp</code>. Select QuantTrace and follow the sign-in instructions.</p>}
-          <p>Then ask {clients[client]} to list the available QuantTrace tools.</p>
+          {client === "codex" ? <div className="mcp-login-command"><code>codex mcp login quanttrace</code><CopyButton text="codex mcp login quanttrace" label="Copy login command" /></div> : <p>Open Claude Code and run <code>/mcp</code>. Select <code>quanttrace</code> and follow the sign-in instructions.</p>}
+          <p>Then ask {clients[client]} to list the available Quantgrove tools.</p>
         </>}</div>
       </details>
     </div>

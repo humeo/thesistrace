@@ -665,7 +665,7 @@ export function ChatIntroduction({ opening = false }: { opening?: boolean }) {
       <p className="eyebrow">Research Agent</p>
       <h1>Turn an investment idea into Alpha</h1>
       <p className="chat-empty-copy">
-        Describe the signal you want to investigate. ThesisTrace will use the selected registered model and only this Chat's memory.
+        Describe the signal you want to investigate. Quantgrove will use the selected registered model and only this Chat's memory.
       </p>
       {opening ? <p className="chat-history-status">Opening conversation…</p> : null}
     </section>

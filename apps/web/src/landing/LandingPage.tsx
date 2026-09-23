@@ -1,13 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
-const logo = '/quanttrace-logo.png';
+import { Brand } from '../brand/Brand';
 import { copy, type Language } from './copy';
 import './landing.css';
-function Logo() {
-    return <img className="qt-logo" src={logo} alt="" width={32} height={32}/>;
-}
-function Brand({ language }: {
-    language: Language;
-}) { const t = copy[language]; return <><Logo /><span className="qt-brand-text"><strong>{t.brand}</strong></span></>; }
 export default function Landing() {
     const [language, setLanguage] = useState<Language>(() => new URLSearchParams(location.search).get('lang') === 'zh' ? 'zh' : 'en');
     const t = copy[language];
@@ -35,7 +29,7 @@ export default function Landing() {
     };
     return <div className="landing-page">
     <header className="qt-header">
-      <a className="qt-brand" href="#top" aria-label={t.home}><Brand language={language}/></a>
+      <a className="qt-brand" href="#top" aria-label={t.home}><Brand className="qt-logo" size={32} /></a>
       <nav aria-label={t.navigation}>
         <a className="qt-community" href="https://discord.gg/tdwxubVhMJ" target="_blank" rel="noopener noreferrer" aria-label={t.community} title={t.community}><img src="/brand/discord-symbol-white.svg" alt="" width={20} height={15}/><span>Discord</span></a>
         <div className="qt-language" role="group" aria-label="Language / 语言">
@@ -48,8 +42,13 @@ export default function Landing() {
     </header>
     <main id="top">
       <section className="qt-hero" aria-labelledby="hero-title">
-        <h1 id="hero-title">{t.headline[0]}<span className="qt-headline-ending">{t.headline[1]}</span></h1>
-        <p className="qt-subtitle">{t.subtitle}</p><a className="qt-primary" href="#preview">{t.explore}</a>
+        <div className="qt-hero-copy">
+          <h1 id="hero-title">{t.headline[0]}<span className="qt-headline-ending">{t.headline[1]}</span></h1>
+          <p className="qt-descriptor">{t.descriptor}</p>
+          <p className="qt-subtitle">{t.subtitle}</p>
+          <div className="qt-hero-actions"><a className="qt-primary" href="/login">{t.start}</a><a className="qt-secondary" href="#preview">{t.viewExample}</a></div>
+        </div>
+        <img className="qt-hero-image" src="/brand/quantgrove-botanical.jpg" alt="" width={570} height={760} fetchPriority="high" />
       </section>
       <section id="method" className="qt-method" aria-label={t.stepsLabel}>
         {t.stages.map((item, index) => <button className="qt-stage" key={index} onClick={() => selectStage(index)} aria-label={`${item.title}: ${t.viewExample}`}><span className="qt-number">0{index + 1}</span><h2>{item.title}</h2><p>{item.description}</p></button>)}
@@ -77,6 +76,6 @@ export default function Landing() {
       </section>
       <section className="qt-access"><h2>{t.accessTitle}</h2><p>{t.accessBody}</p><a className="qt-primary" href="/login">{t.login}</a></section>
     </main>
-    <footer><a className="qt-brand" href="#top"><Brand language={language}/></a><p>{t.footer}</p></footer>
+    <footer><a className="qt-brand" href="#top" aria-label={t.home}><Brand className="qt-logo" size={24} /></a><p>{t.footer}</p><a className="qt-footer-community" href="https://discord.gg/tdwxubVhMJ" target="_blank" rel="noopener noreferrer">{t.community}</a></footer>
   </div>;
 }

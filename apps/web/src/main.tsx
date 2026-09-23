@@ -97,7 +97,7 @@ function BrowserRoutedApp() {
   }, [anonymousRedirect, authenticatedRedirect, navigate]);
 
   if (state.status === "loading") {
-    return <AuthStatus title="Checking access" message="Verifying your ThesisTrace session…" />;
+    return <AuthStatus title="Checking access" message="Verifying your Quantgrove session…" />;
   }
   if (state.status === "setup") {
     return <AuthStatus title="Preparing workspace" message="Setting up your Research folders…" />;
@@ -123,7 +123,7 @@ function BrowserRoutedApp() {
     );
   }
   if (anonymousRedirect !== null || authenticatedRedirect !== null) {
-    return <AuthStatus title="Opening ThesisTrace" message="Redirecting…" />;
+    return <AuthStatus title="Opening Quantgrove" message="Redirecting…" />;
   }
   if (state.status === "anonymous") {
     return (
@@ -136,7 +136,7 @@ function BrowserRoutedApp() {
     );
   }
   if (researcherId === null) {
-    return <AuthStatus title="Opening ThesisTrace" message="Preparing product access…" />;
+    return <AuthStatus title="Opening Quantgrove" message="Preparing product access…" />;
   }
   return (
     <CoreApp

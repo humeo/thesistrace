@@ -1,7 +1,7 @@
 export const clients = { codex: "Codex", claude: "Claude Code", other: "Other client" } as const;
 export type McpClient = keyof typeof clients;
 export function setupPrompt(client: McpClient, endpoint: string): string {
-  return `Add QuantTrace MCP to ${client === "other" ? "this AI client" : clients[client]} using ${endpoint}. If authorization is needed, guide me through signing in to QuantTrace and approving access. Then retrieve the tool list and report the connection status and available tools. Preserve all other MCP configurations and do not run any research tasks.`;
+  return `Add Quantgrove MCP to ${client === "other" ? "this AI client" : clients[client]} using ${endpoint}. If authorization is needed, guide me through signing in to Quantgrove and approving access. Then retrieve the tool list and report the connection status and available tools. Preserve all other MCP configurations and do not run any research tasks.`;
 }
 export function addCommand(client: Exclude<McpClient, "other">, endpoint: string): string {
   const quoted = `'${endpoint.replaceAll("'", "'\\''")}'`;

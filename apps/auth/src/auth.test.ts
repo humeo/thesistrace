@@ -68,6 +68,7 @@ describe("ThesisTrace Better Auth configuration", () => {
       const auth = createThesisTraceAuth(settings, pool, dependencies);
 
       expect(auth.options.baseURL).toBe(settings.publicOrigin);
+      expect(auth.options.appName).toBe("Quantgrove");
       expect(auth.options.basePath).toBe("/api/auth");
       expect(auth.options.trustedOrigins).toEqual([settings.publicOrigin]);
       expect(auth.options.plugins?.map((plugin) => plugin.id)).toEqual(["email-otp", "oauth-provider", "jwt"]);

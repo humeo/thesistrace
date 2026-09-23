@@ -39,13 +39,13 @@ describe("MCP product page", () => {
     expect(host.textContent).toContain("Service available");
     expect(host.textContent).toContain("1 tools");
     expect(host.textContent).not.toContain("Browse daily tracks");
-    expect(host.textContent).not.toContain("Built into QuantTrace chat");
+    expect(host.textContent).not.toContain("Built into Quantgrove chat");
     await click(button("Copy setup prompt"));
-    expect(copied).toHaveBeenLastCalledWith(expect.stringContaining(`Add QuantTrace MCP to Codex using ${endpoint}.`));
+    expect(copied).toHaveBeenLastCalledWith(expect.stringContaining(`Add Quantgrove MCP to Codex using ${endpoint}.`));
     expect(host.textContent).toContain("No authorized apps yet");
     await click(button("Claude Code"));
     await click(button("Copy setup prompt"));
-    expect(copied).toHaveBeenLastCalledWith(expect.stringContaining("Add QuantTrace MCP to Claude Code"));
+    expect(copied).toHaveBeenLastCalledWith(expect.stringContaining("Add Quantgrove MCP to Claude Code"));
     await click(button("Other client"));
     const manual = [...host.querySelectorAll("details")].find(element => element.querySelector("summary")?.textContent === "Add the server manually")!;
     await click(manual.querySelector("summary")!);

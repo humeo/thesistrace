@@ -1,3 +1,4 @@
+import { fontStylesheet, serveBrandAssets } from "./brand-assets";
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
@@ -12,7 +13,7 @@ test.beforeAll(async () => {
  const chunk = (Array.isArray(result) ? result : [result]).flatMap(b => b.output).find(o => o.type === 'chunk' && o.isEntry);
  if (chunk?.type !== 'chunk') throw new Error('Missing entry'); script = chunk.code;
 });
-test.beforeEach(async ({page}) => { page.on('pageerror', error => { throw error; }); await page.setViewportSize({width:1200,height:850}); await page.emulateMedia({reducedMotion:'reduce'}); await page.route("http://shell.fixture/**", route => route.fulfill({contentType:"text/html",body:`<style>${styles}</style><div id="root"></div>`})); await page.route('http://shell.fixture/brand/discord-symbol-white.svg', route => route.fulfill({contentType:'image/svg+xml',body:readFileSync(new URL('../public/brand/discord-symbol-white.svg',import.meta.url))})); await page.route('http://shell.fixture/quanttrace-logo.png', route => route.fulfill({contentType:'image/png',body:readFileSync(new URL('../public/quanttrace-logo.png',import.meta.url))})); await page.goto("http://shell.fixture/"); await page.addScriptTag({content:script}); });
+test.beforeEach(async ({page}) => { page.on('pageerror', error => { throw error; }); await page.setViewportSize({width:1200,height:850}); await page.emulateMedia({reducedMotion:'reduce'}); await page.route("http://shell.fixture/**", route => route.fulfill({contentType:"text/html",body:`${fontStylesheet}<style>${styles}</style><div id="root"></div>`})); await serveBrandAssets(page); await page.goto("http://shell.fixture/"); await page.addScriptTag({content:script}); await page.evaluate(() => document.fonts.ready); });
 test('account popup aligns with its trigger and keeps Discord in keyboard order', async ({page}, testInfo) => {
  const account=page.getByLabel('Account menu'); await account.click();
  await expect(account.locator('.account-avatar')).toBeVisible();

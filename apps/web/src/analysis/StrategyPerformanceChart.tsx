@@ -64,7 +64,7 @@ export function StrategyPerformanceChart({
       layout: {
         background: { type: ColorType.Solid, color: "#0f1011" },
         textColor: "#8a8f98",
-        fontFamily: "Inter, -apple-system, BlinkMacSystemFont, sans-serif",
+        fontFamily: "Inter, Noto Sans SC, -apple-system, BlinkMacSystemFont, sans-serif",
         fontSize: 11,
         attributionLogo: false,
       },

@@ -115,7 +115,7 @@ test("Chat exposes the registered Catalog and responsive Session sidebar through
   const canvas = (await page.locator(".chat-main").boundingBox())!;
   expect(canvas.y).toBe(0);
   expect(canvas.height).toBe(900);
-  await expect(sidebar.getByRole("link", { name: "QuantTrace home" })).toBeVisible();
+  await expect(sidebar.getByRole("link", { name: "Quantgrove home" })).toBeVisible();
   await expect(sidebar.getByRole("link", { name: "New Chat" })).toBeVisible();
   await expect(sidebar.getByRole("navigation", { name: "Workspace" })).toBeVisible();
   await expect(sidebar.getByRole("heading", { name: "Chats" })).toHaveCount(0);
@@ -183,7 +183,7 @@ test("Chat exposes the registered Catalog and responsive Session sidebar through
   await page.emulateMedia({ reducedMotion: "reduce" });
   await open.press("Enter");
   await expect(close).toBeFocused();
-  const home = sidebar.getByRole("link", { name: "QuantTrace home" });
+  const home = sidebar.getByRole("link", { name: "Quantgrove home" });
   const account = sidebar.getByLabel("Account menu");
   await home.focus();
   await home.press("Shift+Tab");

@@ -27,20 +27,20 @@ test("Email verification creates one account and preserves the access lifecycle"
   await openAccountMenu(page);
   await expect(page.getByRole("button",{name:"Change password"})).toHaveCount(0);
   await page.getByRole("button",{name:"Log out"}).click();
-  await expect(page.getByRole("heading",{name:"Welcome to QuantTrace"})).toBeVisible();
+  await expect(page.getByRole("heading",{name:"Welcome to Quantgrove"})).toBeVisible();
   await loginThroughUi(page,email.toUpperCase());
   await expect(page).toHaveURL(/\/data$/);
   const second = await (await page.request.get("/api/auth/get-session")).json();
   expect(second.user.id).toBe(first.user.id);
   expect(runAuthOperator("deactivate","--email",email)).toMatchObject({status:"updated"});
   await page.evaluate(()=>window.dispatchEvent(new Event("focus")));
-  await expect(page.getByRole("heading",{name:"Welcome to QuantTrace"})).toBeVisible();
+  await expect(page.getByRole("heading",{name:"Welcome to Quantgrove"})).toBeVisible();
   expect(runAuthOperator("reactivate","--email",email)).toMatchObject({status:"updated"});
   await loginThroughUi(page,email);
   await expect(page).toHaveURL(/\/data$/);
   expect(runAuthOperator("revoke-sessions","--email",email)).toMatchObject({status:"updated"});
   await page.evaluate(()=>window.dispatchEvent(new Event("focus")));
-  await expect(page.getByRole("heading",{name:"Welcome to QuantTrace"})).toBeVisible();
+  await expect(page.getByRole("heading",{name:"Welcome to Quantgrove"})).toBeVisible();
 });
 
 test("Invitation expiry, reissue, and lost-response replay converge safely", async ({ page }) => {
@@ -144,7 +144,7 @@ test("Bootstrap and Core failures preserve the exact Session boundary", async ({
     status: 401,
   }));
   await page.getByRole("link", { name: "Data", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Welcome to QuantTrace" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Welcome to Quantgrove" })).toBeVisible();
   await expect(page.getByLabel("Account menu")).toHaveCount(0);
 });
 

@@ -9,7 +9,7 @@ test.beforeAll(async () => {
   origin = server.resolvedUrls!.local[0];
 });
 test.afterAll(async () => { await server?.close(); });
-for (const width of [1220, 390]) {
+for (const width of [1220, 390, 320]) {
   test(`public landing language, research preview and login at ${width}px`, async ({ page }) => {
     const authRequests: string[] = [];
     await page.route('**/api/**', async route => {
@@ -18,10 +18,12 @@ for (const width of [1220, 390]) {
     });
     await page.setViewportSize({ width, height: 964 });
     await page.goto(origin);
-    await expect(page.getByRole('heading', { name: 'A quantitative research lab for AI agents.' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Ideas grow through evidence.' })).toBeVisible();
     expect(authRequests).toEqual([]);
-    await expect(page.getByRole('link', { name: 'Join Discord' })).toHaveAttribute('href', 'https://discord.gg/tdwxubVhMJ');
-    await expect(page.getByRole('heading', { name: 'Why ThesisTrace?' })).toBeVisible();
+    await page.evaluate(() => document.fonts.ready);
+    await page.screenshot({path: test.info().outputPath(`landing-en-${width}.png`)});
+    await expect(page.getByRole('link', { name: 'Join Discord' }).first()).toHaveAttribute('href', 'https://discord.gg/tdwxubVhMJ');
+    await expect(page.getByRole('heading', { name: 'Why Quantgrove?' })).toBeVisible();
     await expect(page.locator('.qt-value-reasons article')).toHaveCount(4);
     await expect(page.locator('.qt-community img')).toHaveJSProperty('naturalWidth', 64);
     await page.getByRole('button', { name: 'Keep observing: View example' }).click();
@@ -29,13 +31,17 @@ for (const width of [1220, 390]) {
     await page.getByRole('button', { name: '中文', exact: true }).click();
     await expect(page.getByRole('tab', { name: '持续观察' })).toHaveAttribute('aria-selected', 'true');
     await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
+    await expect(page.getByRole('heading', {name: /让想法，\s*在证据中生长。/})).toBeVisible();
+    await page.evaluate(() => document.fonts.ready);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({path: test.info().outputPath(`landing-zh-${width}.png`)});
     await page.reload();
     await expect(page.getByRole('button', { name: '中文', exact: true })).toHaveAttribute('aria-pressed', 'true');
     await page.getByRole('button', { name: 'English', exact: true }).click();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({path: test.info().outputPath(`landing-${width}.png`)});
     await page.getByRole('link', { name: 'Log in', exact: true }).first().click();
-    await expect(page.getByRole('heading', { name: 'Welcome to QuantTrace' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Welcome to Quantgrove' })).toBeVisible();
     await expect(page.getByLabel('Email', { exact: true })).toBeVisible();
   });
 }

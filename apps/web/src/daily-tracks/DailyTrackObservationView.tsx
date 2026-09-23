@@ -141,7 +141,7 @@ export function TrackingReturnChart({ observation, originSession }: {
     setSelected(null);
     const chart = createChart(element, {
       width: element.clientWidth, height: 280,
-      layout: { background: { type: ColorType.Solid, color: "#0f1011" }, textColor: "#8a8f98", attributionLogo: false },
+      layout: { background: { type: ColorType.Solid, color: "#0f1011" }, textColor: "#8a8f98", fontFamily: "Inter, Noto Sans SC, -apple-system, BlinkMacSystemFont, sans-serif", attributionLogo: false },
       grid: { vertLines: { visible: false }, horzLines: { color: "#23252a" } },
       rightPriceScale: { borderColor: "#34343a" },
       timeScale: { borderColor: "#34343a", fixLeftEdge: true, fixRightEdge: true },
