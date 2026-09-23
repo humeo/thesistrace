@@ -1,17 +1,22 @@
+import { i18n } from "../i18n";
+
 export const clients = { codex: "Codex", claude: "Claude Code", other: "Other client" } as const;
 export type McpClient = keyof typeof clients;
 export function setupPrompt(client: McpClient, endpoint: string): string {
-  return `Add Quantgrove MCP to ${client === "other" ? "this AI client" : clients[client]} using ${endpoint}. If authorization is needed, guide me through signing in to Quantgrove and approving access. Then retrieve the tool list and report the connection status and available tools. Preserve all other MCP configurations and do not run any research tasks.`;
+  return i18n.t("mcp:setupPrompt", { client: client === "other" ? i18n.t("mcp:thisClient") : clients[client], endpoint });
 }
 export function addCommand(client: Exclude<McpClient, "other">, endpoint: string): string {
   const quoted = `'${endpoint.replaceAll("'", "'\\''")}'`;
   return client === "codex" ? `codex mcp add quanttrace --url ${quoted}`
     : `claude mcp add --transport http --scope user quanttrace ${quoted}`;
 }
-export const scopeLabels: Record<string, string> = {
-  "research:read": "Read research context, runs and results",
-  "research:execute": "Create research runs and batches",
-  "tracking:read": "Read daily tracks and observations",
-  "tracking:execute": "Start, refresh and retry daily tracks",
-  offline_access: "Keep access using a refresh token",
-};
+export function scopeLabel(scope: string): string {
+  switch (scope) {
+    case "research:read": return i18n.t("mcp:scopes.researchRead");
+    case "research:execute": return i18n.t("mcp:scopes.researchExecute");
+    case "tracking:read": return i18n.t("mcp:scopes.trackingRead");
+    case "tracking:execute": return i18n.t("mcp:scopes.trackingExecute");
+    case "offline_access": return i18n.t("mcp:scopes.offlineAccess");
+    default: return scope;
+  }
+}

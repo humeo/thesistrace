@@ -1,4 +1,5 @@
 import { dailyEn, dailyZh } from "./messages/daily";
+import { mcpEn, mcpZh } from "./messages/mcp";
 import { chatEn, chatZh } from "./messages/chat";
 import { batchesEn, batchesZh } from "./messages/batches";
 import { runsEn, runsZh } from "./messages/runs";
@@ -16,6 +17,6 @@ import { researchEn, researchZh } from "./messages/research";
 import { diagnosticsEn, diagnosticsZh } from "./messages/diagnostics";
 
 export const resources = {
-  en: { chat: chatEn, daily: dailyEn, runs: runsEn, batches: batchesEn, analysis: { ...analysisEn, metrics: metricHelpEn }, common: commonEn, navigation: navigationEn, auth: authEn, landing: { page: copy.en }, data: dataEn, editor: editorEn, diagnostics: diagnosticsEn, research: researchEn, catalog: { fields: fields.en, ...catalog.en } },
-  "zh-CN": { chat: chatZh, daily: dailyZh, runs: runsZh, batches: batchesZh, analysis: { ...analysisZh, metrics: metricHelpZh }, common: commonZh, navigation: navigationZh, auth: authZh, landing: { page: copy.zh }, data: dataZh, editor: editorZh, diagnostics: diagnosticsZh, research: researchZh, catalog: { fields: fields["zh-CN"], ...catalog["zh-CN"] } },
+  en: { mcp: mcpEn, chat: chatEn, daily: dailyEn, runs: runsEn, batches: batchesEn, analysis: { ...analysisEn, metrics: metricHelpEn }, common: commonEn, navigation: navigationEn, auth: authEn, landing: { page: copy.en }, data: dataEn, editor: editorEn, diagnostics: diagnosticsEn, research: researchEn, catalog: { fields: fields.en, ...catalog.en } },
+  "zh-CN": { mcp: mcpZh, chat: chatZh, daily: dailyZh, runs: runsZh, batches: batchesZh, analysis: { ...analysisZh, metrics: metricHelpZh }, common: commonZh, navigation: navigationZh, auth: authZh, landing: { page: copy.zh }, data: dataZh, editor: editorZh, diagnostics: diagnosticsZh, research: researchZh, catalog: { fields: fields["zh-CN"], ...catalog["zh-CN"] } },
 } as const;
