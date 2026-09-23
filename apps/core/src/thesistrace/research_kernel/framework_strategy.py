@@ -24,9 +24,9 @@ from thesistrace.research_kernel.builtin_framework import (
 from thesistrace.research_kernel.builtin_risk import BuiltinRiskModule
 from thesistrace.research_kernel.direct_strategy import PythonProgram, program_context
 from thesistrace.research_kernel.framework_evidence import (
+    BuiltinRiskEvidence,
     FormulaEvidence,
     FrameworkEvidence,
-    BuiltinRiskEvidence,
     PositionLimitEvidence,
     ReplacementEvidence,
     SignalEvidence,

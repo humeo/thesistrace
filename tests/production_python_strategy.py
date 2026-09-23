@@ -6,13 +6,16 @@ import socket
 import subprocess
 import sys
 import tempfile
+from copy import deepcopy
 from dataclasses import asdict
 from pathlib import Path
 
+from thesistrace.research_kernel.daily_strategy import prepare_daily_strategy
 from thesistrace.research_kernel.strategy_program_runtime import (
     PythonStrategyRuntime,
     StrategyProgramError,
 )
+from thesistrace.research_series import AlignedResearchData
 
 SOURCE = """
 import datetime
@@ -60,6 +63,99 @@ def invoke(runtime, parameters):
     )
 
 
+def probe_framework(parameters):
+    """Invoke each actual Framework module through the installed policy adapter."""
+    session = "2026-08-03"
+    data = AlignedResearchData(
+        sessions=(session,), instruments={}, fields={}, universe_members={session: ()},
+        historical_universe_members={session: ()}, industries={}, execution_prices={},
+        trading_states={}, price_limits={},
+    )
+    source = SOURCE.replace("def decide(", "def observe(") + """
+def decide(context, state, parameters):
+    observation = observe(context, {'count': 1}, parameters)['output']
+    try:
+        context['account']['cash_cny'] = '999999'
+        observation['account_writable'] = True
+    except TypeError:
+        observation['account_writable'] = False
+    return {'output': None, 'state': observation}
+"""
+    stages = ["universe_selection", "alpha", "portfolio_construction", "risk_management"]
+    definition = {"strategy": {
+        "mode": "framework", "environment": PythonStrategyRuntime().identity(),
+        "modules": {stage: {"kind": "python", "program": {
+            "source": source, "parameters": parameters,
+            "data_requirements": {"field_ids": [], "history_sessions": 1},
+        }} for stage in stages},
+    }}
+    account = {"positions": [], "cash_cny": "100000"}
+
+    def decide(value):
+        policy = prepare_daily_strategy(data, None, value)
+        return policy.decide(session=session, report_index=0, account=account,
+                             fills=[], rejections=[], previous=None)
+
+    result = decide(definition)
+    for stage in stages:
+        observed = result.state["module_states"][stage]
+        assert observed["resources"] == dict.fromkeys(
+            [*parameters["paths"], "socket", "subprocess", "ctypes", "network",
+             "restart_deadline"], "denied",
+        )
+        assert observed["environment"] == {
+            "PYTHONHOME": "/runtime", "PYTHONHASHSEED": "0", "TZ": "UTC",
+        }
+        assert observed["account_writable"] is False
+    assert result.target is None
+    assert account == {"positions": [], "cash_cny": "100000"}
+    direct = {"strategy": {
+        "mode": "direct", "environment": definition["strategy"]["environment"],
+        "program": deepcopy(definition["strategy"]["modules"]["portfolio_construction"]["program"]),
+    }}
+    direct_result = decide(direct)
+    for key in ("resources", "environment", "clock", "account_writable"):
+        assert direct_result.state["state"][key] == (
+            result.state["module_states"]["portfolio_construction"][key]
+        )
+    failures = {
+        "loop": "while True: pass",
+        "memory": "bytearray(512 * 1024 * 1024); return {'output': None, 'state': {}}",
+        "output": "return {'output': 'x' * (2 * 1024 * 1024), 'state': {}}",
+        "state_size": "return {'output': None, 'state': {'large': 'x' * (300 * 1024)}}",
+        "exception": "raise ValueError('expected probe failure')",
+        "invalid_state": "return {'output': None, 'state': {'invalid': float('nan')}}",
+    }
+    expected_errors = {
+        "loop": ("resource or capability limits", "wall time limit"),
+        "memory": ("MemoryError", "resource or capability limits"),
+        "output": ("resource or capability limits",),
+        "state_size": ("state exceeds 262144 bytes",),
+        "exception": ("expected probe failure",),
+        "invalid_state": ("Out of range float", "finite JSON values"),
+    }
+    for mode, valid in (("direct", direct), ("framework", definition)):
+        for case, body in failures.items():
+            failing = deepcopy(valid)
+            program = (failing["strategy"]["program"] if mode == "direct" else
+                       failing["strategy"]["modules"]["universe_selection"]["program"])
+            program["source"] = "def decide(context, state, parameters):\n    " + body
+            try:
+                decide(failing)
+            except StrategyProgramError as error:
+                assert error.session == session
+                assert any(reason in str(error) for reason in expected_errors[case]), (case, error)
+                if mode == "framework":
+                    assert "universe_selection" in str(error)
+            else:
+                raise AssertionError(f"Unbounded or invalid {mode} program succeeded")
+            assert decide(direct) == direct_result
+        assert decide(valid) == (direct_result if mode == "direct" else result)
+    assert account == {"positions": [], "cash_cny": "100000"}
+    return {"stages": stages, "authority_unchanged": True, "bounded_failure_recovered": True,
+            "failure_cases": list(failures), "modes": ["direct", "framework"]}
+
+
 def main():
     runtime = PythonStrategyRuntime()
     if len(sys.argv) > 1:
@@ -102,8 +198,9 @@ def main():
         else:
             raise AssertionError("Unbounded guest execution succeeded")
         assert invoke(runtime, parameters) == result
+        framework = probe_framework(parameters)
         assert sentinel.read_text() == "private-host-content"
-    print(json.dumps({"status": "passed", "runtime": runtime.identity()}))
+    print(json.dumps({"status": "passed", "runtime": runtime.identity(), "framework": framework}))
 
 
 if __name__ == "__main__":
