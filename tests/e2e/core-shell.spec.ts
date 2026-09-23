@@ -16,8 +16,45 @@ function recordDocumentRequests(page: Page): string[] {
   return documentRequests;
 }
 
+async function refreshPythonTrackThroughFixtureEnd(page: Page, trackId: string): Promise<void> {
+  let session = "";
+  let unavailableReads = 0;
+  const readTrack = async () => {
+    const response = await page.request.get(`/api/daily-tracks/${trackId}`);
+    if (response.status() === 503) {
+      unavailableReads++;
+      return false;
+    }
+    expect(response.ok()).toBe(true);
+    const track = await response.json() as {
+      strategy_session: string; status: string; blocked_reason: string | null;
+    };
+    expect(track.status, track.blocked_reason ?? "Track must remain active").not.toBe("blocked");
+    session = track.strategy_session;
+    return true;
+  };
+  await expect.poll(readTrack, { timeout: 30_000 }).toBe(true);
+  // Four missing fixture Sessions; every later bounded Advance needs a new action.
+  for (let advance = 0; advance < 4 && session < "2026-08-11"; advance++) {
+    const previousSession = session;
+    await page.getByRole("button", { name: "Refresh to latest data", exact: true }).click();
+    await expect.poll(async () => await readTrack() && session > previousSession,
+      { timeout: 240_000 }).toBe(true);
+    const reload = page.getByRole("button", { name: "Reload status", exact: true });
+    await reload.click();
+    await expect(reload).toBeEnabled();
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    await expect(page.getByText(`Last observation ${session}`, { exact: true })).toBeVisible();
+  }
+  expect(session).toBe("2026-08-11");
+  if (unavailableReads) test.info().annotations.push({ type: "dependency-recovery",
+    description: `Recovered ${unavailableReads} Track read 503 responses with bounded polling.` });
+}
+
 test("Framework modules author, execute, reuse frozen programs and refresh DailyTrack", { tag: "@isolated" }, async ({ page }, testInfo) => {
-  test.setTimeout(300_000);
+  // Cold WASI compilation and multiple explicit Advances are outside each guest's
+  // decision timer; this product journey is not a throughput benchmark.
+  test.setTimeout(600_000);
   const unavailableReads: string[] = [];
   page.on("response", response => {
     const path = new URL(response.url()).pathname;
@@ -89,7 +126,7 @@ test("Framework modules author, execute, reuse frozen programs and refresh Daily
     expect(response.ok()).toBe(true);
     outcome = await response.json();
     return ["succeeded", "failed", "cancelled"].includes(outcome.status);
-  }, { timeout: 120_000 }).toBe(true);
+  }, { timeout: 240_000 }).toBe(true);
   expect(outcome.status, outcome.failure_reason).toBe("succeeded");
   if (await page.getByRole("alert").filter({ hasText: "ResearchRun unavailable" }).isVisible()) {
     // A dependency outage stops UI polling and exposes an explicit Retry action.
@@ -125,11 +162,9 @@ test("Framework modules author, execute, reuse frozen programs and refresh Daily
   await page.getByRole("button", { name: "Start Tracking", exact: true }).click();
   await expect(page).toHaveURL(/\/daily-tracks\/track_[a-f0-9]+$/);
   const trackId = page.url().split("/").at(-1)!;
+  await page.getByRole("tab", { name: /^Holdings/ }).click();
   await expect(page.locator(".framework-state")).toContainText("active signals");
-  await page.getByRole("button", { name: "Refresh to latest data", exact: true }).click();
-  await expect.poll(async () => (await (await page.request.get(`/api/daily-tracks/${trackId}`)).json()).strategy_session,
-    { timeout: 120_000 }).toBe("2026-08-11");
-  await page.getByRole("button", { name: "Reload status", exact: true }).click();
+  await refreshPythonTrackThroughFixtureEnd(page, trackId);
   await expect(page.getByRole("alert")).toHaveCount(0);
   const latest = await (await page.request.get(`/api/daily-tracks/${trackId}`)).json();
   for (const program of programs) expect(latest.observation.decision_state.module_states[program.stage].count).toBe(6);
@@ -139,7 +174,7 @@ test("Framework modules author, execute, reuse frozen programs and refresh Daily
 });
 
 test("Direct Python authoring executes, reuses frozen source and explicitly advances DailyTrack", { tag: "@isolated" }, async ({ page }) => {
-  test.setTimeout(180_000);
+  test.setTimeout(360_000);
   publishFinancialTrackHead("lagged");
   await page.goto("/research?new");
   await page.getByRole("radio", { name: /Strategy Backtest/ }).check();
@@ -201,10 +236,7 @@ test("Direct Python authoring executes, reuses frozen source and explicitly adva
   const origin = await (await page.request.get(`/api/daily-tracks/${trackId}`)).json();
   expect(origin.strategy_session).toBe("2026-08-05");
   expect(origin.observation.decision_state.state).toEqual({ count: 2 });
-  await page.getByRole("button", { name: "Refresh to latest data", exact: true }).click();
-  await expect.poll(async () => (await (await page.request.get(`/api/daily-tracks/${trackId}`)).json()).strategy_session,
-    { timeout: 90_000 }).toBe("2026-08-11");
-  await page.getByRole("button", { name: "Reload status", exact: true }).click();
+  await refreshPythonTrackThroughFixtureEnd(page, trackId);
   await expect(page.getByRole("alert")).toHaveCount(0);
   const latest = await (await page.request.get(`/api/daily-tracks/${trackId}`)).json();
   expect(latest.observation.decision_state.state).toEqual({ count: 6 });
