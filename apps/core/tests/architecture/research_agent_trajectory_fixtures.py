@@ -434,6 +434,7 @@ def daily_track_payload(
             "observed_at": "2024-02-01T00:00:00Z",
         },
         "blocked_reason": "market data refresh is required" if blocked else None,
+        "blocked_code": "DATA_FAMILY_COVERAGE_UNAVAILABLE" if blocked else None,
         "action_eligibility": {
             "refresh": lagging and not blocked,
             "retry": blocked,

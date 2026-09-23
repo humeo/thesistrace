@@ -227,7 +227,7 @@ describe("TrackingProgressView", () => {
     expect(markup).toContain("retry_wait");
     expect(markup).toContain("2/3");
     expect(markup).toContain("Retry eligible");
-    expect(markup).toContain("2026-08-18T00:00:30+00:00");
+    expect(markup).toContain("2026-08-18 00:00:30 UTC");
     expect(markup).not.toContain("Current session");
     expect(markup).not.toContain("completed");
   });

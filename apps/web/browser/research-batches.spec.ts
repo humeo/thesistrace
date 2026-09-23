@@ -56,6 +56,17 @@ test("batch cancellation retries the same request and follows cancelling through
   await expect(confirmation.getByRole("button", { name: "Keep batch" })).toBeFocused();
   await expect(confirmation).toContainText("1 unfinished research run will be cancelled. Completed results will remain.");
   await expect(confirmation).toContainText("Completed factor");
+  for (const width of [1050, 390, 320]) {
+    await page.setViewportSize({ width, height: 964 });
+    await page.getByRole("button", { name: "简体中文", exact: true }).evaluate(element => (element as HTMLButtonElement).click());
+    const translated = page.getByRole("dialog", { name: "取消此批次？" });
+    await expect(translated.getByRole("button", { name: "保留批次" })).toBeFocused();
+    await expect(translated).toContainText("将取消 1 个尚未完成的研究运行");
+    await expect(translated).toContainText("Completed factor");
+    expect(requests).toHaveLength(0);
+    expect(await translated.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+    await page.getByRole("button", { name: "English", exact: true }).evaluate(element => (element as HTMLButtonElement).click());
+  }
   await confirmation.getByRole("button", { name: "Cancel batch", exact: true }).click();
   await expect(confirmation.getByRole("alert")).toContainText("cancellation failed");
   await confirmation.getByRole("button", { name: "Cancel batch", exact: true }).click();
@@ -99,7 +110,7 @@ test("a batch completing between inspection and confirmation requires a fresh st
   await page.route("**/api/research-batches/batch_running", route => route.fulfill({ json: detail }));
   await page.route("**/api/research-batches/batch_running/cancel", route => {
     detail = { ...detail, status: "succeeded" };
-    return route.fulfill({ status: 409, json: { detail: "Research Batch state does not allow cancellation" } });
+    return route.fulfill({ status: 409, json: { detail: { code: "BATCH_NOT_CANCELLABLE" } } });
   });
   await openBatches(page);
   const confirmation = page.getByRole("dialog", { name: "Cancel batch?" });

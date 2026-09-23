@@ -1087,7 +1087,7 @@ def create_app(
                 _researcher_id(request), batch_id, command
             )
         except ResearchBatchCancelConflict as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
+            raise HTTPException(status_code=409, detail={"code": error.code}) from error
         except ResearchBatchTemporarilyUnavailable as error:
             raise HTTPException(
                 status_code=503,
@@ -1179,7 +1179,7 @@ def create_app(
         try:
             run = _runtime(request).research_runs.organize(_researcher_id(request), run_id, command)
         except ResearchRunOrganizationConflict as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
+            raise HTTPException(status_code=409, detail={"code": error.code}) from error
         if run is None:
             raise HTTPException(status_code=404, detail="ResearchRun not found")
         return run
@@ -1397,7 +1397,7 @@ def create_app(
                 _researcher_id(request), run_id, command
             )
         except ResearchRunCancelConflict as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
+            raise HTTPException(status_code=409, detail={"code": error.code}) from error
         except ResearchRunTemporarilyUnavailable as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
         except ValueError as error:
@@ -1421,9 +1421,11 @@ def create_app(
                 _researcher_id(request), run_id, command
             )
         except ResearchRunStartTrackingConflict as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
+            raise HTTPException(status_code=409, detail={"code": error.code}) from error
         except ResearchRunTrackingUnavailable as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
+            raise HTTPException(
+                status_code=409, detail={"code": error.code, "limit": error.limit},
+            ) from error
         except ResearchRunTrackingTemporarilyUnavailable as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
         except ValueError as error:

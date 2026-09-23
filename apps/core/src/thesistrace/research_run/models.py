@@ -336,6 +336,18 @@ class ResearchAdmissionDetails(BaseModel):
     actual: str | list[str]
 
 
+class RerunSourceDetails(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    kind: Literal["rerun_source"] = "rerun_source"
+    reason: Literal[
+        "unsupported_setting", "checkpoint_boundary", "research_kind", "invalid_field",
+        "invalid_source",
+    ]
+    expected: str | int | None = None
+    actual: str | None = None
+    validation_type: str | None = None
+
+
 class ResearchRunAdmissionIssue(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -344,7 +356,7 @@ class ResearchRunAdmissionIssue(BaseModel):
     message: str
     severity: Literal["error"] = "error"
     range: SourceRange | None = None
-    details: DiagnosticDetails | ResearchAdmissionDetails | None = None
+    details: DiagnosticDetails | ResearchAdmissionDetails | RerunSourceDetails | None = None
 
 
 class ResearchSpecDiagnostics(BaseModel):

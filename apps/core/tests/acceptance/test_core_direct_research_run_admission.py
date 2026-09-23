@@ -598,6 +598,7 @@ def test_research_organization_changes_without_changing_evidence(tmp_path: Path)
         assert moved.json()["name"] == second["name"]
         assert moved.json()["folder_id"] == folder["id"]
         assert missing.status_code == 409
+        assert missing.json()["detail"] == {"code": "FOLDER_NOT_FOUND"}
         assert client.get(f"/api/research-runs/{first['id']}").json()["folder_id"] == folder["id"]
         assert _stored_evidence(settings, first["id"]) == before
 

@@ -46,6 +46,7 @@ from thesistrace.daily_track.execution import (
 from thesistrace.daily_track.failure_policy import (
     tracking_attempt_failure_code,
     tracking_attempt_retry_eligible,
+    tracking_blocked_reason_code,
 )
 from thesistrace.daily_track.models import (
     DAILY_TRACK_RESULT_SECTIONS,
@@ -232,7 +233,9 @@ class DailyTrackFenced(RuntimeError):
 
 
 class DailyTrackActivationLimitReached(RuntimeError):
-    pass
+    def __init__(self, limit: int) -> None:
+        super().__init__(f"Active DailyTrack limit of {limit} reached")
+        self.limit = limit
 
 
 class DailyTrackAlreadyExists(RuntimeError):
@@ -497,7 +500,7 @@ class DailyTrackService:
         policy = self._quota_policy(researcher_id)
         limit = policy.active_daily_track_limit
         if limit is not None and int(capacity["count"]) >= limit:
-            raise DailyTrackActivationLimitReached(f"Active DailyTrack limit of {limit} reached")
+            raise DailyTrackActivationLimitReached(limit)
         row = self._activate_current(transaction, researcher_id, origin)
         assert row is not None
         return _summary(row)
@@ -1547,12 +1550,13 @@ class DailyTrackService:
                            progression.next_attempt_eligible_at > now() AS retry_wait,
                            progression.finished_at,
                            attempt.status AS attempt_status,
+                           attempt.failure_reason,
                            attempt.execution_phase,
                            attempt.current_session::text AS current_session,
                            attempt.started_at
                     FROM daily_tracks.session_progressions AS progression
                     LEFT JOIN LATERAL (
-                        SELECT status, execution_phase, current_session, started_at
+                        SELECT status, execution_phase, current_session, started_at, failure_reason
                         FROM daily_tracks.session_progression_attempts
                         WHERE progression_id = progression.id
                         ORDER BY ordinal DESC
@@ -1630,6 +1634,12 @@ class DailyTrackService:
                         "observed_at": row["observed_at"],
                     },
                     "blocked_reason": row["blocked_reason"],
+                    "blocked_code": (
+                        None if unresolved is None else tracking_blocked_reason_code(
+                            status=str(row["status"]), attempt_status=unresolved["attempt_status"],
+                            failure_reason=unresolved["failure_reason"],
+                        )
+                    ),
                     "action_eligibility": {
                         "refresh": (
                             row["status"] == "active"
@@ -2436,6 +2446,12 @@ class DailyTrackService:
                         ),
                     },
                     "blocked_reason": row["blocked_reason"],
+                    "blocked_code": (
+                        None if unresolved is None else tracking_blocked_reason_code(
+                            status=str(row["status"]), attempt_status=unresolved["attempt_status"],
+                            failure_reason=unresolved["failure_reason"],
+                        )
+                    ),
                     "observation": project_daily_observation(
                         tracking_observation_state=tracking_observation_state,
                         origin=DailyTrackOriginAccount.model_validate({

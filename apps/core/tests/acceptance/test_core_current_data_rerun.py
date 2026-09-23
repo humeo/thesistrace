@@ -162,6 +162,10 @@ def test_current_data_rerun_keeps_parameters_and_original_result_without_old_gen
         rejected = client.post("/api/research-runs", json=invalid)
         assert rejected.status_code == 422, rejected.text
         assert "rerun_source.through_session" in rejected.text
+        assert rejected.json()["issues"][0]["details"] == {
+            "kind": "rerun_source", "reason": "checkpoint_boundary",
+            "expected": sessions[3], "actual": sessions[4], "validation_type": None,
+        }
         queued = client.post("/api/research-runs", json={
             **track_command, "request_id": "cancel-current-data-run",
         })
@@ -200,6 +204,10 @@ def test_current_data_rerun_keeps_parameters_and_original_result_without_old_gen
         })
         assert unsupported.status_code == 422, unsupported.text
         assert unsupported.json()["issues"][0]["field"] == "costs"
+        assert unsupported.json()["issues"][0]["details"] == {
+            "kind": "rerun_source", "reason": "unsupported_setting",
+            "expected": None, "actual": None, "validation_type": None,
+        }
         with runtime.database.transaction() as tx:
             tx.execute(
                 "UPDATE research_runs.runs SET immutable_input = jsonb_set(immutable_input, "

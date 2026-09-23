@@ -47,3 +47,18 @@ test("unknown or malformed admission errors never become raw server messages", (
   expect(() => readResearchIssues([{ code: "TYPE_MISMATCH", range: {} }])).toThrow();
   expect(readResearchIssues([issue("FOLDER_NOT_FOUND", null)])).toEqual([issue("FOLDER_NOT_FOUND", null)]);
 });
+
+test("current-data rerun rejections preserve the source-setting and checkpoint causes", () => {
+  const [setting, boundary] = readResearchIssues([
+    { ...issue("RERUN_SOURCE_INVALID", null), field: "strategy.execution", details: {
+      kind: "rerun_source", reason: "unsupported_setting", expected: null, actual: null, validation_type: null,
+    } },
+    { ...issue("RERUN_SOURCE_INVALID", null), field: "rerun_source.through_session", details: {
+      kind: "rerun_source", reason: "checkpoint_boundary", expected: "2026-08-20", actual: "2026-08-21", validation_type: null,
+    } },
+  ]);
+  expect(formatResearchIssue(setting, "en")).toBe("The original simulation setting is unsupported by the current contract.");
+  expect(formatResearchIssue(setting, "zh-CN")).toBe("原模拟设置不受当前契约支持。");
+  expect(formatResearchIssue(boundary, "en")).toBe("Investigation date 2026-08-21 exceeds the selected published Checkpoint through 2026-08-20.");
+  expect(formatResearchIssue(boundary, "zh-CN")).toBe("调查日期 2026-08-21 超过所选已发布检查点的结束日期 2026-08-20。");
+});

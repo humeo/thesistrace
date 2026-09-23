@@ -379,6 +379,7 @@ class DailyTrackPollingDetail(BaseModel):
     progress: DailyTrackPollingProgress
     timing: DailyTrackPollingTiming
     blocked_reason: str | None
+    blocked_code: str | None
     action_eligibility: DailyTrackActionEligibility
     available_result_sections: list[DailyTrackResultSection]
     retry_after_seconds: Annotated[int, Field(strict=True, ge=1, le=60)] | None
@@ -773,6 +774,7 @@ class DailyTrackDetail(BaseModel):
     lag_sessions: int
     progress: DailyTrackProgress
     blocked_reason: str | None
+    blocked_code: str | None
     observation: DailyTrackObservation
     strategy: DailyTrackStrategyResult
 

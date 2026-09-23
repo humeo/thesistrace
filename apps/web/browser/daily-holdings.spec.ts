@@ -1,7 +1,10 @@
+import { fontStylesheet, serveBrandAssets } from "./brand-assets";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import { build } from "vite";
+
+test.beforeEach(async ({ page }) => { await serveBrandAssets(page); });
 
 let script: string;
 const styles = readFileSync(new URL("../src/analysis/strategy-events.css", import.meta.url), "utf8")
@@ -30,7 +33,7 @@ const row = { session: "2026-08-03", instrument_id: "equity:600000.SH", executio
 test("holdings require explicit detail reads and preserve applied filters when paging", async ({ page }) => {
   const reads: Record<string, unknown>[] = [];
   await page.route("https://holdings.test/**", route => {
-    if (new URL(route.request().url()).pathname === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    if (new URL(route.request().url()).pathname === "/") return route.fulfill({ contentType: "text/html", body: `${fontStylesheet}<div id="root"></div>` });
     const query = route.request().postDataJSON() as Record<string, unknown>;
     reads.push(query);
     return route.fulfill({ json: query.section === "daily_holdings_status"
@@ -52,13 +55,20 @@ test("holdings require explicit detail reads and preserve applied filters when p
   await page.getByRole("button", { name: "Load holdings", exact: true }).click();
   await page.getByLabel("Instrument", { exact: true }).focus();
   await expect(page.getByText("Through must be on or after From.")).toBeVisible();
+  const beforeLanguageReads = reads.length;
+  await page.getByRole("button", { name: "简体中文", exact: true }).click();
+  await expect(page.getByRole("alert")).toHaveText("结束日期不得早于开始日期。");
+  await expect(page.getByLabel("结束", { exact: false }).first()).toHaveValue("2026-08-03");
+  expect(reads).toHaveLength(beforeLanguageReads);
+  await page.getByRole("button", { name: "English", exact: true }).click();
+
   expect(reads).toHaveLength(2);
   await page.locator('input[type="date"]').nth(1).fill("");
   await page.getByLabel("From", { exact: true }).fill("2026-08-03");
   await page.getByRole("button", { name: "Load holdings", exact: true }).click();
   await expect(page.getByText("70.00%", { exact: true })).toBeVisible();
   expect(reads.at(-1)?.unit_id).toBe("unit_a");
-  await expect(page.getByRole("cell", { name: "7000", exact: true })).toHaveCSS("text-align", "right");
+  await expect(page.getByRole("cell", { name: "7,000", exact: true })).toHaveCSS("text-align", "right");
   await page.getByLabel("From", { exact: true }).fill("2026-08-04");
   await page.getByRole("button", { name: "Next holdings page" }).click();
   await expect(page.getByRole("button", { name: "Next holdings page" })).toHaveCount(0);
@@ -76,7 +86,7 @@ test("holdings require explicit detail reads and preserve applied filters when p
 test("expired holdings, empty holdings and request failures remain distinct", async ({ page }) => {
   let detailReads = 0;
   await page.route("https://holdings.test/**", route => {
-    if (new URL(route.request().url()).pathname === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    if (new URL(route.request().url()).pathname === "/") return route.fulfill({ contentType: "text/html", body: `${fontStylesheet}<div id="root"></div>` });
     const query = route.request().postDataJSON() as Record<string, unknown>;
     if (query.section === "daily_holdings_status") return route.fulfill({ json: { status: "recorded", units: [unit], next_cursor: null } });
     detailReads++;
@@ -102,7 +112,7 @@ test("expired holdings rerun only on request and reuse identity after a lost res
   const submissions: Record<string, unknown>[] = [];
   await page.route("https://holdings.test/**", route => {
     const path = new URL(route.request().url()).pathname;
-    if (path === "/" || path === "/research-runs/run_new") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    if (path === "/" || path === "/research-runs/run_new") return route.fulfill({ contentType: "text/html", body: `${fontStylesheet}<div id="root"></div>` });
     const body = route.request().postDataJSON() as Record<string, unknown>;
     if (path === "/api/research-runs") {
       submissions.push(body);
@@ -131,7 +141,7 @@ test("Track rerun pins the checkpoint and investigates the selected period from 
   let submitted: Record<string, unknown> | null = null;
   await page.route("https://holdings.test/**", route => {
     const path = new URL(route.request().url()).pathname;
-    if (path === "/" || path === "/research-runs/run_track_rerun") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    if (path === "/" || path === "/research-runs/run_track_rerun") return route.fulfill({ contentType: "text/html", body: `${fontStylesheet}<div id="root"></div>` });
     if (path === "/api/research-runs") {
       submitted = route.request().postDataJSON() as Record<string, unknown>;
       return route.fulfill({ status: 202, json: { id: "run_track_rerun" } });

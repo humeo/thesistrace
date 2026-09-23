@@ -105,6 +105,7 @@ def test_queued_cancel_replays_and_conflicts_without_malformed_receipt(
             json={"request_id": f"current-data-cancel-{research_kind}"},
         )
         assert conflict.status_code == 409
+        assert conflict.json()["detail"] == {"code": "CANCEL_REQUEST_CONFLICT"}
         malformed = client.post(
             f"/api/research-runs/{second_id}/cancel",
             json={"unexpected": "field"},
@@ -728,9 +729,7 @@ def test_terminal_run_wins_over_late_cancel(tmp_path: Path) -> None:
             json={"request_id": "current-data-after-success"},
         )
         assert outcome.status_code == 409
-        assert outcome.json()["detail"] == (
-            "ResearchRun state does not allow cancellation"
-        )
+        assert outcome.json()["detail"] == {"code": "RUN_NOT_CANCELLABLE"}
         assert client.get(f"/api/research-runs/{run_id}").json() == before
 
 

@@ -176,6 +176,13 @@ def test_queued_cancel_is_atomic_idempotent_conflict_safe_and_terminal(
             json={"request_id": "cancel-after-natural-terminal"},
         )
         assert late.status_code == 409
+        assert late.json()["detail"] == {"code": "BATCH_NOT_CANCELLABLE"}
+        request_conflict = client.post(
+            f"/api/research-batches/{second['id']}/cancel",
+            json={"request_id": "cancel-queued"},
+        )
+        assert request_conflict.status_code == 409
+        assert request_conflict.json()["detail"] == {"code": "BATCH_CANCEL_REQUEST_CONFLICT"}
 
         with client.app.state.core_runtime.database.transaction() as transaction:
             receipts = transaction.execute(

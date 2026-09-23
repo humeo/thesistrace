@@ -1,4 +1,5 @@
-import { STRATEGY_BENCHMARK_DISPLAY_NAME } from "../benchmark";
+import { useTranslation } from "../i18n";
+import { catalogLabel } from "../i18n/catalog";
 import { StrategyPerformanceChart } from "./StrategyPerformanceChart";
 import type { StrategyComparison } from "./strategyComparison";
 
@@ -7,18 +8,20 @@ export function StrategyComparisonPanel({
 }: {
   comparison: StrategyComparison;
 }) {
+  const { t } = useTranslation("analysis");
+  const benchmark = catalogLabel("benchmarks", "csi300-price-index-open");
   if (comparison.status === "unavailable") {
     return (
       <section
-        aria-label={`${STRATEGY_BENCHMARK_DISPLAY_NAME} Strategy Comparison`}
+        aria-label={t("chart.comparison", { benchmark })}
         className="strategy-comparison-unavailable"
         role="status"
       >
-        <strong>{STRATEGY_BENCHMARK_DISPLAY_NAME} comparison unavailable</strong>
+        <strong>{t("chart.unavailable", { benchmark })}</strong>
         <p>
           {comparison.reason === "no_entry_open"
-            ? "The account has not reached its first scheduled trading Open. No entry-period comparison is available yet."
-            : "The fixed Benchmark Snapshot is unavailable. No comparison chart is shown."}
+            ? t("chart.noEntry")
+            : t("chart.noBenchmark")}
         </p>
       </section>
     );

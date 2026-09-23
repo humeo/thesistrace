@@ -1,5 +1,6 @@
 import { Question, X } from "@phosphor-icons/react";
 import { useEffect, useId, useRef, useState, type MouseEvent } from "react";
+import { useTranslation } from "../i18n";
 
 export type MetricHelpContent = Readonly<{
   description: string;
@@ -10,6 +11,7 @@ export type MetricHelpContent = Readonly<{
 }>;
 
 export function MetricHelp({ label, content }: { label: string; content: MetricHelpContent }) {
+  const { t } = useTranslation("analysis");
   const id = useId();
   const panelRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
@@ -48,7 +50,7 @@ export function MetricHelp({ label, content }: { label: string; content: MetricH
   return (
     <>
       <button
-        aria-label={`About ${label}`}
+        aria-label={t("help.about", { label })}
         className="metric-help-trigger"
         onClick={toggle}
         popoverTarget={id}
@@ -60,7 +62,6 @@ export function MetricHelp({ label, content }: { label: string; content: MetricH
         aria-labelledby={`${id}-title`}
         className="metric-help-popover"
         id={id}
-        lang="zh-CN"
         onToggle={(event) => setOpen(event.newState === "open")}
         popover="auto"
         ref={panelRef}
@@ -68,15 +69,15 @@ export function MetricHelp({ label, content }: { label: string; content: MetricH
       >
         <header>
           <h3 id={`${id}-title`}>{label}</h3>
-          <button aria-label="关闭说明" className="metric-help-close" popoverTarget={id} popoverTargetAction="hide" type="button">
+          <button aria-label={t("help.close")} className="metric-help-close" popoverTarget={id} popoverTargetAction="hide" type="button">
             <X aria-hidden="true" size={15} />
           </button>
         </header>
         <p>{content.description}</p>
         <dl>
-          <dt>计算口径</dt><dd>{content.formula}</dd>
-          <dt>取值范围</dt><dd>{content.range}</dd>
-          <dt>如何判断</dt><dd>{content.direction}</dd>
+          <dt>{t("help.formula")}</dt><dd>{content.formula}</dd>
+          <dt>{t("help.range")}</dt><dd>{content.range}</dd>
+          <dt>{t("help.direction")}</dt><dd>{content.direction}</dd>
         </dl>
         {content.note === undefined ? null : <p className="metric-help-note">{content.note}</p>}
       </div>

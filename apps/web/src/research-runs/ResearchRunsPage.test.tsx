@@ -30,6 +30,12 @@ describe("ResearchRunBackLink", () => {
 });
 
 describe("ResearchDeleteDialog", () => {
+  it("preserves markup-like user names as literal text in the deletion decision", () => {
+    const markup = renderToStaticMarkup(<ResearchDeleteDialog deleting={false} error={null}
+      name={'Signal <br/> <strong>alpha</strong> & v2'} onConfirm={() => {}} onDismiss={() => {}} open />);
+    expect(markup).toContain("Signal &lt;br/&gt; &lt;strong&gt;alpha&lt;/strong&gt; &amp; v2");
+  });
+
   it("renders an explicit in-page decision with the permanent and retained effects", () => {
     const markup = renderToStaticMarkup(
       <ResearchDeleteDialog
@@ -197,7 +203,7 @@ describe("ResearchRunProgressView", () => {
     expect(markup).not.toContain("Warm-up");
     expect(markup).not.toContain("Committed chunks");
     expect(markup).toContain("Research sessions");
-    expect(markup).toContain("126 / 4034");
+    expect(markup).toContain("126 / 4,034");
     expect(markup).toContain("1h 2m 3s");
     expect(markup).toContain("Started");
     expect(markup).toContain("2026-08-13 01:00:00 UTC");
@@ -246,7 +252,7 @@ describe("ResearchRunProgressView", () => {
 describe("ResearchFolderLoadFailure", () => {
   it("keeps Folder recovery separate from ResearchRun loading", () => {
     const markup = renderToStaticMarkup(
-      <ResearchFolderLoadFailure error="Research Folders unavailable" onRetry={() => undefined} />,
+      <ResearchFolderLoadFailure error="folderError" onRetry={() => undefined} />,
     );
     expect(markup).toContain("Research Folders unavailable");
     expect(markup).toContain("Retry Folders");

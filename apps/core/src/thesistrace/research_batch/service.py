@@ -265,11 +265,11 @@ class ResearchBatchAdmissionConflict(RuntimeError):
 
 
 class ResearchBatchCancelConflict(RuntimeError):
-    pass
+    code = "BATCH_NOT_CANCELLABLE"
 
 
 class ResearchBatchCancelIdempotencyConflict(ResearchBatchCancelConflict):
-    pass
+    code = "BATCH_CANCEL_REQUEST_CONFLICT"
 
 
 class ResearchBatchCancelStateConflict(ResearchBatchCancelConflict):

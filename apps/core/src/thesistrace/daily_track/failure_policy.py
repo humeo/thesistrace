@@ -57,6 +57,21 @@ def tracking_attempt_failure_code(reason: object) -> str | None:
     return "UNCLASSIFIED_FAILURE" if policy is None else policy.code
 
 
+def tracking_blocked_reason_code(
+    *, status: str, attempt_status: str | None, failure_reason: object,
+) -> str | None:
+    """Present persisted execution facts without interpreting the public English reason."""
+    if status != "blocked":
+        return None
+    # A blocked target without an attempt is the capacity admission rejection.
+    if attempt_status is None:
+        return "CAPACITY_EXCEEDED"
+    code = tracking_attempt_failure_code(failure_reason)
+    if code == "INFRASTRUCTURE_FAILURE":
+        return "INFRASTRUCTURE_RETRIES_EXHAUSTED"
+    return code or "UNCLASSIFIED_FAILURE"
+
+
 def tracking_attempt_retry_eligible(reason: object, cycle_attempt_ordinal: int) -> bool:
     if not isinstance(reason, str):
         return False
@@ -72,5 +87,6 @@ __all__ = (
     "TRACKING_ATTEMPT_FAILURE_POLICIES",
     "TrackingAttemptFailurePolicy",
     "tracking_attempt_failure_code",
+    "tracking_blocked_reason_code",
     "tracking_attempt_retry_eligible",
 )

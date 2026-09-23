@@ -1,3 +1,5 @@
+import { i18n, useTranslation } from "../i18n";
+import { formatDecimal, formatNumber, formatPercent } from "../i18n/format";
 import { useEffect, useId, useState } from "react";
 import { coreFetch } from "../auth/coreFetch";
 import "./factor-evidence.css";
@@ -26,59 +28,60 @@ type Page = { section: "factor_observations"; items: Daily[]; next_cursor: strin
   | { section: "factor_periods"; items: Period[]; next_cursor: string | null };
 type Filters = { horizon: string; view: "daily" | "month" | "year" | "all"; start: string; end: string };
 const groups = ["q1", "q2", "q3", "q4", "q5"] as const;
-const reasonLabels: Record<string, string> = {
-  missing_expression: "Missing signal", missing_industry: "Missing industry",
-  industry_group_too_small: "Industry group too small", sample_insufficient: "Fewer than 30 valid samples",
-  constant_array: "Constant signal or returns", data_unavailable: "Data unavailable",
-  confirmed_market_open_unavailable: "Open unavailable",
-  right_censored_by_research_period_end: "Label extends beyond research end",
-};
-const number = (value: number | null) => value === null ? "—" : value.toFixed(3);
-const percent = (value: number | null) => value === null ? "—" : `${(value * 100).toFixed(2)}%`;
+function reasonLabel(reason: string) {
+  const labels = i18n.t("analysis:factor.reasons", { returnObjects: true });
+  return labels[reason as keyof typeof labels] ?? i18n.t("analysis:unknownReason");
+}
+const number = (value: number | null) => formatDecimal(value, 3, "dash");
+const percent = (value: number | null) => formatPercent(value, { missing: "dash" });
 function Exclusions({ values }: { values: Record<string, number> }) {
+  useTranslation("analysis");
   return <>{Object.entries(values).map(([reason, count]) =>
-    <span className="factor-exclusion" key={reason}>{reasonLabels[reason] ?? reason}: {count}</span>)}</>;
+    <span className="factor-exclusion" key={reason}>{reasonLabel(reason)}: {formatNumber(count)}</span>)}</>;
 }
 function SampleCoverage({ value }: { value: Coverage }) {
-  return <><p>Candidates {value.alpha_candidate_count} · Final signals {value.alpha_sample_count} · Valid labels {value.sample_count}</p>
+  const { t } = useTranslation("analysis");
+  return <><p>{t("factor.samples", { candidates: formatNumber(value.alpha_candidate_count), signals: formatNumber(value.alpha_sample_count), labels: formatNumber(value.sample_count) })}</p>
     <Exclusions values={value.alpha_exclusions} /><Exclusions values={value.label_exclusions} /></>;
 }
 
 export function FactorEvidence({ runId }: { runId: string }) {
+  const { t } = useTranslation("analysis");
   const [open, setOpen] = useState(false);
   const [filters, setFilters] = useState<Filters>({ horizon: "5", view: "month", start: "", end: "" });
   const id = useId();
   return <details className="factor-evidence" onToggle={event => setOpen(event.currentTarget.open)}>
-    <summary>Factor evidence</summary>
+    <summary>{t("factor.title")}</summary>
     {open && <div className="factor-evidence-content">
-      <p>IC and Rank IC describe signal predictiveness. Group and Q5 − Q1 returns are forward Open labels before costs, not executable strategy returns. — means unavailable; zero is an observed value.</p>
+      <p>{t("factor.explanation")}</p>
       <div className="factor-evidence-controls">
-        <label htmlFor={`${id}-horizon`}>Horizon<select id={`${id}-horizon`} value={filters.horizon}
+        <label htmlFor={`${id}-horizon`}>{t("factor.horizon")}<select id={`${id}-horizon`} value={filters.horizon}
           onChange={event => setFilters({ ...filters, horizon: event.target.value })}>
-          {[1, 5, 20].map(h => <option value={h} key={h}>{h} sessions</option>)}
+          {[1, 5, 20].map(h => <option value={h} key={h}>{t("factor.sessions", { count: h })}</option>)}
         </select></label>
-        <label htmlFor={`${id}-view`}>View<select id={`${id}-view`} value={filters.view}
+        <label htmlFor={`${id}-view`}>{t("factor.view")}<select id={`${id}-view`} value={filters.view}
           onChange={event => setFilters({ ...filters, view: event.target.value as Filters["view"] })}>
-          <option value="daily">Daily</option><option value="month">Monthly</option>
-          <option value="year">Yearly</option><option value="all">Full period</option>
+          <option value="daily">{t("factor.daily")}</option><option value="month">{t("factor.month")}</option>
+          <option value="year">{t("factor.year")}</option><option value="all">{t("factor.all")}</option>
         </select></label>
         {filters.view === "daily" && <>
-          <label htmlFor={`${id}-start`}>Signal from<input id={`${id}-start`} type="date" value={filters.start}
+          <label htmlFor={`${id}-start`}>{t("factor.from")}<input id={`${id}-start`} type="date" value={filters.start}
             onChange={event => setFilters({ ...filters, start: event.target.value })} /></label>
-          <label htmlFor={`${id}-end`}>Signal through<input id={`${id}-end`} type="date" value={filters.end}
+          <label htmlFor={`${id}-end`}>{t("factor.through")}<input id={`${id}-end`} type="date" value={filters.end}
             onChange={event => setFilters({ ...filters, end: event.target.value })} /></label>
         </>}
       </div>
-      {filters.view !== "daily" && <p>Grouped by signal date. Daily correlations have equal weight; labels crossing a month or year remain intact. ICIR uses the daily sample standard deviation.</p>}
+      {filters.view !== "daily" && <p>{t("factor.grouping")}</p>}
       <EvidencePage key={`${runId}:${JSON.stringify(filters)}`} runId={runId} filters={filters} />
     </div>}
   </details>;
 }
 
 function EvidencePage({ runId, filters }: { runId: string; filters: Filters }) {
+  const { t } = useTranslation("analysis");
   const [cursors, setCursors] = useState<(string | null)[]>([null]);
   const [page, setPage] = useState<Page | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<"cursor" | "load" | null>(null);
   const [retry, setRetry] = useState(0);
   const cursor = cursors[cursors.length - 1];
   const invalidRange = filters.view === "daily" && filters.start !== "" && filters.end !== "" && filters.start > filters.end;
@@ -95,46 +98,46 @@ function EvidencePage({ runId, filters }: { runId: string; filters: Filters }) {
     const endpoint = filters.view === "daily" ? "factor-observations" : "factor-periods";
     void coreFetch(`/api/research-runs/${encodeURIComponent(runId)}/${endpoint}?${query}`, { signal: controller.signal })
       .then(async response => {
-        if (!response.ok) throw new Error(response.status === 400 ? "The page cursor is no longer valid. Reload the first page." : "Factor evidence could not be loaded.");
+        if (!response.ok) { if (!controller.signal.aborted) setError(response.status === 400 ? "cursor" : "load"); return; }
         const result = await response.json() as Page;
         if (!controller.signal.aborted) setPage(result);
-      }).catch((cause: unknown) => {
-        if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : "Unable to load evidence.");
+      }).catch(() => {
+        if (!controller.signal.aborted) setError("load");
       });
     return () => controller.abort();
   }, [runId, filters, cursor, retry, invalidRange]);
-  if (invalidRange) return <p role="alert">Signal through must be on or after Signal from.</p>;
+  if (invalidRange) return <p role="alert">{t("factor.invalidRange")}</p>;
   return <>
-    {error ? <div role="alert"><p>{error}</p><button type="button" onClick={() => { setCursors([null]); setRetry(value => value + 1); }}>Reload first page</button></div>
-      : page === null ? <p role="status">Loading Factor evidence…</p>
-      : page.items.length === 0 ? <p>No observations in this selection.</p>
+    {error ? <div role="alert"><p>{t(error === "cursor" ? "factor.cursorError" : "factor.loadError")}</p><button type="button" onClick={() => { setCursors([null]); setRetry(value => value + 1); }}>{t("reloadFirst")}</button></div>
+      : page === null ? <p role="status">{t("factor.loading")}</p>
+      : page.items.length === 0 ? <p>{t("factor.empty")}</p>
       : <div className="factor-evidence-table"><table>
-        <caption>{page.section === "factor_observations" ? "Daily signal evidence" : "Signal-date period statistics"}</caption>
-        <thead><tr><th>{page.section === "factor_observations" ? "Signal date" : "Period"}</th><th>IC</th><th>Rank IC</th>
+        <caption>{page.section === "factor_observations" ? t("factor.dailyCaption") : t("factor.periodCaption")}</caption>
+        <thead><tr><th>{page.section === "factor_observations" ? t("factor.signalDate") : t("factor.period")}</th><th>IC</th><th>Rank IC</th>
           {page.section === "factor_periods" && <><th>ICIR</th><th>Rank ICIR</th></>}
-          {groups.map(group => <th key={group}>{group.toUpperCase()}</th>)}<th>Q5 − Q1</th><th>Evidence</th></tr></thead>
+          {groups.map(group => <th key={group}>{group.toUpperCase()}</th>)}<th>Q5 − Q1</th><th>{t("factor.evidence")}</th></tr></thead>
         <tbody>{page.section === "factor_observations" ? page.items.map(row => <tr key={row.session}>
           <td>{row.session}</td><td>{number(row.ic)}</td><td>{number(row.rank_ic)}</td>
-          {groups.map(group => <td key={group}>{percent(row.quantile_returns[group])}<small>n={row.quantile_counts[group]}</small></td>)}
-          <td>{percent(row.top_bottom_return)}</td><td><details><summary>Coverage and label</summary>
+          {groups.map(group => <td key={group}>{percent(row.quantile_returns[group])}<small>n={row.quantile_counts[group] === null ? "—" : formatNumber(row.quantile_counts[group])}</small></td>)}
+          <td>{percent(row.top_bottom_return)}</td><td><details><summary>{t("factor.coverage")}</summary>
             <SampleCoverage value={row} />
-            <p>Open {row.label_entry_session ?? "—"} → {row.label_exit_session ?? "—"}</p>
-            {row.label_status === "right_censored_by_research_period_end" && <p>Label extends beyond research end</p>}
-            {row.correlation_reason && <p>{reasonLabels[row.correlation_reason] ?? row.correlation_reason}</p>}
+            <p>{t("factor.open", { start: row.label_entry_session ?? "—", end: row.label_exit_session ?? "—" })}</p>
+            {row.label_status === "right_censored_by_research_period_end" && <p>{t("factor.reasons.right_censored_by_research_period_end")}</p>}
+            {row.correlation_reason && <p>{reasonLabel(row.correlation_reason)}</p>}
           </details></td></tr>) : page.items.map(row => <tr key={row.period}>
           <td>{row.period}</td><td>{number(row.summary.ic.mean)}</td><td>{number(row.summary.rank_ic.mean)}</td>
           <td>{number(row.summary.ic.icir)}</td><td>{number(row.summary.rank_ic.icir)}</td>
           {groups.map(group => <td key={group}>{percent(row.summary.quantile_returns[group])}</td>)}
-          <td>{percent(row.summary.top_bottom_return)}</td><td><details><summary>{row.coverage.label_evaluable_session_count} / {row.coverage.signal_session_count} sessions</summary>
-            <p>Signals {row.coverage.first_signal_session} → {row.coverage.last_signal_session}</p>
-            <p>Evaluable signals {row.coverage.first_evaluable_signal_session ?? "—"} → {row.coverage.last_evaluable_signal_session ?? "—"}</p>
-            <p>Valid IC days {row.coverage.ic_valid_session_count} · Valid Rank IC days {row.coverage.rank_ic_valid_session_count} · Tail not evaluated {row.coverage.right_censored_session_count}</p>
+          <td>{percent(row.summary.top_bottom_return)}</td><td><details><summary>{t("factor.coverageCount", { valid: formatNumber(row.coverage.label_evaluable_session_count), total: formatNumber(row.coverage.signal_session_count) })}</summary>
+            <p>{t("factor.signals", { start: row.coverage.first_signal_session, end: row.coverage.last_signal_session })}</p>
+            <p>{t("factor.evaluable", { start: row.coverage.first_evaluable_signal_session ?? "—", end: row.coverage.last_evaluable_signal_session ?? "—" })}</p>
+            <p>{t("factor.validDays", { ic: formatNumber(row.coverage.ic_valid_session_count), rankIc: formatNumber(row.coverage.rank_ic_valid_session_count), tail: formatNumber(row.coverage.right_censored_session_count) })}</p>
             <SampleCoverage value={row.coverage} />
           </details></td></tr>)}</tbody>
       </table></div>}
-    <nav aria-label="Factor evidence pages"><button type="button" disabled={cursors.length === 1 || page === null || error !== null}
-      onClick={() => setCursors(values => values.slice(0, -1))}>Previous</button>
-      <span>Page {cursors.length}</span><button type="button" disabled={!page?.next_cursor || error !== null}
-        onClick={() => { if (page?.next_cursor) setCursors(values => [...values, page.next_cursor]); }}>Next</button></nav>
+    <nav aria-label={t("factor.pages")}><button type="button" disabled={cursors.length === 1 || page === null || error !== null}
+      onClick={() => setCursors(values => values.slice(0, -1))}>{t("previous")}</button>
+      <span>{t("page", { page: formatNumber(cursors.length) })}</span><button type="button" disabled={!page?.next_cursor || error !== null}
+        onClick={() => { if (page?.next_cursor) setCursors(values => [...values, page.next_cursor]); }}>{t("next")}</button></nav>
   </>;
 }

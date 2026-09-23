@@ -93,7 +93,7 @@ test("rejected batch cancellation explains the restriction and keeps live resear
     ...detail, progress: { ...detail.progress, completed_research_sessions: completedSessions },
   } }));
   await page.route("**/api/research-runs/run_cancel/cancel", route => route.fulfill({
-    status: 409, json: { detail: "Batch-owned ResearchRun cancellation is controlled by its Research Batch" },
+    status: 409, json: { detail: { code: "BATCH_CANCELLATION_REQUIRED" } },
   }));
   await openResearch(page);
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
@@ -117,6 +117,11 @@ test("cancellation retry keeps its request identity and preserves the frozen inp
   await openResearch(page);
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("cancellation failed");
+  await page.getByRole("button", { name: "简体中文", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("取消研究运行失败");
+  await expect(page.getByRole("group", { name: "研究执行条件" })).toContainText("rank(-pb)");
+  expect(requests).toHaveLength(1);
+  await page.getByRole("button", { name: "English", exact: true }).click();
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
   const facts = page.getByRole("group", { name: "Research execution conditions" });
   await expect(facts).toContainText("cancelled");
@@ -150,4 +155,29 @@ test("accepted cancellation keeps its details and polls until execution has stop
   releaseDetail();
   await expect(facts).toContainText("cancelled");
   await expect(page.getByRole("button", { name: "Cancel", exact: true })).toHaveCount(0);
+});
+
+
+test("a late tracking rejection uses the current language and actual configured limit", async ({ page }) => {
+  await page.route("**/api/research-runs/run_cancel", route => route.fulfill({ json: { ...summary, status: "succeeded", research_kind: "strategy_backtest" } }));
+  let release = () => {};
+  let posts = 0;
+  const ready = new Promise<void>(resolve => { release = resolve; });
+  await page.route("**/api/research-runs/run_cancel/daily-tracks", async route => {
+    posts += 1;
+    await ready;
+    await route.fulfill({ status: 409, json: { detail: { code: "ACTIVE_DAILY_TRACK_LIMIT_REACHED", limit: 7 } } });
+  });
+  await page.route("http://127.0.0.1/", route => route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' }));
+  await page.route("**/api/research-folders", route => route.fulfill({ json: { items: [{ id: "folder_default", name: "Default", is_default: true }], next_cursor: null } }));
+  await page.goto("http://127.0.0.1/");
+  await page.addScriptTag({ content: script });
+  await page.getByRole("button", { name: "Start Tracking", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Starting Tracking…" })).toBeDisabled();
+  await page.getByRole("button", { name: "简体中文", exact: true }).click();
+  release();
+  await expect(page.getByRole("alert")).toContainText("上限为 7");
+  await page.getByRole("button", { name: "English", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("limit is 7");
+  expect(posts).toBe(1);
 });

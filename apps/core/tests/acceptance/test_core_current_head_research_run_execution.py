@@ -1070,6 +1070,7 @@ def test_financial_track_blocks_at_cutoff_then_catches_up(tmp_path: Path) -> Non
         assert blocked["blocked_reason"] == (
             "Financial Coverage ends before the next Research Session."
         )
+        assert blocked["blocked_code"] == "FINANCIAL_COVERAGE_UNAVAILABLE"
         before = _tracking_checkpoint_history(settings, track_id)
 
         recovered_sessions = (*lagged_sessions, "2026-08-10")
@@ -1150,6 +1151,7 @@ def test_industry_track_blocks_at_cutoff_then_requires_retry(tmp_path: Path) -> 
         assert blocked["blocked_reason"] == (
             "Industry Coverage ends before the next Research Session."
         )
+        assert blocked["blocked_code"] == "INDUSTRY_COVERAGE_UNAVAILABLE"
         assert _tracking_checkpoint_history(settings, track_id) == before
 
         _publish_composite_head(
@@ -1416,6 +1418,7 @@ def test_tracking_advance_blocks_one_session_before_creating_an_attempt(
         assert detail["status"] == "blocked"
         assert detail["strategy_session"] == seed_sessions[-1]
         assert detail["blocked_reason"] == ("DailyTrack target exceeds Tracking Worker capacity.")
+        assert detail["blocked_code"] == "CAPACITY_EXCEEDED"
         assert detail["progress"] == {
             "head_session": seed_sessions[-1],
             "lag_sessions": 2,
@@ -1670,6 +1673,9 @@ def test_tracking_transient_cycle_persists_backoff_rotates_and_requires_retry(
             assert (
                 client.get(f"/api/daily-tracks/{retry_track}").json()["blocked_reason"]
                 == "DailyTrack exhausted its automatic infrastructure retries."
+            )
+            assert client.get(f"/api/daily-tracks/{retry_track}").json()["blocked_code"] == (
+                "INFRASTRUCTURE_RETRIES_EXHAUSTED"
             )
             assert runtime.daily_tracks.process_next() is False
             lifecycle_failures = [
@@ -3361,9 +3367,11 @@ def test_current_data_track_limit_releases_capacity_after_stop(tmp_path: Path) -
                 daily_model_budget_nanodollars=0, daily_run_limit=0, active_daily_track_limit=0))
         zero_runs = ResearchRunService(runtime.database, publication=runtime.publication,
             activate_track=zero_tracks.activate)
-        with pytest.raises(ResearchRunTrackingUnavailable, match="limit of 0"):
+        with pytest.raises(ResearchRunTrackingUnavailable, match="limit of 0") as rejection:
             zero_runs.start_tracking(TEST_RESEARCHER.researcher_id, run_ids[0],
                 StartTrackingCommand(request_id="zero-track-policy"))
+        assert rejection.value.code == "ACTIVE_DAILY_TRACK_LIMIT_REACHED"
+        assert rejection.value.limit == 0
         assert client.get("/api/daily-tracks").json()["items"] == []
 
         same_seed_barrier = Barrier(4)
@@ -3388,7 +3396,7 @@ def test_current_data_track_limit_releases_capacity_after_stop(tmp_path: Path) -
             response.json() for response in same_seed_responses if response.status_code == 201
         )
         assert all(
-            response.json() == {"detail": "ResearchRun already has a DailyTrack"}
+            response.json() == {"detail": {"code": "DAILY_TRACK_ALREADY_EXISTS", "limit": None}}
             for response in same_seed_responses
             if response.status_code == 409
         )
@@ -3427,7 +3435,7 @@ def test_current_data_track_limit_releases_capacity_after_stop(tmp_path: Path) -
         )
         rejected_run_id = run_ids[2 + rejected_index]
         assert capacity_responses[rejected_index].json() == {
-            "detail": "Active DailyTrack limit of 3 reached"
+            "detail": {"code": "ACTIVE_DAILY_TRACK_LIMIT_REACHED", "limit": 3}
         }
         assert (
             len(

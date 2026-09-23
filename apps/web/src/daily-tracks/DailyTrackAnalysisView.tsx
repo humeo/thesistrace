@@ -1,6 +1,9 @@
+import { useTranslation } from "react-i18next";
+import { formatPercent, formatDecimal, formatCurrency } from "../i18n/format";
+import { catalogLabel } from "../i18n/catalog";
 import { StrategyComparisonPanel } from "../analysis/StrategyComparisonPanel";
 import type { StrategyComparison } from "../analysis/strategyComparison";
-import { STRATEGY_BENCHMARK_DISPLAY_NAME } from "../benchmark";
+
 
 type DailyTrackStrategyObservation = {
   session: string;
@@ -34,32 +37,33 @@ export type DailyTrackAnalysis = {
 };
 
 export function DailyTrackAnalysisView({ analysis }: { analysis: DailyTrackAnalysis }) {
+  const { t } = useTranslation("daily");
   const metrics = analysis.strategy.summary.metrics;
   return (
     <div className="research-result">
       <section className="research-result-section">
         <StrategyComparisonPanel comparison={analysis.strategy.comparison} />
         <div className="section-heading">
-          <h2>Strategy Summary</h2>
+          <h2>{t("summary")} </h2>
         </div>
         <div className="strategy-metrics">
-          <Metric label="Net cumulative" value={formatPercent(metrics.net_cumulative_return)} />
+          <Metric label={t("netCumulative") } value={formatPercent(metrics.net_cumulative_return)} />
           <Metric
-            label={`${STRATEGY_BENCHMARK_DISPLAY_NAME} cumulative`}
+            label={t("benchmarkCumulative", { benchmark: catalogLabel("benchmarks", "csi300-price-index-open") })}
             value={formatPercent(metrics.benchmark_cumulative_return)}
           />
           <Metric
-            label="Annualized excess"
+            label={t("annualizedExcess") }
             value={formatPercent(metrics.annualized_excess_return)}
           />
           <Metric
-            label="Maximum drawdown"
+            label={t("maximumDrawdown") }
             value={formatPercent(metrics.maximum_drawdown.value)}
           />
-          <Metric label="Sharpe" value={formatDecimal(metrics.sharpe)} />
+          <Metric label={t("sharpe") } value={formatDecimal(metrics.sharpe)} />
           <Metric
-            label="Transaction costs"
-            value={formatCny(metrics.transaction_costs.cumulative_amount)}
+            label={t("transactionCosts") }
+            value={formatCurrency(metrics.transaction_costs.cumulative_amount, 0)}
           />
         </div>
       </section>
@@ -74,20 +78,4 @@ function Metric({ label, value }: { label: string; value: string }) {
       <strong>{value}</strong>
     </div>
   );
-}
-
-function formatPercent(value: number | null) {
-  return value === null ? "Not available" : `${(value * 100).toFixed(2)}%`;
-}
-
-function formatDecimal(value: number | null) {
-  return value === null ? "Not available" : value.toFixed(3);
-}
-
-function formatCny(value: number) {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "CNY",
-    maximumFractionDigits: 0,
-  }).format(value);
 }

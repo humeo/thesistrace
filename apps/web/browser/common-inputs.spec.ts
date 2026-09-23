@@ -1,7 +1,10 @@
+import { fontStylesheet, serveBrandAssets } from "./brand-assets";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import { build } from "vite";
+
+test.beforeEach(async ({ page }) => { await serveBrandAssets(page); });
 
 let script: string;
 const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8")
@@ -30,7 +33,7 @@ test("common inputs load on demand and page through zero and missing values", as
   let reads = 0;
   await page.route("https://common.test/**", async route => {
     const url = new URL(route.request().url());
-    if (url.pathname === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    if (url.pathname === "/") return route.fulfill({ contentType: "text/html", body: `${fontStylesheet}<div id="root"></div>` });
     reads++;
     const next = url.searchParams.has("cursor");
     await route.fulfill({ json: { items: [next ? { ...first, identifier: "industry_return",
@@ -58,7 +61,7 @@ test("common inputs load on demand and page through zero and missing values", as
 test("failed requests can retry without looking like an empty sample", async ({ page }) => {
   let reads = 0;
   await page.route("https://common.test/**", async route => {
-    if (new URL(route.request().url()).pathname === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    if (new URL(route.request().url()).pathname === "/") return route.fulfill({ contentType: "text/html", body: `${fontStylesheet}<div id="root"></div>` });
     reads++;
     await route.fulfill(reads === 1 ? { status: 500, body: "error" }
       : { json: { items: [], next_cursor: null } });
@@ -67,6 +70,11 @@ test("failed requests can retry without looking like an empty sample", async ({ 
   await page.addScriptTag({ content: script });
   await page.getByText("Common market inputs", { exact: true }).click();
   await expect(page.getByRole("alert")).toBeVisible();
+  await page.getByRole("button", { name: "简体中文", exact: true }).click();
+  await expect(page.getByRole("alert")).toHaveText("公共市场输入加载失败。重新加载首页");
+  expect(reads).toBe(1);
+  await page.getByRole("button", { name: "English", exact: true }).click();
+
   await page.getByRole("button", { name: "Reload first page" }).click();
   await expect(page.getByText("This research does not use common market inputs.")).toBeVisible();
 });

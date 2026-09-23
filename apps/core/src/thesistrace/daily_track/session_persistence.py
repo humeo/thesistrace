@@ -148,12 +148,14 @@ class SessionCoordinateRepository:
                            progression.next_attempt_eligible_at::text,
                            progression.next_attempt_eligible_at > now() AS retry_wait,
                            attempt.status AS attempt_status,
+                           attempt.failure_reason,
                            attempt.cycle_attempt_ordinal,
                            attempt.execution_phase,
                            attempt.current_session::text AS current_session
                     FROM daily_tracks.session_progressions AS progression
                     LEFT JOIN LATERAL (
-                        SELECT status, execution_phase, current_session, cycle_attempt_ordinal
+                        SELECT status, execution_phase, current_session, cycle_attempt_ordinal,
+                               failure_reason
                         FROM daily_tracks.session_progression_attempts
                         WHERE progression_id = progression.id
                         ORDER BY ordinal DESC LIMIT 1

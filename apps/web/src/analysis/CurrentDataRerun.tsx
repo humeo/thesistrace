@@ -1,5 +1,7 @@
 import { useRef, useState } from "react";
 import { coreFetch } from "../auth/coreFetch";
+import { useTranslation } from "../i18n";
+import { readResearchIssues, formatResearchIssue, researchIssueField, type ResearchRunAdmissionIssue } from "../research/admission";
 
 export type RerunSource =
   | { kind: "research_run"; run_id: string }
@@ -8,8 +10,9 @@ export type RerunSource =
 export function CurrentDataRerun({ source, folderId, navigate = path => window.location.assign(path) }: {
   source: RerunSource; folderId: string; navigate?: (path: string) => void;
 }) {
+  const { t } = useTranslation("analysis");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<"unavailable" | ResearchRunAdmissionIssue[] | null>(null);
   const pending = useRef<{ key: string; request_id: string } | null>(null);
   const inFlight = useRef(false);
   async function submit() {
@@ -24,23 +27,24 @@ export function CurrentDataRerun({ source, folderId, navigate = path => window.l
           request_id: pending.current.request_id, folder_id: folderId, rerun_source: source,
         }),
       });
-      const result = await response.json() as { id?: string; issues?: { field: string; message: string }[]; detail?: unknown };
-      if (!response.ok || !result.id) {
-        const issues = result.issues?.map(issue => `${issue.field}: ${issue.message}`).join("; ");
-        throw new Error(issues || (typeof result.detail === "string" ? result.detail : "The backtest could not be submitted. Try again."));
+      const result = await response.json() as { id?: unknown; issues?: unknown };
+      if (!response.ok || typeof result.id !== "string" || !result.id) {
+        const issues = response.status === 422 ? readResearchIssues(result.issues) : [];
+        setError(issues.length ? issues : "unavailable");
+        return;
       }
       navigate(`/research-runs/${encodeURIComponent(result.id)}`);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "The backtest could not be submitted.");
+    } catch {
+      setError("unavailable");
     } finally {
       inFlight.current = false; setBusy(false);
     }
   }
   return <div className="daily-holdings-rerun">
-    <p>Create a new backtest with the same strategy and capital using current data. Results may differ; the original result stays available.
-      {source.kind === "daily_track" && <> Runs from the original research start through {source.through_session}.</>}</p>
-    <button type="button" disabled={busy} onClick={() => void submit()}>{busy ? "Submitting backtest…" : "Rerun to generate holdings"}</button>
-    {error && <p role="alert">{error}</p>}
+    <p>{t("rerun.explanation")}
+      {source.kind === "daily_track" && <> {t("rerun.period", { date: source.through_session })}</>}</p>
+    <button type="button" disabled={busy} onClick={() => void submit()}>{t(busy ? "rerun.submitting" : "rerun.submit")}</button>
+    {error && <p role="alert">{error === "unavailable" ? t("rerun.error") : error.map(issue => `${researchIssueField(issue.field)}: ${formatResearchIssue(issue)}`).join("; ")}</p>}
   </div>;
 }
 
@@ -49,10 +53,11 @@ export type RerunOrigin = {
   source_data_generation_id: string; source_checkpoint_manifest_sha256?: string | null;
 };
 export function CurrentDataRerunOrigin({ origin }: { origin: RerunOrigin }) {
+  const { t } = useTranslation("analysis");
   return <p className="research-run-rerun-origin">
-    Current-data rerun · {origin.source_track_id
-      ? <a href={`/daily-tracks/${encodeURIComponent(origin.source_track_id)}`}>Source Daily Track</a>
-      : <a href={`/research-runs/${encodeURIComponent(origin.source_run_id)}`}>Source Research Run</a>}
-    . Uses current data and rules; results may differ from the source.
+    {t("rerun.origin")} · {origin.source_track_id
+      ? <a href={`/daily-tracks/${encodeURIComponent(origin.source_track_id)}`}>{t("rerun.sourceTrack")}</a>
+      : <a href={`/research-runs/${encodeURIComponent(origin.source_run_id)}`}>{t("rerun.sourceRun")}</a>}
+    . {t("rerun.different")}
   </p>;
 }

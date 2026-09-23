@@ -10,7 +10,9 @@ import {
   type Time,
 } from "lightweight-charts";
 
-import { STRATEGY_BENCHMARK_DISPLAY_NAME } from "../benchmark";
+import { interfaceLocale, useTranslation } from "../i18n";
+import { catalogLabel } from "../i18n/catalog";
+import { formatNumber, formatPercent, formatSessionDate } from "../i18n/format";
 import type { StrategyComparisonCurvePoint } from "./strategyComparison";
 
 // TradingView Lightweight Charts™
@@ -48,6 +50,8 @@ export function StrategyPerformanceChart({
 }: {
   curves: StrategyComparisonCurvePoint[];
 }) {
+  const { t, i18n } = useTranslation("analysis");
+  const benchmark = catalogLabel("benchmarks", "csi300-price-index-open");
   const points = useMemo(() => strategyChartPoints(curves), [curves]);
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -86,7 +90,9 @@ export function StrategyPerformanceChart({
       handleScroll: true,
       handleScale: true,
       localization: {
-        priceFormatter: formatPercent,
+        locale: interfaceLocale(),
+        priceFormatter: chartPercent,
+        timeFormatter: (time: Time) => formatSessionDate(timeLabel(time)),
       },
     });
     chartRef.current = chart;
@@ -150,6 +156,14 @@ export function StrategyPerformanceChart({
     };
   }, [points]);
 
+  useEffect(() => {
+    chartRef.current?.applyOptions({ localization: {
+      locale: interfaceLocale(),
+      priceFormatter: chartPercent,
+      timeFormatter: (time: Time) => formatSessionDate(timeLabel(time)),
+    } });
+  }, [i18n.language, points]);
+
   function selectRange(range: VisibleRange): void {
     setVisibleRange(range);
     const chart = chartRef.current;
@@ -166,19 +180,19 @@ export function StrategyPerformanceChart({
   }
 
   if (points.length === 0) {
-    return <p className="strategy-chart-empty">No comparison observations.</p>;
+    return <p className="strategy-chart-empty">{t("chart.empty")}</p>;
   }
   return (
     <figure
       className="strategy-chart"
-      aria-label={`Net Strategy and ${STRATEGY_BENCHMARK_DISPLAY_NAME} performance chart`}
+      aria-label={t("chart.label", { benchmark })}
     >
       <figcaption>
-        <span><i className="strategy-swatch" /> Net Strategy</span>
-        <span><i className="benchmark-swatch" /> {STRATEGY_BENCHMARK_DISPLAY_NAME}</span>
-        <span className="strategy-chart-session-count">{points.length} Research Sessions</span>
+        <span><i className="strategy-swatch" /> {t("chart.strategy")}</span>
+        <span><i className="benchmark-swatch" /> {benchmark}</span>
+        <span className="strategy-chart-session-count">{t("chart.sessions", { total: formatNumber(points.length) })}</span>
       </figcaption>
-      <div className="strategy-chart-toolbar" aria-label="Chart range">
+      <div className="strategy-chart-toolbar" aria-label={t("chart.range")}>
         {(["1Y", "3Y", "5Y", "All"] as const).map((range) => (
           <button
             aria-pressed={visibleRange === range}
@@ -186,19 +200,19 @@ export function StrategyPerformanceChart({
             onClick={() => selectRange(range)}
             type="button"
           >
-            {range}
+            {t(`chart.ranges.${range}`)}
           </button>
         ))}
       </div>
       <div className="strategy-chart-canvas" ref={containerRef} />
       <div className="strategy-chart-readout" aria-live="polite">
         {tooltip === null ? (
-          <span>Move across the chart to inspect a session.</span>
+          <span>{t("chart.inspect")}</span>
         ) : (
           <>
-            <time dateTime={tooltip.time}>{tooltip.time}</time>
-            <span>Net Strategy {formatPercent(tooltip.strategy)}</span>
-            <span>{STRATEGY_BENCHMARK_DISPLAY_NAME} {formatPercent(tooltip.benchmark)}</span>
+            <time dateTime={tooltip.time}>{formatSessionDate(tooltip.time)}</time>
+            <span>{t("chart.strategy")} {chartPercent(tooltip.strategy)}</span>
+            <span>{benchmark} {chartPercent(tooltip.benchmark)}</span>
           </>
         )}
       </div>
@@ -229,7 +243,6 @@ function timeLabel(time: Time): string {
     .join("-");
 }
 
-function formatPercent(value: number): string {
-  const sign = value > 0 ? "+" : "";
-  return `${sign}${(value * 100).toFixed(2)}%`;
+function chartPercent(value: number): string {
+  return formatPercent(value, { signed: true });
 }

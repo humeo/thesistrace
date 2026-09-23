@@ -1,4 +1,11 @@
-import { i18n } from "../i18n";
+import type { ParseKeys } from "i18next";
+import { Trans } from "react-i18next";
+import { catalogLabel } from "../i18n/catalog";
+import { formatDecimal, formatDuration, formatNumber, formatPercent, formatUtcTimestamp } from "../i18n/format";
+import { folderDisplayName } from "../research/folders";
+import { formatRunError, formatExecutionFailure, readOrganizationError, type OrganizationError, readCancelError, readTrackingError, type RunError, type CancelError, type HttpActionError } from "./errors";
+export { formatDuration } from "../i18n/format";
+import { i18n, useTranslation } from "../i18n";
 import { CurrentDataRerunOrigin, type RerunOrigin } from "../analysis/CurrentDataRerun";
 import { DailyHoldings } from "../analysis/DailyHoldings";
 import { StrategyEvents } from "../analysis/StrategyEvents";
@@ -19,7 +26,6 @@ import { coreFetch } from "../auth/coreFetch";
 import { StrategyComparisonPanel } from "../analysis/StrategyComparisonPanel";
 import { MetricHelp, type MetricHelpContent } from "../analysis/MetricHelp";
 import type { StrategyComparison } from "../analysis/strategyComparison";
-import { STRATEGY_BENCHMARK_DISPLAY_NAME } from "../benchmark";
 import {
   useResearchAsDraft,
   type FrozenResearchAuthorableInput,
@@ -204,13 +210,6 @@ export type ResearchFolderOption = {
 type ResearchFolderList = { items: ResearchFolderOption[]; next_cursor: null };
 type LoadState = "loading" | "refreshing" | null;
 const FACTOR_HORIZONS = ["1", "5", "20"] as const;
-const ACTIVE_TRACK_LIMIT_DETAIL = "Active DailyTrack limit of 3 reached";
-const ACTIVE_TRACK_LIMIT_MESSAGE =
-  "3 active, blocked, or stopping DailyTracks already exist. Stop one before starting another.";
-const BATCH_CANCELLATION_DETAIL =
-  "Batch-owned ResearchRun cancellation is controlled by its Research Batch";
-const BATCH_CANCELLATION_MESSAGE =
-  "This research is part of a batch. Cancel the research batch to stop its unfinished runs.";
 const RESEARCH_RUN_PAGE_SIZE = 20;
 type ResearchKindFilter = "" | ResearchRun["research_kind"];
 
@@ -218,6 +217,7 @@ export function ResearchRunsPage({ researcherId, runId }: {
   researcherId: string;
   runId?: string;
 }) {
+  const { t } = useTranslation("runs");
   const [run, setRun] = useState<ResearchRun | null>(null);
   const [items, setItems] = useState<ResearchRun[] | null>(null);
   const [folders, setFolders] = useState<ResearchFolderOption[]>([]);
@@ -227,15 +227,15 @@ export function ResearchRunsPage({ researcherId, runId }: {
   const [sort, setSort] = useState<ResearchRunSort>(DEFAULT_RESEARCH_RUN_SORT);
   const [metricFilters, setMetricFilters] = useState<ResearchMetricFilter[]>([]);
   const [totalCount, setTotalCount] = useState<number | null>(null);
-  const [folderError, setFolderError] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [folderError, setFolderError] = useState<"folderError" | null>(null);
+  const [error, setError] = useState<RunError | null>(null);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [canceling, setCanceling] = useState(false);
-  const [cancelError, setCancelError] = useState<string | null>(null);
+  const [cancelError, setCancelError] = useState<CancelError | null>(null);
   const [startingTracking, setStartingTracking] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<HttpActionError | null>(null);
   const [refreshGeneration, setRefreshGeneration] = useState(0);
   const [folderRefreshGeneration, setFolderRefreshGeneration] = useState(0);
   const loadGeneration = useRef(0);
@@ -260,7 +260,7 @@ export function ResearchRunsPage({ researcherId, runId }: {
       })
       .catch((reason: unknown) => {
         if (reason instanceof DOMException && reason.name === "AbortError") return;
-        setFolderError("Research Folders unavailable");
+        setFolderError("folderError");
       });
     return () => controller.abort();
   }, [folderRefreshGeneration]);
@@ -322,7 +322,7 @@ export function ResearchRunsPage({ researcherId, runId }: {
         if (reason instanceof DOMException && reason.name === "AbortError") return;
         if (generation !== loadGeneration.current) return;
         setLoadState(null);
-        setError("ResearchRun unavailable");
+        setError({ code: "loadError" });
       }
     }
 
@@ -414,7 +414,7 @@ export function ResearchRunsPage({ researcherId, runId }: {
       ? pending.requestId
       : `cancel_${crypto.randomUUID()}`;
     cancelRequest.current = { runId: targetRun.id, requestId };
-    let failureMessage = "ResearchRun cancellation failed. Try again.";
+    let failure: CancelError = "cancelError";
     try {
       const response = await coreFetch(`/api/research-runs/${targetRun.id}/cancel`, {
         method: "POST",
@@ -423,13 +423,8 @@ export function ResearchRunsPage({ researcherId, runId }: {
         signal: controller.signal,
       });
       if (!response.ok) {
-        const body = (await response.json().catch(() => ({}))) as { detail?: unknown };
-        if (typeof body.detail === "string" && body.detail.trim()) {
-          failureMessage = body.detail === BATCH_CANCELLATION_DETAIL
-            ? BATCH_CANCELLATION_MESSAGE
-            : body.detail;
-        }
-        throw new Error(failureMessage);
+        failure = await readCancelError(response);
+        throw new Error("ResearchRun cancellation failed");
       }
       const nextRun = (await response.json()) as ResearchRun;
       if (generation !== cancelGeneration.current) return;
@@ -438,7 +433,7 @@ export function ResearchRunsPage({ researcherId, runId }: {
     } catch (reason: unknown) {
       if (reason instanceof DOMException && reason.name === "AbortError") return;
       if (generation !== cancelGeneration.current) return;
-      setCancelError(failureMessage);
+      setCancelError(failure);
     } finally {
       if (generation === cancelGeneration.current) {
         cancelController.current = null;
@@ -472,13 +467,9 @@ export function ResearchRunsPage({ researcherId, runId }: {
         signal: controller.signal,
       });
       if (!response.ok) {
-        if (response.status === 409) {
-          const body = (await response.json()) as { detail?: unknown };
-          if (body.detail === ACTIVE_TRACK_LIMIT_DETAIL) {
-            throw new Error(ACTIVE_TRACK_LIMIT_MESSAGE);
-          }
-        }
-        throw new Error("Start Tracking failed");
+        const failure = await readTrackingError(response);
+        if (generation === trackingGeneration.current) setError(failure);
+        return;
       }
       const track = (await response.json()) as { id: string };
       if (generation !== trackingGeneration.current) return;
@@ -487,11 +478,7 @@ export function ResearchRunsPage({ researcherId, runId }: {
     } catch (reason: unknown) {
       if (reason instanceof DOMException && reason.name === "AbortError") return;
       if (generation !== trackingGeneration.current) return;
-      setError(
-        reason instanceof Error && reason.message === ACTIVE_TRACK_LIMIT_MESSAGE
-          ? ACTIVE_TRACK_LIMIT_MESSAGE
-          : "Start Tracking failed",
-      );
+      setError({ code: "trackingError" });
     } finally {
       if (generation === trackingGeneration.current) {
         trackingController.current = null;
@@ -530,13 +517,13 @@ export function ResearchRunsPage({ researcherId, runId }: {
         method: "DELETE",
         signal: controller.signal,
       });
-      if (!response.ok) throw new Error(`Research deletion failed (${response.status})`);
+      if (!response.ok) { if (generation === deleteGeneration.current) setDeleteError({ status: response.status }); return; }
       if (generation !== deleteGeneration.current) return;
       window.location.assign("/research-runs");
     } catch (reason: unknown) {
       if (reason instanceof DOMException && reason.name === "AbortError") return;
       if (generation !== deleteGeneration.current) return;
-      setDeleteError(reason instanceof Error ? reason.message : "Research deletion failed");
+      setDeleteError({ status: null });
     } finally {
       if (generation === deleteGeneration.current) {
         deleteController.current = null;
@@ -547,18 +534,18 @@ export function ResearchRunsPage({ researcherId, runId }: {
 
   if (error) {
     return (
-      <section aria-label="Research Runs" className="state-section">
-        <h1>ResearchRun</h1>
-        <p role="alert">{error}</p>
-        <button onClick={refresh}>Retry</button>
+      <section aria-label={t("title")} className="state-section">
+        <h1>{t("run")}</h1>
+        <p role="alert">{formatRunError(error)}</p>
+        <button onClick={refresh}>{t("retry")}</button>
       </section>
     );
   }
   if (runId && run?.id !== runId) {
-    return <section aria-label="Research Runs" className="state-section"><p>Loading ResearchRun…</p></section>;
+    return <section aria-label={t("title")} className="state-section"><p>{t("loadingRun")}</p></section>;
   }
   if (!runId && items === null) {
-    return <section aria-label="Research Runs" className="state-section"><p>Loading Research Runs…</p></section>;
+    return <section aria-label={t("title")} className="state-section"><p>{t("loadingRuns")}</p></section>;
   }
   if (runId && run?.id === runId) {
     const terminal = isTerminalResearch(run.status);
@@ -570,20 +557,20 @@ export function ResearchRunsPage({ researcherId, runId }: {
       />
     ) : null;
     return (
-      <section aria-label="Research Runs" className="research-run-page">
+      <section aria-label={t("title")} className="research-run-page">
         <header className="research-run-header">
           <div>
-            <h1>ResearchRun</h1>
+            <h1>{t("run")}</h1>
           </div>
           <div>
             <ResearchRunBackLink />
-            {run.batch_id ? <a className="button button-quiet" href={`/research-runs/batches/${encodeURIComponent(run.batch_id)}`} onClick={followCoreLink}>View batch</a> : null}
+            {run.batch_id ? <a className="button button-quiet" href={`/research-runs/batches/${encodeURIComponent(run.batch_id)}`} onClick={followCoreLink}>{t("viewBatch")}</a> : null}
             {run.batch_id && ["queued", "running", "cancelling"].includes(run.status) ? (
               <ResearchBatchCancelButton key={run.batch_id} batchId={run.batch_id} status={run.status} />
             ) : null}
             {!run.batch_id && (run.status === "queued" || run.status === "running") ? (
               <button disabled={canceling} onClick={() => void cancel()}>
-                {canceling ? "Cancelling…" : "Cancel"}
+                {t(canceling ? "cancelling" : "cancel")}
               </button>
             ) : null}
             {run.status === "succeeded" && run.research_kind === "strategy_backtest" ? (
@@ -591,7 +578,7 @@ export function ResearchRunsPage({ researcherId, runId }: {
                 disabled={startingTracking || deleting}
                 onClick={() => void startTracking()}
               >
-                {startingTracking ? "Starting Tracking…" : "Start Tracking"}
+                {t(startingTracking ? "startingTracking" : "startTracking")}
               </button>
             ) : null}
             {isTerminalResearch(run.status) ? (
@@ -603,13 +590,13 @@ export function ResearchRunsPage({ researcherId, runId }: {
                 onClick={openDeleteDialog}
                 ref={deleteTrigger}
               >
-                {deleting ? "Deleting…" : "Delete Research"}
+                {t(deleting ? "deleting" : "delete")}
               </button>
             ) : null}
           </div>
         </header>
         {cancelError !== null ? (
-          <p className="inline-status inline-status-error" role="alert">{cancelError}</p>
+          <p className="inline-status inline-status-error" role="alert">{t(cancelError)}</p>
         ) : null}
         <ResearchDeleteDialog
           deleting={deleting}
@@ -620,7 +607,7 @@ export function ResearchRunsPage({ researcherId, runId }: {
           open={deleteDialogOpen}
         />
         {loadState === "refreshing" ? (
-          <p role="status">Refreshing ResearchRun…</p>
+          <p role="status">{t("refreshingRun")}</p>
         ) : null}
         <ResearchRunFacts run={run} />
         {run.rerun_origin && <CurrentDataRerunOrigin origin={run.rerun_origin} />}
@@ -628,7 +615,7 @@ export function ResearchRunsPage({ researcherId, runId }: {
         {deleting ? null : folderError !== null ? (
           <ResearchFolderLoadFailure error={folderError} onRetry={refreshFolders} />
         ) : folders.length === 0 ? (
-          <p role="status">Loading Research Folders…</p>
+          <p role="status">{t("loadingFolders")}</p>
         ) : (
           <ResearchOrganizationPanel
             folders={folders}
@@ -640,7 +627,7 @@ export function ResearchRunsPage({ researcherId, runId }: {
           />
         )}
         {run.status === "failed" && run.failure_reason ? (
-          <p role="alert"><strong>Failure</strong> {run.failure_reason}</p>
+          <p role="alert"><strong>{t("failure")}</strong> {formatExecutionFailure(run.failure_reason)}</p>
         ) : null}
         {run.status === "succeeded" && run.result ? (
           <>
@@ -664,9 +651,9 @@ export function ResearchRunsPage({ researcherId, runId }: {
     );
   }
   return (
-    <section aria-label="Research Runs" className="research-runs-list-page">
+    <section aria-label={t("title")} className="research-runs-list-page">
       <header className="page-header">
-        <h1>Research Runs</h1>
+        <h1>{t("title")}</h1>
       </header>
       <ResearchRunsNavigation active="runs" />
       <div className="research-run-list-toolbar">
@@ -674,32 +661,30 @@ export function ResearchRunsPage({ researcherId, runId }: {
           {folderError !== null ? (
             <ResearchFolderLoadFailure error={folderError} onRetry={refreshFolders} />
           ) : folders.length === 0 ? (
-            <p role="status">Loading Research Folders…</p>
+            <p role="status">{t("loadingFolders")}</p>
           ) : (
-            <label>Folder
-              <select
-                aria-label="Filter by Folder"
+            <label>{t("folder")}<select
+                aria-label={t("filterFolder")}
                 onChange={(event) => changeFolderFilter(event.target.value)}
                 value={folderFilter}
               >
-                <option value="">All Folders</option>
+                <option value="">{t("allFolders")}</option>
                 {folders.map((folder) => (
-                  <option key={folder.id} value={folder.id}>{folder.name}</option>
+                  <option key={folder.id} value={folder.id}>{folderDisplayName(folder)}</option>
                 ))}
               </select>
             </label>
           )}
-          <label>Type
-            <select
-              aria-label="Filter by Type"
+          <label>{t("type")}<select
+              aria-label={t("filterType")}
               onChange={(event) => changeResearchKindFilter(
                 event.target.value as ResearchKindFilter,
               )}
               value={researchKindFilter}
             >
-              <option value="">All Types</option>
-              <option value="factor_evaluation">Factor Evaluation</option>
-              <option value="strategy_backtest">Strategy Backtest</option>
+              <option value="">{t("allTypes")}</option>
+              <option value="factor_evaluation">{i18n.t("research:factor_evaluation")}</option>
+              <option value="strategy_backtest">{i18n.t("research:strategy_backtest")}</option>
             </select>
           </label>
         </div>
@@ -709,10 +694,10 @@ export function ResearchRunsPage({ researcherId, runId }: {
           onApply={(filters) => { setMetricFilters(filters); resetListPage(); }} />
       )}
       {loadState === "refreshing" ? (
-        <p className="research-run-list-status" role="status">Loading Research Runs…</p>
+        <p className="research-run-list-status" role="status">{t("loadingRuns")}</p>
       ) : null}
       {loadState === null && items?.length === 0 ? (
-        <p className="research-run-list-empty">No Research Runs match these filters.</p>
+        <p className="research-run-list-empty">{t("empty")}</p>
       ) : null}
       <ResearchRunHistory
         items={items ?? []}
@@ -733,11 +718,10 @@ export function ResearchRunsPage({ researcherId, runId }: {
 }
 
 export function ResearchRunBackLink() {
+  const { t } = useTranslation("runs");
   return (
     <a className="button button-quiet" href="/research-runs" onClick={followCoreLink}>
-      <CaretLeft aria-hidden="true" size={13} weight="bold" />
-      Back to Research Runs
-    </a>
+      <CaretLeft aria-hidden="true" size={13} weight="bold" />{t("back")}</a>
   );
 }
 
@@ -750,12 +734,13 @@ export function ResearchDeleteDialog({
   open,
 }: {
   deleting: boolean;
-  error: string | null;
+  error: HttpActionError | null;
   name: string;
   onConfirm: () => void;
   onDismiss: () => void;
   open: boolean;
 }) {
+  const { t } = useTranslation("runs");
   const dialog = useRef<HTMLDialogElement | null>(null);
 
   useEffect(() => {
@@ -782,26 +767,25 @@ export function ResearchDeleteDialog({
     >
       <div className="research-delete-dialog-content">
         <header>
-          <p className="eyebrow research-delete-dialog-eyebrow">Permanent action</p>
-          <h2 id="research-delete-title">Delete Research?</h2>
+          <p className="eyebrow research-delete-dialog-eyebrow">{t("deleteDialog.permanent")}</p>
+          <h2 id="research-delete-title">{t("deleteDialog.title")}</h2>
         </header>
         <p id="research-delete-description">
-          <strong>{name}</strong> and its run-owned result will be permanently removed. This
-          cannot be undone.
+          <Trans t={t} i18nKey="deleteDialog.description" components={{ name: <strong>{name}</strong> }} />
         </p>
-        <p className="research-delete-dialog-retained">DailyTracks will remain.</p>
+        <p className="research-delete-dialog-retained">{t("deleteDialog.retained")}</p>
         {error !== null ? (
-          <p className="inline-status inline-status-error" role="alert">{error}</p>
+          <p className="inline-status inline-status-error" role="alert">{error.status === null ? t("deleteError") : t("deleteHttpError", { status: error.status })}</p>
         ) : null}
         <footer className="research-delete-dialog-actions">
-          <button disabled={deleting} onClick={onDismiss} type="button">Keep Research</button>
+          <button disabled={deleting} onClick={onDismiss} type="button">{t("deleteDialog.keep")}</button>
           <button
             className="button-danger"
             disabled={deleting}
             onClick={onConfirm}
             type="button"
           >
-            {deleting ? "Deleting…" : "Delete Research"}
+            {t(deleting ? "deleting" : "delete")}
           </button>
         </footer>
       </div>
@@ -842,19 +826,16 @@ export function ResearchRunPagination({
   onPreviousPage: () => void;
   pageIndex: number;
 }) {
+  const { t } = useTranslation("runs");
   return (
-    <nav aria-label="Research Runs pages" className="research-run-pagination">
+    <nav aria-label={t("pages")} className="research-run-pagination">
       <button disabled={loading || pageIndex === 0} onClick={onPreviousPage} type="button">
-        <CaretLeft aria-hidden="true" size={13} weight="bold" />
-        Previous
-      </button>
+        <CaretLeft aria-hidden="true" size={13} weight="bold" />{t("previous")}</button>
       <span className="research-run-pagination-summary" aria-live="polite">
-        <span>{totalCount === null ? "Loading…" : `${totalCount} total · ${RESEARCH_RUN_PAGE_SIZE} per page`}</span>
-        {totalCount !== null && <span>{`Page ${totalCount === 0 ? 0 : pageIndex + 1} / ${Math.ceil(totalCount / RESEARCH_RUN_PAGE_SIZE)}`}</span>}
+        <span>{totalCount === null ? t("loading") : t("total", { total: formatNumber(totalCount), size: formatNumber(RESEARCH_RUN_PAGE_SIZE) })}</span>
+        {totalCount !== null && <span>{t("page", { page: formatNumber(totalCount === 0 ? 0 : pageIndex + 1), pages: formatNumber(Math.ceil(totalCount / RESEARCH_RUN_PAGE_SIZE)) })}</span>}
       </span>
-      <button disabled={loading || totalCount === null || (pageIndex + 1) * RESEARCH_RUN_PAGE_SIZE >= totalCount} onClick={onNextPage} type="button">
-        Next
-        <CaretRight aria-hidden="true" size={13} weight="bold" />
+      <button disabled={loading || totalCount === null || (pageIndex + 1) * RESEARCH_RUN_PAGE_SIZE >= totalCount} onClick={onNextPage} type="button">{t("next")}<CaretRight aria-hidden="true" size={13} weight="bold" />
       </button>
     </nav>
   );
@@ -869,6 +850,7 @@ export function ResearchRunProgressView({
   status: ResearchRun["status"];
   timing?: ResearchRunExecutionTiming;
 }) {
+  const { t } = useTranslation("runs");
   const estimate = progress.remaining_duration_estimate_seconds;
   const completed = progress.completed_warmup_sessions + progress.completed_research_sessions;
   const total = progress.total_warmup_sessions + progress.total_research_sessions;
@@ -877,32 +859,29 @@ export function ResearchRunProgressView({
   const executionTiming = (
     <dl className="research-run-timing">
       <div>
-        <dt>Started</dt>
+        <dt>{t("started")}</dt>
         <dd><ExecutionTimestamp value={timing?.started_at ?? null} /></dd>
       </div>
       <div>
-        <dt>Finished</dt>
+        <dt>{t("finished")}</dt>
         <dd><ExecutionTimestamp value={timing?.finished_at ?? null} /></dd>
       </div>
     </dl>
   );
   if (status === "succeeded") {
     return (
-      <section aria-label="ResearchRun progress" className="research-run-progress research-run-progress-complete">
+      <section aria-label={t("progress")} className="research-run-progress research-run-progress-complete">
         <details className="research-run-completion-details">
           <summary>
             <span className="research-run-completion-label">
-              <CheckCircle aria-hidden="true" size={18} weight="fill" />
-              Execution complete
+              <CheckCircle aria-hidden="true" size={18} weight="fill" />{t("executionComplete")}</span>
+            <span className="research-run-completion-metric">
+              <strong>{formatNumber(progress.completed_research_sessions)} / {formatNumber(progress.total_research_sessions)}</strong> {t("sessions")}
             </span>
             <span className="research-run-completion-metric">
-              <strong>{progress.completed_research_sessions} / {progress.total_research_sessions}</strong> sessions
+              <span>{t("executionTime")}</span> <strong>{formatDuration(timing?.elapsed_seconds ?? null)}</strong>
             </span>
-            <span className="research-run-completion-metric">
-              <span>Execution time</span> <strong>{formatDuration(timing?.elapsed_seconds ?? null)}</strong>
-            </span>
-            <span className="research-run-completion-toggle">
-              Timing details <CaretDown aria-hidden="true" size={14} />
+            <span className="research-run-completion-toggle">{t("timingDetails")}<CaretDown aria-hidden="true" size={14} />
             </span>
           </summary>
           {executionTiming}
@@ -911,25 +890,25 @@ export function ResearchRunProgressView({
     );
   }
   return (
-    <section aria-label="ResearchRun progress" className="research-run-progress">
+    <section aria-label={t("progress")} className="research-run-progress">
       <header className="research-run-progress-heading">
         <div className="research-run-progress-title">
-          <h2>Execution progress</h2>
+          <h2>{t("executionProgress")}</h2>
           <span className="research-run-progress-state" data-status={status}>
             {progressLabel(status, progress.phase)}
           </span>
         </div>
-        <span className="research-run-progress-percentage">{progressPercentage}%</span>
+        <span className="research-run-progress-percentage">{formatNumber(progressPercentage)}%</span>
         <dl className="research-run-duration">
           <div>
-            <dt>{timing?.is_final ? "Execution time" : "Elapsed"}</dt>
+            <dt>{t(timing?.is_final ? "executionTime" : "elapsed")}</dt>
             <dd>{formatDuration(timing?.elapsed_seconds ?? null)}</dd>
           </div>
         </dl>
       </header>
       <div className="research-run-progress-track">
         <progress
-          aria-label="Research execution progress"
+          aria-label={t("progressAria")}
           max={Math.max(total, 1)}
           value={completed}
         />
@@ -938,16 +917,16 @@ export function ResearchRunProgressView({
         <dl className="research-run-progress-stats">
           <div>
             <dt>{progress.phase === "shared_alpha_factor"
-              ? "Shared calculation sessions" : "Research sessions"}</dt>
-            <dd>{progress.completed_research_sessions} / {progress.total_research_sessions}</dd>
+              ? t("sharedSessions") : t("researchSessions")}</dt>
+            <dd>{formatNumber(progress.completed_research_sessions)} / {formatNumber(progress.total_research_sessions)}</dd>
           </div>
         </dl>
         {executionTiming}
       </div>
       {active && estimate !== null ? (
         <p className="research-run-progress-note">
-          About {formatDuration(estimate)} remaining
-          {progress.duration_is_estimate ? " (estimate may change)" : ""}
+          {t("remaining", { duration: formatDuration(estimate) })}
+          {progress.duration_is_estimate ? t("estimate") : ""}
         </p>
       ) : null}
     </section>
@@ -955,42 +934,43 @@ export function ResearchRunProgressView({
 }
 
 export function ResearchRunFacts({ run }: { run: ResearchRun }) {
+  const { t } = useTranslation("runs");
   const input = run.input;
   const factorConditionClass = input?.research_kind === "factor_evaluation"
     ? "research-run-fact-half"
     : undefined;
   return (
     <div
-      aria-label="Research execution conditions"
+      aria-label={t("conditions")}
       className="research-run-facts research-run-execution-facts"
       role="group"
     >
-      <p><strong>Status</strong> {run.status}</p>
-      <p><strong>Research type</strong> {researchKindLabel(run.research_kind)}</p>
-      <p className="research-run-fact-name"><strong>Name</strong> {run.name}</p>
+      <p><strong>{t("status")}</strong> {t(`statuses.${run.status}`)}</p>
+      <p><strong>{i18n.t("research:kind")}</strong> {researchKindLabel(run.research_kind)}</p>
+      <p className="research-run-fact-name"><strong>{t("name")}</strong> {run.name}</p>
       <p className="research-run-fact-formula">
-        <strong>Formula</strong> <code>{input?.formula ?? run.formula_summary}</code>
+        <strong>{t("formula")}</strong> <code>{input?.formula ?? run.formula_summary}</code>
       </p>
       <p className="research-run-fact-period">
-        <strong>Research period</strong> {run.start_date} to {run.end_date}
+        <strong>{t("period")}</strong> {t("dateRange", { start: run.start_date, end: run.end_date })}
       </p>
       {input !== undefined ? (
         <>
           <p className={factorConditionClass}>
-            <strong>Universe</strong> {universeLabel(input.universe)}
+            <strong>{i18n.t("research:universe")}</strong> {universeLabel(input.universe)}
           </p>
           <p className={factorConditionClass}>
-            <strong>Neutralization</strong> {neutralizationLabel(input.neutralization)}
+            <strong>{i18n.t("research:neutralization")}</strong> {neutralizationLabel(input.neutralization)}
           </p>
           {input.research_kind === "strategy_backtest" ? (
             <>
-              <p><strong>Initial cash (CNY)</strong> {input.initial_cash_cny}</p>
-              <p><strong>Holdings count</strong> {input.holdings_count}</p>
-              {input.weighting === "inverse_volatility" && <p><strong>Volatility window</strong> {input.volatility_window} sessions</p>}
-              <p><strong>Portfolio weighting</strong> {input.weighting === "inverse_volatility" ? "Inverse volatility" : input.weighting === "rank_weight" ? "Rank weight" : "Equal weight"}</p>
-              <p><strong>Exposure expression</strong> <code>{input.exposure_expression}</code></p>
+              <p><strong>{i18n.t("research:initialCash")}</strong> {input.initial_cash_cny}</p>
+              <p><strong>{i18n.t("research:holdings")}</strong> {formatNumber(input.holdings_count)}</p>
+              {input.weighting === "inverse_volatility" && <p><strong>{t("volatilityWindow")}</strong> {formatNumber(input.volatility_window)} {t("sessions")}</p>}
+              <p><strong>{i18n.t("research:weighting")}</strong> {i18n.t(`research:weightings.${input.weighting}`)}</p>
+              <p><strong>{t("exposureExpression")}</strong> <code>{input.exposure_expression}</code></p>
               <p>
-                <strong>Selection</strong>{" "}
+                <strong>{t("selection")}</strong>{" "}
                 {selectionLabel(input.selection_every_sessions)}
               </p>
             </>
@@ -1001,39 +981,13 @@ export function ResearchRunFacts({ run }: { run: ResearchRun }) {
   );
 }
 
-function progressLabel(
-  status: ResearchRun["status"],
-  phase: ResearchRunProgress["phase"],
-): string {
-  if (status === "queued") return "Waiting for a Research Worker";
-  if (status === "cancelling") return "Cancelling execution";
-  if (status === "cancelled") return "Execution cancelled";
-  if (status === "failed") return "Execution failed";
-  if (status === "succeeded") return "Execution complete";
-  if (phase === "preparing_data") return "Preparing data";
-  if (phase === "shared_alpha_factor") return "Computing shared Alpha";
-  if (phase === "waiting_for_execution") return "Waiting for earlier research in this batch";
-  if (phase === "recovering") return "Waiting for execution recovery";
-  return phase === "finalizing" ? "Finalizing result" : `Running ${phase}`;
-}
-
-export function formatDuration(seconds: number | null): string {
-  if (seconds === null || !Number.isFinite(seconds)) return "Not started";
-  const rounded = Math.max(0, Math.floor(seconds));
-  const hours = Math.floor(rounded / 3600);
-  const minutes = Math.floor((rounded % 3600) / 60);
-  const remainder = rounded % 60;
-  if (hours > 0) return `${hours}h ${minutes}m ${remainder}s`;
-  if (minutes > 0) return `${minutes}m ${remainder}s`;
-  return `${remainder}s`;
+function progressLabel(status: ResearchRun["status"], phase: ResearchRunProgress["phase"]): string {
+  return status === "running" ? i18n.t(`runs:progressPhases.${phase}`) : i18n.t(`runs:progressStates.${status}`);
 }
 
 function ExecutionTimestamp({ value }: { value: string | null }) {
-  if (value === null) return <>Not available</>;
-  const timestamp = new Date(value);
-  if (!Number.isFinite(timestamp.getTime())) return <>Not available</>;
-  const iso = timestamp.toISOString();
-  return <time dateTime={value}>{iso.slice(0, 10)} {iso.slice(11, 19)} UTC</time>;
+  useTranslation("common");
+  return <time dateTime={value ?? undefined}>{formatUtcTimestamp(value, true)}</time>;
 }
 
 export function isTerminalResearch(status: ResearchRun["status"]): boolean {
@@ -1057,8 +1011,9 @@ export function UseAsDraftPanel({
   confirmDiscard?: (message: string) => boolean;
   navigate?: (path: string) => void;
 }) {
+  const { t } = useTranslation("runs");
   const [targetFolderId, setTargetFolderId] = useState(sourceFolderId);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<"draft.error" | null>(null);
 
   function useAsDraft(): void {
     setError(null);
@@ -1074,27 +1029,26 @@ export function UseAsDraftPanel({
         ? "/research"
         : `/research?folder=${encodeURIComponent(targetFolderId)}`);
     } catch {
-      setError("This Research could not be copied into the browser Draft.");
+      setError("draft.error");
     }
   }
 
   return (
-    <section aria-label="Create a draft" className="research-use-as-draft">
-      <h2>Create a draft</h2>
-      <p>Copy this Run’s frozen inputs into a browser draft to inspect or edit.</p>
-      <label>Target Folder
-        <select
-          aria-label="Target Folder"
+    <section aria-label={t("draft.title")} className="research-use-as-draft">
+      <h2>{t("draft.title")}</h2>
+      <p>{t("draft.description")}</p>
+      <label>{t("draft.folder")}<select
+          aria-label={t("draft.folder")}
           onChange={(event) => setTargetFolderId(event.target.value)}
           value={targetFolderId}
         >
           {folders.map((folder) => (
-            <option key={folder.id} value={folder.id}>{folder.name}</option>
+            <option key={folder.id} value={folder.id}>{folderDisplayName(folder)}</option>
           ))}
         </select>
       </label>
-      <button onClick={useAsDraft}>Create draft</button>
-      {error !== null ? <p role="alert">{error}</p> : null}
+      <button onClick={useAsDraft}>{t("draft.create")}</button>
+      {error !== null ? <p role="alert">{t(error)}</p> : null}
     </section>
   );
 }
@@ -1103,13 +1057,14 @@ export function ResearchFolderLoadFailure({
   error,
   onRetry,
 }: {
-  error: string;
+  error: "folderError";
   onRetry: () => void;
 }) {
+  const { t } = useTranslation("runs");
   return (
-    <section aria-label="Research Folder availability">
-      <p role="alert">{error}</p>
-      <button onClick={onRetry}>Retry Folders</button>
+    <section aria-label={t("folderAvailability")}>
+      <p role="alert">{t(error)}</p>
+      <button onClick={onRetry}>{t("retryFolders")}</button>
     </section>
   );
 }
@@ -1123,10 +1078,11 @@ export function ResearchOrganizationPanel({
   folders: ResearchFolderOption[];
   onOrganized: (run: ResearchRun) => void;
 }) {
+  const { t } = useTranslation("runs");
   const [name, setName] = useState(run.name);
   const [folderId, setFolderId] = useState(run.folder_id);
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<OrganizationError | null>(null);
   const normalizedName = name.trim();
   const nameChanged = normalizedName !== "" && normalizedName !== run.name;
   const folderChanged = folderId !== run.folder_id;
@@ -1145,44 +1101,36 @@ export function ResearchOrganizationPanel({
         body: JSON.stringify(body),
       });
       if (!response.ok) {
-        let detail = `Research organization failed (${response.status})`;
-        try {
-          const payload = (await response.json()) as { detail?: unknown };
-          if (typeof payload.detail === "string") detail = payload.detail;
-        } catch {
-          // The HTTP status remains a sufficient public failure reason.
-        }
-        throw new Error(detail);
+        setError(await readOrganizationError(response));
+        return;
       }
       onOrganized((await response.json()) as ResearchRun);
-    } catch (reason: unknown) {
-      setError(reason instanceof Error ? reason.message : "Research organization failed");
+    } catch {
+      setError({ status: null });
     } finally {
       setSubmitting(false);
     }
   }
 
   return (
-    <section aria-label="Name and folder" className="research-organization">
-      <h2>Name and folder</h2>
-      <label>Research name
-        <input
-          aria-label="Research name"
+    <section aria-label={t("organization.title")} className="research-organization">
+      <h2>{t("organization.title")}</h2>
+      <label>{i18n.t("research:name")}<input
+          aria-label={i18n.t("research:name")}
           disabled={submitting}
           maxLength={200}
           onChange={(event) => setName(event.target.value)}
           value={name}
         />
       </label>
-      <label>Folder
-        <select
-          aria-label="Folder"
+      <label>{t("folder")}<select
+          aria-label={t("folder")}
           disabled={submitting}
           onChange={(event) => setFolderId(event.target.value)}
           value={folderId}
         >
           {folders.map((folder) => (
-            <option key={folder.id} value={folder.id}>{folder.name}</option>
+            <option key={folder.id} value={folder.id}>{folderDisplayName(folder)}</option>
           ))}
         </select>
       </label>
@@ -1190,9 +1138,9 @@ export function ResearchOrganizationPanel({
         disabled={submitting || (!nameChanged && !folderChanged)}
         onClick={() => void organize()}
       >
-        {submitting ? "Saving…" : "Save changes"}
+        {t(submitting ? "organization.saving" : "organization.save")}
       </button>
-      {error !== null ? <p role="alert">{error}</p> : null}
+      {error !== null ? <p role="alert">{"code" in error ? t("organization.folderMissing") : error.status === null ? t("organization.error") : t("organization.httpError", { status: error.status })}</p> : null}
     </section>
   );
 }
@@ -1212,8 +1160,8 @@ type ResearchRunSort = {
 };
 type ResearchRunMetricColumn = {
   key: Exclude<ResearchRunSortKey, "created_at">;
-  label: string;
-  shortLabel: string;
+  label: ParseKeys<"runs">;
+  shortLabel: ParseKeys<"runs">;
 };
 
 const DEFAULT_RESEARCH_RUN_SORT: ResearchRunSort = {
@@ -1222,19 +1170,19 @@ const DEFAULT_RESEARCH_RUN_SORT: ResearchRunSort = {
 };
 
 const FACTOR_RESEARCH_RUN_METRICS: ResearchRunMetricColumn[] = [
-  { key: "one_session_rank_ic", label: "1-session Rank IC", shortLabel: "1S Rank IC" },
-  { key: "five_session_rank_ic", label: "5-session Rank IC", shortLabel: "5S Rank IC" },
-  { key: "twenty_session_rank_ic", label: "20-session Rank IC", shortLabel: "20S Rank IC" },
+  { key: "one_session_rank_ic", label: "metrics.one_session_rank_ic", shortLabel: "shortMetrics.one_session_rank_ic" },
+  { key: "five_session_rank_ic", label: "metrics.five_session_rank_ic", shortLabel: "shortMetrics.five_session_rank_ic" },
+  { key: "twenty_session_rank_ic", label: "metrics.twenty_session_rank_ic", shortLabel: "shortMetrics.twenty_session_rank_ic" },
 ];
 
 const STRATEGY_RESEARCH_RUN_METRICS: ResearchRunMetricColumn[] = [
   {
     key: "annualized_excess_return",
-    label: "Annualized excess",
-    shortLabel: "Excess",
+    label: "metrics.annualized_excess_return",
+    shortLabel: "shortMetrics.annualized_excess_return",
   },
-  { key: "sharpe", label: "Sharpe", shortLabel: "Sharpe" },
-  { key: "maximum_drawdown", label: "Max drawdown", shortLabel: "Drawdown" },
+  { key: "sharpe", label: "metrics.sharpe", shortLabel: "shortMetrics.sharpe" },
+  { key: "maximum_drawdown", label: "metrics.maximum_drawdown", shortLabel: "shortMetrics.maximum_drawdown" },
 ];
 
 export type ResearchMetricFilter = {
@@ -1249,6 +1197,7 @@ export function ResearchMetricFilters({ researchKind, onApply }: {
   researchKind: Exclude<ResearchKindFilter, "">;
   onApply: (filters: ResearchMetricFilter[]) => void;
 }) {
+  const { t } = useTranslation("runs");
   const columns = researchKind === "strategy_backtest"
     ? STRATEGY_RESEARCH_RUN_METRICS
     : FACTOR_RESEARCH_RUN_METRICS;
@@ -1260,48 +1209,46 @@ export function ResearchMetricFilters({ researchKind, onApply }: {
     setRows(current => current.map(row => row.id === id ? { ...row, ...values } : row));
   }
   return (
-    <form className="research-metric-filters" aria-label="Metric filters" onSubmit={event => {
+    <form className="research-metric-filters" aria-label={t("filters.title")} onSubmit={event => {
       event.preventDefault();
       onApply(rows.map(row => ({ metric: row.metric, operator: row.operator,
         value: Number(row.value) / (isPercentMetric(row.metric) ? 100 : 1) })));
       setApplied(JSON.stringify(rows));
     }}>
       <div className="research-metric-filter-actions">
-        <span>Metric filters</span>
+        <span>{t("filters.title")}</span>
         <button type="button" disabled={rows.length >= 12} onClick={() => {
           const id = nextId.current++;
           setRows(current => [...current, { id, metric: columns[0].key, operator: "gt", value: "" }]);
-        }}>Add condition</button>
+        }}>{t("filters.add")}</button>
         {(rows.length > 0 || applied !== "[]") && <>
-          <button type="submit" disabled={!dirty}>Apply filters</button>
-          <button type="button" onClick={() => { setRows([]); setApplied("[]"); onApply([]); }}>Clear filters</button>
+          <button type="submit" disabled={!dirty}>{t("filters.apply")}</button>
+          <button type="button" onClick={() => { setRows([]); setApplied("[]"); onApply([]); }}>{t("filters.clear")}</button>
         </>}
       </div>
-      {rows.length > 0 && <p>All conditions must match.{researchKind === "strategy_backtest" && " Percentage values: enter 10 for 10%."}</p>}
+      {rows.length > 0 && <p>{t("filters.allMatch")}{researchKind === "strategy_backtest" && t("filters.percent")}</p>}
       {rows.map((row, index) => (
         <div className="research-metric-filter-row" key={row.id}>
-          <label>Metric
-            <select aria-label={`Metric ${index + 1}`} value={row.metric}
+          <label>{t("filters.metric")}<select aria-label={t("filters.metricAt", { index: formatNumber(index + 1) })} value={row.metric}
               onChange={event => update(row.id, { metric: event.target.value as ResearchMetricFilter["metric"], value: "" })}>
-              {columns.map(column => <option key={column.key} value={column.key}>{column.label}</option>)}
+              {columns.map(column => <option key={column.key} value={column.key}>{t(column.label)}</option>)}
             </select>
           </label>
-          <label>Comparison
-            <select aria-label={`Comparison ${index + 1}`} value={row.operator}
+          <label>{t("filters.comparison")}<select aria-label={t("filters.comparisonAt", { index: formatNumber(index + 1) })} value={row.operator}
               onChange={event => update(row.id, { operator: event.target.value as ResearchMetricFilter["operator"] })}>
               <option value="gt">&gt;</option><option value="gte">≥</option>
               <option value="lt">&lt;</option><option value="lte">≤</option>
             </select>
           </label>
-          <label>{isPercentMetric(row.metric) ? "Value (%)" : "Value"}
-            <input aria-label={`Threshold ${index + 1}`} type="number" step="any" required value={row.value}
+          <label>{t(isPercentMetric(row.metric) ? "filters.valuePercent" : "filters.value")}
+            <input aria-label={t("filters.thresholdAt", { index: formatNumber(index + 1) })} type="number" step="any" required value={row.value}
               onChange={event => update(row.id, { value: event.target.value })} />
           </label>
-          <button type="button" aria-label={`Remove condition ${index + 1}`}
-            onClick={() => setRows(current => current.filter(item => item.id !== row.id))}>Remove</button>
+          <button type="button" aria-label={t("filters.removeAt", { index: formatNumber(index + 1) })}
+            onClick={() => setRows(current => current.filter(item => item.id !== row.id))}>{t("filters.remove")}</button>
         </div>
       ))}
-      {dirty && <p role="status">Changes not applied.</p>}
+      {dirty && <p role="status">{t("filters.notApplied")}</p>}
     </form>
   );
 }
@@ -1321,6 +1268,7 @@ export function ResearchRunHistory({
   sort: ResearchRunSort;
   onSortChange: (sort: ResearchRunSort) => void;
 }) {
+  const { t } = useTranslation("runs");
   const metricColumns = researchRunMetricColumns(researchKind);
 
   function changeSort(key: ResearchRunSortKey) {
@@ -1342,29 +1290,28 @@ export function ResearchRunHistory({
   return (
     <div className="research-run-history-container">
       <div className="research-run-mobile-sort">
-        <label>Sort by
-          <select
-            aria-label="Sort Research Runs by"
+        <label>{t("sortBy")}<select
+            aria-label={t("sortByAria")}
             onChange={(event) => selectSort(event.target.value as ResearchRunSortKey)}
             value={sort.key}
           >
-            <option value="created_at">Created</option>
+            <option value="created_at">{t("created")}</option>
             {metricColumns.map((column) => (
-              <option key={column.key} value={column.key}>{column.label}</option>
+              <option key={column.key} value={column.key}>{t(column.label)}</option>
             ))}
           </select>
         </label>
         <button
-          aria-label={`Sort ${sort.direction}`}
+          aria-label={t(sort.direction === "ascending" ? "sortAscending" : "sortDescending")}
           onClick={toggleSortDirection}
           type="button"
         >
           <MobileSortIcon aria-hidden="true" size={14} weight="bold" />
-          {sort.direction === "ascending" ? "Ascending" : "Descending"}
+          {t(sort.direction === "ascending" ? "ascending" : "descending")}
         </button>
       </div>
       <div className="research-run-history-scroll">
-      <table aria-label="Research Runs" className="research-run-history">
+      <table aria-label={t("title")} className="research-run-history">
         <colgroup>
           <col className="research-run-col-name" />
           <col className="research-run-col-type" />
@@ -1378,23 +1325,23 @@ export function ResearchRunHistory({
         </colgroup>
         <thead>
           <tr>
-            <th scope="col">Research</th>
-            <th scope="col">Type</th>
+            <th scope="col">{i18n.t("research:title")}</th>
+            <th scope="col">{t("type")}</th>
             <SortableResearchRunHeading
               direction={sort.direction}
               isActive={sort.key === "created_at"}
-              label="Created (UTC)"
+              label={t("createdUtc")}
               onSort={() => changeSort("created_at")}
             />
-            <th scope="col">Status</th>
+            <th scope="col">{t("status")}</th>
             {metricColumns.length === 0 ? (
-              <th className="research-run-metric-heading" scope="col">Result summary</th>
+              <th className="research-run-metric-heading" scope="col">{t("resultSummary")}</th>
             ) : metricColumns.map((column) => (
               <SortableResearchRunHeading
                 direction={sort.direction}
                 isActive={sort.key === column.key}
                 key={column.key}
-                label={column.label}
+                label={t(column.label)}
                 onSort={() => changeSort(column.key)}
               />
             ))}
@@ -1406,15 +1353,15 @@ export function ResearchRunHistory({
               <th scope="row">
                 <a href={`/research-runs/${item.id}`} onClick={followCoreLink}>{item.name}</a>
               </th>
-              <td data-label="Type">{researchKindLabel(item.research_kind)}</td>
-              <td data-label="Created (UTC)">
+              <td data-label={t("type")}>{researchKindLabel(item.research_kind)}</td>
+              <td data-label={t("createdUtc")}>
                 <time dateTime={item.created_at}>{formatResearchRunCreatedAt(item.created_at)}</time>
               </td>
-              <td data-label="Status"><span className={`run-status run-status-${item.status}`}>{item.status}</span></td>
+              <td data-label={t("status")}><span className={`run-status run-status-${item.status}`}>{t(`statuses.${item.status}`)}</span></td>
               {metricColumns.length === 0 ? (
                 <ResearchRunResultSummary item={item} />
               ) : metricColumns.map((column) => (
-                <td className="research-run-metric" data-label={column.label} key={column.key}>
+                <td className="research-run-metric" data-label={t(column.label)} key={column.key}>
                   {formatResearchRunMetric(item, column.key)}
                 </td>
               ))}
@@ -1428,15 +1375,16 @@ export function ResearchRunHistory({
 }
 
 function ResearchRunResultSummary({ item }: { item: ResearchRun }) {
+  const { t } = useTranslation("runs");
   const columns = item.research_kind === "factor_evaluation"
     ? FACTOR_RESEARCH_RUN_METRICS
     : STRATEGY_RESEARCH_RUN_METRICS;
   return (
-    <td className="research-run-result-summary" data-label="Result summary">
+    <td className="research-run-result-summary" data-label={t("resultSummary")}>
       <div>
         {columns.map((column) => (
           <span key={column.key}>
-            <small>{column.shortLabel}</small>
+            <small>{t(column.shortLabel)}</small>
             <strong>{formatResearchRunMetric(item, column.key)}</strong>
           </span>
         ))}
@@ -1484,10 +1432,7 @@ function SortableResearchRunHeading({
 }
 
 export function formatResearchRunCreatedAt(value: string): string {
-  const timestamp = new Date(value);
-  if (!Number.isFinite(timestamp.getTime())) return "Not available";
-  const iso = timestamp.toISOString();
-  return `${iso.slice(0, 10)} ${iso.slice(11, 19)}`;
+  return formatUtcTimestamp(value);
 }
 
 function researchRunSortValue(item: ResearchRun, key: ResearchRunSortKey): number | null {
@@ -1513,13 +1458,15 @@ function formatResearchRunMetric(
 }
 
 export function ResearchResultView({ result }: { result: ResearchResult }) {
+  const { t } = useTranslation("runs");
+  const strategyHelp = strategyMetricHelp();
   const strategyResult = "strategy" in result ? result : null;
   const factorResult = "factor" in result ? result : null;
   return (
     <div className="research-result">
       {factorResult !== null ? <section className="research-result-section">
         <div className="section-heading">
-          <h2>Factor Summary</h2>
+          <h2>{t("result.factor")}</h2>
         </div>
         <div className="factor-horizons">
           {FACTOR_HORIZONS.map((name) => (
@@ -1530,50 +1477,50 @@ export function ResearchResultView({ result }: { result: ResearchResult }) {
 
       {strategyResult !== null ? <section className="research-result-section">
         <div className="section-heading strategy-summary-heading">
-          <h2>Strategy Summary</h2>
-          <p>Account through <time>{strategyResult.terminal_strategy_state.session}</time></p>
+          <h2>{t("result.strategy")}</h2>
+          <p>{t("result.accountThrough")} <time>{strategyResult.terminal_strategy_state.session}</time></p>
         </div>
         <div className="strategy-metrics">
-          <Metric label="Net cumulative" help={strategyMetricHelp.netCumulative} value={formatPercent(strategyResult.strategy.summary.metrics.net_cumulative_return)} />
+          <Metric label={t("result.netCumulative")} help={strategyHelp.netCumulative} value={formatPercent(strategyResult.strategy.summary.metrics.net_cumulative_return)} />
           <Metric
-            label={`${STRATEGY_BENCHMARK_DISPLAY_NAME} cumulative`}
-            help={strategyMetricHelp.benchmarkCumulative}
+            label={t("result.benchmarkCumulative", { benchmark: catalogLabel("benchmarks", "csi300-price-index-open") })}
+            help={strategyHelp.benchmarkCumulative}
             value={formatPercent(strategyResult.strategy.summary.metrics.benchmark_cumulative_return)}
           />
           <Metric
-            label="Annualized excess"
-            help={strategyMetricHelp.annualizedExcess}
+            label={t("result.annualizedExcess")}
+            help={strategyHelp.annualizedExcess}
             value={formatPercent(strategyResult.strategy.summary.metrics.annualized_excess_return)}
           />
           <Metric
-            label="Maximum drawdown"
-            help={strategyMetricHelp.maximumDrawdown}
+            label={t("result.maximumDrawdown")}
+            help={strategyHelp.maximumDrawdown}
             value={formatPercent(strategyResult.strategy.summary.metrics.maximum_drawdown.value)}
           />
-          <Metric label="Sharpe" help={strategyMetricHelp.sharpe} value={formatDecimal(strategyResult.strategy.summary.metrics.sharpe)} />
+          <Metric label={t("result.sharpe")} help={strategyHelp.sharpe} value={formatDecimal(strategyResult.strategy.summary.metrics.sharpe)} />
           <Metric
-            label="Cumulative cost ratio"
-            help={strategyMetricHelp.cumulativeCostRatio}
+            label={t("result.costRatio")}
+            help={strategyHelp.cumulativeCostRatio}
             value={formatPercent(strategyResult.strategy.summary.metrics.transaction_costs.ratio)}
           />
         </div>
         <div className="strategy-execution-context">
           <div className="strategy-context-row">
-            <h3>Exposure</h3>
+            <h3>{t("result.exposure")}</h3>
             <dl className="strategy-exposure-values">
-              <div><dt>Last Close target</dt><dd>{formatPercent(strategyResult.terminal_strategy_state.target_exposure)}</dd></div>
-              <div><dt>Actual Open allocation</dt><dd>{formatPercent(1 - Number(strategyResult.terminal_strategy_state.net_cash) / Number(strategyResult.terminal_strategy_state.net_nav))}</dd></div>
+              <div><dt>{t("result.lastCloseTarget")}</dt><dd>{formatPercent(strategyResult.terminal_strategy_state.target_exposure)}</dd></div>
+              <div><dt>{t("result.actualOpenAllocation")}</dt><dd>{formatPercent(1 - Number(strategyResult.terminal_strategy_state.net_cash) / Number(strategyResult.terminal_strategy_state.net_nav))}</dd></div>
             </dl>
           </div>
           <div className="strategy-context-row">
-            <h3>Selection check</h3>
+            <h3>{t("result.selection")}</h3>
             <SelectionEligibilityView selection={strategyResult.terminal_strategy_state.target_selection} />
           </div>
           <details className="strategy-execution-notes">
-            <summary>Execution conventions <CaretDown aria-hidden="true" size={14} /></summary>
+            <summary>{t("result.conventions")}<CaretDown aria-hidden="true" size={14} /></summary>
             <ul>
-              <li>Decisions execute at the next Open, including the final session; the ending account is not liquidated.</li>
-              <li>Orders, costs and rounding can leave a difference between target exposure and actual allocation; the target is not a hard allocation limit.</li>
+              <li>{t("result.nextOpen")}</li>
+              <li>{t("result.allocation")}</li>
             </ul>
           </details>
         </div>
@@ -1585,22 +1532,21 @@ export function ResearchResultView({ result }: { result: ResearchResult }) {
 }
 
 function FactorHorizonView({ horizon }: { horizon: FactorHorizon }) {
+  const { t } = useTranslation("runs");
   const help = factorMetricHelp(horizon.horizon);
-  const context = `${horizon.horizon}-session`;
+  const context = t("result.horizon", { horizon: formatNumber(horizon.horizon) });
   return (
-    <section aria-label={`${horizon.horizon}-session Factor`}>
-      <strong>{horizon.horizon}-session</strong>
+    <section aria-label={t("result.horizonFactor", { horizon: formatNumber(horizon.horizon) })}>
+      <strong>{t("result.horizon", { horizon: formatNumber(horizon.horizon) })}</strong>
       <Metric label="Rank IC" context={context} help={help.rankIc} value={formatDecimal(horizon.summary.rank_ic.mean)} />
       <Metric label="Rank ICIR" context={context} help={help.rankIcir} value={formatDecimal(horizon.summary.rank_ic.icir)} />
       <Metric label="IC" context={context} help={help.ic} value={formatDecimal(horizon.summary.ic.mean)} />
       <Metric label="ICIR" context={context} help={help.icir} value={formatDecimal(horizon.summary.ic.icir)} />
       <p className="factor-coverage">
-        Rank IC coverage {horizon.coverage.rank_ic_valid_session_count}/
-        {horizon.coverage.signal_session_count}
+        {t("result.rankCoverage", { valid: formatNumber(horizon.coverage.rank_ic_valid_session_count), total: formatNumber(horizon.coverage.signal_session_count) })}
       </p>
       <p className="factor-coverage">
-        IC coverage {horizon.coverage.ic_valid_session_count}/
-        {horizon.coverage.signal_session_count}
+        {t("result.icCoverage", { valid: formatNumber(horizon.coverage.ic_valid_session_count), total: formatNumber(horizon.coverage.signal_session_count) })}
       </p>
     </section>
   );
@@ -1623,41 +1569,22 @@ function Metric({ label, value, help, context }: {
   );
 }
 
-function formatPercent(value: number | null) {
-  return value === null ? "Not available" : `${(value * 100).toFixed(2)}%`;
-}
-
 function formatSignedPercent(value: number | null) {
-  if (value === null) return "Not available";
-  const percent = value * 100;
-  return `${percent > 0 ? "+" : ""}${percent.toFixed(2)}%`;
+  return formatPercent(value, { signed: true });
 }
 
-function formatDecimal(value: number | null) {
-  return value === null ? "Not available" : value.toFixed(3);
+function researchKindLabel(value: ResearchRun["research_kind"]): string {
+  return i18n.t(`research:${value}`);
 }
 
-function researchKindLabel(
-  value: ResearchRun["research_kind"],
-): "Factor Evaluation" | "Strategy Backtest" {
-  return value === "factor_evaluation" ? "Factor Evaluation" : "Strategy Backtest";
+export function universeLabel(value: FrozenResearchAuthorableInput["universe"]): string {
+  return i18n.t("research:top", { count: Number(value.slice(3)) });
 }
 
-function universeLabel(value: FrozenResearchAuthorableInput["universe"]): string {
-  return {
-    top300: "Top 300",
-    top1000: "Top 1000",
-    top2000: "Top 2000",
-    top3000: "Top 3000",
-  }[value];
-}
-
-function neutralizationLabel(
-  value: FrozenResearchAuthorableInput["neutralization"],
-): string {
-  return value === "none" ? "None" : "Industry";
+export function neutralizationLabel(value: FrozenResearchAuthorableInput["neutralization"]): string {
+  return i18n.t(`research:${value}`);
 }
 
 function selectionLabel(sessions: number): string {
-  return sessions === 1 ? "Every session" : `Every ${sessions} sessions`;
+  return sessions === 1 ? i18n.t("runs:everySession") : i18n.t("runs:everySessions", { sessions: formatNumber(sessions) });
 }

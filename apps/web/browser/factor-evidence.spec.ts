@@ -1,7 +1,10 @@
+import { fontStylesheet, serveBrandAssets } from "./brand-assets";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import { build } from "vite";
+
+test.beforeEach(async ({ page }) => { await serveBrandAssets(page); });
 
 let script: string;
 const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8")
@@ -46,7 +49,7 @@ test("Factor evidence loads on demand, resets cursors with filters and shows dai
   const reads: URL[] = [];
   await page.route("https://factor.test/**", route => {
     const url = new URL(route.request().url());
-    if (url.pathname === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    if (url.pathname === "/") return route.fulfill({ contentType: "text/html", body: `${fontStylesheet}<div id="root"></div>` });
     reads.push(url);
     const isDaily = url.pathname.endsWith("factor-observations");
     return route.fulfill({ json: { section: isDaily ? "factor_observations" : "factor_periods",
@@ -69,13 +72,24 @@ test("Factor evidence loads on demand, resets cursors with filters and shows dai
   await expect(page.getByText("Missing signal: 1", { exact: true })).toBeVisible();
   await expect(page.getByText(/2026-08-04 → 2026-08-11/)).toBeVisible();
   await expect(page.getByText(/before costs/)).toBeVisible();
+  const beforeLanguageReads = reads.length;
+  await page.getByRole("button", { name: "简体中文", exact: true }).click();
+  await expect(page.getByText("缺少信号: 1", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("预测周期")).toHaveValue("20");
+  await expect(page.getByLabel("视图")).toHaveValue("daily");
+  expect(reads).toHaveLength(beforeLanguageReads);
+  for (const width of [1050, 390, 320]) {
+    await page.setViewportSize({ width, height: 964 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  }
+
   await page.screenshot({ path: "../../.local/browser-tests/factor-evidence.png", fullPage: true });
 });
 
 test("Factor request failure stays distinct from an empty page and can retry", async ({ page }) => {
   let reads = 0;
   await page.route("https://factor.test/**", route => {
-    if (new URL(route.request().url()).pathname === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    if (new URL(route.request().url()).pathname === "/") return route.fulfill({ contentType: "text/html", body: `${fontStylesheet}<div id="root"></div>` });
     reads++;
     return route.fulfill(reads === 1 ? { status: 503 } : { json: { section: "factor_periods", items: [], next_cursor: null } });
   });
@@ -92,7 +106,7 @@ test("narrow Factor view preserves missing values and rejects reversed signal da
   await page.setViewportSize({ width: 390, height: 844 });
   await page.route("https://factor.test/**", route => {
     const url = new URL(route.request().url());
-    if (url.pathname === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    if (url.pathname === "/") return route.fulfill({ contentType: "text/html", body: `${fontStylesheet}<div id="root"></div>` });
     reads++;
     return route.fulfill({ json: { section: url.pathname.endsWith("factor-periods") ? "factor_periods" : "factor_observations",
       items: url.pathname.endsWith("factor-periods") ? [period] : [{ ...daily, ic: null, rank_ic: null,

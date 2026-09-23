@@ -19,6 +19,7 @@ from psycopg.errors import OutOfMemory, UniqueViolation
 from psycopg.types.json import Jsonb
 from psycopg_pool import PoolTimeout
 from pydantic import ValidationError
+from pydantic_core import ErrorDetails
 
 from thesistrace._paging import fit_page
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
@@ -77,6 +78,7 @@ from thesistrace.research_kernel.factor_evidence import (
     validate_factor_observations,
 )
 from thesistrace.research_kernel.numeric import (
+    MAX_INITIAL_CASH_CNY,
     NUMERIC_CONTRACT_ID,
     NumericContractError,
     require_current_numeric_contract,
@@ -128,6 +130,7 @@ from thesistrace.research_run.models import (
     OrganizeResearchRunCommand,
     ProvenanceResultSection,
     ProvenanceResultSectionInput,
+    RerunSourceDetails,
     ResearchAdmissionDetails,
     ResearchKind,
     ResearchRunAdmissionAccepted,
@@ -261,19 +264,21 @@ class ResearchRunContractMismatch(RuntimeError):
 
 
 class ResearchRunCancelConflict(RuntimeError):
-    pass
+    code = "RUN_NOT_CANCELLABLE"
 
 
 class ResearchRunCancelIdempotencyConflict(ResearchRunCancelConflict):
-    pass
+    code = "CANCEL_REQUEST_CONFLICT"
 
 
 class ResearchRunCancelStateConflict(ResearchRunCancelConflict):
-    pass
+    def __init__(self, message: str, *, code: str = "RUN_NOT_CANCELLABLE") -> None:
+        super().__init__(message)
+        self.code = code
 
 
 class ResearchRunStartTrackingConflict(RuntimeError):
-    pass
+    code = "TRACKING_REQUEST_CONFLICT"
 
 
 class ResearchRunResultUnavailable(RuntimeError):
@@ -289,7 +294,13 @@ class ResearchRunResultReadFailed(RuntimeError):
 
 
 class ResearchRunTrackingUnavailable(RuntimeError):
-    pass
+    def __init__(
+        self, message: str = "Start Tracking requires a complete verified Result", *,
+        code: str = "TRACKING_RESULT_UNAVAILABLE", limit: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.limit = limit
 
 
 class ResearchRunTrackingTemporarilyUnavailable(RuntimeError):
@@ -317,7 +328,7 @@ class ResearchRunAdmissionConflict(RuntimeError):
 
 
 class ResearchRunOrganizationConflict(RuntimeError):
-    pass
+    code = "FOLDER_NOT_FOUND"
 
 
 class ResearchRunDeleteConflict(RuntimeError):
@@ -1318,6 +1329,7 @@ class ResearchRunService:
             except (KeyError, TypeError, ValueError) as error:
                 raise ResearchRunAdmissionRejected([ResearchRunAdmissionIssue(
                     code="RERUN_SOURCE_INVALID", field="rerun_source", message=str(error),
+                    details=RerunSourceDetails(reason="invalid_source"),
                 )]) from error
         else:
             with self._database.transaction() as transaction:
@@ -1340,7 +1352,11 @@ class ResearchRunService:
         try:
             immutable = selected["immutable_input"]
             if immutable["research_kind"] != "strategy_backtest":
-                raise ValueError("Rerun source must be a Strategy Backtest")
+                raise ResearchRunAdmissionRejected([ResearchRunAdmissionIssue(
+                    code="RERUN_SOURCE_INVALID", field="research_kind",
+                    message="Rerun source must be a Strategy Backtest",
+                    details=RerunSourceDetails(reason="research_kind"),
+                )])
             strategy = immutable["strategy"]
             # Retain supported simulation settings exactly. Unsupported old settings
             # are diagnosed; never substitute current defaults for a different model.
@@ -1356,6 +1372,7 @@ class ResearchRunService:
                         message=(
                             "Original simulation setting is unsupported in the current contract"
                         ),
+                        details=RerunSourceDetails(reason="unsupported_setting"),
                     )])
             through = (source.through_session.isoformat()
                        if isinstance(source, DailyTrackRerunSource)
@@ -1365,6 +1382,10 @@ class ResearchRunService:
                 raise ResearchRunAdmissionRejected([ResearchRunAdmissionIssue(
                     code="RERUN_SOURCE_INVALID", field="rerun_source.through_session",
                     message="Investigation date exceeds the selected published Checkpoint",
+                    details=RerunSourceDetails(
+                        reason="checkpoint_boundary", expected=selected["completed_session"],
+                        actual=through,
+                    ),
                 )])
             projected = StrategyBacktestAdmissionCommand.model_validate({
                 "request_id": command.request_id, "folder_id": command.folder_id,
@@ -1398,10 +1419,12 @@ class ResearchRunService:
                 code="RERUN_SOURCE_INVALID",
                 field=".".join(map(str, item["loc"])) or "rerun_source",
                 message=item["msg"],
+                details=_rerun_validation_details(item),
             ) for item in error.errors()]) from error
         except (KeyError, TypeError, ValueError) as error:
             raise ResearchRunAdmissionRejected([ResearchRunAdmissionIssue(
                 code="RERUN_SOURCE_INVALID", field="rerun_source", message=str(error),
+                    details=RerunSourceDetails(reason="invalid_source"),
             )]) from error
 
     def _record_admission_rejection(
@@ -2068,7 +2091,8 @@ class ResearchRunService:
                 return None
             if row["execution_owner"] != "ordinary":
                 raise ResearchRunCancelStateConflict(
-                    "Batch-owned ResearchRun cancellation is controlled by its Research Batch"
+                    "Batch-owned ResearchRun cancellation is controlled by its Research Batch",
+                    code="BATCH_CANCELLATION_REQUIRED",
                 )
             if row["status"] == "running":
                 cancelling_attempt = transaction.execute(
@@ -2359,12 +2383,14 @@ class ResearchRunService:
                     return None
                 if row["status"] != "succeeded":
                     raise ResearchRunTrackingUnavailable(
-                        "Start Tracking requires a succeeded ResearchRun"
+                        "Start Tracking requires a succeeded ResearchRun",
+                        code="TRACKING_RUN_NOT_SUCCEEDED",
                     )
                 immutable_input = ImmutableRunInput.model_validate(row["immutable_input"])
                 if immutable_input.research_kind != "strategy_backtest":
                     raise ResearchRunTrackingUnavailable(
-                        "Start Tracking requires a Strategy Backtest Result"
+                        "Start Tracking requires a Strategy Backtest Result",
+                        code="TRACKING_STRATEGY_REQUIRED",
                     )
                 try:
                     origin = self._tracking_origin(transaction, row)
@@ -2404,16 +2430,22 @@ class ResearchRunService:
                     replayed=False,
                 )
         except DailyTrackActivationLimitReached as error:
-            raise ResearchRunTrackingUnavailable(str(error)) from error
+            raise ResearchRunTrackingUnavailable(
+                str(error), code="ACTIVE_DAILY_TRACK_LIMIT_REACHED", limit=error.limit,
+            ) from error
         except DailyTrackAlreadyExists as error:
-            raise ResearchRunTrackingUnavailable("ResearchRun already has a DailyTrack") from error
+            raise ResearchRunTrackingUnavailable(
+                "ResearchRun already has a DailyTrack", code="DAILY_TRACK_ALREADY_EXISTS",
+            ) from error
         except UniqueViolation as error:
             if error.diag.constraint_name not in {
                 "start_tracking_receipts_seed_run_id_key",
                 "tracks_seed_run_id_key",
             }:
                 raise
-            raise ResearchRunTrackingUnavailable("ResearchRun already has a DailyTrack") from error
+            raise ResearchRunTrackingUnavailable(
+                "ResearchRun already has a DailyTrack", code="DAILY_TRACK_ALREADY_EXISTS",
+            ) from error
         except (
             OperationalError,
             PoolTimeout,
@@ -5692,4 +5724,28 @@ def _factor_checkpoint_coordinates(
     after = before + plan.chunks[ordinal - 1].research_session_count
     return factor_resolution_coordinates(
         sessions, before=before, after=after, final=ordinal == len(plan.chunks),
+    )
+
+
+def _rerun_validation_details(error: ErrorDetails) -> RerunSourceDetails:
+    validation_type = error["type"]
+    field = ".".join(map(str, error["loc"]))
+    expected = None
+    if validation_type == "value_error" and field in {
+        "start_date", "end_date", "through_session",
+    }:
+        validation_type = "natural_date"
+    elif validation_type == "value_error" and field == "initial_cash_cny":
+        validation_type = "initial_cash"
+        expected = int(MAX_INITIAL_CASH_CNY)
+    else:
+        context_key = {
+            "greater_than": "gt", "greater_than_equal": "ge", "less_than": "lt",
+            "less_than_equal": "le", "string_too_short": "min_length",
+            "string_too_long": "max_length",
+        }.get(validation_type)
+        if context_key is not None:
+            expected = error.get("ctx", {}).get(context_key)
+    return RerunSourceDetails(
+        reason="invalid_field", validation_type=validation_type, expected=expected,
     )
