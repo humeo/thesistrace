@@ -105,6 +105,15 @@ Each program has the same source, parameters and data declaration contract as
 Direct, its own explicit state, and its own isolated invocation. All four
 slots are frozen with the Run. Omitting `modules` selects all four built-ins.
 
+The Research workbench exposes the four stages in the same order. Each stage
+can use its built-in implementation or a Python module with independent source,
+parameters and data declarations. Switching a stage clears its inactive settings.
+The initial Python examples select available candidates, publish momentum signals,
+replace a holding when another signal exceeds the improvement threshold, and exit
+explicitly listed holdings. They are editable examples, not additional platform
+rules. Run details retain every frozen module; Create draft copies those definitions
+without changing an existing Run or DailyTrack.
+
 Only built-in Alpha accepts `formula` and `neutralization`. Only built-in
 Portfolio accepts `holdings_count`, `selection_every_sessions`,
 `exposure_expression`, `weighting` and `volatility_window`. Inactive settings

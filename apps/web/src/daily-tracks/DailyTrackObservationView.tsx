@@ -1,5 +1,6 @@
 import { SelectionEligibilityView } from "../research/SelectionEligibility";
-import type { StrategyDecisionState } from "../research/strategyDecisionState";
+import { isBuiltinFrameworkState, strategySelection, type StrategyDecisionState } from "../research/strategyDecisionState";
+import { FrameworkStateView } from "../research/FrameworkStateView";
 import { useEffect, useRef, useState } from "react";
 import { ColorType, LineSeries, createChart, type Time } from "lightweight-charts";
 
@@ -59,16 +60,17 @@ export function ObservationSummary({ observation, originSession }: {
 export function CurrentHoldings({ observation }: { observation: DailyTrackObservation }) {
   const [query, setQuery] = useState("");
   const holdings = observation.holdings.filter((item) => item.instrument_id.toLowerCase().includes(query.toLowerCase()));
+  const selection = strategySelection(observation.decision_state);
   return (
     <section className="track-holdings" aria-label="Current holdings">
       <div className="track-section-heading">
-        <div><h2>Current holdings</h2><p>Published positions as of {observation.session}. {observation.decision_state.mode === "framework"
+        <div><h2>Current holdings</h2><p>Published positions as of {observation.session}. {isBuiltinFrameworkState(observation.decision_state)
           ? <>Close target {formatReturn(observation.decision_state.exposure)} · </> : null}Actual Open allocation {formatReturn(1 - Number(observation.cash_cny) / Number(observation.net_asset_value_cny))}. Orders, costs and rounding can leave a difference.</p></div>
         <input aria-label="Filter holdings by symbol" placeholder="Find a symbol…" type="search"
           value={query} onChange={(event) => setQuery(event.target.value)} />
       </div>
-      {observation.decision_state.mode === "framework"
-        ? <SelectionEligibilityView selection={observation.decision_state.selection} /> : null}
+      {selection && <SelectionEligibilityView selection={selection} />}
+      <FrameworkStateView state={observation.decision_state} />
       <div className="track-table-scroll" tabIndex={0} role="region" aria-label="Holdings table">
         <table className="track-table">
           <thead><tr><th scope="col">Symbol</th><th scope="col">Shares</th><th scope="col">Market value</th><th scope="col">Weight</th></tr></thead>

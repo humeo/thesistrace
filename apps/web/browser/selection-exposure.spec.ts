@@ -7,6 +7,74 @@ let script: string;
 const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
 
 for (const width of [1280, 390]) {
+  test(`Framework modules retain independent drafts and locate errors at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 964 });
+    const checks: Record<string, unknown>[] = [];
+    const submissions: Record<string, unknown>[] = [];
+    await page.route("https://exposure.test/**", route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === "/api/alpha/diagnostics") return route.fulfill({ json: { valid: true, diagnostics: [] } });
+      if (path === "/api/research/diagnostics") {
+        checks.push(route.request().postDataJSON());
+        return route.fulfill({ json: checks.length === 1 ? {
+          valid: false, issues: [{ code: "STRATEGY_PROGRAM_INVALID", field: "modules.portfolio_construction.program.source",
+            message: "portfolio_construction, line 1: SyntaxError: invalid syntax", severity: "error", range: null }],
+        } : { valid: true, issues: [] } });
+      }
+      if (path === "/api/research-runs") {
+        submissions.push(route.request().postDataJSON());
+        return route.fulfill({ status: 202, json: { id: "run_framework" } });
+      }
+      return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    });
+    const mount = async () => {
+      await page.goto("https://exposure.test/");
+      await page.addStyleTag({ content: styles });
+      await page.addScriptTag({ content: script });
+    };
+    await mount();
+    await page.getByRole("combobox", { name: "Alpha / Signals module", exact: true }).selectOption("python");
+    await page.getByRole("combobox", { name: "Portfolio Construction module", exact: true }).selectOption("python");
+    const alpha = page.getByRole("region", { name: "Alpha / Signals module", exact: true });
+    const portfolio = page.getByRole("region", { name: "Portfolio Construction module", exact: true });
+    await expect(alpha.getByLabel("Python source", { exact: true })).toContainText("momentum_signals");
+    await expect(portfolio.getByLabel("Python source", { exact: true })).toContainText("better_signal_candidate");
+    await expect(page.getByLabel("Alpha formula", { exact: true })).toHaveCount(0);
+    await expect(page.getByLabel("Holdings count", { exact: true })).toHaveCount(0);
+    await portfolio.getByLabel("Parameters (JSON)", { exact: true }).fill("{");
+    await page.getByRole("button", { name: "Run backtest", exact: true }).click();
+    await expect(portfolio.getByLabel("Parameters (JSON)", { exact: true })).toBeFocused();
+    expect(submissions).toHaveLength(0);
+    await mount();
+    await expect(portfolio.getByLabel("Parameters (JSON)", { exact: true })).toHaveValue("{");
+    await portfolio.getByLabel("Parameters (JSON)", { exact: true }).fill('{"improvement": 0.04}');
+    await page.getByRole("button", { name: "Check configuration" }).click();
+    await expect(portfolio.locator("#portfolio_construction-python-source-error")).toContainText("line 1");
+    await expect(alpha.getByLabel("Python source", { exact: true })).not.toHaveAttribute("aria-invalid", "true");
+    await portfolio.getByLabel("Python source", { exact: true }).fill("def decide(context, state, parameters):\n    return {'output': None, 'state': state}\n");
+    await page.getByRole("button", { name: "Check configuration" }).click();
+    await expect(page.getByText("Configuration is valid.", { exact: false })).toBeVisible();
+    expect(checks[1]).toMatchObject({ strategy_mode: "framework", modules: {
+      alpha: { kind: "python", program: { data_requirements: { field_ids: ["price.close.adjusted"], history_sessions: 6 } } },
+      portfolio_construction: { kind: "python", program: { parameters: { improvement: 0.04 } } },
+      universe_selection: "dataset_universe/v1", risk_management: "no_risk/v1",
+    } });
+    for (const field of ["formula", "neutralization", "holdings_count", "selection_every_sessions", "exposure_expression", "program"]) {
+      expect(checks[1]).not.toHaveProperty(field);
+    }
+    await portfolio.getByRole("button", { name: "Browse fields" }).click();
+    await expect(page.getByRole("searchbox", { name: "Search fields" })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(portfolio.getByRole("button", { name: "Browse fields" })).toBeFocused();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: `../../.local/browser-tests/framework-authoring-${width}.png`, fullPage: true });
+    await page.getByRole("button", { name: "Run backtest", exact: true }).click();
+    await expect.poll(() => submissions.length).toBe(1);
+    expect(submissions[0]).toMatchObject(checks[1]);
+  });
+}
+
+for (const width of [1280, 390]) {
   test(`Direct Python remains editable, validates and submits one active definition at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 964 });
     const checks: Record<string, unknown>[] = [];
@@ -132,7 +200,7 @@ test(`Exposure, ${weighting}, retained draft and submission share one source`, a
     await page.addScriptTag({ content: script });
   };
   await mount();
-  await expect(page.getByText(/Framework · Built-in strategy/)).toBeVisible();
+  await expect(page.getByText(/Framework · Decision modules\. Decide/)).toBeVisible();
   await expect(page.getByText(/Decide after the close; simulate trades at the next/)).toBeVisible();
   await page.getByRole("button", { name: "Run settings", exact: true }).click();
   await expect(page.getByLabel("Portfolio weighting", { exact: false })).toHaveValue("equal_weight");

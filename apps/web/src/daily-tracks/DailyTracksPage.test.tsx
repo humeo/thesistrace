@@ -23,6 +23,18 @@ const observation: DailyTrackObservation = {
 };
 
 describe("Daily observation presentation", () => {
+  it("renders custom Framework holdings without inventing a built-in Selection or target", () => {
+    const markup = renderToStaticMarkup(<CurrentHoldings observation={{ ...observation, decision_state: {
+      mode: "framework", contract_checksum: "a".repeat(64), selection_interval: null,
+      module_states: { universe_selection: {}, alpha: {}, portfolio_construction: { decisions: 2 }, risk_management: {} },
+      universe: ["000001.SZ"], signals: [], retained_proposal: null,
+    } }} />);
+    expect(markup).toContain("Framework state");
+    expect(markup).toContain("0 active signals");
+    expect(markup).toContain("<td>100</td>");
+    expect(markup).not.toContain("Close target");
+    expect(markup).not.toContain("NaN");
+  });
   it("labels the tracking period and displays the published account", () => {
     const markup = renderToStaticMarkup(<ObservationSummary observation={observation} originSession="2026-08-17" />);
     expect(markup).toContain("Return since tracking");

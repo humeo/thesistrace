@@ -26,6 +26,7 @@ import {
 } from "./ResearchWorkspacePage";
 import { buildResearchDatePresets } from "./dateRange";
 import { parseProgramParameters } from "./pythonStrategy";
+import { builtinFrameworkModules } from "./frameworkModules";
 
 describe("Python parameter JSON", () => {
   it.each(['{"threshold": 1e999}', '{"x": 9007199254740992}', '{"x": "\\ud800"}',
@@ -204,7 +205,7 @@ describe("browser Research Draft", () => {
     const begun = beginResearchRun(strategy, folder.id, () => "strategy-request");
     expect(begun.command).toMatchObject({
       request_id: "strategy-request",
-      research_kind: "strategy_backtest", strategy_mode: "framework",
+      research_kind: "strategy_backtest", strategy_mode: "framework", modules: builtinFrameworkModules,
       holdings_count: 10,
       initial_cash_cny: "100000",
       selection_every_sessions: 2,
@@ -262,7 +263,7 @@ describe("browser Research Draft", () => {
       end_date: "2026-08-05",
       universe: "top1000",
       neutralization: "industry",
-      research_kind: "strategy_backtest", strategy_mode: "framework",
+      research_kind: "strategy_backtest", strategy_mode: "framework", modules: builtinFrameworkModules,
       holdings_count: 25,
       initial_cash_cny: "100000",
       selection_every_sessions: 5,
@@ -328,7 +329,7 @@ describe("browser Research Draft", () => {
       end_date: "2026-08-05",
       universe: "top1000",
       neutralization: "industry",
-      research_kind: "strategy_backtest", strategy_mode: "framework",
+      research_kind: "strategy_backtest", strategy_mode: "framework", modules: builtinFrameworkModules,
       holdings_count: 25,
       initial_cash_cny: "100000",
       selection_every_sessions: 5,
@@ -367,7 +368,7 @@ describe("browser Research Draft", () => {
       end_date: "2026-08-05",
       universe: "top300",
       neutralization: "none",
-      research_kind: "strategy_backtest", strategy_mode: "framework",
+      research_kind: "strategy_backtest", strategy_mode: "framework", modules: builtinFrameworkModules,
       holdings_count: 10,
       initial_cash_cny: "100000",
       selection_every_sessions: 2,
@@ -407,7 +408,7 @@ describe("browser Research Draft", () => {
       end_date: "2026-08-05",
       universe: "top300",
       neutralization: "none",
-      research_kind: "strategy_backtest", strategy_mode: "framework",
+      research_kind: "strategy_backtest", strategy_mode: "framework", modules: builtinFrameworkModules,
       holdings_count: 10,
       initial_cash_cny: "100000",
       selection_every_sessions: 2,
@@ -680,7 +681,7 @@ it("freezes the single Exposure source and renews pending identity when it chang
 it("restores a frozen Exposure source exactly when reusing a Run as a draft", () => {
   const storage = new MemoryStorage();
   expect(useResearchAsDraft(storage, "exposure", "folder_default", {
-    research_kind: "strategy_backtest", strategy_mode: "framework", formula: "close", hypothesis: null,
+    research_kind: "strategy_backtest", strategy_mode: "framework", modules: builtinFrameworkModules, formula: "close", hypothesis: null,
     start_date: "2026-08-03", end_date: "2026-08-05", universe: "top300", neutralization: "none",
     initial_cash_cny: "100000", holdings_count: 10, selection_every_sessions: 5,
     exposure_expression: "7 / 10",

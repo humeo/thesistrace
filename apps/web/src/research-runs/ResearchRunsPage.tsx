@@ -2,7 +2,9 @@ import { CurrentDataRerunOrigin, type RerunOrigin } from "../analysis/CurrentDat
 import { DailyHoldings } from "../analysis/DailyHoldings";
 import { StrategyEvents } from "../analysis/StrategyEvents";
 import { SelectionEligibilityView } from "../research/SelectionEligibility";
-import type { StrategyDecisionState } from "../research/strategyDecisionState";
+import { isBuiltinFrameworkState, strategySelection, type StrategyDecisionState } from "../research/strategyDecisionState";
+import { FrameworkStateView } from "../research/FrameworkStateView";
+import { FrozenFrameworkModules, FrozenPythonProgram } from "../research/FrozenStrategyDefinition";
 import {
   CaretDown,
   CaretLeft,
@@ -985,23 +987,16 @@ export function ResearchRunFacts({ run }: { run: ResearchRun }) {
           <p className={factorConditionClass}>
             <strong>Universe</strong> {universeLabel(input.universe)}
           </p>
-          {"neutralization" in input && <p className={factorConditionClass}>
+          {"neutralization" in input && input.neutralization !== undefined && <p className={factorConditionClass}>
             <strong>Neutralization</strong> {neutralizationLabel(input.neutralization)}
           </p>}
           {input.research_kind === "strategy_backtest" ? (
             <>
-              <p><strong>Strategy</strong> {direct ? "Direct · Python" : "Framework · Built-in"}</p>
+              <p><strong>Strategy</strong> {direct ? "Direct · Python" : "Framework · Decision modules"}</p>
               <p><strong>Initial cash (CNY)</strong> {input.initial_cash_cny}</p>
-              {input.strategy_mode === "direct" ? <>
-                <p><strong>History</strong> {input.program.data_requirements.history_sessions} sessions</p>
-                <p className="research-run-fact-program"><strong>Declared fields</strong> <code>{input.program.data_requirements.field_ids.join(", ") || "None"}</code></p>
-                <details className="research-run-fact-program">
-                  <summary>Frozen Python source and parameters</summary>
-                  <pre><code>{input.program.source}</code></pre>
-                  <strong>Parameters</strong>
-                  <pre><code>{JSON.stringify(input.program.parameters, null, 2)}</code></pre>
-                </details>
-              </> : <>
+              {input.strategy_mode === "direct" ? <FrozenPythonProgram program={input.program} /> : <>
+              <FrozenFrameworkModules modules={input.modules} />
+              {input.selection_every_sessions !== undefined && <>
               <p><strong>Holdings count</strong> {input.holdings_count}</p>
               {input.weighting === "inverse_volatility" && <p><strong>Volatility window</strong> {input.volatility_window} sessions</p>}
               <p><strong>Portfolio weighting</strong> {input.weighting === "inverse_volatility" ? "Inverse volatility" : input.weighting === "rank_weight" ? "Rank weight" : "Equal weight"}</p>
@@ -1010,6 +1005,7 @@ export function ResearchRunFacts({ run }: { run: ResearchRun }) {
                 <strong>Selection</strong>{" "}
                 {selectionLabel(input.selection_every_sessions)}
               </p>
+              </>}
               </>}
             </>
           ) : null}
@@ -1533,6 +1529,7 @@ function formatResearchRunMetric(
 export function ResearchResultView({ result }: { result: ResearchResult }) {
   const strategyResult = "strategy" in result ? result : null;
   const factorResult = "factor" in result ? result : null;
+  const selection = strategyResult ? strategySelection(strategyResult.terminal_strategy_state.decision_state) : null;
   return (
     <div className="research-result">
       {factorResult !== null ? <section className="research-result-section">
@@ -1579,16 +1576,17 @@ export function ResearchResultView({ result }: { result: ResearchResult }) {
           <div className="strategy-context-row">
             <h3>Exposure</h3>
             <dl className="strategy-exposure-values">
-              <div><dt>Last Close target</dt><dd>{formatPercent(strategyResult.terminal_strategy_state.decision_state.mode === "framework"
+              <div><dt>Last Close target</dt><dd>{formatPercent(isBuiltinFrameworkState(strategyResult.terminal_strategy_state.decision_state)
                 ? strategyResult.terminal_strategy_state.decision_state.exposure
                 : strategyResult.terminal_strategy_state.pending_target?.allocation?.exposure ?? null)}</dd></div>
               <div><dt>Actual Open allocation</dt><dd>{formatPercent(1 - Number(strategyResult.terminal_strategy_state.net_cash) / Number(strategyResult.terminal_strategy_state.net_nav))}</dd></div>
             </dl>
           </div>
-          {strategyResult.terminal_strategy_state.decision_state.mode === "framework" ? <div className="strategy-context-row">
+          {selection !== null ? <div className="strategy-context-row">
             <h3>Selection check</h3>
-            <SelectionEligibilityView selection={strategyResult.terminal_strategy_state.decision_state.selection} />
+            <SelectionEligibilityView selection={selection} />
           </div> : null}
+          <FrameworkStateView state={strategyResult.terminal_strategy_state.decision_state} />
           <details className="strategy-execution-notes">
             <summary>Execution conventions <CaretDown aria-hidden="true" size={14} /></summary>
             <ul>

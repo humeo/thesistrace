@@ -17,6 +17,9 @@ import type { BrowserLocation } from "../auth/routing";
 import { ResearchFieldCatalog, type DataOverview } from "../data/DataPage";
 import { AlphaFormulaEditor, type AlphaFormulaEditorHandle } from "./AlphaFormulaEditor";
 import { PythonStrategyAuthoring } from "./PythonStrategyAuthoring";
+import { FrameworkAuthoring } from "./FrameworkAuthoring";
+import { frameworkStages, type FrameworkStage } from "./frameworkModules";
+import { programInputFields, type ProgramInputField } from "./pythonStrategy";
 import { buildResearchDatePresets } from "./dateRange";
 import {
   createDiagnosticsScheduler,
@@ -40,6 +43,9 @@ import {
   researchDraftKey,
   selectResearchKind,
   selectStrategyMode,
+  selectFrameworkModule,
+  usesBuiltinAlpha,
+  usesBuiltinPortfolio,
   type ResearchDraft,
 } from "./draft";
 
@@ -398,6 +404,8 @@ export function ResearchDraftWorkspace({
   const [validationAttempted, setValidationAttempted] = useState(false);
   const [pendingInput, setPendingInput] = useState<ResearchInputField | null>(null);
   const direct = draft.researchKind === "strategy_backtest" && draft.strategyMode === "direct";
+  const builtinAlpha = usesBuiltinAlpha(draft);
+  const builtinPortfolio = usesBuiltinPortfolio(draft);
   const inputIssues = validationAttempted ? researchInputIssues(researchInputs(draft)) : [];
   const inputError = (field: ResearchInputField) => inputIssues.find((issue) => issue.field === field)?.message;
   useEffect(() => {
@@ -405,7 +413,7 @@ export function ResearchDraftWorkspace({
     if (pendingInput === "formula") alphaEditor.current?.focus();
     else if (pendingInput === "exposureExpression") exposureEditor.current?.focus();
     else {
-      const input = workspace.current?.querySelector<HTMLElement>(INPUT_SELECTORS[pendingInput]);
+      const input = workspace.current?.querySelector<HTMLElement>(inputSelector(pendingInput));
       const disclosure = input?.closest("details");
       if (disclosure) disclosure.open = true;
       input?.focus();
@@ -433,6 +441,13 @@ export function ResearchDraftWorkspace({
     setFieldsOpen(false);
     fieldsTrigger.current?.focus();
   }
+  function fieldsButton() {
+    return <button className="button button-quiet" type="button" aria-expanded={fieldsOpen}
+      aria-controls="research-fields-panel" onClick={event => {
+        fieldsTrigger.current = event.currentTarget;
+        setFieldsOpen(open => !open);
+      }}>Browse fields</button>;
+  }
   const [exposureDiagnosticState, setExposureDiagnosticState] = useState<DiagnosticState>({ kind: "idle", result: null });
   const exposureDiagnostics = useRef(createDiagnosticsScheduler(coreFetch, undefined, "exposure"));
   const [specFeedback, setSpecFeedback] = useState<{
@@ -446,14 +461,14 @@ export function ResearchDraftWorkspace({
   const admissionController = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    diagnostics.current.diagnose(direct ? "" : draft.formula, setDiagnosticState);
-  }, [draft.formula, direct]);
+    diagnostics.current.diagnose(builtinAlpha ? draft.formula : "", setDiagnosticState);
+  }, [draft.formula, builtinAlpha]);
   useEffect(() => {
     exposureDiagnostics.current.diagnose(
-      draft.researchKind === "strategy_backtest" && !direct ? draft.exposureExpression : "",
+      builtinPortfolio ? draft.exposureExpression : "",
       setExposureDiagnosticState,
     );
-  }, [draft.researchKind, draft.exposureExpression, direct]);
+  }, [draft.exposureExpression, builtinPortfolio]);
   useEffect(() => {
     specController.current?.abort();
   }, [specKey]);
@@ -611,13 +626,44 @@ export function ResearchDraftWorkspace({
     ? admissionFeedback.issues
     : [];
   function programError(field: ResearchInputField): string | undefined {
-    const serverField = {
+    const [stage, input] = field.includes(".") ? field.split(".") : [null, field];
+    const serverField = (stage ? `modules.${stage}.` : "") + {
       programSource: "program.source", programParameters: "program.parameters",
       programFields: "program.data_requirements", programHistorySessions: "program.data_requirements",
-    }[field as string];
+    }[input as ProgramInputField];
     const issues = [...visibleIssues, ...(specFeedback?.key === specKey ? specFeedback.issues : [])];
-    return inputError(field) ?? issues.find(issue => issue.field === serverField)?.message;
+    return inputError(field) ?? issues.find(issue => issue.field === serverField || issue.field.startsWith(`${serverField}.`))?.message;
   }
+  const alphaAuthoring = <>
+        <div className="formula-workbench">
+          <header className="formula-heading">
+            <h2 id="alpha-formula-title">Alpha formula</h2>
+            {fieldsButton()}
+          </header>
+          {inputError("formula") && <p className="research-formula-error inline-status-error">{inputError("formula")}</p>}
+          <AlphaFormulaEditor
+            ref={alphaEditor}
+            catalog={catalog}
+            diagnostics={serverDiagnostics}
+            formula={draft.formula}
+            onChange={(formula, editor) => updateDraft((current) => ({ ...current, formula, editor }))}
+            selection={draft.editor}
+          />
+          <footer className="formula-status"><span>Ctrl + Space to autocomplete</span><span>{coverage ? `Market data through ${coverage.end}` : "Market data not ready for research"}</span></footer>
+        </div>
+        {diagnosticState.kind === "complete" && diagnosticState.result.diagnostics.length > 0 ? (
+          <ul aria-label="Formula diagnostics" className="formula-diagnostics">
+            {diagnosticState.result.diagnostics.map((diagnostic) => (
+              <li key={`${diagnostic.code}-${diagnostic.range.start.offset}`}>
+                <code>{diagnostic.code}</code> {diagnostic.message}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {diagnosticState.kind === "unavailable" ? (
+          <p className="inline-status inline-status-error" role="status">Formula validation is unavailable.</p>
+        ) : null}
+  </>;
   return (
     <section ref={workspace} aria-label="Research" className="page-section research-workspace">
       <header className="research-workspace-header">
@@ -677,7 +723,7 @@ export function ResearchDraftWorkspace({
             const mode = event.target.value;
             if (mode === "framework" || mode === "direct") updateDraft(current => selectStrategyMode(current, mode));
           }}>
-            <option value="framework">Framework · Built-in strategy</option>
+            <option value="framework">Framework · Decision modules</option>
             <option value="direct">Direct · Python</option>
           </select>
         </div>}
@@ -714,39 +760,16 @@ export function ResearchDraftWorkspace({
         <header><h2>Browse fields</h2><button className="button button-quiet" type="button" aria-label="Close field browser" onClick={closeFields}><X aria-hidden="true" size={18} /></button></header>
         {fieldsOpen && <ResearchFieldCatalog catalog={catalog} />}
       </aside>
-      <section className="research-editor-panel" aria-label={direct ? "Python authoring" : "Alpha authoring"}>
+      <section className="research-editor-panel" aria-label={direct ? "Python authoring" : draft.researchKind === "strategy_backtest" ? "Framework authoring" : "Alpha authoring"}>
         {direct ? <PythonStrategyAuthoring inputs={draft} error={programError}
           onChange={changes => updateDraft(current => ({ ...current, ...changes }))}
-          fieldsButton={<button className="button button-quiet" type="button" ref={fieldsTrigger} aria-expanded={fieldsOpen} aria-controls="research-fields-panel" onClick={() => setFieldsOpen(open => !open)}>Browse fields</button>} /> : <>
-        <div className="formula-workbench">
-          <header className="formula-heading">
-            <h2 id="alpha-formula-title">Alpha formula</h2>
-            <button className="button button-quiet" type="button" ref={fieldsTrigger} aria-expanded={fieldsOpen} aria-controls="research-fields-panel" onClick={() => setFieldsOpen((open) => !open)}>Browse fields</button>
-          </header>
-          {inputError("formula") && <p className="research-formula-error inline-status-error">{inputError("formula")}</p>}
-          <AlphaFormulaEditor
-            ref={alphaEditor}
-            catalog={catalog}
-            diagnostics={serverDiagnostics}
-            formula={draft.formula}
-            onChange={(formula, editor) => updateDraft((current) => ({ ...current, formula, editor }))}
-            selection={draft.editor}
-          />
-          <footer className="formula-status"><span>Ctrl + Space to autocomplete</span><span>{coverage ? `Market data through ${coverage.end}` : "Market data not ready for research"}</span></footer>
-        </div>
-        {diagnosticState.kind === "complete" && diagnosticState.result.diagnostics.length > 0 ? (
-          <ul aria-label="Formula diagnostics" className="formula-diagnostics">
-            {diagnosticState.result.diagnostics.map((diagnostic) => (
-              <li key={`${diagnostic.code}-${diagnostic.range.start.offset}`}>
-                <code>{diagnostic.code}</code> {diagnostic.message}
-              </li>
-            ))}
-          </ul>
-        ) : null}
-        {diagnosticState.kind === "unavailable" ? (
-          <p className="inline-status inline-status-error" role="status">Formula validation is unavailable.</p>
-        ) : null}
-        </>}
+          fieldsButton={fieldsButton()} /> : draft.researchKind === "strategy_backtest" ? <FrameworkAuthoring
+          modules={draft.frameworkModules} error={programError} fieldsButton={fieldsButton} alphaEditor={alphaAuthoring}
+          selectModule={(stage, kind) => updateDraft(current => selectFrameworkModule(current, stage, kind))}
+          updateProgram={(stage, changes) => updateDraft(current => ({ ...current, frameworkModules: {
+            ...current.frameworkModules, [stage]: { ...current.frameworkModules[stage],
+              program: { ...current.frameworkModules[stage].program, ...changes } },
+          } }))} /> : alphaAuthoring}
         {storageError !== null ? <p className="inline-status inline-status-error" role="alert">{storageError}</p> : null}
         {visibleIssues.length > 0 ? (
           <ul aria-label="Run issues" className="formula-diagnostics">
@@ -756,10 +779,10 @@ export function ResearchDraftWorkspace({
           </ul>
         ) : null}
         {draft.researchKind === "strategy_backtest" && <p className="research-spec-feedback">
-          {direct ? "Direct · Python strategy." : "Framework · Built-in strategy."} Decide after the close; simulate trades at the next trading session’s open.
+          {direct ? "Direct · Python strategy." : "Framework · Decision modules."} Decide after the close; simulate trades at the next trading session’s open.
         </p>}
         <div className="research-selection-settings">
-          {draft.researchKind === "strategy_backtest" && !direct && <>
+          {builtinPortfolio && <>
                 <ResearchNumberStepper
                   actionLabel="number of holdings"
                   id="research-holdings-count"
@@ -804,7 +827,7 @@ export function ResearchDraftWorkspace({
                   {(validationAttempted || draft.initialCashCny !== "") && !isValidInitialCash(draft.initialCashCny) && <small id="initial-cash-help" className="inline-status-error">Enter 0.01–1,000,000,000 CNY, with up to two decimal places.</small>}
                 </div>
             </>}
-            {!direct && <div className="research-parameter-field">
+            {builtinAlpha && <div className="research-parameter-field">
               <div className="research-parameter-heading"><label htmlFor="research-neutralization">Neutralization</label></div>
               <select id="research-neutralization" aria-invalid={Boolean(inputError("neutralization"))} aria-describedby={inputError("neutralization") ? "neutralization-error" : undefined} onChange={(event) => updateDraft((current) => ({ ...current, neutralization: event.target.value }))} value={draft.neutralization}>
                 <option value="">Not selected</option>
@@ -814,7 +837,7 @@ export function ResearchDraftWorkspace({
               {inputError("neutralization") && <small id="neutralization-error" className="inline-status-error">{inputError("neutralization")}</small>}
             </div>}
 
-            {draft.researchKind === "strategy_backtest" && !direct ? (
+            {builtinPortfolio ? (
               <>
                 <div className="research-parameter-field research-weighting-field">
                   <div className="research-parameter-heading"><label htmlFor="portfolio-weighting">Portfolio weighting</label>
@@ -1045,7 +1068,7 @@ function ResearchParameterHelp({ label, text }: { label: string; text: ReactNode
   </span>;
 }
 
-const INPUT_SELECTORS: Record<Exclude<ResearchInputField, "formula" | "exposureExpression">, string> = {
+const INPUT_SELECTORS: Record<Exclude<ResearchInputField, "formula" | "exposureExpression" | `${FrameworkStage}.${ProgramInputField}`>, string> = {
   hypothesis: "#research-notes", startDate: "#research-start-date", endDate: "#research-end-date",
   universe: "#research-universe", neutralization: "#research-neutralization", initialCashCny: "#initial-cash",
   holdingsCount: "#research-holdings-count", selectionEverySessions: "#research-selection-sessions",
@@ -1053,6 +1076,14 @@ const INPUT_SELECTORS: Record<Exclude<ResearchInputField, "formula" | "exposureE
   programSource: "#python-source", programParameters: "#python-parameters",
   programFields: "#python-fields", programHistorySessions: "#python-history",
 };
+
+function inputSelector(field: Exclude<ResearchInputField, "formula" | "exposureExpression">): string {
+  const [stage, input] = field.split(".");
+  if (frameworkStages.includes(stage as FrameworkStage) && programInputFields.includes(input as ProgramInputField)) {
+    return `#${stage}-${INPUT_SELECTORS[input as ProgramInputField].slice(1)}`;
+  }
+  return INPUT_SELECTORS[field as keyof typeof INPUT_SELECTORS];
+}
 
 function ResearchPositionSizing({ ref, catalog, expression, diagnostics, onChange, error }: {
   ref: Ref<AlphaFormulaEditorHandle>;

@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { builtinFrameworkModules } from "../research/frameworkModules";
 
 import {
   ResearchFolderLoadFailure,
@@ -73,13 +74,30 @@ const STRATEGY_RUN: ResearchRun = {
     holdings_count: 10,
     initial_cash_cny: "100000",
     selection_every_sessions: 2,
-    strategy_mode: "framework",
+    strategy_mode: "framework", modules: builtinFrameworkModules,
     exposure_expression: "1",
     weighting: "equal_weight", volatility_window: 20,
   },
 };
 
 describe("ResearchRunFacts", () => {
+  it("shows each frozen Framework module without inactive Alpha or Portfolio fields", () => {
+    const program = { source: "def decide(context, state, parameters): return {'output': None, 'state': state}",
+      parameters: { improvement: 0.02 }, data_requirements: { field_ids: [], history_sessions: 1 } };
+    const markup = renderToStaticMarkup(<ResearchRunFacts run={{ ...STRATEGY_RUN, input: {
+      research_kind: "strategy_backtest", strategy_mode: "framework", initial_cash_cny: "100000",
+      start_date: "2026-08-01", end_date: "2026-08-05", universe: "top300", hypothesis: null,
+      modules: { ...builtinFrameworkModules, alpha: { kind: "python", program },
+        portfolio_construction: { kind: "python", program } },
+    } }} />);
+    expect(markup).toContain("Alpha / Signals");
+    expect(markup).toContain("Portfolio Construction");
+    expect(markup).toContain("improvement");
+    expect(markup).toContain("def decide");
+    expect(markup).not.toContain("Holdings count");
+    expect(markup).not.toContain("Neutralization");
+    expect(markup).not.toContain("Exposure expression");
+  });
   it("shows frozen Direct code and parameters without Framework settings", () => {
     const markup = renderToStaticMarkup(<ResearchRunFacts run={{
       ...STRATEGY_RUN, input: {
@@ -423,6 +441,18 @@ describe("ResearchResultView", () => {
     expect(unavailableMarkup).toContain("CSI 300 comparison unavailable");
     expect(unavailableMarkup).toContain("No comparison chart is shown");
     expect(unavailableMarkup).not.toContain("<figure");
+    const modular = renderToStaticMarkup(<ResearchResultView result={{ ...result,
+      terminal_strategy_state: { ...TERMINAL_STATE, pending_target: null, decision_state: {
+        mode: "framework", contract_checksum: "a".repeat(64), selection_interval: null,
+        module_states: { universe_selection: {}, alpha: { updates: 1 }, portfolio_construction: {}, risk_management: {} },
+        universe: ["cn.stock.000001"], signals: [{ instrument_id: "cn.stock.000001", value: 0.3,
+          created_session: "2026-08-05", created_session_number: 3, valid_for_sessions: 2 }], retained_proposal: null,
+      } },
+    }} />);
+    expect(modular).toContain("Framework state");
+    expect(modular).toContain("1 active signals");
+    expect(modular).not.toContain("Selection check");
+    expect(modular).not.toContain("NaN");
 
     const cashAccountMarkup = renderToStaticMarkup(
       <ResearchResultView
@@ -704,7 +734,7 @@ describe("UseAsDraftPanel", () => {
           holdings_count: 10,
           initial_cash_cny: "100000",
           selection_every_sessions: 2,
-          strategy_mode: "framework",
+          strategy_mode: "framework", modules: builtinFrameworkModules,
           exposure_expression: "1",
           weighting: "equal_weight", volatility_window: 20,
         }}

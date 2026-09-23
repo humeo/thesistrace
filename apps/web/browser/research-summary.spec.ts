@@ -78,3 +78,39 @@ test("strategy summary prioritizes metrics and keeps execution conventions expan
     await expect(explanation).not.toBeVisible();
   }
 });
+
+test.describe("Frozen Framework touch controls", () => {
+  test.use({ hasTouch: true });
+  test("frozen module source disclosures work on wide and narrow touch layouts", async ({ page }) => {
+    const program = { source: "def decide(context, state, parameters):\n    return {'output': None, 'state': state}",
+      parameters: { threshold: 0.03 }, data_requirements: { field_ids: [], history_sessions: 1 } };
+    const input = { research_kind: "strategy_backtest", strategy_mode: "framework", initial_cash_cny: "100000",
+      hypothesis: null, start_date: "2026-08-03", end_date: "2026-08-04", universe: "top300", modules: {
+        universe_selection: "dataset_universe/v1", alpha: { kind: "python", program },
+        portfolio_construction: { kind: "python", program }, risk_management: "no_risk/v1",
+      } };
+    await page.route("https://research-evidence.test/**", route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+      if (path === "/api/research-folders") return route.fulfill({ json: {
+        items: [{ id: "folder_default", name: "Default", is_default: true }], next_cursor: null,
+      } });
+      return route.fulfill({ json: { ...run, input } });
+    });
+    await page.goto("https://research-evidence.test/");
+    await page.addStyleTag({ content: styles });
+    await page.addScriptTag({ content: script });
+    for (const width of [1280, 390]) {
+      await page.setViewportSize({ width, height: 964 });
+      const disclosure = page.getByText("Portfolio Construction · Frozen Python source and parameters", { exact: true });
+      const bounds = await disclosure.boundingBox();
+      expect(bounds?.height).toBeGreaterThanOrEqual(44);
+      expect(bounds?.width).toBeGreaterThanOrEqual(44);
+      await disclosure.focus();
+      await disclosure.press("Enter");
+      await expect(disclosure.locator("..").getByText(program.source, { exact: true })).toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      await disclosure.press("Enter");
+    }
+  });
+});

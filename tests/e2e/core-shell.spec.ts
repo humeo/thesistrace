@@ -16,6 +16,128 @@ function recordDocumentRequests(page: Page): string[] {
   return documentRequests;
 }
 
+test("Framework modules author, execute, reuse frozen programs and refresh DailyTrack", { tag: "@isolated" }, async ({ page }, testInfo) => {
+  test.setTimeout(300_000);
+  const unavailableReads: string[] = [];
+  page.on("response", response => {
+    const path = new URL(response.url()).pathname;
+    if (response.status() === 503 && /^\/api\/research-runs\/run_[a-f0-9]+$/.test(path)) unavailableReads.push(path);
+  });
+  publishFinancialTrackHead("lagged");
+  await page.goto("/research?new");
+  await page.getByRole("radio", { name: /Strategy Backtest/ }).check();
+  await page.getByLabel("Research name").fill("Daily Framework modules");
+  await page.getByLabel("Research start date").fill("2026-08-04");
+  await page.getByLabel("Research end date").fill("2026-08-05");
+  await page.getByLabel("Universe", { exact: true }).selectOption("top300");
+  const programs = [
+    { stage: "universe_selection", label: "Universe Selection", source: [
+      'def decide(context, state, parameters):',
+      '    state["count"] = state.get("count", 0) + 1',
+      '    return {"output": {"reason": "visible_candidates", "instrument_ids": [',
+      '        row["instrument_id"] for row in context["candidates"]]}, "state": state}',
+    ].join("\n"), parameters: "{}" },
+    { stage: "alpha", label: "Alpha / Signals", source: [
+      'def decide(context, state, parameters):',
+      '    state["count"] = state.get("count", 0) + 1',
+      '    return {"output": {"reason": "opportunities", "signals": [',
+      '        {"instrument_id": row["instrument_id"], "value": 1.0, "valid_for_sessions": 2}',
+      '        for row in context["candidates"]]}, "state": state}',
+    ].join("\n"), parameters: "{}" },
+    { stage: "portfolio_construction", label: "Portfolio Construction", source: [
+      'def decide(context, state, parameters):',
+      '    state["count"] = state.get("count", 0) + 1',
+      '    signals = context["framework"]["signals"]',
+      '    output = None',
+      '    if signals and not context["account"]["positions"]:',
+      '        item = signals[0]["instrument_id"]',
+      '        output = {"reason": "new_opportunity", "allocation": {"mode": "rebalance",',
+      '                  "instrument_ids": [item], "relative_weights": {item: "1"},',
+      '                  "exposure": 1.0}, "position_limits": {}}',
+      '    return {"output": output, "state": state}',
+    ].join("\n"), parameters: "{}" },
+    { stage: "risk_management", label: "Risk Management", source: [
+      'def decide(context, state, parameters):',
+      '    state["count"] = state.get("count", 0) + 1',
+      '    state["label"] = parameters["label"]',
+      '    return {"output": None, "state": state}',
+    ].join("\n"), parameters: '{"label": "original_frozen_risk"}' },
+  ];
+  for (const program of programs) {
+    await page.getByRole("combobox", { name: `${program.label} module`, exact: true }).selectOption("python");
+    const editor = page.getByRole("region", { name: `${program.label} module`, exact: true });
+    await editor.getByLabel("Python source", { exact: true }).fill(program.source);
+    await editor.getByLabel("Parameters (JSON)", { exact: true }).fill(program.parameters);
+    await editor.getByLabel("Declared fields", { exact: true }).fill("");
+    await editor.getByLabel("History (trading sessions)", { exact: true }).fill("1");
+  }
+  const riskSource = page.getByRole("region", { name: "Risk Management module", exact: true }).getByLabel("Python source", { exact: true });
+  await riskSource.fill("def decide(:");
+  await page.getByRole("button", { name: "Check configuration" }).click();
+  await expect(page.locator("#risk_management-python-source-error")).toContainText("line 1", { timeout: 60_000 });
+  await riskSource.fill(programs[3].source);
+  await page.getByRole("button", { name: "Check configuration" }).click();
+  // All four modules are validated sequentially in isolated guest invocations.
+  await expect(page.getByText("Configuration is valid.", { exact: false })).toBeVisible({ timeout: 60_000 });
+  await page.getByRole("button", { name: "Run backtest", exact: true }).click();
+  await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/, { timeout: 60_000 });
+  const runUrl = page.url(), runId = runUrl.split("/").at(-1)!;
+  let outcome = { status: "", failure_reason: "" };
+  await expect.poll(async () => {
+    const response = await page.request.get(`/api/research-runs/${runId}`);
+    if (response.status() === 503) return false;
+    expect(response.ok()).toBe(true);
+    outcome = await response.json();
+    return ["succeeded", "failed", "cancelled"].includes(outcome.status);
+  }, { timeout: 120_000 }).toBe(true);
+  expect(outcome.status, outcome.failure_reason).toBe("succeeded");
+  if (await page.getByRole("alert").filter({ hasText: "ResearchRun unavailable" }).isVisible()) {
+    // A dependency outage stops UI polling and exposes an explicit Retry action.
+    expect(unavailableReads).toContain(`/api/research-runs/${runId}`);
+    testInfo.annotations.push({ type: "dependency-recovery", description: "Recovered a 503 Run read using the visible Retry action." });
+    await page.getByRole("button", { name: "Retry", exact: true }).click();
+  }
+  await expect(page.getByRole("heading", { name: "Strategy Summary" })).toBeVisible({ timeout: 30_000 });
+  const facts = page.getByRole("group", { name: "Research execution conditions" });
+  await expect(facts).not.toContainText("Holdings count");
+  await page.getByText("Risk Management · Frozen Python source and parameters", { exact: true }).click();
+  await expect(facts).toContainText("original_frozen_risk");
+  await expect(page.locator(".framework-state")).toContainText("active signals");
+  const accepted = await (await page.request.get(`/api/research-runs/${runId}`)).json();
+  for (const program of programs) {
+    expect(accepted.input.modules[program.stage].program.source).toBe(program.source);
+    expect(accepted.result.terminal_strategy_state.decision_state.module_states[program.stage].count).toBe(2);
+  }
+  const evidence = await page.request.post(`/api/research-runs/${runId}/events/query`, {
+    headers: sameOriginHeaders(), data: { section: "strategy_framework", limit: 50 },
+  });
+  expect(evidence.status()).toBe(200);
+  expect((await evidence.json()).rows).toHaveLength(2);
+  await page.screenshot({ path: testInfo.outputPath("framework-result.png"), fullPage: true });
+  await page.getByRole("button", { name: "Create draft", exact: true }).click();
+  await expect(page).toHaveURL(/\/research$/);
+  for (const program of programs) {
+    await expect(page.getByRole("region", { name: `${program.label} module`, exact: true })
+      .getByLabel("Python source", { exact: true })).toHaveValue(program.source);
+  }
+  await riskSource.fill("a later editable risk module");
+  await page.goto(runUrl);
+  await page.getByRole("button", { name: "Start Tracking", exact: true }).click();
+  await expect(page).toHaveURL(/\/daily-tracks\/track_[a-f0-9]+$/);
+  const trackId = page.url().split("/").at(-1)!;
+  await expect(page.locator(".framework-state")).toContainText("active signals");
+  await page.getByRole("button", { name: "Refresh to latest data", exact: true }).click();
+  await expect.poll(async () => (await (await page.request.get(`/api/daily-tracks/${trackId}`)).json()).strategy_session,
+    { timeout: 120_000 }).toBe("2026-08-11");
+  await page.getByRole("button", { name: "Reload status", exact: true }).click();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  const latest = await (await page.request.get(`/api/daily-tracks/${trackId}`)).json();
+  for (const program of programs) expect(latest.observation.decision_state.module_states[program.stage].count).toBe(6);
+  expect(latest.observation.decision_state.module_states.risk_management.label).toBe("original_frozen_risk");
+  expect(latest.observation.selection_interval).toBeNull();
+  await page.screenshot({ path: testInfo.outputPath("framework-track.png"), fullPage: true });
+});
+
 test("Direct Python authoring executes, reuses frozen source and explicitly advances DailyTrack", { tag: "@isolated" }, async ({ page }) => {
   test.setTimeout(180_000);
   publishFinancialTrackHead("lagged");
