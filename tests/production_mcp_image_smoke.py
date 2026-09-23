@@ -49,6 +49,7 @@ SAFE_STDIO_TOOL_ORDER = (
     "get_research_context",
     "get_alpha_catalog",
     "diagnose_alpha_formula",
+    "diagnose_research_spec",
     "list_research_runs",
     "get_research_run",
     "get_research_run_result",
@@ -66,6 +67,7 @@ SAFE_STDIO_TOOL_ORDER = (
 SAFE_STDIO_TOOLS = set(SAFE_STDIO_TOOL_ORDER)
 READ_TOOLS = {
     "diagnose_alpha_formula",
+    "diagnose_research_spec",
     "get_alpha_catalog",
     "get_research_batch",
     "get_research_context",
@@ -277,6 +279,7 @@ async def _http_before() -> dict[str, object]:
                 "universe": "top300",
                 "neutralization": "none",
                 "research_kind": "strategy_backtest",
+                "initial_cash_cny": "100000",
                 "holdings_count": 1,
                 "selection_every_sessions": 1,
             },
@@ -501,7 +504,7 @@ def _raw_stdio_probe() -> dict[str, object]:
         _require(isinstance(raw_tools, list), "stdio_contract")
         names = [tool.get("name") for tool in raw_tools if isinstance(tool, dict)]
         _require(tuple(names) == SAFE_STDIO_TOOL_ORDER, "stdio_contract")
-        _require(len(names) == 16 and len(set(names)) == 16, "stdio_contract")
+        _require(len(set(names)) == len(SAFE_STDIO_TOOL_ORDER), "stdio_contract")
         _assert_no_generic_tools(set(names))
         _record_protocol_envelope(
             transport="stdio",
