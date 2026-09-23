@@ -1523,7 +1523,8 @@ class ResearchRunService:
                     chunk = execution.chunk
                     if chunk.get("reused_checkpoint") is not True:
                         commit_started = monotonic()
-                        self._commit_execution_chunk(claim, chunk)
+                        with self._publication.staging():
+                            self._commit_execution_chunk(claim, chunk)
                         emit(
                             {
                                 "event": "research_execution_chunk_committed",
@@ -1555,21 +1556,22 @@ class ResearchRunService:
                         )
                         self._progress("checkpoint", claim.run_id)
                     if chunk["final"] is True:
-                        prepared, provenance, key_metrics, holding_prepared = (
-                            self._prepare_execution_result(claim, chunk)
-                        )
-                        self._progress("prepared", claim.run_id)
-                        self._validate_current_execution(claim)
-                        execution.acknowledge(
-                            cancel_requested=lambda: self._cancellation_is_pending(claim)
-                        )
-                        self._publish_success(
-                            claim,
-                            prepared,
-                            provenance,
-                            key_metrics,
-                            holding_prepared,
-                        )
+                        with self._publication.staging():
+                            prepared, provenance, key_metrics, holding_prepared = (
+                                self._prepare_execution_result(claim, chunk)
+                            )
+                            self._progress("prepared", claim.run_id)
+                            self._validate_current_execution(claim)
+                            execution.acknowledge(
+                                cancel_requested=lambda: self._cancellation_is_pending(claim)
+                            )
+                            self._publish_success(
+                                claim,
+                                prepared,
+                                provenance,
+                                key_metrics,
+                                holding_prepared,
+                            )
                         emit(
                             _research_event(
                                 "research_result_published",

@@ -402,7 +402,7 @@ class ResearchBatchService:
         execution: SupervisedResearchBatchExecution | None = None
         private_artifact_path: Path | None = None
         try:
-            with self._maintain_claim(claim, emit):
+            with self._maintain_claim(claim, emit), self._publication.staging():
                 reuse_private_artifact = False
                 if claim.batch_kind == "strategy_sweep":
                     private_artifact_path = self._private_artifact_path(claim.attempt_id)

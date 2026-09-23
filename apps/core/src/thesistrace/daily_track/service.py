@@ -701,25 +701,26 @@ class DailyTrackService:
                                 phase="result_ready",
                             )
                         )
-                        prepared, provenance, holding_prepared = self._prepare_current_result(
-                            current_claim,
-                            execution.result,
-                        )
-                        self._progress(
-                            "prepared",
-                            current_claim.track_id,
-                            current_claim.data_generation_id,
-                        )
-                        execution.acknowledge(
-                            stop_requested=lambda: self._stop_is_pending(current_claim)
-                        )
-                        published = self._publish_current(
-                            current_claim,
-                            prepared,
-                            provenance,
-                            execution.result.terminal_strategy_state,
-                            holding_prepared,
-                        )
+                        with self._publication.staging():
+                            prepared, provenance, holding_prepared = self._prepare_current_result(
+                                current_claim,
+                                execution.result,
+                            )
+                            self._progress(
+                                "prepared",
+                                current_claim.track_id,
+                                current_claim.data_generation_id,
+                            )
+                            execution.acknowledge(
+                                stop_requested=lambda: self._stop_is_pending(current_claim)
+                            )
+                            published = self._publish_current(
+                                current_claim,
+                                prepared,
+                                provenance,
+                                execution.result.terminal_strategy_state,
+                                holding_prepared,
+                            )
                         emit(
                             _tracking_event(
                                 "tracking_phase_completed",

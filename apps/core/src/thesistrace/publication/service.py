@@ -5,8 +5,9 @@ import json
 import os
 import re
 import time
-from collections.abc import Callable, Mapping, Sequence
-from contextlib import AbstractContextManager, nullcontext
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager, contextmanager, nullcontext
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,7 @@ from botocore.exceptions import (
     HTTPClientError,
     ReadTimeoutError,
 )
+from psycopg import Error as PostgresError
 from pyarrow import ArrowException
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
@@ -37,6 +39,7 @@ OBJECT_READ_ATTEMPTS = 3
 OBJECT_STREAM_CHUNK_BYTES = 1024 * 1024
 IDENTIFIER_PATTERN = re.compile(r"^[a-z][a-z0-9_.-]{0,127}$")
 PUBLICATION_MUTATION_LOCK = "thesistrace-publication-mutation"
+PUBLICATION_STAGING_LOCK = "thesistrace-publication-staging"
 TRANSIENT_S3_ERRORS = (
     ConnectionClosedError,
     ConnectTimeoutError,
@@ -159,6 +162,15 @@ def lock_publication_mutation(transaction: PostgresTransaction) -> None:
     )
 
 
+def try_lock_publication_collection(transaction: PostgresTransaction) -> bool:
+    """Called after the mutation fence; never wait for a publisher that needs it."""
+    row = transaction.execute(
+        "SELECT pg_try_advisory_xact_lock(hashtext(%s)) AS acquired",
+        (PUBLICATION_STAGING_LOCK,),
+    ).fetchone()
+    return bool(row and row["acquired"])
+
+
 def s3_storage_is_available(s3: BaseClient) -> bool:
     try:
         return s3.list_buckets()["ResponseMetadata"]["HTTPStatusCode"] == 200
@@ -180,6 +192,33 @@ class Publication:
         self._s3 = s3
         self._bucket = bucket
         self._bucket_ready = False
+        self._staging_connection: ContextVar[PostgresTransaction | None] = ContextVar(
+            "publication_staging_connection", default=None,
+        )
+
+    @contextmanager
+    def staging(self) -> Iterator[None]:
+        """Protect staged bytes until reference commit or abandonment.
+
+        Concurrent publishers share this fence. Collection retries later instead
+        of deleting an object reused from an older, released publication. Keep
+        the scope through record's transaction exit; process loss releases it.
+        """
+        with self._database.session_advisory_lock_shared(PUBLICATION_STAGING_LOCK) as connection:
+            token = self._staging_connection.set(connection)
+            try:
+                yield
+            finally:
+                self._staging_connection.reset(token)
+
+    def _require_staging_session(self) -> None:
+        connection = self._staging_connection.get()
+        if connection is not None:
+            try:
+                connection.execute("SELECT 1")
+                connection.commit()
+            except PostgresError as error:
+                raise PublicationUnavailableError("Publication staging session was lost") from error
 
     @property
     def storage_identity(self) -> dict[str, str]:
@@ -197,6 +236,7 @@ class Publication:
         provenance: object,
         staging_authority: StagingAuthority | None = None,
     ) -> PreparedPublication:
+        self._require_staging_session()
         _require_identifier(kind, subject="publication kind")
         if not payloads:
             raise PublicationPreparationError("a publication requires at least one payload")
@@ -268,6 +308,7 @@ class Publication:
         *,
         staging_authority: StagingAuthority | None = None,
     ) -> StagedPayload:
+        self._require_staging_session()
         content, media_type, serialization = _serialize_payload(payload)
         self._ensure_bucket(staging_authority=staging_authority)
         digest = hashlib.sha256(content).hexdigest()
@@ -294,6 +335,7 @@ class Publication:
     ) -> StagedPayload:
         """Stage one file without materializing its complete contents in Python memory."""
 
+        self._require_staging_session()
         if not media_type:
             raise PublicationPreparationError("staged file requires a media type")
         canonical_serialization = _canonical_json_value(
@@ -349,6 +391,7 @@ class Publication:
         *, expiring_payloads: frozenset[str] = frozenset(),
     ) -> PublishedRef:
         lock_publication_mutation(transaction)
+        self._require_staging_session()
         manifest = _load_manifest(prepared._manifest_bytes, prepared.manifest_sha256)
         objects = _manifest_objects(manifest)
 
@@ -671,6 +714,8 @@ class Publication:
     ) -> str | None:
         """Use the caller's maintenance connection and per-object transaction."""
         lock_publication_mutation(transaction)
+        if not try_lock_publication_collection(transaction):
+            return None
         row = transaction.execute(
             """
             SELECT object_sha256
@@ -965,6 +1010,7 @@ class Publication:
                     return byte_size, checksum.hexdigest()
             except ClientError as error:
                 if not _client_error_is_transient(error):
+                    self._require_staging_session()
                     raise PublicationVerificationError("Publication object is missing") from error
                 last_transient_error = error
                 attempt_failed_transiently = True

@@ -672,6 +672,19 @@ An uploaded object followed by a PostgreSQL failure is invisible and may be
 collected later. Readers start from the PostgreSQL reference and verify every
 referenced object.
 
+A publisher holds a shared staging fence from its first temporary upload through
+reference commit or abandonment. This includes reused content-addressed objects
+that a prior publication has already queued for deletion. Ordinary Research
+holds it for each checkpoint and final publication, Tracking for result
+publication, and Batch for the attempt that accumulates staged item partitions.
+Publishers may run concurrently. Both queued deletion and orphan collection take
+the mutation fence first, then try the exclusive staging fence without waiting;
+active staging defers collection to a later maintenance step. Session loss
+releases the fence; subsequent staging and reference recording reject the lost
+session as infrastructure unavailability. This deliberately delays shared byte reclamation during a
+Batch attempt rather than adding time-based staging leases or exposing a
+prepare-to-record deletion window.
+
 ## Product routes
 
 The browser route boundary is:
