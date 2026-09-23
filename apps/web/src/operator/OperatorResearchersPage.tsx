@@ -1,7 +1,7 @@
 import { MagnifyingGlass } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { i18n, interfaceLocale, useTranslation } from "../i18n";
-import { formatNumber } from "../i18n/format";
+import { i18n, useTranslation } from "../i18n";
+import { formatNumber, formatTimestamp as formatLocaleTimestamp } from "../i18n/format";
 
 import {
   loadInvitationPage,
@@ -665,11 +665,11 @@ function statusLabel(status: InvitationStatus): string {
 }
 
 function formatTimestamp(value: string): string {
-  return new Intl.DateTimeFormat(interfaceLocale() === "en" ? "en-GB" : "zh-CN", {
+  return formatLocaleTimestamp(value, {
     dateStyle: "medium",
     timeStyle: "short",
     timeZone: "UTC",
-  }).format(new Date(value));
+  });
 }
 
 function restoreMutationFocus(
