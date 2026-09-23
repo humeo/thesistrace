@@ -654,8 +654,12 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
         ]
         runtime = client.app.state.core_runtime
         for run in ordinary:
-            assert runtime.research_runs.process_next() is True
-            assert client.get(f"/api/research-runs/{run['id']}").json()["status"] == ("succeeded")
+            ordinary_events: list[dict[str, object]] = []
+            assert runtime.research_runs.process_next(
+                on_execution_event=ordinary_events.append,
+            ) is True
+            detail = client.get(f"/api/research-runs/{run['id']}").json()
+            assert detail["status"] == "succeeded", {"detail": detail, "events": ordinary_events}
 
         assert runtime.research_batches.process_next(on_execution_event=events.append) is True
 

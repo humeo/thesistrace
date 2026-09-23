@@ -101,9 +101,9 @@ def test_daily_track_detail_keeps_latest_504_sessions_and_full_origin_metrics(
         assert tracking_events[1]["event"] == "tracking_advance_claimed"
         assert tracking_events[1]["track_id"] == track_id
         first_detail = client.get(f"/api/daily-tracks/{track_id}").json()
-        assert first_detail["strategy_session"] == sessions[66]
-        assert first_detail["lag_sessions"] == 236
-        for index in range(4):
+        assert first_detail["strategy_session"] == sessions[12]
+        assert first_detail["lag_sessions"] == 290
+        for index in range(29):
             _refresh_daily_track(
                 client,
                 track_id,
@@ -121,7 +121,7 @@ def test_daily_track_detail_keeps_latest_504_sessions_and_full_origin_metrics(
             expected_manifest=head_b,
             operation_id="daily-track-504-head-c",
         )
-        for index in range(4):
+        for index in range(21):
             _refresh_daily_track(
                 client,
                 track_id,

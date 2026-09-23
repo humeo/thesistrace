@@ -352,7 +352,9 @@ def test_degraded_financial_readiness_is_admitted_and_frozen() -> None:
         coverage_start=sessions[0],
         coverage_end=sessions[-1],
         research_sessions=sessions,
-        available_field_ids=frozenset({"financial.income.total_revenue.latest_fy"}),
+        available_field_ids=frozenset({
+            "financial.income.total_revenue.latest_fy", "price.close.adjusted",
+        }),
         maximum_universe_cardinality=lambda _universe, _start, _end: 300,
         universe_member_union_cardinalities=lambda _universe, windows: tuple(300 for _ in windows),
         financial_research_readiness="ready_with_pending",
@@ -493,8 +495,8 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
             "numeric_execution_contract": "thesistrace-numeric-v1",
             "semantic_versions": {
                 "factor": "factor-v1",
-                "strategy": "strategy-v6",
-                "kernel": "kernel-v9",
+                "strategy": "strategy-v10",
+                "kernel": "kernel-v14",
             },
             "expression_admission": {
                 "effective_lookback": 0,
@@ -519,7 +521,7 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
             "execution_plan": {
                 "execution_memory_bytes": 1536 * 1024**2,
                 "chunk_time_target_seconds": 30,
-                "chunk_session_count": 64,
+                "chunk_session_count": 10,
                 "time_target_exceeded": False,
                 "maximum_universe_cardinality": 1,
                 "calculation_sessions": ["2026-08-03", "2026-08-04"],
@@ -562,6 +564,19 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
             "holdings_count": 1,
             "selection_every_sessions": 1,
             "exposure_expression": "1",
+            "costs": {
+                "commission_rate_all_in": "0.0003",
+                "commission_min_cny": "5",
+                "stamp_duty_sell_rate": "0.0005",
+                "transfer_fee_rate": "0.00001",
+                "slippage_bps": "0",
+            },
+            "modules": {
+                "universe_selection": "dataset_universe/v1",
+                "alpha": "alpha_formula/v1",
+                "portfolio_construction": "periodic_top_n/v1",
+                "risk_management": "no_risk/v1",
+            },
         }
         assert completed.json()["result"]["provenance"]["research_run_id"] == queued["id"]
 
