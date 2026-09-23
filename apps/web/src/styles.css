@@ -70,10 +70,10 @@ html:has(.landing-page, .login-page, .auth-page) {
 .quantgrove-wordmark { font-family: var(--font-display); }
 
 * { box-sizing: border-box; }
-html { min-width: 320px; overflow-x: clip; scrollbar-gutter: stable; background: var(--canvas); }
+html { min-width: 0; overflow-x: clip; scrollbar-gutter: stable; background: var(--canvas); }
 body {
   margin: 0;
-  min-width: 320px;
+  min-width: 0;
   min-height: 100vh;
   min-height: 100dvh;
   overflow-x: clip;

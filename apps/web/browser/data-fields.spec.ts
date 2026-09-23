@@ -44,7 +44,7 @@ for (const width of [1280, 390, 320]) {
     await page.route("http://data.test/**", async (route) => {
       const pathname = new URL(route.request().url()).pathname;
       if (pathname === "/") {
-        return route.fulfill({ contentType: "text/html", body: `${fontStylesheet}<div id="root"></div>` });
+        return route.fulfill({ contentType: "text/html", body: `<!doctype html>${fontStylesheet}<div id="root"></div>` });
       }
       requests.push(pathname);
       if (pathname !== "/api/data") return route.fulfill({ status: 404 });
@@ -178,7 +178,7 @@ for (const width of [1280, 390, 320]) {
     await expect(page.locator(".data-explorer-table tbody tr")).toHaveCount(1);
     await page.getByRole("searchbox", { name: "搜索字段" }).fill("close_raw");
     await expect(page.locator(".data-explorer-table tbody tr")).toHaveCount(1);
-    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(await page.evaluate(() => document.documentElement.clientWidth));
     await page.screenshot({ path: test.info().outputPath(`data-zh-${width}.png`), fullPage: true });
     await page.getByRole("button", { name: "English", exact: true }).click();
     await expect(page.getByRole("combobox", { name: "Research purpose" })).toHaveValue("行情");
@@ -215,7 +215,7 @@ for (const width of [1280, 390, 320]) {
     await page.getByRole("searchbox", { name: "Search fields" }).fill("monetary_funds");
     await expect(page.locator(".data-field-dataset .data-field-table tbody tr")).toHaveCount(1);
     await expect(page.locator(".data-field-dataset .data-field-table tbody tr")).toContainText("monetary_funds");
-    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(await page.evaluate(() => document.documentElement.clientWidth));
   });
 }
 
