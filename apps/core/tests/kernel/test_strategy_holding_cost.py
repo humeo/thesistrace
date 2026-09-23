@@ -207,7 +207,7 @@ def test_builtin_stop_loss_freezes_close_exit_and_executes_at_next_open(next_ope
         origin_session=SESSIONS[0],
     )
     evidence = triggered.finalized["framework_events"][-1]["risk_adjustment"]
-    assert evidence["mode"] == "holding_risk"
+    assert evidence["mode"] == "builtin_risk"
     assert evidence["observations"] == [{
         "reason": "stop_loss", "instrument_id": A, "remaining_acquisition_cost_cny": "1e+4",
         "close_market_value_cny": "89e+2", "holding_return": "-11e-2",

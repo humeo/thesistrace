@@ -1833,9 +1833,9 @@ def test_v1_inventory_scopes_descriptions_annotations_and_schemas_are_exact() ->
     canonical = _canonical_v1_contract()
 
     assert sha256(canonical).hexdigest() == (
-        "4fab1cb44771dd87a80453227a1780073e567a4a596e1b23fbd36f3eeeee0977"
+        "12ed5bf12f96f4fadb0aa0c705881bde37a96bf7303bc2b66055ccb65c93fa1a"
     )
-    assert len(canonical) == 294948
+    assert len(canonical) == 302045
 
 
 def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None:

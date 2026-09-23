@@ -570,3 +570,49 @@ for (const width of [1280, 390]) {
     } } });
   });
 }
+
+for (const width of [1280, 390]) {
+  test(`portfolio drawdown requires complete policy and persists at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 964 });
+    const submissions: Record<string, unknown>[] = [];
+    await page.route("https://exposure.test/**", route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === "/api/alpha/diagnostics") return route.fulfill({ json: { valid: true, diagnostics: [] } });
+      if (path === "/api/research-runs") {
+        submissions.push(route.request().postDataJSON());
+        return route.fulfill({ status: 202, json: { id: "run_drawdown" } });
+      }
+      return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    });
+    const mount = async () => {
+      await page.goto("https://exposure.test/");
+      await page.addStyleTag({ content: styles });
+      await page.addScriptTag({ content: script });
+    };
+    await mount();
+    const threshold = page.getByLabel("Drawdown threshold (%)", { exact: true });
+    const cap = page.getByLabel("Maximum stock exposure (%)", { exact: true });
+    const cooldown = page.getByLabel("Cooldown (trading sessions)", { exact: true });
+    for (const input of [threshold, cap, cooldown]) await expect(input).toHaveValue("");
+    await threshold.fill("10");
+    await page.getByRole("button", { name: "Run backtest", exact: true }).click();
+    await expect(cap).toBeFocused();
+    await expect(cap).toHaveAttribute("aria-invalid", "true");
+    expect(submissions).toHaveLength(0);
+    await cap.fill("30");
+    await cooldown.fill("2");
+    await mount();
+    await expect(threshold).toHaveValue("10");
+    await expect(cap).toHaveValue("30");
+    await expect(cooldown).toHaveValue("2");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: `../../.local/browser-tests/drawdown-${width}.png`, fullPage: true });
+    await page.getByRole("button", { name: "Run backtest", exact: true }).click();
+    await expect.poll(() => submissions.length).toBe(1);
+    expect(submissions[0]).toMatchObject({ modules: { risk_management: {
+      kind: "builtin_risk/v1", portfolio_drawdown: {
+        drawdown_threshold: 0.1, maximum_stock_exposure: 0.3, cooldown_sessions: 2,
+      },
+    } } });
+  });
+}

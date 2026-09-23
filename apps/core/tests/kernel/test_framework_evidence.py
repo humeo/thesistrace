@@ -143,3 +143,19 @@ def test_minimum_holding_evidence_round_trips_with_reserved_allocation():
         "strategy_framework", parquet_bytes(payload.rows, payload.contract),
     ) == [row]
     assert event_matches(row, "strategy_framework", {"instrument_id": "equity:600001.SH"})
+
+
+@pytest.mark.parametrize("cap", [None, 0.0, 0.3, 1.0])
+def test_stock_exposure_cap_survives_target_partition(cap):
+    row = {
+        "target_id": "target_1", "decision_session": "2026-09-01",
+        "execution": "next_research_session_open", "contract_checksum": "a" * 64,
+        "reason": "portfolio_cap", "allocation": None,
+        "position_limits": {"equity:600001.SH": 0},
+    }
+    if cap is not None:
+        row["maximum_stock_exposure"] = cap
+    payload = strategy_event_payload("strategy_targets", [row])
+    assert read_strategy_event_partition(
+        "strategy_targets", parquet_bytes(payload.rows, payload.contract),
+    ) == [row]

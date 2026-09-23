@@ -69,7 +69,9 @@ def columnar_fixture(canonical) -> ColumnarResearchData:
     )
 
 
-@pytest.mark.parametrize("policy", ["stop_loss", "holding_periods", "take_profit"])
+@pytest.mark.parametrize("policy", [
+    "stop_loss", "holding_periods", "take_profit", "portfolio_drawdown",
+])
 def test_builtin_holding_risk_survives_columnar_tracking_checkpoint(policy):
     from thesistrace.research_kernel.builtin_framework import BUILTIN_FRAMEWORK_MODULES
 
@@ -79,6 +81,11 @@ def test_builtin_holding_risk_survives_columnar_tracking_checkpoint(policy):
     modules = {**BUILTIN_FRAMEWORK_MODULES, "risk_management": {
             "kind": "builtin_risk/v1", "stop_loss_threshold": 0.01,
     }}
+    if policy == "portfolio_drawdown":
+        modules["risk_management"] = {"kind": "builtin_risk/v1", "portfolio_drawdown": {
+            "drawdown_threshold": 0.0001, "maximum_stock_exposure": 0.3,
+            "cooldown_sessions": 2,
+        }}
     if policy == "take_profit":
         modules["risk_management"] = {"kind": "builtin_risk/v1", "take_profit_tiers": [
             {"profit_threshold": 0.0001, "cumulative_reduction": 0.3},

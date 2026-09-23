@@ -1,3 +1,4 @@
+import { drawdownDraft, drawdownFields, drawdownIssues, emptyDrawdownInputs, type DrawdownInputs, type DrawdownField } from "./portfolioDrawdown";
 import { readTakeProfitDraft, takeProfitDraft, takeProfitIssues, type TakeProfitField, type TakeProfitTierDraft } from "./takeProfit";
 import { costFields, costInputError, defaultSimulationCosts, readCostInputs, type CostField, type SimulationCosts } from "./simulationCosts";
 import {
@@ -17,7 +18,7 @@ export type EditorState = {
   head: number;
 };
 
-export type ResearchInputs = ProgramInputs & {
+export type ResearchInputs = ProgramInputs & DrawdownInputs & {
   researchKind: "factor_evaluation" | "strategy_backtest";
   strategyMode: "framework" | "direct";
   frameworkModules: FrameworkModulesDraft;
@@ -100,7 +101,7 @@ export type ResearchDraft = ResearchInputs & {
 };
 
 const MAX_DRAFT_BYTES = 2 * 1024 * 1024;
-const DRAFT_STORAGE_SCHEMA = "research-draft/v6";
+const DRAFT_STORAGE_SCHEMA = "research-draft/v7";
 const MAX_FORMULA_LENGTH = 4_096;
 export const MAX_HYPOTHESIS_LENGTH = 1_024;
 const MAX_TEXT_LENGTH = 10_000;
@@ -109,7 +110,7 @@ export function emptyResearchDraft(): ResearchDraft {
   return {
     researchKind: "factor_evaluation",
     strategyMode: "framework",
-    takeProfitTiers: [],
+    takeProfitTiers: [], ...emptyDrawdownInputs(),
     stopLossThreshold: "",
     maximumHoldingSessions: "",
     minimumHoldingSessions: "",
@@ -354,7 +355,7 @@ export function isValidInitialCash(value: string): boolean {
   return BigInt(whole + fraction.padEnd(2, "0")) <= 100000000000n;
 }
 
-export type ResearchInputField = TakeProfitField | `costs.${CostField}` | ProgramInputField | `${FrameworkStage}.${ProgramInputField}`
+export type ResearchInputField = DrawdownField | TakeProfitField | `costs.${CostField}` | ProgramInputField | `${FrameworkStage}.${ProgramInputField}`
   | "formula" | "hypothesis" | "startDate" | "endDate" | "universe" | "neutralization" | "initialCashCny"
   | "stopLossThreshold" | "maximumHoldingSessions" | "minimumHoldingSessions" | "holdingsCount" | "selectionEverySessions" | "exposureExpression" | "volatilityWindow";
 export type ResearchInputIssue = { field: ResearchInputField; message: string };
@@ -385,6 +386,7 @@ export function researchInputIssues(inputs: ResearchInputs): ResearchInputIssue[
   }
   if (inputs.researchKind === "strategy_backtest" && inputs.strategyMode === "framework"
     && inputs.frameworkModules.risk_management.kind === "builtin") {
+    issues.push(...drawdownIssues(inputs));
     issues.push(...takeProfitIssues(inputs.takeProfitTiers));
     const message = stopLossInputError(inputs.stopLossThreshold);
     if (message) issues.push({ field: "stopLossThreshold", message });
@@ -467,6 +469,7 @@ export function useResearchAsDraft(
     frameworkModules: framework ? frameworkDraft(input.modules) : builtinModulesDraft(),
     takeProfitTiers: framework && typeof input.modules.risk_management !== "string" && input.modules.risk_management.kind === "builtin_risk/v1"
       ? takeProfitDraft(input.modules.risk_management.take_profit_tiers ?? []) : [],
+    ...drawdownDraft(framework && typeof input.modules.risk_management !== "string" && input.modules.risk_management.kind === "builtin_risk/v1" ? input.modules.risk_management.portfolio_drawdown : undefined),
     stopLossThreshold: framework ? frozenStopLossPercentage(input.modules) : "",
     maximumHoldingSessions: framework ? frozenMaximumHoldingSessions(input.modules) : "",
     minimumHoldingSessions: framework ? frozenMinimumHoldingSessions(input.modules) : "",
@@ -500,7 +503,7 @@ function wouldOverwriteUnexecutedAuthorableValue(
     "researchKind",
     "strategyMode",
     "programSource", "programParameters", "programFields", "programHistorySessions",
-    "frameworkModules", "costs", "takeProfitTiers", "stopLossThreshold", "maximumHoldingSessions", "minimumHoldingSessions",
+    ...drawdownFields, "frameworkModules", "costs", "takeProfitTiers", "stopLossThreshold", "maximumHoldingSessions", "minimumHoldingSessions",
     "initialCashCny",
     "holdingsCount",
     "selectionEverySessions",
@@ -574,7 +577,7 @@ function readInputs(value: unknown): ResearchInputs | null {
   if (!isRecord(value)) return null;
   const keys = [
     "researchKind",
-    "strategyMode", "stopLossThreshold", "maximumHoldingSessions", "minimumHoldingSessions",
+    ...drawdownFields, "strategyMode", "stopLossThreshold", "maximumHoldingSessions", "minimumHoldingSessions",
     "programSource", "programParameters", "programFields", "programHistorySessions",
     "name",
     "formula",

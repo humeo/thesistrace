@@ -79,12 +79,28 @@ class TakeProfitObservation(TerminalStateModel):
     position_limit: Annotated[StrictInt, Field(ge=0)] | None
 
 
-class HoldingRiskEvidence(TerminalStateModel):
-    mode: Literal["holding_risk"] = "holding_risk"
+class PortfolioDrawdownObservation(TerminalStateModel):
+    reason: Literal["portfolio_drawdown"]
+    status: Literal["observing", "threshold_reached", "cooldown", "awaiting_new_portfolio",
+                    "new_portfolio_recovery"]
+    cycle_started_session: StrictStr
+    peak_close_nav_cny: StrictStr
+    close_risk_nav_cny: StrictStr
+    drawdown: StrictStr
+    drawdown_threshold: StrictFloat
+    maximum_stock_exposure: StrictFloat | None
+    cooldown_sessions: StrictInt
+    completed_cooldown_sessions: StrictInt
+    triggered_session: StrictStr | None
+
+
+class BuiltinRiskEvidence(TerminalStateModel):
+    mode: Literal["builtin_risk"] = "builtin_risk"
     reason: Reason
     position_limits: dict[StrictStr, Annotated[StrictInt, Field(ge=0)]]
     observations: list[Annotated[
-        StopLossObservation | HoldingExpiryObservation | TakeProfitObservation,
+        StopLossObservation | HoldingExpiryObservation | TakeProfitObservation
+        | PortfolioDrawdownObservation,
         Field(discriminator="reason"),
     ]] = Field(min_length=1, max_length=6000)
 
@@ -112,7 +128,7 @@ class FrameworkEvidence(TerminalStateModel):
     proposal: PendingTarget | None
     portfolio_retentions: list[HoldingRetentionEvidence] = Field(default_factory=list)
     risk_adjustment: Annotated[
-        PositionLimitEvidence | ReplacementEvidence | HoldingRiskEvidence,
+        PositionLimitEvidence | ReplacementEvidence | BuiltinRiskEvidence,
         Field(discriminator="mode"),
     ] | None
 
@@ -135,7 +151,7 @@ class FrameworkEvidence(TerminalStateModel):
             result.update(row.instrument_id for row in self.alpha.values)
         if self.proposal:
             result.update(self.proposal.instrument_ids)
-        if isinstance(self.risk_adjustment, (PositionLimitEvidence, HoldingRiskEvidence)):
+        if isinstance(self.risk_adjustment, (PositionLimitEvidence, BuiltinRiskEvidence)):
             result.update(self.risk_adjustment.position_limits)
         elif isinstance(self.risk_adjustment, ReplacementEvidence) and self.risk_adjustment.target:
             result.update(self.risk_adjustment.target.instrument_ids)

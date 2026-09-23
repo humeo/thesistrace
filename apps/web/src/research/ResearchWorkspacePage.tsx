@@ -1,3 +1,4 @@
+import { drawdownFields, type DrawdownField } from "./portfolioDrawdown";
 import type { TakeProfitField } from "./takeProfit";
 import {
   CalendarBlank,
@@ -629,6 +630,11 @@ export function ResearchDraftWorkspace({
     ? admissionFeedback.issues
     : [];
   function programError(field: ResearchInputField): string | undefined {
+    if (drawdownFields.includes(field as DrawdownField)) {
+      const serverKey = { drawdownThreshold: "drawdown_threshold", drawdownMaximumExposure: "maximum_stock_exposure", drawdownCooldownSessions: "cooldown_sessions" }[field as DrawdownField];
+      const issues = [...visibleIssues, ...(specFeedback?.key === specKey ? specFeedback.issues : [])];
+      return inputError(field) ?? issues.find(issue => issue.field.includes(`portfolio_drawdown.${serverKey}`))?.message;
+    }
     if (field.startsWith("takeProfitTiers.")) {
       const [, index, key] = field.split(".");
       const serverKey = key === "profitThreshold" ? "profit_threshold" : "cumulative_reduction";
@@ -783,6 +789,8 @@ export function ResearchDraftWorkspace({
         {direct ? <PythonStrategyAuthoring inputs={draft} error={programError}
           onChange={changes => updateDraft(current => ({ ...current, ...changes }))}
           fieldsButton={fieldsButton()} /> : draft.researchKind === "strategy_backtest" ? <FrameworkAuthoring
+          drawdown={draft}
+          updateDrawdown={changes => updateDraft(current => ({ ...current, ...changes }))}
           takeProfitTiers={draft.takeProfitTiers}
           updateTakeProfitTiers={takeProfitTiers => updateDraft(current => ({ ...current, takeProfitTiers }))}
           stopLossThreshold={draft.stopLossThreshold}
@@ -1099,6 +1107,7 @@ function ResearchParameterHelp({ label, text }: { label: string; text: ReactNode
 }
 
 const INPUT_SELECTORS: Record<Exclude<ResearchInputField, TakeProfitField | "formula" | "exposureExpression" | `${FrameworkStage}.${ProgramInputField}` | `costs.${CostField}`>, string> = {
+  drawdownThreshold: "#risk-drawdownThreshold", drawdownMaximumExposure: "#risk-drawdownMaximumExposure", drawdownCooldownSessions: "#risk-drawdownCooldownSessions",
   hypothesis: "#research-notes", startDate: "#research-start-date", endDate: "#research-end-date",
   universe: "#research-universe", neutralization: "#research-neutralization", initialCashCny: "#initial-cash",
   holdingsCount: "#research-holdings-count", selectionEverySessions: "#research-selection-sessions",

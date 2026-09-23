@@ -56,11 +56,14 @@ _INTEGER_FIELDS = frozenset(
         "submitted_quantity",
     }
 )
-_NULLABLE_FIELDS = frozenset({"unrounded_quantity", "legal_quantity", "rejection_reason"})
+_NULLABLE_FIELDS = frozenset({"unrounded_quantity", "legal_quantity", "rejection_reason",
+                              "maximum_stock_exposure"})
 
 
 def _field(name: str, section: str) -> pa.Field:
-    if name in _INTEGER_FIELDS:
+    if name == "maximum_stock_exposure":
+        data_type = pa.float64()
+    elif name in _INTEGER_FIELDS:
         data_type = pa.int64()
     else:
         data_type = pa.string()
@@ -80,7 +83,7 @@ def event_session_field(section: str) -> str:
 EVENT_CONTRACTS = {
     section: ParquetWriterContract(
         name="research-result-" + section.replace("_", "-"),
-        version=3 if section == "strategy_framework" else 2,
+        version=3 if section in {"strategy_framework", "strategy_targets"} else 2,
         schema=pa.schema([_field(name, section) for name in model.model_fields]),
         sort_keys=(event_session_field(section), EVENT_ID_FIELDS[section]),
     )
@@ -141,6 +144,9 @@ def strategy_event_payload(
         }
         for row in values
     ]
+    if section == "strategy_targets":
+        for row in encoded:
+            row.setdefault("maximum_stock_exposure", None)
     return ParquetRowsPayload(rows=tuple(encoded), contract=EVENT_CONTRACTS[section])
 
 

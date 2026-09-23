@@ -340,8 +340,8 @@ FIXED_STRATEGY_KIND = "framework"
 FIXED_EXECUTION = "next_open_full_fill"
 SEMANTIC_VERSIONS = {
     "factor": "factor-v1",
-    "strategy": "strategy-v9",
-    "kernel": "kernel-v12",
+    "strategy": "strategy-v10",
+    "kernel": "kernel-v13",
 }
 
 

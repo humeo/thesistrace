@@ -78,6 +78,8 @@ class PythonProgramConstraints(BaseModel):
     output: str = (
         'Return {"output": null or {"reason": string, "allocation": object or null, '
         '"position_limits": object}, "state": object}. Null output is NoUpdate. '
+        "An optional maximum_stock_exposure number in [0, 1] caps stock targets "
+        "without raising them. "
         "Only explicit JSON state survives. No filesystem or network access."
     )
 

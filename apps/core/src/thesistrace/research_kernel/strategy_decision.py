@@ -18,7 +18,8 @@ def program_target(output, context, contract_checksum) -> PendingTarget | None:
     if output is None:
         return None
     if (type(output) is not dict
-            or set(output) != {"reason", "allocation", "position_limits"}):
+            or not {"reason", "allocation", "position_limits"} <= set(output)
+            or set(output) - {"reason", "allocation", "position_limits", "maximum_stock_exposure"}):
         raise ValueError("Strategy output requires reason, allocation, position_limits")
     target = PendingTarget.model_validate({
         **output, "decision_session": context["session"],

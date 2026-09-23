@@ -585,6 +585,10 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
                  "risk_management": "no_risk/v1" if ordinal == 0 else {
                      "kind": "builtin_risk/v1", "stop_loss_threshold": 0.01,
                      "maximum_holding_sessions": 1,
+                     "portfolio_drawdown": {
+                         "drawdown_threshold": 0.01, "maximum_stock_exposure": 0.3,
+                         "cooldown_sessions": 2,
+                     },
                      "take_profit_tiers": [
                          {"profit_threshold": 0.0001, "cumulative_reduction": 0.3},
                      ],

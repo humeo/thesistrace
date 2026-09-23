@@ -271,3 +271,41 @@ it("does not apply retained built-in take-profit inputs to Python risk or Direct
   expect(JSON.stringify(researchSpec(custom))).not.toContain("take_profit_tiers");
   expect(JSON.stringify(researchSpec(selectStrategyMode(current, "direct")))).not.toContain("take_profit_tiers");
 });
+
+it("freezes and reuses explicit drawdown policy without enabling it by default", () => {
+  expect(researchSpec(draft())).not.toHaveProperty("modules.risk_management.portfolio_drawdown");
+  const current = { ...draft(), drawdownThreshold: "10", drawdownMaximumExposure: "30", drawdownCooldownSessions: "2" };
+  const spec = researchSpec(current);
+  expect(spec).toHaveProperty("modules.risk_management.portfolio_drawdown", {
+    drawdown_threshold: 0.1, maximum_stock_exposure: 0.3, cooldown_sessions: 2,
+  });
+  const saved = storage();
+  persistResearchDraft(saved, "researcher", "folder", current);
+  expect(researchSpec(loadResearchDraft(saved, "researcher", "folder"))).toEqual(spec);
+  expect(useResearchAsDraft(saved, "researcher", "other", spec as FrozenResearchAuthorableInput, () => true)).toBe(true);
+  expect(researchSpec(loadResearchDraft(saved, "researcher", "other"))).toEqual(spec);
+});
+
+it.each([
+  ["", "30", "2", "drawdownThreshold"], ["0", "30", "2", "drawdownThreshold"],
+  ["101", "30", "2", "drawdownThreshold"], ["10", "", "2", "drawdownMaximumExposure"],
+  ["10", "101", "2", "drawdownMaximumExposure"], ["10", "30", "", "drawdownCooldownSessions"],
+  ["10", "30", "0", "drawdownCooldownSessions"], ["10", "30", "1.5", "drawdownCooldownSessions"],
+])("rejects incomplete or invalid drawdown policy %s/%s/%s", (drawdownThreshold, drawdownMaximumExposure, drawdownCooldownSessions, field) => {
+  expect(researchInputIssues({ ...draft(), drawdownThreshold, drawdownMaximumExposure, drawdownCooldownSessions })).toEqual(expect.arrayContaining([expect.objectContaining({ field })]));
+});
+
+it("accepts boundary drawdown percentages and ignores builtin policy in custom risk and Direct", () => {
+  const current = { ...draft(), drawdownThreshold: "100", drawdownMaximumExposure: "0", drawdownCooldownSessions: "1" };
+  expect(researchInputIssues(current)).toEqual([]);
+  expect(researchSpec(current)).toHaveProperty("modules.risk_management.portfolio_drawdown", {
+    drawdown_threshold: 1, maximum_stock_exposure: 0, cooldown_sessions: 1,
+  });
+  const incomplete = { ...current, drawdownThreshold: "" };
+  const custom = selectFrameworkModule(incomplete, "risk_management", "python");
+  expect(researchInputIssues(custom).some(issue => issue.field.startsWith("drawdown"))).toBe(false);
+  expect(researchSpec(custom)).not.toHaveProperty("modules.risk_management.portfolio_drawdown");
+  const direct = selectStrategyMode(incomplete, "direct");
+  expect(researchInputIssues(direct).some(issue => issue.field.startsWith("drawdown"))).toBe(false);
+  expect(researchSpec(direct)).not.toHaveProperty("modules");
+});

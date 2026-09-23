@@ -1,3 +1,4 @@
+import { PortfolioDrawdownFacts, type PortfolioDrawdownObservation } from "./PortfolioDrawdownFacts";
 import { TakeProfitFacts, type TakeProfitObservation } from "./TakeProfitFacts";
 import Decimal from "decimal.js";
 
@@ -5,7 +6,7 @@ type Proposal = {
   reason: string;
   allocation: { mode: "rebalance" | "reduce" | "increase"; instrument_ids: string[];
     relative_weights: Record<string, string>; exposure: number; retained_instrument_ids?: string[] } | null;
-  position_limits: Record<string, number>;
+  position_limits: Record<string, number>; maximum_stock_exposure?: number;
 };
 type Signal = { instrument_id: string; value: number; created_session: string;
   created_session_number: number; valid_for_sessions: number };
@@ -20,12 +21,12 @@ export type FrameworkRecord = {
   portfolio_retentions?: { reason: "minimum_holding_period"; instrument_id: string;
     execution_shares: number; holding_age: number; minimum_holding_sessions: number }[];
   risk_adjustment: { mode: "replace"; reason: string; target: Proposal | null }
-    | { mode: "holding_risk"; reason: string; position_limits: Record<string, number>;
+    | { mode: "builtin_risk"; reason: string; position_limits: Record<string, number>;
       observations: ({ reason: "stop_loss"; instrument_id: string; remaining_acquisition_cost_cny: string;
         close_market_value_cny: string; holding_return: string; stop_loss_threshold: string;
         execution_shares: number; holding_age: number } | { reason: "maximum_holding_period";
         instrument_id: string; execution_shares: number; holding_age: number;
-        maximum_holding_sessions: number } | TakeProfitObservation)[] }
+        maximum_holding_sessions: number } | TakeProfitObservation | PortfolioDrawdownObservation)[] }
     | { mode: "limit_positions"; reason: string; position_limits: Record<string, number> } | null;
   target_id: string | null;
 };
@@ -53,6 +54,7 @@ function Portfolio({ value }: { value: Proposal }) {
       </details>
       {value.allocation.retained_instrument_ids?.length ? <p>保留原持仓：{value.allocation.retained_instrument_ids.map(stock).join("、")}；仅剩余资金按上述权重分配，风险调整仍可退出。</p> : null}
     </>}
+    {value.maximum_stock_exposure !== undefined && <p>股票目标上限 {new Decimal(value.maximum_stock_exposure).mul(100).toString()}%；仅限制较高目标。</p>}
     {Object.keys(value.position_limits).length > 0 && <Limits limits={value.position_limits} />}
   </>;
 }
@@ -96,9 +98,10 @@ export function FrameworkDecisionDetails({ row }: { row: FrameworkRecord }) {
     <section aria-label="风险调整"><h4>4 · 风险调整</h4>
       {!risk ? <p>本日无风险调整。</p> : <>
         <p>原因：{risk.reason}</p>
-        {risk.mode !== "replace" ? <><p>局部持仓上限；未列出的持仓数量不因此改变。</p>
+        {risk.mode !== "replace" ? <><p>局部上限限制列出的持仓；组合回撤上限同时限制整体股票目标。</p>
           <Limits limits={risk.position_limits} />
-          {risk.mode === "holding_risk" && <ul aria-label="持仓风险触发依据">{risk.observations.map(item => <li key={`${item.instrument_id}:${item.reason}`}>
+          {risk.mode === "builtin_risk" && <ul aria-label="风险判断依据">{risk.observations.map(item => <li key={item.reason === "portfolio_drawdown" ? item.reason : `${item.instrument_id}:${item.reason}`}>
+            {item.reason === "portfolio_drawdown" ? <PortfolioDrawdownFacts item={item} /> : <>
             <strong>{stock(item.instrument_id)}</strong>
             {item.reason === "take_profit" ? <TakeProfitFacts item={item} /> : <>
             {item.reason === "stop_loss" ? <>
@@ -106,6 +109,7 @@ export function FrameworkDecisionDetails({ row }: { row: FrameworkRecord }) {
             <p>持仓收益 {new Decimal(item.holding_return).mul(100).toString()}%；止损阈值 {new Decimal(item.stop_loss_threshold).mul(100).toString()}%。</p>
             </> : <p>已达到最长持仓期限：{item.maximum_holding_sessions} 个研究交易日。</p>}
             <p>判断时持仓 {item.execution_shares} 股，持有 {item.holding_age} 个研究交易日。下一开盘尝试退出，实际成交与拒绝由关联记录说明。</p>
+            </>}
             </>}
           </li>)}</ul>}</>
           : risk.target ? <><p>替换本日组合建议。</p><Portfolio value={risk.target} /></>

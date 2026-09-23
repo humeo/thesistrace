@@ -26,11 +26,15 @@ from thesistrace.research_kernel.direct_strategy import PythonProgram, program_c
 from thesistrace.research_kernel.framework_evidence import (
     FormulaEvidence,
     FrameworkEvidence,
-    HoldingRiskEvidence,
+    BuiltinRiskEvidence,
     PositionLimitEvidence,
     ReplacementEvidence,
     SignalEvidence,
     UniverseEvidence,
+)
+from thesistrace.research_kernel.portfolio_drawdown import (
+    PortfolioDrawdownState,
+    portfolio_drawdown_decision,
 )
 from thesistrace.research_kernel.strategy_decision import DailyDecision, program_target
 from thesistrace.research_kernel.strategy_program_runtime import (
@@ -150,12 +154,32 @@ class FrameworkStrategy:
     def validate_continuation(self, continuation):
         """Validate resumable risk facts before any Open, including empty refreshes."""
         risk = self._modules.risk_management
-        if not isinstance(risk, BuiltinRiskModule) or not risk.take_profit_tiers:
+        if not isinstance(risk, BuiltinRiskModule):
             return
         restored = FrameworkModulesDecisionState.model_validate(continuation["decision_state"])
         if restored.contract_checksum != self._checksum:
             raise ValueError("Framework state differs from the frozen modules")
-        state = TakeProfitState.model_validate(restored.module_states["risk_management"])
+        risk_state = restored.module_states["risk_management"]
+        expected_keys = set()
+        if risk.take_profit_tiers:
+            expected_keys.add("take_profit_cycles")
+        if risk.portfolio_drawdown is not None:
+            expected_keys.add("portfolio_drawdown")
+        if set(risk_state) != expected_keys:
+            raise ValueError("Builtin risk checkpoint differs from configured policies")
+        if risk.portfolio_drawdown is not None:
+            PortfolioDrawdownState.model_validate(risk_state["portfolio_drawdown"]).validate_boundary(
+                session=continuation["daily"][-1]["session"],
+                completed_sessions=continuation.get(
+                    "report_session_count", len(continuation["daily"]),
+                ),
+                close_nav=continuation["daily"][-1]["close_risk_nav_cny"],
+            )
+        if not risk.take_profit_tiers:
+            return
+        state = TakeProfitState.model_validate({
+            "take_profit_cycles": risk_state["take_profit_cycles"],
+        })
         positions = {position["instrument_id"]: position for position in continuation["positions"]}
         for item, cycle in state.take_profit_cycles.items():
             position = positions.get(item)
@@ -279,24 +303,39 @@ class FrameworkStrategy:
             if self._modules.risk_management.take_profit_tiers:
                 risk_state, profit_limits, profit_observations = take_profit_decision(
                     tiers=self._modules.risk_management.take_profit_tiers, account=account,
-                    previous=module_states["risk_management"], fills=fills,
+                    previous=({"take_profit_cycles": module_states["risk_management"][
+                        "take_profit_cycles"
+                    ]} if module_states["risk_management"] else {}), fills=fills,
                 )
-                module_states["risk_management"] = risk_state
+                module_states["risk_management"].update(risk_state)
                 observations.extend(profit_observations)
                 for item, maximum in profit_limits.items():
                     risk_limits[item] = min(maximum, risk_limits.get(item, maximum))
+            exposure_cap = target.maximum_stock_exposure if target else None
+            if self._modules.risk_management.portfolio_drawdown is not None:
+                drawdown_state, cap, observation = portfolio_drawdown_decision(
+                    policy=self._modules.risk_management.portfolio_drawdown,
+                    nav=account["close_risk_nav_cny"], session=session,
+                    session_number=report_index + 1, new_proposal=target is not None,
+                    previous=module_states["risk_management"].get("portfolio_drawdown"),
+                )
+                module_states["risk_management"]["portfolio_drawdown"] = drawdown_state
+                observations.append(observation)
+                if cap is not None:
+                    exposure_cap = min(cap, exposure_cap) if exposure_cap is not None else cap
             if observations:
                 reason = "+".join(dict.fromkeys(row["reason"] for row in observations))
                 limits = dict(target.position_limits) if target else {}
                 for item, maximum in risk_limits.items():
                     limits[item] = min(maximum, limits.get(item, maximum))
-                if risk_limits:
+                if risk_limits or exposure_cap is not None:
                     target = PendingTarget(
                         decision_session=session, execution="next_research_session_open",
                         contract_checksum=self._checksum, reason=reason,
                         allocation=target.allocation if target else None, position_limits=limits,
+                        maximum_stock_exposure=exposure_cap,
                     )
-                risk_evidence = HoldingRiskEvidence(
+                risk_evidence = BuiltinRiskEvidence(
                     reason=reason, position_limits=limits, observations=observations,
                 )
         state = {
@@ -354,6 +393,8 @@ class FrameworkStrategy:
                 "allocation": (proposal.allocation.model_dump(mode="json")
                                if proposal is not None and proposal.allocation else None),
                 "position_limits": limits,
+                "maximum_stock_exposure": (proposal.maximum_stock_exposure
+                                           if proposal is not None else None),
             }, context, self._checksum)
         except ValueError as error:
             self._fail("risk_management", context["session"], error)

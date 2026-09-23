@@ -654,3 +654,88 @@ def decide(context, state, parameters):
         ("buy", SESSIONS[1]), ("sell", SESSIONS[2]), ("buy", SESSIONS[3]),
     ]
     assert result["positions"][0]["holding_age"] == 1
+
+
+def test_custom_local_risk_preserves_portfolio_stock_cap_in_single_final_target():
+    data, definition, matrix, _ = framework_inputs()
+    definition["costs"] = dict.fromkeys(definition["costs"], "0")
+    definition["strategy"]["modules"]["portfolio_construction"] = python_module("""
+def decide(context, state, parameters):
+    output = None
+    if context['completed_sessions'] in (1, 2):
+        output = {'reason': 'stock_cap', 'allocation': {
+            'mode': 'rebalance', 'instrument_ids': [parameters['a']],
+            'relative_weights': {parameters['a']: '1'}, 'exposure': 1.0},
+            'position_limits': {}}
+        if context['completed_sessions'] == 2:
+            output['maximum_stock_exposure'] = 0.3
+    return {'output': output, 'state': {}}
+""", parameters={"a": A})
+    definition["strategy"]["modules"]["risk_management"] = python_module("""
+def decide(context, state, parameters):
+    output = None
+    if context['completed_sessions'] == 2:
+        output = {'mode': 'limit_positions', 'reason': 'local_cap',
+                  'position_limits': {parameters['a']: 5000}}
+    return {'output': output, 'state': {}}
+""", parameters={"a": A})
+    result = transition_strategy(data, matrix, definition, origin_session=SESSIONS[0]).finalized
+    assert [(row['side'], row['quantity']) for row in result['fills']] == [
+        ('buy', 10000), ('sell', 7000),
+    ]
+    assert result['positions'][0]['execution_shares'] == 3000
+    assert len(result['target_events']) == 2
+    assert result['target_events'][1]['maximum_stock_exposure'] == 0.3
+    assert result['target_events'][1]['position_limits'] == {A: 5000}
+
+
+@pytest.mark.parametrize('cap,second_exposure,expected', [
+    (None, 0.2, [('buy', 2500)]), (0.3, 0.2, [('buy', 2500)]),
+    (0.1, 0.2, [('buy', 2500), ('sell', 1500)]),
+    (0.3, 0.4, [('buy', 2500), ('buy', 500)]),
+])
+def test_stock_cap_preserves_increase_only_intent_unless_binding(cap, second_exposure, expected):
+    data, definition, matrix, _ = framework_inputs()
+    definition['costs'] = dict.fromkeys(definition['costs'], '0')
+    definition['strategy']['modules']['risk_management'] = 'no_risk/v1'
+    definition['strategy']['modules']['portfolio_construction'] = python_module('''
+def decide(context, state, parameters):
+    number = context['completed_sessions']
+    output = None
+    if number in (1, 2):
+        output = {'reason': 'increase_only', 'allocation': {
+            'mode': 'rebalance' if number == 1 else 'increase',
+            'instrument_ids': [parameters['a']], 'relative_weights': {parameters['a']: '1'},
+            'exposure': 0.25 if number == 1 else parameters['exposure']}, 'position_limits': {}}
+        if number == 2 and parameters['cap'] is not None:
+            output['maximum_stock_exposure'] = parameters['cap']
+    return {'output': output, 'state': {}}
+''', parameters={'a': A, 'cap': cap, 'exposure': second_exposure})
+    result = transition_strategy(data, matrix, definition, origin_session=SESSIONS[0]).finalized
+    assert [(row['side'], row['quantity']) for row in result['fills']] == expected
+
+
+@pytest.mark.parametrize('cap', [None, 1.0])
+def test_nonbinding_stock_cap_preserves_frozen_local_quantity_with_slippage(cap):
+    data, definition, matrix, _ = framework_inputs()
+    definition['costs'] = {**dict.fromkeys(definition['costs'], '0'), 'slippage_bps': '1000'}
+    definition['strategy']['modules']['risk_management'] = 'no_risk/v1'
+    definition['strategy']['modules']['portfolio_construction'] = python_module('''
+def decide(context, state, parameters):
+    number = context['completed_sessions']
+    output = None
+    if number == 1:
+        output = {'reason': 'initial', 'allocation': {
+            'mode': 'rebalance', 'instrument_ids': [parameters['a']],
+            'relative_weights': {parameters['a']: '1'}, 'exposure': 1.0}, 'position_limits': {}}
+    elif number == 2:
+        output = {'reason': 'local', 'allocation': None, 'position_limits': {parameters['a']: 5000}}
+        if parameters['cap'] is not None:
+            output['maximum_stock_exposure'] = parameters['cap']
+    return {'output': output, 'state': {}}
+''', parameters={'a': A, 'cap': cap})
+    result = transition_strategy(data, matrix, definition, origin_session=SESSIONS[0]).finalized
+    assert [(row['side'], row['quantity']) for row in result['fills']] == [
+        ('buy', 9000), ('sell', 4000),
+    ]
+    assert result['positions'][0]['execution_shares'] == 5000

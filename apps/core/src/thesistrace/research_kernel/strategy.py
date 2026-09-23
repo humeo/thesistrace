@@ -517,6 +517,11 @@ def _execute_strategy(
                 money(pre_net_nav * Decimal(str(allocation["exposure"])))
                 if allocation is not None else Decimal(0)
             )
+            exposure_cap = pending_target.get("maximum_stock_exposure")
+            if exposure_cap is not None and allocation is not None:
+                target_capital = min(
+                    target_capital, money(pre_net_nav * Decimal(str(exposure_cap))),
+                )
             retained_values = {
                 item: money(positions[item].adjusted_units * marks[item])
                 for item in retained if item in positions
@@ -542,7 +547,8 @@ def _execute_strategy(
             target_values.update(retained_values)
             if mode in {"local", "increase"}:
                 for item, position in positions.items():
-                    target_values.setdefault(item, money(position.adjusted_units * marks[item]))
+                    actual_value = money(position.adjusted_units * marks[item])
+                    target_values[item] = max(target_values.get(item, actual_value), actual_value)
             monetary_target_values = dict(target_values)
             position_limits = pending_target["position_limits"]
             for item, maximum in position_limits.items():
@@ -553,6 +559,15 @@ def _execute_strategy(
                         position.adjusted_units * marks[item] * maximum / position.execution_shares
                     )
                     target_values[item] = min(target_values.get(item, Decimal(0)), capped_value)
+            if exposure_cap is not None:
+                stock_capital = money(pre_net_nav * Decimal(str(exposure_cap)))
+                proposed_capital = sum(target_values.values())
+                if proposed_capital > stock_capital:
+                    with accounting_context():
+                        ratio = stock_capital / proposed_capital
+                        target_values = {item: money(value * ratio)
+                                         for item, value in target_values.items()}
+                    monetary_target_values = dict(target_values)
             candidate_set = set(target_values)
             alpha_order = {instrument_id: index for index, instrument_id in enumerate(candidates)}
             buy_deficits = {
@@ -563,7 +578,8 @@ def _execute_strategy(
             }
 
             for instrument_id in sorted(positions):
-                if mode == "increase" and instrument_id not in position_limits:
+                if (mode == "increase" and instrument_id not in position_limits
+                        and exposure_cap is None):
                     continue
                 position = positions[instrument_id]
                 current_value = money(position.adjusted_units * marks[instrument_id])

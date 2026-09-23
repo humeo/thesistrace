@@ -303,16 +303,21 @@ test("Custom fees and slippage survive Run reuse and DailyTrack refresh", { tag:
   expect((await source.json()).input.costs).toEqual(costs);
 });
 
-for (const policyName of ["Close stop loss", "Holding periods", "Cumulative take profit"]) {
+for (const policyName of ["Close stop loss", "Holding periods", "Cumulative take profit", "Portfolio drawdown"]) {
 const holdingPeriods = policyName === "Holding periods";
+const drawdown = policyName === "Portfolio drawdown";
 const takeProfit = policyName === "Cumulative take profit";
 test(`${policyName} survives Run reuse and DailyTrack refresh`, { tag: "@isolated" }, async ({ page }, testInfo) => {
   test.setTimeout(240_000);
   publishFinancialTrackHead("lagged");
-  if (holdingPeriods || takeProfit) await page.setViewportSize({ width: 390, height: 844 });
+  if (holdingPeriods || takeProfit || drawdown) await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/research?new");
   await fillCompleteDraft(page, { name: "Close cost stop loss", formula: "close" });
-  if (takeProfit) {
+  if (drawdown) {
+    await page.getByLabel("Drawdown threshold (%)", { exact: true }).fill("1");
+    await page.getByLabel("Maximum stock exposure (%)", { exact: true }).fill("30");
+    await page.getByLabel("Cooldown (trading sessions)", { exact: true }).fill("2");
+  } else if (takeProfit) {
     await page.getByRole("button", { name: "Add take-profit tier", exact: true }).click();
     await page.getByLabel("Profit threshold (%)", { exact: true }).fill("0.01");
     await page.getByLabel("Cumulative reduction (%)", { exact: true }).fill("30");
@@ -335,7 +340,9 @@ test(`${policyName} survives Run reuse and DailyTrack refresh`, { tag: "@isolate
   await expect(page.locator(".research-run-facts").getByText(/Status\s+succeeded/)).toBeVisible({ timeout: 90_000 });
   const accepted = await page.request.get(`/api/research-runs/${runId}`);
   expect(accepted.ok()).toBe(true);
-  const policy = takeProfit ? { kind: "builtin_risk/v1", take_profit_tiers: [
+  const policy = drawdown ? { kind: "builtin_risk/v1", portfolio_drawdown: {
+    drawdown_threshold: 0.01, maximum_stock_exposure: 0.3, cooldown_sessions: 2,
+  } } : takeProfit ? { kind: "builtin_risk/v1", take_profit_tiers: [
     { profit_threshold: 0.0001, cumulative_reduction: 0.3 },
   ] } : holdingPeriods ? { kind: "builtin_risk/v1", maximum_holding_sessions: 2 }
     : { kind: "builtin_risk/v1", stop_loss_threshold: 0.01 };
@@ -347,25 +354,39 @@ test(`${policyName} survives Run reuse and DailyTrack refresh`, { tag: "@isolate
   });
   expect(events.ok()).toBe(true);
   const rows = (await events.json()).rows;
-  if (takeProfit) {
+  if (drawdown) {
+    const trigger = rows.find((row: { risk_adjustment: { observations?: { reason: string; status?: string }[] } | null }) =>
+      row.risk_adjustment?.observations?.some(item => item.reason === "portfolio_drawdown" && item.status === "threshold_reached"));
+    expect(trigger).toBeTruthy();
+    await page.getByText("Trading events", { exact: true }).click();
+    await page.getByLabel("事件类型").selectOption("strategy_framework");
+    await page.getByRole("button", { name: `查看原始记录：${trigger.decision_session}`, exact: true }).click();
+    await expect(page.getByLabel("风险判断依据", { exact: true })).toContainText("股票目标上限 30%");
+    await expect(page.getByLabel("风险判断依据", { exact: true })).toContainText("历史最大回撤不重置");
+  } else if (takeProfit) {
     const trigger = rows.find((row: { risk_adjustment: { observations?: { reason: string }[] } | null }) =>
       row.risk_adjustment?.observations?.some(item => item.reason === "take_profit"));
     expect(trigger).toBeTruthy();
     await page.getByText("Trading events", { exact: true }).click();
     await page.getByLabel("事件类型").selectOption("strategy_framework");
     await page.getByRole("button", { name: `查看原始记录：${trigger.decision_session}`, exact: true }).click();
-    await expect(page.getByLabel("持仓风险触发依据", { exact: true })).toContainText("累计减仓 30%");
-    await expect(page.getByLabel("持仓风险触发依据", { exact: true })).toContainText("禁止普通补仓");
+    await expect(page.getByLabel("风险判断依据", { exact: true })).toContainText("累计减仓 30%");
+    await expect(page.getByLabel("风险判断依据", { exact: true })).toContainText("禁止普通补仓");
   } else if (holdingPeriods) {
     expect(rows[1].portfolio_retentions[0].holding_age).toBe(1);
     await page.getByText("Trading events", { exact: true }).click();
     await page.getByLabel("事件类型").selectOption("strategy_framework");
     await page.getByRole("button", { name: "查看原始记录：2026-08-05", exact: true }).click();
     await expect(page.getByLabel("最短持仓保留依据", { exact: true })).toContainText("未满最短 2 日");
-  } else expect(rows.some((row: { risk_adjustment: { mode: string } | null }) => row.risk_adjustment?.mode === "holding_risk")).toBe(true);
+  } else expect(rows.some((row: { risk_adjustment: { mode: string } | null }) => row.risk_adjustment?.mode === "builtin_risk")).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("close-stop-loss-result.png"), fullPage: true });
   await page.getByRole("button", { name: "Create draft", exact: true }).click();
-  if (takeProfit) {
+  if (drawdown) {
+    await expect(page.getByLabel("Drawdown threshold (%)", { exact: true })).toHaveValue("1");
+    await expect(page.getByLabel("Maximum stock exposure (%)", { exact: true })).toHaveValue("30");
+    await expect(page.getByLabel("Cooldown (trading sessions)", { exact: true })).toHaveValue("2");
+    await page.getByLabel("Maximum stock exposure (%)", { exact: true }).fill("20");
+  } else if (takeProfit) {
     await expect(page.getByLabel("Profit threshold (%)", { exact: true })).toHaveValue("0.01");
     await expect(page.getByLabel("Cumulative reduction (%)", { exact: true })).toHaveValue("30");
     await page.getByLabel("Cumulative reduction (%)", { exact: true }).fill("60");
@@ -388,6 +409,8 @@ test(`${policyName} survives Run reuse and DailyTrack refresh`, { tag: "@isolate
   expect(tracked.ok()).toBe(true);
   const trackRows = (await tracked.json()).rows;
   expect(trackRows.slice(0, rows.length)).toEqual(rows);
+  if (drawdown) expect(trackRows.some((row: { risk_adjustment: { observations?: { reason: string; completed_cooldown_sessions?: number }[] } | null }) =>
+    row.risk_adjustment?.observations?.some(item => item.reason === "portfolio_drawdown" && Number(item.completed_cooldown_sessions) >= 2))).toBe(true);
   if (takeProfit) expect(trackRows.some((row: { risk_adjustment: { observations?: { reason: string; executed_reduction_units?: string }[] } | null }) =>
     row.risk_adjustment?.observations?.some(item => item.reason === "take_profit" && Number(item.executed_reduction_units) > 0))).toBe(true);
   if (holdingPeriods) expect(trackRows.some((row: { risk_adjustment: { observations: { reason: string; holding_age: number }[] } | null }) =>

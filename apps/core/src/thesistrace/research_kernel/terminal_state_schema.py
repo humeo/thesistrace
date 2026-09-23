@@ -145,7 +145,8 @@ class TargetAllocation(TerminalStateModel):
 class PendingTarget(TerminalStateModel):
     """One final decision, independent of any module's retained selection.
 
-    Without an allocation, unmentioned positions are unchanged. Position limits
+    Without an allocation, holdings are retained subject to the optional stock exposure cap.
+    The cap only lowers targets and never initiates an increase. Position limits
     cap execution shares frozen at Close, including any simultaneous allocation.
     NoUpdate is represented by no pending target, never an empty decision.
     """
@@ -157,9 +158,14 @@ class PendingTarget(TerminalStateModel):
     allocation: TargetAllocation | None
     position_limits: dict[StrictStr, Annotated[StrictInt, Field(ge=0)]]
 
+    maximum_stock_exposure: StrictFloat | None = Field(
+        default=None, ge=0, le=1, allow_inf_nan=False, exclude_if=lambda value: value is None,
+    )
+
     @model_validator(mode="after")
     def decision_is_not_empty(self) -> PendingTarget:
-        if self.allocation is None and not self.position_limits:
+        if (self.allocation is None and not self.position_limits
+                and self.maximum_stock_exposure is None):
             raise ValueError("Empty target must be NoUpdate")
         return self
 

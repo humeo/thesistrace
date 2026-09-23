@@ -14,6 +14,7 @@ from pydantic import (
 )
 
 from thesistrace.research_kernel.numeric import ACCOUNTING_CONTEXT, canonical_decimal
+from thesistrace.research_kernel.portfolio_drawdown import PortfolioDrawdownPolicy
 
 
 class TakeProfitTier(BaseModel):
@@ -37,6 +38,10 @@ class BuiltinRiskModule(BaseModel):
         default_factory=list, max_length=100, exclude_if=lambda value: not value,
     )
 
+    portfolio_drawdown: PortfolioDrawdownPolicy | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
+
     @field_validator("take_profit_tiers")
     @classmethod
     def increasing_tiers(cls, tiers):
@@ -56,7 +61,7 @@ class BuiltinRiskModule(BaseModel):
     @model_validator(mode="after")
     def require_enabled_policy(self):
         if (self.stop_loss_threshold is None and self.maximum_holding_sessions is None
-                and not self.take_profit_tiers):
+                and not self.take_profit_tiers and self.portfolio_drawdown is None):
             raise ValueError("builtin_risk requires at least one enabled policy")
         return self
 

@@ -80,7 +80,9 @@ CURRENT_RESEARCH_AUTHORING_CONSTRAINTS = ResearchAuthoringConstraints(
                     "Validity is in Research Sessions."
                 ),
                 "portfolio_construction": (
-                    "Return a complete Target Decision {reason, allocation, position_limits}, "
+                    "Return a complete Target Decision {reason, allocation, position_limits} "
+                    "with optional "
+                    "maximum_stock_exposure in [0, 1], "
                     "or null for NoUpdate. Signals do not execute orders."
                 ),
                 "risk_management": (

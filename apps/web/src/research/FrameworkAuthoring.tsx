@@ -1,3 +1,5 @@
+import { PortfolioDrawdownAuthoring } from "./PortfolioDrawdownAuthoring";
+import type { DrawdownInputs } from "./portfolioDrawdown";
 import { TakeProfitAuthoring } from "./TakeProfitAuthoring";
 import type { TakeProfitTierDraft } from "./takeProfit";
 import type { ReactNode } from "react";
@@ -10,7 +12,7 @@ import { PythonStrategyAuthoring } from "./PythonStrategyAuthoring";
 
 const builtinNames: Record<FrameworkStage, string> = {
   universe_selection: "Dataset candidates", alpha: "Alpha formula",
-  portfolio_construction: "Periodic Top-N", risk_management: "Holding risk rules",
+  portfolio_construction: "Periodic Top-N", risk_management: "Risk policies",
 };
 const explanations: Record<FrameworkStage, string> = {
   universe_selection: "Choose candidates from the Dataset Universe selected above.",
@@ -19,7 +21,8 @@ const explanations: Record<FrameworkStage, string> = {
   risk_management: "Inspect actual holdings and the new proposal at every Close. Adjustments combine into one final target before execution.",
 };
 
-export function FrameworkAuthoring({ modules, selectModule, updateProgram, stopLossThreshold, updateStopLoss, maximumHoldingSessions, updateMaximumHoldingSessions, minimumHoldingSessions, updateMinimumHoldingSessions, takeProfitTiers, updateTakeProfitTiers, error, fieldsButton, alphaEditor }: {
+export function FrameworkAuthoring({ drawdown, updateDrawdown, modules, selectModule, updateProgram, stopLossThreshold, updateStopLoss, maximumHoldingSessions, updateMaximumHoldingSessions, minimumHoldingSessions, updateMinimumHoldingSessions, takeProfitTiers, updateTakeProfitTiers, error, fieldsButton, alphaEditor }: {
+  drawdown: DrawdownInputs; updateDrawdown: (changes: Partial<DrawdownInputs>) => void;
   modules: FrameworkModulesDraft;
   takeProfitTiers: TakeProfitTierDraft[];
   updateTakeProfitTiers: (tiers: TakeProfitTierDraft[]) => void;
@@ -52,6 +55,7 @@ export function FrameworkAuthoring({ modules, selectModule, updateProgram, stopL
         inputs={modules[stage].program} onChange={changes => updateProgram(stage, changes)}
         error={field => error(`${stage}.${field}`)} fieldsButton={fieldsButton()} />
         : stage === "alpha" ? alphaEditor : stage === "risk_management" ? <div className="research-parameter-field">
+          <PortfolioDrawdownAuthoring values={drawdown} onChange={updateDrawdown} error={error} />
           <TakeProfitAuthoring tiers={takeProfitTiers} onChange={updateTakeProfitTiers} error={error} />
           <label htmlFor="stop-loss-threshold">Stop loss (%)</label>
           <input id="stop-loss-threshold" type="text" inputMode="decimal" placeholder="Off" maxLength={128}
