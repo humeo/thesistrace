@@ -28,6 +28,19 @@ test("Staged FIFO survives reload, Steer stays in the active Turn, and two tabs 
     const sessionUrl = page.url();
     expect(new URL(sessionUrl).searchParams.get("session")).toMatch(/^[a-f0-9-]{36}$/u);
 
+    const draft = "Unsent bilingual draft";
+    await page.getByRole("textbox", { name: "Message", exact: true }).fill(draft);
+    await page.locator(".account-menu > summary").click();
+    await page.getByRole("button", { name: "简体中文", exact: true }).click();
+    await expect(status(page)).toHaveText("Research Agent 正在工作");
+    await expect(page.getByRole("textbox", { name: "消息", exact: true })).toHaveValue(draft);
+    await expect(page.locator(".chat-staged-queue li")).toHaveCount(2);
+    expect(page.url()).toBe(sessionUrl);
+    expect(runs).toHaveLength(1);
+    await page.getByRole("button", { name: "English", exact: true }).click();
+    await page.keyboard.press("Escape");
+    await page.getByRole("textbox", { name: "Message", exact: true }).fill("");
+
     await page.reload();
     await expect(page.locator(".chat-staged-queue li")).toHaveCount(2);
     await expect(status(page)).toHaveText("Research Agent is working");
