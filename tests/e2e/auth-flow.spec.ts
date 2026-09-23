@@ -15,6 +15,26 @@ import {
   securityTest as test,
 } from "./auth-fixture";
 
+test("Chinese public entry survives real email authentication and a saved console preference survives reload", async ({ page }) => {
+  const email = "browser-chinese-entry@example.test";
+  await page.goto("/?lang=zh");
+  await expect(page.locator("html")).toHaveAttribute("lang", "zh-CN");
+  await page.getByRole("navigation", { name: "主导航" }).getByRole("link", { name: "登录", exact: true }).click();
+  await expect(page).toHaveURL(/\/login\?lang=zh$/);
+  await page.getByLabel("邮箱", { exact: true }).fill(email);
+  await page.getByRole("button", { name: "使用邮箱继续", exact: true }).click();
+  await page.getByLabel("验证码", { exact: true }).fill(await emailCode(email));
+  await page.getByRole("button", { name: "验证并继续", exact: true }).click();
+  await expect(page).toHaveURL(/\/data$/);
+  await expect(page.getByRole("heading", { name: "数据", exact: true })).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute("lang", "zh-CN");
+  await page.locator(".account-menu > summary").click();
+  await page.getByRole("button", { name: "简体中文", exact: true }).click();
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "数据", exact: true })).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute("lang", "zh-CN");
+});
+
 test("Email verification creates one account and preserves the access lifecycle", async ({page}) => {
   const email = "browser-email-access@example.test";
   await page.setViewportSize({width:375,height:812});
