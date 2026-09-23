@@ -4,7 +4,7 @@ This directory contains current ThesisTrace architecture decisions that are diff
 
 Number gaps are intentional and numbers are never reused. When a decision stops being current, merge any still-valid rationale into the surviving record, delete the obsolete file, and repair its references.
 
-The Strategy extension in [ADR-0250](0250-admit-strategy-programs-with-explicit-simulation-coordinates.md) and the execution records referring to it are accepted for the next contract and are not yet implemented. Their design status must not be read as evidence that Python strategies, holding rules, configurable fees or slippage already run in the current product.
+The current Strategy contract in [ADR-0250](0250-admit-strategy-programs-with-explicit-simulation-coordinates.md) implements Direct and built-in/custom Framework decisions, holding/risk rules, and frozen configurable costs through shared execution. Implementation does not imply a particular environment has passed deployment qualification or completed its explicit old-research cutover.
 
 ## Foundations and data semantics
 

@@ -2,8 +2,9 @@
 
 > Status: current module-first product, execution, identity, ownership, and
 > public-entry boundary.
-> The accepted next Strategy contract in [ADR-0250](../adr/0250-admit-strategy-programs-with-explicit-simulation-coordinates.md)
-> is not yet implemented; its Python and risk capabilities are not current runtime facts.
+> The Strategy contract in [ADR-0250](../adr/0250-admit-strategy-programs-with-explicit-simulation-coordinates.md)
+> implements isolated Python decisions and shared risk/cost execution; environment
+> qualification and explicit research retirement remain separate operations.
 
 ## Product boundary
 
@@ -640,12 +641,15 @@ Strategy transitions, numeric semantics, and deterministic ordering. Its Run
 and Advance paths share one implementation of those rules. Operators form a
 closed append-only Alpha catalog; Alpha expressions do not execute arbitrary
 Python or SQL. Strategy Programs use the separate isolated decision boundary
-accepted in ADR-0250, which is not yet implemented.
+defined in ADR-0250: pinned CPython/WASI consumes a completed-session view and
+explicit state, returning one decision without account or fill authority. Direct
+and Framework share platform execution, frozen costs, valuation and bookkeeping.
+Primary Gross/Net NAV uses post-Open observations; Close Risk NAV is separate.
 
 The runtime executes one current calculation kernel and Numeric Execution
 Contract. Product State records that identity, and a result-changing update
 refuses incompatible state until an explicitly supported contract transition
-has completed. The accepted Strategy extension uses the authorized, reference-scoped
+has completed. The Strategy contract uses the authorized, reference-scoped
 old-research cutover only after the new contract is verified, preserving Dataset,
 Researcher identities and unrelated records; other schema changes use explicit
 data-preserving migrations. There is no Tracking Generation branch, historical
