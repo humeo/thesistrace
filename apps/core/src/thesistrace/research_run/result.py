@@ -97,12 +97,13 @@ STRATEGY_RESULT_BASE_PAYLOAD_NAMES = frozenset(
 )
 STRATEGY_DAILY_OBSERVATIONS_CONTRACT = ParquetWriterContract(
     name="research-result-strategy-daily-observations",
-    version=2,
+    version=3,
     schema=pa.schema(
         [
             pa.field("session", pa.string(), nullable=False),
             pa.field("gross_nav", pa.string(), nullable=False),
             pa.field("net_nav", pa.string(), nullable=False),
+            pa.field("close_risk_nav_cny", pa.string(), nullable=False),
             pa.field("net_cash", pa.string(), nullable=False),
             pa.field("transaction_cost_cny", pa.string(), nullable=False),
             pa.field("holdings_count", pa.int64(), nullable=False),
@@ -116,13 +117,17 @@ STRATEGY_DAILY_OBSERVATIONS_CONTRACT = ParquetWriterContract(
 )
 TERMINAL_POSITIONS_CONTRACT = ParquetWriterContract(
     name="research-result-terminal-positions",
-    version=1,
+    version=2,
     schema=pa.schema(
         [
             pa.field("instrument_id", pa.string(), nullable=False),
             pa.field("execution_shares", pa.int64(), nullable=False),
             pa.field("adjusted_units", pa.string(), nullable=False),
             pa.field("last_adjusted_price", pa.string(), nullable=False),
+            pa.field("remaining_acquisition_cost_cny", pa.string(), nullable=False),
+            pa.field("holding_cycle_started_session", pa.string(), nullable=False),
+            pa.field("holding_age", pa.int64(), nullable=False),
+            pa.field("last_close_adjusted_price", pa.string(), nullable=False),
         ]
     ),
     sort_keys=("instrument_id",),
@@ -137,6 +142,7 @@ PUBLIC_TERMINAL_STATE_KEYS = frozenset(
         "net_cash",
         "gross_nav",
         "net_nav",
+        "close_risk_nav_cny",
         "cumulative_transaction_cost",
         "research_phase",
         "decision_state",
@@ -697,6 +703,7 @@ def _strategy_daily_observations(
                 "session": str(row["session"]),
                 "gross_nav": str(row["gross_nav"]),
                 "net_nav": str(row["net_nav"]),
+                "close_risk_nav_cny": str(row["close_risk_nav_cny"]),
                 "net_cash": str(row["net_cash"]),
                 "transaction_cost_cny": canonical_decimal(session_cost),
                 "holdings_count": int(row["holdings_count"]),
@@ -731,6 +738,7 @@ def _terminal_strategy_state(
         "net_cash": str(terminal["net_cash"]),
         "gross_nav": str(terminal["gross_nav"]),
         "net_nav": str(terminal["net_nav"]),
+        "close_risk_nav_cny": str(terminal["close_risk_nav_cny"]),
         "cumulative_transaction_cost": str(terminal["cumulative_transaction_cost"]),
         "positions": [copy.deepcopy(dict(position)) for position in positions],
         "research_phase": {

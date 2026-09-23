@@ -310,14 +310,15 @@ const TERMINAL_STATE: TerminalStrategyState = {
   gross_cash: "9000000",
   net_cash: "8999995",
   gross_nav: "10001000",
-  net_nav: "10000995",
+  net_nav: "10000995", close_risk_nav_cny: "9999995",
   cumulative_transaction_cost: "5",
   positions: [
     {
       instrument_id: "cn.stock.000001",
       execution_shares: 100,
       adjusted_units: "100",
-      last_adjusted_price: "10.01",
+      last_adjusted_price: "10.01", last_close_adjusted_price: "10",
+      remaining_acquisition_cost_cny: "1005", holding_cycle_started_session: "2026-08-04", holding_age: 2,
     },
   ],
   research_phase: {
@@ -356,7 +357,7 @@ describe("ResearchResultView", () => {
         observations: [{
           session: "2026-08-03",
           gross_nav: "10000000",
-          net_nav: "10000000",
+          net_nav: "10000000", close_risk_nav_cny: "10000000",
           net_cash: "10000000",
           transaction_cost_cny: "0",
           holdings_count: 0,
@@ -430,7 +431,9 @@ describe("ResearchResultView", () => {
     expect(markup).not.toContain("Terminal Open");
     expect(markup).not.toContain("Net Excess");
     expect(markup).not.toContain("Final Portfolio");
-    expect(markup).not.toContain("cn.stock.000001");
+    expect(markup).toContain("Close risk and holdings");
+    expect(markup).toContain("Remaining acquisition cost (CNY)");
+    expect(markup).toContain("9999995");
     expect(markup).not.toMatch(
       /Predictive evidence|One fill path|Research-period account observations|signal sessions|Daily Observations|Provenance|Input digest/i,
     );

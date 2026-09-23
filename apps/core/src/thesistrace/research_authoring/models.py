@@ -96,6 +96,8 @@ class FrameworkAuthoringConstraints(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     stages: tuple[FrameworkStageConstraints, ...]
+    builtin_risk_schema: dict[str, object]
+    account_observation: str
     maximum_active_signals: int
     signal_validity_sessions: IntegerRange
     maximum_state_bytes: int

@@ -26,6 +26,7 @@ def account(
             "net_cash": str(Decimal(nav) - 900),
             "gross_nav": str(Decimal(nav) + Decimal(cost)),
             "net_nav": nav,
+            "close_risk_nav_cny": str(Decimal(nav) - 100),
             "cumulative_transaction_cost": cost,
             "positions": [
                 {
@@ -33,6 +34,10 @@ def account(
                     "execution_shares": 100,
                     "adjusted_units": "200",
                     "last_adjusted_price": "4.5",
+                    "last_close_adjusted_price": "4",
+                    "remaining_acquisition_cost_cny": "910",
+                    "holding_cycle_started_session": "2026-08-03",
+                    "holding_age": count,
                 }
             ],
             "research_phase": {
@@ -97,6 +102,11 @@ def test_observation_uses_published_holdings_and_adjusted_valuation_coordinates(
     assert Decimal(result.net_change_cny) == 100
     assert Decimal(result.transaction_cost_cny) == Decimal("2.75")
     assert result.session_count == 1
+    assert result.close_risk_nav_cny == "1000"
+    assert result.holdings[0].remaining_acquisition_cost_cny == "910"
+    assert result.holdings[0].holding_age == 12
+    assert result.holdings[0].holding_cycle_started_session == "2026-08-03"
+    assert result.holdings[0].last_close_adjusted_price == "4"
     assert result.holdings[0].shares == 100
     assert Decimal(result.holdings[0].market_value_cny) == 900
     assert result.holdings[0].weight == pytest.approx(9 / 11)

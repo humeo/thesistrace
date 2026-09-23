@@ -565,6 +565,7 @@ def test_daily_track_owns_minimal_tracking_checkpoint_projection_and_restoration
         "session",
         "gross_nav",
         "net_nav",
+        "close_risk_nav_cny",
         "net_cash",
         "transaction_cost_cny",
         "holdings_count",

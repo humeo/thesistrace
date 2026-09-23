@@ -144,3 +144,33 @@ describe("Framework authoring contract", () => {
     expect(loadResearchDraft(saved, "researcher", "folder").name).toBe("Keep my name");
   });
 });
+
+it("freezes, stores and reuses the configured built-in stop loss", () => {
+  const current = { ...draft(), stopLossThreshold: "10" };
+  expect(researchInputIssues(current)).toEqual([]);
+  const spec = researchSpec(current);
+  expect(spec).toMatchObject({ modules: { risk_management: {
+    kind: "builtin_risk/v1", stop_loss_threshold: 0.1,
+  } } });
+  const saved = storage();
+  persistResearchDraft(saved, "researcher", "folder", current);
+  expect(loadResearchDraft(saved, "researcher", "folder").stopLossThreshold).toBe("10");
+  expect(useResearchAsDraft(saved, "researcher", "reuse", spec as FrozenResearchAuthorableInput, () => true)).toBe(true);
+  const reused = loadResearchDraft(saved, "researcher", "reuse");
+  expect(reused.stopLossThreshold).toBe("10");
+  expect(researchSpec(reused)).toEqual(spec);
+});
+
+it.each(["0", "-1", "100", "Infinity", "abc"])("rejects invalid stop-loss percentage %s", stopLossThreshold => {
+  expect(researchInputIssues({ ...draft(), stopLossThreshold })).toContainEqual({
+    field: "stopLossThreshold", message: "Enter a stop loss greater than 0% and less than 100%, or leave blank to disable.",
+  });
+});
+
+it("omits built-in stop loss when the risk module is Python or the strategy is Direct", () => {
+  const current = { ...draft(), stopLossThreshold: "10" };
+  const pythonRisk = selectFrameworkModule(current, "risk_management", "python");
+  expect(researchSpec(pythonRisk)).toMatchObject({ modules: { risk_management: { kind: "python" } } });
+  expect(JSON.stringify(researchSpec(pythonRisk))).not.toContain("stop_loss_threshold");
+  expect(JSON.stringify(researchSpec(selectStrategyMode(current, "direct")))).not.toContain("stop_loss_threshold");
+});

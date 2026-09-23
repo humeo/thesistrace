@@ -368,7 +368,7 @@ def _legal_result() -> dict[str, object]:
             "gross_cash": "1e+7",
             "gross_nav": "1e+7",
             "net_cash": "1e+7",
-            "net_nav": "1e+7",
+            "net_nav": "1e+7", "close_risk_nav_cny": "1e+7",
             "pre_trade_gross_nav": "1e+7",
             "pre_trade_net_nav": "1e+7",
             "rebalance": False,
@@ -413,7 +413,7 @@ def _legal_result() -> dict[str, object]:
             {
                 "session": "2024-01-02",
                 "gross_nav": "1e+7",
-                "net_nav": "1e+7",
+                "net_nav": "1e+7", "close_risk_nav_cny": "1e+7",
                 "net_cash": "1e+7",
                 "transaction_cost_cny": "0",
                 "holdings_count": 0,
@@ -428,7 +428,7 @@ def _legal_result() -> dict[str, object]:
             "gross_cash": "1e+7",
             "net_cash": "1e+7",
             "gross_nav": "1e+7",
-            "net_nav": "1e+7",
+            "net_nav": "1e+7", "close_risk_nav_cny": "1e+7",
             "cumulative_transaction_cost": "0",
             "positions": [],
             "research_phase": {

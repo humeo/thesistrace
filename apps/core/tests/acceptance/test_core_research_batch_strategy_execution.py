@@ -577,6 +577,13 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
         }
         command["strategies"] = [
             {**item, "initial_cash_cny": "100000", "exposure_expression": exposure,
+             "modules": {
+                 "universe_selection": "dataset_universe/v1", "alpha": "alpha_formula/v1",
+                 "portfolio_construction": "periodic_top_n/v1",
+                 "risk_management": "no_risk/v1" if ordinal == 0 else {
+                     "kind": "builtin_risk/v1", "stop_loss_threshold": 0.01,
+                 },
+             },
              "weighting": "inverse_volatility" if ordinal == 0 else "rank_weight",
              "volatility_window": 2,
              "costs": {**default_simulation_costs().model_dump(),
@@ -630,6 +637,7 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
                     "weighting": item["weighting"],
                     "volatility_window": item["volatility_window"],
                     "costs": item["costs"],
+                    "modules": item["modules"],
                 },
             ).json()
             for ordinal, item in enumerate(command["strategies"], start=1)
@@ -688,6 +696,7 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
             assert frozen["weighting"] == command["strategies"][item["ordinal"] - 1]["weighting"]
             assert frozen["initial_cash_cny"] == "100000"
             assert frozen["costs"] == command["strategies"][item["ordinal"] - 1]["costs"]
+            assert frozen["modules"] == command["strategies"][item["ordinal"] - 1]["modules"]
             assert batch_stored["key_metrics"]["annualized_excess_return"] is not None
             if expected_source == "0":
                 assert batch_stored["key_metrics"]["annualized_excess_return"] < 0

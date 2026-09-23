@@ -1,4 +1,4 @@
-import { frameworkStageLabels, frameworkStages, type FrameworkModules } from "./frameworkModules";
+import { frameworkStageLabels, frameworkStages, frozenStopLossPercentage, type FrameworkModules } from "./frameworkModules";
 import type { PythonProgram } from "./pythonStrategy";
 import { costFields, type SimulationCosts } from "./simulationCosts";
 
@@ -27,7 +27,10 @@ export function FrozenFrameworkModules({ modules }: { modules: FrameworkModules 
     {frameworkStages.map(stage => {
       const module = modules[stage];
       return typeof module === "string" ? <p key={stage}><strong>{frameworkStageLabels[stage]}</strong> <code>{module}</code></p>
-        : <FrozenPythonProgram key={stage} title={`${frameworkStageLabels[stage]} · Frozen Python source and parameters`} program={module.program} />;
+        : module.kind === "builtin_risk/v1" ? <div key={stage}>
+          <p><strong>Risk Management · Stop loss</strong> {frozenStopLossPercentage(modules)}%</p>
+          <p>Evaluated at Close against actual acquisition cost; the next Open determines execution.</p>
+        </div> : <FrozenPythonProgram key={stage} title={`${frameworkStageLabels[stage]} · Frozen Python source and parameters`} program={module.program} />;
     })}
   </div>;
 }

@@ -185,7 +185,10 @@ def _batch_request(
             hypothesis=None,
             requested_start_date=sessions[offset],
             requested_end_date=sessions[-1],
-            field_bindings={value: key for key, value in compiled.field_ids_by_identifier.items()},
+            field_bindings={
+                **{value: key for key, value in compiled.field_ids_by_identifier.items()},
+                **({"price.close.adjusted": "close"} if strategy else {}),
+            },
             universe="top300",
             neutralization="industry",
             research_kind="strategy_backtest" if strategy else "factor_evaluation",

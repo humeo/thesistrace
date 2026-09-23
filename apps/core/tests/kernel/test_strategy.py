@@ -53,16 +53,28 @@ def test_position_valuation_is_invariant_to_continuation_rehydration_order() -> 
             execution_shares=1,
             adjusted_units=Decimal("1e28"),
             last_adjusted_price=Decimal("1"),
+            remaining_acquisition_cost_cny=Decimal("1"),
+            holding_cycle_started_session="2026-01-05",
+            holding_age=1,
+            last_close_adjusted_price=Decimal("1"),
         ),
         "equity:a-small.SH": Position(
             execution_shares=1,
             adjusted_units=Decimal("3"),
             last_adjusted_price=Decimal("1"),
+            remaining_acquisition_cost_cny=Decimal("1"),
+            holding_cycle_started_session="2026-01-05",
+            holding_age=1,
+            last_close_adjusted_price=Decimal("1"),
         ),
         "equity:b-small.SH": Position(
             execution_shares=1,
             adjusted_units=Decimal("3"),
             last_adjusted_price=Decimal("1"),
+            remaining_acquisition_cost_cny=Decimal("1"),
+            holding_cycle_started_session="2026-01-05",
+            holding_age=1,
+            last_close_adjusted_price=Decimal("1"),
         ),
     }
     marks = {instrument_id: Decimal("1") for instrument_id in positions}

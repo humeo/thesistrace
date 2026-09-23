@@ -112,6 +112,27 @@ def test_direct_replays_exactly_from_an_explicit_midrun_boundary():
     assert continued == whole
 
 
+def test_direct_program_observes_cost_age_and_independent_close_account():
+    data, definition = inputs()
+    definition["strategy"]["program"]["source"] = SOURCE.replace(
+        "{'count': state.get('count', 0) + 1}",
+        "{'observed_account': {"
+        "'close_risk_nav_cny': context['account']['close_risk_nav_cny'],"
+        "'post_open_net_nav_cny': context['account']['post_open_net_nav_cny'],"
+        "'positions': [dict(p) for p in context['account']['positions']]}}",
+    )
+    result = transition_strategy(data, None, definition, origin_session=SESSIONS[0]).finalized
+    observed = result["decision_state"]["state"]["observed_account"]
+    assert Decimal(observed["close_risk_nav_cny"]) == 300000
+    assert Decimal(observed["post_open_net_nav_cny"]) == 200000
+    position = observed["positions"][0]
+    assert position["instrument_id"] == B
+    assert Decimal(position["remaining_acquisition_cost_cny"]) == 100000
+    assert Decimal(position["last_close_adjusted_price"]) == 30
+    assert position["holding_age"] == 2
+    assert position["holding_cycle_started_session"] == SESSIONS[2]
+
+
 def test_direct_public_kernel_input_does_not_invent_an_alpha_formula():
     from thesistrace.daily_track.checkpoint import (
         project_tracking_checkpoint,

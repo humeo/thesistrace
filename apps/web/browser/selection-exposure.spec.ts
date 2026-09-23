@@ -530,3 +530,43 @@ for (const width of [1280, 390]) {
     await expect.poll(() => submissions).toBe(1);
   });
 }
+
+for (const width of [1280, 390]) {
+  test(`built-in stop loss validates, persists and submits at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 964 });
+    const submissions: Record<string, unknown>[] = [];
+    await page.route("https://exposure.test/**", route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === "/api/alpha/diagnostics") return route.fulfill({ json: { valid: true, diagnostics: [] } });
+      if (path === "/api/research-runs") {
+        submissions.push(route.request().postDataJSON());
+        return route.fulfill({ status: 202, json: { id: "run_stop_loss" } });
+      }
+      return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    });
+    const mount = async () => {
+      await page.goto("https://exposure.test/");
+      await page.addStyleTag({ content: styles });
+      await page.addScriptTag({ content: script });
+    };
+    await mount();
+    const threshold = page.getByLabel("Stop loss (%)", { exact: true });
+    await expect(threshold).toHaveValue("");
+    await expect(page.locator("#stop-loss-help")).toContainText("next Open");
+    await threshold.fill("100");
+    await page.getByRole("button", { name: "Run backtest", exact: true }).click();
+    await expect(threshold).toBeFocused();
+    await expect(threshold).toHaveAttribute("aria-invalid", "true");
+    expect(submissions).toHaveLength(0);
+    await threshold.fill("10");
+    await mount();
+    await expect(threshold).toHaveValue("10");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: `../../.local/browser-tests/stop-loss-${width}.png`, fullPage: true });
+    await page.getByRole("button", { name: "Run backtest", exact: true }).click();
+    await expect.poll(() => submissions.length).toBe(1);
+    expect(submissions[0]).toMatchObject({ modules: { risk_management: {
+      kind: "builtin_risk/v1", stop_loss_threshold: 0.1,
+    } } });
+  });
+}

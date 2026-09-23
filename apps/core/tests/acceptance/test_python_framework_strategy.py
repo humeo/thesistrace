@@ -88,7 +88,9 @@ def test_framework_track_origin_keeps_a_large_legal_module_state(tmp_path):
         run_id = admitted.json()['id']
         runtime = client.app.state.core_runtime
         assert runtime.research_runs.process_next()
-        detail = client.get(f'/api/research-runs/{run_id}').json()
+        response = client.get(f'/api/research-runs/{run_id}')
+        assert response.status_code == 200, response.text
+        detail = response.json()
         assert detail['status'] == 'succeeded', detail
         tracked = client.post(
             f'/api/research-runs/{run_id}/daily-tracks',
@@ -120,7 +122,10 @@ async def _get_origin_through_mcp(settings, track_id, stderr_path):
 
 
 @pytest.mark.parametrize('builtin_alpha', [False, True])
-def test_framework_run_reuse_and_track_preserve_frozen_modules_and_account(tmp_path, builtin_alpha):
+@pytest.mark.parametrize('builtin_risk', [False, True])
+def test_framework_run_reuse_and_track_preserve_frozen_modules_and_account(
+    tmp_path, builtin_alpha, builtin_risk,
+):
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
@@ -128,8 +133,12 @@ def test_framework_run_reuse_and_track_preserve_frozen_modules_and_account(tmp_p
     with TestClient(create_app(settings)) as client:
         runtime = client.app.state.core_runtime
         submitted = command('framework-run', builtin_alpha=builtin_alpha)
+        if builtin_risk:
+            submitted['modules']['risk_management'] = {
+                'kind': 'builtin_risk/v1', 'stop_loss_threshold': 0.01,
+            }
         costs = {**default_simulation_costs().model_dump(),
-                 'commission_min_cny': '2', 'slippage_bps': '15'}
+                 'commission_min_cny': '2', 'slippage_bps': '1000' if builtin_risk else '15'}
         submitted['costs'] = costs
         diagnosed = client.post('/api/research/diagnostics', json={
             key: value for key, value in submitted.items()
@@ -141,7 +150,9 @@ def test_framework_run_reuse_and_track_preserve_frozen_modules_and_account(tmp_p
         assert admitted.status_code == 202, admitted.text
         run_id = admitted.json()['id']
         assert runtime.research_runs.process_next()
-        detail = client.get(f'/api/research-runs/{run_id}').json()
+        response = client.get(f'/api/research-runs/{run_id}')
+        assert response.status_code == 200, response.text
+        detail = response.json()
         assert detail['status'] == 'succeeded', detail
         assert detail['input']['modules'] == submitted['modules']
         assert detail['input']['costs'] == costs
@@ -149,6 +160,8 @@ def test_framework_run_reuse_and_track_preserve_frozen_modules_and_account(tmp_p
         expected = {stage: {'count': 3} for stage in submitted['modules']}
         if builtin_alpha:
             expected['alpha'] = {}
+        if builtin_risk:
+            expected['risk_management'] = {}
         assert detail['result']['terminal_strategy_state']['decision_state']['module_states'] == (
             expected
         )
@@ -160,6 +173,12 @@ def test_framework_run_reuse_and_track_preserve_frozen_modules_and_account(tmp_p
         assert original_events[0]['universe']['reason'] == 'visible_candidates'
         assert original_events[0]['alpha']['kind'] == ('formula' if builtin_alpha else 'signals')
         assert original_events[0]['risk_adjustment'] is None
+        if builtin_risk:
+            triggered = original_events[1]['risk_adjustment']
+            assert triggered['mode'] == 'stop_loss'
+            assert triggered['observations'][0]['holding_age'] == 1
+            assert triggered['observations'][0]['stop_loss_threshold'] == '1e-2'
+            assert detail['result']['terminal_strategy_state']['positions'] == []
         for row in original_events:
             if row['target_id'] is not None:
                 target = client.post(event_path, json={
@@ -205,9 +224,9 @@ def test_framework_run_reuse_and_track_preserve_frozen_modules_and_account(tmp_p
             assert runtime.daily_tracks.process_next()
             track = client.get(f'/api/daily-tracks/{track_id}').json()
         assert track['strategy_session'] == SESSIONS[-1], track
-        full = client.post('/api/research-runs', json={**command(
-            'full', end=SESSIONS[-1], builtin_alpha=builtin_alpha,
-        ), 'costs': costs})
+        full = client.post('/api/research-runs', json={
+            **submitted, 'request_id': 'full', 'end_date': SESSIONS[-1],
+        })
         assert full.status_code == 202, full.text
         assert runtime.research_runs.process_next()
         full_result = client.get(f"/api/research-runs/{full.json()['id']}").json()

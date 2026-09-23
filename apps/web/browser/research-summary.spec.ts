@@ -35,8 +35,13 @@ const run = {
       observations: [], comparison: { status: "unavailable", reason: "benchmark_snapshot_unavailable" },
     },
     terminal_strategy_state: {
-      session: "2026-08-04", net_cash: "100000", gross_cash: "100000", net_nav: "100000", gross_nav: "100000",
-      cumulative_transaction_cost: "0", positions: [], pending_target: null, contract_checksum: "contract",
+      close_risk_nav_cny: "98995",
+      session: "2026-08-04", net_cash: "89995", gross_cash: "90000", net_nav: "99995", gross_nav: "100000",
+      cumulative_transaction_cost: "5", positions: [{
+        instrument_id: "equity:600001.SH", execution_shares: 1000, adjusted_units: "1000",
+        remaining_acquisition_cost_cny: "10005", holding_cycle_started_session: "2026-08-04",
+        holding_age: 1, last_adjusted_price: "10", last_close_adjusted_price: "9",
+      }], pending_target: null, contract_checksum: "contract",
       decision_state: { mode: "framework", selection: { signal_session: "2026-08-03", eligibility_exclusions: {} }, selection_interval: 10, exposure: 1 },
       research_phase: { origin_session: "2026-08-03", report_session_count: 2 },
     },
@@ -58,7 +63,7 @@ test("strategy summary prioritizes metrics and keeps execution conventions expan
   await page.addStyleTag({ content: styles });
   await page.addScriptTag({ content: script });
   const summary = page.locator(".research-result-section");
-  const conventions = summary.locator("summary");
+  const conventions = summary.locator("summary").filter({ hasText: "Execution conventions" });
   const explanation = summary.getByText(/Decisions execute at the next Open/);
   for (const width of [1050, 390]) {
     await page.setViewportSize({ width, height: 964 });
@@ -77,6 +82,14 @@ test("strategy summary prioritizes metrics and keeps execution conventions expan
     expect(await summary.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
     await conventions.press("Enter");
     await expect(explanation).not.toBeVisible();
+    const risk = summary.locator("details").filter({ has: page.getByText("Close risk and holdings", { exact: true }) });
+    await risk.locator("summary").click();
+    await expect(risk.getByText("98995", { exact: true })).toBeVisible();
+    await expect(risk.getByText("10005", { exact: true })).toBeVisible();
+    await expect(risk.getByText("Holding age (trading sessions)")).toBeVisible();
+    expect(await summary.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+    await page.screenshot({ path: `../../.local/browser-tests/close-risk-${width}.png`, fullPage: true });
+    await risk.locator("summary").click();
   }
 });
 

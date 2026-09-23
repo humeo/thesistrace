@@ -22,6 +22,7 @@ from thesistrace.research_batch.models import (
 )
 from thesistrace.research_definition import default_simulation_costs
 from thesistrace.research_kernel.builtin_framework import BUILTIN_FRAMEWORK_MODULES
+from thesistrace.research_kernel.builtin_risk import BuiltinRiskModule
 from thesistrace.research_kernel.numeric import MAX_INITIAL_CASH_CNY
 from thesistrace.research_kernel.strategy_program_assets import PYTHON_VERSION
 from thesistrace.research_kernel.strategy_program_guest import AVAILABLE_MODULES
@@ -85,6 +86,16 @@ CURRENT_RESEARCH_AUTHORING_CONSTRAINTS = ResearchAuthoringConstraints(
                 ),
             }[stage],
         ) for stage, identity in BUILTIN_FRAMEWORK_MODULES.items()),
+        builtin_risk_schema=BuiltinRiskModule.model_json_schema(),
+        account_observation=(
+            "Direct and Framework programs receive cash_cny, post_open_net_nav_cny, "
+            "close_risk_nav_cny and actual positions. Each position includes execution_shares, "
+            "adjusted_units, last_adjusted_price (Open), last_close_adjusted_price, "
+            "remaining_acquisition_cost_cny, holding_cycle_started_session and holding_age. "
+            "Age counts Research Sessions including the first actual buy. Builtin stop loss "
+            "compares Close research value to remaining acquisition cost, then caps that "
+            "holding at zero for the next Open. no_risk/v1 disables built-in risk."
+        ),
         maximum_active_signals=MAX_ACTIVE_SIGNALS,
         signal_validity_sessions=IntegerRange(minimum=1, maximum=MAX_SIGNAL_VALIDITY_SESSIONS),
         maximum_state_bytes=FRAMEWORK_STATE_BYTES,

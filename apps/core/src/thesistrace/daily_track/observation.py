@@ -46,6 +46,11 @@ def project_daily_observation(
                     "shares": position.execution_shares,
                     "market_value_cny": canonical_decimal(market_value),
                     "weight": float(market_value / current_nav),
+                    "adjusted_units": position.adjusted_units,
+                    "last_close_adjusted_price": position.last_close_adjusted_price,
+                    "remaining_acquisition_cost_cny": position.remaining_acquisition_cost_cny,
+                    "holding_cycle_started_session": position.holding_cycle_started_session,
+                    "holding_age": position.holding_age,
                 }
             )
         phase = current.research_phase
@@ -58,6 +63,7 @@ def project_daily_observation(
             {
                 "session": current.session,
                 "net_asset_value_cny": current.net_nav,
+                "close_risk_nav_cny": current.close_risk_nav_cny,
                 "cash_cny": current.net_cash,
                 "net_change_cny": canonical_decimal(current_nav - origin_nav),
                 "net_return": float(current_nav / origin_nav - 1),

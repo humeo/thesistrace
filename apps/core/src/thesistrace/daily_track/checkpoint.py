@@ -255,6 +255,7 @@ def terminal_strategy_state(state: KernelState) -> dict[str, object]:
         "net_cash": str(terminal["net_cash"]),
         "gross_nav": str(terminal["gross_nav"]),
         "net_nav": str(terminal["net_nav"]),
+        "close_risk_nav_cny": str(terminal["close_risk_nav_cny"]),
         "cumulative_transaction_cost": str(terminal["cumulative_transaction_cost"]),
         "positions": [copy.deepcopy(dict(item)) for item in positions],
         "research_phase": {
@@ -339,6 +340,7 @@ def _strategy_state(
             "net_cash": str(finalized_terminal["net_cash"]),
             "gross_nav": str(finalized_terminal["gross_nav"]),
             "net_nav": str(finalized_terminal["net_nav"]),
+            "close_risk_nav_cny": str(finalized_terminal["close_risk_nav_cny"]),
             "cumulative_transaction_cost": str(finalized_terminal["cumulative_transaction_cost"]),
             "positions": [copy.deepcopy(dict(item)) for item in finalized_positions],
             "research_phase": {
@@ -380,6 +382,7 @@ def _minimal_strategy_observations(
                 "session": session,
                 "gross_nav": str(row["gross_nav"]),
                 "net_nav": str(row["net_nav"]),
+                "close_risk_nav_cny": str(row["close_risk_nav_cny"]),
                 "net_cash": str(row["net_cash"]),
                 "transaction_cost_cny": canonical_decimal(session_cost),
                 "holdings_count": int(row["holdings_count"]),

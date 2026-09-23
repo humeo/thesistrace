@@ -1,3 +1,4 @@
+import { CloseRiskFacts } from "../analysis/CloseRiskFacts";
 import { CurrentDataRerunOrigin, type RerunOrigin } from "../analysis/CurrentDataRerun";
 import { DailyHoldings } from "../analysis/DailyHoldings";
 import { StrategyEvents } from "../analysis/StrategyEvents";
@@ -59,6 +60,7 @@ type StrategyObservation = {
   session: string;
   gross_nav: string;
   net_nav: string;
+  close_risk_nav_cny: string;
   net_cash: string;
   transaction_cost_cny: string;
   holdings_count: number;
@@ -86,12 +88,17 @@ export type TerminalStrategyState = {
   net_cash: string;
   gross_nav: string;
   net_nav: string;
+  close_risk_nav_cny: string;
   cumulative_transaction_cost: string;
   positions: Array<{
     instrument_id: string;
     execution_shares: number;
     adjusted_units: string;
     last_adjusted_price: string;
+    last_close_adjusted_price: string;
+    remaining_acquisition_cost_cny: string;
+    holding_cycle_started_session: string;
+    holding_age: number;
   }>;
   research_phase: {
     origin_session: string;
@@ -1587,6 +1594,9 @@ export function ResearchResultView({ result }: { result: ResearchResult }) {
             <h3>Selection check</h3>
             <SelectionEligibilityView selection={selection} />
           </div> : null}
+          <CloseRiskFacts session={strategyResult.terminal_strategy_state.session}
+            nav={strategyResult.terminal_strategy_state.close_risk_nav_cny}
+            positions={strategyResult.terminal_strategy_state.positions} />
           <FrameworkStateView state={strategyResult.terminal_strategy_state.decision_state} />
           <details className="strategy-execution-notes">
             <summary>Execution conventions <CaretDown aria-hidden="true" size={14} /></summary>

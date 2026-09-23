@@ -44,6 +44,23 @@ class PositionLimitEvidence(TerminalStateModel):
     position_limits: dict[StrictStr, Annotated[StrictInt, Field(ge=0)]]
 
 
+class StopLossObservation(TerminalStateModel):
+    instrument_id: StrictStr
+    remaining_acquisition_cost_cny: StrictStr
+    close_market_value_cny: StrictStr
+    holding_return: StrictStr
+    stop_loss_threshold: StrictStr
+    execution_shares: Annotated[StrictInt, Field(gt=0)]
+    holding_age: Annotated[StrictInt, Field(ge=1)]
+
+
+class StopLossEvidence(TerminalStateModel):
+    mode: Literal["stop_loss"] = "stop_loss"
+    reason: Reason = "stop_loss"
+    position_limits: dict[StrictStr, Annotated[StrictInt, Field(ge=0)]]
+    observations: list[StopLossObservation] = Field(min_length=1, max_length=3000)
+
+
 class ReplacementEvidence(TerminalStateModel):
     mode: Literal["replace"]
     reason: Reason
@@ -58,7 +75,7 @@ class FrameworkEvidence(TerminalStateModel):
     alpha: Annotated[FormulaEvidence | SignalEvidence, Field(discriminator="kind")]
     proposal: PendingTarget | None
     risk_adjustment: Annotated[
-        PositionLimitEvidence | ReplacementEvidence, Field(discriminator="mode"),
+        PositionLimitEvidence | ReplacementEvidence | StopLossEvidence, Field(discriminator="mode"),
     ] | None
 
     @model_validator(mode="after")
@@ -80,7 +97,7 @@ class FrameworkEvidence(TerminalStateModel):
             result.update(row.instrument_id for row in self.alpha.values)
         if self.proposal:
             result.update(self.proposal.instrument_ids)
-        if isinstance(self.risk_adjustment, PositionLimitEvidence):
+        if isinstance(self.risk_adjustment, (PositionLimitEvidence, StopLossEvidence)):
             result.update(self.risk_adjustment.position_limits)
         elif isinstance(self.risk_adjustment, ReplacementEvidence) and self.risk_adjustment.target:
             result.update(self.risk_adjustment.target.instrument_ids)

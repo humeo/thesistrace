@@ -4,7 +4,7 @@ import {
   parseProgramParameters, programSpec, type ProgramInputField, type ProgramInputs, type PythonProgram,
 } from "./pythonStrategy";
 import {
-  builtinModulesDraft, frameworkDraft, frameworkSpec, frameworkStages,
+  builtinModulesDraft, frameworkDraft, frameworkSpec, frameworkStages, frozenStopLossPercentage, stopLossInputError,
   type FrameworkModules, type FrameworkModulesDraft, type FrameworkStage,
 } from "./frameworkModules";
 import { frameworkExample } from "./frameworkExamples";
@@ -20,6 +20,7 @@ export type ResearchInputs = ProgramInputs & {
   researchKind: "factor_evaluation" | "strategy_backtest";
   strategyMode: "framework" | "direct";
   frameworkModules: FrameworkModulesDraft;
+  stopLossThreshold: string;
   name: string;
   formula: string;
   hypothesis: string;
@@ -95,7 +96,7 @@ export type ResearchDraft = ResearchInputs & {
 };
 
 const MAX_DRAFT_BYTES = 2 * 1024 * 1024;
-const DRAFT_STORAGE_SCHEMA = "research-draft/v3";
+const DRAFT_STORAGE_SCHEMA = "research-draft/v4";
 const MAX_FORMULA_LENGTH = 4_096;
 export const MAX_HYPOTHESIS_LENGTH = 1_024;
 const MAX_TEXT_LENGTH = 10_000;
@@ -104,6 +105,7 @@ export function emptyResearchDraft(): ResearchDraft {
   return {
     researchKind: "factor_evaluation",
     strategyMode: "framework",
+    stopLossThreshold: "",
     ...emptyProgramInputs(), frameworkModules: builtinModulesDraft(),
     name: "",
     formula: "",
@@ -300,7 +302,7 @@ export function researchSpec(inputs: ResearchInputs): ResearchSpec {
     ...common, ...alpha, research_kind: "factor_evaluation",
   } : {
     ...common, research_kind: "strategy_backtest", strategy_mode: "framework",
-    modules: frameworkSpec(inputs.frameworkModules), initial_cash_cny: inputs.initialCashCny, costs: { ...inputs.costs },
+    modules: frameworkSpec(inputs.frameworkModules, inputs.stopLossThreshold), initial_cash_cny: inputs.initialCashCny, costs: { ...inputs.costs },
     ...(usesBuiltinAlpha(inputs) ? alpha : {}),
     ...(usesBuiltinPortfolio(inputs) ? {
       holdings_count: Number(inputs.holdingsCount), selection_every_sessions: Number(inputs.selectionEverySessions),
@@ -347,7 +349,7 @@ export function isValidInitialCash(value: string): boolean {
 
 export type ResearchInputField = `costs.${CostField}` | ProgramInputField | `${FrameworkStage}.${ProgramInputField}`
   | "formula" | "hypothesis" | "startDate" | "endDate" | "universe" | "neutralization" | "initialCashCny"
-  | "holdingsCount" | "selectionEverySessions" | "exposureExpression" | "volatilityWindow";
+  | "stopLossThreshold" | "holdingsCount" | "selectionEverySessions" | "exposureExpression" | "volatilityWindow";
 export type ResearchInputIssue = { field: ResearchInputField; message: string };
 
 export function researchInputIssues(inputs: ResearchInputs): ResearchInputIssue[] {
@@ -373,6 +375,11 @@ export function researchInputIssues(inputs: ResearchInputs): ResearchInputIssue[
     if (!isValidVolatilityWindow(inputs.volatilityWindow)) issues.push({ field: "volatilityWindow", message: "Volatility window must be a whole number from 1 to 252." });
     if (!inputs.exposureExpression.trim()) issues.push({ field: "exposureExpression", message: "Enter a position sizing formula." });
     else if (Number(inputs.exposureExpression) < 0 || Number(inputs.exposureExpression) > 1) issues.push({ field: "exposureExpression", message: "Position sizing formula must return a value between 0 and 1." });
+  }
+  if (inputs.researchKind === "strategy_backtest" && inputs.strategyMode === "framework"
+    && inputs.frameworkModules.risk_management.kind === "builtin") {
+    const message = stopLossInputError(inputs.stopLossThreshold);
+    if (message) issues.push({ field: "stopLossThreshold", message });
   }
   if (direct) issues.push(...programInputIssues(inputs));
   else if (inputs.researchKind === "strategy_backtest") {
@@ -439,6 +446,7 @@ export function useResearchAsDraft(
     selectionEverySessions: framework && input.selection_every_sessions !== undefined ? String(input.selection_every_sessions) : "",
     ...(direct ? programDraft(input.program) : emptyProgramInputs()),
     frameworkModules: framework ? frameworkDraft(input.modules) : builtinModulesDraft(),
+    stopLossThreshold: framework ? frozenStopLossPercentage(input.modules) : "",
   };
   if (
     wouldOverwriteUnexecutedAuthorableValue(current, nextInputs) &&
@@ -469,7 +477,7 @@ function wouldOverwriteUnexecutedAuthorableValue(
     "researchKind",
     "strategyMode",
     "programSource", "programParameters", "programFields", "programHistorySessions",
-    "frameworkModules", "costs",
+    "frameworkModules", "costs", "stopLossThreshold",
     "initialCashCny",
     "holdingsCount",
     "selectionEverySessions",
@@ -543,7 +551,7 @@ function readInputs(value: unknown): ResearchInputs | null {
   if (!isRecord(value)) return null;
   const keys = [
     "researchKind",
-    "strategyMode",
+    "strategyMode", "stopLossThreshold",
     "programSource", "programParameters", "programFields", "programHistorySessions",
     "name",
     "formula",

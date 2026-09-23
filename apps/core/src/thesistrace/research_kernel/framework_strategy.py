@@ -9,6 +9,7 @@ from thesistrace.research_kernel.builtin_framework import (
     PreparedBuiltinPortfolio,
     alpha_values_by_session,
 )
+from thesistrace.research_kernel.builtin_risk import BuiltinRiskModule
 from thesistrace.research_kernel.direct_strategy import PythonProgram, program_context
 from thesistrace.research_kernel.framework_evidence import (
     FormulaEvidence,
@@ -16,6 +17,7 @@ from thesistrace.research_kernel.framework_evidence import (
     PositionLimitEvidence,
     ReplacementEvidence,
     SignalEvidence,
+    StopLossEvidence,
     UniverseEvidence,
 )
 from thesistrace.research_kernel.strategy_decision import DailyDecision, program_target
@@ -27,6 +29,7 @@ from thesistrace.research_kernel.terminal_state_schema import (
     MAX_ACTIVE_SIGNALS,
     MAX_SIGNAL_VALIDITY_SESSIONS,
     FrameworkModulesDecisionState,
+    PendingTarget,
 )
 
 
@@ -43,7 +46,7 @@ class FrameworkModules(BaseModel):
     universe_selection: Literal["dataset_universe/v1"] | PythonModule
     alpha: Literal["alpha_formula/v1"] | PythonModule
     portfolio_construction: Literal["periodic_top_n/v1"] | PythonModule
-    risk_management: Literal["no_risk/v1"] | PythonModule
+    risk_management: Literal["no_risk/v1"] | BuiltinRiskModule | PythonModule
 
     def programs(self) -> dict[str, PythonProgram]:
         return {name: module.program for name in BUILTIN_FRAMEWORK_MODULES
@@ -102,7 +105,7 @@ class FrameworkStrategy:
         self._modules = FrameworkModules.model_validate(strategy["modules"])
         self._programs = self._modules.programs()
         self._runtime = get_strategy_runtime()
-        if strategy["environment"] != self._runtime.identity():
+        if self._programs and strategy["environment"] != self._runtime.identity():
             raise ValueError("Python execution environment differs from its frozen identity")
         if "alpha" not in self._programs and alpha_matrix is None:
             raise ValueError("Builtin Alpha module requires an Alpha matrix")
@@ -205,6 +208,19 @@ class FrameworkStrategy:
                     ReplacementEvidence(mode="replace", reason=output["reason"], target=target)
                     if output["mode"] == "replace" else PositionLimitEvidence.model_validate(output)
                 )
+        elif isinstance(self._modules.risk_management, BuiltinRiskModule):
+            observations = self._modules.risk_management.stop_loss_observations(account)
+            if observations:
+                limits = dict(target.position_limits) if target else {}
+                limits.update({row["instrument_id"]: 0 for row in observations})
+                target = PendingTarget(
+                    decision_session=session, execution="next_research_session_open",
+                    contract_checksum=self._checksum, reason="stop_loss",
+                    allocation=target.allocation if target else None, position_limits=limits,
+                )
+                risk_evidence = StopLossEvidence(
+                    position_limits=limits, observations=observations,
+                )
         state = {
             "mode": "framework", "contract_checksum": self._checksum,
             "selection_interval": (
@@ -220,7 +236,9 @@ class FrameworkStrategy:
             state=state, target=target, diagnostics=tuple(diagnostics),
             framework=FrameworkEvidence(
                 modules={name: ("python:" + module.program.source_sha256
-                                if isinstance(module, PythonModule) else module)
+                                if isinstance(module, PythonModule) else (
+                                    module.kind if isinstance(module, BuiltinRiskModule) else module
+                                ))
                          for name in BUILTIN_FRAMEWORK_MODULES
                          for module in (getattr(self._modules, name),)},
                 universe=universe_evidence, alpha=alpha_evidence,

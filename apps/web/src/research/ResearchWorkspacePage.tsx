@@ -628,6 +628,10 @@ export function ResearchDraftWorkspace({
     ? admissionFeedback.issues
     : [];
   function programError(field: ResearchInputField): string | undefined {
+    if (field === "stopLossThreshold") {
+      const issues = [...visibleIssues, ...(specFeedback?.key === specKey ? specFeedback.issues : [])];
+      return inputError(field) ?? issues.find(issue => issue.field.includes("stop_loss_threshold"))?.message;
+    }
     const [stage, input] = field.includes(".") ? field.split(".") : [null, field];
     const serverField = (stage ? `modules.${stage}.` : "") + {
       programSource: "program.source", programParameters: "program.parameters",
@@ -771,6 +775,8 @@ export function ResearchDraftWorkspace({
         {direct ? <PythonStrategyAuthoring inputs={draft} error={programError}
           onChange={changes => updateDraft(current => ({ ...current, ...changes }))}
           fieldsButton={fieldsButton()} /> : draft.researchKind === "strategy_backtest" ? <FrameworkAuthoring
+          stopLossThreshold={draft.stopLossThreshold}
+          updateStopLoss={stopLossThreshold => updateDraft(current => ({ ...current, stopLossThreshold }))}
           modules={draft.frameworkModules} error={programError} fieldsButton={fieldsButton} alphaEditor={alphaAuthoring}
           selectModule={(stage, kind) => updateDraft(current => selectFrameworkModule(current, stage, kind))}
           updateProgram={(stage, changes) => updateDraft(current => ({ ...current, frameworkModules: {
@@ -1082,7 +1088,7 @@ const INPUT_SELECTORS: Record<Exclude<ResearchInputField, "formula" | "exposureE
   hypothesis: "#research-notes", startDate: "#research-start-date", endDate: "#research-end-date",
   universe: "#research-universe", neutralization: "#research-neutralization", initialCashCny: "#initial-cash",
   holdingsCount: "#research-holdings-count", selectionEverySessions: "#research-selection-sessions",
-  volatilityWindow: "#volatility-window",
+  volatilityWindow: "#volatility-window", stopLossThreshold: "#stop-loss-threshold",
   programSource: "#python-source", programParameters: "#python-parameters",
   programFields: "#python-fields", programHistorySessions: "#python-history",
 };

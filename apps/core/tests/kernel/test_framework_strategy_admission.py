@@ -27,6 +27,9 @@ def test_authoring_discovery_publishes_the_four_framework_module_contracts():
     assert "valid_for_sessions" in framework["stages"][1]["output_contract"]
     assert "NoUpdate" in framework["stages"][2]["output_contract"]
     assert "limit_positions" in framework["stages"][3]["output_contract"]
+    threshold = framework["builtin_risk_schema"]["properties"]["stop_loss_threshold"]
+    assert threshold["exclusiveMaximum"] == 1
+    assert "close_risk_nav_cny" in framework["account_observation"]
     assert framework["maximum_active_signals"] == 3000
     assert framework["signal_validity_sessions"] == {"minimum": 1, "maximum": 252}
     assert framework["maximum_state_bytes"] == 3 * 1024 * 1024
@@ -175,3 +178,45 @@ def test_framework_sweep_freezes_each_items_modules_without_a_dummy_shared_formu
     assert command.neutralization is None
     assert command.strategies[0].modules.alpha.program.parameters == {"stage": "alpha"}
     assert command.strategies[1].modules.alpha.program.parameters["threshold"] == 2
+
+
+def test_builtin_stop_loss_freezes_and_reuses_the_same_risk_module():
+    service, snapshot = service_and_snapshot()
+    values = {
+        "research_kind": "strategy_backtest", "strategy_mode": "framework",
+        "start_date": "2026-08-07", "end_date": "2026-08-07", "universe": "top300",
+        "initial_cash_cny": "100000", "formula": "close", "neutralization": "none",
+        "holdings_count": 10, "selection_every_sessions": 5, "exposure_expression": "1",
+        "weighting": "equal_weight", "volatility_window": 20,
+        "modules": {**BUILTIN_FRAMEWORK_MODULES, "risk_management": {
+            "kind": "builtin_risk/v1", "stop_loss_threshold": 0.1,
+        }},
+    }
+    spec = TypeAdapter(ResearchSpec).validate_python(values)
+    assert service.diagnose_research_spec(spec).valid
+    command = TypeAdapter(ResearchRunAdmissionCommand).validate_python({
+        **values, "request_id": "stop-loss", "folder_id": "folder_default",
+    })
+    admitted = service.prepare_child_admission(
+        UUID(int=1), command, dataset=snapshot,
+    ).immutable_input
+    assert admitted.authorable_value()["modules"] == values["modules"]
+    assert (admitted.kernel_strategy().modules_snapshot().model_dump(mode="json")
+            == values["modules"])
+    from thesistrace.daily_track.models import DailyTrackFrozenResearchInput
+    authorable = admitted.authorable_value()
+    authorable.pop("research_kind")
+    track = DailyTrackFrozenResearchInput.model_validate(authorable)
+    assert track.model_dump(mode="json")["modules"] == values["modules"]
+
+
+@pytest.mark.parametrize(
+    "threshold", [None, 0, -0.1, 1, 1.1, float("nan"), float("inf"), "0.1", True],
+)
+def test_builtin_stop_loss_rejects_invalid_thresholds(threshold):
+    values = framework_spec()
+    values["modules"]["risk_management"] = {
+        "kind": "builtin_risk/v1", "stop_loss_threshold": threshold,
+    }
+    with pytest.raises(ValidationError):
+        TypeAdapter(ResearchSpec).validate_python(values)

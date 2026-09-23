@@ -1206,6 +1206,7 @@ def _execute_strategy_item_messages(
                     if strategy["weighting"] == "inverse_volatility":
                         strategy_fields["price.close.adjusted"] = "close"
                         strategy_lookback = max(strategy_lookback, strategy["volatility_window"])
+                strategy_fields = {**strategy_fields, "price.close.adjusted": "close"}
                 research_data = _read_shared_window(
                     store,
                     generation_id=generation_id,

@@ -69,8 +69,43 @@ def columnar_fixture(canonical) -> ColumnarResearchData:
     )
 
 
+def test_builtin_stop_loss_survives_columnar_tracking_checkpoint():
+    from thesistrace.research_kernel.builtin_framework import BUILTIN_FRAMEWORK_MODULES
+
+    _, canonical = build_fixture(session_count=26)
+    data = aligned_market_data(canonical)
+    initial = slice_research_sessions(data, data.sessions[:24])
+    modules = {**BUILTIN_FRAMEWORK_MODULES, "risk_management": {
+            "kind": "builtin_risk/v1", "stop_loss_threshold": 0.01,
+    }}
+    selected = run_input(initial, "close", "none", holdings=1, rebalance=5, modules=modules)
+    prior = run(selected).track_state
+    checkpoint = project_tracking_checkpoint(
+        prior, prior_observation_state=initial_tracking_observation_state(
+            data.sessions[22], prior.strategy_resume_snapshot()["daily"][-2]["net_nav"],
+        ), retained_strategy_sessions=[prior.boundary_session],
+    )
+    columnar = columnar_fixture(canonical)
+    restored = restore_tracking_checkpoint(
+        checkpoint, research_data=slice_research_sessions(columnar, data.sessions[23:24]),
+    )
+    advanced = advance_tracking(AdvanceInput(
+        prior_state=restored,
+        target_research_data=slice_research_sessions(columnar, data.sessions[23:]),
+        appended_sessions=list(data.sessions[24:]), continuation=continuation_snapshot(prior),
+        calculation_scope="forward_tracking",
+    ))
+    whole = run(run_input(data, "close", "none", holdings=1, rebalance=5, modules=modules))
+    actual = advanced.strategy_resume_snapshot()
+    expected = whole.track_state.strategy_resume_snapshot()
+    for key in ("positions", "decision_state", "pending_target"):
+        assert actual[key] == expected[key]
+    assert actual["daily"][-1] == expected["daily"][-1]
+
+
 def run_input(
     data, source, neutralization, holdings=10, rebalance=5, exposure="1", weighting="equal_weight",
+    modules=None,
 ):
     compiled = alpha_language.compile(source)
     exposure_compiled = alpha_language.compile(exposure, context="exposure")
@@ -89,6 +124,7 @@ def run_input(
         neutralization=neutralization,
         research_kind="strategy_backtest",
         strategy=StrategyRunInput(
+            modules_json=json.dumps(modules).encode() if modules is not None else None,
             holdings_count=holdings, selection_interval=rebalance, weighting=weighting,
             exposure_expression_json=json.dumps(exposure_compiled.expression).encode(),
             initial_cash_cny="10000000", commission_rate_all_in="0.0003",
@@ -337,7 +373,8 @@ def test_mounted_daily_fields_match_single_run_and_tracking_without_source_acces
     monkeypatch.setattr(TushareAdapter, "query_raw", reject_source)
     source = "rank(close_raw / pe + turnover_rate)"
     compiled = alpha_language.compile(source)
-    bindings = {value: key for key, value in compiled.field_ids_by_identifier.items()}
+    bindings = {"price.close.adjusted": "close",
+                **{value: key for key, value in compiled.field_ids_by_identifier.items()}}
     columnar = MountedGenerationStore(tmp_path).read_columnar_slice(
         generation.manifest_sha256, sessions=calendar, universe_name="top300",
         neutralization="none", field_bindings=bindings, fact_instrument_ids=frozenset(instruments),

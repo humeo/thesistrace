@@ -8,7 +8,7 @@ import { PythonStrategyAuthoring } from "./PythonStrategyAuthoring";
 
 const builtinNames: Record<FrameworkStage, string> = {
   universe_selection: "Dataset candidates", alpha: "Alpha formula",
-  portfolio_construction: "Periodic Top-N", risk_management: "No risk adjustment",
+  portfolio_construction: "Periodic Top-N", risk_management: "Holding risk rules",
 };
 const explanations: Record<FrameworkStage, string> = {
   universe_selection: "Choose candidates from the Dataset Universe selected above.",
@@ -17,8 +17,10 @@ const explanations: Record<FrameworkStage, string> = {
   risk_management: "Inspect actual holdings and the new proposal at every Close. Adjustments combine into one final target before execution.",
 };
 
-export function FrameworkAuthoring({ modules, selectModule, updateProgram, error, fieldsButton, alphaEditor }: {
+export function FrameworkAuthoring({ modules, selectModule, updateProgram, stopLossThreshold, updateStopLoss, error, fieldsButton, alphaEditor }: {
   modules: FrameworkModulesDraft;
+  stopLossThreshold: string;
+  updateStopLoss: (value: string) => void;
   selectModule: (stage: FrameworkStage, kind: "builtin" | "python") => void;
   updateProgram: (stage: FrameworkStage, changes: Partial<ProgramInputs>) => void;
   error: (field: ResearchInputField) => string | undefined;
@@ -41,7 +43,15 @@ export function FrameworkAuthoring({ modules, selectModule, updateProgram, error
       {modules[stage].kind === "python" ? <PythonStrategyAuthoring stage={stage}
         inputs={modules[stage].program} onChange={changes => updateProgram(stage, changes)}
         error={field => error(`${stage}.${field}`)} fieldsButton={fieldsButton()} />
-        : stage === "alpha" ? alphaEditor : null}
+        : stage === "alpha" ? alphaEditor : stage === "risk_management" ? <div className="research-parameter-field">
+          <label htmlFor="stop-loss-threshold">Stop loss (%)</label>
+          <input id="stop-loss-threshold" type="text" inputMode="decimal" placeholder="Off" maxLength={128}
+            value={stopLossThreshold} onChange={event => updateStopLoss(event.target.value)}
+            aria-invalid={Boolean(error("stopLossThreshold"))}
+            aria-describedby={error("stopLossThreshold") ? "stop-loss-help stop-loss-error" : "stop-loss-help"} />
+          <p id="stop-loss-help" className="framework-module-help">Leave blank to disable. Uses actual acquisition cost including buy fees. Checks at Close and attempts to sell at the next Open; gaps or trading restrictions can increase the loss.</p>
+          {error("stopLossThreshold") && <p id="stop-loss-error" className="inline-status-error">{error("stopLossThreshold")}</p>}
+        </div> : null}
     </section>)}
   </div>;
 }

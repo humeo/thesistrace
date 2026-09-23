@@ -447,7 +447,9 @@ class ImmutableRunInput(BaseModel):
             if program.source_sha256 != self.strategy["program_sha256"]:
                 raise ValueError("Frozen Python program identity does not match its source")
             if (not isinstance(self.strategy["environment"], dict)
-                    or self.field_bindings.keys() != set(program.data_requirements.field_ids)
+                    or self.field_bindings.keys() != (
+                        set(program.data_requirements.field_ids) | {"price.close.adjusted"}
+                    )
                     or self.expression_admission.effective_lookback
                     != program.data_requirements.history_sessions - 1):
                 raise ValueError("Frozen Python data or execution environment is invalid")
@@ -774,6 +776,7 @@ class StrategyDailyObservation(BaseModel):
     session: str
     gross_nav: str
     net_nav: str
+    close_risk_nav_cny: str
     net_cash: str
     transaction_cost_cny: str
     holdings_count: int
@@ -798,6 +801,10 @@ class TerminalStrategyPosition(BaseModel):
     execution_shares: int
     adjusted_units: str
     last_adjusted_price: str
+    last_close_adjusted_price: str
+    remaining_acquisition_cost_cny: str
+    holding_cycle_started_session: str
+    holding_age: int
 
 
 class TerminalResearchPhase(BaseModel):
@@ -817,6 +824,7 @@ class TerminalStrategyStateView(BaseModel):
     net_cash: str
     gross_nav: str
     net_nav: str
+    close_risk_nav_cny: str
     cumulative_transaction_cost: str
     positions: list[TerminalStrategyPosition]
     research_phase: TerminalResearchPhase

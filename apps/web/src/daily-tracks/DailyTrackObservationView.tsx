@@ -1,4 +1,5 @@
 import { SelectionEligibilityView } from "../research/SelectionEligibility";
+import { CloseRiskFacts, type CloseRiskPosition } from "../analysis/CloseRiskFacts";
 import { isBuiltinFrameworkState, strategySelection, type StrategyDecisionState } from "../research/strategyDecisionState";
 import { FrameworkStateView } from "../research/FrameworkStateView";
 import { useEffect, useRef, useState } from "react";
@@ -8,13 +9,16 @@ export type DailyTrackObservation = {
   decision_state: StrategyDecisionState;
   session: string;
   net_asset_value_cny: string;
+  close_risk_nav_cny: string;
   cash_cny: string;
   net_change_cny: string;
   net_return: number;
   maximum_drawdown: number;
   transaction_cost_cny: string;
   session_count: number;
-  holdings: Array<{ instrument_id: string; shares: number; market_value_cny: string; weight: number }>;
+  holdings: Array<Omit<CloseRiskPosition, "execution_shares"> & {
+    shares: number; market_value_cny: string; weight: number;
+  }>;
   selection_interval: number | null;
   pending_target_session: string | null;
   sessions_until_next_signal: number | null;
@@ -71,6 +75,8 @@ export function CurrentHoldings({ observation }: { observation: DailyTrackObserv
       </div>
       {selection && <SelectionEligibilityView selection={selection} />}
       <FrameworkStateView state={observation.decision_state} />
+      <CloseRiskFacts session={observation.session} nav={observation.close_risk_nav_cny}
+        positions={observation.holdings.map(item => ({ ...item, execution_shares: item.shares }))} />
       <div className="track-table-scroll" tabIndex={0} role="region" aria-label="Holdings table">
         <table className="track-table">
           <thead><tr><th scope="col">Symbol</th><th scope="col">Shares</th><th scope="col">Market value</th><th scope="col">Weight</th></tr></thead>

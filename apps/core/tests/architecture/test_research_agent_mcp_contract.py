@@ -1833,9 +1833,9 @@ def test_v1_inventory_scopes_descriptions_annotations_and_schemas_are_exact() ->
     canonical = _canonical_v1_contract()
 
     assert sha256(canonical).hexdigest() == (
-        "4e50d5153dbb0f2d1033fbac3ccd54084e335d49b7889bd2431c3493f9fb2873"
+        "91a551d6b4f824a47341242580c549e950c39ffed628e46a0fb57d7c03f3fdea"
     )
-    assert len(canonical) == 275938
+    assert len(canonical) == 282355
 
 
 def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None:
@@ -1999,6 +1999,7 @@ def test_mcp_origin_result_preserves_large_legal_framework_state_and_pending_tar
             "session": "2026-08-03",
             "gross_cash": "100000", "net_cash": "100000",
             "gross_nav": "100000", "net_nav": "100000",
+            "close_risk_nav_cny": "100000",
             "cumulative_transaction_cost": "0",
             "research_phase": {"origin_session": "2026-08-03", "report_session_count": 1},
             "decision_state": {

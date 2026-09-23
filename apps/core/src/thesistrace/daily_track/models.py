@@ -196,6 +196,7 @@ class InitialStrategyState(BaseModel):
     net_cash: str
     gross_nav: str
     net_nav: str
+    close_risk_nav_cny: str
     cumulative_transaction_cost: str
     positions: list[dict[str, object]]
     research_phase: dict[str, object]
@@ -400,6 +401,10 @@ class DailyTrackOriginPosition(BaseModel):
     execution_shares: int
     adjusted_units: str
     last_adjusted_price: str
+    remaining_acquisition_cost_cny: str
+    last_close_adjusted_price: str
+    holding_cycle_started_session: str
+    holding_age: int = Field(ge=1)
 
 
 class DailyTrackOriginResearchPhase(BaseModel):
@@ -417,6 +422,7 @@ class DailyTrackOriginAccount(BaseModel):
     net_cash: str
     gross_nav: str
     net_nav: str
+    close_risk_nav_cny: str
     cumulative_transaction_cost: str
     positions: list[DailyTrackOriginPosition]
     research_phase: DailyTrackOriginResearchPhase
@@ -459,6 +465,7 @@ class DailyTrackStrategyObservation(BaseModel):
     session: str
     gross_nav: str
     net_nav: str
+    close_risk_nav_cny: str
     net_cash: str
     transaction_cost_cny: str
     holdings_count: int
@@ -628,6 +635,7 @@ class DailyTrackOriginAccountSummary(BaseModel):
     net_cash: str
     gross_nav: str
     net_nav: str
+    close_risk_nav_cny: str
     cumulative_transaction_cost: str
     research_phase: DailyTrackOriginResearchPhase
     decision_state: DecisionState
@@ -754,6 +762,11 @@ class DailyTrackHolding(BaseModel):
     shares: int
     market_value_cny: str
     weight: float
+    adjusted_units: str
+    last_close_adjusted_price: str
+    remaining_acquisition_cost_cny: str
+    holding_cycle_started_session: str
+    holding_age: int = Field(ge=1)
 
 
 class DailyTrackObservationPoint(BaseModel):
@@ -770,6 +783,7 @@ class DailyTrackObservation(BaseModel):
 
     session: str
     net_asset_value_cny: str
+    close_risk_nav_cny: str
     cash_cny: str
     net_change_cny: str
     net_return: float

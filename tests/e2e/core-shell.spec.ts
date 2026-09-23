@@ -303,6 +303,57 @@ test("Custom fees and slippage survive Run reuse and DailyTrack refresh", { tag:
   expect((await source.json()).input.costs).toEqual(costs);
 });
 
+test("Close stop loss survives Run reuse and DailyTrack refresh", { tag: "@isolated" }, async ({ page }, testInfo) => {
+  test.setTimeout(240_000);
+  publishFinancialTrackHead("lagged");
+  await page.goto("/research?new");
+  await fillCompleteDraft(page, { name: "Close cost stop loss", formula: "close" });
+  await page.getByLabel("Stop loss (%)", { exact: true }).fill("1");
+  await page.getByRole("button", { name: "Run settings", exact: true }).click();
+  await page.getByLabel("Price slippage (basis points)", { exact: true }).fill("1000");
+  await page.getByRole("button", { name: "Run settings", exact: true }).click();
+  await page.getByRole("button", { name: "Run backtest", exact: true }).click();
+  await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
+  const runUrl = page.url();
+  const runId = runUrl.split("/").at(-1)!;
+  await expect(page.locator(".research-run-facts").getByText(/Status\s+succeeded/)).toBeVisible({ timeout: 90_000 });
+  const accepted = await page.request.get(`/api/research-runs/${runId}`);
+  expect(accepted.ok()).toBe(true);
+  const policy = { kind: "builtin_risk/v1", stop_loss_threshold: 0.01 };
+  expect((await accepted.json()).input.modules.risk_management).toEqual(policy);
+  await page.getByText("Close risk and holdings", { exact: true }).click();
+  await expect(page.getByText(/Close Risk NAV \(CNY\):/)).toBeVisible();
+  const events = await page.request.post(`/api/research-runs/${runId}/events/query`, {
+    headers: sameOriginHeaders(), data: { section: "strategy_framework", limit: 50 },
+  });
+  expect(events.ok()).toBe(true);
+  const rows = (await events.json()).rows;
+  expect(rows.some((row: { risk_adjustment: { mode: string } | null }) => row.risk_adjustment?.mode === "stop_loss")).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("close-stop-loss-result.png"), fullPage: true });
+  await page.getByRole("button", { name: "Create draft", exact: true }).click();
+  await expect(page.getByLabel("Stop loss (%)", { exact: true })).toHaveValue("1");
+  await page.getByLabel("Stop loss (%)", { exact: true }).fill("2");
+  await page.goto(runUrl);
+  await page.getByRole("button", { name: "Start Tracking", exact: true }).click();
+  await expect(page).toHaveURL(/\/daily-tracks\/track_[a-f0-9]+$/);
+  const trackId = page.url().split("/").at(-1)!;
+  await refreshPythonTrackThroughFixtureEnd(page, trackId);
+  const tracked = await page.request.post(`/api/daily-tracks/${trackId}/events/query`, {
+    headers: sameOriginHeaders(), data: { section: "strategy_framework", limit: 50 },
+  });
+  expect(tracked.ok()).toBe(true);
+  expect((await tracked.json()).rows.slice(0, rows.length)).toEqual(rows);
+  await page.getByRole("tab", { name: /^Holdings/ }).click();
+  await page.getByText("Close risk and holdings", { exact: true }).click();
+  const riskFacts = page.locator("details").filter({ has: page.getByText("Close risk and holdings", { exact: true }) });
+  await expect(riskFacts).toContainText("2026-08-11");
+  await expect(riskFacts).toContainText("Close Risk NAV (CNY)");
+  await page.screenshot({ path: testInfo.outputPath("close-stop-loss-current-track.png"), fullPage: true });
+  const source = await page.request.get(`/api/research-runs/${runId}`);
+  expect(source.ok()).toBe(true);
+  expect((await source.json()).input.modules.risk_management).toEqual(policy);
+});
+
 test("ResearchRun return keeps the selected Type without a document reload", async ({ page }) => {
   const documentRequests = recordDocumentRequests(page);
   await page.route("**/api/research-folders", async (route) => {

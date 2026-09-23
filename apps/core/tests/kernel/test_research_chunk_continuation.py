@@ -1005,6 +1005,20 @@ def test_strategy_consumer_rejects_incompatible_shared_outcome_binding() -> None
             cancellation_check=lambda: None,
         )
 
+    for invalid_close_nav in (None, "NaN", "not-a-number"):
+        malformed = first_strategy.continuation_snapshot()
+        daily = malformed["strategy_state"]["daily"][0]
+        if invalid_close_nav is None:
+            del daily["close_risk_nav_cny"]
+        else:
+            daily["close_risk_nav_cny"] = invalid_close_nav
+        with pytest.raises(ValueError, match="Strategy continuation is invalid"):
+            execute_strategy_chunk_from_alpha_factor_outcome(
+                run_input=strategy_input, binding=binding, alpha_factor_outcome=shared,
+                research_data=fixture, final_chunk=True, continuation=malformed,
+                cancellation_check=lambda: None,
+            )
+
 
 def test_repeated_strategy_consumption_has_a_shared_stage_performance_gate(
     monkeypatch: pytest.MonkeyPatch,
@@ -1133,7 +1147,9 @@ def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(
     )
     for instrument_index in range(40):
         for session_index in range(80):
-            if (instrument_index * 3 + session_index) % 29 == 0:
+            # Close is also the account valuation input: missing historical
+            # signal observations precede any actual holdings in this fixture.
+            if session_index < 20 and (instrument_index * 3 + session_index) % 29 == 0:
                 close[instrument_index, session_index] = np.nan
             if (instrument_index + session_index * 2) % 31 == 0:
                 revenue[instrument_index, session_index] = np.nan

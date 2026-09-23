@@ -40,6 +40,10 @@ class TerminalPosition(TerminalStateModel):
     execution_shares: StrictInt
     adjusted_units: StrictStr
     last_adjusted_price: StrictStr
+    remaining_acquisition_cost_cny: StrictStr
+    last_close_adjusted_price: StrictStr
+    holding_cycle_started_session: StrictStr
+    holding_age: Annotated[StrictInt, Field(ge=1)]
 
 
 class ResearchPhase(TerminalStateModel):
@@ -263,6 +267,7 @@ class ValuationEvent(TerminalStateModel):
 
 
 class LastDailyObservation(TerminalStateModel):
+    close_risk_nav_cny: StrictStr
     cash_ratio: StrictNumber
     cumulative_transaction_cost: StrictStr
     cycle_type: StrictStr
@@ -353,6 +358,7 @@ class TerminalStrategyStateValue(TerminalStateModel):
     net_cash: StrictStr
     gross_nav: StrictStr
     net_nav: StrictStr
+    close_risk_nav_cny: StrictStr
     cumulative_transaction_cost: StrictStr
     positions: list[TerminalPosition]
     research_phase: ResearchPhase

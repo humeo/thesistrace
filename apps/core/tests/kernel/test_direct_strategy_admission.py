@@ -173,3 +173,17 @@ def test_authoring_discovery_publishes_program_contract_and_limits():
     assert program["maximum_fields"] == 32
     assert program["execution_time"] == "next_session_open"
     assert "math" in program["modules"]
+
+
+def test_account_close_valuation_is_loaded_without_being_declared_by_the_program():
+    service, snapshot = service_and_snapshot()
+    values = direct_spec()
+    values["program"]["data_requirements"] = {"field_ids": [], "history_sessions": 1}
+    command = TypeAdapter(ResearchRunAdmissionCommand).validate_python({
+        **values, "request_id": "account-close", "folder_id": "folder_default",
+    })
+    admitted = service.prepare_child_admission(
+        UUID(int=1), command, dataset=snapshot,
+    ).immutable_input
+    assert admitted.field_bindings == {"price.close.adjusted": "close"}
+    assert admitted.canonical_value()["strategy"]["program"]["data_requirements"]["field_ids"] == []

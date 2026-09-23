@@ -7,6 +7,7 @@ from decimal import Decimal, DecimalException, localcontext
 from fractions import Fraction
 from statistics import stdev
 
+from thesistrace.research_kernel.common_inputs import CLOSE_FIELD_ID
 from thesistrace.research_kernel.daily_strategy import prepare_daily_strategy
 from thesistrace.research_kernel.numeric import (
     ACCOUNTING_CONTEXT,
@@ -24,6 +25,7 @@ from thesistrace.research_series import (
     ExecutionPrice,
     InstrumentProfile,
     PriceLimit,
+    slice_research_sessions,
 )
 
 
@@ -41,6 +43,10 @@ class Position:
     execution_shares: int
     adjusted_units: Decimal
     last_adjusted_price: Decimal
+    remaining_acquisition_cost_cny: Decimal
+    holding_cycle_started_session: str
+    holding_age: int
+    last_close_adjusted_price: Decimal | None
 
 
 @dataclass(frozen=True)
@@ -394,6 +400,12 @@ def _execute_strategy(
                 execution_shares=int(item["execution_shares"]),
                 adjusted_units=Decimal(str(item["adjusted_units"])),
                 last_adjusted_price=Decimal(str(item["last_adjusted_price"])),
+                remaining_acquisition_cost_cny=Decimal(
+                    str(item["remaining_acquisition_cost_cny"]),
+                ),
+                holding_cycle_started_session=str(item["holding_cycle_started_session"]),
+                holding_age=int(item["holding_age"]),
+                last_close_adjusted_price=Decimal(str(item["last_close_adjusted_price"])),
             )
             for item in position_rows
         }
@@ -831,6 +843,9 @@ def _execute_strategy(
         if net_cash < 0:
             raise StrategyCalculationError("Net Cash became negative")
 
+        for position in positions.values():
+            position.holding_age += 1
+
         position_values = {
             instrument_id: money(position.adjusted_units * marks[instrument_id])
             for instrument_id, position in positions.items()
@@ -845,6 +860,8 @@ def _execute_strategy(
         residual = money((gross_nav - net_nav) - cumulative_cost)
         previous_gross_nav = Decimal(str(daily[-1]["gross_nav"])) if daily else gross_nav
         previous_net_nav = Decimal(str(daily[-1]["net_nav"])) if daily else net_nav
+        close_marks = mark_close_positions(session, positions, research_data)
+        close_risk_nav = money(net_cash + sum_position_values(positions, close_marks))
         daily.append(
             {
                 "session": session,
@@ -854,6 +871,7 @@ def _execute_strategy(
                 "pre_trade_net_nav": canonical_decimal(pre_net_nav),
                 "gross_nav": canonical_decimal(gross_nav),
                 "net_nav": canonical_decimal(net_nav),
+                "close_risk_nav_cny": canonical_decimal(close_risk_nav),
                 "gross_return": float(gross_nav / previous_gross_nav - 1),
                 "net_return": float(net_nav / previous_net_nav - 1),
                 "gross_cash": canonical_decimal(gross_cash),
@@ -908,6 +926,7 @@ def _execute_strategy(
                 session=session, report_index=report_index,
                 account={"cash_cny": canonical_decimal(net_cash),
                          "post_open_net_nav_cny": canonical_decimal(net_nav),
+                         "close_risk_nav_cny": canonical_decimal(close_risk_nav),
                          "positions": _position_payload(positions)},
                 fills=fills[event_fill_start:], rejections=rejections[event_rejection_start:],
                 previous=decision_state,
@@ -1042,9 +1061,54 @@ def _position_payload(positions: Mapping[str, Position]) -> list[dict[str, objec
             "execution_shares": position.execution_shares,
             "adjusted_units": canonical_decimal(position.adjusted_units),
             "last_adjusted_price": canonical_decimal(position.last_adjusted_price),
+            "holding_cycle_started_session": position.holding_cycle_started_session,
+            "holding_age": position.holding_age,
+            "last_close_adjusted_price": canonical_decimal(position.last_close_adjusted_price),
+            "remaining_acquisition_cost_cny": canonical_decimal(
+                position.remaining_acquisition_cost_cny,
+            ),
         }
         for instrument_id, position in sorted(positions.items())
     ]
+
+
+def mark_close_positions(
+    session: str,
+    positions: dict[str, Position],
+    research_data: AlignedResearchData | ColumnarResearchSeries,
+) -> dict[str, Decimal]:
+    """Keep Close observations separate from the account's Open valuation carry."""
+    instruments = tuple(sorted(positions))
+    if not instruments:
+        return {}
+    if isinstance(research_data, ColumnarResearchSeries):
+        scoped = slice_research_sessions(research_data, (session,))
+        matrix = scoped.numeric_field_matrices((CLOSE_FIELD_ID,), instruments)[CLOSE_FIELD_ID]
+        values = {instrument_id: matrix[index][0]
+                  for index, instrument_id in enumerate(instruments)}
+    else:
+        field = research_data.fields[CLOSE_FIELD_ID]
+        values = {instrument_id: field.get((session, instrument_id))
+                  for instrument_id in instruments}
+    marks = {}
+    for instrument_id, position in positions.items():
+        value = values[instrument_id]
+        mark = None if value is None else Decimal(str(value))
+        if mark is not None and not mark.is_nan() and (not mark.is_finite() or mark <= 0):
+            raise StrategyCalculationError(
+                f"invalid Close for held instrument {instrument_id} on {session}"
+            )
+        if mark is not None and mark.is_finite() and mark > 0:
+            position.last_close_adjusted_price = mark
+        elif (research_data.trading_states.get((session, instrument_id))
+              == "full_session_suspension" and position.last_close_adjusted_price is not None):
+            mark = position.last_close_adjusted_price
+        else:
+            raise StrategyCalculationError(
+                f"unexplained missing Close for held instrument {instrument_id} on {session}"
+            )
+        marks[instrument_id] = mark
+    return marks
 
 
 def mark_positions(
@@ -1252,8 +1316,14 @@ def execute_order(
             added_units = Decimal(total_quantity) / (adjusted_open / raw_open)
         position = positions.get(instrument_id)
         if position is None:
-            positions[instrument_id] = Position(total_quantity, added_units, adjusted_open)
+            positions[instrument_id] = Position(
+                total_quantity, added_units, adjusted_open, money(raw_notional + total_cost),
+                session, 0, None,
+            )
         else:
+            position.remaining_acquisition_cost_cny = money(
+                position.remaining_acquisition_cost_cny + raw_notional + total_cost,
+            )
             position.execution_shares += total_quantity
             position.adjusted_units = money(position.adjusted_units + added_units)
             position.last_adjusted_price = adjusted_open
@@ -1275,6 +1345,11 @@ def execute_order(
         if total_quantity == before_shares:
             positions.pop(instrument_id)
         else:
+            with accounting_context():
+                position.remaining_acquisition_cost_cny = money(
+                    position.remaining_acquisition_cost_cny
+                    * Decimal(before_shares - total_quantity) / Decimal(before_shares),
+                )
             position.execution_shares -= total_quantity
             position.adjusted_units = money(position.adjusted_units - removed_units)
             position.last_adjusted_price = adjusted_open

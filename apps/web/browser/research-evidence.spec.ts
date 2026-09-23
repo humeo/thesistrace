@@ -32,6 +32,7 @@ const run = {
       observations: [], comparison: { status: "unavailable", reason: "benchmark_snapshot_unavailable" },
     },
     terminal_strategy_state: {
+      close_risk_nav_cny: "100000",
       session: "2026-08-04", net_cash: "100000", gross_cash: "100000", net_nav: "100000", gross_nav: "100000",
       cumulative_transaction_cost: "0", positions: [], pending_target: null, contract_checksum: "contract",
       decision_state: { mode: "framework", selection: { signal_session: "2026-08-03", eligibility_exclusions: {} }, selection_interval: 10, exposure: 1 },

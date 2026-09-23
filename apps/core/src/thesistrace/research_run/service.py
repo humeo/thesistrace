@@ -340,8 +340,8 @@ FIXED_STRATEGY_KIND = "framework"
 FIXED_EXECUTION = "next_open_full_fill"
 SEMANTIC_VERSIONS = {
     "factor": "factor-v1",
-    "strategy": "strategy-v6",
-    "kernel": "kernel-v9",
+    "strategy": "strategy-v7",
+    "kernel": "kernel-v10",
 }
 
 
@@ -4463,6 +4463,8 @@ def _spec_data_requirements(command, compiled, exposure) -> ExpressionRequiremen
         estimated_work=0, require_industry=False,
     ))
     bindings = dict(base.field_bindings)
+    if command.research_kind == "strategy_backtest":
+        bindings["price.close.adjusted"] = "close"
     lookback = base.effective_lookback
     programs = _spec_programs(command)
     if programs:
@@ -4525,6 +4527,8 @@ def _admitted_input(
         for name, expression in (("formula", compiled), ("exposure_expression", exposure))
         if expression is not None
     }
+    if command.research_kind == "strategy_backtest":
+        field_owners["data"] = {"price.close.adjusted"}
     field_owners.update({
         f"{path}.data_requirements": set(program.data_requirements.field_ids)
         for path, program in programs.items()
@@ -5628,6 +5632,7 @@ def _public_result(
                     "net_cash",
                     "gross_nav",
                     "net_nav",
+                    "close_risk_nav_cny",
                     "cumulative_transaction_cost",
                     "positions",
                     "research_phase",

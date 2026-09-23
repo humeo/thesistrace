@@ -328,8 +328,12 @@ class RunInput:
             return
         if not isinstance(self.strategy, StrategyRunInput):
             raise KernelRunError("Strategy continuation requires Strategy input")
-        programs = self.strategy.modules_snapshot().programs()
-        expected_type = FrameworkModulesDecisionState if programs else FrameworkDecisionState
+        modules = self.strategy.modules_snapshot()
+        programs = modules.programs()
+        expected_type = (
+            FrameworkDecisionState if modules.model_dump(mode="json") == BUILTIN_FRAMEWORK_MODULES
+            else FrameworkModulesDecisionState
+        )
         interval = (
             None if "portfolio_construction" in programs else self.strategy.selection_interval
         )

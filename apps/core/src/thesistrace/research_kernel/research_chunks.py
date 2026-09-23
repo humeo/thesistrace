@@ -39,6 +39,7 @@ from thesistrace.research_kernel.terminal_state_schema import (
     DECISION_STATE_ADAPTER,
     FrameworkModulesDecisionState,
     PendingTarget,
+    TerminalPosition,
 )
 from thesistrace.research_series import ColumnarResearchSeries
 
@@ -738,6 +739,7 @@ def _execute_strategy_chunk_from_validated_alpha_factor(
                 "net_cash": str(terminal["net_cash"]),
                 "gross_nav": str(terminal["gross_nav"]),
                 "net_nav": str(terminal["net_nav"]),
+                "close_risk_nav_cny": str(terminal["close_risk_nav_cny"]),
                 "cumulative_transaction_cost": str(terminal["cumulative_transaction_cost"]),
                 "positions": [dict(value) for value in strategy["positions"]],
                 "research_phase": {
@@ -1257,6 +1259,7 @@ def _strategy_observations(
                 "session": str(row["session"]),
                 "gross_nav": str(row["gross_nav"]),
                 "net_nav": str(row["net_nav"]),
+                "close_risk_nav_cny": str(row["close_risk_nav_cny"]),
                 "net_cash": str(row["net_cash"]),
                 "transaction_cost_cny": canonical_decimal(cumulative_cost - prior_cost),
                 "holdings_count": int(row["holdings_count"]),
@@ -1420,6 +1423,7 @@ def _validated_bounded_strategy_state(state: dict[str, object]) -> dict[str, obj
         "session",
         "gross_nav",
         "net_nav",
+        "close_risk_nav_cny",
         "gross_cash",
         "net_cash",
         "cumulative_transaction_cost",
@@ -1446,13 +1450,7 @@ def _validated_bounded_strategy_state(state: dict[str, object]) -> dict[str, obj
             if not Decimal(str(last_daily[name])).is_finite():
                 raise ValueError("Strategy continuation is invalid")
         for position in positions:
-            if set(position) != {
-                "instrument_id",
-                "execution_shares",
-                "adjusted_units",
-                "last_adjusted_price",
-            }:
-                raise ValueError("Strategy continuation is invalid")
+            TerminalPosition.model_validate(position)
             if (
                 not isinstance(position["instrument_id"], str)
                 or isinstance(position["execution_shares"], bool)
@@ -1460,6 +1458,9 @@ def _validated_bounded_strategy_state(state: dict[str, object]) -> dict[str, obj
                 or position["execution_shares"] < 0
                 or not Decimal(str(position["adjusted_units"])).is_finite()
                 or not Decimal(str(position["last_adjusted_price"])).is_finite()
+                or not Decimal(str(position["last_close_adjusted_price"])).is_finite()
+                or not Decimal(str(position["remaining_acquisition_cost_cny"])).is_finite()
+                or Decimal(str(position["remaining_acquisition_cost_cny"])) < 0
             ):
                 raise ValueError("Strategy continuation is invalid")
         if (
