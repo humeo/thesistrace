@@ -22,7 +22,9 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkCjkFriendly from "remark-cjk-friendly/parseOnly";
-import { agentFailure } from "@thesistrace/contracts/agent-failure";
+import { useTranslation } from "react-i18next";
+import { i18n } from "../i18n";
+import { formatNumber, formatTimestamp } from "../i18n/format";
 
 import { parseResearchRunHref } from "./toolResult";
 import { ResearchA2UIActivity } from "./researchA2UI";
@@ -38,14 +40,16 @@ const RESEARCH_MARKDOWN_REMARK_PLUGINS = [remarkGfm, remarkCjkFriendly];
 type ScrollAnchor = Readonly<{ top: number; turnId: string }>;
 type ToolEntry = Extract<TimelineEntry, { kind: "tool_activity" }> & { questionDetails?: { question: string; answer?: string } };
 type TurnSegment = TimelineEntry | Readonly<{ entries: readonly ToolEntry[]; kind: "tool_group" }>;
+export type ChatAnnouncement = "copied" | "copyFailed";
 
 export function ChatTimeline({
   controller,
   onAnnounce,
 }: {
   controller: ChatConversationController;
-  onAnnounce: (message: string) => void;
+  onAnnounce: (message: ChatAnnouncement) => void;
 }) {
+  const { t } = useTranslation("chat");
   const scrollRef = useRef<HTMLDivElement>(null);
   const topSentinelRef = useRef<HTMLDivElement>(null);
   const previousScrollTopRef = useRef(0);
@@ -234,7 +238,7 @@ export function ChatTimeline({
   return (
     <div className="chat-timeline-shell">
       <div
-        aria-label="Conversation timeline"
+        aria-label={t("timeline")}
         aria-live="off"
         className={`chat-timeline${empty ? " chat-timeline-empty" : ""}`}
         onKeyDown={handleKeyDown}
@@ -257,17 +261,17 @@ export function ChatTimeline({
           <div className="chat-timeline-content">
             <div aria-hidden="true" className="chat-top-sentinel" ref={topSentinelRef} />
             {controller.loadingOlder ? (
-              <CircleNotch aria-label="Loading earlier Turns" className="chat-timeline-loading chat-spinning" size={15} />
+              <CircleNotch aria-label={t("loadingEarlier")} className="chat-timeline-loading chat-spinning" size={15} />
             ) : null}
             {controller.timelineError ? (
               <div className="chat-timeline-error">
-                <span>Conversation history could not be updated.</span>
+                <span>{t("timelineError")}</span>
                 <button
                   className="button-quiet"
                   onClick={() => void controller.retryTimeline()}
                   type="button"
                 >
-                  Retry
+                  {t("retry")}
                 </button>
               </div>
             ) : null}
@@ -286,7 +290,7 @@ export function ChatTimeline({
       {!following && latestBelowViewport && !empty ? (
         <button className="chat-back-to-latest" onClick={backToLatest} type="button">
           <ArrowDown aria-hidden="true" size={14} />
-          Back to latest
+          {t("backToLatest")}
         </button>
       ) : null}
     </div>
@@ -301,9 +305,10 @@ function TimelineTurnView({
 }: {
   controller: ChatConversationController;
   minHeight?: number;
-  onAnnounce: (message: string) => void;
+  onAnnounce: (message: ChatAnnouncement) => void;
   turn: TimelineTurn;
 }) {
+  const { t } = useTranslation("chat");
   const hiddenProgress = progressHistory(turn);
   const visibleEntries = questionToolEntries(turn.entries).filter((entry) => !hiddenProgress.has(entry.entry_id));
   const firstAssistantIndex = visibleEntries.findIndex((entry) => entry.kind !== "user_input");
@@ -335,10 +340,10 @@ function TimelineTurnView({
     && (controller.phase === "active" || turn.status === "stopping")
     && (!activeWithoutText || runningTools.length > 0);
   const latestTool = runningTools.at(-1);
-  const currentActivity = turn.status === "stopping" ? "Stopping…"
-    : latestTool ? `Running ${latestTool.payload.name.replaceAll("_", " ")}…${runningTools.length > 1 ? ` (${runningTools.length} tools running)` : ""}`
+  const currentActivity = turn.status === "stopping" ? t("stoppingActivity")
+    : latestTool ? `${t("runningTool", { name: latestTool.payload.name.replaceAll("_", " ") })}${runningTools.length > 1 ? t("runningTools", { count: runningTools.length }) : ""}`
     : turn.entries.some(entry => entry.kind === "assistant_message" && entry.payload.status === "streaming")
-      ? "Writing response…" : "Preparing response…";
+      ? t("writingResponse") : t("preparingActivity");
   const showAssistantSection = assistantEntries.length > 0 || activeWithoutText;
 
   const renderEntries = (entries: readonly TimelineEntry[]) => segmentTurnEntries(entries).map((segment) => (
@@ -370,15 +375,15 @@ function TimelineTurnView({
           </div>
         ) : null}
         {activeWithoutText && !showCurrentActivity ? (
-          <div aria-label="Research Agent is preparing a response" className="chat-response-indicator">
+          <div aria-label={t("preparingResponse")} className="chat-response-indicator">
             <span aria-hidden="true" />
           </div>
         ) : null}
         {assistantText.length > 0 || turn.completed_at !== null ? (
           <footer className="chat-response-footer">
-            {assistantText.length > 0 ? <CopyTextButton content={assistantText} label="Copy response" onAnnounce={onAnnounce} /> : null}
-            {turn.completed_at !== null ? <time dateTime={turn.completed_at} title={new Date(turn.completed_at).toLocaleString()}>
-              {new Date(turn.completed_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+            {assistantText.length > 0 ? <CopyTextButton content={assistantText} label={t("copyResponse")} onAnnounce={onAnnounce} /> : null}
+            {turn.completed_at !== null ? <time dateTime={turn.completed_at} title={formatTimestamp(turn.completed_at, { dateStyle: "medium", timeStyle: "medium" })}>
+              {formatTimestamp(turn.completed_at, { hour: "numeric", minute: "2-digit" })}
             </time> : null}
           </footer>
         ) : null}
@@ -388,6 +393,7 @@ function TimelineTurnView({
 }
 
 function WorkedFor({ turn }: { turn: TimelineTurn }) {
+  const { t } = useTranslation("chat");
   const ticking = turn.completed_at === null && (turn.status === "running" || turn.status === "stopping");
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -397,7 +403,7 @@ function WorkedFor({ turn }: { turn: TimelineTurn }) {
   }, [ticking]);
   const startedAt = Date.parse(turn.started_at);
   const completedAt = turn.completed_at === null ? now : Date.parse(turn.completed_at);
-  return `${ticking ? "Working" : "Worked"} for ${formatDuration(Math.max(0, completedAt - startedAt))}`;
+  return t(ticking ? "workingFor" : "workedFor", { duration: formatDuration(Math.max(0, completedAt - startedAt)) });
 }
 
 function TimelineItem({
@@ -407,16 +413,17 @@ function TimelineItem({
 }: {
   controller: ChatConversationController;
   entry: TimelineEntry;
-  onAnnounce: (message: string) => void;
+  onAnnounce: (message: ChatAnnouncement) => void;
 }) {
+  const { t } = useTranslation("chat");
   if (entry.kind === "user_input") {
     return (
       <article className="chat-message chat-message-user" data-entry-id={entry.entry_id}>
         <div className="chat-message-actions">
-          <CopyTextButton content={entry.payload.content} label="Copy your message" onAnnounce={onAnnounce} />
+          <CopyTextButton content={entry.payload.content} label={t("copyMessage")} onAnnounce={onAnnounce} />
         </div>
         <div className="chat-message-content">{entry.payload.content}</div>
-        {entry.payload.source === "steer" ? <span className="chat-input-source">Steered</span> : null}
+        {entry.payload.source === "steer" ? <span className="chat-input-source">{t("steered")}</span> : null}
       </article>
     );
   }
@@ -428,15 +435,15 @@ function TimelineItem({
         </div>
         {entry.payload.recovery ? (
           <span className="chat-assistant-outcome" role="status">
-            {entry.payload.recovery.status === "recovering" ? "Partial response · preparing a replacement"
-              : entry.payload.recovery.status === "succeeded" ? "Partial response · replaced by the complete answer below"
-              : entry.payload.recovery.attempts === 1 ? "Partial response · recovery failed"
-              : entry.payload.recovery.cause === "OUTPUT_LIMIT" ? "Partial response · output limit reached"
-              : "Response stopped · context is too large"}
+            {t(entry.payload.recovery.status === "recovering" ? "partialRecovering"
+              : entry.payload.recovery.status === "succeeded" ? "partialReplaced"
+              : entry.payload.recovery.attempts === 1 ? "partialRecoveryFailed"
+              : entry.payload.recovery.cause === "OUTPUT_LIMIT" ? "partialOutputLimit"
+              : "contextTooLarge")}
           </span>
         ) : entry.payload.status === "stopped" || entry.payload.status === "failed" ? (
           <span className={`chat-assistant-outcome chat-assistant-outcome-${entry.payload.status}`}>
-            {entry.payload.status === "stopped" ? "Partial response · stopped" : "Partial response · failed"}
+            {t(entry.payload.status === "stopped" ? "partialStopped" : "partialFailed")}
           </span>
         ) : null}
       </article>
@@ -468,21 +475,22 @@ function TimelineItem({
 }
 
 function ToolActivityGroup({ entries }: { entries: readonly ToolEntry[] }) {
+  const { t } = useTranslation("chat");
   const counts = entries.reduce((current, entry) => ({
     active: current.active + (entry.payload.status === "running" ? 1 : 0),
     failed: current.failed + (entry.payload.status === "failed" ? 1 : 0),
     stopped: current.stopped + (entry.payload.status === "stopped" ? 1 : 0),
   }), { active: 0, failed: 0, stopped: 0 });
   const details = [
-    counts.active === 0 ? null : `${counts.active} active`,
-    counts.failed === 0 ? null : `${counts.failed} failed`,
-    counts.stopped === 0 ? null : `${counts.stopped} stopped`,
-  ].filter((value): value is string => value !== null);
+    counts.active === 0 ? null : t("toolActive", { count: counts.active }),
+    counts.failed === 0 ? null : t("toolFailed", { count: counts.failed }),
+    counts.stopped === 0 ? null : t("toolStopped", { count: counts.stopped }),
+  ].filter((value) => value !== null);
   return (
     <details className="chat-tool-group" data-entry-id={entries[0]?.entry_id}>
       <summary>
         <Wrench aria-hidden="true" size={15} />
-        <span>{counts.active > 0 ? "Using" : "Used"} {entries.length} tool{entries.length === 1 ? "" : "s"}</span>
+        <span>{t(counts.active > 0 ? "usingTools" : "usedTools", { count: entries.length })}</span>
         {details.length === 0 ? null : <small>{details.join(" · ")}</small>}
         <CaretDown aria-hidden="true" className="chat-tool-group-caret" size={13} />
       </summary>
@@ -494,14 +502,15 @@ function ToolActivityGroup({ entries }: { entries: readonly ToolEntry[] }) {
 }
 
 function ToolActivityItem({ entry }: { entry: ToolEntry }) {
+  const { t } = useTranslation("chat");
   const status = entry.payload.status;
   const Icon = status === "running"
     ? CircleNotch
     : status === "complete" ? CheckCircle : status === "stopped" ? StopCircle : WarningCircle;
-  const label = status === "complete" ? "Completed" : status[0]?.toUpperCase() + status.slice(1);
+  const label = t(`toolStatus.${status}`);
   return (
     <li
-      aria-label={`Tool ${entry.payload.name}: ${label}`}
+      aria-label={t("toolAria", { name: entry.payload.name, status: label })}
       data-entry-id={entry.entry_id}
       data-tool-name={entry.payload.name}
       data-tool-status={status}
@@ -510,7 +519,7 @@ function ToolActivityItem({ entry }: { entry: ToolEntry }) {
       <Icon aria-hidden="true" className={status === "running" ? "chat-spinning" : undefined} size={14} />
       <code>{entry.payload.name}</code>
       <span>{label}</span>
-      {entry.questionDetails ? <details className="chat-tool-question"><summary>Question and answer</summary><p>{entry.questionDetails.question}</p>{entry.questionDetails.answer ? <p>{entry.questionDetails.answer}</p> : null}</details> : null}
+      {entry.questionDetails ? <details className="chat-tool-question"><summary>{t("questionAndAnswer")}</summary><p>{entry.questionDetails.question}</p>{entry.questionDetails.answer ? <p>{entry.questionDetails.answer}</p> : null}</details> : null}
     </li>
   );
 }
@@ -543,29 +552,31 @@ function QuestionSurface({
   entryId: string;
   question: ChatQuestion & Readonly<{ status: "pending" | "answered" | "stopped" }>;
 }) {
+  const { t } = useTranslation("chat");
   return (
     <section className="chat-question-activity" data-entry-id={entryId}>
       <details>
         <summary>
           <Question aria-hidden="true" size={16} />
-          <span>{question.status === "answered" ? "Question answered" : question.status === "stopped" ? "Question stopped" : "Asking questions"}</span>
+          <span>{t(question.status === "answered" ? "questionAnswered" : question.status === "stopped" ? "questionStopped" : "askingQuestions")}</span>
           <CaretDown aria-hidden="true" size={13} />
         </summary>
         <p>{question.question}</p>
       </details>
       {active ? <button className="chat-question-waiting" onClick={controller.focusComposer} type="button">
-        <ListChecks aria-hidden="true" size={16} /><span>Waiting for your answer</span>
+        <ListChecks aria-hidden="true" size={16} /><span>{t("waitingAnswer")}</span>
       </button> : null}
     </section>
   );
 }
 
 function TurnOutcome({ entry }: { entry: Extract<TimelineEntry, { kind: "turn_outcome" }> }) {
+  const { t } = useTranslation("chat");
   if (entry.payload.status === "completed") {
     return <div hidden aria-hidden="true" data-entry-id={entry.entry_id} data-turn-outcome="completed" />;
   }
-  const explanation = entry.payload.errorCode === "OUTPUT_LIMIT" || entry.payload.errorCode === "CONTEXT_TOO_LARGE" || entry.payload.errorCode === "CONTEXT_COMPACTION_FAILED"
-    ? agentFailure(entry.payload.errorCode) : undefined;
+  const explanationCode = entry.payload.errorCode === "OUTPUT_LIMIT" || entry.payload.errorCode === "CONTEXT_TOO_LARGE" || entry.payload.errorCode === "CONTEXT_COMPACTION_FAILED"
+    ? entry.payload.errorCode : null;
   return (
     <div
       className={`chat-turn-outcome chat-turn-outcome-${entry.payload.status}`}
@@ -575,12 +586,12 @@ function TurnOutcome({ entry }: { entry: Extract<TimelineEntry, { kind: "turn_ou
       role={entry.payload.status === "failed" ? "alert" : "status"}
     >
       {entry.payload.status === "stopped" ? <StopCircle aria-hidden="true" size={14} /> : <WarningCircle aria-hidden="true" size={14} />}
-      {explanation === undefined ? <>
-        <span>{entry.payload.status === "stopped" ? "Turn stopped" : "Turn failed"}</span>
+      {explanationCode === null ? <>
+        <span>{t(entry.payload.status === "stopped" ? "turnStopped" : "turnFailed")}</span>
         {entry.payload.errorCode === undefined ? null : <code>{entry.payload.errorCode}</code>}
       </> : <span className="chat-turn-failure-explanation">
-        <strong>{explanation.label}</strong>
-        <span>{explanation.message}</span>
+        <strong>{t(`agentFailures.${explanationCode}.label`)}</strong>
+        <span>{t(`agentFailures.${explanationCode}.message`)}</span>
       </span>}
     </div>
   );
@@ -593,8 +604,9 @@ function CopyTextButton({
 }: {
   content: string;
   label: string;
-  onAnnounce: (message: string) => void;
+  onAnnounce: (message: ChatAnnouncement) => void;
 }) {
+  const { t } = useTranslation("chat");
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     if (!copied) return;
@@ -605,15 +617,15 @@ function CopyTextButton({
     try {
       await navigator.clipboard.writeText(content);
       setCopied(true);
-      onAnnounce("Copied to clipboard.");
+      onAnnounce("copied");
     } catch {
-      onAnnounce("Could not copy to clipboard.");
+      onAnnounce("copyFailed");
     }
   }
   return (
     <button aria-label={label} disabled={content.length === 0} onClick={() => void copy()} type="button">
       {copied ? <Check aria-hidden="true" size={14} /> : <Copy aria-hidden="true" size={14} />}
-      <span>Copy</span>
+      <span>{t("copy")}</span>
     </button>
   );
 }
@@ -622,7 +634,9 @@ function formatDuration(milliseconds: number): string {
   const seconds = Math.floor(milliseconds / 1_000);
   const minutes = Math.floor(seconds / 60);
   const remainingSeconds = seconds % 60;
-  return minutes === 0 ? `${remainingSeconds}s` : `${minutes}m ${remainingSeconds}s`;
+  return minutes === 0
+    ? i18n.t("chat:durationSeconds", { seconds: formatNumber(remainingSeconds) })
+    : i18n.t("chat:durationMinutes", { minutes: formatNumber(minutes), seconds: formatNumber(remainingSeconds) });
 }
 
 export function AssistantMarkdown({ content, streaming = false }: { content: string; streaming?: boolean }) {
@@ -659,15 +673,16 @@ function HiddenMarkdownImage(_props: React.ImgHTMLAttributes<HTMLImageElement> &
 }
 
 export function ChatIntroduction({ opening = false }: { opening?: boolean }) {
+  const { t } = useTranslation("chat");
   return (
     <section className="chat-empty-state">
       <span className="chat-empty-symbol" aria-hidden="true">α</span>
-      <p className="eyebrow">Research Agent</p>
-      <h1>Turn an investment idea into Alpha</h1>
+      <p className="eyebrow">{t("researchAgent")}</p>
+      <h1>{t("introTitle")}</h1>
       <p className="chat-empty-copy">
-        Describe the signal you want to investigate. Quantgrove will use the selected registered model and only this Chat's memory.
+        {t("introDescription")}
       </p>
-      {opening ? <p className="chat-history-status">Opening conversation…</p> : null}
+      {opening ? <p className="chat-history-status">{t("openingConversation")}</p> : null}
     </section>
   );
 }

@@ -25,7 +25,7 @@ export type AgentSessionPage = Readonly<{
 }>;
 
 export type SessionGroup = Readonly<{
-  label: "Today" | "Previous 7 days" | "Older";
+  id: "today" | "previous" | "older";
   sessions: readonly AgentSessionSummary[];
 }>;
 
@@ -346,19 +346,19 @@ export function groupSessionsByRecency(
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const previousSevenDays = new Date(today);
   previousSevenDays.setDate(previousSevenDays.getDate() - 7);
-  const buckets: Record<SessionGroup["label"], AgentSessionSummary[]> = {
-    Today: [],
-    "Previous 7 days": [],
-    Older: [],
+  const buckets: Record<SessionGroup["id"], AgentSessionSummary[]> = {
+    today: [],
+    previous: [],
+    older: [],
   };
   for (const session of sessions) {
     const activity = databaseInstantDate(session.activity_at);
-    if (activity >= today) buckets.Today.push(session);
-    else if (activity >= previousSevenDays) buckets["Previous 7 days"].push(session);
-    else buckets.Older.push(session);
+    if (activity >= today) buckets.today.push(session);
+    else if (activity >= previousSevenDays) buckets.previous.push(session);
+    else buckets.older.push(session);
   }
-  return (["Today", "Previous 7 days", "Older"] as const).flatMap((label) => (
-    buckets[label].length === 0 ? [] : [{ label, sessions: buckets[label] }]
+  return (["today", "previous", "older"] as const).flatMap((id) => (
+    buckets[id].length === 0 ? [] : [{ id, sessions: buckets[id] }]
   ));
 }
 

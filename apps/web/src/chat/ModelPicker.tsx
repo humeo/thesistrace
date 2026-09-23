@@ -1,8 +1,10 @@
 import { CaretDown, Check } from "@phosphor-icons/react";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useTranslation } from "react-i18next";
+import "../i18n";
 
 import type { ResolvedModelSelection } from "./chatState";
-import { reasoningEffortLabel, type AgentModelCatalog } from "./modelCatalog";
+import type { AgentModelCatalog, ReasoningEffort } from "./modelCatalog";
 
 export function ModelPicker({
   catalog,
@@ -15,6 +17,8 @@ export function ModelPicker({
   onReasoningChange: (reasoningEffort: string) => void;
   selection: ResolvedModelSelection | null;
 }) {
+  const { t } = useTranslation("chat");
+  const effortLabel = (effort: ReasoningEffort) => t(`reasoningLabels.${effort}`);
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -82,8 +86,8 @@ export function ModelPicker({
         aria-expanded={open}
         aria-haspopup="dialog"
         aria-label={selection === null
-          ? "Choose model and reasoning for the next Turn"
-          : `Model ${selection.model.display_name}, reasoning ${reasoningEffortLabel(selection.reasoningEffort)}`}
+          ? t("nextTurnModel")
+          : t("selectedModel", { model: selection.model.display_name, reasoning: effortLabel(selection.reasoningEffort) })}
         className="chat-model-picker-trigger"
         onClick={() => setOpen((current) => !current)}
         onKeyDown={(event) => {
@@ -95,19 +99,19 @@ export function ModelPicker({
         ref={triggerRef}
         type="button"
       >
-        <strong>{selection?.model.display_name ?? "Choose model"}</strong>
-        {selection === null ? null : <span>{reasoningEffortLabel(selection.reasoningEffort)}</span>}
+        <strong>{selection?.model.display_name ?? t("chooseModel")}</strong>
+        {selection === null ? null : <span>{effortLabel(selection.reasoningEffort)}</span>}
         <CaretDown aria-hidden="true" size={14} />
       </button>
       {!open ? null : (
         <div
-          aria-label="Model and reasoning for the next Turn"
+          aria-label={t("modelDialog")}
           className="chat-model-picker-menu"
           onKeyDown={handleMenuKeyDown}
           role="dialog"
         >
-          <div aria-label="Model" className="chat-model-picker-column" role="group">
-            <span>Model</span>
+          <div aria-label={t("model")} className="chat-model-picker-column" role="group">
+            <span>{t("model")}</span>
             {catalog.models.map((model) => {
               const selected = selection?.model.key === model.key;
               return (
@@ -124,8 +128,8 @@ export function ModelPicker({
               );
             })}
           </div>
-          <div aria-label="Reasoning" className="chat-model-picker-column" role="group">
-            <span>Reasoning</span>
+          <div aria-label={t("reasoning")} className="chat-model-picker-column" role="group">
+            <span>{t("reasoning")}</span>
             {selection?.model.reasoning_efforts.map((effort) => {
               const selected = selection.reasoningEffort === effort;
               return (
@@ -139,11 +143,11 @@ export function ModelPicker({
                   }}
                   type="button"
                 >
-                  <span>{reasoningEffortLabel(effort)}</span>
+                  <span>{effortLabel(effort)}</span>
                   {selected ? <Check aria-hidden="true" size={13} weight="bold" /> : null}
                 </button>
               );
-            }) ?? <span className="chat-model-picker-empty">Choose a model</span>}
+            }) ?? <span className="chat-model-picker-empty">{t("chooseModel")}</span>}
           </div>
         </div>
       )}

@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { ChatComposer } from "../../src/chat/ChatComposer";
 import type { ChatConversationController } from "../../src/chat/useChatConversation";
 import { formatChatAnswer } from "@thesistrace/contracts/chat-answer";
+import { LanguageControls } from "./language-controls";
 
 const noCommand = async () => undefined;
 
@@ -63,6 +64,8 @@ function ComposerFixture() {
     timelineError: false,
   };
   return (
+    <>
+    <div style={{ position: "absolute", right: 0, top: 0, zIndex: 10 }}><LanguageControls /></div>
     <main className="chat-main">
       <div className="chat-timeline-shell">
         <label>Test question mode <select aria-label="Test question mode" value={mode}
@@ -83,6 +86,7 @@ function ComposerFixture() {
       )}
     />
     </main>
+    </>
   );
 }
 

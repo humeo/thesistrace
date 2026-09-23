@@ -41,10 +41,11 @@ test("changing resource aborts the old load and cannot show its late response", 
 });
 test("reads DailyTrack observation and reports blocked state from Core", async () => {
   const id = "track_0123456789abcdef0123";
-  request.mockResolvedValue(new Response(JSON.stringify({ id, status: "blocked", origin: { seed_run_id: first, strategy_session: "2026-08-20" }, strategy_session: "2026-08-27", data_through_session: "2026-08-26", blocked_reason: "Required data is pending", observation: { session: "2026-08-27", net_return: 0.125, maximum_drawdown: -0.025 } })));
+  request.mockResolvedValue(new Response(JSON.stringify({ id, status: "blocked", origin: { seed_run_id: first, strategy_session: "2026-08-20" }, strategy_session: "2026-08-27", data_through_session: "2026-08-26", blocked_reason: "Required data is pending", blocked_code: "FINANCIAL_COVERAGE_UNAVAILABLE", observation: { session: "2026-08-27", net_return: 0.125, maximum_drawdown: -0.025 } })));
   root = createRoot(document.body.appendChild(document.createElement("div")));
   await act(async () => root.render(<ResearchResourceCards kind="track" ids={[id]} />));
-  expect(document.body.textContent).toContain("Required data is pending");
+  expect(document.body.textContent).toContain("Financial Coverage ends before the next Research Session.");
+  expect(document.body.textContent).not.toContain("Required data is pending");
   expect(document.body.textContent).toContain("12.50%");
   expect(document.body.textContent).toContain("-2.50%");
   expect(request.mock.calls[0][0]).toBe(`/api/daily-tracks/${id}`);

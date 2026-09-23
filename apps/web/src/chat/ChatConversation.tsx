@@ -3,10 +3,12 @@ import { UseAgentUpdate, useAgent } from "@copilotkit/react-core/v2/headless";
 import { useCopilotKit } from "@copilotkit/react-core/v2/context";
 import { ArrowUp, WarningCircle } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
+import "../i18n";
 
 import { createAgentFetch } from "./agentTransport";
 import { ChatComposer } from "./ChatComposer";
-import { ChatIntroduction, ChatTimeline } from "./ChatTimeline";
+import { ChatIntroduction, ChatTimeline, type ChatAnnouncement } from "./ChatTimeline";
 import type { ResolvedModelSelection } from "./chatState";
 import type { AgentSessionSummary } from "./sessionHistory";
 import { useChatConversation } from "./useChatConversation";
@@ -25,6 +27,7 @@ export function AgentConversation(props: Readonly<{
   titleMaySettle: boolean;
   threadId: string;
 }>) {
+  const { t } = useTranslation("chat");
   const { copilotkit } = useCopilotKit();
   const subscribe = useCallback((notify: () => void) => copilotkit.subscribe({
     onRuntimeConnectionStatusChanged: notify,
@@ -40,7 +43,7 @@ export function AgentConversation(props: Readonly<{
   if (!hasConnected && runtimeStatus !== "connected") {
     return (
       <StaticChatMain
-        error={runtimeStatus === "error" ? "The Research Agent could not be reached." : undefined}
+        error={runtimeStatus === "error" ? t("agentUnreachable") : undefined}
         modelControls={props.modelControls}
         opening={runtimeStatus !== "error"}
       />
@@ -67,13 +70,14 @@ function AuthoritativeConversation({
   agent,
   ...props
 }: Parameters<typeof AgentConversation>[0] & Readonly<{ agent: HttpAgent }>) {
-  const [announcement, setAnnouncement] = useState("");
+  const { t } = useTranslation("chat");
+  const [announcement, setAnnouncement] = useState<ChatAnnouncement | null>(null);
   const announcementTimerRef = useRef<number | null>(null);
-  const announce = useCallback((message: string) => {
+  const announce = useCallback((message: ChatAnnouncement) => {
     if (announcementTimerRef.current !== null) window.clearTimeout(announcementTimerRef.current);
     setAnnouncement(message);
     announcementTimerRef.current = window.setTimeout(() => {
-      setAnnouncement("");
+      setAnnouncement(null);
       announcementTimerRef.current = null;
     }, 2_000);
   }, []);
@@ -93,7 +97,7 @@ function AuthoritativeConversation({
       <main className="chat-main chat-main-new">
         <div className="chat-new-chat-start">
           <ChatIntroduction />
-          <ChatComposer announcement={announcement} controller={controller} modelControls={props.modelControls} />
+          <ChatComposer announcement={announcement === null ? "" : t(announcement)} controller={controller} modelControls={props.modelControls} />
         </div>
       </main>
     );
@@ -105,7 +109,7 @@ function AuthoritativeConversation({
       data-current-turn-id={controller.currentTurnId ?? undefined}
     >
       <ChatTimeline controller={controller} onAnnounce={announce} />
-      <ChatComposer announcement={announcement} controller={controller} modelControls={props.modelControls} />
+      <ChatComposer announcement={announcement === null ? "" : t(announcement)} controller={controller} modelControls={props.modelControls} />
     </main>
   );
 }
@@ -119,6 +123,7 @@ export function StaticChatMain({
   modelControls: ReactNode;
   opening?: boolean;
 }) {
+  const { t } = useTranslation("chat");
   return (
     <main className="chat-main chat-main-new">
       <div className="chat-new-chat-start">
@@ -128,15 +133,15 @@ export function StaticChatMain({
             <div className="chat-run-error" role="alert">
               <WarningCircle aria-hidden="true" size={15} />
               <span>{error}</span>
-              <button className="button-quiet" onClick={() => window.location.reload()} type="button">Reconnect</button>
+              <button className="button-quiet" onClick={() => window.location.reload()} type="button">{t("reconnect")}</button>
             </div>
           )}
           <div className="chat-composer-surface chat-composer-surface-locked">
-            <textarea aria-label="Message" disabled placeholder="Ask about an investment idea…" rows={2} />
+            <textarea aria-label={t("message")} disabled placeholder={t("newPlaceholder")} rows={2} />
             <div className="chat-composer-toolbar">
               <div className="chat-composer-toolbar-actions">
                 {modelControls}
-                <button aria-label="Send" className="chat-main-action" disabled type="button">
+                <button aria-label={t("send")} className="chat-main-action" disabled type="button">
                   <ArrowUp aria-hidden="true" size={18} weight="bold" />
                 </button>
               </div>

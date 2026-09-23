@@ -7,17 +7,37 @@ import { afterEach, expect, test, vi } from "vitest";
 import type { TimelineEntry, TimelineTurn } from "./chatProtocol";
 import { ChatTimeline } from "./ChatTimeline";
 import type { ChatConversationController } from "./useChatConversation";
+import { changeInterfaceLanguage } from "../i18n";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let root: Root | undefined;
 
 afterEach(async () => {
+  await act(async () => changeInterfaceLanguage("en"));
   await act(async () => root?.unmount());
   root = undefined;
   document.body.replaceChildren();
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+test("switches fixed streaming labels without rewriting authored messages or turn identity", async () => {
+  await mount(controller({
+    currentTurnId: TURN_ID, phase: "active", turns: [timelineTurn([
+      entry("user_input", "user:1", { content: "Keep my formula rank(close)", inputId: INPUT_ID, source: "prompt" }),
+      entry("tool_activity", "tool:1", { name: "run_factor", status: "running" }),
+      entry("assistant_message", "assistant:1", { content: "作者原文不变", status: "streaming" }),
+    ], { completed_at: null, status: "running" })],
+  }));
+  const turn = document.querySelector<HTMLElement>(`[data-turn-id="${TURN_ID}"]`);
+  const authored = document.querySelector(".chat-message-assistant")?.textContent;
+  await act(async () => changeInterfaceLanguage("zh-CN"));
+  expect(document.querySelector<HTMLElement>(`[data-turn-id="${TURN_ID}"]`)).toBe(turn);
+  expect(document.querySelector(".chat-message-assistant")?.textContent).toBe(authored);
+  expect(document.querySelector(".chat-message-user")?.textContent).toContain("Keep my formula rank(close)");
+  expect(document.querySelector(".chat-current-activity")?.textContent).toContain("正在运行 run factor");
+  expect(document.querySelector('[role="log"]')?.getAttribute("aria-label")).toBe("对话时间线");
 });
 
 test("renders each complete Turn in order with assistant text and right-aligned user input", async () => {
@@ -164,7 +184,7 @@ test("copies the complete assistant response once while retaining user Copy", as
   await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Copy response"]')?.click());
   expect(writeText).toHaveBeenCalledWith("First\n\nSecond");
   expect(document.querySelector('[aria-label="Copy your message"]')).not.toBeNull();
-  expect(announce).toHaveBeenCalledWith("Copied to clipboard.");
+  expect(announce).toHaveBeenCalledWith("copied");
   await act(async () => root?.unmount());
   root = undefined;
   expect(vi.getTimerCount()).toBe(0);

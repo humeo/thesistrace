@@ -7,7 +7,9 @@ import {
   useA2UI,
 } from "@copilotkit/a2ui-renderer";
 import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { z } from "zod";
+import "../i18n";
 
 import {
   parseResearchA2UINavigationHref,
@@ -113,39 +115,12 @@ const researchA2UICatalog = createCatalog(
     ),
     Divider: () => <hr className="chat-a2ui-divider" />,
     Formula: ({ props }) => <FormulaSurface expression={props.expression} label={props.label} />,
-    AlphaProposal: ({ props }) => (
-      <section aria-label={`Alpha proposal: ${props.title}`} className="chat-a2ui-domain-section chat-a2ui-proposal">
-        <header>
-          <span>Alpha proposal</span>
-          <strong>Chat-owned</strong>
-        </header>
-        <h2>{props.title}</h2>
-        <dl className="chat-a2ui-facts">
-          <Fact label="Hypothesis" value={props.hypothesis} wide />
-          <Fact label="Universe" value={props.universe} />
-          <Fact label="Period" value={props.period} />
-          <Fact label="Research type" value={props.researchType} />
-          {props.strategy.map((entry) => <Fact key={entry.label} label={entry.label} value={entry.value} />)}
-        </dl>
-        <div className="chat-a2ui-proposal-formula">
-          <span>Formula</span>
-          <code>{props.formula}</code>
-        </div>
-        <p>{props.explanation}</p>
-      </section>
-    ),
+    AlphaProposal: ({ props }) => <AlphaProposalSurface props={props} />,
     ResearchRun: ({ props }) => <ResearchResourceCards kind="run" ids={[props.runId]} />,
     ResearchComparison: ({ props }) => <ResearchResourceCards kind="run" ids={props.runIds} />,
     DailyTrack: ({ props }) => <ResearchResourceCards kind="track" ids={[props.trackId]} />,
     Table: ({ props }) => <ResearchTable {...props} />,
-    Navigation: ({ props }) => {
-      const href = parseResearchA2UINavigationHref(props.href);
-      return href === null ? (
-        <p className="chat-a2ui-error" role="alert">This research link is unavailable.</p>
-      ) : (
-        <a className="chat-a2ui-navigation" href={href}>{props.label}</a>
-      );
-    },
+    Navigation: ({ props }) => <ResearchNavigation href={props.href} label={props.label} />,
   },
   {
     catalogId: RESEARCH_A2UI_CATALOG_ID,
@@ -153,32 +128,66 @@ const researchA2UICatalog = createCatalog(
   },
 );
 
+function AlphaProposalSurface({ props }: { props: z.infer<typeof researchA2UICatalogDefinitions.AlphaProposal.props> }) {
+  const { t } = useTranslation("chat");
+  return (
+      <section aria-label={t("a2ui.alphaProposal", { title: props.title })} className="chat-a2ui-domain-section chat-a2ui-proposal">
+        <header>
+          <span>{t("a2ui.proposal")}</span>
+          <strong>{t("a2ui.chatOwned")}</strong>
+        </header>
+        <h2>{props.title}</h2>
+        <dl className="chat-a2ui-facts">
+          <Fact label={t("a2ui.hypothesis")} value={props.hypothesis} wide />
+          <Fact label={t("a2ui.universe")} value={props.universe} />
+          <Fact label={t("a2ui.period")} value={props.period} />
+          <Fact label={t("a2ui.researchType")} value={props.researchType} />
+          {props.strategy.map((entry) => <Fact key={entry.label} label={entry.label} value={entry.value} />)}
+        </dl>
+        <div className="chat-a2ui-proposal-formula">
+          <span>{t("a2ui.formulaWord")}</span>
+          <code>{props.formula}</code>
+        </div>
+        <p>{props.explanation}</p>
+      </section>
+  );
+}
+
+function ResearchNavigation({ href: sourceHref, label }: { href: string; label: string }) {
+  const { t } = useTranslation("chat");
+  const href = parseResearchA2UINavigationHref(sourceHref);
+  return href === null
+    ? <p className="chat-a2ui-error" role="alert">{t("a2ui.unavailableLink")}</p>
+    : <a className="chat-a2ui-navigation" href={href}>{label}</a>;
+}
+
 export function ResearchA2UIActivity({
   message,
 }: {
   message: ActivityMessage;
 }) {
+  const { t } = useTranslation("chat");
   if (message.activityType !== RESEARCH_A2UI_ACTIVITY_TYPE) return null;
   const projection = projectResearchA2UIContent(message.content);
   if (projection.kind === "loading") {
     return (
-      <article aria-label="Research surface is being prepared" className="chat-a2ui-lifecycle" role="status">
+      <article aria-label={t("a2ui.preparing")} className="chat-a2ui-lifecycle" role="status">
         <span aria-hidden="true" className="chat-a2ui-loading-mark" />
-        <span>{projection.content.status === "retrying" ? "Rebuilding research view…" : "Building research view…"}</span>
+        <span>{t(projection.content.status === "retrying" ? "a2ui.rebuilding" : "a2ui.building")}</span>
       </article>
     );
   }
   if (projection.kind === "error") {
     return (
       <article className="chat-a2ui-error" role="alert">
-        This research view could not be prepared. The conversation is still available.
-        <small>Reference: {message.id} · {String(projection.content.errorCode)}</small>
+        {t("a2ui.preparationFailed")}
+        <small>{t("a2ui.reference", { id: message.id, code: String(projection.content.errorCode) })}</small>
       </article>
     );
   }
   const operationsJson = JSON.stringify(projection.content.a2ui_operations);
   return (
-    <article aria-label="Research surface" className="chat-a2ui-surface">
+    <article aria-label={t("a2ui.surface")} className="chat-a2ui-surface">
       <A2UIProvider catalog={researchA2UICatalog} onAction={() => undefined}>
         <ReadyA2UIRenderer
           key={message.id}
@@ -190,6 +199,7 @@ export function ResearchA2UIActivity({
 }
 
 function ReadyA2UIRenderer({ operationsJson }: { operationsJson: string }) {
+  const { t } = useTranslation("chat");
   const { processMessages } = useA2UI();
   const operations = useMemo(() => (
     JSON.parse(operationsJson) as Array<Record<string, unknown>>
@@ -200,7 +210,7 @@ function ReadyA2UIRenderer({ operationsJson }: { operationsJson: string }) {
   }, [operations, processMessages]);
   return surfaceId === null ? (
     <p className="chat-a2ui-error" role="alert">
-      This research surface could not be displayed. The conversation is still available.
+      {t("a2ui.displayFailed")}
     </p>
   ) : (
     <A2UIRenderer
@@ -225,6 +235,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function FormulaSurface({ expression, label }: { expression: string; label?: string }) {
+  const { t } = useTranslation("chat");
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   async function copy(): Promise<void> {
     try {
@@ -235,14 +246,14 @@ function FormulaSurface({ expression, label }: { expression: string; label?: str
     }
   }
   return (
-    <section aria-label={label ?? "Alpha formula"} className="chat-a2ui-formula">
+    <section aria-label={label ?? t("a2ui.formula")} className="chat-a2ui-formula">
       <header>
-        <span>{label ?? "Alpha formula"}</span>
-        <button onClick={() => void copy()} type="button">Copy</button>
+        <span>{label ?? t("a2ui.formula")}</span>
+        <button onClick={() => void copy()} type="button">{t("copy")}</button>
       </header>
       <code>{expression}</code>
       <span aria-live="polite" className="visually-hidden">
-        {copyState === "copied" ? "Formula copied" : copyState === "failed" ? "Formula could not be copied" : ""}
+        {copyState === "copied" ? t("a2ui.formulaCopied") : copyState === "failed" ? t("a2ui.formulaCopyFailed") : ""}
       </span>
     </section>
   );

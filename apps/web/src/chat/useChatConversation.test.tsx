@@ -18,6 +18,7 @@ vi.mock("./chatProtocol", async (importOriginal) => {
 import { ChatApiError, loadCommandReceipt, loadTimelinePage, type TimelineTurn } from "./chatProtocol";
 import { loadAgentSession, type AgentSessionSummary } from "./sessionHistory";
 import { StagedInputStore, StagedInputStoreError, type StagedInput } from "./stagedInputStore";
+import { changeInterfaceLanguage } from "../i18n";
 import {
   mergeLatestTurns,
   prependOlderTurns,
@@ -34,6 +35,7 @@ let root: Root | undefined;
 let latestController: ChatConversationController | undefined;
 
 afterEach(async () => {
+  await act(async () => changeInterfaceLanguage("en"));
   await act(async () => root?.unmount());
   root = undefined;
   latestController = undefined;
@@ -100,6 +102,12 @@ test("keeps corrupt staged storage fail-closed without restarting the session co
   await vi.waitFor(() => {
     expect(container.textContent).toContain("Staged inputs could not be read.");
   });
+
+  await act(async () => changeInterfaceLanguage("zh-CN"));
+  expect(container.textContent).toContain("无法读取暂存输入");
+  expect(latestController?.queueLocked).toBe(true);
+  expect(loadAgentSession).toHaveBeenCalledTimes(1);
+  await act(async () => changeInterfaceLanguage("en"));
 
   // A corrupt read changes the queue lock, but must not restart the controller
   // effect and issue another opening request for the same Chat.

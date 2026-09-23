@@ -1,5 +1,6 @@
 import { ArrowUp, Check, PencilSimple, X } from "@phosphor-icons/react";
 import type { KeyboardEvent } from "react";
+import { useTranslation } from "react-i18next";
 
 import type { ChatQuestion } from "./chatProtocol";
 import type { ChatConversationController } from "./useChatConversation";
@@ -11,6 +12,7 @@ export function QuestionComposer({ controller, question, locked, tooLarge, onKey
   tooLarge: boolean;
   onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
 }) {
+  const { t } = useTranslation("chat");
   const multiple = question.selection_mode === "multi_select";
   const hasSelection = controller.answerSelections.length > 0;
   return (
@@ -18,19 +20,19 @@ export function QuestionComposer({ controller, question, locked, tooLarge, onKey
       <div className="chat-question-body">
         <header className="chat-question-header">
           <h2 id="chat-question-title">{question.question}</h2>
-          <button aria-label="Stop" className="chat-question-stop" disabled={locked}
-            onClick={() => void controller.stopTurn()} title="Stop this Turn" type="button">
+          <button aria-label={t("stop")} className="chat-question-stop" disabled={locked}
+            onClick={() => void controller.stopTurn()} title={t("stopTurn")} type="button">
             <X aria-hidden="true" size={17} />
           </button>
         </header>
         {question.options === null ? null : (
           <>
             <div className="chat-question-choice-help">
-              <span id="chat-question-choice-help">{multiple ? "Choose any that apply, or write your own" : "Choose one, or write your own"}</span>
-              {hasSelection ? <button disabled={locked} onClick={() => controller.setAnswerSelections([])} type="button">Clear</button> : null}
+              <span id="chat-question-choice-help">{t(multiple ? "choiceMultiple" : "choiceSingle")}</span>
+              {hasSelection ? <button disabled={locked} onClick={() => controller.setAnswerSelections([])} type="button">{t("clear")}</button> : null}
             </div>
             <fieldset aria-describedby="chat-question-choice-help" className="chat-question-choices" disabled={locked}>
-              <legend className="visually-hidden">{multiple ? "Select all that apply" : "Select one"}</legend>
+              <legend className="visually-hidden">{t(multiple ? "selectAll" : "selectOne")}</legend>
               {question.options.map((option, index) => {
                 const selected = controller.answerSelections.includes(option.label);
                 return (
@@ -55,12 +57,12 @@ export function QuestionComposer({ controller, question, locked, tooLarge, onKey
       </div>
       <div className="chat-question-answer-row">
         <PencilSimple aria-hidden="true" size={17} />
-        <textarea aria-label="Answer" aria-describedby={tooLarge ? "chat-composer-guidance chat-composer-validation" : "chat-composer-guidance"}
+        <textarea aria-label={t("answerLabel")} aria-describedby={tooLarge ? "chat-composer-guidance chat-composer-validation" : "chat-composer-guidance"}
           aria-invalid={tooLarge || undefined} disabled={locked}
           onChange={(event) => controller.setDraft(event.target.value)} onKeyDown={onKeyDown}
-          placeholder={hasSelection ? "Add a note (optional)…" : "Write your own answer…"}
+          placeholder={t(hasSelection ? "answerNote" : "answerPlaceholder")}
           ref={controller.textareaRef} rows={1} value={controller.draft} />
-        <button aria-label="Send answer" className="chat-question-send" type="submit"
+        <button aria-label={t("answer")} className="chat-question-send" type="submit"
           disabled={locked || controller.action.kind !== "answer" || !controller.action.enabled}>
           <ArrowUp aria-hidden="true" size={17} weight="bold" />
         </button>

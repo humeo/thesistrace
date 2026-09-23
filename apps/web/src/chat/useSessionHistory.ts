@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import "../i18n";
+import type { ChatErrorKey } from "../i18n/messages/chat";
 
 import {
   AgentSessionInvalidError,
@@ -33,7 +36,7 @@ export type SessionHistoryController = Readonly<{
 }>;
 
 export type SessionHistoryState = Readonly<{
-  error: string | null;
+  error: ChatErrorKey | null;
   generation: number;
   loadingMore: boolean;
   nextCursor: string | null;
@@ -70,6 +73,7 @@ function initialState(ownerId: string, generation = 0): SessionHistoryState {
 }
 
 export function useSessionHistory(researcherId: string): SessionHistoryController {
+  const { t } = useTranslation("chat");
   const [state, setState] = useState<SessionHistoryState>(() => initialState(researcherId));
   const [refreshVersion, setRefreshVersion] = useState(0);
   const researcherRef = useRef(researcherId);
@@ -123,7 +127,7 @@ export function useSessionHistory(researcherId: string): SessionHistoryControlle
         && current.generation === generation
         ? {
             ...current,
-            error: "Chat history could not be loaded.",
+            error: "historyLoad",
             loadingMore: false,
             nextCursor: null,
             status: current.sessions.length === 0 ? "error" : "ready",
@@ -189,7 +193,7 @@ export function useSessionHistory(researcherId: string): SessionHistoryControlle
       ) return;
       setState((current) => ({
         ...current,
-        error: "More Chats could not be loaded.",
+        error: "historyMore",
         loadingMore: false,
       }));
     } finally {
@@ -296,7 +300,7 @@ export function useSessionHistory(researcherId: string): SessionHistoryControlle
             changed = true;
             return next;
           });
-          const activityError = "Chat activity could not be refreshed.";
+          const activityError = "historyActivity";
           const error = updates.includes(null)
             ? current.error ?? activityError
             : current.error === activityError ? null : current.error;
@@ -311,7 +315,7 @@ export function useSessionHistory(researcherId: string): SessionHistoryControlle
 
   return {
     deleteSession,
-    error: visible.error,
+    error: visible.error === null ? null : t(`errors.${visible.error}`),
     loadMore,
     loadingMore: visible.loadingMore,
     nextCursor: visible.nextCursor,
@@ -356,7 +360,7 @@ export function sessionHistoryReducer(
   } catch {
     return {
       ...state,
-      error: "Chat history response was invalid.",
+      error: "historyInvalid",
       loadingMore: false,
       nextCursor: null,
       status: "error",

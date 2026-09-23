@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
 import { resources } from "./resources";
+import { i18n } from "./index";
 
 function messages(value: unknown, path = ""): Map<string, string> {
   if (typeof value === "string") return new Map([[path, value]]);
@@ -19,5 +20,16 @@ test("both bundled languages cover the same messages and interpolation parameter
     expect(text.trim(), key).not.toBe("");
     expect(chinese.get(key)?.trim(), key).not.toBe("");
     expect(parameters(chinese.get(key)!), key).toEqual(parameters(text));
+  }
+});
+
+test("Chat status pluralization resolves in both bundled languages", async () => {
+  try {
+    expect(i18n.t("chat:status.staged", { count: 1 })).toBe(" 1 input staged.");
+    expect(i18n.t("chat:status.staged", { count: 2 })).toBe(" 2 inputs staged.");
+    await i18n.changeLanguage("zh-CN");
+    expect(i18n.t("chat:status.staged", { count: 2 })).toBe(" 已暂存 2 条输入。");
+  } finally {
+    await i18n.changeLanguage("en");
   }
 });

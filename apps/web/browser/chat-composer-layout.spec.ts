@@ -40,6 +40,26 @@ test.beforeEach(async ({ page }) => {
   await page.evaluate(() => document.fonts.ready);
 });
 
+test("language switch preserves an unsent prompt and a pending-question answer at 320px", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 780 });
+  const prompt = page.getByRole("textbox", { name: "Message" });
+  await prompt.fill("My own signal stays unchanged");
+  await prompt.focus();
+  await page.getByRole("button", { name: "简体中文", exact: true }).evaluate(element => (element as HTMLButtonElement).click());
+  await expect(page.getByRole("textbox", { name: "消息" })).toHaveValue("My own signal stays unchanged");
+  await expect(page.getByRole("textbox", { name: "消息" })).toBeFocused();
+  await expect(page.getByRole("button", { name: "发送", exact: true })).toBeEnabled();
+  await page.getByLabel("Test question mode").selectOption("multi_select");
+  await page.getByText("Quality", { exact: true }).click();
+  await page.getByRole("textbox", { name: "回答" }).fill("Keep the authored answer");
+  const choices = page.getByRole("checkbox", { name: "Quality" });
+  await expect(choices).toBeChecked();
+  await page.getByRole("button", { name: "English", exact: true }).evaluate(element => (element as HTMLButtonElement).click());
+  await expect(page.getByRole("textbox", { name: "Answer" })).toHaveValue("Keep the authored answer");
+  await expect(choices).toBeChecked();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
 for (const mobile of [false, true]) {
   test(`question composer supports options plus text, custom-only and Stop on ${mobile ? "mobile" : "desktop"}`, async ({ page }) => {
     await page.setViewportSize(mobile ? { width: 390, height: 844 } : { width: 1159, height: 964 });

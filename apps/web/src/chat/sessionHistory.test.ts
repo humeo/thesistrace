@@ -78,12 +78,12 @@ describe("Agent Chat Session history", () => {
     ];
 
     expect(groupSessionsByRecency(sessions, now).map((group) => ({
-      label: group.label,
+      id: group.id,
       titles: group.sessions.map((candidate) => candidate.title),
     }))).toEqual([
-      { label: "Today", titles: ["Today"] },
-      { label: "Previous 7 days", titles: ["Yesterday", "Seven days"] },
-      { label: "Older", titles: ["Older"] },
+      { id: "today", titles: ["Today"] },
+      { id: "previous", titles: ["Yesterday", "Seven days"] },
+      { id: "older", titles: ["Older"] },
     ]);
   });
 

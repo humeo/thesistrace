@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { useWorkspace } from "../shell/AppShell";
 import { handleWorkspaceNavigation, type WorkspaceNavigate } from "../shell/navigation";
@@ -85,6 +86,7 @@ export function ChatContent({
   sessionHistory: SessionHistoryController;
   thread?: BrowserChatThread;
 }) {
+  const { t } = useTranslation("chat");
   const [requestedModelKey, setRequestedModelKey] = useState<string | null>(null);
   const [requestedReasoning, setRequestedReasoning] = useState<string | null>(null);
   const [acceptedThreadId, setAcceptedThreadId] = useState<string | null>(null);
@@ -143,7 +145,7 @@ export function ChatContent({
           || selectedSessionState.status === "loading"
         ) ? (
           <AuthoritativeStaticChatMain
-            modelControls={<p className="chat-catalog-status" role="status">Loading Session settings…</p>}
+            modelControls={<p className="chat-catalog-status" role="status">{t("loadingSettings")}</p>}
             opening
           />
         ) : thread.kind === "session" && (
@@ -151,7 +153,7 @@ export function ChatContent({
           || selectedSessionState.status !== "ready"
         ) ? (
           <AuthoritativeStaticChatMain
-            error="The Research Agent Session could not be loaded."
+            error={t("sessionLoadFailed")}
             modelControls={null}
           />
         ) : (
@@ -175,20 +177,19 @@ export function ChatContent({
 }
 
 function ChatNotFoundMain({ navigate }: { navigate: () => void }) {
+  const { t } = useTranslation("chat");
   return (
     <main className="chat-main chat-not-found-main">
       <section className="chat-not-found" role="alert">
-        <p className="eyebrow">Chat Session</p>
-        <h1>Chat not found</h1>
-        <p>
-          This Chat does not exist or is not available to the current Researcher.
-        </p>
+        <p className="eyebrow">{t("session")}</p>
+        <h1>{t("chatNotFound")}</h1>
+        <p>{t("chatNotFoundDescription")}</p>
         <a
           className="button button-primary"
           href="/chat"
           onClick={(event) => handleWorkspaceNavigation(event, navigate)}
         >
-          Start a New Chat
+          {t("newChat")}
         </a>
       </section>
     </main>
@@ -210,14 +211,15 @@ function CatalogControls({
   selection: ReturnType<typeof resolveModelSelection> | null;
   selectionRequired: boolean;
 }) {
+  const { t } = useTranslation("chat");
   if (catalogState.status === "loading") {
-    return <p className="chat-catalog-status" role="status">Loading registered models…</p>;
+    return <p className="chat-catalog-status" role="status">{t("loadingModels")}</p>;
   }
   if (catalogState.status === "ready" && selectionRequired) {
     return (
       <div className="chat-model-picker-with-error">
         <p className="visually-hidden" role="alert">
-          The previous model selection is no longer available. Choose a registered model.
+          {t("modelUnavailable")}
         </p>
         <ModelPicker
           catalog={catalogState.catalog}
@@ -230,16 +232,16 @@ function CatalogControls({
   }
   if (catalogState.status !== "ready" || selection === null) {
     const message = catalogState.status === "authentication-required"
-      ? "Your Agent Session could not be verified. Log in again to continue."
+      ? t("agentAuthentication")
       : catalogState.status === "invalid"
-        ? "The registered model Catalog is invalid."
-        : "The Agent Host is unavailable.";
+        ? t("invalidCatalog")
+        : t("agentHostUnavailable");
     return (
       <div className="chat-catalog-error" role="alert">
         <span>{message}</span>
         {catalogState.status !== "authentication-required" ? (
           <button className="button-quiet" onClick={reloadCatalog} type="button">
-            Retry
+            {t("retry")}
           </button>
         ) : null}
       </div>

@@ -15,6 +15,9 @@ import {
   type KeyboardEvent,
 } from "react";
 import { createPortal } from "react-dom";
+import { Trans, useTranslation } from "react-i18next";
+import { i18n } from "../i18n";
+import type { ChatErrorKey } from "../i18n/messages/chat";
 
 import { chatSessionHref } from "./chatNavigation";
 import { handleWorkspaceNavigation } from "../shell/navigation";
@@ -57,6 +60,8 @@ export function SessionHistoryList({
   navigationInteractive: boolean;
   restoreFocus: (deletedCurrentSession: boolean) => void;
 }) {
+  const { t } = useTranslation("chat");
+  const displayTitle = (title: string) => title === "Untitled" ? t("untitled") : title;
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [menuPlacement, setMenuPlacement] = useState<SessionMenuPlacement | null>(null);
   const [dialog, setDialog] = useState<SessionDialog | null>(null);
@@ -220,31 +225,31 @@ export function SessionHistoryList({
     <p
       className="chat-session-status chat-session-status-loading"
       role="status"
-      title="Loading Chats…"
+      title={t("historyLoading")}
     >
-      Loading Chats…
+      {t("historyLoading")}
     </p>
   ) : controller.status === "error" && controller.sessions.length === 0 ? (
       <div className="chat-session-status chat-session-status-error">
         <p role="alert">{controller.error}</p>
-        <button className="button-quiet" onClick={controller.refresh} type="button">Retry</button>
+        <button className="button-quiet" onClick={controller.refresh} type="button">{t("retry")}</button>
       </div>
   ) : controller.sessions.length === 0 ? (
-      <div className="chat-session-empty" title="No conversations yet">
+      <div className="chat-session-empty" title={t("historyEmpty")}>
         <ChatCircle aria-hidden="true" size={16} weight="regular" />
-        <span className="chat-session-empty-full">No conversations yet</span>
-        <span className="chat-session-empty-compact">Empty</span>
+        <span className="chat-session-empty-full">{t("historyEmpty")}</span>
+        <span className="chat-session-empty-compact">{t("empty")}</span>
       </div>
   ) : (
     <>
       <div className="chat-session-groups">
         {groups.map((group) => (
-          <section aria-labelledby={`chat-session-group-${group.label.replaceAll(" ", "-")}`} key={group.label}>
+          <section aria-labelledby={`chat-session-group-${group.id}`} key={group.id}>
             <h3
-              data-collapsed-label={collapsedGroupLabel(group.label)}
-              id={`chat-session-group-${group.label.replaceAll(" ", "-")}`}
+              data-collapsed-label={collapsedGroupLabel(group.id)}
+              id={`chat-session-group-${group.id}`}
             >
-              {group.label}
+              {t(`recency.${group.id}`)}
             </h3>
             <div className="chat-session-list">
               {group.sessions.map((session) => (
@@ -254,14 +259,14 @@ export function SessionHistoryList({
                 >
                   <a
                     aria-current={session.id === currentSessionId ? "page" : undefined}
-                    aria-label={`${session.title}${session.current_turn === null ? "" : `, ${session.current_turn.status === "waiting_for_user" ? "Waiting for answer" : "Running"}`}`}
+                    aria-label={`${displayTitle(session.title)}${session.current_turn === null ? "" : `, ${t(session.current_turn.status === "waiting_for_user" ? "waitingShort" : "runningShort")}`}`}
                     href={chatSessionHref(session.id)}
                     onClick={(event) => handleWorkspaceNavigation(event, () => {
                       if (session.id !== currentSessionId) navigate(chatSessionHref(session.id));
                     })}
-                    title={`${session.title}${session.current_turn === null ? "" : session.current_turn.status === "waiting_for_user" ? " — Waiting for answer" : " — Running"}`}
+                    title={`${displayTitle(session.title)}${session.current_turn === null ? "" : ` — ${t(session.current_turn.status === "waiting_for_user" ? "waitingShort" : "runningShort")}`}`}
                   >
-                    <span>{session.title}</span>
+                    <span>{displayTitle(session.title)}</span>
                     {session.current_turn === null ? null : (
                       <em aria-hidden="true" className="chat-session-turn-state">
                         {session.current_turn.status === "waiting_for_user"
@@ -276,7 +281,7 @@ export function SessionHistoryList({
                       : undefined}
                     aria-expanded={openMenu === session.id}
                     aria-haspopup="menu"
-                    aria-label={`Actions for ${session.title}`}
+                    aria-label={t("actionsFor", { name: displayTitle(session.title) })}
                     className="chat-session-menu-trigger"
                     onClick={(event) => toggleMenu(session.id, event.currentTarget)}
                     ref={(element) => {
@@ -309,7 +314,7 @@ export function SessionHistoryList({
           onClick={() => void controller.loadMore()}
           type="button"
         >
-          {controller.loadingMore ? "Loading…" : "Load more"}
+          {t(controller.loadingMore ? "loadingMore" : "loadMore")}
         </button>
       )}
     </>
@@ -325,7 +330,7 @@ export function SessionHistoryList({
         ? null
         : createPortal(
             <div
-              aria-label={`Actions for ${openMenuSession.title}`}
+              aria-label={t("actionsFor", { name: displayTitle(openMenuSession.title) })}
               className="chat-session-menu"
               id={`chat-session-menu-${openMenuSession.id}`}
               onKeyDown={(event) => handleMenuKeyDown(event, () => closeMenu(true))}
@@ -338,7 +343,7 @@ export function SessionHistoryList({
                 type="button"
               >
                 <NotePencil aria-hidden="true" size={15} />
-                Rename
+                {t("rename")}
               </button>
               {openMenuSession.current_turn === null ? (
                 <button
@@ -347,7 +352,7 @@ export function SessionHistoryList({
                   type="button"
                 >
                   <Trash aria-hidden="true" size={15} />
-                  Delete Chat
+                  {t("deleteChat")}
                 </button>
               ) : null}
             </div>,
@@ -376,10 +381,11 @@ function SessionDecisionDialog({
   onClose: () => void;
   onDeleted: (sessionId: string) => void;
 }) {
+  const { t } = useTranslation("chat");
   const panelRef = useRef<HTMLDialogElement>(null);
   const initialFocusRef = useRef<HTMLInputElement | HTMLButtonElement>(null);
   const [title, setTitle] = useState(dialog.session.title);
-  const [error, setError] = useState<string | null>(null);
+  const [errorKey, setErrorKey] = useState<ChatErrorKey | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
@@ -401,7 +407,7 @@ function SessionDecisionDialog({
     event.preventDefault();
     if (submitting) return;
     setSubmitting(true);
-    setError(null);
+    setErrorKey(null);
     try {
       if (dialog.kind === "rename") {
         await controller.renameSession(dialog.session, title);
@@ -414,22 +420,20 @@ function SessionDecisionDialog({
       }
     } catch (caught) {
       if (caught instanceof AgentSessionChangedError) {
-        setError("This Chat title changed. Close the dialog and try again.");
+        setErrorKey("titleChanged");
         controller.refresh();
       } else if (caught instanceof AgentSessionActiveRunError) {
-        setError("This Chat now has an active Agent run and cannot be deleted.");
+        setErrorKey("activeRun");
         controller.refresh();
       } else if (caught instanceof AgentSessionNotFoundError) {
-        setError("This Chat no longer exists.");
+        setErrorKey("chatGone");
         controller.refresh();
       } else if (caught instanceof AgentSessionTitleInvalidError) {
-        setError(sessionDialogErrorMessage(dialog.kind, caught));
+        setErrorKey(sessionDialogErrorKey(dialog.kind, caught));
       } else if (caught instanceof AgentSessionInvalidError) {
-        setError(sessionDialogErrorMessage(dialog.kind, caught));
+        setErrorKey(sessionDialogErrorKey(dialog.kind, caught));
       } else {
-        setError(dialog.kind === "rename"
-          ? "The Chat title could not be saved."
-          : "The Chat could not be deleted.");
+        setErrorKey(dialog.kind === "rename" ? "renameFailed" : "deleteFailed");
       }
     } finally {
       setSubmitting(false);
@@ -477,17 +481,17 @@ function SessionDecisionDialog({
     >
       <header>
         <div>
-          <p className="eyebrow">Chat Session</p>
-          <h2 id={titleId}>{dialog.kind === "rename" ? "Rename Chat" : "Delete Chat?"}</h2>
+          <p className="eyebrow">{t("session")}</p>
+          <h2 id={titleId}>{t(dialog.kind === "rename" ? "renameChat" : "deleteChatQuestion")}</h2>
         </div>
-        <button aria-label="Close dialog" disabled={submitting} onClick={dismissDialog} type="button">
+        <button aria-label={t("closeDialog")} disabled={submitting} onClick={dismissDialog} type="button">
           <X aria-hidden="true" size={18} />
         </button>
       </header>
       <form onSubmit={(event) => void submit(event)}>
         {dialog.kind === "rename" ? (
           <label className="chat-session-title-field">
-            <span>Title</span>
+            <span>{t("title")}</span>
             <input
               onChange={(event) => setTitle(event.target.value)}
               ref={initialFocusRef as React.RefObject<HTMLInputElement>}
@@ -496,16 +500,12 @@ function SessionDecisionDialog({
             />
           </label>
         ) : (
-          <p id={descriptionId}>
-            Permanently delete <strong>{dialog.session.title}</strong> and its Chat thread,
-            messages, generated UI, and Agent run history. ResearchRuns, Results, and
-            Daily Tracks remain independent and are not deleted.
-          </p>
+          <p id={descriptionId}><Trans i18nKey="deleteDescription" ns="chat" components={{ name: <strong>{dialog.session.title === "Untitled" ? t("untitled") : dialog.session.title}</strong> }} /></p>
         )}
         {dialog.kind === "rename" ? (
-          <p id={descriptionId}>This changes the single title shown for this Chat Session.</p>
+          <p id={descriptionId}>{t("renameDescription")}</p>
         ) : null}
-        {error === null ? null : <p className="chat-dialog-error" role="alert">{error}</p>}
+        {errorKey === null ? null : <p className="chat-dialog-error" role="alert">{t(`errors.${errorKey}`)}</p>}
         <footer>
           <button
             className="button-quiet"
@@ -516,16 +516,16 @@ function SessionDecisionDialog({
               : undefined}
             type="button"
           >
-            Cancel
+            {t("cancel")}
           </button>
           <button
             className={dialog.kind === "delete" ? "button-danger" : "button-primary"}
             disabled={submitting}
             type="submit"
           >
-            {submitting
-              ? dialog.kind === "delete" ? "Deleting…" : "Saving…"
-              : dialog.kind === "delete" ? "Delete Chat" : "Save title"}
+            {t(submitting
+              ? dialog.kind === "delete" ? "deleting" : "saving"
+              : dialog.kind === "delete" ? "deleteChat" : "saveTitle")}
           </button>
         </footer>
       </form>
@@ -533,16 +533,23 @@ function SessionDecisionDialog({
   );
 }
 
+export function sessionDialogErrorKey(
+  kind: SessionDialog["kind"],
+  error: AgentSessionInvalidError | AgentSessionTitleInvalidError,
+): ChatErrorKey {
+  if (error instanceof AgentSessionTitleInvalidError) {
+    return "titleInvalid";
+  }
+  return kind === "rename"
+    ? "titleResponseInvalid"
+    : "deleteResponseInvalid";
+}
+
 export function sessionDialogErrorMessage(
   kind: SessionDialog["kind"],
   error: AgentSessionInvalidError | AgentSessionTitleInvalidError,
 ): string {
-  if (error instanceof AgentSessionTitleInvalidError) {
-    return "Choose a title between 1 and 80 characters other than Untitled.";
-  }
-  return kind === "rename"
-    ? "The Chat title response was invalid."
-    : "The delete response was invalid.";
+  return i18n.t(`chat:errors.${sessionDialogErrorKey(kind, error)}`);
 }
 
 function handleMenuKeyDown(
@@ -572,10 +579,10 @@ function handleMenuKeyDown(
   items[next]?.focus();
 }
 
-function collapsedGroupLabel(label: "Today" | "Previous 7 days" | "Older"): string {
-  switch (label) {
-    case "Today": return "T";
-    case "Previous 7 days": return "7d";
-    case "Older": return "O";
+function collapsedGroupLabel(id: "today" | "previous" | "older"): string {
+  switch (id) {
+    case "today": return "T";
+    case "previous": return "7d";
+    case "older": return "O";
   }
 }

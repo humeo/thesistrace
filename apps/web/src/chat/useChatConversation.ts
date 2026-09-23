@@ -1,5 +1,8 @@
 import { HttpAgent, type AgentSubscriber } from "@ag-ui/client";
 import { useCallback, useEffect, useRef, useState, type SetStateAction } from "react";
+import { useTranslation } from "react-i18next";
+import { i18n } from "../i18n";
+import type { ChatErrorKey } from "../i18n/messages/chat";
 
 import { formatChatAnswer, isChatAnswer, type ChatAnswer } from "@thesistrace/contracts/chat-answer";
 
@@ -93,6 +96,7 @@ export function useChatConversation(options: Readonly<{
   threadId: string;
   titleMaySettle: boolean;
 }>): ChatConversationController {
+  const { t } = useTranslation("chat");
   const [session, setSession] = useState<AgentSessionSummary | null>(
     options.existingSession ? options.initialSession ?? null : null,
   );
@@ -109,7 +113,7 @@ export function useChatConversation(options: Readonly<{
   const [queue, setQueue] = useState<readonly StagedInput[]>([]);
   const [queueLocked, setQueueLocked] = useState(false);
   const [stageWriting, setStageWriting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ChatErrorKey | null>(null);
   const [errorCode, setErrorCode] = useState<string | null>(null);
   const [recovery, setRecovery] = useState<Recovery | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -232,7 +236,7 @@ export function useChatConversation(options: Readonly<{
       if (generationRef.current !== generation) return;
       setQueueLocked(failure instanceof StagedInputStoreError
         && failure.code === "STAGE_STORAGE_CORRUPT");
-      setError("Staged inputs could not be read. Nothing was deleted; retry after storage is available.");
+      setError("stageRead");
     }
   }, [options.researcherId, options.threadId]);
 
@@ -305,7 +309,7 @@ export function useChatConversation(options: Readonly<{
           if (generationRef.current !== generation) return false;
           queueLockedRef.current = true;
           setQueueLocked(true);
-          setError("Staged input storage is damaged. Automatic delivery is disabled without deleting anything.");
+          setError("stageDamagedDelivery");
           return false;
         }
         const head = items[0];
@@ -326,7 +330,7 @@ export function useChatConversation(options: Readonly<{
             } else {
               setRecovery({ clearAnswer: false, commandId: head.inputId, draft: null, item: head });
               setLocalCommand("recovering");
-              setError("Acceptance is still pending. The staged input remains protected.");
+              setError("acceptancePending");
             }
             return true;
           } catch (failure) {
@@ -334,7 +338,7 @@ export function useChatConversation(options: Readonly<{
             if (!(failure instanceof ChatApiError && failure.status === 404)) {
               setRecovery({ clearAnswer: false, commandId: head.inputId, draft: null, item: head });
               setLocalCommand("recovering");
-              setError("The staged input receipt could not be checked. It remains protected.");
+              setError("receiptCheck");
               return false;
             }
             await storeRef.current.release(head);
@@ -359,7 +363,7 @@ export function useChatConversation(options: Readonly<{
       if (generationRef.current !== generation) return false;
       queueLockedRef.current = true;
       setQueueLocked(true);
-      setError("Staged input coordination is unavailable. Inputs remain stored and automatic delivery is disabled.");
+      setError("stageCoordination");
       return false;
     }
   // startPrompt is a stable declaration backed by refs; adding it here would
@@ -420,7 +424,7 @@ export function useChatConversation(options: Readonly<{
       setOpening(false);
     } catch (failure) {
       if (failure instanceof DOMException && failure.name === "AbortError") return;
-      setError("The authoritative Chat state could not be refreshed.");
+      setError("stateRefresh");
     }
   }, [loadLatestTimeline, observeSession, options.existingSession, options.threadId]);
 
@@ -496,12 +500,12 @@ export function useChatConversation(options: Readonly<{
         if (target.clearAnswer) setSubmittingQuestion(null);
         setRecovery(null);
         setLocalCommand("none");
-        setError("The command was rejected before the Turn was accepted. Your input was restored.");
+        setError("commandRejected");
         return null;
       }
       setRecovery(target);
       setLocalCommand("recovering");
-      setError("Acceptance is not yet known. Your input is retained until the server confirms it.");
+      setError("acceptanceUnknown");
       return null;
     }
   }
@@ -940,7 +944,7 @@ export function useChatConversation(options: Readonly<{
       }).catch((failure: unknown) => {
         if (generationRef.current !== generation) return;
         if (!(failure instanceof DOMException && failure.name === "AbortError")) {
-          setError("The Chat could not be opened.");
+          setError("openChat");
           setOpening(false);
         }
       });
@@ -1012,7 +1016,8 @@ export function useChatConversation(options: Readonly<{
 
   const latestTurnStatus = session?.latest_turn?.status ?? null;
   const latestTurnId = session?.latest_turn?.id ?? null;
-  const statusAnnouncement = error ?? statusCopy(phase, latestTurnStatus, queue.length);
+  const localizedError = error === null ? null : t(`errors.${error}`);
+  const statusAnnouncement = localizedError ?? statusCopy(phase, latestTurnStatus, queue.length);
   return {
     action,
     answerSelections,
@@ -1020,7 +1025,7 @@ export function useChatConversation(options: Readonly<{
     draft,
     draftBytes,
     editStaged,
-    error,
+    error: localizedError,
     errorCode,
     executeMainAction,
     focusComposer,
@@ -1066,59 +1071,59 @@ export function prependOlderTurns(
   return [...older.filter((turn) => !existing.has(turn.id)), ...current];
 }
 
-function stageErrorCopy(error: unknown): string {
+function stageErrorCopy(error: unknown): ChatErrorKey {
   if (error instanceof StagedInputStoreError && error.code === "STAGE_LIMIT") {
-    return "This Chat already has 20 staged inputs. Send, edit, or delete one before staging another.";
+    return "stageLimit";
   }
   if (error instanceof StagedInputStoreError && error.code === "STAGE_STORAGE_CORRUPT") {
-    return "Staged input storage is damaged. Nothing was deleted and queue actions are disabled.";
+    return "stageDamaged";
   }
-  return "The input could not be staged. Your draft is still available.";
+  return "stageFailed";
 }
 
-function apiErrorCopy(error: unknown): string {
+function apiErrorCopy(error: unknown): ChatErrorKey {
   if (error instanceof ChatApiError) return commandErrorCopy(error.code);
-  return "The Agent service is unavailable. No input was discarded.";
+  return "agentUnavailable";
 }
 
-function commandErrorCopy(code: string | null): string {
+function commandErrorCopy(code: string | null): ChatErrorKey {
   switch (code) {
-    case "STALE_CHAT_TURN": return "The active Turn changed before this command arrived. Refresh and try again.";
-    case "CHAT_TURN_NOT_STEERABLE": return "This Turn cannot accept Steer input.";
-    case "CHAT_QUESTION_NOT_FOUND": return "The question is no longer waiting for an answer.";
-    case "CHAT_COMMAND_CONFLICT": return "This input identity was already used for a different command.";
-    case "CHAT_CAPABILITY_UNAVAILABLE": return "The requested runtime capability is no longer available.";
-    case "CHAT_STORAGE_FAILURE": return "Chat storage is temporarily unavailable. Your local input was retained.";
-    default: return "The Agent command could not be completed. Your local input was retained.";
+    case "STALE_CHAT_TURN": return "staleTurn";
+    case "CHAT_TURN_NOT_STEERABLE": return "notSteerable";
+    case "CHAT_QUESTION_NOT_FOUND": return "questionMissing";
+    case "CHAT_COMMAND_CONFLICT": return "commandConflict";
+    case "CHAT_CAPABILITY_UNAVAILABLE": return "capabilityUnavailable";
+    case "CHAT_STORAGE_FAILURE": return "storageFailure";
+    default: return "commandFailed";
   }
 }
 
-function rejectedRunErrorCopy(code: string): string {
+function rejectedRunErrorCopy(code: string): ChatErrorKey {
   if (code === "AGENT_CAPACITY") {
-    return "Agent at capacity. The Turn was not accepted and your input was restored.";
+    return "agentCapacity";
   }
   if (code === "AUTHENTICATION_REQUIRED") {
-    return "Authentication was rejected before the Turn was accepted. Your input was restored.";
+    return "authenticationRejected";
   }
-  return "The command was rejected before the Turn was accepted. Your input was restored.";
+  return "commandRejected";
 }
 
 function statusCopy(phase: ChatPhase, latestTurnStatus: ChatTurnStatus | null, queued: number): string {
-  const queueCopy = queued === 0 ? "" : ` ${queued} input${queued === 1 ? "" : "s"} staged.`;
+  const queueCopy = queued === 0 ? "" : i18n.t("chat:status.staged", { count: queued });
   switch (phase) {
-    case "new": return `Ready for a new Chat.${queueCopy}`;
-    case "opening": return `Opening the Turn.${queueCopy}`;
+    case "new": return `${i18n.t("chat:status.new")}${queueCopy}`;
+    case "opening": return `${i18n.t("chat:status.opening")}${queueCopy}`;
     case "idle": {
       const outcome = latestTurnStatus === "completed"
-        ? "Run complete."
+        ? i18n.t("chat:status.complete")
         : latestTurnStatus === "failed"
-          ? "Run failed."
-          : latestTurnStatus === "stopped" ? "Turn stopped." : "Ready.";
+          ? i18n.t("chat:status.failed")
+          : latestTurnStatus === "stopped" ? i18n.t("chat:status.stopped") : i18n.t("chat:status.ready");
       return `${outcome}${queueCopy}`;
     }
-    case "active": return `Research Agent is working.${queueCopy}`;
-    case "waiting_for_user": return `The Research Agent is waiting for your answer.${queueCopy}`;
-    case "stopping": return `Stopping the current Turn.${queueCopy}`;
-    case "recovering": return `Confirming whether the last command was accepted.${queueCopy}`;
+    case "active": return `${i18n.t("chat:status.active")}${queueCopy}`;
+    case "waiting_for_user": return `${i18n.t("chat:status.waiting")}${queueCopy}`;
+    case "stopping": return `${i18n.t("chat:status.stopping")}${queueCopy}`;
+    case "recovering": return `${i18n.t("chat:status.recovering")}${queueCopy}`;
   }
 }
