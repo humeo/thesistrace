@@ -18,7 +18,7 @@ from psycopg import OperationalError
 from psycopg.types.json import Jsonb
 from psycopg_pool import PoolTimeout
 
-from thesistrace._paging import fit_page
+from thesistrace._paging import BUSINESS_PAGE_BYTES, fit_page
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.benchmark import (
     StrategyComparisonFacts,
@@ -116,15 +116,20 @@ from thesistrace.research_kernel import (
     equivalence_bytes,
     first_divergence,
 )
+from thesistrace.research_kernel.capacity import DecisionMode
 from thesistrace.research_kernel.common_inputs import (
     common_input_references,
     requires_common_industry,
 )
+from thesistrace.research_kernel.framework_strategy import FrameworkModules
+from thesistrace.research_kernel.strategy_program_runtime import STATE_BYTES, StrategyProgramFailure
+from thesistrace.research_kernel.terminal_state_schema import FRAMEWORK_STATE_BYTES
 from thesistrace.research_series import (
     research_sessions,
     slice_research_sessions,
 )
 from thesistrace.researcher.quota import QuotaPolicyLookup, unavailable_quota_policy
+from thesistrace.strategy_event_wire import MAX_TARGET_RECORD_BYTES
 from thesistrace.strategy_evidence import (
     StrategyEventPageRead,
     StrategyEventQuery,
@@ -513,7 +518,7 @@ class DailyTrackService:
         track_id = f"track_{uuid4().hex[:20]}"
         boundary = origin.initial_strategy_state.session
         provenance = {
-            "schema_version": "daily-track-activation-checkpoint-v3",
+            "schema_version": "daily-track-activation-checkpoint-v4",
             "daily_track_id": track_id,
             "seed_run_id": origin.seed_run_id,
             "boundary_session": boundary,
@@ -526,7 +531,7 @@ class DailyTrackService:
                 **StrategyEvidencePublication().finish(),
                 "checkpoint": CompressedJsonPayload(
                     {
-                        "schema_version": "daily-track-activation-checkpoint-v3",
+                        "schema_version": "daily-track-activation-checkpoint-v4",
                         "tracking_observation_state": initial_tracking_observation_state(
                             boundary, origin.initial_strategy_state.net_nav,
                         ).model_dump(mode="json"),
@@ -696,25 +701,26 @@ class DailyTrackService:
                                 phase="result_ready",
                             )
                         )
-                        prepared, provenance, holding_prepared = self._prepare_current_result(
-                            current_claim,
-                            execution.result,
-                        )
-                        self._progress(
-                            "prepared",
-                            current_claim.track_id,
-                            current_claim.data_generation_id,
-                        )
-                        execution.acknowledge(
-                            stop_requested=lambda: self._stop_is_pending(current_claim)
-                        )
-                        published = self._publish_current(
-                            current_claim,
-                            prepared,
-                            provenance,
-                            execution.result.terminal_strategy_state,
-                            holding_prepared,
-                        )
+                        with self._publication.staging():
+                            prepared, provenance, holding_prepared = self._prepare_current_result(
+                                current_claim,
+                                execution.result,
+                            )
+                            self._progress(
+                                "prepared",
+                                current_claim.track_id,
+                                current_claim.data_generation_id,
+                            )
+                            execution.acknowledge(
+                                stop_requested=lambda: self._stop_is_pending(current_claim)
+                            )
+                            published = self._publish_current(
+                                current_claim,
+                                prepared,
+                                provenance,
+                                execution.result.terminal_strategy_state,
+                                holding_prepared,
+                            )
                         emit(
                             _tracking_event(
                                 "tracking_phase_completed",
@@ -1209,6 +1215,7 @@ class DailyTrackService:
         admission = self._generation_store.open_admission(current.generation_manifest_sha256)
         origin = TrackingOrigin.model_validate(track["origin"])
         planning = _origin_planning_facts(origin)
+        decision_mode, python_program_count = _origin_decision_capacity(origin)
         maximum_universe_cardinality = self._generation_store.maximum_universe_cardinality(
             admission.generation.manifest_sha256,
             universe=origin_universe(origin),
@@ -1223,6 +1230,7 @@ class DailyTrackService:
             maximum_universe_cardinality=maximum_universe_cardinality,
             effective_lookback=planning["effective_lookback"],
             execution_memory_bytes=self._execution_memory_bytes,
+            decision_mode=decision_mode, python_program_count=python_program_count,
         )
         return not plan.capacity_blocked and len(plan.target_sessions) >= len(target_sessions)
 
@@ -2066,10 +2074,11 @@ class DailyTrackService:
                             "net_cash",
                             "gross_nav",
                             "net_nav",
+                            "close_risk_nav_cny",
                             "cumulative_transaction_cost",
-                            "selection_phase",
-                            "target_selection",
-                            "target_exposure",
+                            "research_phase",
+                            "decision_state",
+                            "contract_checksum",
                             "pending_target",
                         )
                     },
@@ -2095,13 +2104,19 @@ class DailyTrackService:
                         ),
                     }
                 ),
+                byte_budget=(
+                    BUSINESS_PAGE_BYTES
+                    + MAX_TARGET_RECORD_BYTES
+                    + (FRAMEWORK_STATE_BYTES
+                       if account.decision_state.mode == "framework" else STATE_BYTES)
+                ),
             )
         if isinstance(query, DailyTrackProvenanceResultSectionInput):
             immutable = origin.immutable_input
-            strategy = _mapping_value(
-                immutable.get("strategy"),
-                "Tracking frozen Strategy input",
-            )
+            from thesistrace.research_definition import authorable_research_input
+
+            authorable = authorable_research_input(immutable)
+            authorable.pop("research_kind")
             semantic_versions = _mapping_value(
                 immutable.get("semantic_versions"),
                 "Tracking semantic versions",
@@ -2117,20 +2132,7 @@ class DailyTrackService:
                     "immutable_input_sha256": hashlib.sha256(
                         canonical_json_bytes(immutable)
                     ).hexdigest(),
-                    "frozen_research_input": {
-                        "formula": immutable["formula_source"],
-                        "hypothesis": immutable.get("hypothesis"),
-                        "start_date": immutable["requested_start_date"],
-                        "end_date": immutable["requested_end_date"],
-                        "universe": immutable["universe"],
-                        "neutralization": immutable["neutralization"],
-                        "initial_cash_cny": strategy["initial_cash_cny"],
-                        "holdings_count": strategy["holdings_count"],
-                        "selection_every_sessions": strategy["selection_every_sessions"],
-                        "exposure_expression": strategy["exposure_source"],
-                        "weighting": strategy["weighting"],
-                        "volatility_window": strategy["volatility_window"],
-                    },
+                    "frozen_research_input": authorable,
                     "origin_data_through_session": origin.seed_data_through_session,
                     "tracking_strategy_session": current_session,
                     "checkpoint_manifest_sha256": current_manifest,
@@ -2391,11 +2393,12 @@ class DailyTrackService:
                                 "net_cash",
                                 "gross_nav",
                                 "net_nav",
+                                "close_risk_nav_cny",
                                 "cumulative_transaction_cost",
                                 "positions",
-                                "selection_phase",
-                                "target_selection",
-                                "target_exposure",
+                                "research_phase",
+                                "decision_state",
+                                "contract_checksum",
                                 "pending_target",
                             )
                         },
@@ -2712,6 +2715,7 @@ class DailyTrackService:
                 )
                 planning_candidates = target_sessions[:MAX_CHUNK_SESSION_COUNT]
                 planning = _origin_planning_facts(origin)
+                decision_mode, python_program_count = _origin_decision_capacity(origin)
                 maximum_universe_cardinality = self._generation_store.maximum_universe_cardinality(
                     generation.manifest_sha256,
                     universe=origin_universe(origin),
@@ -2728,6 +2732,7 @@ class DailyTrackService:
                     maximum_universe_cardinality=maximum_universe_cardinality,
                     effective_lookback=planning["effective_lookback"],
                     execution_memory_bytes=execution_memory_bytes,
+                    decision_mode=decision_mode, python_program_count=python_program_count,
                 )
                 planned_target_sessions = tuple(value.isoformat() for value in plan.target_sessions)
                 if existing is None:
@@ -3408,7 +3413,7 @@ class DailyTrackService:
     ) -> Mapping[str, object] | None:
         if (
             self._working_cache is None
-            or predecessor.get("schema_version") != "daily-track-checkpoint-v3"
+            or predecessor.get("schema_version") != "daily-track-checkpoint-v5"
         ):
             return None
         try:
@@ -3433,7 +3438,7 @@ class DailyTrackService:
         if checkpoint.boundary_session != claim.target_sessions[-1]:
             raise RuntimeError("Tracking child returned an invalid Target boundary")
         provenance = {
-            "schema_version": "daily-track-checkpoint-v3",
+            "schema_version": "daily-track-checkpoint-v5",
             "daily_track_id": claim.track_id,
             "predecessor_manifest_sha256": claim.predecessor_manifest_sha256,
             "boundary_session": checkpoint.boundary_session,
@@ -3586,6 +3591,8 @@ class DailyTrackService:
         blocked_reason: str = PUBLIC_BLOCKED_REASON,
     ) -> _TrackingFailure | None:
         assert self._dataset_lifecycle is not None
+        if isinstance(error, StrategyProgramFailure):
+            blocked_reason = str(error)
         retryable = _tracking_failure_is_retryable(error)
         failure_reason = "InfrastructureFailure" if retryable else type(error).__name__
         retry_wait = tracking_attempt_retry_eligible(
@@ -3810,11 +3817,22 @@ def _origin_planning_facts(origin: TrackingOrigin) -> dict[str, int]:
         }
     except (KeyError, TypeError, ValueError) as error:
         raise RuntimeError("DailyTrack frozen planning input is invalid") from error
-    if any(value <= 0 for key, value in facts.items() if key != "effective_lookback"):
-        raise RuntimeError("DailyTrack frozen planning input is invalid")
-    if facts["effective_lookback"] < 0:
+    if any(value < 0 for value in facts.values()):
         raise RuntimeError("DailyTrack frozen planning input is invalid")
     return facts
+
+
+def _origin_decision_capacity(origin: TrackingOrigin) -> tuple[DecisionMode, int]:
+    strategy = origin.immutable_input.get("strategy")
+    if not isinstance(strategy, Mapping):
+        raise RuntimeError("DailyTrack frozen strategy planning input is invalid")
+    kind = strategy.get("kind")
+    if kind == "direct":
+        return "direct", 1
+    if kind == "framework":
+        modules = FrameworkModules.model_validate(strategy.get("modules"))
+        return "framework", len(modules.programs())
+    raise RuntimeError("DailyTrack frozen strategy planning input is invalid")
 
 
 _TRACK_SELECT = """
@@ -4162,9 +4180,9 @@ def _read_publication_json(
     value = decode_compressed_json(payload)
     value = _mapping_value(value, "DailyTrack product payload")
     schema = value.get("schema_version")
-    if schema == "daily-track-checkpoint-v3":
+    if schema == "daily-track-checkpoint-v5":
         KernelStateCheckpoint.model_validate(value)
-    elif schema == "daily-track-activation-checkpoint-v3":
+    elif schema == "daily-track-activation-checkpoint-v4":
         expected = {"schema_version", "terminal_strategy_state", "tracking_observation_state"}
         if set(value) != expected:
             raise RuntimeError("Activation checkpoint fields are invalid")

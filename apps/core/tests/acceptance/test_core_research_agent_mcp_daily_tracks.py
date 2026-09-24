@@ -591,7 +591,10 @@ async def _exercise_daily_tracks(settings: CoreSettings, tmp_path: Path) -> None
     )
 
     async with _mcp_client(settings, tmp_path / "track-manual-catch-up.stderr.log") as client:
-        for index in range(6):
+        initial = await client.call_tool("get_daily_track", {"track_id": transient_track_id})
+        assert initial.is_error is False
+        refresh_bound = initial.structured_content["progress"]["lag_sessions"] + 1
+        for index in range(refresh_bound):
             current = await client.call_tool(
                 "get_daily_track",
                 {"track_id": transient_track_id},
@@ -609,7 +612,7 @@ async def _exercise_daily_tracks(settings: CoreSettings, tmp_path: Path) -> None
             completed = await anyio.to_thread.run_sync(_run_tracking_worker_once, settings)
             assert_worker_succeeded(completed)
         else:
-            raise AssertionError("DailyTrack did not catch up after six explicit Refreshes")
+            raise AssertionError("DailyTrack did not catch up within the initial session-lag bound")
 
     async with _mcp_client(settings, tmp_path / "track-reconnect.stderr.log") as client:
         advanced = await client.call_tool("get_daily_track", {"track_id": track_id})
@@ -1709,7 +1712,7 @@ def _assert_compact_track(
 ) -> None:
     serialized = str(payload).lower()
     assert payload["available_result_sections"] == [
-        "strategy_targets", "strategy_orders", "strategy_child_orders",
+        "strategy_framework", "strategy_targets", "strategy_orders", "strategy_child_orders",
         "strategy_fills", "strategy_adjustments", "strategy_execution_constraints",
         "daily_holdings_status", "daily_holdings",
         "strategy_summary", "strategy_observations", "origin", "provenance",

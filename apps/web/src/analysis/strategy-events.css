@@ -37,6 +37,17 @@
 .strategy-event-record-toolbar button { border: 0; background: transparent; color: var(--primary); }
 .strategy-event-record pre { margin: 8px 0; max-height: 230px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 var(--mono); color: var(--ink-muted); }
 .strategy-event-record p[role="alert"] { font-size: 12px; color: var(--danger); }
+.framework-decision-details { margin-bottom: 16px; color: var(--ink-muted); line-height: 1.6; }
+.framework-decision-details section { border-top: 1px solid var(--line); padding: 10px 0; }
+.framework-decision-details h4 { margin: 0 0 4px; color: var(--ink); font-size: 13px; font-weight: 500; }
+.framework-decision-details p { margin: 4px 0; }
+.framework-decision-details summary { cursor: pointer; min-height: 30px; display: list-item; align-content: center; }
+.framework-decision-details :is(ul, dl, .framework-instruments) { max-height: 180px; overflow: auto; overflow-wrap: anywhere; }
+.framework-decision-details dl > div { margin: 6px 0; }
+.framework-decision-details dd { margin: 0; font-family: var(--mono); }
+@media (any-pointer: coarse) {
+  .framework-decision-details summary { min-height: 44px; min-width: 44px; }
+}
 .strategy-event-links, .strategy-events nav { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .strategy-event-links button { min-height: 30px; padding: 4px 7px; }
 .strategy-events nav { justify-content: flex-end; padding: 12px 0 0; font-size: 12px; }

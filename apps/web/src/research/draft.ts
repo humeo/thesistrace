@@ -1,3 +1,16 @@
+import { drawdownDraft, drawdownFields, drawdownIssues, emptyDrawdownInputs, type DrawdownInputs, type DrawdownField } from "./portfolioDrawdown";
+import { readTakeProfitDraft, takeProfitDraft, takeProfitIssues, type TakeProfitField, type TakeProfitTierDraft } from "./takeProfit";
+import { costFields, costInputError, defaultSimulationCosts, readCostInputs, type CostField, type SimulationCosts } from "./simulationCosts";
+import {
+  DIRECT_EXAMPLE, emptyProgramInputs, programDraft, programInputFields, programInputIssues,
+  parseProgramParameters, programSpec, type ProgramInputField, type ProgramInputs, type PythonProgram,
+} from "./pythonStrategy";
+import {
+  builtinModulesDraft, frameworkDraft, frameworkSpec, frameworkStages, frozenStopLossPercentage, stopLossInputError, frozenMaximumHoldingSessions, frozenMinimumHoldingSessions, holdingSessionsInputError,
+  type FrameworkModules, type FrameworkModulesDraft, type FrameworkStage,
+} from "./frameworkModules";
+import { frameworkExample } from "./frameworkExamples";
+
 export type PortfolioWeighting = "equal_weight" | "rank_weight" | "inverse_volatility";
 
 export type EditorState = {
@@ -5,8 +18,14 @@ export type EditorState = {
   head: number;
 };
 
-export type ResearchInputs = {
+export type ResearchInputs = ProgramInputs & DrawdownInputs & {
   researchKind: "factor_evaluation" | "strategy_backtest";
+  strategyMode: "framework" | "direct";
+  frameworkModules: FrameworkModulesDraft;
+  takeProfitTiers: TakeProfitTierDraft[];
+  stopLossThreshold: string;
+  maximumHoldingSessions: string;
+  minimumHoldingSessions: string;
   name: string;
   formula: string;
   hypothesis: string;
@@ -15,6 +34,7 @@ export type ResearchInputs = {
   universe: string;
   neutralization: string;
   initialCashCny: string;
+  costs: SimulationCosts;
   holdingsCount: string;
   selectionEverySessions: string;
   exposureExpression: string;
@@ -32,12 +52,10 @@ type CommonResearchRunAdmissionCommand = {
   request_id: string;
   folder_id: string;
   name: string | null;
-  formula: string;
   hypothesis: string | null;
   start_date: string;
   end_date: string;
   universe: string;
-  neutralization: string;
 };
 
 export type ResearchRunAdmissionCommand = ResearchSpec & Pick<
@@ -45,24 +63,35 @@ export type ResearchRunAdmissionCommand = ResearchSpec & Pick<
 >;
 
 type CommonFrozenResearchAuthorableInput = {
-  formula: string;
   hypothesis: string | null;
   start_date: string;
   end_date: string;
   universe: "top300" | "top1000" | "top2000" | "top3000";
-  neutralization: "none" | "industry";
 };
 
 export type FrozenResearchAuthorableInput = CommonFrozenResearchAuthorableInput & ({
   research_kind: "factor_evaluation";
+  formula: string;
+  neutralization: "none" | "industry";
 } | {
   research_kind: "strategy_backtest";
+  strategy_mode: "framework";
+  modules: FrameworkModules;
+  formula?: string;
+  neutralization?: "none" | "industry";
   initial_cash_cny: string;
-  holdings_count: number;
-  selection_every_sessions: number;
-  exposure_expression: string;
-  weighting: PortfolioWeighting;
-  volatility_window: number;
+  costs: SimulationCosts;
+  holdings_count?: number;
+  selection_every_sessions?: number;
+  exposure_expression?: string;
+  weighting?: PortfolioWeighting;
+  volatility_window?: number;
+} | {
+  research_kind: "strategy_backtest";
+  strategy_mode: "direct";
+  initial_cash_cny: string;
+  costs: SimulationCosts;
+  program: PythonProgram;
 });
 
 export type ResearchDraft = ResearchInputs & {
@@ -71,7 +100,8 @@ export type ResearchDraft = ResearchInputs & {
   pendingAdmission: PendingResearchRun | null;
 };
 
-const MAX_DRAFT_BYTES = 64 * 1024;
+const MAX_DRAFT_BYTES = 2 * 1024 * 1024;
+const DRAFT_STORAGE_SCHEMA = "research-draft/v7";
 const MAX_FORMULA_LENGTH = 4_096;
 export const MAX_HYPOTHESIS_LENGTH = 1_024;
 const MAX_TEXT_LENGTH = 10_000;
@@ -79,6 +109,12 @@ const MAX_TEXT_LENGTH = 10_000;
 export function emptyResearchDraft(): ResearchDraft {
   return {
     researchKind: "factor_evaluation",
+    strategyMode: "framework",
+    takeProfitTiers: [], ...emptyDrawdownInputs(),
+    stopLossThreshold: "",
+    maximumHoldingSessions: "",
+    minimumHoldingSessions: "",
+    ...emptyProgramInputs(), frameworkModules: builtinModulesDraft(),
     name: "",
     formula: "",
     hypothesis: "",
@@ -86,7 +122,7 @@ export function emptyResearchDraft(): ResearchDraft {
     endDate: "",
     universe: "",
     neutralization: "none",
-    initialCashCny: "",
+    initialCashCny: "", costs: defaultSimulationCosts(),
     holdingsCount: "",
     selectionEverySessions: "",
     exposureExpression: "1",
@@ -125,7 +161,16 @@ export function persistResearchDraft(
   folderId: string,
   draft: ResearchDraft,
 ): void {
-  const encoded = JSON.stringify(draft);
+  // Keep one copy of unchanged source/parameters. Snapshots are differences
+  // from the visible inputs, so later edits still preserve accepted/pending input.
+  const current = researchInputs(draft);
+  const encoded = JSON.stringify({
+    ...draft, storageSchema: DRAFT_STORAGE_SCHEMA,
+    lastAdmittedBaseline: draft.lastAdmittedBaseline === null ? null : inputChanges(draft.lastAdmittedBaseline, current),
+    pendingAdmission: draft.pendingAdmission === null ? null : { ...draft.pendingAdmission,
+      inputs: inputChanges(draft.pendingAdmission.inputs, current),
+    },
+  });
   if (new TextEncoder().encode(encoded).byteLength > MAX_DRAFT_BYTES) {
     throw new Error("Research Draft exceeds the browser storage limit");
   }
@@ -148,8 +193,10 @@ export function selectResearchKind(
 ): ResearchDraft {
   return researchKind === "factor_evaluation" ? {
     ...draft,
-    researchKind,
-    initialCashCny: "",
+    researchKind, strategyMode: "framework",
+    ...emptyProgramInputs(), frameworkModules: builtinModulesDraft(),
+    neutralization: draft.neutralization || "none",
+    initialCashCny: "", costs: defaultSimulationCosts(),
     holdingsCount: "",
     selectionEverySessions: "",
     exposureExpression: "1",
@@ -164,6 +211,54 @@ export function selectResearchKind(
   };
 }
 
+export function selectStrategyMode(draft: ResearchDraft, mode: ResearchInputs["strategyMode"]): ResearchDraft {
+  if (draft.strategyMode === mode) return draft;
+  return mode === "direct" ? {
+    ...draft, strategyMode: mode, formula: "", neutralization: "", holdingsCount: "",
+    selectionEverySessions: "", exposureExpression: "", weighting: "equal_weight", volatilityWindow: "",
+    programSource: DIRECT_EXAMPLE, programParameters: '{"improvement": 0.02}',
+    programFields: "price.close.adjusted", programHistorySessions: "6",
+    frameworkModules: builtinModulesDraft(),
+    editor: { anchor: 0, head: 0 }, pendingAdmission: null,
+  } : {
+    ...draft, strategyMode: mode, ...emptyProgramInputs(), frameworkModules: builtinModulesDraft(),
+    formula: "", neutralization: "none", holdingsCount: "10", selectionEverySessions: "5",
+    exposureExpression: "1", weighting: "equal_weight", volatilityWindow: "20",
+    editor: { anchor: 0, head: 0 }, pendingAdmission: null,
+  };
+}
+
+export function selectFrameworkModule(
+  draft: ResearchDraft, stage: FrameworkStage, kind: "builtin" | "python",
+): ResearchDraft {
+  if (draft.frameworkModules[stage].kind === kind) return draft;
+  const next: ResearchDraft = {
+    ...draft, pendingAdmission: null,
+    frameworkModules: { ...draft.frameworkModules, [stage]: {
+      kind, program: kind === "python" ? frameworkExample(stage) : emptyProgramInputs(),
+    } },
+  };
+  if (stage === "alpha") Object.assign(next, {
+    formula: "", neutralization: kind === "builtin" ? "none" : "", editor: { anchor: 0, head: 0 },
+  });
+  if (stage === "portfolio_construction") Object.assign(next, {
+    holdingsCount: kind === "builtin" ? "10" : "", selectionEverySessions: kind === "builtin" ? "5" : "",
+    exposureExpression: kind === "builtin" ? "1" : "", weighting: "equal_weight",
+    volatilityWindow: kind === "builtin" ? "20" : "",
+  });
+  return next;
+}
+
+export function usesBuiltinAlpha(inputs: ResearchInputs): boolean {
+  return inputs.researchKind === "factor_evaluation" || (inputs.strategyMode === "framework"
+    && inputs.frameworkModules.alpha.kind === "builtin");
+}
+
+export function usesBuiltinPortfolio(inputs: ResearchInputs): boolean {
+  return inputs.researchKind === "strategy_backtest" && inputs.strategyMode === "framework"
+    && inputs.frameworkModules.portfolio_construction.kind === "builtin";
+}
+
 export function beginResearchRun(
   draft: ResearchDraft,
   folderId: string,
@@ -173,7 +268,7 @@ export function beginResearchRun(
   const existing = draft.pendingAdmission;
   const pending = existing !== null &&
     existing.folderId === folderId &&
-    JSON.stringify(existing.inputs) === JSON.stringify(inputs)
+    sameInputs(existing.inputs, inputs)
     ? existing
     : { requestId: createRequestId(), folderId, inputs };
   return {
@@ -188,36 +283,39 @@ export function beginResearchRun(
 }
 
 export type ResearchSpec = Omit<CommonResearchRunAdmissionCommand, "request_id" | "folder_id" | "name"> & (
-  { research_kind: "factor_evaluation" } | {
-    research_kind: "strategy_backtest";
-    initial_cash_cny: string;
-    holdings_count: number;
-    selection_every_sessions: number;
-    exposure_expression: string;
-  weighting: PortfolioWeighting;
-  volatility_window: number;
+  { research_kind: "factor_evaluation"; formula: string; neutralization: string } | {
+    research_kind: "strategy_backtest"; strategy_mode: "framework";
+    modules: FrameworkModules;
+    formula?: string; neutralization?: string; initial_cash_cny: string; costs: SimulationCosts;
+    holdings_count?: number; selection_every_sessions?: number; exposure_expression?: string;
+    weighting?: PortfolioWeighting; volatility_window?: number;
+  } | {
+    research_kind: "strategy_backtest"; strategy_mode: "direct";
+    initial_cash_cny: string; costs: SimulationCosts; program: PythonProgram;
   }
 );
 
 export function researchSpec(inputs: ResearchInputs): ResearchSpec {
   const common = {
-    formula: inputs.formula,
     hypothesis: inputs.hypothesis.trim() === "" ? null : inputs.hypothesis,
-    start_date: inputs.startDate,
-    end_date: inputs.endDate,
-    universe: inputs.universe,
-    neutralization: inputs.neutralization,
+    start_date: inputs.startDate, end_date: inputs.endDate, universe: inputs.universe,
   };
+  if (inputs.researchKind === "strategy_backtest" && inputs.strategyMode === "direct") return {
+    ...common, research_kind: "strategy_backtest", strategy_mode: "direct",
+    initial_cash_cny: inputs.initialCashCny, costs: { ...inputs.costs },
+    program: programSpec(inputs),
+  };
+  const alpha = { formula: inputs.formula, neutralization: inputs.neutralization };
   return inputs.researchKind === "factor_evaluation" ? {
-    ...common, research_kind: "factor_evaluation",
+    ...common, ...alpha, research_kind: "factor_evaluation",
   } : {
-    ...common, research_kind: "strategy_backtest",
-    initial_cash_cny: inputs.initialCashCny,
-    holdings_count: Number(inputs.holdingsCount),
-    selection_every_sessions: Number(inputs.selectionEverySessions),
-    exposure_expression: inputs.exposureExpression,
-    weighting: inputs.weighting,
-    volatility_window: Number(inputs.volatilityWindow),
+    ...common, research_kind: "strategy_backtest", strategy_mode: "framework",
+    modules: frameworkSpec(inputs.frameworkModules, inputs), initial_cash_cny: inputs.initialCashCny, costs: { ...inputs.costs },
+    ...(usesBuiltinAlpha(inputs) ? alpha : {}),
+    ...(usesBuiltinPortfolio(inputs) ? {
+      holdings_count: Number(inputs.holdingsCount), selection_every_sessions: Number(inputs.selectionEverySessions),
+      exposure_expression: inputs.exposureExpression, weighting: inputs.weighting, volatility_window: Number(inputs.volatilityWindow),
+    } : {}),
   };
 }
 
@@ -257,25 +355,61 @@ export function isValidInitialCash(value: string): boolean {
   return BigInt(whole + fraction.padEnd(2, "0")) <= 100000000000n;
 }
 
-export type ResearchInputField = "formula" | "hypothesis" | "startDate" | "endDate" | "universe" | "neutralization" | "initialCashCny" | "holdingsCount" | "selectionEverySessions" | "exposureExpression" | "volatilityWindow";
+export type ResearchInputField = DrawdownField | TakeProfitField | `costs.${CostField}` | ProgramInputField | `${FrameworkStage}.${ProgramInputField}`
+  | "formula" | "hypothesis" | "startDate" | "endDate" | "universe" | "neutralization" | "initialCashCny"
+  | "stopLossThreshold" | "maximumHoldingSessions" | "minimumHoldingSessions" | "holdingsCount" | "selectionEverySessions" | "exposureExpression" | "volatilityWindow";
 export type ResearchInputIssue = { field: ResearchInputField; message: string };
 
 export function researchInputIssues(inputs: ResearchInputs): ResearchInputIssue[] {
   const issues: ResearchInputIssue[] = [];
-  if (!inputs.formula.trim()) issues.push({ field: "formula", message: "Enter an Alpha formula." });
+  const direct = inputs.researchKind === "strategy_backtest" && inputs.strategyMode === "direct";
+  if (usesBuiltinAlpha(inputs) && !inputs.formula.trim()) issues.push({ field: "formula", message: "Enter an Alpha formula." });
   if (!/^\d{4}-\d{2}-\d{2}$/.test(inputs.startDate)) issues.push({ field: "startDate", message: "Choose a start date." });
   if (!/^\d{4}-\d{2}-\d{2}$/.test(inputs.endDate)) issues.push({ field: "endDate", message: "Choose an end date." });
   else if (inputs.startDate > inputs.endDate) issues.push({ field: "endDate", message: "End date must be on or after start date." });
   if (!["top300", "top1000", "top2000", "top3000"].includes(inputs.universe)) issues.push({ field: "universe", message: "Choose a stock universe." });
-  if (!["none", "industry"].includes(inputs.neutralization)) issues.push({ field: "neutralization", message: "Choose a neutralization method." });
+  if (usesBuiltinAlpha(inputs) && !["none", "industry"].includes(inputs.neutralization)) issues.push({ field: "neutralization", message: "Choose a neutralization method." });
+  if (inputs.researchKind === "strategy_backtest" && !isValidInitialCash(inputs.initialCashCny)) issues.push({ field: "initialCashCny", message: "Initial cash must be 0.01–1,000,000,000 CNY, with up to two decimal places." });
   if (inputs.researchKind === "strategy_backtest") {
+    for (const { key } of costFields) {
+      const message = costInputError(key, inputs.costs[key]);
+      if (message) issues.push({ field: `costs.${key}`, message });
+    }
+  }
+  if (usesBuiltinPortfolio(inputs)) {
     const holdings = Number(inputs.holdingsCount), interval = Number(inputs.selectionEverySessions);
     if (!Number.isInteger(holdings) || holdings < 1 || holdings > 100) issues.push({ field: "holdingsCount", message: "Holdings count must be a whole number from 1 to 100." });
     if (!Number.isInteger(interval) || interval < 1 || interval > 20) issues.push({ field: "selectionEverySessions", message: "Selection interval must be a whole number from 1 to 20 trading days." });
-    if (!isValidInitialCash(inputs.initialCashCny)) issues.push({ field: "initialCashCny", message: "Initial cash must be 0.01–1,000,000,000 CNY, with up to two decimal places." });
     if (!isValidVolatilityWindow(inputs.volatilityWindow)) issues.push({ field: "volatilityWindow", message: "Volatility window must be a whole number from 1 to 252." });
     if (!inputs.exposureExpression.trim()) issues.push({ field: "exposureExpression", message: "Enter a position sizing formula." });
     else if (Number(inputs.exposureExpression) < 0 || Number(inputs.exposureExpression) > 1) issues.push({ field: "exposureExpression", message: "Position sizing formula must return a value between 0 and 1." });
+  }
+  if (inputs.researchKind === "strategy_backtest" && inputs.strategyMode === "framework"
+    && inputs.frameworkModules.risk_management.kind === "builtin") {
+    issues.push(...drawdownIssues(inputs));
+    issues.push(...takeProfitIssues(inputs.takeProfitTiers));
+    const message = stopLossInputError(inputs.stopLossThreshold);
+    if (message) issues.push({ field: "stopLossThreshold", message });
+    const holdingMessage = holdingSessionsInputError(inputs.maximumHoldingSessions);
+    if (holdingMessage) issues.push({ field: "maximumHoldingSessions", message: holdingMessage });
+  }
+  if (inputs.researchKind === "strategy_backtest" && inputs.strategyMode === "framework"
+    && inputs.frameworkModules.portfolio_construction.kind === "builtin") {
+    const message = holdingSessionsInputError(inputs.minimumHoldingSessions);
+    if (message) issues.push({ field: "minimumHoldingSessions", message });
+    if (inputs.frameworkModules.risk_management.kind === "builtin" && inputs.minimumHoldingSessions !== ""
+      && inputs.maximumHoldingSessions !== "" && Number(inputs.minimumHoldingSessions) > Number(inputs.maximumHoldingSessions)) {
+      issues.push({ field: "maximumHoldingSessions", message: "Maximum holding sessions must be at least minimum." });
+    }
+  }
+  if (direct) issues.push(...programInputIssues(inputs));
+  else if (inputs.researchKind === "strategy_backtest") {
+    for (const stage of frameworkStages) {
+      const module = inputs.frameworkModules[stage];
+      if (module.kind === "python") issues.push(...programInputIssues(module.program).map(issue => ({
+        ...issue, field: `${stage}.${issue.field}` as ResearchInputField,
+      })));
+    }
   }
   if (Array.from(inputs.hypothesis).length > MAX_HYPOTHESIS_LENGTH) issues.push({ field: "hypothesis", message: "Keep notes within 1,024 characters." });
   return issues;
@@ -287,10 +421,25 @@ export function isCompleteResearchInputs(inputs: ResearchInputs): boolean {
 
 export function hasUnexecutedChanges(draft: ResearchDraft): boolean {
   const current = researchInputs(draft);
-  if (draft.lastAdmittedBaseline === null) {
-    return JSON.stringify(current) !== JSON.stringify(researchInputs(emptyResearchDraft()));
+  return !sameInputs(current, draft.lastAdmittedBaseline ?? researchInputs(emptyResearchDraft()));
+}
+
+function sameInputs(left: ResearchInputs, right: ResearchInputs): boolean {
+  return (Object.keys(left) as (keyof ResearchInputs)[]).every(key => sameInputValue(key, left[key], right[key]));
+}
+
+function sameInputValue(key: string, left: unknown, right: unknown): boolean {
+  return JSON.stringify(snapshotInputValue(key, left)) === JSON.stringify(snapshotInputValue(key, right));
+}
+
+function snapshotInputValue(key: string, value: unknown): unknown {
+  if (key === "programParameters" && typeof value === "string") {
+    // Accepted/pending inputs need the parameter values, not the editor's whitespace.
+    // Incomplete JSON remains editable and is compared verbatim.
+    try { return JSON.stringify(parseProgramParameters(value)); } catch { return value; }
   }
-  return JSON.stringify(current) !== JSON.stringify(draft.lastAdmittedBaseline);
+  if (isRecord(value)) return Object.fromEntries(Object.entries(value).map(([child, item]) => [child, snapshotInputValue(child, item)]));
+  return value;
 }
 
 export function useResearchAsDraft(
@@ -301,25 +450,29 @@ export function useResearchAsDraft(
   confirmDiscard: (message: string) => boolean,
 ): boolean {
   const current = loadResearchDraft(storage, researcherId, folderId);
+  const direct = input.research_kind === "strategy_backtest" && input.strategy_mode === "direct";
+  const framework = input.research_kind === "strategy_backtest" && input.strategy_mode === "framework";
   const nextInputs: ResearchInputs = {
-    ...researchInputs(current),
-    formula: input.formula,
-    hypothesis: input.hypothesis ?? "",
-    startDate: input.start_date,
-    endDate: input.end_date,
-    universe: input.universe,
-    neutralization: input.neutralization,
-    researchKind: input.research_kind,
+    ...researchInputs(emptyResearchDraft()), name: current.name,
+    formula: "formula" in input ? input.formula ?? "" : "",
+    hypothesis: input.hypothesis ?? "", startDate: input.start_date, endDate: input.end_date,
+    universe: input.universe, neutralization: "neutralization" in input ? input.neutralization ?? "" : "",
+    researchKind: input.research_kind, strategyMode: direct ? "direct" : "framework",
     initialCashCny: input.research_kind === "strategy_backtest" ? input.initial_cash_cny : "",
-    holdingsCount: input.research_kind === "strategy_backtest"
-      ? String(input.holdings_count)
-      : "",
-    exposureExpression: input.research_kind === "strategy_backtest" ? input.exposure_expression : "1",
-    volatilityWindow: input.research_kind === "strategy_backtest" ? String(input.volatility_window) : "20",
-    weighting: input.research_kind === "strategy_backtest" ? input.weighting : "equal_weight",
-    selectionEverySessions: input.research_kind === "strategy_backtest"
-      ? String(input.selection_every_sessions)
-      : "",
+    costs: input.research_kind === "strategy_backtest" ? { ...input.costs } : defaultSimulationCosts(),
+    holdingsCount: framework && input.holdings_count !== undefined ? String(input.holdings_count) : "",
+    exposureExpression: framework ? input.exposure_expression ?? "" : direct ? "" : "1",
+    volatilityWindow: framework ? input.volatility_window === undefined ? "" : String(input.volatility_window) : direct ? "" : "20",
+    weighting: framework ? input.weighting ?? "equal_weight" : "equal_weight",
+    selectionEverySessions: framework && input.selection_every_sessions !== undefined ? String(input.selection_every_sessions) : "",
+    ...(direct ? programDraft(input.program) : emptyProgramInputs()),
+    frameworkModules: framework ? frameworkDraft(input.modules) : builtinModulesDraft(),
+    takeProfitTiers: framework && typeof input.modules.risk_management !== "string" && input.modules.risk_management.kind === "builtin_risk/v1"
+      ? takeProfitDraft(input.modules.risk_management.take_profit_tiers ?? []) : [],
+    ...drawdownDraft(framework && typeof input.modules.risk_management !== "string" && input.modules.risk_management.kind === "builtin_risk/v1" ? input.modules.risk_management.portfolio_drawdown : undefined),
+    stopLossThreshold: framework ? frozenStopLossPercentage(input.modules) : "",
+    maximumHoldingSessions: framework ? frozenMaximumHoldingSessions(input.modules) : "",
+    minimumHoldingSessions: framework ? frozenMinimumHoldingSessions(input.modules) : "",
   };
   if (
     wouldOverwriteUnexecutedAuthorableValue(current, nextInputs) &&
@@ -328,7 +481,7 @@ export function useResearchAsDraft(
   persistResearchDraft(storage, researcherId, folderId, {
     ...current,
     ...nextInputs,
-    editor: { anchor: input.formula.length, head: input.formula.length },
+    editor: { anchor: nextInputs.formula.length, head: nextInputs.formula.length },
     pendingAdmission: null,
   });
   return true;
@@ -348,6 +501,9 @@ function wouldOverwriteUnexecutedAuthorableValue(
     "universe",
     "neutralization",
     "researchKind",
+    "strategyMode",
+    "programSource", "programParameters", "programFields", "programHistorySessions",
+    ...drawdownFields, "frameworkModules", "costs", "takeProfitTiers", "stopLossThreshold", "maximumHoldingSessions", "minimumHoldingSessions",
     "initialCashCny",
     "holdingsCount",
     "selectionEverySessions",
@@ -355,34 +511,35 @@ function wouldOverwriteUnexecutedAuthorableValue(
     "weighting",
     "volatilityWindow",
   ] as const;
-  return copiedKeys.some((key) => current[key] !== baseline[key] && current[key] !== next[key]);
+  return copiedKeys.some((key) => !sameInputValue(key, current[key], baseline[key])
+    && !sameInputValue(key, current[key], next[key]));
 }
 
 function readDraft(value: unknown): ResearchDraft | null {
-  if (!isRecord(value)) return null;
+  if (!isRecord(value) || value.storageSchema !== DRAFT_STORAGE_SCHEMA) return null;
   const empty = emptyResearchDraft();
   const inputs = readInputs(value);
   const editor = value.editor;
-  const baseline = value.lastAdmittedBaseline;
-  const pending = value.pendingAdmission;
+  if (inputs === null) return null;
+  const baseline = value.lastAdmittedBaseline === null ? null : readInputs(restoreInputs(inputs, value.lastAdmittedBaseline));
+  const pending = value.pendingAdmission === null ? null : readPendingResearchRun(value.pendingAdmission, inputs);
   if (
-    inputs === null ||
     !isRecord(editor) ||
     !isSafeOffset(editor.anchor) ||
     !isSafeOffset(editor.head) ||
-    (baseline !== null && readInputs(baseline) === null) ||
-    (pending !== null && readPendingResearchRun(pending) === null)
+    (value.lastAdmittedBaseline !== null && baseline === null) ||
+    (value.pendingAdmission !== null && pending === null)
   ) return null;
   return {
     ...empty,
     ...inputs,
     editor: { anchor: editor.anchor, head: editor.head },
-    lastAdmittedBaseline: baseline === null ? null : readInputs(baseline),
-    pendingAdmission: pending === null ? null : readPendingResearchRun(pending),
+    lastAdmittedBaseline: baseline,
+    pendingAdmission: pending,
   };
 }
 
-function readPendingResearchRun(value: unknown): PendingResearchRun | null {
+function readPendingResearchRun(value: unknown, current: ResearchInputs): PendingResearchRun | null {
   if (
     !isRecord(value) ||
     typeof value.requestId !== "string" ||
@@ -392,15 +549,36 @@ function readPendingResearchRun(value: unknown): PendingResearchRun | null {
     value.folderId.length < 1 ||
     value.folderId.length > 200
   ) return null;
-  const inputs = readInputs(value.inputs);
+  const inputs = readInputs(restoreInputs(current, value.inputs));
   if (inputs === null) return null;
   return { requestId: value.requestId, folderId: value.folderId, inputs };
+}
+
+function inputChanges(snapshot: Record<string, unknown>, current: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(current).flatMap(([key, visible]) => {
+    const value = snapshot[key];
+    if (isRecord(value) && isRecord(visible)) {
+      const changes = inputChanges(value, visible);
+      return Object.keys(changes).length === 0 ? [] : [[key, changes]];
+    }
+    return value === visible ? [] : [[key, snapshotInputValue(key, value)]];
+  }));
+}
+
+function restoreInputs(current: Record<string, unknown>, changes: unknown): Record<string, unknown> | null {
+  if (!isRecord(changes) || Object.keys(changes).some(key => !Object.hasOwn(current, key))) return null;
+  return Object.fromEntries(Object.entries(current).map(([key, value]) => {
+    if (!Object.hasOwn(changes, key)) return [key, value];
+    return [key, isRecord(value) ? restoreInputs(value, changes[key]) : changes[key]];
+  }));
 }
 
 function readInputs(value: unknown): ResearchInputs | null {
   if (!isRecord(value)) return null;
   const keys = [
     "researchKind",
+    ...drawdownFields, "strategyMode", "stopLossThreshold", "maximumHoldingSessions", "minimumHoldingSessions",
+    "programSource", "programParameters", "programFields", "programHistorySessions",
     "name",
     "formula",
     "hypothesis",
@@ -419,12 +597,32 @@ function readInputs(value: unknown): ResearchInputs | null {
   const strings = value as Record<(typeof keys)[number], string>;
   if (
     !["factor_evaluation", "strategy_backtest"].includes(strings.researchKind) ||
+    !["framework", "direct"].includes(strings.strategyMode) ||
     !["equal_weight", "rank_weight", "inverse_volatility"].includes(strings.weighting) ||
     strings.formula.length > MAX_FORMULA_LENGTH ||
     strings.exposureExpression.length > MAX_FORMULA_LENGTH ||
-    keys.some((key) => strings[key].length > MAX_TEXT_LENGTH)
+    keys.some((key) => key === "programSource" || key === "programParameters"
+      ? new TextEncoder().encode(strings[key]).byteLength > (key === "programSource" ? 65536 : MAX_DRAFT_BYTES)
+      : strings[key].length > MAX_TEXT_LENGTH)
   ) return null;
-  return Object.fromEntries(keys.map((key) => [key, strings[key]])) as ResearchInputs;
+  const takeProfitTiers = readTakeProfitDraft(value.takeProfitTiers);
+  if (takeProfitTiers === null) return null;
+  const costs = readCostInputs(value.costs);
+  if (costs === null) return null;
+  const modules = value.frameworkModules;
+  if (!isRecord(modules)) return null;
+  const parsedModules = builtinModulesDraft();
+  for (const stage of frameworkStages) {
+    const module = modules[stage];
+    if (!isRecord(module) || (module.kind !== "builtin" && module.kind !== "python")) return null;
+    const program = module.program;
+    if (!isRecord(program) || programInputFields.some(field => typeof program[field] !== "string")) return null;
+    const inputs = Object.fromEntries(programInputFields.map(field => [field, program[field]])) as ProgramInputs;
+    if (new TextEncoder().encode(inputs.programSource).byteLength > 65536
+      || inputs.programFields.length > MAX_TEXT_LENGTH || inputs.programHistorySessions.length > MAX_TEXT_LENGTH) return null;
+    parsedModules[stage] = { kind: module.kind, program: inputs };
+  }
+  return { ...Object.fromEntries(keys.map((key) => [key, strings[key]])), frameworkModules: parsedModules, costs, takeProfitTiers } as ResearchInputs;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

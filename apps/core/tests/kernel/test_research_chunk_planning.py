@@ -68,3 +68,46 @@ def test_planner_rejects_when_one_complete_universe_session_cannot_fit() -> None
             effective_lookback=252,
             execution_memory_bytes=1536 * 1024**2,
         )
+
+
+def test_framework_plan_reserves_four_isolated_invocations_and_bounded_evidence() -> None:
+    common = dict(
+        calculation_sessions=_sessions(65), research_session_offset=1,
+        formula_work=1, node_count=1, field_count=1,
+        maximum_universe_cardinality=3000, effective_lookback=1,
+        execution_memory_bytes=1536 * 1024**2,
+    )
+    ordinary = plan_research_chunks(**common)
+    framework = plan_research_chunks(
+        **common, decision_mode="framework", python_program_count=4,
+    )
+    assert ordinary.chunk_session_count == 64
+    assert framework.chunk_session_count == 1
+    assert framework.time_target_exceeded is True
+    assert framework.estimated_peak_bytes > ordinary.estimated_peak_bytes // 64
+    assert all(chunk.session_count == 1 for chunk in framework.chunks)
+
+
+def test_isolated_program_must_fit_memory_before_admission() -> None:
+    common = dict(
+        calculation_sessions=_sessions(2), research_session_offset=1,
+        formula_work=1, node_count=1, field_count=1,
+        maximum_universe_cardinality=3000, effective_lookback=1,
+        execution_memory_bytes=190 * 1024**2,
+    )
+    assert plan_research_chunks(**common).chunk_session_count >= 1
+    with pytest.raises(
+        ResearchChunkCapacityError, match="one complete full-Universe Research Session",
+    ):
+        plan_research_chunks(**common, decision_mode="direct", python_program_count=1)
+
+
+def test_planner_rejects_unknown_decision_mode() -> None:
+    with pytest.raises(ValueError, match="decision capacity facts"):
+        plan_research_chunks(
+            calculation_sessions=_sessions(2), research_session_offset=1,
+            formula_work=1, node_count=1, field_count=1,
+            maximum_universe_cardinality=3000, effective_lookback=1,
+            execution_memory_bytes=1536 * 1024**2,
+            decision_mode="unknown",  # type: ignore[arg-type]
+        )

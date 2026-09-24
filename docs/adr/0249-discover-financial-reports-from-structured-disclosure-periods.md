@@ -1,8 +1,8 @@
 # Discover financial reports from structured disclosure periods
 
 Financial Refresh uses TuShare `disclosure_date` as its only discovery source.
-This supersedes [ADR-0219](0219-drive-daily-financial-refresh-from-cninfo-disclosures.md)
-and [ADR-0232](0232-resolve-financial-announcement-triggers-from-stock-level-canonical-deltas.md).
+This replaces CNINFO announcement discovery and stock-level delta-based
+trigger resolution with explicit report-period requirements.
 The runtime and Replay no longer scrape CNINFO, classify announcement titles, or
 create announcement-triggered work.
 

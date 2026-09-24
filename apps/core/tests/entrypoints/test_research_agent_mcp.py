@@ -24,7 +24,7 @@ def test_stdio_raw_frame_reader_is_bounded_before_json_parsing() -> None:
 async def _exercise_bounded_stdio_reader() -> None:
     exact = b"x" * (RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES - 1) + b"\n"
     reader = research_agent_mcp._BoundedStdin(
-        BytesIO(exact + b"private-raw-frame-canary" * 10000)
+        BytesIO(exact + b"private-raw-frame-canary" + b"x" * RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES)
     )
 
     assert await anext(reader) == exact.decode()
@@ -66,9 +66,10 @@ print(json.dumps({
     assert process.stdout is not None
     assert process.stderr is not None
     try:
-        process.stdin.write(b"x" * (RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES + 1))
-        process.stdin.flush()
-        returncode = process.wait(timeout=10)
+        completed_stdout, completed_stderr = process.communicate(
+            input=b"x" * (RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES + 1), timeout=10,
+        )
+        returncode = process.returncode
     except Exception as error:
         returncode, completed_stdout, completed_stderr = _finish_stdio_claim_probe(
             process
@@ -78,9 +79,6 @@ print(json.dumps({
             f"returncode={returncode}, "
             f"stdout={completed_stdout!r}, stderr={completed_stderr!r}"
         ) from error
-    else:
-        completed_stdout = process.stdout.read(4096)
-        completed_stderr = process.stderr.read(4096)
     finally:
         if not process.stdin.closed:
             process.stdin.close()

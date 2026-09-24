@@ -5,6 +5,207 @@ import { build } from "vite";
 
 let script: string;
 const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+
+for (const width of [1280, 390]) {
+  test(`fees remain editable, validate beside the field and submit exactly at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 964 });
+    const submissions: Record<string, unknown>[] = [];
+    await page.route("https://exposure.test/**", route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === "/api/alpha/diagnostics") return route.fulfill({ json: { valid: true, diagnostics: [] } });
+      if (path === "/api/research-runs") {
+        submissions.push(route.request().postDataJSON());
+        return route.fulfill({ status: 202, json: { id: "run_costs" } });
+      }
+      return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    });
+    const mount = async () => {
+      await page.goto("https://exposure.test/");
+      await page.addStyleTag({ content: styles });
+      await page.addScriptTag({ content: script });
+    };
+    await mount();
+    await page.getByRole("button", { name: "Run settings", exact: true }).click();
+    const slippage = page.getByLabel("Price slippage (basis points)", { exact: true });
+    await expect(slippage).toHaveValue("0");
+    await expect(page.getByLabel("Buy/sell commission rate", { exact: true })).toHaveValue("0.0003");
+    await expect(page.getByLabel("Minimum commission per child order (CNY)", { exact: true })).toHaveValue("5");
+    await slippage.fill("10000");
+    await page.getByRole("button", { name: "Run settings", exact: true }).click();
+    await page.getByRole("button", { name: "Run backtest", exact: true }).click();
+    await expect(slippage).toBeFocused();
+    await expect(slippage).toHaveAttribute("aria-invalid", "true");
+    await expect(page.locator("#cost-slippage_bps-error")).toContainText("below 10,000");
+    expect(submissions).toHaveLength(0);
+    await slippage.fill("15");
+    await page.getByLabel("Minimum commission per child order (CNY)", { exact: true }).fill("2");
+    await mount();
+    await page.getByLabel("Strategy mode", { exact: true }).selectOption("direct");
+    await page.getByRole("button", { name: "Run settings", exact: true }).click();
+    await expect(slippage).toHaveValue("15");
+    await expect(page.getByLabel("Minimum commission per child order (CNY)", { exact: true })).toHaveValue("2");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: `../../.local/browser-tests/simulation-costs-${width}.png`, fullPage: true });
+    await page.getByRole("button", { name: "Run backtest", exact: true }).click();
+    await expect.poll(() => submissions.length).toBe(1);
+    expect(submissions[0]).toMatchObject({ strategy_mode: "direct", costs: {
+      commission_rate_all_in: "0.0003", commission_min_cny: "2", stamp_duty_sell_rate: "0.0005",
+      transfer_fee_rate: "0.00001", slippage_bps: "15",
+    } });
+  });
+}
+
+for (const width of [1280, 390]) {
+  test(`Framework modules retain independent drafts and locate errors at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 964 });
+    const checks: Record<string, unknown>[] = [];
+    const submissions: Record<string, unknown>[] = [];
+    await page.route("https://exposure.test/**", route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === "/api/alpha/diagnostics") return route.fulfill({ json: { valid: true, diagnostics: [] } });
+      if (path === "/api/research/diagnostics") {
+        checks.push(route.request().postDataJSON());
+        return route.fulfill({ json: checks.length === 1 ? {
+          valid: false, issues: [{ code: "STRATEGY_PROGRAM_INVALID", field: "modules.portfolio_construction.program.source",
+            message: "portfolio_construction, line 1: SyntaxError: invalid syntax", severity: "error", range: null }],
+        } : { valid: true, issues: [] } });
+      }
+      if (path === "/api/research-runs") {
+        submissions.push(route.request().postDataJSON());
+        return route.fulfill({ status: 202, json: { id: "run_framework" } });
+      }
+      return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    });
+    const mount = async () => {
+      await page.goto("https://exposure.test/");
+      await page.addStyleTag({ content: styles });
+      await page.addScriptTag({ content: script });
+    };
+    await mount();
+    await page.getByRole("combobox", { name: "Alpha / Signals module", exact: true }).selectOption("python");
+    await page.getByRole("combobox", { name: "Portfolio Construction module", exact: true }).selectOption("python");
+    const alpha = page.getByRole("region", { name: "Alpha / Signals module", exact: true });
+    const portfolio = page.getByRole("region", { name: "Portfolio Construction module", exact: true });
+    await expect(alpha.getByLabel("Python source", { exact: true })).toContainText("momentum_signals");
+    await expect(portfolio.getByLabel("Python source", { exact: true })).toContainText("better_signal_candidate");
+    await expect(page.getByLabel("Alpha formula", { exact: true })).toHaveCount(0);
+    await expect(page.getByLabel("Holdings count", { exact: true })).toHaveCount(0);
+    await portfolio.getByLabel("Parameters (JSON)", { exact: true }).fill("{");
+    await page.getByRole("button", { name: "Run backtest", exact: true }).click();
+    await expect(portfolio.getByLabel("Parameters (JSON)", { exact: true })).toBeFocused();
+    expect(submissions).toHaveLength(0);
+    await mount();
+    await expect(portfolio.getByLabel("Parameters (JSON)", { exact: true })).toHaveValue("{");
+    await portfolio.getByLabel("Parameters (JSON)", { exact: true }).fill('{"improvement": 0.04}');
+    await page.getByRole("button", { name: "Check configuration" }).click();
+    await expect(portfolio.locator("#portfolio_construction-python-source-error")).toContainText("line 1");
+    await expect(alpha.getByLabel("Python source", { exact: true })).not.toHaveAttribute("aria-invalid", "true");
+    await portfolio.getByLabel("Python source", { exact: true }).fill("def decide(context, state, parameters):\n    return {'output': None, 'state': state}\n");
+    await page.getByRole("button", { name: "Check configuration" }).click();
+    await expect(page.getByText("Configuration is valid.", { exact: false })).toBeVisible();
+    expect(checks[1]).toMatchObject({ strategy_mode: "framework", modules: {
+      alpha: { kind: "python", program: { data_requirements: { field_ids: ["price.close.adjusted"], history_sessions: 6 } } },
+      portfolio_construction: { kind: "python", program: { parameters: { improvement: 0.04 } } },
+      universe_selection: "dataset_universe/v1", risk_management: "no_risk/v1",
+    } });
+    for (const field of ["formula", "neutralization", "holdings_count", "selection_every_sessions", "exposure_expression", "program"]) {
+      expect(checks[1]).not.toHaveProperty(field);
+    }
+    await portfolio.getByRole("button", { name: "Browse fields" }).click();
+    await expect(page.getByRole("searchbox", { name: "Search fields" })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(portfolio.getByRole("button", { name: "Browse fields" })).toBeFocused();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: `../../.local/browser-tests/framework-authoring-${width}.png`, fullPage: true });
+    await page.getByRole("button", { name: "Run backtest", exact: true }).click();
+    await expect.poll(() => submissions.length).toBe(1);
+    expect(submissions[0]).toMatchObject(checks[1]);
+  });
+}
+
+for (const width of [1280, 390]) {
+  test(`Direct Python remains editable, validates and submits one active definition at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 964 });
+    const checks: Record<string, unknown>[] = [];
+    const submissions: Record<string, unknown>[] = [];
+    await page.route("https://exposure.test/**", route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === "/api/alpha/diagnostics") return route.fulfill({ json: { valid: true, diagnostics: [] } });
+      if (path === "/api/research/diagnostics") {
+        checks.push(route.request().postDataJSON());
+        return route.fulfill({ json: checks.length === 1 ? {
+          valid: false, issues: [{ code: "STRATEGY_PROGRAM_INVALID", field: "program.source",
+            message: "program abcdef123456, line 1: SyntaxError: invalid syntax", severity: "error", range: null }],
+        } : { valid: true, issues: [] } });
+      }
+      if (path === "/api/research-runs") {
+        submissions.push(route.request().postDataJSON());
+        return route.fulfill({ status: 202, json: { id: "run_direct" } });
+      }
+      return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    });
+    const mount = async () => {
+      await page.goto("https://exposure.test/");
+      await page.addStyleTag({ content: styles });
+      await page.addScriptTag({ content: script });
+    };
+    await mount();
+    await page.getByLabel("Strategy mode", { exact: true }).selectOption("direct");
+    await expect(page.getByLabel("Python source", { exact: true })).toContainText("def decide");
+    await expect(page.getByLabel("Alpha formula", { exact: true })).toHaveCount(0);
+    await expect(page.getByLabel("Holdings count", { exact: true })).toHaveCount(0);
+    await page.getByLabel("Parameters (JSON)", { exact: true }).fill("{");
+    await page.getByRole("button", { name: "Run backtest", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText("JSON");
+    await expect(page.getByLabel("Parameters (JSON)", { exact: true })).toBeFocused();
+    await page.getByLabel("Python source", { exact: true }).focus();
+    await expect(page.locator("#python-parameters-error")).toContainText("JSON");
+    expect(submissions).toHaveLength(0);
+    await mount();
+    await expect(page.getByLabel("Parameters (JSON)", { exact: true })).toHaveValue("{");
+    await page.getByLabel("Parameters (JSON)", { exact: true }).fill('{"improvement": 0.03}');
+    await page.getByLabel("Python source", { exact: true }).fill("def decide(:");
+    await page.getByRole("button", { name: "Check configuration" }).click();
+    await expect(page.getByLabel("Configuration issues")).toContainText("line 1");
+    await expect(page.locator("#python-source-error")).toContainText("line 1");
+    const source = "def decide(context, state, parameters):\n    return {'output': None, 'state': state}\n";
+    await page.getByLabel("Python source", { exact: true }).fill(source);
+    await expect(page.getByLabel("Configuration issues")).not.toBeVisible();
+    await page.getByRole("button", { name: "Check configuration" }).click();
+    await expect(page.getByText("Configuration is valid.", { exact: false })).toBeVisible();
+    expect(checks[1]).toMatchObject({ strategy_mode: "direct", program: {
+      source, parameters: { improvement: 0.03 },
+      data_requirements: { field_ids: ["price.close.adjusted"], history_sessions: 6 },
+    } });
+    expect(checks[1]).not.toHaveProperty("formula");
+    expect(checks[1]).not.toHaveProperty("holdings_count");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: `../../.local/browser-tests/direct-python-${width}.png`, fullPage: true });
+    await page.getByRole("button", { name: "Run backtest", exact: true }).click();
+    await expect.poll(() => submissions.length).toBe(1);
+    expect(submissions[0]).toMatchObject(checks[1]);
+    expect(submissions[0]).not.toHaveProperty("exposure_expression");
+  });
+}
+
+test("switching back to built-in Framework removes the Python definition", async ({ page }) => {
+  await page.route("https://exposure.test/**", route => route.fulfill({
+    contentType: "text/html", body: '<div id="root"></div>',
+  }));
+  await page.goto("https://exposure.test/");
+  await page.addStyleTag({ content: styles });
+  await page.addScriptTag({ content: script });
+  const mode = page.getByLabel("Strategy mode", { exact: true });
+  await mode.selectOption("direct");
+  await page.getByLabel("Python source", { exact: true }).fill("private draft");
+  await mode.selectOption("framework");
+  await expect(page.getByLabel("Python source", { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("Alpha formula", { exact: true })).toBeVisible();
+  const draft = await page.evaluate(() => JSON.parse(localStorage.getItem("thesistrace.research-draft.exposure-test.folder_default")!));
+  expect(draft.programSource).toBe("");
+  expect(draft.programParameters).toBe("");
+  expect(draft.programFields).toBe("");
+});
 test.beforeAll(async () => {
   const result = await build({
     configFile: false, logLevel: "silent", esbuild: { jsx: "automatic" },
@@ -48,6 +249,8 @@ test(`Exposure, ${weighting}, retained draft and submission share one source`, a
     await page.addScriptTag({ content: script });
   };
   await mount();
+  await expect(page.getByText(/Framework · Decision modules\. Decide/)).toBeVisible();
+  await expect(page.getByText(/Decide after the close; simulate trades at the next/)).toBeVisible();
   await page.getByRole("button", { name: "Run settings", exact: true }).click();
   await expect(page.getByLabel("Portfolio weighting", { exact: false })).toHaveValue("equal_weight");
   await page.getByLabel("Portfolio weighting", { exact: false }).selectOption(weighting);
@@ -325,5 +528,91 @@ for (const width of [1280, 390]) {
     await page.getByLabel("Alpha formula", { exact: true }).fill("close");
     await page.getByRole("button", { name: "Run backtest", exact: true }).click();
     await expect.poll(() => submissions).toBe(1);
+  });
+}
+
+for (const width of [1280, 390]) {
+  test(`built-in stop loss validates, persists and submits at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 964 });
+    const submissions: Record<string, unknown>[] = [];
+    await page.route("https://exposure.test/**", route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === "/api/alpha/diagnostics") return route.fulfill({ json: { valid: true, diagnostics: [] } });
+      if (path === "/api/research-runs") {
+        submissions.push(route.request().postDataJSON());
+        return route.fulfill({ status: 202, json: { id: "run_stop_loss" } });
+      }
+      return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    });
+    const mount = async () => {
+      await page.goto("https://exposure.test/");
+      await page.addStyleTag({ content: styles });
+      await page.addScriptTag({ content: script });
+    };
+    await mount();
+    const threshold = page.getByLabel("Stop loss (%)", { exact: true });
+    await expect(threshold).toHaveValue("");
+    await expect(page.locator("#stop-loss-help")).toContainText("next Open");
+    await threshold.fill("100");
+    await page.getByRole("button", { name: "Run backtest", exact: true }).click();
+    await expect(threshold).toBeFocused();
+    await expect(threshold).toHaveAttribute("aria-invalid", "true");
+    expect(submissions).toHaveLength(0);
+    await threshold.fill("10");
+    await mount();
+    await expect(threshold).toHaveValue("10");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: `../../.local/browser-tests/stop-loss-${width}.png`, fullPage: true });
+    await page.getByRole("button", { name: "Run backtest", exact: true }).click();
+    await expect.poll(() => submissions.length).toBe(1);
+    expect(submissions[0]).toMatchObject({ modules: { risk_management: {
+      kind: "builtin_risk/v1", stop_loss_threshold: 0.1,
+    } } });
+  });
+}
+
+for (const width of [1280, 390]) {
+  test(`portfolio drawdown requires complete policy and persists at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 964 });
+    const submissions: Record<string, unknown>[] = [];
+    await page.route("https://exposure.test/**", route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === "/api/alpha/diagnostics") return route.fulfill({ json: { valid: true, diagnostics: [] } });
+      if (path === "/api/research-runs") {
+        submissions.push(route.request().postDataJSON());
+        return route.fulfill({ status: 202, json: { id: "run_drawdown" } });
+      }
+      return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    });
+    const mount = async () => {
+      await page.goto("https://exposure.test/");
+      await page.addStyleTag({ content: styles });
+      await page.addScriptTag({ content: script });
+    };
+    await mount();
+    const threshold = page.getByLabel("Drawdown threshold (%)", { exact: true });
+    const cap = page.getByLabel("Maximum stock exposure (%)", { exact: true });
+    const cooldown = page.getByLabel("Cooldown (trading sessions)", { exact: true });
+    for (const input of [threshold, cap, cooldown]) await expect(input).toHaveValue("");
+    await threshold.fill("10");
+    await page.getByRole("button", { name: "Run backtest", exact: true }).click();
+    await expect(cap).toBeFocused();
+    await expect(cap).toHaveAttribute("aria-invalid", "true");
+    expect(submissions).toHaveLength(0);
+    await cap.fill("30");
+    await cooldown.fill("2");
+    await mount();
+    await expect(threshold).toHaveValue("10");
+    await expect(cap).toHaveValue("30");
+    await expect(cooldown).toHaveValue("2");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: `../../.local/browser-tests/drawdown-${width}.png`, fullPage: true });
+    await page.getByRole("button", { name: "Run backtest", exact: true }).click();
+    await expect.poll(() => submissions.length).toBe(1);
+    expect(submissions[0]).toMatchObject({ modules: { risk_management: {
+      kind: "builtin_risk/v1", portfolio_drawdown: {
+        drawdown_threshold: 0.1, maximum_stock_exposure: 0.3, cooldown_sessions: 2,
+      },
+    } } });
   });
 }

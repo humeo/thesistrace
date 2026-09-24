@@ -86,7 +86,7 @@ def test_explicit_research_period_projects_three_variable_length_result_values(
     result = build_result_payload(
         output,
         research_kind="strategy_backtest",
-        selection_interval=1,
+
     )
     payloads = result_publication_payloads(
         result, research_kind="strategy_backtest"
@@ -461,7 +461,7 @@ def _run_input(
             commission_rate_all_in="0.0003",
             commission_min_cny="5",
             stamp_duty_sell_rate="0.0005",
-            transfer_fee_rate="0.00001",
+            transfer_fee_rate="0.00001", slippage_bps="0",
         ),
         research_start_session=start,
         research_end_session=end,

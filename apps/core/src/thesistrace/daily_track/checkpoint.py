@@ -13,13 +13,16 @@ from thesistrace.daily_track.observation_state import (
     TrackingObservationState,
     advance_tracking_observation_state,
 )
+from thesistrace.research_definition import kernel_strategy_from_frozen
 from thesistrace.research_kernel.common_observations import common_input_observation_rows
 from thesistrace.research_kernel.kernel_advance import continuation_snapshot
 from thesistrace.research_kernel.kernel_run import (
+    DirectStrategyRunInput,
     KernelRunError,
     KernelState,
     RunInput,
     StrategyRunInput,
+    strategy_input_from_snapshot,
 )
 from thesistrace.research_kernel.numeric import canonical_decimal
 from thesistrace.research_kernel.serialization import canonical_json_bytes
@@ -43,7 +46,8 @@ def project_tracking_checkpoint(
     run_input = state.run_input_with_research_data(state.research_data_snapshot())
     strategy_input = _strategy_input(run_input)
     output = state.output_snapshot()
-    alpha = _mapping(output.get("alpha_matrix"), "Alpha Matrix")
+    alpha = (_mapping(output.get("alpha_matrix"), "Alpha Matrix")
+             if run_input.has_alpha else None)
     strategy = _mapping(output.get("strategy_backtest"), "Strategy Backtest")
     continuation = continuation_snapshot(state)
     continuation_bytes = canonical_json_bytes(continuation)
@@ -54,7 +58,7 @@ def project_tracking_checkpoint(
         prior_observation_state, strategy_state["retained_delta"],
     )
     return {
-        "schema_version": "daily-track-checkpoint-v3",
+        "schema_version": "daily-track-checkpoint-v5",
         "tracking_observation_state": observation_state.model_dump(mode="json"),
         "origin_session": state.origin_session,
         "boundary_session": state.boundary_session,
@@ -65,25 +69,17 @@ def project_tracking_checkpoint(
             "effective_lookback": run_input.effective_lookback,
             "universe": run_input.universe,
             "neutralization": run_input.neutralization,
-            "holdings_count": strategy_input.holdings_count,
-            "selection_interval": strategy_input.selection_interval,
-            "weighting": strategy_input.weighting,
-            "volatility_window": strategy_input.volatility_window,
-            "initial_cash_cny": strategy_input.initial_cash_cny,
-            "exposure_expression": strategy_input.exposure_expression_snapshot(),
-            "commission_rate_all_in": strategy_input.commission_rate_all_in,
-            "commission_min_cny": strategy_input.commission_min_cny,
-            "stamp_duty_sell_rate": strategy_input.stamp_duty_sell_rate,
-            "transfer_fee_rate": strategy_input.transfer_fee_rate,
+            "strategy": strategy_input.contract_snapshot(),
         },
-        "alpha_state": {
+        "alpha_state": None if alpha is None else {
             "expression": alpha["expression"],
             "effective_lookback": alpha["effective_lookback"],
             "neutralization": alpha["neutralization"],
         },
         "strategy_state": strategy_state,
         "common_input_observations": common_input_observation_rows(
-            alpha, sessions=tuple(retained_strategy_sessions),
+            _mapping(output.get("common_inputs"), "Common inputs"),
+            sessions=tuple(retained_strategy_sessions),
         ),
         "continuation_sha256": hashlib.sha256(continuation_bytes).hexdigest(),
         "pending_alpha_sessions": len(continuation["pending_alpha"]),
@@ -108,26 +104,17 @@ def restore_tracking_checkpoint(
         },
         effective_lookback=int(contract["effective_lookback"]),
         universe=str(contract["universe"]),
-        neutralization=str(contract["neutralization"]),
+        neutralization=contract["neutralization"],
         research_kind="strategy_backtest",
-        strategy=StrategyRunInput(
-            holdings_count=int(contract["holdings_count"]),
-            selection_interval=int(contract["selection_interval"]),
-            weighting=contract["weighting"],
-            volatility_window=contract["volatility_window"],
-            initial_cash_cny=str(contract["initial_cash_cny"]),
-            exposure_expression_json=canonical_json_bytes(contract["exposure_expression"]),
-            commission_rate_all_in=str(contract["commission_rate_all_in"]),
-            commission_min_cny=str(contract["commission_min_cny"]),
-            stamp_duty_sell_rate=str(contract["stamp_duty_sell_rate"]),
-            transfer_fee_rate=str(contract["transfer_fee_rate"]),
-        ),
+        strategy=strategy_input_from_snapshot(_mapping(contract["strategy"], "Tracking Strategy")),
     )
     sessions = research_sessions(research_data)
     if not sessions or sessions[-1] != str(value["boundary_session"]):
         raise KernelRunError("DailyTrack Checkpoint boundary does not match Research Data")
     strategy_state = _mapping(value.get("strategy_state"), "Strategy state")
-    terminal = _mapping(strategy_state.get("terminal"), "Terminal Strategy State")
+    terminal = TerminalStrategyStateValue.model_validate(
+        _mapping(strategy_state.get("terminal"), "Terminal Strategy State"),
+    ).model_dump(mode="json", exclude_unset=True)
     resume_observation = _mapping(
         terminal.get("last_daily_observation"),
         "Strategy continuation observation",
@@ -144,20 +131,29 @@ def restore_tracking_checkpoint(
         or not isinstance(retained_delta, list)
     ):
         raise KernelRunError("DailyTrack Strategy state is invalid")
+    common_by_session = defaultdict(list)
+    for observation in value["common_input_observations"]:
+        common_by_session[observation["session"]].append({
+            key: item for key, item in observation.items() if key != "session"
+        })
     return KernelState(
         run_input=run_input,
         output={
-            "alpha_matrix": {
+            "common_inputs": {"sessions": [
+                {"session": row["session"], "common_inputs": common_by_session[row["session"]]}
+                for row in retained_delta
+            ]},
+            **({} if not run_input.has_alpha else {"alpha_matrix": {
                 **dict(_mapping(value.get("alpha_state"), "Alpha state")),
                 "sessions": [],
-            },
+            }}),
             "strategy_backtest": {
                 "daily": [dict(resume_observation)],
                 "positions": copy.deepcopy(positions),
                 "metrics": dict(summary),
                 "metric_state": dict(metric_state),
-                "target_selection": copy.deepcopy(terminal["target_selection"]),
-                "target_exposure": terminal["target_exposure"],
+                "decision_state": copy.deepcopy(terminal["decision_state"]),
+                "contract_checksum": terminal["contract_checksum"],
                 "pending_target": copy.deepcopy(terminal["pending_target"]),
                 "orders": [],
                 "child_orders": [],
@@ -173,10 +169,10 @@ def restore_tracking_checkpoint(
         strategy_resume={
             "daily": [dict(resume_observation)],
             "positions": copy.deepcopy(positions),
-            "report_session_count": int(terminal["selection_phase"]["report_session_count"]),
+            "report_session_count": int(terminal["research_phase"]["report_session_count"]),
             "metric_state": dict(metric_state),
-            "target_selection": copy.deepcopy(terminal["target_selection"]),
-            "target_exposure": terminal["target_exposure"],
+            "decision_state": copy.deepcopy(terminal["decision_state"]),
+            "contract_checksum": terminal["contract_checksum"],
             "pending_target": copy.deepcopy(terminal["pending_target"]),
         },
         origin_session=str(value["origin_session"]),
@@ -191,25 +187,25 @@ def restore_tracking_origin(
     """Build the first forward-only Kernel state without replaying the seed Run."""
     terminal = TerminalStrategyStateValue.model_validate(terminal_value)
     run_input = _origin_run_input(origin, research_data)
-    effective_lookback = run_input.alpha_execution_plan().effective_lookback
     metric_state = terminal.metric_state.model_dump(mode="json", exclude_unset=True)
     last_daily = terminal.last_daily_observation.model_dump(mode="json")
     positions = [item.model_dump(mode="json") for item in terminal.positions]
     return KernelState(
         run_input=run_input,
         output={
-            "alpha_matrix": {
+            "common_inputs": {"sessions": []},
+            **({} if not run_input.has_alpha else {"alpha_matrix": {
                 "expression": run_input.alpha_expression_snapshot(),
-                "effective_lookback": effective_lookback,
+                "effective_lookback": run_input.alpha_execution_plan().effective_lookback,
                 "neutralization": run_input.neutralization,
                 "sessions": [],
-            },
+            }}),
             "strategy_backtest": {
                 "daily": [last_daily],
                 "positions": positions,
                 "metrics": strategy_metrics_from_state(metric_state),
-                "target_selection": terminal.target_selection.model_dump(mode="json"),
-                "target_exposure": terminal.target_exposure,
+                "decision_state": terminal.decision_state.model_dump(mode="json"),
+                "contract_checksum": terminal.contract_checksum,
                 "pending_target": (
                     terminal.pending_target.model_dump(mode="json")
                     if terminal.pending_target is not None else None
@@ -229,16 +225,16 @@ def restore_tracking_origin(
         strategy_resume={
             "daily": [last_daily],
             "positions": positions,
-            "report_session_count": terminal.selection_phase.report_session_count,
+            "report_session_count": terminal.research_phase.report_session_count,
             "metric_state": metric_state,
-            "target_selection": terminal.target_selection.model_dump(mode="json"),
-            "target_exposure": terminal.target_exposure,
+            "decision_state": terminal.decision_state.model_dump(mode="json"),
+            "contract_checksum": terminal.contract_checksum,
             "pending_target": (
                 terminal.pending_target.model_dump(mode="json")
                 if terminal.pending_target is not None else None
             ),
         },
-        origin_session=terminal.selection_phase.origin_session,
+        origin_session=terminal.research_phase.origin_session,
     )
 
 
@@ -253,25 +249,21 @@ def terminal_strategy_state(state: KernelState) -> dict[str, object]:
     metric_state = _mapping(strategy.get("metric_state"), "Strategy metric state")
     terminal = daily[-1]
     session_count = int(metric_state["session_count"])
-    selection_interval = _strategy_input(
-        state.run_input_with_research_data(state.research_data_snapshot())
-    ).selection_interval
     return {
         "session": str(terminal["session"]),
         "gross_cash": str(terminal["gross_cash"]),
         "net_cash": str(terminal["net_cash"]),
         "gross_nav": str(terminal["gross_nav"]),
         "net_nav": str(terminal["net_nav"]),
+        "close_risk_nav_cny": str(terminal["close_risk_nav_cny"]),
         "cumulative_transaction_cost": str(terminal["cumulative_transaction_cost"]),
         "positions": [copy.deepcopy(dict(item)) for item in positions],
-        "selection_phase": {
+        "research_phase": {
             "origin_session": state.origin_session,
             "report_session_count": session_count,
-            "selection_interval": selection_interval,
-            "completed_intervals": session_count - 1,
         },
-        "target_selection": copy.deepcopy(strategy["target_selection"]),
-        "target_exposure": strategy["target_exposure"],
+        "decision_state": copy.deepcopy(strategy["decision_state"]),
+        "contract_checksum": strategy["contract_checksum"],
         "pending_target": copy.deepcopy(strategy["pending_target"]),
         "last_daily_observation": copy.deepcopy(dict(terminal)),
         "metric_state": copy.deepcopy(dict(metric_state)),
@@ -283,33 +275,18 @@ def _origin_run_input(
     research_data: AlignedResearchData,
 ) -> RunInput:
     immutable_input = origin.immutable_input
-    alpha = _mapping(immutable_input.get("alpha_expression"), "Tracking Alpha")
-    admission = _mapping(immutable_input.get("expression_admission"), "Tracking Alpha admission")
-    strategy = _mapping(immutable_input.get("strategy"), "Tracking Strategy")
-    costs = _mapping(immutable_input.get("costs"), "Tracking Costs")
-    field_bindings = _mapping(
-        immutable_input.get("field_bindings"),
-        "Tracking field bindings",
-    )
+    admission = _mapping(immutable_input["expression_admission"], "Tracking admission")
     return RunInput(
         research_data=research_data,
-        alpha_expression=dict(alpha),
-        field_bindings={str(key): str(value) for key, value in field_bindings.items()},
-        effective_lookback=int(admission["effective_lookback"]),
-        universe=str(immutable_input["universe"]),
-        neutralization=str(immutable_input["neutralization"]),
+        alpha_expression=immutable_input["alpha_expression"],
+        field_bindings=_mapping(immutable_input["field_bindings"], "Tracking field bindings"),
+        effective_lookback=admission["effective_lookback"],
+        universe=immutable_input["universe"],
+        neutralization=immutable_input["neutralization"],
         research_kind="strategy_backtest",
-        strategy=StrategyRunInput(
-            holdings_count=int(strategy["holdings_count"]),
-            selection_interval=int(strategy["selection_every_sessions"]),
-            weighting=strategy["weighting"],
-            volatility_window=strategy["volatility_window"],
-            initial_cash_cny=str(strategy["initial_cash_cny"]),
-            exposure_expression_json=canonical_json_bytes(strategy["exposure_expression"]),
-            commission_rate_all_in=str(costs["commission_rate_all_in"]),
-            commission_min_cny=str(costs["commission_min_cny"]),
-            stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
-            transfer_fee_rate=str(costs["transfer_fee_rate"]),
+        strategy=kernel_strategy_from_frozen(
+            _mapping(immutable_input["strategy"], "Tracking Strategy"),
+            _mapping(immutable_input["costs"], "Tracking Costs"),
         ),
     )
 
@@ -354,9 +331,6 @@ def _strategy_state(
     finalized_terminal = daily[-1]
     report_count = int(metric_state["session_count"])
     final_report_count = report_count
-    selection_interval = _strategy_input(
-        state.run_input_with_research_data(state.research_data_snapshot())
-    ).selection_interval
     return {
         "summary": _compact_strategy_metrics(metrics),
         "retained_delta": retained_delta,
@@ -366,16 +340,15 @@ def _strategy_state(
             "net_cash": str(finalized_terminal["net_cash"]),
             "gross_nav": str(finalized_terminal["gross_nav"]),
             "net_nav": str(finalized_terminal["net_nav"]),
+            "close_risk_nav_cny": str(finalized_terminal["close_risk_nav_cny"]),
             "cumulative_transaction_cost": str(finalized_terminal["cumulative_transaction_cost"]),
             "positions": [copy.deepcopy(dict(item)) for item in finalized_positions],
-            "selection_phase": {
+            "research_phase": {
                 "origin_session": state.origin_session,
                 "report_session_count": final_report_count,
-                "selection_interval": selection_interval,
-                "completed_intervals": final_report_count - 1,
             },
-            "target_selection": copy.deepcopy(strategy["target_selection"]),
-            "target_exposure": strategy["target_exposure"],
+            "decision_state": copy.deepcopy(strategy["decision_state"]),
+            "contract_checksum": strategy["contract_checksum"],
             "pending_target": copy.deepcopy(strategy["pending_target"]),
             "last_daily_observation": copy.deepcopy(dict(finalized_terminal)),
             "metric_state": copy.deepcopy(dict(metric_state)),
@@ -409,6 +382,7 @@ def _minimal_strategy_observations(
                 "session": session,
                 "gross_nav": str(row["gross_nav"]),
                 "net_nav": str(row["net_nav"]),
+                "close_risk_nav_cny": str(row["close_risk_nav_cny"]),
                 "net_cash": str(row["net_cash"]),
                 "transaction_cost_cny": canonical_decimal(session_cost),
                 "holdings_count": int(row["holdings_count"]),
@@ -442,7 +416,7 @@ def _mapping(value: object, name: str) -> Mapping[str, object]:
     return value
 
 
-def _strategy_input(run_input: RunInput) -> StrategyRunInput:
+def _strategy_input(run_input: RunInput) -> StrategyRunInput | DirectStrategyRunInput:
     if run_input.research_kind != "strategy_backtest" or run_input.strategy is None:
         raise KernelRunError("DailyTrack requires Strategy Backtest input")
     return run_input.strategy

@@ -5,6 +5,7 @@ from datetime import date
 
 from thesistrace.research_kernel.capacity import (
     MAX_CHUNK_SESSION_COUNT,
+    DecisionMode,
     SessionCapacityError,
     plan_session_capacity,
 )
@@ -30,6 +31,8 @@ def plan_tracking_advance(
     maximum_universe_cardinality: int,
     effective_lookback: int,
     execution_memory_bytes: int,
+    decision_mode: DecisionMode = "factor_evaluation",
+    python_program_count: int = 0,
 ) -> TrackingAdvancePlan:
     if not unpublished_sessions:
         raise ValueError("Tracking Advance needs an unpublished Research Session")
@@ -42,6 +45,7 @@ def plan_tracking_advance(
             maximum_universe_cardinality=maximum_universe_cardinality,
             effective_lookback=effective_lookback,
             execution_memory_bytes=execution_memory_bytes,
+            decision_mode=decision_mode, python_program_count=python_program_count,
         )
     except SessionCapacityError:
         return TrackingAdvancePlan(

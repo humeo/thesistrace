@@ -90,6 +90,7 @@ from thesistrace.research_kernel.research_chunks import AlphaFactorExecutionBind
 from thesistrace.research_run.execution import ResearchExecutionResourceExhausted
 from thesistrace.research_run.factor_result import FactorEvidencePublication, factor_daily_payload
 from thesistrace.research_run.models import (
+    DirectStrategyAdmissionCommand,
     FactorEvaluationAdmissionCommand,
     ResearchRunAdmissionCommand,
     StrategyBacktestAdmissionCommand,
@@ -401,7 +402,7 @@ class ResearchBatchService:
         execution: SupervisedResearchBatchExecution | None = None
         private_artifact_path: Path | None = None
         try:
-            with self._maintain_claim(claim, emit):
+            with self._maintain_claim(claim, emit), self._publication.staging():
                 reuse_private_artifact = False
                 if claim.batch_kind == "strategy_sweep":
                     private_artifact_path = self._private_artifact_path(claim.attempt_id)
@@ -2970,9 +2971,11 @@ class ResearchBatchService:
             alpha = binding.get("alpha")
             research_period = binding.get("research_period")
             if (
-                not isinstance(alpha, dict)
-                or alpha.get("expression") != immutable.alpha_expression
-                or alpha.get("field_bindings") != immutable.field_bindings
+                (alpha is not None if not immutable.has_alpha else (
+                    not isinstance(alpha, dict)
+                    or alpha.get("expression") != immutable.alpha_expression
+                    or alpha.get("field_bindings") != immutable.alpha_field_bindings
+                ))
                 or research_period
                 != {
                     "first_session": immutable.data_admission.first_research_session.isoformat(),
@@ -3843,26 +3846,29 @@ def _child_commands(
             for ordinal, item in enumerate(command.factors, start=1)
         ]
     assert isinstance(command, StrategySweepBatchAdmissionCommand)
-    return [
-        (
-            item.item_key,
-            StrategyBacktestAdmissionCommand(
-                request_id=f"batch-strategy-{ordinal}",
-                research_kind="strategy_backtest",
-                name=item.name,
-                formula=command.alpha.formula,
-                hypothesis=command.alpha.hypothesis,
+    children = []
+    for ordinal, item in enumerate(command.strategies, start=1):
+        if item.strategy_mode == "direct":
+            child = DirectStrategyAdmissionCommand(
+                request_id=f"batch-strategy-{ordinal}", research_kind="strategy_backtest",
+                strategy_mode="direct", name=item.name, program=item.program,
                 initial_cash_cny=item.initial_cash_cny,
-                holdings_count=item.holdings_count,
-                selection_every_sessions=item.selection_every_sessions,
-                exposure_expression=item.exposure_expression,
-                weighting=item.weighting,
-                volatility_window=item.volatility_window,
-                **common,
-            ),
-        )
-        for ordinal, item in enumerate(command.strategies, start=1)
-    ]
+                costs=item.costs,
+                **{name: value for name, value in common.items() if name != "neutralization"},
+            )
+        else:
+            signal = ({"formula": command.alpha.formula,
+                       "hypothesis": command.alpha.hypothesis,
+                       "neutralization": command.neutralization} if item.has_alpha else {})
+            child = StrategyBacktestAdmissionCommand(
+                request_id=f"batch-strategy-{ordinal}", research_kind="strategy_backtest",
+                name=item.name,
+                **item.model_dump(exclude={"item_key", "name"}, exclude_none=True),
+                **signal,
+                **{name: value for name, value in common.items() if name != "neutralization"},
+            )
+        children.append((item.item_key, child))
+    return children
 
 
 def _validate_unique_item_keys(command: ResearchBatchAdmissionCommand) -> None:
@@ -3914,12 +3920,11 @@ def _validate_duplicate_computation(
             seen[identity] = item.item_key
         return
     assert isinstance(command, StrategySweepBatchAdmissionCommand)
-    seen_strategy: dict[tuple[str, int, int, str], str] = {}
-    for item in command.strategies:
-        identity = (
-            item.initial_cash_cny, item.holdings_count,
-            item.selection_every_sessions, item.exposure_expression,
-        )
+    seen_strategy: dict[bytes, str] = {}
+    for item, child in zip(command.strategies, prepared, strict=True):
+        identity = canonical_json_bytes({
+            "strategy": child.immutable_input.strategy, "costs": child.immutable_input.costs,
+        })
         conflicting = seen_strategy.get(identity)
         if conflicting is not None:
             raise ResearchBatchAdmissionRejected(
@@ -4382,8 +4387,16 @@ def _message_diagnostic(message: Mapping[str, object]) -> ResearchBatchDiagnosti
         "Shared Alpha-and-Factor calculation failed.",
     }
     candidate = str(message.get("message"))
+    # User program diagnostics contain only the bounded guest error and its
+    # source identity/location. Never expose arbitrary trusted-worker errors.
+    program_error = (
+        message.get("error_type") == "StrategyProgramError"
+        and candidate.startswith("program ")
+        and len(candidate) <= 8192
+    )
     public_message = (
-        candidate if candidate in public_messages else "Research Batch item execution failed."
+        candidate if candidate in public_messages or program_error
+        else "Research Batch item execution failed."
     )
     return ResearchBatchDiagnostic(
         code=(

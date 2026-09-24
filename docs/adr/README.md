@@ -1,8 +1,10 @@
 # Architecture Decision Records
 
-This directory contains only current ThesisTrace decisions that are difficult to reverse, surprising without context, and based on a real trade-off. Product vocabulary belongs in [CONTEXT.md](../../CONTEXT.md), current topology belongs in [docs/architecture/core.md](../architecture/core.md), implementation detail belongs in code and tests, and completed work history remains in Git.
+This directory contains current ThesisTrace architecture decisions that are difficult to reverse, surprising without context, and based on a real trade-off. Acceptance records the chosen design, not implementation or test completion; decisions for an upcoming contract state that boundary explicitly. Product vocabulary belongs in [CONTEXT.md](../../CONTEXT.md), current topology belongs in [docs/architecture/core.md](../architecture/core.md), implementation detail belongs in code and tests, and completed work history remains in Git.
 
 Number gaps are intentional and numbers are never reused. When a decision stops being current, merge any still-valid rationale into the surviving record, delete the obsolete file, and repair its references.
+
+The current Strategy contract in [ADR-0250](0250-admit-strategy-programs-with-explicit-simulation-coordinates.md) implements Direct and built-in/custom Framework decisions, holding/risk rules, and frozen configurable costs through shared execution. Implementation does not imply a particular environment has passed deployment qualification or completed its explicit old-research cutover.
 
 ## Foundations and data semantics
 
@@ -27,18 +29,19 @@ Number gaps are intentional and numbers are never reused. When a decision stops 
 
 ## Strategy execution and reporting
 
-- [ADR-0040 — Use long-only signal selection with configurable portfolio weighting](0040-use-one-long-only-top-n-equal-weight-strategy.md)
-- [ADR-0042 — Separate scheduled stock selection from exposure adjustments](0042-use-only-scheduled-alpha-snapshots-for-periodic-full-rebalancing.md)
-- [ADR-0044 — Use a conservative full-fill Open Execution Model](0044-use-a-conservative-full-fill-open-execution-model.md)
+- [ADR-0040 — Keep score-based selection as a built-in long-only Strategy](0040-use-one-long-only-top-n-equal-weight-strategy.md)
+- [ADR-0042 — Let Strategies trigger targets independently of selection schedules](0042-use-only-scheduled-alpha-snapshots-for-periodic-full-rebalancing.md)
+- [ADR-0044 — Use full-fill Open execution with frozen costs and price slippage](0044-use-a-conservative-full-fill-open-execution-model.md)
 - [ADR-0045 — Cancel blocked Open orders without retry or substitution](0045-cancel-blocked-open-orders-without-retry-or-substitution.md)
-- [ADR-0046 — Reassess existing-position eligibility only at scheduled Rebalances](0046-reassess-existing-position-eligibility-only-at-scheduled-rebalances.md)
+- [ADR-0046 — Reassess holding eligibility at Strategy-defined target updates](0046-reassess-existing-position-eligibility-only-at-scheduled-rebalances.md)
 - [ADR-0054 — Report Gross and Net NAV from one fill path](0054-report-gross-and-net-nav-from-one-fill-path.md)
-- [ADR-0055 — Record Strategy NAV after each Open execution cycle](0055-record-strategy-nav-after-each-open-execution-cycle.md)
+- [ADR-0055 — Keep post-Open performance separate from Close risk valuation](0055-record-strategy-nav-after-each-open-execution-cycle.md)
 - [ADR-0074 — Separate confirmed suspension from unknown market-data loss](0074-separate-confirmed-suspension-from-unknown-market-data-loss.md)
 - [ADR-0089 — Use the daily first-traded price as the Open coordinate](0089-use-the-daily-first-traded-price-as-the-open-coordinate.md)
 - [ADR-0100 — Resolve missing Opens from suspension and delisting evidence](0100-resolve-missing-opens-from-suspension-and-delisting-evidence.md)
 - [ADR-0212 — Filter Research membership by positive-turnover observations](0212-filter-research-membership-by-positive-turnover-observations.md)
 - [ADR-0231 — Use an independent append-only CSI 300 Benchmark Snapshot](0231-use-an-independent-append-only-csi-300-benchmark-snapshot.md)
+- [ADR-0250 — Admit Strategy Programs with explicit simulation coordinates](0250-admit-strategy-programs-with-explicit-simulation-coordinates.md)
 
 ## Market universe and calendar
 
@@ -93,7 +96,7 @@ Number gaps are intentional and numbers are never reused. When a decision stops 
 - [ADR-0158 — Keep Alpha field authority in Data and operation authority in the Kernel](0158-separate-alpha-field-and-builtin-ownership.md)
 - [ADR-0160 — Use a small static Alpha value model](0160-use-a-small-static-alpha-value-model.md)
 - [ADR-0164 — Evaluate Alpha as a Series execution plan](0164-evaluate-alpha-as-a-series-execution-plan.md)
-- [ADR-0167 — Parse Formulae with a strict Python AST subset](0167-parse-formulas-with-a-strict-python-ast-subset.md)
+- [ADR-0167 — Parse Alpha Formulae with a strict Python AST subset](0167-parse-formulas-with-a-strict-python-ast-subset.md)
 - [ADR-0191 — Separate authoring identifiers from Canonical Field References](0191-separate-authoring-identifiers-from-canonical-field-references.md)
 - [ADR-0211 — Execute only the current Alpha and calculation contracts](0211-hard-cut-result-changing-calculation-contracts.md)
 
@@ -109,17 +112,15 @@ Number gaps are intentional and numbers are never reused. When a decision stops 
 - [ADR-0170 — Preserve complete financial source data but author only session-aligned fields](0170-preserve-complete-financial-source-data-but-author-only-session-aligned-fields.md)
 - [ADR-0175 — Store each financial statement kind as a wide version table](0175-store-each-financial-statement-kind-as-a-wide-version-table.md)
 - [ADR-0176 — Ingest financial company types with explicit Field applicability](0176-ingest-all-financial-company-types-with-explicit-field-applicability.md)
-- [ADR-0178 — Use consolidated statements for the six financial fields](0178-use-consolidated-statements-for-the-six-financial-fields.md)
-- [ADR-0179 — Use latest annual flow fields and latest reported stock fields](0179-use-latest-annual-flow-fields-and-latest-reported-stock-fields.md)
+- [ADR-0178 — Use consolidated scope for statement-derived financial fields](0178-use-consolidated-statements-for-the-six-financial-fields.md)
+- [ADR-0179 — Preserve annual flow and latest-reported stock field meanings](0179-use-latest-annual-flow-fields-and-latest-reported-stock-fields.md)
 - [ADR-0180 — Use per-instrument Tushare financial collection](0180-use-per-instrument-tushare-financial-collection.md)
 - [ADR-0181 — Refresh Dataset Families independently under one Head](0181-refresh-dataset-families-independently-under-one-head.md)
 - [ADR-0183 — Give each Dataset Family its own Coverage declaration](0183-give-each-dataset-family-its-own-coverage-declaration.md)
 - [ADR-0184 — Start Financial Coverage in 2010 with minimal pre-start seeds](0184-start-financial-coverage-in-2010-with-minimal-pre-start-seeds.md)
-- [ADR-0188 — Expose financial data only through Alpha authoring and Data readiness](0188-expose-financial-data-only-through-alpha-authoring-and-data-readiness.md)
+- [ADR-0188 — Expose financial research through governed session-aligned fields](0188-expose-financial-data-only-through-alpha-authoring-and-data-readiness.md)
 - [ADR-0192 — Paginate the ordinary balance sheet inside one logical shard](0192-paginate-the-ordinary-balance-sheet-inside-one-logical-shard.md)
-- [ADR-0219 — Drive daily financial refresh from disclosure evidence](0219-drive-daily-financial-refresh-from-cninfo-disclosures.md)
-- [ADR-0232 — Resolve financial announcement triggers from stock-level Canonical deltas](0232-resolve-financial-announcement-triggers-from-stock-level-canonical-deltas.md)
-- [ADR-0249 — Discover financial reports from structured disclosure periods](0249-discover-financial-reports-from-structured-disclosure-periods.md) (supersedes ADR-0219 and ADR-0232)
+- [ADR-0249 — Discover financial reports from structured disclosure periods](0249-discover-financial-reports-from-structured-disclosure-periods.md)
 - [ADR-0243 — Give statement-derived TTM flows distinct field identities](0243-give-statement-derived-ttm-flows-distinct-field-identities.md)
 - [ADR-0244 — Admit announcement-aligned financial history with evidence limits](0244-admit-announcement-aligned-financial-history-with-evidence-limits.md)
 - [ADR-0248 — Reuse published indicator projections with checked evidence](0248-reuse-published-indicator-projections-with-checked-evidence.md)

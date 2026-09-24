@@ -4,6 +4,7 @@ import pytest
 from pydantic import BaseModel
 
 from thesistrace.research_agent.pagination import InvalidPageCursor, ResearchAgentPagination
+from thesistrace.research_definition import default_simulation_costs
 
 
 class Item(BaseModel):
@@ -144,6 +145,8 @@ def test_complete_provenance_with_maximum_text_preserves_every_character_under_b
     from thesistrace.research_run.models import ProvenanceResultSection, ResearchRunAuthorableInput
 
     inputs = dict(
+        strategy_mode="framework",
+        costs=default_simulation_costs(),
         formula="close #" + "\x01" * 4089,
         hypothesis="\x01" * 1024,
         start_date=date(2024, 1, 1),
@@ -194,6 +197,7 @@ def test_complete_provenance_with_maximum_text_preserves_every_character_under_b
                 "commission_min_cny": "5",
                 "stamp_duty_sell_rate": "0.0005",
                 "transfer_fee_rate": "0.00001",
+                "slippage_bps": "0",
             },
             "risk_free_rate": "0.02",
         },

@@ -10,6 +10,7 @@ from series import aligned_market_data
 
 from thesistrace.research_kernel import RunInput, StrategyRunInput, run
 from thesistrace.research_kernel.alpha import evaluate_alpha_matrix, validate_alpha
+from thesistrace.research_kernel.builtin_framework import BUILTIN_FRAMEWORK_MODULES
 from thesistrace.research_kernel.strategy import run_strategy
 
 SESSIONS = ("2026-01-05", "2026-01-06", "2026-01-07", "2026-01-08")
@@ -715,6 +716,7 @@ def _definition(
     return {
         "universe": "manual",
         "strategy": {"volatility_window": 20, "weighting": "equal_weight",
+            "mode": "framework", "modules": dict(BUILTIN_FRAMEWORK_MODULES),
             "holdings_count": holdings_count,
             "selection_interval": selection_interval,
             "initial_cash_cny": "10000000",
@@ -725,6 +727,7 @@ def _definition(
             "commission_min_cny": "5",
             "stamp_duty_sell_rate": "0.0005",
             "transfer_fee_rate": "0.00001",
+            "slippage_bps": "0",
         },
     }
 
@@ -753,7 +756,7 @@ def _kernel_run(
                 commission_rate_all_in="0.0003",
                 commission_min_cny="5",
                 stamp_duty_sell_rate="0.0005",
-                transfer_fee_rate="0.00001",
+                transfer_fee_rate="0.00001", slippage_bps="0",
             ),
             research_start_session=SESSIONS[0],
             research_end_session=SESSIONS[-1],
@@ -952,10 +955,10 @@ def test_zero_exposure_preserves_cash_baseline_and_latest_selection():
     assert result["positions"] == []
     assert [Decimal(row["net_nav"]) for row in result["daily"]] == [Decimal("100000")] * 4
     assert [row["rebalance"] for row in result["daily"]] == [False, True, False, True]
-    assert result["target_selection"]["selected_instrument_ids"] == [B]
-    assert result["target_selection"]["signal_session"] == SESSIONS[2]
+    assert result["decision_state"]["selection"]["selected_instrument_ids"] == [B]
+    assert result["decision_state"]["selection"]["signal_session"] == SESSIONS[2]
     assert result["metrics"]["maximum_drawdown"]["recovery_session"] is None
-    assert result["target_exposure"] == 0.0
+    assert result["decision_state"]["exposure"] == 0.0
     assert result["pending_target"] is None
 
 
@@ -982,10 +985,12 @@ def test_tracking_checkpoint_restores_retained_selection_and_exposure(exposure, 
     actual = terminal_strategy_state(restored)
     assert actual == original
     assert restored.output_snapshot()["alpha_matrix"]["sessions"] == []
-    assert actual["target_exposure"] == exposure
-    assert actual["target_selection"]["selected_instrument_ids"] == [B]
+    assert actual["decision_state"]["exposure"] == exposure
+    assert actual["decision_state"]["selection"]["selected_instrument_ids"] == [B]
     assert (actual["pending_target"] is not None) == (interval == 3)
-    assert checkpoint["run_input"]["exposure_expression"] == {"kind": "number", "value": exposure}
+    assert checkpoint["run_input"]["strategy"]["exposure_expression"] == {
+        "kind": "number", "value": exposure,
+    }
 
 
 @pytest.mark.parametrize("blocked,interval", [(False, 5), (True, 5), (False, 1)])
@@ -1018,10 +1023,10 @@ def test_daily_exposure_uses_proportional_reduction_unless_selection_is_due(bloc
         _alpha_matrix({session: ((A, 2), (B, 1)) for session in SESSIONS}),
         definition, origin_session=SESSIONS[1], ledger=ledger,
     )
-    assert result['target_selection']['signal_session'] == (
+    assert result['decision_state']['selection']['signal_session'] == (
         SESSIONS[1] if interval == 5 else SESSIONS[3]
     )
-    assert result['target_exposure'] == 0.3
+    assert result['decision_state']['exposure'] == 0.3
     assert ledger[0]['submitted_orders'] == []
     assert [(row['side'], row['instrument_id']) for row in ledger[1]['submitted_orders']] == [
         ('buy', A), ('buy', B),
@@ -1076,7 +1081,7 @@ def test_daily_exposure_only_adjustment_respects_direction_and_total_buy_budget(
         _alpha_matrix({session: ((A, 2), (B, 1)) for session in SESSIONS}),
         definition, origin_session=SESSIONS[1], ledger=ledger,
     )
-    assert result['target_selection']['signal_session'] == SESSIONS[1]
+    assert result['decision_state']['selection']['signal_session'] == SESSIONS[1]
     assert result['pending_target'] is None
     assert {row['instrument_id']: row['execution_shares']
             for row in ledger[-1]['positions']} == expected_shares
@@ -1125,8 +1130,8 @@ def test_daily_exposure_keeps_new_selection_while_cash_then_restores_without_ret
         *([(sessions[7], A, 'sell')] if blocked else []),
         (sessions[8], B, 'buy'),
     ]
-    assert result['target_selection']['signal_session'] == sessions[6]
-    assert result['target_selection']['selected_instrument_ids'] == [B]
+    assert result['decision_state']['selection']['signal_session'] == sessions[6]
+    assert result['decision_state']['selection']['selected_instrument_ids'] == [B]
     assert result['pending_target'] is None
     assert [row['instrument_id'] for row in result['positions']] == [B]
     assert all(row['positions'] == [] for row in ledger[6:7])
@@ -1162,7 +1167,7 @@ def test_rank_weighted_selection_survives_cash_and_drives_exposure_restore():
         _alpha_matrix({session: ((A, 2), (B, 1)) for session in SESSIONS}),
         definition, origin_session=SESSIONS[1], ledger=ledger,
     )
-    selection = result['target_selection']
+    selection = result['decision_state']['selection']
     assert selection['signal_session'] == SESSIONS[1]
     assert selection['relative_weights'] == {A: '2/3', B: '1/3'}
     assert ledger[0]['positions'] == ledger[1]['positions'] == []
@@ -1194,7 +1199,7 @@ def test_inverse_volatility_targets_use_only_decision_close_history(future_close
         _alpha_matrix({session: ((A, 2), (B, 1)) for session in SESSIONS}),
         definition, origin_session=SESSIONS[2],
     )
-    assert result['target_selection']['relative_weights'] == {A: '2/3', B: '1/3'}
+    assert result['decision_state']['selection']['relative_weights'] == {A: '2/3', B: '1/3'}
     assert {row['instrument_id']: row['execution_shares'] for row in result['positions']} == {
         A: 4000, B: 2000,
     }
@@ -1216,10 +1221,10 @@ def test_empty_inverse_selection_keeps_exposure_and_records_eligibility(exposure
         _alpha_matrix({session: ((A, 2), (B, 1)) for session in SESSIONS}),
         definition, origin_session=SESSIONS[2],
     )
-    assert result['target_selection']['eligibility_exclusions'] == {'zero_volatility': 2}
-    assert result['target_selection']['signal_session'] == SESSIONS[2]
-    assert result['target_selection']['selected_instrument_ids'] == []
-    assert result['target_exposure'] == exposure
+    assert result['decision_state']['selection']['eligibility_exclusions'] == {'zero_volatility': 2}
+    assert result['decision_state']['selection']['signal_session'] == SESSIONS[2]
+    assert result['decision_state']['selection']['selected_instrument_ids'] == []
+    assert result['decision_state']['exposure'] == exposure
     assert result['positions'] == result['orders'] == []
     assert Decimal(result['daily'][-1]['net_cash']) == Decimal('100000')
 

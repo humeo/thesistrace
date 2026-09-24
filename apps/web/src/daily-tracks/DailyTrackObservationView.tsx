@@ -1,22 +1,27 @@
-import { SelectionEligibilityView, type SelectionEligibility } from "../research/SelectionEligibility";
+import { SelectionEligibilityView } from "../research/SelectionEligibility";
+import { CloseRiskFacts, type CloseRiskPosition } from "../analysis/CloseRiskFacts";
+import { isBuiltinFrameworkState, strategySelection, type StrategyDecisionState } from "../research/strategyDecisionState";
+import { FrameworkStateView } from "../research/FrameworkStateView";
 import { useEffect, useRef, useState } from "react";
 import { ColorType, LineSeries, createChart, type Time } from "lightweight-charts";
 
 export type DailyTrackObservation = {
-  target_selection: SelectionEligibility;
+  decision_state: StrategyDecisionState;
   session: string;
   net_asset_value_cny: string;
+  close_risk_nav_cny: string;
   cash_cny: string;
   net_change_cny: string;
   net_return: number;
   maximum_drawdown: number;
   transaction_cost_cny: string;
   session_count: number;
-  holdings: Array<{ instrument_id: string; shares: number; market_value_cny: string; weight: number }>;
-  target_exposure: number;
-  selection_interval: number;
+  holdings: Array<Omit<CloseRiskPosition, "execution_shares"> & {
+    shares: number; market_value_cny: string; weight: number;
+  }>;
+  selection_interval: number | null;
   pending_target_session: string | null;
-  sessions_until_next_signal: number;
+  sessions_until_next_signal: number | null;
   returns: Array<{ session: string; net_return: number }>;
 };
 
@@ -59,14 +64,19 @@ export function ObservationSummary({ observation, originSession }: {
 export function CurrentHoldings({ observation }: { observation: DailyTrackObservation }) {
   const [query, setQuery] = useState("");
   const holdings = observation.holdings.filter((item) => item.instrument_id.toLowerCase().includes(query.toLowerCase()));
+  const selection = strategySelection(observation.decision_state);
   return (
     <section className="track-holdings" aria-label="Current holdings">
       <div className="track-section-heading">
-        <div><h2>Current holdings</h2><p>Published positions as of {observation.session}. Close target {formatReturn(observation.target_exposure)} · actual Open allocation {formatReturn(1 - Number(observation.cash_cny) / Number(observation.net_asset_value_cny))}. Orders, costs and rounding can leave a difference.</p></div>
+        <div><h2>Current holdings</h2><p>Published positions as of {observation.session}. {isBuiltinFrameworkState(observation.decision_state)
+          ? <>Close target {formatReturn(observation.decision_state.exposure)} · </> : null}Actual Open allocation {formatReturn(1 - Number(observation.cash_cny) / Number(observation.net_asset_value_cny))}. Orders, costs and rounding can leave a difference.</p></div>
         <input aria-label="Filter holdings by symbol" placeholder="Find a symbol…" type="search"
           value={query} onChange={(event) => setQuery(event.target.value)} />
       </div>
-      <SelectionEligibilityView selection={observation.target_selection} />
+      {selection && <SelectionEligibilityView selection={selection} />}
+      <FrameworkStateView state={observation.decision_state} />
+      <CloseRiskFacts session={observation.session} nav={observation.close_risk_nav_cny}
+        positions={observation.holdings.map(item => ({ ...item, execution_shares: item.shares }))} />
       <div className="track-table-scroll" tabIndex={0} role="region" aria-label="Holdings table">
         <table className="track-table">
           <thead><tr><th scope="col">Symbol</th><th scope="col">Shares</th><th scope="col">Market value</th><th scope="col">Weight</th></tr></thead>
@@ -99,12 +109,16 @@ export function SelectionSchedule({ observation, isStopped, isBehind }: {
   return (
     <section className="track-rebalance" aria-label="Selection schedule">
       <div className="track-section-heading"><div><h2>Selection schedule</h2>
-        <p>The strategy keeps the selection cycle selected in the original backtest.</p></div></div>
+        <p>{observation.selection_interval === null
+          ? "The program evaluates conditions after each completed trading session."
+          : "The strategy keeps the selection cycle selected in the original backtest."}</p></div></div>
       <dl className="track-schedule-facts">
-        <div><dt>Frequency</dt><dd>Every {observation.selection_interval} {observation.selection_interval === 1 ? "trading session" : "trading sessions"}</dd></div>
+        <div><dt>Frequency</dt><dd>{observation.selection_interval === null ? "Condition driven"
+          : <>Every {observation.selection_interval} {observation.selection_interval === 1 ? "trading session" : "trading sessions"}</>}</dd></div>
         <div><dt>Signal at last observation</dt><dd>{observation.pending_target_session ?? "No pending signal"}</dd></div>
         <div><dt>Next scheduled step</dt><dd>{isStopped ? "Tracking stopped" : observation.pending_target_session
           ? "Rebalance at the next trading session open"
+          : observation.selection_interval === null ? "Evaluate conditions at the next Close"
           : `Next signal in ${observation.sessions_until_next_signal} trading ${observation.sessions_until_next_signal === 1 ? "session" : "sessions"}`}</dd></div>
       </dl>
       {isBehind && !isStopped ? <p className="track-inline-notice">Tracking is behind the available data. Update the track before using its next signal.</p> : null}

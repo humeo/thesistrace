@@ -27,11 +27,7 @@ from thesistrace.entrypoints.runtime import CoreSettings, open_core_runtime
 from thesistrace.product_state import product_state_counts
 from thesistrace.publication import Publication, PublishedRef
 from thesistrace.publication.serialization import canonical_json_bytes
-from thesistrace.research_run.result import (
-    RESULT_DAILY_PARTITION_PREFIX,
-    RESULT_TERMINAL_POSITION_PARTITION_PREFIX,
-    read_result_bundle,
-)
+from thesistrace.research_run.result import read_result_bundle
 
 EXPECTED_OVERVIEW = {
     "market_coverage": {"start": "2009-12-07", "end": "2026-08-05"},
@@ -747,11 +743,13 @@ def _before_restart(
             "strategies": [
                 {
                     "item_key": "focused",
+                    "initial_cash_cny": "100000",
                     "holdings_count": 1,
                     "selection_every_sessions": 1,
                 },
                 {
                     "item_key": "broad",
+                    "initial_cash_cny": "100000",
                     "holdings_count": 2,
                     "selection_every_sessions": 2,
                 },
@@ -800,6 +798,7 @@ def _before_restart(
             "universe": "top300",
             "neutralization": "none",
             "research_kind": "strategy_backtest",
+            "initial_cash_cny": "100000",
             "holdings_count": 1,
             "selection_every_sessions": 1,
         },
@@ -849,6 +848,7 @@ def _before_restart(
             "universe": "top300",
             "neutralization": "none",
             "research_kind": "strategy_backtest",
+            "initial_cash_cny": "100000",
             "holdings_count": 1,
             "selection_every_sessions": 1,
         },
@@ -881,6 +881,7 @@ def _before_restart(
             "universe": "top300",
             "neutralization": "none",
             "research_kind": "strategy_backtest",
+            "initial_cash_cny": "100000",
             "holdings_count": 1,
             "selection_every_sessions": 1,
         },
@@ -990,16 +991,19 @@ def _qualify_research_batches(
     strategy_specs = (
         {
             "item_key": "baseline",
+            "initial_cash_cny": "100000",
             "holdings_count": 1,
             "selection_every_sessions": 1,
         },
         {
             "item_key": "holdings-only",
+            "initial_cash_cny": "100000",
             "holdings_count": 2,
             "selection_every_sessions": 1,
         },
         {
             "item_key": "rebalance-only",
+            "initial_cash_cny": "100000",
             "holdings_count": 1,
             "selection_every_sessions": 5,
         },
@@ -1101,6 +1105,7 @@ def _qualify_research_batches(
                     **scope,
                     "formula": "rank(close)",
                     "research_kind": "strategy_backtest",
+                    "initial_cash_cny": item["initial_cash_cny"],
                     "holdings_count": item["holdings_count"],
                     "selection_every_sessions": item["selection_every_sessions"],
                 }
@@ -2893,11 +2898,10 @@ def _wait_for_run(
             else:
                 assert research_kind == "strategy_backtest"
                 assert set(last["result"]) == {
-                    "factor",
                     "strategy",
                     "terminal_strategy_state",
                     "provenance",
-                }
+                }, last["result"].keys()
                 assert last["result"]["strategy"]["observations"]
                 assert last["result"]["provenance"]["research_kind"] == research_kind
             return last
@@ -3231,32 +3235,38 @@ def _durable_result(
         stored_result = read_result_bundle(bundle, research_kind=research_kind)
         result_object_names = sorted(stored_result)
         payload_names = sorted(bundle.payloads)
+        # These fixtures use instrument fields, not universe/industry common inputs.
+        descriptor_names: set[str] = set()
         if research_kind == "factor_evaluation":
-            assert result_object_names == ["factor_summary"]
-            assert payload_names == ["factor_summary"]
+            assert result_object_names == ["factor_summary"], result_object_names
+            descriptor_names.add("factor_daily_observations")
+            expected_payloads = {"factor_summary", "factor_period_statistics"}
         else:
             assert research_kind == "strategy_backtest"
             assert result_object_names == [
-                "factor_summary",
                 "strategy_daily_observations",
                 "strategy_summary",
                 "terminal_strategy_state",
-            ]
-            partition_names = {
-                name for name in payload_names if name.startswith(RESULT_DAILY_PARTITION_PREFIX)
-            }
-            position_partition_names = {
-                name
-                for name in payload_names
-                if name.startswith(RESULT_TERMINAL_POSITION_PARTITION_PREFIX)
-            }
-            assert partition_names
-            assert set(payload_names) == (
-                set(result_object_names)
-                | {"terminal_positions"}
-                | partition_names
-                | position_partition_names
-            )
+            ], result_object_names
+            descriptor_names.update({
+                "strategy_daily_observations", "terminal_positions",
+                "strategy_framework", "strategy_targets", "strategy_orders",
+                "strategy_child_orders", "strategy_fills", "strategy_adjustments",
+                "strategy_execution_constraints",
+            })
+            expected_payloads = {"strategy_summary", "terminal_strategy_state"}
+        expected_payloads.update(descriptor_names)
+        for name in descriptor_names:
+            descriptor = json.loads(bundle.payloads[name].content)
+            parts = descriptor["partitions"]
+            if name in {"factor_daily_observations", "strategy_daily_observations"}:
+                assert parts, name
+            if name.startswith("strategy_") and name != "strategy_daily_observations":
+                assert descriptor["status"] == "recorded", name
+            for index, part in enumerate(parts):
+                assert part["name"] == f"{name}.part-{index:06d}", part
+                expected_payloads.add(part["name"])
+        assert set(payload_names) == expected_payloads, payload_names
         return {
             "active_pin_count": int(row["active_pin_count"]),
             "manifest_sha256": manifest_sha256,

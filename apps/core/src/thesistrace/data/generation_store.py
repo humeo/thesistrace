@@ -1138,7 +1138,7 @@ class MountedGenerationStore:
         *,
         sessions: list[str],
         universe_name: str,
-        neutralization: str,
+        neutralization: str | None,
         field_bindings: Mapping[str, str],
         require_industry: bool = False,
     ) -> MountedMarketSeries:
@@ -1146,7 +1146,7 @@ class MountedGenerationStore:
             raise GenerationStoreError("Market Series sessions are invalid")
         if universe_name not in _UNIVERSE_NAMES:
             raise GenerationStoreError("Market Series Universe is invalid")
-        if neutralization not in {"none", "industry"}:
+        if neutralization not in {None, "none", "industry"}:
             raise GenerationStoreError("Market Series Neutralization is invalid")
         try:
             requested_columns = market_field_columns(field_bindings)
@@ -1255,7 +1255,7 @@ class MountedGenerationStore:
         *,
         sessions: list[str],
         universe_name: str,
-        neutralization: str,
+        neutralization: str | None,
         field_bindings: Mapping[str, str],
         require_industry: bool = False,
     ) -> MountedMarketSeries:
@@ -1368,7 +1368,7 @@ class MountedGenerationStore:
         *,
         sessions: list[str],
         universe_name: str,
-        neutralization: str,
+        neutralization: str | None,
         field_bindings: Mapping[str, str],
         require_industry: bool = False,
         fact_instrument_ids: frozenset[str],
@@ -1379,7 +1379,7 @@ class MountedGenerationStore:
             raise GenerationStoreError("Columnar Research sessions are invalid")
         if universe_name not in _UNIVERSE_NAMES:
             raise GenerationStoreError("Columnar Research Universe is invalid")
-        if neutralization not in {"none", "industry"}:
+        if neutralization not in {None, "none", "industry"}:
             raise GenerationStoreError("Columnar Research Neutralization is invalid")
         bindings = _field_family_bindings(field_bindings, neutralization)
         market_bindings = bindings.pop("equity.eod_price", {})
@@ -3106,7 +3106,7 @@ def _family_spec_for_reference(
 
 
 def _field_family_bindings(
-    field_bindings: Mapping[str, str], neutralization: str,
+    field_bindings: Mapping[str, str], neutralization: str | None,
 ) -> dict[str, dict[str, str]]:
     from thesistrace.data.dependencies import resolve_data_dependencies
 

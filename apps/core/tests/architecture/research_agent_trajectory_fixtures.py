@@ -19,6 +19,7 @@ from thesistrace.research_agent import (
 )
 from thesistrace.research_agent.models import AlphaCatalogView, ResearchContext
 from thesistrace.research_agent.pagination import ResearchAgentPagination
+from thesistrace.research_authoring.service import CURRENT_RESEARCH_AUTHORING_CONSTRAINTS
 from thesistrace.research_batch import research_batch_polling_detail
 from thesistrace.research_batch.models import (
     FactorEvaluationBatchProgress,
@@ -27,6 +28,7 @@ from thesistrace.research_batch.models import (
     ResearchBatchItemSummary,
     ResearchBatchScope,
 )
+from thesistrace.research_definition import default_simulation_costs
 from thesistrace.research_run.models import (
     FactorResultSection,
     ResearchRunAuthorableInput,
@@ -162,36 +164,7 @@ def research_context_payload() -> dict[str, object]:
                 ],
                 "next_cursor": None,
             },
-            "authoring_constraints": {
-                "volatility_window": {"minimum": 1, "maximum": 252},
-                "research_kinds": ("factor_evaluation", "strategy_backtest"),
-                "universes": ("top300", "top1000", "top2000", "top3000"),
-                "neutralizations": ("none", "industry"),
-                "initial_cash_cny": {"currency": "CNY", "encoding": "decimal_string",
-                                     "exclusive_minimum": "0", "maximum": "1000000000",
-                                     "maximum_decimal_places": 2,
-                                     "required": True},
-                "holdings_count": {"minimum": 1, "maximum": 100},
-                "selection_every_sessions": {"minimum": 1, "maximum": 20},
-                "batch_items": {"minimum": 1, "maximum": 20},
-                "batch_kinds": ("factor_evaluation", "strategy_sweep"),
-                "exposure": {
-                    "context": "exposure", "mode": "daily_expression",
-                    "default_expression": "1", "minimum": 0, "maximum": 1,
-                    "data_series_allowed": True,
-                    "result_types": ("number", "common_numeric_series"),
-                    "stock_fields_allowed": False, "decision_time": "session_close",
-                    "execution_time": "next_session_open",
-                },
-                "weighting": ("equal_weight", "rank_weight", "inverse_volatility"),
-                "formula": {
-                    "maximum_length": 4096,
-                    "maximum_expression_nodes": 256,
-                    "maximum_expression_depth": 32,
-                    "maximum_effective_lookback": 252,
-                    "maximum_estimated_work": 4096,
-                },
-            },
+            "authoring_constraints": CURRENT_RESEARCH_AUTHORING_CONSTRAINTS.model_dump(),
         }
     ).model_dump(mode="json")
 
@@ -240,6 +213,8 @@ def run_polling_payload(
     }
     if research_kind == "strategy_backtest":
         input_payload.update({"volatility_window": 20, "weighting": "equal_weight",
+            "strategy_mode": "framework",
+            "costs": default_simulation_costs(),
             "initial_cash_cny": "10000000", "holdings_count": 10, "selection_every_sessions": 5,
             "exposure_expression": "1",
         })
@@ -263,7 +238,8 @@ def run_polling_payload(
             )
             if research_kind == "factor_evaluation"
             else (
-                "strategy_targets", "strategy_orders", "strategy_child_orders",
+                "strategy_framework", "strategy_targets", "strategy_orders",
+                "strategy_child_orders",
                 "strategy_fills", "strategy_adjustments", "strategy_execution_constraints",
                 "daily_holdings_status", "daily_holdings",
                 "strategy_summary",

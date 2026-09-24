@@ -18,12 +18,12 @@ from psycopg import OperationalError
 from psycopg.errors import OutOfMemory, UniqueViolation
 from psycopg.types.json import Jsonb
 from psycopg_pool import PoolTimeout
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from thesistrace._paging import fit_page
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.alpha_language import CompiledAlpha, FormulaCompilationError, alpha_language
-from thesistrace.alpha_language.requirements import expression_requirements
+from thesistrace.alpha_language.requirements import ExpressionRequirements, expression_requirements
 from thesistrace.benchmark import (
     AnnualizedExcessCalculator,
     StrategyComparisonFacts,
@@ -50,6 +50,7 @@ from thesistrace.data import (
     MountedGenerationStore,
 )
 from thesistrace.data.dependencies import resolve_data_dependencies
+from thesistrace.data.fields import alpha_field_catalog
 from thesistrace.data.lifecycle import lock_data_lifecycle
 from thesistrace.operational_events import non_blocking_operational_event_sink
 from thesistrace.publication import (
@@ -82,6 +83,11 @@ from thesistrace.research_kernel.numeric import (
     require_current_numeric_contract,
 )
 from thesistrace.research_kernel.research_chunks import validated_research_continuation
+from thesistrace.research_kernel.strategy_program_runtime import (
+    StrategyProgramError,
+    StrategyProgramFailure,
+    get_strategy_runtime,
+)
 from thesistrace.research_run.execution import (
     ExecutionEvent,
     ResearchExecutionCancelled,
@@ -115,6 +121,7 @@ from thesistrace.research_run.models import (
     CurrentDataRerunOrigin,
     DailyTrackRerunSource,
     DataAdmissionFacts,
+    DirectStrategyBacktestSpec,
     ExpressionAdmissionFacts,
     FactorEvaluationResearchRunKeyMetrics,
     FactorEvaluationResearchRunResult,
@@ -329,18 +336,12 @@ class ResearchRunAdmissionRejected(ValueError):
         self.issues = issues
 
 
-FIXED_STRATEGY_KIND = "long_only_top_n"
+FIXED_STRATEGY_KIND = "framework"
 FIXED_EXECUTION = "next_open_full_fill"
-FIXED_COSTS = {
-    "commission_rate_all_in": "0.0003",
-    "commission_min_cny": "5",
-    "stamp_duty_sell_rate": "0.0005",
-    "transfer_fee_rate": "0.00001",
-}
 SEMANTIC_VERSIONS = {
     "factor": "factor-v1",
-    "strategy": "strategy-v2",
-    "kernel": "kernel-v5",
+    "strategy": "strategy-v10",
+    "kernel": "kernel-v14",
 }
 
 
@@ -678,6 +679,10 @@ class ResearchRunService:
         enforce_result_bundle_budget(
             prepared.exact_bytes, completed_sessions,
             strategy_event_count=strategy_event_record_count(payloads),
+            strategy_target_count=strategy_event_record_count(payloads, section="strategy_targets"),
+            strategy_framework_count=strategy_event_record_count(
+                payloads, section="strategy_framework",
+            ),
         )
         with self._database.transaction() as transaction:
             lock_publication_mutation(transaction)
@@ -853,6 +858,10 @@ class ResearchRunService:
         enforce_result_bundle_budget(
             prepared.exact_bytes, completed_sessions,
             strategy_event_count=strategy_event_record_count(payloads),
+            strategy_target_count=strategy_event_record_count(payloads, section="strategy_targets"),
+            strategy_framework_count=strategy_event_record_count(
+                payloads, section="strategy_framework",
+            ),
         )
         with self._database.transaction() as transaction:
             lock_publication_mutation(transaction)
@@ -1021,10 +1030,11 @@ class ResearchRunService:
     def _prepare_research_input(
         self, command: ResearchSpec, *, dataset: DatasetAdmissionSnapshot | None,
     ) -> ImmutableRunInput:
-        if self._compile_formula is None:
+        if self._compile_formula is None and command.has_alpha:
             raise RuntimeError("ResearchRun admission compiler is not configured")
         try:
-            compiled = self._compile_formula(command.formula)
+            compiled = (None if not command.has_alpha
+                        else self._compile_formula(command.formula))
         except FormulaCompilationError as error:
             raise ResearchRunAdmissionRejected(
                 [
@@ -1337,22 +1347,8 @@ class ResearchRunService:
             immutable = selected["immutable_input"]
             if immutable["research_kind"] != "strategy_backtest":
                 raise ValueError("Rerun source must be a Strategy Backtest")
-            strategy = immutable["strategy"]
-            # Retain supported simulation settings exactly. Unsupported old settings
-            # are diagnosed; never substitute current defaults for a different model.
-            for field, value, supported in (
-                ("strategy.kind", strategy["kind"], FIXED_STRATEGY_KIND),
-                ("strategy.execution", strategy["execution"], FIXED_EXECUTION),
-                ("costs", immutable["costs"], FIXED_COSTS),
-                ("risk_free_rate", immutable["risk_free_rate"], "0"),
-            ):
-                if value != supported:
-                    raise ResearchRunAdmissionRejected([ResearchRunAdmissionIssue(
-                        code="RERUN_SOURCE_INVALID", field=field,
-                        message=(
-                            "Original simulation setting is unsupported in the current contract"
-                        ),
-                    )])
+            frozen = ImmutableRunInput.model_validate(immutable)
+            self._require_current_execution_contracts(frozen)
             through = (source.through_session.isoformat()
                        if isinstance(source, DailyTrackRerunSource)
                        else immutable["requested_end_date"])
@@ -1362,18 +1358,9 @@ class ResearchRunService:
                     code="RERUN_SOURCE_INVALID", field="rerun_source.through_session",
                     message="Investigation date exceeds the selected published Checkpoint",
                 )])
-            projected = StrategyBacktestAdmissionCommand.model_validate({
-                "request_id": command.request_id, "folder_id": command.folder_id,
-                "name": command.name, "research_kind": "strategy_backtest",
-                "formula": immutable["formula_source"], "hypothesis": immutable["hypothesis"],
-                "start_date": immutable["requested_start_date"], "end_date": through,
-                "universe": immutable["universe"], "neutralization": immutable["neutralization"],
-                "initial_cash_cny": strategy["initial_cash_cny"],
-                "holdings_count": strategy["holdings_count"],
-                "selection_every_sessions": strategy["selection_every_sessions"],
-                "exposure_expression": strategy["exposure_source"],
-                "weighting": strategy["weighting"],
-                "volatility_window": strategy["volatility_window"],
+            projected = TypeAdapter(ResearchRunAdmissionCommand).validate_python({
+                **frozen.authorable_value(), "request_id": command.request_id,
+                "folder_id": command.folder_id, "name": command.name, "end_date": through,
             })
             provenance = selected["source_provenance"]
             origin = CurrentDataRerunOrigin.model_validate({
@@ -1536,7 +1523,8 @@ class ResearchRunService:
                     chunk = execution.chunk
                     if chunk.get("reused_checkpoint") is not True:
                         commit_started = monotonic()
-                        self._commit_execution_chunk(claim, chunk)
+                        with self._publication.staging():
+                            self._commit_execution_chunk(claim, chunk)
                         emit(
                             {
                                 "event": "research_execution_chunk_committed",
@@ -1568,21 +1556,22 @@ class ResearchRunService:
                         )
                         self._progress("checkpoint", claim.run_id)
                     if chunk["final"] is True:
-                        prepared, provenance, key_metrics, holding_prepared = (
-                            self._prepare_execution_result(claim, chunk)
-                        )
-                        self._progress("prepared", claim.run_id)
-                        self._validate_current_execution(claim)
-                        execution.acknowledge(
-                            cancel_requested=lambda: self._cancellation_is_pending(claim)
-                        )
-                        self._publish_success(
-                            claim,
-                            prepared,
-                            provenance,
-                            key_metrics,
-                            holding_prepared,
-                        )
+                        with self._publication.staging():
+                            prepared, provenance, key_metrics, holding_prepared = (
+                                self._prepare_execution_result(claim, chunk)
+                            )
+                            self._progress("prepared", claim.run_id)
+                            self._validate_current_execution(claim)
+                            execution.acknowledge(
+                                cancel_requested=lambda: self._cancellation_is_pending(claim)
+                            )
+                            self._publish_success(
+                                claim,
+                                prepared,
+                                provenance,
+                                key_metrics,
+                                holding_prepared,
+                            )
                         emit(
                             _research_event(
                                 "research_result_published",
@@ -3263,43 +3252,41 @@ class ResearchRunService:
     ) -> None:
         try:
             require_current_numeric_contract(immutable_input.numeric_execution_contract)
-            compiled = alpha_language.compile(immutable_input.formula_source)
+            spec = TypeAdapter(ResearchSpec).validate_python(immutable_input.authorable_value())
+            compiled = (alpha_language.compile(spec.formula) if spec.has_alpha else None)
             exposure = (
-                alpha_language.compile(
-                    str(immutable_input.strategy["exposure_source"]), context="exposure",
-                )
-                if immutable_input.strategy is not None else None
+                alpha_language.compile(spec.exposure_expression, context="exposure")
+                if isinstance(spec, StrategyBacktestSpec) and spec.has_builtin_portfolio else None
             )
-        except (NumericContractError, FormulaCompilationError) as error:
+            requirements = _spec_data_requirements(spec, compiled, exposure)
+        except (NumericContractError, FormulaCompilationError, ValidationError,
+                ResearchRunAdmissionRejected) as error:
             raise ResearchRunContractMismatch(
                 "frozen Research execution contract is obsolete"
             ) from error
-        requirements = expression_requirements(
-            compiled, *(() if exposure is None else (exposure,)),
-            weighting=(immutable_input.strategy["weighting"]
-                       if immutable_input.strategy is not None else "equal_weight"),
-            volatility_window=(immutable_input.strategy["volatility_window"]
-                               if immutable_input.strategy is not None else 20),
-        )
-        current_bindings = requirements.field_bindings
         admission = immutable_input.expression_admission
         strategy = immutable_input.strategy
+        estimated_work = (estimate_alpha_run_work(
+            requirements.estimated_work,
+            research_session_count=immutable_input.data_admission.calculation_session_count,
+            universe_instrument_count=immutable_input.data_admission.universe_instrument_count,
+        ) if requirements.estimated_work else 0)
         common_contract_mismatch = (
             immutable_input.semantic_versions != SEMANTIC_VERSIONS
-            or compiled.expression != immutable_input.alpha_expression
-            or current_bindings != immutable_input.field_bindings
+            or (compiled.expression if compiled is not None else None)
+            != immutable_input.alpha_expression
+            or requirements.field_bindings != immutable_input.field_bindings
             or requirements.effective_lookback != admission.effective_lookback
             or requirements.node_count != admission.node_count
             or requirements.depth != admission.depth
             or requirements.estimated_work != admission.formula_work
+            or estimated_work != admission.estimated_run_work
         )
-        strategy_contract_mismatch = immutable_input.research_kind == "strategy_backtest" and (
-            strategy is None
-            or strategy.get("kind") != FIXED_STRATEGY_KIND
-            or strategy.get("execution") != FIXED_EXECUTION
-            or exposure is None
-            or strategy["exposure_expression"] != exposure.expression
-            or immutable_input.costs != FIXED_COSTS
+        strategy_contract_mismatch = strategy is not None and (
+            strategy["execution"] != FIXED_EXECUTION
+            or (exposure is not None and strategy["exposure_expression"] != exposure.expression)
+            or (immutable_input.programs
+                and strategy["environment"] != get_strategy_runtime().identity())
             or immutable_input.risk_free_rate != "0"
         )
         if common_contract_mismatch or strategy_contract_mismatch:
@@ -3594,6 +3581,10 @@ class ResearchRunService:
             prepared.exact_bytes,
             int(progress["completed_research_sessions"]),
             strategy_event_count=strategy_event_record_count(payloads),
+            strategy_target_count=strategy_event_record_count(payloads, section="strategy_targets"),
+            strategy_framework_count=strategy_event_record_count(
+                payloads, section="strategy_framework",
+            ),
         )
         holding_prepared = None
         if claim.immutable_input.research_kind == "strategy_backtest":
@@ -4452,15 +4443,59 @@ def _decode_list_cursor(
     return created_at, run_id
 
 
+def _spec_programs(command: ResearchSpec):
+    if isinstance(command, DirectStrategyBacktestSpec):
+        return {"program": command.program}
+    if isinstance(command, StrategyBacktestSpec):
+        return {f"modules.{stage}.program": program
+                for stage, program in command.modules.programs().items()}
+    return {}
+
+
+def _spec_data_requirements(command, compiled, exposure) -> ExpressionRequirements:
+    expressions = tuple(item for item in (compiled, exposure) if item is not None)
+    builtin_portfolio = (isinstance(command, StrategyBacktestSpec)
+                         and command.has_builtin_portfolio)
+    base = (expression_requirements(
+        *expressions,
+        weighting=command.weighting if builtin_portfolio else "equal_weight",
+        volatility_window=command.volatility_window if builtin_portfolio else 20,
+    ) if expressions else ExpressionRequirements(
+        field_bindings={}, effective_lookback=0, node_count=0, depth=0,
+        estimated_work=0, require_industry=False,
+    ))
+    bindings = dict(base.field_bindings)
+    if command.research_kind == "strategy_backtest":
+        bindings["price.close.adjusted"] = "close"
+    lookback = base.effective_lookback
+    programs = _spec_programs(command)
+    if programs:
+        fields = {field.field_id: field.alpha.identifier for field in alpha_field_catalog()}
+        for path, program in programs.items():
+            declared = program.data_requirements
+            if not set(declared.field_ids) <= fields.keys():
+                raise ResearchRunAdmissionRejected([ResearchRunAdmissionIssue(
+                    code="FIELD_UNAVAILABLE_IN_CURRENT_DATA", field=f"{path}.data_requirements",
+                    message="Python program declares an unknown research field",
+                )])
+            bindings.update({key: fields[key] for key in declared.field_ids})
+            lookback = max(lookback, declared.history_sessions - 1)
+    return ExpressionRequirements(
+        field_bindings=bindings, effective_lookback=lookback, node_count=base.node_count,
+        depth=base.depth, estimated_work=base.estimated_work,
+        require_industry=base.require_industry,
+    )
+
+
 def _admitted_input(
     command: ResearchSpec,
-    compiled: CompiledAlpha,
+    compiled: CompiledAlpha | None,
     snapshot: DatasetAdmissionSnapshot | None,
     *,
     execution_memory_bytes: int,
 ) -> ImmutableRunInput:
     exposure = None
-    if isinstance(command, StrategyBacktestSpec):
+    if isinstance(command, StrategyBacktestSpec) and command.has_builtin_portfolio:
         try:
             exposure = alpha_language.compile(command.exposure_expression, context="exposure")
         except FormulaCompilationError as error:
@@ -4474,13 +4509,35 @@ def _admitted_input(
                 )
                 for diagnostic in error.diagnostics
             ]) from error
-    requirements = expression_requirements(
-        compiled, *(() if exposure is None else (exposure,)),
-        weighting=(command.weighting
-                   if isinstance(command, StrategyBacktestSpec) else "equal_weight"),
-        volatility_window=(command.volatility_window
-                           if isinstance(command, StrategyBacktestSpec) else 20),
-    )
+    direct = isinstance(command, DirectStrategyBacktestSpec)
+    environment = None
+    programs = _spec_programs(command)
+    if programs:
+        runtime = get_strategy_runtime()
+        for path, program in programs.items():
+            try:
+                runtime.validate(program.source)
+            except StrategyProgramError as error:
+                raise ResearchRunAdmissionRejected([ResearchRunAdmissionIssue(
+                    code="STRATEGY_PROGRAM_INVALID", field=f"{path}.source", message=str(error),
+                )]) from error
+        environment = runtime.identity()
+    requirements = _spec_data_requirements(command, compiled, exposure)
+    neutralization = command.neutralization if command.has_alpha else None
+    field_owners = {
+        name: set(expression.field_ids_by_identifier.values())
+        for name, expression in (("formula", compiled), ("exposure_expression", exposure))
+        if expression is not None
+    }
+    if command.research_kind == "strategy_backtest":
+        field_owners["data"] = {"price.close.adjusted"}
+    field_owners.update({
+        f"{path}.data_requirements": set(program.data_requirements.field_ids)
+        for path, program in programs.items()
+    })
+    if (isinstance(command, StrategyBacktestSpec) and command.has_builtin_portfolio
+            and command.weighting == "inverse_volatility"):
+        field_owners["weighting"] = {"price.close.adjusted"}
     if snapshot is None:
         raise ResearchRunAdmissionRejected(
             [
@@ -4518,14 +4575,16 @@ def _admitted_input(
             [
                 ResearchRunAdmissionIssue(
                     code="FIELD_UNAVAILABLE_IN_CURRENT_DATA",
-                    field="formula",
-                    message="Alpha field is unavailable in current Data",
+                    field=owner,
+                    message="Research field is unavailable in current Data",
                 )
+                for owner, owned in field_owners.items()
+                if owned - snapshot.available_field_ids
             ]
         )
     dependencies = resolve_data_dependencies(
         field_ids=field_ids,
-        neutralization=command.neutralization,
+        neutralization=neutralization,
         require_industry=requirements.require_industry,
     )
     first_index = snapshot.research_sessions.index(sessions[0])
@@ -4539,23 +4598,27 @@ def _admitted_input(
     if unavailable:
         issues = []
         for family_id in sorted(unavailable):
+            owners = [owner for owner, owned in field_owners.items()
+                      if owned & dependencies.field_ids_by_family.get(family_id, frozenset())]
             coverage = snapshot.family_coverage.get(family_id)
             available = (
                 "not ready" if coverage is None
                 else f"{coverage.start.isoformat()} to {coverage.end.isoformat()}"
             )
             if family_id == "equity.industry_membership":
-                code, field = "INDUSTRY_CALCULATION_OUTSIDE_COVERAGE", "neutralization"
+                code, owners = "INDUSTRY_CALCULATION_OUTSIDE_COVERAGE", ["neutralization"]
             elif family_id in dependencies.financial_families:
-                code, field = "FINANCIAL_CALCULATION_OUTSIDE_COVERAGE", "formula"
+                code = "FINANCIAL_CALCULATION_OUTSIDE_COVERAGE"
             else:
-                code, field = "FIELD_CALCULATION_OUTSIDE_COVERAGE", "formula"
+                code = "FIELD_CALCULATION_OUTSIDE_COVERAGE"
             issue_range = None
             if family_id == "equity.industry_membership" and requirements.require_industry:
                 industry_expression = (
-                    compiled if requires_common_industry(compiled.expression) else exposure
+                    compiled if compiled is not None and requires_common_industry(
+                        compiled.expression,
+                    ) else exposure
                 )
-                field = "formula" if industry_expression is compiled else "exposure_expression"
+                owners = ["formula" if industry_expression is compiled else "exposure_expression"]
                 issue_range = {
                     "start": {"offset": 0, "line": 1, "column": 1},
                     "end": {
@@ -4564,13 +4627,13 @@ def _admitted_input(
                         "column": len(industry_expression.source.rsplit("\n", 1)[-1]) + 1,
                     },
                 }
-            issues.append(ResearchRunAdmissionIssue(
-                code=code, field=field, range=issue_range,
+            issues.extend(ResearchRunAdmissionIssue(
+                code=code, field=owner, range=issue_range,
                 message=(
-                    f"Formula requires {family_id} coverage for its calculation period; "
+                    f"Research requires {family_id} coverage for its calculation period; "
                     f"current coverage is {available}."
                 ),
-            ))
+            ) for owner in owners or ["data"])
         raise ResearchRunAdmissionRejected(issues)
     try:
         calculation_session_count, universe_instrument_count = snapshot.calculation_shape(
@@ -4589,7 +4652,7 @@ def _admitted_input(
                 )
             ]
         ) from error
-    estimated_run_work = estimate_alpha_run_work(
+    estimated_run_work = 0 if not requirements.estimated_work else estimate_alpha_run_work(
         requirements.estimated_work,
         research_session_count=calculation_session_count,
         universe_instrument_count=universe_instrument_count,
@@ -4609,6 +4672,10 @@ def _admitted_input(
             maximum_universe_cardinality=universe_instrument_count,
             effective_lookback=requirements.effective_lookback,
             execution_memory_bytes=execution_memory_bytes,
+            decision_mode=("direct" if direct else "framework" if isinstance(
+                command, StrategyBacktestSpec,
+            ) else "factor_evaluation"),
+            python_program_count=len(programs),
         )
     except ResearchChunkCapacityError as error:
         raise ResearchRunAdmissionRejected(
@@ -4621,32 +4688,43 @@ def _admitted_input(
             ]
         ) from error
     strategy_values: dict[str, object] = {}
-    if isinstance(command, StrategyBacktestSpec):
-        assert exposure is not None
+    if direct:
+        strategy_values = {
+            "strategy": {
+                "kind": "direct", "program": command.program.model_dump(mode="json"),
+                "program_sha256": command.program.source_sha256, "environment": environment,
+                "initial_cash_cny": command.initial_cash_cny, "execution": FIXED_EXECUTION,
+            },
+            "costs": command.costs.model_dump(), "risk_free_rate": "0",
+        }
+    elif isinstance(command, StrategyBacktestSpec):
+        portfolio_settings = {} if not command.has_builtin_portfolio else {
+            "holdings_count": command.holdings_count,
+            "selection_every_sessions": command.selection_every_sessions,
+            "weighting": command.weighting, "volatility_window": command.volatility_window,
+            "exposure_source": exposure.source, "exposure_expression": exposure.expression,
+        }
         strategy_values = {
             "strategy": {
                 "kind": FIXED_STRATEGY_KIND,
-                "holdings_count": command.holdings_count,
-                "selection_every_sessions": command.selection_every_sessions,
-                "weighting": command.weighting,
-                "volatility_window": command.volatility_window,
-                "exposure_source": exposure.source,
-                "exposure_expression": exposure.expression,
+                "modules": command.modules.model_dump(mode="json"),
+                **portfolio_settings,
+                **({"environment": environment} if programs else {}),
                 "initial_cash_cny": command.initial_cash_cny,
                 "execution": FIXED_EXECUTION,
             },
-            "costs": FIXED_COSTS,
+            "costs": command.costs.model_dump(),
             "risk_free_rate": "0",
         }
     return ImmutableRunInput(
-        formula_source=command.formula,
-        alpha_expression=compiled.expression,
+        formula_source=command.formula if command.has_alpha else None,
+        alpha_expression=compiled.expression if compiled is not None else None,
         hypothesis=command.hypothesis,
         requested_start_date=command.start_date,
         requested_end_date=command.end_date,
         field_bindings=requirements.field_bindings,
         universe=command.universe,
-        neutralization=command.neutralization,
+        neutralization=neutralization,
         research_kind=command.research_kind,
         **strategy_values,
         numeric_execution_contract=NUMERIC_CONTRACT_ID,
@@ -4714,7 +4792,7 @@ def _result_provenance(claim: ResearchRunExecutionClaim) -> dict[str, object]:
             }
         )
     return {
-        "schema_version": "research-result-v2",
+        "schema_version": "research-result-v3",
         "research_run_id": claim.run_id,
         "research_kind": claim.immutable_input.research_kind,
         "immutable_input_sha256": hashlib.sha256(canonical_json_bytes(value)).hexdigest(),
@@ -4767,6 +4845,8 @@ def _chunk_completes_phase(
 
 
 def _failure_policy(error: Exception) -> _FailurePolicy:
+    if isinstance(error, StrategyProgramFailure):
+        return _FailurePolicy(attempt_reason="StrategyProgramFailure", public_reason=str(error))
     if isinstance(error, ResearchRunInsufficientWarmup):
         return _FailurePolicy(
             attempt_reason="InsufficientCalculationWarmup",
@@ -4845,7 +4925,11 @@ def _start_tracking_fingerprint(run_id: str) -> str:
 def _summary(row: object) -> ResearchRunSummary:
     assert isinstance(row, dict)
     immutable_input = ImmutableRunInput.model_validate(row["immutable_input"])
-    compact_formula = " ".join(immutable_input.formula_source.split())
+    compact_formula = (
+        f"Python · {immutable_input.strategy['program_sha256'][:12]}" if immutable_input.is_direct
+        else (" ".join(immutable_input.formula_source.split()) if immutable_input.has_alpha
+              else "Framework · Python Signals")
+    )
     formula_summary = (
         compact_formula if len(compact_formula) <= 120 else f"{compact_formula[:117]}..."
     )
@@ -4978,27 +5062,7 @@ def _strategy_comparison_facts(
 def _authorable_input(row: object) -> ResearchRunAuthorableInput:
     assert isinstance(row, dict)
     immutable_input = ImmutableRunInput.model_validate(row["immutable_input"])
-    strategy_values: dict[str, object] = {}
-    if immutable_input.research_kind == "strategy_backtest":
-        assert immutable_input.strategy is not None
-        strategy_values = {
-            "initial_cash_cny": str(immutable_input.strategy["initial_cash_cny"]),
-            "holdings_count": int(immutable_input.strategy["holdings_count"]),
-            "selection_every_sessions": int(immutable_input.strategy["selection_every_sessions"]),
-            "weighting": immutable_input.strategy["weighting"],
-            "volatility_window": immutable_input.strategy["volatility_window"],
-            "exposure_expression": str(immutable_input.strategy["exposure_source"]),
-        }
-    return ResearchRunAuthorableInput(
-        formula=immutable_input.formula_source,
-        hypothesis=immutable_input.hypothesis,
-        start_date=immutable_input.requested_start_date,
-        end_date=immutable_input.requested_end_date,
-        universe=immutable_input.universe,
-        neutralization=immutable_input.neutralization,
-        research_kind=immutable_input.research_kind,
-        **strategy_values,
-    )
+    return ResearchRunAuthorableInput.model_validate(immutable_input.authorable_value())
 
 
 def _research_progress(row: Mapping[str, object]) -> ResearchRunProgress:
@@ -5135,7 +5199,7 @@ def _checkpoint_binding(
             }
         )
     return {
-        "schema_version": "research-execution-checkpoint-v2",
+        "schema_version": "research-execution-checkpoint-v3",
         "research_kind": immutable_input.research_kind,
         "run_id": run_id,
         "creator_attempt_id": creator_attempt_id,
@@ -5570,11 +5634,12 @@ def _public_result(
                     "net_cash",
                     "gross_nav",
                     "net_nav",
+                    "close_risk_nav_cny",
                     "cumulative_transaction_cost",
                     "positions",
-                    "selection_phase",
-                    "target_selection",
-                    "target_exposure",
+                    "research_phase",
+                    "decision_state",
+                    "contract_checksum",
                     "pending_target",
                 )
             },

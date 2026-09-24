@@ -1,23 +1,22 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from decimal import Decimal
 from typing import Annotated, Literal
 
 from pydantic import (
     AfterValidator,
     BaseModel,
-    BeforeValidator,
     ConfigDict,
+    Discriminator,
     Field,
     StrictFloat,
     StrictInt,
+    Tag,
     TypeAdapter,
     field_validator,
     model_validator,
 )
 
-from thesistrace.alpha_language.language import MAX_FORMULA_LENGTH
 from thesistrace.alpha_language.models import DiagnosticDetails, SourceRange
 from thesistrace.benchmark import StrategyComparison, StrategyComparisonSummary
 from thesistrace.daily_holding_queries import (
@@ -28,12 +27,79 @@ from thesistrace.daily_holding_queries import (
 )
 from thesistrace.daily_track.models import DailyTrackSummary
 from thesistrace.data.models import FinancialResearchReadiness
+from thesistrace.research_definition import (
+    MAX_HOLDINGS_COUNT as MAX_HOLDINGS_COUNT,
+)
+from thesistrace.research_definition import (
+    MAX_SELECTION_INTERVAL as MAX_SELECTION_INTERVAL,
+)
+from thesistrace.research_definition import (
+    MIN_HOLDINGS_COUNT as MIN_HOLDINGS_COUNT,
+)
+from thesistrace.research_definition import (
+    MIN_SELECTION_INTERVAL as MIN_SELECTION_INTERVAL,
+)
+from thesistrace.research_definition import (
+    RESEARCH_KINDS as RESEARCH_KINDS,
+)
+from thesistrace.research_definition import (
+    RESEARCH_NEUTRALIZATIONS as RESEARCH_NEUTRALIZATIONS,
+)
+from thesistrace.research_definition import (
+    RESEARCH_UNIVERSES as RESEARCH_UNIVERSES,
+)
+from thesistrace.research_definition import (
+    DirectStrategyBacktestSpec as DirectStrategyBacktestSpec,
+)
+from thesistrace.research_definition import (
+    FactorEvaluationSpec as FactorEvaluationSpec,
+)
+from thesistrace.research_definition import (
+    Formula as Formula,
+)
+from thesistrace.research_definition import (
+    HoldingsCount as HoldingsCount,
+)
+from thesistrace.research_definition import (
+    InitialCash as InitialCash,
+)
+from thesistrace.research_definition import (
+    NaturalDate as NaturalDate,
+)
+from thesistrace.research_definition import (
+    ResearchHypothesis as ResearchHypothesis,
+)
+from thesistrace.research_definition import (
+    ResearchKind as ResearchKind,
+)
+from thesistrace.research_definition import (
+    ResearchNeutralization as ResearchNeutralization,
+)
+from thesistrace.research_definition import (
+    ResearchSpec as ResearchSpec,
+)
+from thesistrace.research_definition import (
+    ResearchUniverse as ResearchUniverse,
+)
+from thesistrace.research_definition import (
+    SelectionInterval as SelectionInterval,
+)
+from thesistrace.research_definition import (
+    SimulationCosts,
+    authorable_research_input,
+    kernel_strategy_from_frozen,
+    spec_discriminator,
+)
+from thesistrace.research_definition import (
+    StrategyBacktestSpec as StrategyBacktestSpec,
+)
 from thesistrace.research_kernel.common_observations import CommonInputObservation
+from thesistrace.research_kernel.direct_strategy import PythonProgram
 from thesistrace.research_kernel.exposure import validate_exposure
 from thesistrace.research_kernel.factor_evidence import FactorDailyObservation
-from thesistrace.research_kernel.numeric import MAX_INITIAL_CASH_CNY
+from thesistrace.research_kernel.framework_strategy import FrameworkModules
 from thesistrace.research_kernel.portfolio_weighting import PortfolioWeighting, VolatilityWindow
-from thesistrace.research_kernel.terminal_state_schema import PendingTarget, TargetSelection
+from thesistrace.research_kernel.terminal_state_schema import DecisionState, PendingTarget
 from thesistrace.research_run.result_schema import FactorPeriodStatistic, StrategyMetrics
 from thesistrace.strategy_evidence import (
     StrategyAdjustmentsPage,
@@ -44,6 +110,8 @@ from thesistrace.strategy_evidence import (
     StrategyExecutionConstraintsQuery,
     StrategyFillsPage,
     StrategyFillsQuery,
+    StrategyFrameworkPage,
+    StrategyFrameworkQuery,
     StrategyOrdersPage,
     StrategyOrdersQuery,
     StrategyTargetsPage,
@@ -87,47 +155,11 @@ RequestId = Annotated[
 ]
 FolderId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
 ResearchName = Annotated[str, Field(strict=True, max_length=200)]
-ResearchHypothesis = Annotated[str, Field(strict=True, max_length=1024)]
-Formula = Annotated[str, Field(strict=True, max_length=MAX_FORMULA_LENGTH)]
-MIN_HOLDINGS_COUNT = 1
-MAX_HOLDINGS_COUNT = 100
-MIN_SELECTION_INTERVAL = 1
-MAX_SELECTION_INTERVAL = 20
-def _normalize_initial_cash(value: str) -> str:
-    amount = Decimal(value)
-    if amount <= 0 or amount > MAX_INITIAL_CASH_CNY:
-        raise ValueError("Initial Cash must be positive and at most 1000000000 CNY")
-    whole, separator, fraction = format(amount, "f").partition(".")
-    fraction = fraction.rstrip("0")
-    return whole + ("." + fraction if separator and fraction else "")
-
-
-InitialCash = Annotated[
-    str,
-    Field(
-        strict=True, pattern=r"^[0-9]+(?:\.[0-9]{1,2})?$",
-        description=(
-            "CNY decimal string, greater than 0 and at most 1000000000, up to 2 decimal places."
-        ),
-    ),
-    AfterValidator(_normalize_initial_cash),
-]
-
-
-HoldingsCount = Annotated[
-    int,
-    Field(strict=True, ge=MIN_HOLDINGS_COUNT, le=MAX_HOLDINGS_COUNT),
-]
-SelectionInterval = Annotated[
-    int,
-    Field(strict=True, ge=MIN_SELECTION_INTERVAL, le=MAX_SELECTION_INTERVAL),
-]
-type ResearchKind = Literal["factor_evaluation", "strategy_backtest"]
 type ResearchRunStatus = Literal[
     "queued", "running", "cancelling", "succeeded", "failed", "cancelled"
 ]
 type ResearchRunResultSection = Literal[
-    "strategy_targets", "strategy_orders", "strategy_child_orders",
+    "strategy_framework", "strategy_targets", "strategy_orders", "strategy_child_orders",
     "strategy_fills", "strategy_adjustments", "strategy_execution_constraints",
     "daily_holdings_status", "daily_holdings",
     "factor",
@@ -140,8 +172,6 @@ type ResearchRunResultSection = Literal[
     "provenance",
     "common_input_observations",
 ]
-type ResearchUniverse = Literal["top300", "top1000", "top2000", "top3000"]
-type ResearchNeutralization = Literal["none", "industry"]
 RESEARCH_RUN_ACTIVE_STATUSES = frozenset({"queued", "running", "cancelling"})
 RESEARCH_RUN_POLL_RETRY_SECONDS = 2
 FACTOR_RESULT_SECTIONS: tuple[ResearchRunResultSection, ...] = (
@@ -152,7 +182,7 @@ FACTOR_RESULT_SECTIONS: tuple[ResearchRunResultSection, ...] = (
     "common_input_observations",
 )
 STRATEGY_RESULT_SECTIONS: tuple[ResearchRunResultSection, ...] = (
-    "strategy_targets", "strategy_orders", "strategy_child_orders",
+    "strategy_framework", "strategy_targets", "strategy_orders", "strategy_child_orders",
     "strategy_fills", "strategy_adjustments", "strategy_execution_constraints",
     "daily_holdings_status", "daily_holdings",
     "strategy_summary",
@@ -161,20 +191,6 @@ STRATEGY_RESULT_SECTIONS: tuple[ResearchRunResultSection, ...] = (
     "terminal_positions",
     "provenance",
     "common_input_observations",
-)
-RESEARCH_KINDS: tuple[ResearchKind, ...] = (
-    "factor_evaluation",
-    "strategy_backtest",
-)
-RESEARCH_UNIVERSES: tuple[ResearchUniverse, ...] = (
-    "top300",
-    "top1000",
-    "top2000",
-    "top3000",
-)
-RESEARCH_NEUTRALIZATIONS: tuple[ResearchNeutralization, ...] = (
-    "none",
-    "industry",
 )
 
 
@@ -193,58 +209,6 @@ def research_run_result_sections(
     return STRATEGY_RESULT_SECTIONS
 
 
-def _natural_date(value: object) -> date:
-    if type(value) is date:
-        return value
-    if not isinstance(value, str):
-        raise ValueError("natural date must be an ISO YYYY-MM-DD string")
-    try:
-        parsed = date.fromisoformat(value)
-    except ValueError as error:
-        raise ValueError("natural date must be an ISO YYYY-MM-DD string") from error
-    if parsed.isoformat() != value:
-        raise ValueError("natural date must be an ISO YYYY-MM-DD string")
-    return parsed
-
-
-NaturalDate = Annotated[date, BeforeValidator(_natural_date)]
-
-
-class _ResearchSpecBase(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-
-    formula: Formula
-    hypothesis: ResearchHypothesis | None = None
-    start_date: NaturalDate
-    end_date: NaturalDate
-    universe: ResearchUniverse
-    neutralization: ResearchNeutralization
-
-    @model_validator(mode="after")
-    def validate_research_period(self) -> _ResearchSpecBase:
-        if self.start_date > self.end_date:
-            raise ValueError("Research end date must not precede start date")
-        return self
-
-
-class FactorEvaluationSpec(_ResearchSpecBase):
-    research_kind: Literal["factor_evaluation"]
-
-
-class StrategyBacktestSpec(_ResearchSpecBase):
-    research_kind: Literal["strategy_backtest"]
-    initial_cash_cny: InitialCash
-    holdings_count: HoldingsCount
-    selection_every_sessions: SelectionInterval
-    exposure_expression: Formula = "1"
-    weighting: PortfolioWeighting = "equal_weight"
-    volatility_window: VolatilityWindow = 20
-
-
-type ResearchSpec = Annotated[
-    FactorEvaluationSpec | StrategyBacktestSpec,
-    Field(discriminator="research_kind"),
-]
 
 
 class _ResearchRunSubmission(BaseModel):
@@ -271,9 +235,15 @@ class StrategyBacktestAdmissionCommand(StrategyBacktestSpec, _ResearchRunSubmiss
     pass
 
 
+class DirectStrategyAdmissionCommand(DirectStrategyBacktestSpec, _ResearchRunSubmission):
+    pass
+
+
 type ResearchRunAdmissionCommand = Annotated[
-    FactorEvaluationAdmissionCommand | StrategyBacktestAdmissionCommand,
-    Field(discriminator="research_kind"),
+    Annotated[FactorEvaluationAdmissionCommand, Tag("factor_evaluation")]
+    | Annotated[StrategyBacktestAdmissionCommand, Tag("strategy_backtest:framework")]
+    | Annotated[DirectStrategyAdmissionCommand, Tag("strategy_backtest:direct")],
+    Discriminator(spec_discriminator),
 ]
 
 
@@ -431,14 +401,14 @@ class ImmutableRunInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     rerun_origin: CurrentDataRerunOrigin | None = None
-    formula_source: str
-    alpha_expression: dict[str, object]
+    formula_source: str | None
+    alpha_expression: dict[str, object] | None
     hypothesis: ResearchHypothesis | None
     requested_start_date: date
     requested_end_date: date
     field_bindings: dict[str, str]
     universe: ResearchUniverse
-    neutralization: ResearchNeutralization
+    neutralization: ResearchNeutralization | None
     research_kind: ResearchKind
     strategy: dict[str, object] | None = None
     costs: dict[str, str] | None = None
@@ -462,27 +432,116 @@ class ImmutableRunInput(BaseModel):
             value is None for value in strategy_values
         ):
             raise ValueError("Strategy Backtest immutable input requires Strategy values")
-        if self.strategy is not None:
+        if self.costs is not None:
+            SimulationCosts.model_validate(self.costs)
+        if self.is_direct:
+            if any(value is not None for value in (
+                self.formula_source, self.alpha_expression, self.neutralization,
+            )):
+                raise ValueError("Direct Strategy cannot contain Alpha settings")
             if set(self.strategy) != {
-                "kind", "holdings_count", "selection_every_sessions", "initial_cash_cny",
-                "execution", "exposure_source", "exposure_expression",
-                "weighting", "volatility_window",
+                "kind", "program", "program_sha256", "environment", "initial_cash_cny", "execution",
             }:
+                raise ValueError("Frozen Direct input does not match the current contract")
+            program = PythonProgram.model_validate(self.strategy["program"])
+            if program.source_sha256 != self.strategy["program_sha256"]:
+                raise ValueError("Frozen Python program identity does not match its source")
+            if (not isinstance(self.strategy["environment"], dict)
+                    or self.field_bindings.keys() != (
+                        set(program.data_requirements.field_ids) | {"price.close.adjusted"}
+                    )
+                    or self.expression_admission.effective_lookback
+                    != program.data_requirements.history_sessions - 1):
+                raise ValueError("Frozen Python data or execution environment is invalid")
+            TypeAdapter(InitialCash).validate_python(self.strategy["initial_cash_cny"])
+            return self
+        if self.strategy is not None and self.strategy.get("kind") != "framework":
+            raise ValueError("Frozen Strategy must identify the supported Framework modules")
+        modules = (FrameworkModules.model_validate(self.strategy.get("modules"))
+                   if self.strategy is not None else None)
+        requires_alpha = modules is None or modules.alpha == "alpha_formula/v1"
+        alpha_values = (self.formula_source, self.alpha_expression, self.neutralization)
+        if requires_alpha and any(value is None for value in alpha_values):
+            raise ValueError("Formula research requires Alpha settings")
+        if not requires_alpha and any(value is not None for value in alpha_values):
+            raise ValueError("Python Signal cannot contain builtin Alpha settings")
+        if self.strategy is not None:
+            programs = modules.programs()
+            expected = {"kind", "initial_cash_cny", "execution", "modules"}
+            if self.has_builtin_portfolio:
+                expected |= {"holdings_count", "selection_every_sessions", "exposure_source",
+                             "exposure_expression", "weighting", "volatility_window"}
+            if programs:
+                expected.add("environment")
+            if set(self.strategy) != expected:
                 raise ValueError("Frozen Strategy input does not match the current contract")
             TypeAdapter(InitialCash).validate_python(self.strategy["initial_cash_cny"])
-            TypeAdapter(HoldingsCount).validate_python(self.strategy["holdings_count"])
-            TypeAdapter(PortfolioWeighting).validate_python(self.strategy["weighting"])
-            TypeAdapter(VolatilityWindow).validate_python(self.strategy["volatility_window"])
-            TypeAdapter(SelectionInterval).validate_python(self.strategy["selection_every_sessions"])
-            TypeAdapter(Formula).validate_python(self.strategy["exposure_source"])
-            validate_exposure(self.strategy["exposure_expression"])
+            if programs and not isinstance(self.strategy["environment"], dict):
+                raise ValueError("Framework programs require a frozen execution environment")
+            for program in programs.values():
+                declaration = program.data_requirements
+                if (not set(declaration.field_ids) <= self.field_bindings.keys()
+                        or declaration.history_sessions - 1
+                        > self.expression_admission.effective_lookback):
+                    raise ValueError("Frozen Framework program data requirements are invalid")
+            if self.has_builtin_portfolio:
+                TypeAdapter(HoldingsCount).validate_python(self.strategy["holdings_count"])
+                TypeAdapter(PortfolioWeighting).validate_python(self.strategy["weighting"])
+                TypeAdapter(VolatilityWindow).validate_python(self.strategy["volatility_window"])
+                TypeAdapter(SelectionInterval).validate_python(
+                    self.strategy["selection_every_sessions"],
+                )
+                TypeAdapter(Formula).validate_python(self.strategy["exposure_source"])
+                validate_exposure(self.strategy["exposure_expression"])
         return self
 
     @property
-    def expression_trees(self) -> tuple[dict[str, object], ...]:
-        return (self.alpha_expression,) + (
-            () if self.strategy is None else (self.strategy["exposure_expression"],)
+    def is_direct(self) -> bool:
+        return self.strategy is not None and self.strategy.get("kind") == "direct"
+
+    @property
+    def has_alpha(self) -> bool:
+        return self.alpha_expression is not None
+
+    @property
+    def alpha_field_bindings(self) -> dict[str, str]:
+        from thesistrace.research_kernel.alpha_expression import validate_normalized_alpha
+
+        if not self.has_alpha:
+            return {}
+        expression = validate_normalized_alpha(
+            self.alpha_expression, field_bindings=self.field_bindings,
         )
+        return {field_id: identifier
+                for identifier, field_id in expression.field_ids_by_identifier.items()}
+
+    @property
+    def has_builtin_portfolio(self) -> bool:
+        return (self.strategy is not None and self.strategy.get("kind") == "framework"
+                and FrameworkModules.model_validate(
+                    self.strategy["modules"],
+                ).has_builtin_portfolio)
+
+    @property
+    def programs(self) -> dict[str, PythonProgram]:
+        if self.is_direct:
+            return {"program": PythonProgram.model_validate(self.strategy["program"])}
+        if self.strategy is None:
+            return {}
+        return {f"modules.{stage}.program": program for stage, program
+                in FrameworkModules.model_validate(self.strategy["modules"]).programs().items()}
+
+    @property
+    def expression_trees(self) -> tuple[dict[str, object], ...]:
+        return (() if not self.has_alpha else (self.alpha_expression,)) + (
+            (self.strategy["exposure_expression"],) if self.has_builtin_portfolio else ()
+        )
+
+    def kernel_strategy(self):
+        return kernel_strategy_from_frozen(self.strategy, self.costs)
+
+    def authorable_value(self) -> dict[str, object]:
+        return authorable_research_input(self.model_dump())
 
     def canonical_value(self) -> dict[str, object]:
         value = self.model_dump(mode="json")
@@ -584,16 +643,22 @@ type ResearchRunAdmissionOutcome = Annotated[
 class ResearchRunAuthorableInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    formula: Formula
+    formula: Formula | None = Field(default=None, exclude_if=lambda value: value is None)
     hypothesis: ResearchHypothesis | None
     start_date: date
     end_date: date
     universe: ResearchUniverse
-    neutralization: ResearchNeutralization
+    neutralization: ResearchNeutralization | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
     research_kind: ResearchKind
+    strategy_mode: Literal["framework", "direct"] | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
     initial_cash_cny: InitialCash | None = Field(
         default=None, exclude_if=lambda value: value is None,
     )
+    costs: SimulationCosts | None = Field(default=None, exclude_if=lambda value: value is None)
     holdings_count: int | None = Field(default=None, exclude_if=lambda value: value is None)
     volatility_window: VolatilityWindow | None = Field(
         default=None, exclude_if=lambda value: value is None,
@@ -609,20 +674,14 @@ class ResearchRunAuthorableInput(BaseModel):
         exclude_if=lambda value: value is None,
     )
 
+    program: PythonProgram | None = Field(default=None, exclude_if=lambda value: value is None)
+    modules: FrameworkModules | None = Field(default=None, exclude_if=lambda value: value is None)
+
     @model_validator(mode="after")
     def validate_research_kind_contract(self) -> ResearchRunAuthorableInput:
-        strategy_values = (
-            self.initial_cash_cny, self.holdings_count, self.selection_every_sessions,
-            self.exposure_expression, self.weighting, self.volatility_window,
-        )
-        if self.research_kind == "factor_evaluation" and any(
-            value is not None for value in strategy_values
-        ):
-            raise ValueError("Factor Evaluation authorable input cannot contain Strategy values")
-        if self.research_kind == "strategy_backtest" and any(
-            value is None for value in strategy_values
-        ):
-            raise ValueError("Strategy Backtest authorable input requires Strategy values")
+        if self.research_kind == "strategy_backtest" and self.costs is None:
+            raise ValueError("Strategy authorable input requires frozen Simulation Costs")
+        TypeAdapter(ResearchSpec).validate_python(self.model_dump(exclude_none=True))
         return self
 
 
@@ -719,6 +778,7 @@ class StrategyDailyObservation(BaseModel):
     session: str
     gross_nav: str
     net_nav: str
+    close_risk_nav_cny: str
     net_cash: str
     transaction_cost_cny: str
     holdings_count: int
@@ -743,15 +803,17 @@ class TerminalStrategyPosition(BaseModel):
     execution_shares: int
     adjusted_units: str
     last_adjusted_price: str
+    last_close_adjusted_price: str
+    remaining_acquisition_cost_cny: str
+    holding_cycle_started_session: str
+    holding_age: int
 
 
-class TerminalSelectionPhase(BaseModel):
+class TerminalResearchPhase(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     origin_session: str
     report_session_count: int
-    selection_interval: int
-    completed_intervals: int
 
 
 class TerminalStrategyStateView(BaseModel):
@@ -764,11 +826,12 @@ class TerminalStrategyStateView(BaseModel):
     net_cash: str
     gross_nav: str
     net_nav: str
+    close_risk_nav_cny: str
     cumulative_transaction_cost: str
     positions: list[TerminalStrategyPosition]
-    selection_phase: TerminalSelectionPhase
-    target_selection: TargetSelection
-    target_exposure: float = Field(ge=0, le=1, allow_inf_nan=False)
+    research_phase: TerminalResearchPhase
+    decision_state: DecisionState
+    contract_checksum: str
     pending_target: PendingTarget | None
 
 
@@ -896,6 +959,10 @@ class ProvenanceResultSectionInput(_ResearchRunResultSectionInput):
     section: Literal["provenance"]
 
 
+class RunStrategyFrameworkInput(_ResearchRunResultSectionInput, StrategyFrameworkQuery):
+    pass
+
+
 class RunStrategyTargetsInput(_ResearchRunResultSectionInput, StrategyTargetsQuery):
     pass
 
@@ -940,6 +1007,7 @@ type ResearchRunResultSectionInput = Annotated[
     | TerminalPositionsResultSectionInput
     | ProvenanceResultSectionInput
     | CommonInputObservationsResultSectionInput
+    | RunStrategyFrameworkInput
     | RunStrategyTargetsInput
     | RunStrategyOrdersInput
     | RunStrategyChildOrdersInput
@@ -1054,10 +1122,11 @@ class TerminalStrategyStateResultSection(BaseModel):
     net_cash: str
     gross_nav: str
     net_nav: str
+    close_risk_nav_cny: str
     cumulative_transaction_cost: str
-    selection_phase: TerminalSelectionPhase
-    target_selection: TargetSelection
-    target_exposure: float = Field(ge=0, le=1, allow_inf_nan=False)
+    research_phase: TerminalResearchPhase
+    decision_state: DecisionState
+    contract_checksum: str
     pending_target: PendingTarget | None
 
 
@@ -1109,6 +1178,7 @@ type ResearchRunResultSectionResponse = Annotated[
     | TerminalPositionsResultSection
     | ProvenanceResultSection
     | CommonInputObservationsResultSection
+    | StrategyFrameworkPage
     | StrategyTargetsPage
     | StrategyOrdersPage
     | StrategyChildOrdersPage

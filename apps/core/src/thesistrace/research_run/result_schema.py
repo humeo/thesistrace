@@ -150,7 +150,7 @@ class StrategyMetrics(DurableResultModel):
 
 
 class StrategySummaryValue(DurableResultModel):
-    alpha_checksum: StrictStr
+    alpha_checksum: StrictStr | None
     entry_session: StrictStr | None
     initial_cash_cny: StrictStr
     source_checksum: StrictStr
@@ -161,6 +161,7 @@ class StrategyDailyObservation(DurableResultModel):
     session: StrictStr
     gross_nav: StrictStr
     net_nav: StrictStr
+    close_risk_nav_cny: StrictStr
     net_cash: StrictStr
     transaction_cost_cny: StrictStr
     holdings_count: StrictInt

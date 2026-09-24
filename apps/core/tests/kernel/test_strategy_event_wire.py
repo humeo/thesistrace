@@ -221,3 +221,28 @@ def test_holding_rows_are_framed_separately_from_permanent_events():
     for frame in frames[:-1]:
         assert assembler.accept(frame) is None
     assert assembler.accept(frames[-1]) == message
+
+
+def test_large_target_frames_are_byte_bounded_and_ordinary_records_remain_small():
+    from thesistrace.strategy_event_wire import (
+        MAX_EVENT_FRAME_BYTES,
+        MAX_EVENT_RECORD_BYTES,
+        MAX_TARGET_RECORD_BYTES,
+    )
+
+    target = {"allocation": "x" * (MAX_TARGET_RECORD_BYTES - len('{"allocation":""}'))}
+    frames = list(strategy_event_messages({"strategy_events": {"strategy_targets": [target] * 5}}))
+    assert [len(frame["rows"]) for frame in frames[:-1]] == [4, 1]
+    assembler = EventMessageAssembler()
+    with pytest.raises(ValueError, match="frame exceeds"):
+        assembler.accept({
+            "status": "strategy_event_frame", "section": "strategy_targets", "offset": 0,
+            "rows": [target] * 5,
+        })
+    assert len(json.dumps(frames[0], separators=(",", ":"))) < MAX_EVENT_FRAME_BYTES + 1024
+    for section, row in (
+        ("strategy_targets", {"allocation": target["allocation"] + "x"}),
+        ("strategy_fills", {"evidence": "x" * MAX_EVENT_RECORD_BYTES}),
+    ):
+        with pytest.raises(ValueError, match="record exceeds"):
+            list(strategy_event_messages({"strategy_events": {section: [row]}}))

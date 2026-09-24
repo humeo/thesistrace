@@ -10,6 +10,7 @@ from botocore.client import BaseClient
 from botocore.exceptions import ClientError, ResponseStreamingError
 
 from thesistrace.entrypoints.runtime import CoreSettings, open_core_runtime
+from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.publication import (
     CompressedJsonPayload,
     JsonPayload,
@@ -54,6 +55,7 @@ def clean_publication_objects(
     core_settings: CoreSettings,
     rustfs_admin: BaseClient,
 ) -> Iterator[None]:
+    initialize_core(core_settings.database_url)
     _clear_bucket(rustfs_admin, core_settings.s3_bucket)
     yield
     _clear_bucket(rustfs_admin, core_settings.s3_bucket)
@@ -195,6 +197,10 @@ def test_semantic_result_sections_read_only_bounded_real_rustfs_objects(
         "execution_shares": 100,
         "adjusted_units": "100",
         "last_adjusted_price": "10",
+        "remaining_acquisition_cost_cny": "1000",
+        "last_close_adjusted_price": "10",
+        "holding_cycle_started_session": "2024-01-02",
+        "holding_age": 1,
     }
     result["terminal_strategy_state"]["positions"] = [
         {**position, "instrument_id": f"equity:{index:06d}.SZ"} for index in range(101)
@@ -249,9 +255,10 @@ def test_semantic_result_sections_read_only_bounded_real_rustfs_objects(
                 "gross_nav",
                 "net_nav",
                 "cumulative_transaction_cost",
-                "selection_phase",
-                "target_selection",
-                "target_exposure",
+                "close_risk_nav_cny",
+                "research_phase",
+                "decision_state",
+                "contract_checksum",
                 "pending_target",
             }
             assert observed_digests == [payload_digests["terminal_strategy_state"]]
@@ -669,6 +676,7 @@ def _legal_result() -> dict[str, object]:
             "gross_nav": "1e+7",
             "net_cash": "1e+7",
             "net_nav": "1e+7",
+            "close_risk_nav_cny": "1e+7",
             "pre_trade_gross_nav": "1e+7",
             "pre_trade_net_nav": "1e+7",
             "rebalance": False,
@@ -680,6 +688,7 @@ def _legal_result() -> dict[str, object]:
     metric_state.update(
         {
             "contract": "strategy-metric-state-v2",
+            "session_count": 1,
             "entry_session": "2024-01-02",
             "entry_session_ordinal": 1,
             "initial_cash_cny": "1e+7",
@@ -713,6 +722,7 @@ def _legal_result() -> dict[str, object]:
                 "session": "2024-01-02",
                 "gross_nav": "1e+7",
                 "net_nav": "1e+7",
+                "close_risk_nav_cny": "1e+7",
                 "net_cash": "1e+7",
                 "transaction_cost_cny": "0",
                 "holdings_count": 0,
@@ -728,20 +738,27 @@ def _legal_result() -> dict[str, object]:
             "net_cash": "1e+7",
             "gross_nav": "1e+7",
             "net_nav": "1e+7",
+            "close_risk_nav_cny": "1e+7",
             "cumulative_transaction_cost": "0",
             "positions": [],
-            "selection_phase": {
+            "research_phase": {
                 "origin_session": "2024-01-02",
                 "report_session_count": 1,
+            },
+            "contract_checksum": "0" * 64,
+            "decision_state": {
+                "mode": "framework",
                 "selection_interval": 1,
-                "completed_intervals": 0,
+                "selection": {
+                    "eligibility_exclusions": {},
+                    "signal_session": "2024-01-02",
+                    "selected_instrument_ids": [],
+                    "relative_weights": {},
+                    "signal_checksum": "0" * 64,
+                    "contract_checksum": "0" * 64,
+                },
+                "exposure": 1.0,
             },
-            "target_selection": {"eligibility_exclusions": {},
-                "signal_session": "2024-01-02", "selected_instrument_ids": [],
-                "relative_weights": {},
-                "signal_checksum": "signal", "contract_checksum": "contract",
-            },
-            "target_exposure": 1.0,
             "pending_target": None,
             "last_daily_observation": last_daily,
             "metric_state": metric_state,

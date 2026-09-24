@@ -1,3 +1,3 @@
-# Expose financial data only through Alpha authoring and Data readiness
+# Expose financial research through governed session-aligned fields
 
-Financial research uses accepted Session-Aligned Fields in the common Alpha catalog, with Coverage and Readiness exposing the limits of those inputs. Keeping complete source statements behind the Data boundary preserves one governed research meaning at the cost of unrestricted statement exploration.
+Financial research consumes governed Session-Aligned Financial Fields, with Coverage and Readiness exposing source availability and revision-evidence limits. The Alpha catalog and the Strategy Program data interface accepted in [ADR-0250](0250-admit-strategy-programs-with-explicit-simulation-coordinates.md) preserve that same information boundary; Python authoring does not grant unrestricted raw-statement or future-data access. Keeping complete source statements behind Data sacrifices unrestricted exploration for one governed research meaning.

@@ -17,6 +17,7 @@ from thesistrace.publication.service import (
     PublicationVerificationError,
     _digest_from_object_key,
     lock_publication_mutation,
+    try_lock_publication_collection,
 )
 
 MAINTENANCE_LOCK = "thesistrace-publication-maintenance"
@@ -238,6 +239,8 @@ class PublicationMaintenance:
         with connection.transaction():
             connection.execute("SET LOCAL lock_timeout = '1s'")
             lock_publication_mutation(connection)
+            if not try_lock_publication_collection(connection):
+                return None
             if (
                 connection.execute(
                     "SELECT 1 FROM publication.objects WHERE sha256 = %s", (digest,)

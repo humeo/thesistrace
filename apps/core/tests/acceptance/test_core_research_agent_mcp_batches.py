@@ -659,7 +659,7 @@ async def _exercise_indicator_consumers(settings, tmp_path, sessions):
         })
         assert started.is_error is False
         track_id = started.structured_content["track_id"]
-        for index in range(6):
+        for index in range(len(sessions) + 1):
             assert_worker_succeeded(await anyio.to_thread.run_sync(
                 _run_tracking_worker_once, settings,
             ))
@@ -672,7 +672,9 @@ async def _exercise_indicator_consumers(settings, tmp_path, sessions):
             })
             assert refresh.is_error is False
         else:
-            raise AssertionError("Indicator DailyTrack did not catch up within six refreshes")
+            raise AssertionError(
+                "Indicator DailyTrack did not catch up within the session-count refresh bound"
+            )
         assert detail.structured_content["progress"]["head_session"] == sessions[-1]
         summary = await client.call_tool("get_daily_track_result", {
             "track_id": track_id, "section": "strategy_summary",

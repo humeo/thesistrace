@@ -259,7 +259,9 @@ def test_worker_loss_retry_resumes_committed_chunks_on_the_frozen_generation(
             assert _checkpoint_ordinals(settings, run_id) == [1, 2]
             committed = first_process.get(f"/api/research-runs/{run_id}").json()
             assert committed["progress"]["committed_chunk_count"] == 2
-            assert committed["progress"]["completed_research_sessions"] == 128
+            assert committed["progress"]["completed_research_sessions"] == (
+                20 if research_kind == "strategy_backtest" else 128
+            )
             assert committed["progress"]["phase"] == "research"
             if research_kind == "factor_evaluation":
                 _assert_factor_checkpoint_evidence(
@@ -1100,7 +1102,7 @@ def _reference_result(
                 commission_rate_all_in="0.0003",
                 commission_min_cny="5",
                 stamp_duty_sell_rate="0.0005",
-                transfer_fee_rate="0.00001",
+                transfer_fee_rate="0.00001", slippage_bps="0",
             )
             if research_kind == "strategy_backtest"
             else None
@@ -1143,7 +1145,7 @@ def _reference_result(
     return build_result_payload(
         output,
         research_kind=research_kind,
-        selection_interval=(1 if research_kind == "strategy_backtest" else None),
+
     )
 
 

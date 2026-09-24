@@ -16,14 +16,35 @@ import { CurrentHoldings, ObservationSummary, SelectionSchedule, TrackingReturnC
 
 const observation: DailyTrackObservation = {
   session: "2026-08-18", net_asset_value_cny: "1100", cash_cny: "200",
+  close_risk_nav_cny: "1000",
   net_change_cny: "100", net_return: 0.1, maximum_drawdown: 0.025, transaction_cost_cny: "2.75", session_count: 1,
-  holdings: [{ instrument_id: "000001.SZ", shares: 100, market_value_cny: "900", weight: 9 / 11 }],
-  target_selection: { signal_session: "2026-08-05", eligibility_exclusions: {} },
-  target_exposure: 0.7, selection_interval: 5, pending_target_session: null, sessions_until_next_signal: 4,
+  holdings: [{ instrument_id: "000001.SZ", shares: 100, market_value_cny: "900", weight: 9 / 11,
+    adjusted_units: "200", last_close_adjusted_price: "4", remaining_acquisition_cost_cny: "910",
+    holding_cycle_started_session: "2026-08-03", holding_age: 12 }],
+  decision_state: { mode: "framework", selection: { signal_session: "2026-08-05", eligibility_exclusions: {} }, selection_interval: 5, exposure: 0.7 }, selection_interval: 5, pending_target_session: null, sessions_until_next_signal: 4,
   returns: [{ session: "2026-08-17", net_return: 0 }, { session: "2026-08-18", net_return: 0.1 }],
 };
 
 describe("Daily observation presentation", () => {
+  it("shows the current Close risk facts alongside Open holdings", () => {
+    const markup = renderToStaticMarkup(<CurrentHoldings observation={observation} />);
+    expect(markup).toContain("Close Risk NAV (CNY): <strong>1000</strong>");
+    expect(markup).toContain("2026-08-18");
+    expect(markup).toContain("Remaining acquisition cost (CNY)</dt><dd>910");
+    expect(markup).toContain("Holding age (trading sessions)</dt><dd>12");
+  });
+  it("renders custom Framework holdings without inventing a built-in Selection or target", () => {
+    const markup = renderToStaticMarkup(<CurrentHoldings observation={{ ...observation, decision_state: {
+      mode: "framework", contract_checksum: "a".repeat(64), selection_interval: null,
+      module_states: { universe_selection: {}, alpha: {}, portfolio_construction: { decisions: 2 }, risk_management: {} },
+      universe: ["000001.SZ"], signals: [], retained_proposal: null,
+    } }} />);
+    expect(markup).toContain("Framework state");
+    expect(markup).toContain("0 active signals");
+    expect(markup).toContain("<td>100</td>");
+    expect(markup).not.toContain("Close target");
+    expect(markup).not.toContain("NaN");
+  });
   it("labels the tracking period and displays the published account", () => {
     const markup = renderToStaticMarkup(<ObservationSummary observation={observation} originSession="2026-08-17" />);
     expect(markup).toContain("Return since tracking");
@@ -266,20 +287,18 @@ describe("TrackingOriginView", () => {
       result_checksum_sha256: "a".repeat(64),
       strategy_session: "2026-08-05",
       terminal_account: {
-        target_selection: { signal_session: "2026-08-05", eligibility_exclusions: {} },
-        target_exposure: 1,
+        decision_state: { mode: "framework", selection: { signal_session: "2026-08-05", eligibility_exclusions: {} }, selection_interval: 1, exposure: 1 },
+        contract_checksum: "contract",
         session: "2026-08-05",
         gross_cash: "9000000",
         net_cash: "8999995",
         gross_nav: "10001000",
-        net_nav: "10000995",
+        net_nav: "10000995", close_risk_nav_cny: "9999995",
         cumulative_transaction_cost: "5",
         positions: [],
-        selection_phase: {
+        research_phase: {
           origin_session: "2026-08-03",
           report_session_count: 3,
-          selection_interval: 1,
-          completed_intervals: 2,
         },
         pending_target: null,
       },
@@ -304,20 +323,18 @@ describe("TrackingOriginView", () => {
       result_checksum_sha256: "a".repeat(64),
       strategy_session: "2026-08-05",
       terminal_account: {
-        target_selection: { signal_session: "2026-08-05", eligibility_exclusions: {} },
-        target_exposure: 1,
+        decision_state: { mode: "framework", selection: { signal_session: "2026-08-05", eligibility_exclusions: {} }, selection_interval: 1, exposure: 1 },
+        contract_checksum: "contract",
         session: "2026-08-05",
         gross_cash: "9000000",
         net_cash: "8999995",
         gross_nav: "10001000",
-        net_nav: "10000995",
+        net_nav: "10000995", close_risk_nav_cny: "9999995",
         cumulative_transaction_cost: "5",
         positions: [],
-        selection_phase: {
+        research_phase: {
           origin_session: "2026-08-03",
           report_session_count: 3,
-          selection_interval: 1,
-          completed_intervals: 2,
         },
         pending_target: null,
       },

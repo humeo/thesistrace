@@ -1,25 +1,34 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
+from datetime import date
 from fractions import Fraction
-from math import isfinite
+from math import isfinite, lcm
 from typing import Annotated, Literal
 
 from pydantic import (
+    AfterValidator,
     BaseModel,
     ConfigDict,
+    Discriminator,
     Field,
+    JsonValue,
     StrictBool,
     StrictFloat,
     StrictInt,
     StrictStr,
+    Tag,
+    TypeAdapter,
     model_validator,
 )
 
 from thesistrace.research_kernel.portfolio_weighting import EligibilityReason
+from thesistrace.research_kernel.strategy_program_runtime import STATE_BYTES, encode_program_json
 
 StrictNumber = StrictInt | StrictFloat
 EligibilityExclusions = dict[EligibilityReason, Annotated[StrictInt, Field(gt=0)]]
+_TARGET_RATIO = re.compile(r"[1-9][0-9]{0,127}(?:/[1-9][0-9]{0,127})?")
 
 
 class TerminalStateModel(BaseModel):
@@ -31,13 +40,15 @@ class TerminalPosition(TerminalStateModel):
     execution_shares: StrictInt
     adjusted_units: StrictStr
     last_adjusted_price: StrictStr
+    remaining_acquisition_cost_cny: StrictStr
+    last_close_adjusted_price: StrictStr
+    holding_cycle_started_session: StrictStr
+    holding_age: Annotated[StrictInt, Field(ge=1)]
 
 
-class SelectionPhase(TerminalStateModel):
+class ResearchPhase(TerminalStateModel):
     origin_session: StrictStr
-    report_session_count: StrictInt
-    selection_interval: StrictInt
-    completed_intervals: StrictInt
+    report_session_count: Annotated[StrictInt, Field(ge=1)]
 
 
 class TargetSelection(TerminalStateModel):
@@ -50,33 +61,209 @@ class TargetSelection(TerminalStateModel):
 
     @model_validator(mode="after")
     def target_weights_match_selection(self) -> TargetSelection:
-        selected = self.selected_instrument_ids
-        weights = self.relative_weights
-        if len(selected) != len(set(selected)) or set(weights) != set(selected):
-            raise ValueError("Pending target weights do not match the unique selection")
-        try:
-            ratios = [Fraction(weight) for weight in weights.values()]
-        except (ValueError, ZeroDivisionError):
-            raise ValueError("Target weights must be canonical positive ratios") from None
-        if any(str(ratio) != weight or not 0 < ratio <= 1
-               for weight, ratio in zip(weights.values(), ratios, strict=True)):
-            raise ValueError("Target weights must be canonical positive ratios")
-        if selected and sum(ratios) != 1:
-            raise ValueError("Target weights must sum to one")
+        _validate_target_weights(self.selected_instrument_ids, self.relative_weights)
         return self
 
 
-class PendingTarget(TargetSelection):
-    decision_session: StrictStr
-    mode: Literal["selection", "reduce", "increase"]
-    execution: Literal["next_research_session_open"]
-    exposure: StrictFloat
+class BuiltinPortfolioState(TerminalStateModel):
+    selection: TargetSelection
+    exposure: StrictFloat = Field(ge=0, le=1, allow_inf_nan=False)
+
+    def validate_selection_boundary(self, *, session: str, contract_checksum: str) -> None:
+        if self.selection.signal_session > session:
+            raise ValueError("Retained Selection cannot come from the future")
+        if self.selection.contract_checksum != contract_checksum:
+            raise ValueError("Retained Selection differs from the Strategy contract")
+
+
+class FrameworkDecisionState(BuiltinPortfolioState):
+    mode: Literal["framework"]
+    selection_interval: Annotated[StrictInt, Field(ge=1, le=20)]
+
+    @property
+    def contract_checksum(self) -> str:
+        return self.selection.contract_checksum
+
+
+class DirectDecisionState(TerminalStateModel):
+    mode: Literal["direct"]
+    program_sha256: Annotated[StrictStr, Field(pattern=r"^[0-9a-f]{64}$")]
+    state: dict[str, JsonValue]
 
     @model_validator(mode="after")
-    def exposure_is_valid(self) -> PendingTarget:
+    def explicit_state_is_bounded(self):
+        encode_program_json(self.state, STATE_BYTES, "state")
+        return self
+
+
+def _validate_target_weights(selected: list[str], weights: dict[str, str]) -> None:
+    if len(selected) != len(set(selected)) or set(weights) != set(selected):
+        raise ValueError("Pending target weights do not match the unique selection")
+    # Validate the bounded integer grammar before Fraction sees guest output.
+    # Fraction accepts compact exponents that can allocate huge host integers.
+    if any(_TARGET_RATIO.fullmatch(weight) is None for weight in weights.values()):
+        raise ValueError("Target weights must be canonical positive ratios of at most 128 digits")
+    ratios = [Fraction(weight) for weight in weights.values()]
+    if any(str(ratio) != weight or not 0 < ratio <= 1
+           for weight, ratio in zip(weights.values(), ratios, strict=True)):
+        raise ValueError("Target weights must be canonical positive ratios")
+    total = Fraction()
+    denominator = 1
+    for ratio in ratios:
+        denominator = lcm(denominator, ratio.denominator)
+        if denominator.bit_length() > 4096:
+            raise ValueError("Target weights exceed the common denominator size limit")
+        total += ratio
+    if selected and total != 1:
+        raise ValueError("Target weights must sum to one")
+
+
+class TargetAllocation(TerminalStateModel):
+    """Close-frozen weights; rebalance exits omitted names, increase only buys,
+    and reduce applies an exposure ceiling proportionally to actual holdings.
+    """
+
+    mode: Literal["rebalance", "reduce", "increase"]
+    instrument_ids: list[StrictStr]
+    relative_weights: dict[StrictStr, StrictStr]
+    exposure: StrictFloat
+    retained_instrument_ids: list[StrictStr] = Field(
+        default_factory=list, exclude_if=lambda value: not value,
+    )
+
+    @model_validator(mode="after")
+    def allocation_is_valid(self) -> TargetAllocation:
+        _validate_target_weights(self.instrument_ids, self.relative_weights)
+        if (len(self.retained_instrument_ids) != len(set(self.retained_instrument_ids))
+                or set(self.retained_instrument_ids) & set(self.instrument_ids)):
+            raise ValueError("Retained holdings must be unique and separate from weighted targets")
         if not isfinite(self.exposure) or not 0 <= self.exposure <= 1:
             raise ValueError("Pending Exposure must be finite and between zero and one")
         return self
+
+
+class PendingTarget(TerminalStateModel):
+    """One final decision, independent of any module's retained selection.
+
+    Without an allocation, holdings are retained subject to the optional stock exposure cap.
+    The cap only lowers targets and never initiates an increase. Position limits
+    cap execution shares frozen at Close, including any simultaneous allocation.
+    NoUpdate is represented by no pending target, never an empty decision.
+    """
+
+    decision_session: StrictStr
+    execution: Literal["next_research_session_open"]
+    contract_checksum: StrictStr
+    reason: Annotated[StrictStr, Field(min_length=1, max_length=512)]
+    allocation: TargetAllocation | None
+    position_limits: dict[StrictStr, Annotated[StrictInt, Field(ge=0)]]
+
+    maximum_stock_exposure: StrictFloat | None = Field(
+        default=None, ge=0, le=1, allow_inf_nan=False, exclude_if=lambda value: value is None,
+    )
+
+    @model_validator(mode="after")
+    def decision_is_not_empty(self) -> PendingTarget:
+        if (self.allocation is None and not self.position_limits
+                and self.maximum_stock_exposure is None):
+            raise ValueError("Empty target must be NoUpdate")
+        return self
+
+    @property
+    def instrument_ids(self) -> frozenset[str]:
+        return frozenset(self.position_limits) | (
+            frozenset(self.allocation.instrument_ids + self.allocation.retained_instrument_ids)
+            if self.allocation else frozenset()
+        )
+
+
+FRAMEWORK_STATE_BYTES = 3 * 1024 * 1024
+MAX_ACTIVE_SIGNALS = 3000
+MAX_SIGNAL_VALIDITY_SESSIONS = 252
+
+
+def _signal_session(value: str) -> str:
+    if date.fromisoformat(value).isoformat() != value:
+        raise ValueError("Signal creation Session must use YYYY-MM-DD")
+    return value
+
+
+class ActiveStrategySignal(TerminalStateModel):
+    instrument_id: StrictStr
+    value: StrictFloat = Field(allow_inf_nan=False)
+    created_session: Annotated[StrictStr, AfterValidator(_signal_session)]
+    created_session_number: Annotated[StrictInt, Field(ge=1)]
+    valid_for_sessions: Annotated[StrictInt, Field(ge=1, le=MAX_SIGNAL_VALIDITY_SESSIONS)]
+
+
+class FrameworkModulesDecisionState(TerminalStateModel):
+    mode: Literal["framework"]
+    contract_checksum: Annotated[StrictStr, Field(pattern=r"^[0-9a-f]{64}$")]
+    selection_interval: Annotated[StrictInt, Field(ge=1, le=20)] | None
+    module_states: dict[StrictStr, dict[str, JsonValue]]
+    universe: list[StrictStr] = Field(max_length=3000)
+    signals: list[ActiveStrategySignal] = Field(max_length=MAX_ACTIVE_SIGNALS)
+    retained_proposal: PendingTarget | None
+
+    @model_validator(mode="after")
+    def explicit_state_is_valid(self):
+        if set(self.module_states) != {
+            "universe_selection", "alpha", "portfolio_construction", "risk_management",
+        }:
+            raise ValueError("Framework state requires all four module states")
+        signal_ids = [signal.instrument_id for signal in self.signals]
+        if (len(self.universe) != len(set(self.universe))
+                or len(signal_ids) != len(set(signal_ids))
+                or not set(signal_ids) <= set(self.universe)):
+            raise ValueError("Framework Universe and signals must be unique and aligned")
+        if (self.retained_proposal is not None
+                and self.retained_proposal.contract_checksum != self.contract_checksum):
+            raise ValueError("Retained proposal differs from the Framework contract")
+        portfolio = self.builtin_portfolio
+        if portfolio and portfolio.selection.contract_checksum != self.contract_checksum:
+            raise ValueError("Retained Selection differs from the Strategy contract")
+        for state in self.module_states.values():
+            encode_program_json(state, STATE_BYTES, "module state")
+        encode_program_json(self.model_dump(mode="json"), FRAMEWORK_STATE_BYTES, "Framework state")
+        return self
+
+    @property
+    def builtin_portfolio(self) -> BuiltinPortfolioState | None:
+        return (BuiltinPortfolioState.model_validate(self.module_states["portfolio_construction"])
+                if self.selection_interval is not None else None)
+
+    def validate_boundary(self, *, session: str, completed_sessions: int) -> None:
+        portfolio = self.builtin_portfolio
+        if portfolio is not None:
+            portfolio.validate_selection_boundary(
+                session=session, contract_checksum=self.contract_checksum,
+            )
+        if any(
+            signal.created_session > session
+            or signal.created_session_number > completed_sessions
+            or signal.created_session_number + signal.valid_for_sessions <= completed_sessions
+            for signal in self.signals
+        ):
+            raise ValueError("Framework signals do not match the completed Session boundary")
+        if self.retained_proposal and self.retained_proposal.decision_session > session:
+            raise ValueError("Retained proposal cannot come from the future")
+
+
+def _decision_state_discriminator(value: object) -> str | None:
+    read = value.get if isinstance(value, dict) else lambda name: getattr(value, name, None)
+    if read("mode") == "framework":
+        return "framework_modules" if read("module_states") is not None else "framework_builtin"
+    return read("mode")
+
+
+type DecisionState = Annotated[
+    Annotated[FrameworkDecisionState, Tag("framework_builtin")]
+    | Annotated[FrameworkModulesDecisionState, Tag("framework_modules")]
+    | Annotated[DirectDecisionState, Tag("direct")],
+    Discriminator(_decision_state_discriminator),
+]
+
+DECISION_STATE_ADAPTER = TypeAdapter(DecisionState)
 
 
 class ValuationEvent(TerminalStateModel):
@@ -93,6 +280,7 @@ class ValuationEvent(TerminalStateModel):
 
 
 class LastDailyObservation(TerminalStateModel):
+    close_risk_nav_cny: StrictStr
     cash_ratio: StrictNumber
     cumulative_transaction_cost: StrictStr
     cycle_type: StrictStr
@@ -183,32 +371,36 @@ class TerminalStrategyStateValue(TerminalStateModel):
     net_cash: StrictStr
     gross_nav: StrictStr
     net_nav: StrictStr
+    close_risk_nav_cny: StrictStr
     cumulative_transaction_cost: StrictStr
     positions: list[TerminalPosition]
-    selection_phase: SelectionPhase
-    target_selection: TargetSelection
-    target_exposure: StrictFloat
+    research_phase: ResearchPhase
+    contract_checksum: Annotated[StrictStr, Field(pattern=r"^[0-9a-f]{64}$")]
+    decision_state: DecisionState
     pending_target: PendingTarget | None
     last_daily_observation: LastDailyObservation
     metric_state: StrategyMetricState
 
     @model_validator(mode="after")
     def continuation_sessions_must_match_boundary(self) -> TerminalStrategyStateValue:
-        if not isfinite(self.target_exposure) or not 0 <= self.target_exposure <= 1:
-            raise ValueError("Target Exposure must be finite and between zero and one")
-        if self.target_selection.signal_session > self.session:
-            raise ValueError("Retained Selection cannot come from the future")
-        if self.pending_target is not None and (
-            self.pending_target.exposure != self.target_exposure
-            or self.pending_target.model_dump(
-                exclude={"execution", "exposure", "decision_session", "mode"},
+        if isinstance(self.decision_state, FrameworkDecisionState):
+            self.decision_state.validate_selection_boundary(
+                session=self.session, contract_checksum=self.contract_checksum,
             )
-            != self.target_selection.model_dump()
+        if isinstance(self.decision_state, FrameworkModulesDecisionState):
+            if self.decision_state.contract_checksum != self.contract_checksum:
+                raise ValueError("Framework modules differ from the Strategy contract")
+            self.decision_state.validate_boundary(
+                session=self.session, completed_sessions=self.research_phase.report_session_count,
+            )
+        if self.pending_target is not None and (
+            self.pending_target.contract_checksum != self.contract_checksum
         ):
-            raise ValueError("Pending target differs from the decided Selection and Exposure")
+            raise ValueError("Pending target differs from the Strategy contract")
         if (
             self.last_daily_observation.session != self.session
             or self.metric_state.last_session != self.session
+            or self.research_phase.report_session_count != self.metric_state.session_count
             or (
                 self.pending_target is not None
                 and self.pending_target.decision_session != self.session

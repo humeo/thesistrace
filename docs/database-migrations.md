@@ -168,3 +168,69 @@ upgrade verifies the affected target structures and preserves progress. For a
 post-commit rollback, stop writers and restore the verified backup with its
 matching application images. Start the target Core services only after the
 migration succeeds. Do not reset the database or alter its fingerprint manually.
+
+## Explicit research-contract retirement
+
+`python -m thesistrace.migrations.research_contract_cutover` is an operator-only
+retirement command, never an application startup action. Use the approved target
+checkout/image and its Core environment settings, with the database owner (including
+permission to read `pg_control_system()`) and the matching Publication S3 store.
+Drain and stop Research, Batch, Tracking and Publication maintenance writers first.
+Do not execute this on the daily development environment until final feature
+qualification authorizes that environment's cutover.
+
+This operation does not change relational schema or its fingerprint. Its source
+and target schema must both equal this checkout's current schema. A different
+schema needs its separate explicit migration first. Supply a JSON file containing
+exact `factor`, `strategy`, and `kernel` source versions; current and incomplete
+contracts are rejected. Other historical contracts require their own reviewed
+preview and are not implicitly included.
+
+```sh
+python -m thesistrace.migrations.research_contract_cutover preview \
+  --source-contract source-contract.json --output preview.json
+python -m thesistrace.migrations.research_contract_cutover apply \
+  --plan preview.json --backup backup.json
+python -m thesistrace.migrations.research_contract_cutover status --id CUTOVER_ID
+python -m thesistrace.migrations.research_contract_cutover resume --id CUTOVER_ID
+```
+
+The preview's printed `id` identifies the exact canonical preview. Review its
+cluster/database and S3 endpoint/bucket identities, contracts, selected IDs/counts, descendant inventory,
+and retained/exclusive Publication references. A mixed Batch or retained Track
+that depends on selected research blocks retirement. A stale preview, active
+execution/pin, missing Publication metadata or inconsistent ownership fails
+before authority changes. Dataset files, Dataset state, identities, unrelated
+research and current-contract records are outside retirement scope. Run ownership
+tombstones and Dataset pin history are preserved.
+
+`apply` takes schema/Publication locks and write-blocking locks on affected tables,
+rechecks the full inventory, then writes a private, fsynced JSON backup before its
+single metadata transaction deletes selected records. The backup records the
+preview and affected metadata, including copied Publication links; it does not
+copy object-store bytes. A new preview file never overwrites evidence. Retrying
+an uncommitted operation can reuse its backup only when its bytes exactly match
+the newly verified inventory. A partial or different backup is rejected; preserve
+it for diagnosis and choose a new backup path after reviewing a fresh preview.
+
+`status` reports `not_committed` when no authority receipt exists. Failed metadata
+transactions roll back references, records and the receipt together; their durable
+backup remains. Successful `apply` records `committed` and the exact object list
+in `thesistrace_meta.research_cutovers`. Repeating `apply` verifies its backup and
+returns the existing receipt. Apply, status and resume reject changed database or
+object-store coordinates before modifying records or bytes. Credentials are not
+stored in the preview. Save the command's exit status and stderr alongside
+the private preview/backup for failed-attempt diagnostics.
+
+`resume` processes only that receipt's pending object hashes, rechecks references
+through the shared Publication collector, and commits each object's outcome and
+progress independently. Status becomes `collecting`, then `complete`. It preserves
+objects acquired by retained manifests and never drains unrelated queue entries.
+Failure after a byte deletion but before the progress commit leaves that hash
+pending; repeated deletion is idempotent. Ordinary maintenance may also complete
+a queued hash, which resume records as already collected. Keep the backup at its
+recorded absolute path: repeated apply, status and resume verify its SHA before
+proceeding. This is destructive retirement, not a reversible schema downgrade;
+once exclusive bytes are reclaimed, its metadata-only backup cannot restore those
+bytes. Stop writers and preserve a separate full database/object-store backup if
+post-commit restoration is required.

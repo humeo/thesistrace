@@ -1,7 +1,11 @@
+import { CloseRiskFacts } from "../analysis/CloseRiskFacts";
 import { CurrentDataRerunOrigin, type RerunOrigin } from "../analysis/CurrentDataRerun";
 import { DailyHoldings } from "../analysis/DailyHoldings";
 import { StrategyEvents } from "../analysis/StrategyEvents";
-import { SelectionEligibilityView, type SelectionEligibility } from "../research/SelectionEligibility";
+import { SelectionEligibilityView } from "../research/SelectionEligibility";
+import { isBuiltinFrameworkState, strategySelection, type StrategyDecisionState } from "../research/strategyDecisionState";
+import { FrameworkStateView } from "../research/FrameworkStateView";
+import { FrozenFrameworkModules, FrozenPythonProgram, FrozenSimulationCosts } from "../research/FrozenStrategyDefinition";
 import {
   CaretDown,
   CaretLeft,
@@ -56,6 +60,7 @@ type StrategyObservation = {
   session: string;
   gross_nav: string;
   net_nav: string;
+  close_risk_nav_cny: string;
   net_cash: string;
   transaction_cost_cny: string;
   holdings_count: number;
@@ -76,30 +81,40 @@ type StrategyMetrics = {
 };
 
 export type TerminalStrategyState = {
-  target_selection: SelectionEligibility;
+  decision_state: StrategyDecisionState;
+  contract_checksum: string;
   session: string;
   gross_cash: string;
   net_cash: string;
   gross_nav: string;
   net_nav: string;
+  close_risk_nav_cny: string;
   cumulative_transaction_cost: string;
   positions: Array<{
     instrument_id: string;
     execution_shares: number;
     adjusted_units: string;
     last_adjusted_price: string;
+    last_close_adjusted_price: string;
+    remaining_acquisition_cost_cny: string;
+    holding_cycle_started_session: string;
+    holding_age: number;
   }>;
-  selection_phase: {
+  research_phase: {
     origin_session: string;
     report_session_count: number;
-    selection_interval: number;
-    completed_intervals: number;
   };
-  target_exposure: number;
   pending_target: {
     decision_session: string;
-    mode: "selection" | "reduce" | "increase";
-    signal_session: string;
+    reason: string;
+    contract_checksum: string;
+    allocation: {
+      mode: "rebalance" | "reduce" | "increase";
+      instrument_ids: string[];
+      relative_weights: Record<string, string>;
+      exposure: number;
+    } | null;
+    position_limits: Record<string, number>;
     execution: "next_research_session_open";
   } | null;
 };
@@ -122,7 +137,7 @@ type FactorEvaluationResearchResult = {
 type StrategyBacktestResearchResult = {
   strategy: {
     summary: {
-      alpha_checksum: string;
+      alpha_checksum: string | null;
       entry_session: string | null;
       initial_cash_cny: string;
       source_checksum: string;
@@ -955,6 +970,7 @@ export function ResearchRunProgressView({
 
 export function ResearchRunFacts({ run }: { run: ResearchRun }) {
   const input = run.input;
+  const direct = input?.research_kind === "strategy_backtest" && input.strategy_mode === "direct";
   const factorConditionClass = input?.research_kind === "factor_evaluation"
     ? "research-run-fact-half"
     : undefined;
@@ -967,9 +983,9 @@ export function ResearchRunFacts({ run }: { run: ResearchRun }) {
       <p><strong>Status</strong> {run.status}</p>
       <p><strong>Research type</strong> {researchKindLabel(run.research_kind)}</p>
       <p className="research-run-fact-name"><strong>Name</strong> {run.name}</p>
-      <p className="research-run-fact-formula">
+      {(input === undefined || "formula" in input) && <p className="research-run-fact-formula">
         <strong>Formula</strong> <code>{input?.formula ?? run.formula_summary}</code>
-      </p>
+      </p>}
       <p className="research-run-fact-period">
         <strong>Research period</strong> {run.start_date} to {run.end_date}
       </p>
@@ -978,12 +994,17 @@ export function ResearchRunFacts({ run }: { run: ResearchRun }) {
           <p className={factorConditionClass}>
             <strong>Universe</strong> {universeLabel(input.universe)}
           </p>
-          <p className={factorConditionClass}>
+          {"neutralization" in input && input.neutralization !== undefined && <p className={factorConditionClass}>
             <strong>Neutralization</strong> {neutralizationLabel(input.neutralization)}
-          </p>
+          </p>}
           {input.research_kind === "strategy_backtest" ? (
             <>
+              <p><strong>Strategy</strong> {direct ? "Direct · Python" : "Framework · Decision modules"}</p>
               <p><strong>Initial cash (CNY)</strong> {input.initial_cash_cny}</p>
+              <FrozenSimulationCosts costs={input.costs} />
+              {input.strategy_mode === "direct" ? <FrozenPythonProgram program={input.program} /> : <>
+              <FrozenFrameworkModules modules={input.modules} />
+              {input.selection_every_sessions !== undefined && <>
               <p><strong>Holdings count</strong> {input.holdings_count}</p>
               {input.weighting === "inverse_volatility" && <p><strong>Volatility window</strong> {input.volatility_window} sessions</p>}
               <p><strong>Portfolio weighting</strong> {input.weighting === "inverse_volatility" ? "Inverse volatility" : input.weighting === "rank_weight" ? "Rank weight" : "Equal weight"}</p>
@@ -992,6 +1013,8 @@ export function ResearchRunFacts({ run }: { run: ResearchRun }) {
                 <strong>Selection</strong>{" "}
                 {selectionLabel(input.selection_every_sessions)}
               </p>
+              </>}
+              </>}
             </>
           ) : null}
         </>
@@ -1514,6 +1537,7 @@ function formatResearchRunMetric(
 export function ResearchResultView({ result }: { result: ResearchResult }) {
   const strategyResult = "strategy" in result ? result : null;
   const factorResult = "factor" in result ? result : null;
+  const selection = strategyResult ? strategySelection(strategyResult.terminal_strategy_state.decision_state) : null;
   return (
     <div className="research-result">
       {factorResult !== null ? <section className="research-result-section">
@@ -1560,14 +1584,20 @@ export function ResearchResultView({ result }: { result: ResearchResult }) {
           <div className="strategy-context-row">
             <h3>Exposure</h3>
             <dl className="strategy-exposure-values">
-              <div><dt>Last Close target</dt><dd>{formatPercent(strategyResult.terminal_strategy_state.target_exposure)}</dd></div>
+              <div><dt>Last Close target</dt><dd>{formatPercent(isBuiltinFrameworkState(strategyResult.terminal_strategy_state.decision_state)
+                ? strategyResult.terminal_strategy_state.decision_state.exposure
+                : strategyResult.terminal_strategy_state.pending_target?.allocation?.exposure ?? null)}</dd></div>
               <div><dt>Actual Open allocation</dt><dd>{formatPercent(1 - Number(strategyResult.terminal_strategy_state.net_cash) / Number(strategyResult.terminal_strategy_state.net_nav))}</dd></div>
             </dl>
           </div>
-          <div className="strategy-context-row">
+          {selection !== null ? <div className="strategy-context-row">
             <h3>Selection check</h3>
-            <SelectionEligibilityView selection={strategyResult.terminal_strategy_state.target_selection} />
-          </div>
+            <SelectionEligibilityView selection={selection} />
+          </div> : null}
+          <CloseRiskFacts session={strategyResult.terminal_strategy_state.session}
+            nav={strategyResult.terminal_strategy_state.close_risk_nav_cny}
+            positions={strategyResult.terminal_strategy_state.positions} />
+          <FrameworkStateView state={strategyResult.terminal_strategy_state.decision_state} />
           <details className="strategy-execution-notes">
             <summary>Execution conventions <CaretDown aria-hidden="true" size={14} /></summary>
             <ul>
@@ -1652,7 +1682,7 @@ function universeLabel(value: FrozenResearchAuthorableInput["universe"]): string
 }
 
 function neutralizationLabel(
-  value: FrozenResearchAuthorableInput["neutralization"],
+  value: "none" | "industry",
 ): string {
   return value === "none" ? "None" : "Industry";
 }

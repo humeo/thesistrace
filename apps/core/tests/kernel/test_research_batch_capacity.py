@@ -44,6 +44,43 @@ def test_strategy_sweep_capacity_accounts_for_private_artifact_copy() -> None:
     assert sweep.estimated_peak_bytes > factor.estimated_peak_bytes
 
 
+def test_framework_batch_reserves_guest_time_state_and_stage_records_per_child() -> None:
+    ordinary = _prepared_child(
+        field_id="price.close.adjusted", execution_memory_bytes=1024 * 1024**2,
+        chunk_session_count=4,
+    )
+    custom = _prepared_child(
+        field_id="price.close.adjusted", execution_memory_bytes=1024 * 1024**2,
+        chunk_session_count=4,
+    )
+    custom.immutable_input.strategy = {"kind": "framework", "holdings_count": 10}
+    custom.immutable_input.programs = {name: object() for name in (
+        "universe_selection", "alpha", "portfolio_construction", "risk_management",
+    )}
+    base_plan = _validate_research_batch_capacity("strategy_sweep", [ordinary])
+    custom_plan = _validate_research_batch_capacity("strategy_sweep", [custom])
+    assert custom_plan.session_count == 1
+    assert custom_plan.time_target_exceeded is True
+    assert custom_plan.estimated_peak_bytes > base_plan.estimated_peak_bytes
+    assert custom_plan.estimated_work > base_plan.estimated_work
+
+
+def test_framework_batch_time_target_counts_every_child_program() -> None:
+    children = [
+        _prepared_child(
+            field_id="price.close.adjusted", execution_memory_bytes=1024 * 1024**2,
+        )
+        for _ in range(2)
+    ]
+    for child in children:
+        child.immutable_input.programs = {"risk_management": object()}
+    solo = _validate_research_batch_capacity("strategy_sweep", children[:1])
+    paired = _validate_research_batch_capacity("strategy_sweep", children)
+    assert solo.session_count == 2
+    assert paired.session_count == 1
+    assert paired.time_target_exceeded is True
+
+
 def test_strategy_sweep_capacity_prices_one_streamed_artifact_chunk() -> None:
     short = _prepared_child(
         field_id="price.close.adjusted",
@@ -320,7 +357,8 @@ def _prepared_child(
             requested_end_date=calculation_sessions[-1],
             universe="top3000",
             neutralization="none",
-            strategy={"holdings_count": 10},
+            programs={},
+            strategy={"kind": "framework", "holdings_count": 10},
             field_bindings={field_id: object()},
             expression_admission=SimpleNamespace(
                 formula_work=1,

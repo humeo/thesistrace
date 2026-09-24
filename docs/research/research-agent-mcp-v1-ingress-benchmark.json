@@ -8,8 +8,8 @@
     "execution_slots_per_worker": 1
   },
   "fixed_limits": {
-    "request_bytes": 131072,
-    "response_bytes": 262144,
+    "request_bytes": 67108864,
+    "response_bytes": 16777216,
     "formula_characters": 4096,
     "calls_per_window": 120,
     "window_seconds": 60,
@@ -21,9 +21,10 @@
     "cursor_characters": 1024
   },
   "deterministic_payloads": {
-    "v1_contract_sha256": "ab3fc1f479b014da17998938bc562bbf9b886314c8b66a778f2b06ebb9d01ca9",
-    "v1_contract_bytes": 234736,
-    "maximum_factor_batch_call_bytes": 84536
+    "v1_contract_sha256": "3192733e7f2e05cf474b947382cb57dd6e5f1b8f3b840e55ea6d5a2537994b1f",
+    "v1_contract_bytes": 302134,
+    "maximum_factor_batch_call_bytes": 84536,
+    "maximum_framework_batch_call_bytes": 62887654
   },
   "observed": {
     "tests_passed": 4,
@@ -41,6 +42,6 @@
     "transport": "in-process deterministic MCP client",
     "network_access": false,
     "real_model": false,
-    "note": "Deterministic payload hash and size refreshed on 2026-09-16 for execution constraints in ResearchRun and DailyTrack result queries; observed performance remains the 2026-09-07 measurement. Peak RSS includes the Python interpreter, pytest, plugins, schemas, and fixtures; it is compared conservatively with the current production container envelope. Current pagination and receipt contract; transport and business-page bounds are verified separately."
+    "note": "Deterministic contract hash and size refreshed on 2026-09-23 for Framework modules. The hash sorts semantically unordered JSON Schema anyOf alternatives so unrelated test imports cannot change it. Observed performance remains the prior 2026-09-07 measurement and does not qualify the increased request limit. Maximum Python request and complete 4 MiB event-page wire envelopes have separate deterministic regressions in test_research_agent_mcp_contract.py. Business-page bounds and transport bounds are verified separately."
   }
 }

@@ -7,6 +7,7 @@ type Page = { section: Section; status: "recorded" | "not_recorded" | "expired" 
 type Filter = { start_session?: string; end_session?: string; instrument_id?: string; target_id?: string; order_id?: string; child_order_id?: string };
 type View = { section: Section; filters: Filter; cursors: (string | null)[]; scope: string | null };
 const descriptions: Record<Section, string> = {
+  strategy_framework: "按候选、信号、组合建议和风险调整查看收盘判断，展开后可关联最终目标。Direct 策略不产生这些中间阶段记录。",
   strategy_targets: "收盘时形成的选股和仓位目标，日期为决策日。",
   strategy_orders: "回测生成的买卖委托，包括被拒绝的委托，日期为执行日。",
   strategy_child_orders: "按单笔交易数量规则拆分的模拟委托。",
@@ -105,7 +106,7 @@ export function StrategyEvents({ endpoint }: { endpoint: string }) {
       </div>}
       <div className="strategy-events-status">
         <span>{filters.start_session || filters.end_session ? (filters.start_session ?? "最早") + " 至 " + (filters.end_session ?? "最新") : "全部日期"} · {filters.instrument_id ? instrumentLabel(filters.instrument_id) : "全部股票"}</span>
-        <span>{section === "strategy_targets" ? "决策日期" : section === "strategy_adjustments" ? "调整日期" : "执行日期"} · 每页最多 20 条</span>
+        <span>{["strategy_targets", "strategy_framework"].includes(section) ? "决策日期" : section === "strategy_adjustments" ? "调整日期" : "执行日期"} · 每页最多 20 条</span>
       </div>
       {page?.status === "partially_expired" && <p role="status">部分历史交易明细已过期，以下展示仍在保留期内的记录。</p>}
       {error ? <p role="alert">{error}</p> : page === null ? <p role="status">正在加载记录…</p>

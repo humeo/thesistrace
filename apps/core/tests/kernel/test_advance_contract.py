@@ -25,6 +25,7 @@ from thesistrace.research_kernel import (
     run,
 )
 from thesistrace.research_kernel.alpha_expression import validate_normalized_alpha
+from thesistrace.research_kernel.builtin_framework import BUILTIN_FRAMEWORK_MODULES
 from thesistrace.research_kernel.strategy import advance_strategy_metric_state
 from thesistrace.research_series import AlignedResearchData, slice_research_sessions
 
@@ -156,8 +157,8 @@ def test_kernel_advance_uses_bounded_continuation_with_compact_prior_state(
         strategy_resume={
             "daily": resume_daily[-504:],
             "positions": resume["positions"],
-            "target_selection": resume["target_selection"],
-            "target_exposure": resume["target_exposure"],
+            "decision_state": resume["decision_state"],
+            "contract_checksum": resume["contract_checksum"],
             "pending_target": resume["pending_target"],
             "report_session_count": metric_state["session_count"],
             "metric_state": metric_state,
@@ -201,6 +202,7 @@ def test_compact_advance_retains_only_bounded_strategy_alpha() -> None:
         "neutralization": "none",
         "universe": "top300",
         "strategy": {"volatility_window": 20, "weighting": "equal_weight",
+            "mode": "framework", "modules": dict(BUILTIN_FRAMEWORK_MODULES),
             "holdings_count": 10,
             "selection_interval": 5,
             "exposure_expression": {"kind": "number", "value": 1},
@@ -211,6 +213,7 @@ def test_compact_advance_retains_only_bounded_strategy_alpha() -> None:
             "commission_min_cny": "5",
             "stamp_duty_sell_rate": "0.0005",
             "transfer_fee_rate": "0.00001",
+            "slippage_bps": "0",
         },
     }
     definition["alpha"] = {"expression": CLOSE_ADJUSTED}
@@ -270,6 +273,7 @@ def test_warm_continuation_with_short_data_slice_has_no_factor_state() -> None:
         "neutralization": "none",
         "universe": "top300",
         "strategy": {"volatility_window": 20, "weighting": "equal_weight",
+            "mode": "framework", "modules": dict(BUILTIN_FRAMEWORK_MODULES),
             "holdings_count": 10,
             "selection_interval": 5,
             "exposure_expression": {"kind": "number", "value": 1},
@@ -280,6 +284,7 @@ def test_warm_continuation_with_short_data_slice_has_no_factor_state() -> None:
             "commission_min_cny": "5",
             "stamp_duty_sell_rate": "0.0005",
             "transfer_fee_rate": "0.00001",
+            "slippage_bps": "0",
         },
     }
     calendar = list(canonical["research_calendar"])
@@ -335,6 +340,7 @@ def test_cold_continuation_rebuild_uses_lookback_before_504_retained_sessions() 
         "neutralization": "none",
         "universe": "top300",
         "strategy": {"volatility_window": 20, "weighting": "equal_weight",
+            "mode": "framework", "modules": dict(BUILTIN_FRAMEWORK_MODULES),
             "holdings_count": 10,
             "selection_interval": 5,
             "exposure_expression": {"kind": "number", "value": 1},
@@ -345,6 +351,7 @@ def test_cold_continuation_rebuild_uses_lookback_before_504_retained_sessions() 
             "commission_min_cny": "5",
             "stamp_duty_sell_rate": "0.0005",
             "transfer_fee_rate": "0.00001",
+            "slippage_bps": "0",
         },
     }
     calendar = list(canonical["research_calendar"])
@@ -558,6 +565,7 @@ def test_daily_track_owns_minimal_tracking_checkpoint_projection_and_restoration
         "session",
         "gross_nav",
         "net_nav",
+        "close_risk_nav_cny",
         "net_cash",
         "transaction_cost_cny",
         "holdings_count",
@@ -728,6 +736,7 @@ def _run_input(
             commission_min_cny=str(costs["commission_min_cny"]),
             stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
             transfer_fee_rate=str(costs["transfer_fee_rate"]),
+            slippage_bps=str(costs["slippage_bps"]),
         ),
         research_start_session=research_start_session,
         research_end_session=research_end_session,

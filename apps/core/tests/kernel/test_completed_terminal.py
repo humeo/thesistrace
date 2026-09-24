@@ -99,14 +99,14 @@ def test_resume_rejects_invalid_frozen_weights(weights):
         origin_session=SESSIONS[0],
     )
     invalid = copy.deepcopy(prefix.resumable)
-    invalid["pending_target"]["relative_weights"] = weights
+    invalid["pending_target"]["allocation"]["relative_weights"] = weights
     with pytest.raises(ValueError, match="(Target weights|Pending target|relative_weights)"):
         transition_strategy(
             data, matrix, definition, origin_session=SESSIONS[0], continuation=invalid
         )
 
 
-def test_resume_rejects_pending_weights_different_from_retained_selection():
+def test_resume_rejects_pending_decision_from_different_contract():
     import copy
 
     data, matrix, definition = _scenario()
@@ -117,8 +117,7 @@ def test_resume_rejects_pending_weights_different_from_retained_selection():
         origin_session=SESSIONS[0],
     )
     invalid = copy.deepcopy(prefix.resumable)
-    invalid["pending_target"]["selected_instrument_ids"] = [A, B]
-    invalid["pending_target"]["relative_weights"] = {A: "7/10", B: "3/10"}
+    invalid["pending_target"]["contract_checksum"] = "different-contract"
     with pytest.raises(RuntimeError, match="Pending decision differs"):
         transition_strategy(
             data, matrix, definition, origin_session=SESSIONS[0], continuation=invalid

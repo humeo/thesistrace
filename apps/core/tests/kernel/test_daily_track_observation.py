@@ -26,6 +26,7 @@ def account(
             "net_cash": str(Decimal(nav) - 900),
             "gross_nav": str(Decimal(nav) + Decimal(cost)),
             "net_nav": nav,
+            "close_risk_nav_cny": str(Decimal(nav) - 100),
             "cumulative_transaction_cost": cost,
             "positions": [
                 {
@@ -33,28 +34,34 @@ def account(
                     "execution_shares": 100,
                     "adjusted_units": "200",
                     "last_adjusted_price": "4.5",
+                    "last_close_adjusted_price": "4",
+                    "remaining_acquisition_cost_cny": "910",
+                    "holding_cycle_started_session": "2026-08-03",
+                    "holding_age": count,
                 }
             ],
-            "selection_phase": {
+            "research_phase": {
                 "origin_session": "2026-08-03",
                 "report_session_count": count,
-                "selection_interval": 5,
-                "completed_intervals": count - 1,
             },
-            "target_selection": {"eligibility_exclusions": {},
-                "signal_session": session,
-                "selected_instrument_ids": ["000001.SZ"],
-                "relative_weights": {"000001.SZ": "1"},
-                "signal_checksum": "signal", "contract_checksum": "contract",
+            "decision_state": {
+                "mode": "framework", "selection_interval": 5, "exposure": 1.0,
+                "selection": {"eligibility_exclusions": {},
+                    "signal_session": session,
+                    "selected_instrument_ids": ["000001.SZ"],
+                    "relative_weights": {"000001.SZ": "1"},
+                    "signal_checksum": "signal", "contract_checksum": "contract",
+                },
             },
-            "target_exposure": 1.0,
-            "pending_target": {"eligibility_exclusions": {},
-                "decision_session": session, "mode": "selection",
-                "exposure": 1.0,
-                "signal_session": session, "execution": "next_research_session_open",
-                "selected_instrument_ids": ["000001.SZ"],
-                "relative_weights": {"000001.SZ": "1"},
-                "signal_checksum": "signal", "contract_checksum": "contract",
+            "contract_checksum": "contract",
+            "pending_target": {
+                "decision_session": session, "reason": "selection",
+                "execution": "next_research_session_open", "contract_checksum": "contract",
+                "allocation": {
+                    "mode": "rebalance", "exposure": 1.0,
+                    "instrument_ids": ["000001.SZ"], "relative_weights": {"000001.SZ": "1"},
+                },
+                "position_limits": {},
             }
             if pending
             else None,
@@ -95,6 +102,11 @@ def test_observation_uses_published_holdings_and_adjusted_valuation_coordinates(
     assert Decimal(result.net_change_cny) == 100
     assert Decimal(result.transaction_cost_cny) == Decimal("2.75")
     assert result.session_count == 1
+    assert result.close_risk_nav_cny == "1000"
+    assert result.holdings[0].remaining_acquisition_cost_cny == "910"
+    assert result.holdings[0].holding_age == 12
+    assert result.holdings[0].holding_cycle_started_session == "2026-08-03"
+    assert result.holdings[0].last_close_adjusted_price == "4"
     assert result.holdings[0].shares == 100
     assert Decimal(result.holdings[0].market_value_cny) == 900
     assert result.holdings[0].weight == pytest.approx(9 / 11)

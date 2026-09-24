@@ -53,3 +53,19 @@ def test_tracking_target_freezes_one_blocked_session_when_memory_cannot_fit() ->
     assert plan.target_sessions == _sessions(1)
     assert plan.capacity_blocked is True
     assert plan.time_target_exceeded is False
+
+
+def test_tracking_uses_the_same_isolated_framework_capacity_as_run() -> None:
+    common = dict(
+        unpublished_sessions=_sessions(8), formula_work=1, node_count=1,
+        field_count=1, maximum_universe_cardinality=3000, effective_lookback=1,
+        execution_memory_bytes=1536 * 1024**2,
+        decision_mode="framework", python_program_count=4,
+    )
+    plan = plan_tracking_advance(**common)
+    assert plan.target_sessions == _sessions(1)
+    assert plan.time_target_exceeded is True
+    assert plan.capacity_blocked is False
+    blocked = plan_tracking_advance(**{**common, "execution_memory_bytes": 190 * 1024**2})
+    assert blocked.target_sessions == _sessions(1)
+    assert blocked.capacity_blocked is True

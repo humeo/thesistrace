@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, localcontext
 from typing import Annotated, Literal
 
 from pydantic import AfterValidator, Field, StrictInt, StrictStr, model_validator
 
+from thesistrace.research_kernel.framework_evidence import FrameworkEvidence, ReplacementEvidence
+from thesistrace.research_kernel.numeric import ACCOUNTING_CONTEXT
 from thesistrace.research_kernel.terminal_state_schema import (
     PendingTarget,
     TerminalStateModel,
@@ -32,7 +34,24 @@ RejectionReason = Literal["suspension", "data_unavailable", "upper_limit_buy", "
 StrategyEventSection = Literal[
     "strategy_targets", "strategy_orders", "strategy_child_orders", "strategy_fills",
     "strategy_adjustments", "strategy_execution_constraints",
+    "strategy_framework",
 ]
+
+
+class StrategyFrameworkEvent(FrameworkEvidence):
+    decision_id: StrictStr
+    decision_session: Session
+    target_id: StrictStr | None
+
+    @model_validator(mode="after")
+    def stage_decisions_match_session(self):
+        targets = [self.proposal]
+        if isinstance(self.risk_adjustment, ReplacementEvidence):
+            targets.append(self.risk_adjustment.target)
+        if any(target is not None and target.decision_session != self.decision_session
+               for target in targets):
+            raise ValueError("Framework evidence contains a decision from another Session")
+        return self
 
 
 class StrategyTargetEvent(PendingTarget):
@@ -46,7 +65,7 @@ class TradeEvent(TerminalStateModel):
     session: Session
     instrument_id: StrictStr
     side: Literal["buy", "sell"]
-    reason: Literal["selection", "reduce", "increase"]
+    reason: Annotated[StrictStr, Field(min_length=1, max_length=512)]
     order_id: StrictStr
 
     @model_validator(mode="after")
@@ -81,6 +100,11 @@ class StrategyChildOrderEvent(TradeEvent):
 class StrategyFillEvent(StrategyChildOrderEvent):
     fill_id: StrictStr
     raw_open: DecimalEvidence
+    execution_price: DecimalEvidence
+    price_slippage: DecimalEvidence
+    commission_cny: DecimalEvidence
+    stamp_duty_cny: DecimalEvidence
+    transfer_fee_cny: DecimalEvidence
     adjusted_open: DecimalEvidence
     raw_notional: DecimalEvidence
     cost: DecimalEvidence
@@ -97,9 +121,22 @@ class StrategyFillEvent(StrategyChildOrderEvent):
         if self.execution_shares_delta != direction * self.quantity:
             raise ValueError("Fill execution share delta differs from its direction")
         if any(Decimal(value) <= 0 for value in (
-            self.raw_open, self.adjusted_open, self.raw_notional, self.research_settlement,
+            self.raw_open, self.execution_price, self.adjusted_open,
+            self.raw_notional, self.research_settlement,
         )) or Decimal(self.cost) < 0:
             raise ValueError("Fill amounts are invalid")
+        fees = tuple(Decimal(value) for value in (
+            self.commission_cny, self.stamp_duty_cny, self.transfer_fee_cny,
+        ))
+        with localcontext(ACCOUNTING_CONTEXT):
+            if any(value < 0 for value in fees) or sum(fees) != Decimal(self.cost):
+                raise ValueError("Fill fee components differ from its total cost")
+            if (Decimal(self.execution_price) - Decimal(self.raw_open)
+                    != Decimal(self.price_slippage)
+                    or direction * Decimal(self.price_slippage) < 0):
+                raise ValueError("Fill price slippage differs from its execution direction")
+        if self.side == "buy" and Decimal(self.stamp_duty_cny) != 0:
+            raise ValueError("Buy fills cannot charge sell-side stamp duty")
         settlement = Decimal(self.research_settlement)
         expected_cash = settlement.copy_negate() if direction == 1 else settlement
         if Decimal(self.gross_cash_delta) != expected_cash:
@@ -125,7 +162,8 @@ class StrategyExecutionConstraintEvent(TerminalStateModel):
     session: Session
     instrument_id: StrictStr
     side: Literal["buy", "sell"]
-    mode: Literal["selection", "reduce", "increase"]
+    mode: Literal["rebalance", "reduce", "increase", "local"]
+    decision_reason: Annotated[StrictStr, Field(min_length=1, max_length=512)]
     reason: Literal["below_board_lot", "insufficient_cash"]
     intended_value: DecimalEvidence
     unrounded_quantity: Annotated[StrictInt, Field(ge=0)]
@@ -153,6 +191,7 @@ class StrategyExecutionConstraintEvent(TerminalStateModel):
 
 
 EVENT_MODELS = {
+    "strategy_framework": StrategyFrameworkEvent,
     "strategy_targets": StrategyTargetEvent,
     "strategy_orders": StrategyOrderEvent,
     "strategy_child_orders": StrategyChildOrderEvent,
@@ -161,6 +200,7 @@ EVENT_MODELS = {
     "strategy_execution_constraints": StrategyExecutionConstraintEvent,
 }
 EVENT_ID_FIELDS = {
+    "strategy_framework": "decision_id",
     "strategy_targets": "target_id", "strategy_orders": "order_id",
     "strategy_child_orders": "child_order_id", "strategy_fills": "fill_id",
     "strategy_adjustments": "adjustment_id",
@@ -174,6 +214,7 @@ def strategy_event_rows(
     """Select this completed segment only; never reconstruct absent historical trades."""
     covered = set(sessions)
     candidates = {
+        "strategy_framework": strategy["framework_events"],
         "strategy_targets": strategy["target_events"],
         "strategy_orders": strategy["orders"],
         "strategy_child_orders": strategy["child_orders"],
@@ -186,7 +227,8 @@ def strategy_event_rows(
     }
     result = {}
     for section, rows in candidates.items():
-        session_key = "decision_session" if section == "strategy_targets" else "session"
+        session_key = ("decision_session" if section in {"strategy_targets", "strategy_framework"}
+                       else "session")
         model = EVENT_MODELS[section]
         selected = [model.model_validate(row).model_dump(mode="json") for row in rows
                     if row[session_key] in covered]

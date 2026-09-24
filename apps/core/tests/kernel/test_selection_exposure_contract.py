@@ -33,6 +33,24 @@ def test_selection_schedule_has_one_current_public_name():
         adapter.validate_python({**command, "rebalance_every_sessions": 5})
 
 
+def test_form_strategy_freezes_framework_identity_and_rejects_unimplemented_modes():
+    from thesistrace.research_batch.models import StrategySweepItem
+
+    command = strategy_command()
+    adapter = TypeAdapter(ResearchRunAdmissionCommand)
+    assert adapter.validate_python(command).model_dump()["strategy_mode"] == "framework"
+    item = {
+        "item_key": "baseline", "initial_cash_cny": "100000",
+        "holdings_count": 10, "selection_every_sessions": 5,
+    }
+    assert StrategySweepItem.model_validate(item).model_dump()["strategy_mode"] == "framework"
+    for mode in ("direct", "unknown"):
+        with pytest.raises(ValidationError):
+            adapter.validate_python({**command, "strategy_mode": mode})
+        with pytest.raises(ValidationError):
+            StrategySweepItem.model_validate({**item, "strategy_mode": mode})
+
+
 @pytest.mark.parametrize("interval", [0, 21, True, 1.5, "5"])
 def test_selection_schedule_rejects_invalid_intervals(interval):
     with pytest.raises(ValidationError):

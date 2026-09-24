@@ -1,5 +1,7 @@
+import { defaultSimulationCosts } from "../research/simulationCosts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { builtinFrameworkModules } from "../research/frameworkModules";
 
 import {
   ResearchFolderLoadFailure,
@@ -71,20 +73,69 @@ const STRATEGY_RUN: ResearchRun = {
     neutralization: "industry",
     research_kind: "strategy_backtest",
     holdings_count: 10,
-    initial_cash_cny: "100000",
+    initial_cash_cny: "100000", costs: defaultSimulationCosts(),
     selection_every_sessions: 2,
+    strategy_mode: "framework", modules: builtinFrameworkModules,
     exposure_expression: "1",
     weighting: "equal_weight", volatility_window: 20,
   },
 };
 
 describe("ResearchRunFacts", () => {
+  it("shows accepted custom fees and slippage instead of current defaults", () => {
+    if (STRATEGY_RUN.input?.research_kind !== "strategy_backtest") throw new Error("Invalid fixture");
+    const markup = renderToStaticMarkup(<ResearchRunFacts run={{ ...STRATEGY_RUN, input: {
+      ...STRATEGY_RUN.input, costs: { ...defaultSimulationCosts(), commission_min_cny: "2", slippage_bps: "15" },
+    } }} />);
+    expect(markup).toContain("Frozen fees and slippage");
+    expect(markup).toContain("<strong>Minimum commission per child order (CNY)</strong> 2");
+    expect(markup).toContain("<strong>Price slippage (basis points)</strong> 15");
+    expect(markup).toContain("not charged again as a fee");
+  });
+  it("shows each frozen Framework module without inactive Alpha or Portfolio fields", () => {
+    const program = { source: "def decide(context, state, parameters): return {'output': None, 'state': state}",
+      parameters: { improvement: 0.02 }, data_requirements: { field_ids: [], history_sessions: 1 } };
+    const markup = renderToStaticMarkup(<ResearchRunFacts run={{ ...STRATEGY_RUN, input: {
+      research_kind: "strategy_backtest", strategy_mode: "framework", initial_cash_cny: "100000", costs: defaultSimulationCosts(),
+      start_date: "2026-08-01", end_date: "2026-08-05", universe: "top300", hypothesis: null,
+      modules: { ...builtinFrameworkModules, alpha: { kind: "python", program },
+        portfolio_construction: { kind: "python", program } },
+    } }} />);
+    expect(markup).toContain("Alpha / Signals");
+    expect(markup).toContain("Portfolio Construction");
+    expect(markup).toContain("improvement");
+    expect(markup).toContain("def decide");
+    expect(markup).not.toContain("Holdings count");
+    expect(markup).not.toContain("Neutralization");
+    expect(markup).not.toContain("Exposure expression");
+  });
+  it("shows frozen Direct code and parameters without Framework settings", () => {
+    const markup = renderToStaticMarkup(<ResearchRunFacts run={{
+      ...STRATEGY_RUN, input: {
+        research_kind: "strategy_backtest", strategy_mode: "direct",
+        hypothesis: null, start_date: "2026-08-01", end_date: "2026-08-05",
+        universe: "top300", initial_cash_cny: "100000", costs: defaultSimulationCosts(),
+        program: { source: "def decide(context, state, parameters): pass",
+          parameters: { improvement: 0.02 }, data_requirements: {
+            field_ids: ["price.close.adjusted"], history_sessions: 6,
+          } },
+      },
+    }} />);
+    expect(markup).toContain("Direct · Python");
+    expect(markup).toContain("def decide(context, state, parameters): pass");
+    expect(markup).toContain("improvement");
+    expect(markup).toContain("price.close.adjusted");
+    expect(markup).not.toContain("Framework");
+    expect(markup).not.toContain("<strong>Formula</strong>");
+    expect(markup).not.toContain("Neutralization");
+    expect(markup).not.toContain("Holdings count");
+  });
   it.each([
     ["equal_weight", "Equal weight"], ["rank_weight", "Rank weight"],
     ["inverse_volatility", "Inverse volatility"],
   ] as const)("shows one accurate frozen %s weighting", (weighting, label) => {
     const input = STRATEGY_RUN.input;
-    if (input?.research_kind !== "strategy_backtest") throw new Error("Invalid Strategy fixture");
+    if (input?.research_kind !== "strategy_backtest" || input.strategy_mode !== "framework") throw new Error("Invalid Strategy fixture");
     const markup = renderToStaticMarkup(<ResearchRunFacts run={{
       ...STRATEGY_RUN, input: { ...input, weighting },
     }} />);
@@ -259,27 +310,27 @@ const TERMINAL_STATE: TerminalStrategyState = {
   gross_cash: "9000000",
   net_cash: "8999995",
   gross_nav: "10001000",
-  net_nav: "10000995",
+  net_nav: "10000995", close_risk_nav_cny: "9999995",
   cumulative_transaction_cost: "5",
   positions: [
     {
       instrument_id: "cn.stock.000001",
       execution_shares: 100,
       adjusted_units: "100",
-      last_adjusted_price: "10.01",
+      last_adjusted_price: "10.01", last_close_adjusted_price: "10",
+      remaining_acquisition_cost_cny: "1005", holding_cycle_started_session: "2026-08-04", holding_age: 2,
     },
   ],
-  selection_phase: {
+  research_phase: {
     origin_session: "2026-08-03",
     report_session_count: 3,
-    selection_interval: 1,
-    completed_intervals: 2,
   },
-  target_selection: { signal_session: "2026-08-05", eligibility_exclusions: {} },
-  target_exposure: 1,
+  decision_state: { mode: "framework", selection: { signal_session: "2026-08-05", eligibility_exclusions: {} }, selection_interval: 1, exposure: 1 },
+  contract_checksum: "contract",
   pending_target: {
-    decision_session: "2026-08-05", mode: "selection",
-    signal_session: "2026-08-05",
+    decision_session: "2026-08-05", reason: "selection", contract_checksum: "contract",
+    allocation: { mode: "rebalance", instrument_ids: ["cn.stock.000001"], relative_weights: { "cn.stock.000001": "1" }, exposure: 1 },
+    position_limits: {},
     execution: "next_research_session_open",
   },
 };
@@ -306,7 +357,7 @@ describe("ResearchResultView", () => {
         observations: [{
           session: "2026-08-03",
           gross_nav: "10000000",
-          net_nav: "10000000",
+          net_nav: "10000000", close_risk_nav_cny: "10000000",
           net_cash: "10000000",
           transaction_cost_cny: "0",
           holdings_count: 0,
@@ -358,7 +409,7 @@ describe("ResearchResultView", () => {
       },
       terminal_strategy_state: TERMINAL_STATE,
       provenance: {
-        schema_version: "research-result-v2",
+        schema_version: "research-result-v3",
         research_run_id: "run_test",
         immutable_input_sha256: "a".repeat(64),
         calculation_contracts: {},
@@ -380,7 +431,9 @@ describe("ResearchResultView", () => {
     expect(markup).not.toContain("Terminal Open");
     expect(markup).not.toContain("Net Excess");
     expect(markup).not.toContain("Final Portfolio");
-    expect(markup).not.toContain("cn.stock.000001");
+    expect(markup).toContain("Close risk and holdings");
+    expect(markup).toContain("Remaining acquisition cost (CNY)");
+    expect(markup).toContain("9999995");
     expect(markup).not.toMatch(
       /Predictive evidence|One fill path|Research-period account observations|signal sessions|Daily Observations|Provenance|Input digest/i,
     );
@@ -402,6 +455,18 @@ describe("ResearchResultView", () => {
     expect(unavailableMarkup).toContain("CSI 300 comparison unavailable");
     expect(unavailableMarkup).toContain("No comparison chart is shown");
     expect(unavailableMarkup).not.toContain("<figure");
+    const modular = renderToStaticMarkup(<ResearchResultView result={{ ...result,
+      terminal_strategy_state: { ...TERMINAL_STATE, pending_target: null, decision_state: {
+        mode: "framework", contract_checksum: "a".repeat(64), selection_interval: null,
+        module_states: { universe_selection: {}, alpha: { updates: 1 }, portfolio_construction: {}, risk_management: {} },
+        universe: ["cn.stock.000001"], signals: [{ instrument_id: "cn.stock.000001", value: 0.3,
+          created_session: "2026-08-05", created_session_number: 3, valid_for_sessions: 2 }], retained_proposal: null,
+      } },
+    }} />);
+    expect(modular).toContain("Framework state");
+    expect(modular).toContain("1 active signals");
+    expect(modular).not.toContain("Selection check");
+    expect(modular).not.toContain("NaN");
 
     const cashAccountMarkup = renderToStaticMarkup(
       <ResearchResultView
@@ -598,7 +663,7 @@ const FACTOR_RESULT = {
     }>,
   },
   provenance: {
-    schema_version: "research-result-v2",
+    schema_version: "research-result-v3",
     research_run_id: "run_factor",
     immutable_input_sha256: "a".repeat(64),
     calculation_contracts: {},
@@ -681,8 +746,9 @@ describe("UseAsDraftPanel", () => {
           neutralization: "none",
           research_kind: "strategy_backtest",
           holdings_count: 10,
-          initial_cash_cny: "100000",
+          initial_cash_cny: "100000", costs: defaultSimulationCosts(),
           selection_every_sessions: 2,
+          strategy_mode: "framework", modules: builtinFrameworkModules,
           exposure_expression: "1",
           weighting: "equal_weight", volatility_window: 20,
         }}

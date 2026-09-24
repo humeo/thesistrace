@@ -4,6 +4,7 @@ from datetime import date
 
 from thesistrace.research_kernel.capacity import (
     CHUNK_TIME_TARGET_SECONDS,
+    DecisionMode,
     SessionCapacityError,
     plan_session_capacity,
 )
@@ -29,6 +30,8 @@ def plan_research_chunks(
     maximum_universe_cardinality: int,
     effective_lookback: int,
     execution_memory_bytes: int,
+    decision_mode: DecisionMode = "factor_evaluation",
+    python_program_count: int = 0,
 ) -> ResearchExecutionPlan:
     if not calculation_sessions or calculation_sessions != tuple(sorted(calculation_sessions)):
         raise ValueError("Research calculation sessions must be ordered")
@@ -42,6 +45,7 @@ def plan_research_chunks(
             maximum_universe_cardinality=maximum_universe_cardinality,
             effective_lookback=effective_lookback,
             execution_memory_bytes=execution_memory_bytes,
+            decision_mode=decision_mode, python_program_count=python_program_count,
         )
     except SessionCapacityError as error:
         raise ResearchChunkCapacityError(str(error)) from error

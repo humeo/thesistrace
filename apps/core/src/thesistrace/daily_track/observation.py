@@ -46,14 +46,24 @@ def project_daily_observation(
                     "shares": position.execution_shares,
                     "market_value_cny": canonical_decimal(market_value),
                     "weight": float(market_value / current_nav),
+                    "adjusted_units": position.adjusted_units,
+                    "last_close_adjusted_price": position.last_close_adjusted_price,
+                    "remaining_acquisition_cost_cny": position.remaining_acquisition_cost_cny,
+                    "holding_cycle_started_session": position.holding_cycle_started_session,
+                    "holding_age": position.holding_age,
                 }
             )
-        phase = current.selection_phase
-        signal_offset = (phase.report_session_count - 1) % phase.selection_interval
+        phase = current.research_phase
+        interval = (
+            current.decision_state.selection_interval
+            if current.decision_state.mode == "framework" else None
+        )
+        signal_offset = (phase.report_session_count - 1) % interval if interval else None
         return DailyTrackObservation.model_validate(
             {
                 "session": current.session,
                 "net_asset_value_cny": current.net_nav,
+                "close_risk_nav_cny": current.close_risk_nav_cny,
                 "cash_cny": current.net_cash,
                 "net_change_cny": canonical_decimal(current_nav - origin_nav),
                 "net_return": float(current_nav / origin_nav - 1),
@@ -63,18 +73,17 @@ def project_daily_observation(
                     - Decimal(origin.cumulative_transaction_cost)
                 ),
                 "session_count": phase.report_session_count
-                - origin.selection_phase.report_session_count,
+                - origin.research_phase.report_session_count,
                 "holdings": sorted(
                     holdings, key=lambda row: (-row["weight"], row["instrument_id"])
                 ),
-                "target_exposure": current.target_exposure,
-                "target_selection": current.target_selection.model_dump(mode="json"),
-                "selection_interval": phase.selection_interval,
+                "decision_state": current.decision_state.model_dump(mode="json"),
+                "selection_interval": interval,
                 "pending_target_session": (
                     current.pending_target.decision_session if current.pending_target else None
                 ),
                 "sessions_until_next_signal": (
-                    phase.selection_interval - signal_offset if signal_offset else 0
+                    (interval - signal_offset if signal_offset else 0) if interval else None
                 ),
                 "returns": points[-504:],
             }
