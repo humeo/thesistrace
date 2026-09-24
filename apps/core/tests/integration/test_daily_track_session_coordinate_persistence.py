@@ -585,7 +585,7 @@ def _insert_parent_track(database: PostgresDatabase, *, track_id: str) -> None:
         "verified_result": {
             "kind": "research.result",
             "research_run_id": f"run_{track_id}",
-            "schema_version": "research-result-v2",
+            "schema_version": "research-result-v3",
             "result_manifest_sha256": "f" * 64,
             "result_checksum_sha256": "e" * 64,
         },
@@ -629,6 +629,7 @@ def _strategy_state(session: str, net_nav: str) -> dict[str, object]:
             "gross_nav": net_nav,
             "net_cash": net_nav,
             "net_nav": net_nav,
+            "close_risk_nav_cny": net_nav,
             "pre_trade_gross_nav": net_nav,
             "pre_trade_net_nav": net_nav,
             "rebalance": False,
@@ -650,19 +651,27 @@ def _strategy_state(session: str, net_nav: str) -> dict[str, object]:
         "net_cash": net_nav,
         "gross_nav": net_nav,
         "net_nav": net_nav,
+        "close_risk_nav_cny": net_nav,
         "cumulative_transaction_cost": "0",
         "positions": [],
-        "selection_phase": {
+        "research_phase": {
             "origin_session": "2026-08-03",
             "report_session_count": 1,
+        },
+        "contract_checksum": "0" * 64,
+        "decision_state": {
+            "mode": "framework",
             "selection_interval": 1,
-            "completed_intervals": 0,
+            "selection": {
+                "eligibility_exclusions": {},
+                "signal_session": session,
+                "selected_instrument_ids": [],
+                "relative_weights": {},
+                "signal_checksum": "0" * 64,
+                "contract_checksum": "0" * 64,
+            },
+            "exposure": 1.0,
         },
-        "target_selection": {"eligibility_exclusions": {},
-            "signal_session": session, "selected_instrument_ids": [], "relative_weights": {},
-            "signal_checksum": "0" * 64, "contract_checksum": "0" * 64,
-        },
-        "target_exposure": 1.0,
         "pending_target": None,
         "last_daily_observation": last_daily,
         "metric_state": metric_state,
@@ -672,10 +681,14 @@ def _strategy_state(session: str, net_nav: str) -> dict[str, object]:
 def _state_with_mismatched_coordinate(coordinate: str) -> dict[str, object]:
     state = _strategy_state("2026-08-04", "10001000")
     if coordinate == "pending_target":
-        state["pending_target"] = {"eligibility_exclusions": {},
-            "selected_instrument_ids": [], "relative_weights": {}, "exposure": 1.0,
-            "signal_checksum": "0" * 64, "contract_checksum": "0" * 64,
-            "signal_session": "2026-08-03",
+        state["pending_target"] = {
+            "contract_checksum": "0" * 64,
+            "decision_session": "2026-08-03", "reason": "selection",
+            "allocation": {
+                "mode": "rebalance", "instrument_ids": [], "relative_weights": {},
+                "exposure": 1.0,
+            },
+            "position_limits": {},
             "execution": "next_research_session_open",
         }
         return state

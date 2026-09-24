@@ -12,6 +12,9 @@ class TrackingAttemptFailurePolicy:
 MAX_TRACKING_CYCLE_ATTEMPTS = 3
 
 TRACKING_ATTEMPT_FAILURE_POLICIES = {
+    "StrategyProgramFailure": TrackingAttemptFailurePolicy(
+        code="STRATEGY_PROGRAM_FAILED", max_cycle_attempts=1,
+    ),
     "FamilyCoverageUnavailable": TrackingAttemptFailurePolicy(
         code="DATA_FAMILY_COVERAGE_UNAVAILABLE", max_cycle_attempts=1,
     ),

@@ -48,6 +48,7 @@ from thesistrace.research_batch.service import (
     ResearchBatchService,
     preserve_deleted_run_history,
 )
+from thesistrace.research_definition import default_simulation_costs
 from thesistrace.research_folder import BATCH_RESEARCH_FOLDER_ID
 from thesistrace.research_kernel.research_chunks import AlphaFactorExecutionBinding
 from thesistrace.research_run.execution import ResearchExecutionResourceExhausted
@@ -576,8 +577,28 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
         }
         command["strategies"] = [
             {**item, "initial_cash_cny": "100000", "exposure_expression": exposure,
+             "modules": {
+                 "universe_selection": "dataset_universe/v1", "alpha": "alpha_formula/v1",
+                 "portfolio_construction": "periodic_top_n/v1" if ordinal == 0 else {
+                     "kind": "periodic_top_n/v1", "minimum_holding_sessions": 1,
+                 },
+                 "risk_management": "no_risk/v1" if ordinal == 0 else {
+                     "kind": "builtin_risk/v1", "stop_loss_threshold": 0.01,
+                     "maximum_holding_sessions": 1,
+                     "portfolio_drawdown": {
+                         "drawdown_threshold": 0.01, "maximum_stock_exposure": 0.3,
+                         "cooldown_sessions": 2,
+                     },
+                     "take_profit_tiers": [
+                         {"profit_threshold": 0.0001, "cumulative_reduction": 0.3},
+                     ],
+                 },
+             },
              "weighting": "inverse_volatility" if ordinal == 0 else "rank_weight",
-             "volatility_window": 2}
+             "volatility_window": 2,
+             "costs": {**default_simulation_costs().model_dump(),
+                       "commission_min_cny": str(ordinal + 1),
+                       "slippage_bps": str(10 + ordinal * 5)}}
             for ordinal, (item, exposure) in enumerate(
                 zip(command["strategies"], exposures, strict=True)
             )
@@ -625,19 +646,26 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
                     "exposure_expression": item["exposure_expression"],
                     "weighting": item["weighting"],
                     "volatility_window": item["volatility_window"],
+                    "costs": item["costs"],
+                    "modules": item["modules"],
                 },
             ).json()
             for ordinal, item in enumerate(command["strategies"], start=1)
         ]
         runtime = client.app.state.core_runtime
         for run in ordinary:
-            assert runtime.research_runs.process_next() is True
-            assert client.get(f"/api/research-runs/{run['id']}").json()["status"] == ("succeeded")
+            ordinary_events: list[dict[str, object]] = []
+            assert runtime.research_runs.process_next(
+                on_execution_event=ordinary_events.append,
+            ) is True
+            detail = client.get(f"/api/research-runs/{run['id']}").json()
+            assert detail["status"] == "succeeded", {"detail": detail, "events": ordinary_events}
 
         assert runtime.research_batches.process_next(on_execution_event=events.append) is True
 
         completed = client.get(f"/api/research-batches/{batch['id']}").json()
-        assert completed["status"] == "succeeded", str(completed)
+        failures = [event for event in events if "failed" in str(event.get("event", ""))]
+        assert completed["status"] == "succeeded", str(failures or completed)
         assert completed["progress"] == {
             "shared_alpha_factor_status": "succeeded",
             "completed_strategy_tasks": 2,
@@ -681,6 +709,8 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
             assert frozen["exposure_expression"] == expected_source
             assert frozen["weighting"] == command["strategies"][item["ordinal"] - 1]["weighting"]
             assert frozen["initial_cash_cny"] == "100000"
+            assert frozen["costs"] == command["strategies"][item["ordinal"] - 1]["costs"]
+            assert frozen["modules"] == command["strategies"][item["ordinal"] - 1]["modules"]
             assert batch_stored["key_metrics"]["annualized_excess_return"] is not None
             if expected_source == "0":
                 assert batch_stored["key_metrics"]["annualized_excess_return"] < 0

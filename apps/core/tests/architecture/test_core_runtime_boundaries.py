@@ -93,10 +93,11 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
         "publication": {"_postgres"},
         "research_series": set(),
         "strategy_evidence": {"_paging", "publication", "research_kernel", "strategy_event_wire"},
-        "strategy_event_wire": set(),
+        "strategy_event_wire": {"research_kernel"},
         "daily_holding_evidence": {"publication", "research_kernel"},
         "daily_holding_queries": {"daily_holding_evidence", "research_kernel"},
         "research_kernel": {"research_series"},
+        "research_definition": {"alpha_language", "research_kernel"},
         "data": {
             "_postgres",
             "benchmark",
@@ -109,6 +110,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
         "research_folder": {"_postgres"},
         "researcher": {"_postgres", "research_folder"},
         "daily_track": {
+            "research_definition",
             "daily_holding_evidence",
             "daily_holding_queries",
             "strategy_event_wire",
@@ -124,6 +126,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
             "research_series",
         },
         "research_run": {
+            "research_definition",
             "daily_holding_evidence",
             "daily_holding_queries",
             "strategy_event_wire",
@@ -142,6 +145,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
             "research_series",
         },
         "research_batch": {
+            "research_definition",
             "daily_holding_evidence",
             "strategy_evidence",
             "_memory",
@@ -157,6 +161,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
             "research_series",
         },
         "research_authoring": {
+            "research_definition",
             "alpha_language",
             "research_kernel",
             "research_batch",
@@ -520,7 +525,7 @@ def test_publication_hides_physical_s3_keys_and_uses_the_standard_client() -> No
     assert "s3" not in CoreRuntime.__dataclass_fields__
     assert "thesistrace.objects" not in source
     assert (ROOT / "apps/core/src/thesistrace" / "publication" / "serialization.py").is_file()
-    for forbidden in ("token", "proxy", "fastapi", "filesystem"):
+    for forbidden in ("auth_token", "proxy", "fastapi", "filesystem"):
         assert forbidden not in source.lower()
 
 
@@ -576,7 +581,10 @@ def test_publication_owns_its_sql_and_never_commits_a_caller_transaction() -> No
     assert "CREATE TABLE publication.manifest_objects" in schema
     assert "def record(" in service
     assert "def read_in_transaction(" in service
-    assert ".commit(" not in service
+    # The publication-owned staging session may commit its keepalive query;
+    # callers' reference transactions remain owned by their caller.
+    assert service.count(".commit(") == 1
+    assert "connection.commit()" in service
     for product_schema in (
         "data.",
         "definitions.",

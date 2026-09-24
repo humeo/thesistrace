@@ -1,25 +1,30 @@
 import { useTranslation } from "react-i18next";
 import { interfaceLocale } from "../i18n";
 import { formatCurrency, formatNumber, formatSessionDate } from "../i18n/format";
-import { SelectionEligibilityView, type SelectionEligibility } from "../research/SelectionEligibility";
+import { SelectionEligibilityView } from "../research/SelectionEligibility";
+import { CloseRiskFacts, type CloseRiskPosition } from "../analysis/CloseRiskFacts";
+import { isBuiltinFrameworkState, strategySelection, type StrategyDecisionState } from "../research/strategyDecisionState";
+import { FrameworkStateView } from "../research/FrameworkStateView";
 import { useEffect, useRef, useState } from "react";
 import { ColorType, LineSeries, createChart, type Time, type IChartApi } from "lightweight-charts";
 
 export type DailyTrackObservation = {
-  target_selection: SelectionEligibility;
+  decision_state: StrategyDecisionState;
   session: string;
   net_asset_value_cny: string;
+  close_risk_nav_cny: string;
   cash_cny: string;
   net_change_cny: string;
   net_return: number;
   maximum_drawdown: number;
   transaction_cost_cny: string;
   session_count: number;
-  holdings: Array<{ instrument_id: string; shares: number; market_value_cny: string; weight: number }>;
-  target_exposure: number;
-  selection_interval: number;
+  holdings: Array<Omit<CloseRiskPosition, "execution_shares"> & {
+    shares: number; market_value_cny: string; weight: number;
+  }>;
+  selection_interval: number | null;
   pending_target_session: string | null;
-  sessions_until_next_signal: number;
+  sessions_until_next_signal: number | null;
   returns: Array<{ session: string; net_return: number }>;
 };
 
@@ -56,15 +61,21 @@ export function CurrentHoldings({ observation }: { observation: DailyTrackObserv
   const { t } = useTranslation("daily");
   const [query, setQuery] = useState("");
   const holdings = observation.holdings.filter((item) => item.instrument_id.toLowerCase().includes(query.toLowerCase()));
+  const selection = strategySelection(observation.decision_state);
   return (
     <section className="track-holdings" aria-label={t("holdings") }>
       <div className="track-section-heading">
-        <div><h2>{t("holdings")} </h2><p>{t("holdingsDescription", { date: observation.session, target: formatReturn(observation.target_exposure), actual: formatReturn(1 - Number(observation.cash_cny) / Number(observation.net_asset_value_cny)) })}</p></div>
-        <input aria-label={t("filterHoldings") } placeholder={t("findSymbol") } type="search"
+        <div><h2>{t("holdings")}</h2><p>{isBuiltinFrameworkState(observation.decision_state)
+          ? t("holdingsDescription", { date: observation.session, target: formatReturn(observation.decision_state.exposure), actual: formatReturn(1 - Number(observation.cash_cny) / Number(observation.net_asset_value_cny)) })
+          : t("holdingsDescriptionWithoutTarget", { date: observation.session, actual: formatReturn(1 - Number(observation.cash_cny) / Number(observation.net_asset_value_cny)) })}</p></div>
+        <input aria-label={t("filterHoldings")} placeholder={t("findSymbol")} type="search"
           value={query} onChange={(event) => setQuery(event.target.value)} />
       </div>
-      <SelectionEligibilityView selection={observation.target_selection} />
-      <div className="track-table-scroll" tabIndex={0} role="region" aria-label={t("holdingsTable") }>
+      {selection && <SelectionEligibilityView selection={selection} />}
+      <FrameworkStateView state={observation.decision_state} />
+      <CloseRiskFacts session={observation.session} nav={observation.close_risk_nav_cny}
+        positions={observation.holdings.map(item => ({ ...item, execution_shares: item.shares }))} />
+      <div className="track-table-scroll" tabIndex={0} role="region" aria-label={t("holdingsTable")}>
         <table className="track-table">
           <thead><tr><th scope="col">{t("symbol")} </th><th scope="col">{t("shares")} </th><th scope="col">{t("marketValue")} </th><th scope="col">{t("weight")} </th></tr></thead>
           <tbody>
@@ -95,13 +106,13 @@ export function SelectionSchedule({ observation, isStopped, isBehind }: {
 }) {
   const { t } = useTranslation("daily");
   return (
-    <section className="track-rebalance" aria-label={t("schedule") }>
-      <div className="track-section-heading"><div><h2>{t("schedule")} </h2>
-        <p>{t("scheduleDescription")} </p></div></div>
+    <section className="track-rebalance" aria-label={t("schedule")}>
+      <div className="track-section-heading"><div><h2>{t("schedule")}</h2>
+        <p>{t(observation.selection_interval === null ? "scheduleConditionDescription" : "scheduleDescription")}</p></div></div>
       <dl className="track-schedule-facts">
-        <div><dt>{t("frequency")} </dt><dd>{t("every", { count: observation.selection_interval })}</dd></div>
-        <div><dt>{t("lastSignal")} </dt><dd>{observation.pending_target_session ?? t("noSignal")}</dd></div>
-        <div><dt>{t("nextStep")} </dt><dd>{isStopped ? t("trackingStopped") : observation.pending_target_session ? t("nextOpen") : t("nextSignal", { count: observation.sessions_until_next_signal })}</dd></div>
+        <div><dt>{t("frequency")}</dt><dd>{observation.selection_interval === null ? t("conditionDriven") : t("every", { count: observation.selection_interval })}</dd></div>
+        <div><dt>{t("lastSignal")}</dt><dd>{observation.pending_target_session ?? t("noSignal")}</dd></div>
+        <div><dt>{t("nextStep")}</dt><dd>{isStopped ? t("trackingStopped") : observation.pending_target_session ? t("nextOpen") : observation.selection_interval === null ? t("nextCondition") : t("nextSignal", { count: observation.sessions_until_next_signal! })}</dd></div>
       </dl>
       {isBehind && !isStopped ? <p className="track-inline-notice">{t("behindNote")} </p> : null}
       <div className="track-guidance-empty">

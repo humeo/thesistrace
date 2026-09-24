@@ -1903,6 +1903,162 @@ def test_received_report_waiting_for_calendar_is_present_even_with_null_metrics(
     assert validated.report_periods["income"] == ("2026-06-30",)
 
 
+def test_report_inventory_reads_metadata_without_decoding_financial_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import pyarrow.parquet as pq
+
+    store, prior, _, _ = _materialized_candidate(
+        tmp_path,
+        income_items=[
+            ["000001.SZ", "20260813", "", "20260630", "1", "1", "2", None, "0"],
+        ],
+    )
+    original_read = pq.read_table
+
+    def read_metadata(source, *, columns=None, **kwargs):
+        assert columns is not None, "Report presence must not decode the whole financial table"
+        assert "revenue" not in columns, (
+            "Nullable financial values do not determine report presence"
+        )
+        return original_read(source, columns=columns, **kwargs)
+
+    monkeypatch.setattr(pq, "read_table", read_metadata)
+    inventory = store.report_inventory(prior.manifest_sha256, through="2026-08-13")
+    assert inventory["income"] == {
+        ("equity:000001.SZ", "2026-06-30"),
+        ("equity:000002.SZ", "2008-12-31"),
+    }
+    assert ("equity:000001.SZ", "2026-06-30") not in store.report_inventory(
+        prior.manifest_sha256, through="2026-08-12",
+    )["income"]
+
+
+def test_prepared_daily_candidate_reconciles_once_and_preserves_published_inventory(
+    tmp_path: Path,
+) -> None:
+    store, prior, _, snapshot = _materialized_candidate(tmp_path)
+    before = store.report_inventory(prior.manifest_sha256, through="2026-08-13")
+    discovery = FinancialDiscoveryPublication(
+        baseline_session="2026-08-13", attempted_through_session="2026-08-13",
+        complete_through_session="2026-08-13", source_lineage_sha256="f" * 64,
+        readiness_status="ready_with_pending", pending_instrument_count=1,
+        discovery_gap_count=0, earliest_unresolved_date="2026-08-13",
+    )
+    existing_manifests = set((tmp_path / "manifests").rglob("*.json"))
+    prepared = store.prepare_daily(
+        _targeted_instrument_collection(snapshot, idempotency_key="prepared-daily"),
+        prior_candidate_manifest_sha256=prior.manifest_sha256, discovery=discovery,
+    )
+    assert prepared.received_reports == before
+    # Preparation may write addressed data objects/indexes, but never a tentative Family.
+    assert not any(
+        json.loads(path.read_bytes()).get("format") == "thesistrace-financial-family-candidate"
+        for path in set((tmp_path / "manifests").rglob("*.json")) - existing_manifests
+    )
+    prepared.received_reports["income"].clear()
+    candidate = store.finalize_daily(
+        prepared, discovery=replace(discovery, readiness_status="ready",
+                                    pending_instrument_count=0, earliest_unresolved_date=None),
+    )
+    assert candidate.pending_instrument_count == 0
+    assert candidate.readiness_status == "ready"
+    with measure_data_io() as io:
+        store.verify_for_publication(candidate.manifest_sha256)
+        assert store.report_inventory(candidate.manifest_sha256, through="2026-08-13") == before
+    assert io.financial_parquet_scans == 0
+    assert store.report_inventory(prior.manifest_sha256, through="2026-08-13") == before
+    families = [path for path in set((tmp_path / "manifests").rglob("*.json")) - existing_manifests
+                if json.loads(path.read_bytes()).get("format")
+                == "thesistrace-financial-family-candidate"]
+    assert len(families) == 1
+
+
+def test_prepared_inventory_matches_full_logical_rows_across_delta_layers(tmp_path: Path):
+    store, prior, _, snapshot = _materialized_candidate(tmp_path)
+    discovery = FinancialDiscoveryPublication(
+        baseline_session="2026-08-13", attempted_through_session="2026-08-13",
+        complete_through_session="2026-08-13", source_lineage_sha256="a" * 64,
+        readiness_status="ready", pending_instrument_count=0, discovery_gap_count=0,
+        earliest_unresolved_date=None,
+    )
+    collection = _targeted_instrument_collection(snapshot, idempotency_key="inventory-layer")
+    for ordinal, row in enumerate((
+        ["000001.SZ", "20260812", "20260812", "20260630", "1", "1", "2", None, "1"],
+        ["000001.SZ", "20260813", "20260813", "20260630", "1", "1", "2", "902", "1"],
+        None,
+    )):
+        if row is not None:
+            collection = _append_targeted_source_row(
+                tmp_path, collection, endpoint="income", row=row,
+            )
+        current = replace(collection, idempotency_key=f"inventory-layer-{ordinal}")
+        if row is None:
+            current = replace(current, target_count=0, shards=())
+        prepared = store.prepare_daily(
+            current, prior_candidate_manifest_sha256=prior.manifest_sha256, discovery=discovery,
+        )
+        candidate = store.finalize_daily(prepared, discovery=discovery)
+        assert ("equity:000001.SZ", "2026-06-30") in prepared.received_reports["income"]
+        # Full public reads are independent of the compact workset and its overlay.
+        complete = FinancialCandidateStore(tmp_path)
+        for endpoint, table in (
+            ("income", "income_statement_versions"),
+            ("balancesheet", "balance_sheet_versions"),
+            ("cashflow", "cash_flow_statement_versions"),
+        ):
+            rows = complete.read_table(candidate.manifest_sha256, table)
+            expected = {
+                (value["instrument_id"], datetime.strptime(
+                    value["source_report_period"], "%Y%m%d",
+                ).date().isoformat())
+                for value in rows
+                if value["availability_status"] in (
+                    "available", "pending_calendar", "outside_calendar",
+                ) and value["source_report_type"] == "1"
+                and value["source_report_period"] <= value["source_published_date"] <= "20260813"
+            }
+            assert prepared.received_reports[endpoint] == expected
+        assert complete.report_inventory(
+            candidate.manifest_sha256, through="2026-08-13",
+        ) == prepared.received_reports
+        complete.close()
+        prior = candidate
+    store.close()
+    assert not list(tmp_path.glob(".financial-published-index-*"))
+
+
+@pytest.mark.parametrize("damage", ["reports", "base_object", "delta_object"])
+def test_prepared_candidate_cannot_reuse_a_stale_validation_result(tmp_path: Path, damage: str):
+    store, prior, _, snapshot = _materialized_candidate(tmp_path)
+    targeted = _append_targeted_source_row(
+        tmp_path, _targeted_instrument_collection(snapshot, idempotency_key="damaged-preparation"),
+        endpoint="income",
+        row=["000001.SZ", "20260813", "", "20260630", "1", "1", "2", "901", "0"],
+    )
+    discovery = FinancialDiscoveryPublication(
+        baseline_session="2026-08-13", attempted_through_session="2026-08-13",
+        complete_through_session="2026-08-13", source_lineage_sha256="b" * 64,
+        readiness_status="ready", pending_instrument_count=0, discovery_gap_count=0,
+        earliest_unresolved_date=None,
+    )
+    prepared = store.prepare_daily(
+        targeted, prior_candidate_manifest_sha256=prior.manifest_sha256, discovery=discovery,
+    )
+    if damage == "reports":
+        prepared = replace(
+            prepared, reports=tuple((endpoint, ()) for endpoint in FINANCIAL_ENDPOINTS),
+        )
+    else:
+        family = json.loads(prepared.family_template)
+        table = _read_manifest(tmp_path, family["tables"][0]["manifest_sha256"])
+        digest = table["objects"][0 if damage == "base_object" else -1]["sha256"]
+        (tmp_path / "objects/sha256" / digest[:2] / f"{digest}.parquet").write_bytes(b"damaged")
+    with pytest.raises(FinancialCandidateError):
+        store.finalize_daily(prepared, discovery=discovery)
+    store.close()
+
+
 def test_daily_instrument_validation_ignores_raw_batch_only_change(
     tmp_path: Path,
 ) -> None:

@@ -24,6 +24,7 @@ from thesistrace.daily_track import (
     DailyTrackDetailUnavailable,
     DailyTrackInvalidCursor,
     DailyTrackList,
+    DailyTrackOriginResultSection,
     DailyTrackPollingDetail,
     DailyTrackRefreshConflict,
     DailyTrackRefreshOutcome,
@@ -769,11 +770,29 @@ def _canonical_v1_contract() -> bytes:
         for capability in _registry(authority).accessible_capabilities()
     ]
     return json.dumps(
-        contract,
+        _canonical_contract_value(contract),
         ensure_ascii=True,
         separators=(",", ":"),
         sort_keys=True,
     ).encode()
+
+
+def _canonical_contract_value(value):
+    if isinstance(value, dict):
+        return {
+            key: (
+                sorted(
+                    (_canonical_contract_value(item) for item in member),
+                    key=lambda item: json.dumps(item, sort_keys=True),
+                )
+                if key == "anyOf" and isinstance(member, list)
+                else _canonical_contract_value(member)
+            )
+            for key, member in value.items()
+        }
+    if isinstance(value, list):
+        return [_canonical_contract_value(item) for item in value]
+    return value
 
 
 def test_local_operator_has_only_safe_default_scopes() -> None:
@@ -898,6 +917,18 @@ def test_registry_catalog_paginates_fields_and_builtins_as_one_collection() -> N
 
 
 def test_registry_context_paginates_folders_and_invalidates_changed_collections() -> None:
+    from thesistrace.data.overview import describe_family_fields
+
+    families = [family.model_copy(update={
+        "available_field_ids": family.supported_field_ids,
+        "coverage_start": date(2024, 1, 2), "coverage_end": date(2024, 1, 31),
+        "readiness": "ready",
+    }) for family in describe_family_fields(None)]
+
+    class DataReader(_DataOverviewReader):
+        def overview(self) -> DataOverview:
+            return super().overview().model_copy(update={"field_families": families})
+
     folders = [
         ResearchFolderSummary(
             id=f"folder_{i:03}",
@@ -912,15 +943,19 @@ def test_registry_context_paginates_folders_and_invalidates_changed_collections(
         def list(self, researcher_id: UUID) -> ResearchFolderList:
             return ResearchFolderList(items=folders)
 
-    registry = _registry(research_folders=FolderReader())
+    registry = _registry(research_folders=FolderReader(), data_overview=DataReader())
     first = registry.get_research_context()
+    assert first.data_overview == DataReader().overview()
+    assert len(first.model_dump_json().encode("utf-8")) <= 64 * 1024
     assert len(first.folders.items) == 20
     assert first.folders.next_cursor
     seen = list(first.folders.items)
     cursor = first.folders.next_cursor
     while cursor is not None:
         page = registry.get_research_context(folder_cursor=cursor)
-        assert len(page.model_dump_json().encode("utf-8")) <= 32 * 1024
+        assert len(page.model_dump_json().encode("utf-8")) <= 64 * 1024
+        assert page.data_overview == first.data_overview
+        assert page.authoring_constraints == first.authoring_constraints
         seen.extend(page.folders.items)
         cursor = page.folders.next_cursor
     assert seen == folders
@@ -1829,14 +1864,14 @@ def test_v1_inventory_scopes_descriptions_annotations_and_schemas_are_exact() ->
     canonical = _canonical_v1_contract()
 
     assert sha256(canonical).hexdigest() == (
-        "b3c9aa0de432397ed3ae1f046f232747e719f901ce7aca95b0cca05b90dffc31"
+        "e647abf06f85dd7ed70d465fbbd861dd30dbf4d0c513ddbe5097c932a4cc9905"
     )
-    assert len(canonical) == 238086
+    assert len(canonical) == 305484
 
 
 def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None:
-    assert RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES == 128 * 1024
-    assert RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES == 256 * 1024
+    assert RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES == 64 * 1024 * 1024
+    assert RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES == 16 * 1024 * 1024
     assert RESEARCH_AGENT_RATE_WINDOW_SECONDS == 60
     assert RESEARCH_AGENT_MAX_CALLS_PER_WINDOW == 120
     assert RESEARCH_AGENT_MAX_CONCURRENT_CALLS == 4
@@ -1900,11 +1935,154 @@ def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None
         "v1_contract_sha256": sha256(canonical_contract).hexdigest(),
         "v1_contract_bytes": len(canonical_contract),
         "maximum_factor_batch_call_bytes": maximum_batch_bytes,
+        "maximum_framework_batch_call_bytes": 62_887_654,
     }
     assert evidence["observed"]["maximum_resident_set_bytes"] < (
         evidence["production_envelope"]["container_memory_bytes"] // 10
     )
     assert evidence["observed"]["swaps"] == 0
+
+
+def test_wire_envelope_carries_twenty_maximum_python_programs_and_explicit_state():
+    from pydantic import TypeAdapter
+
+    prefix = (
+        "def decide(context, state, parameters):\n"
+        "    return {'output': None, 'state': state}\n#"
+    )
+    source = prefix + "\x01" * (65_536 - len(prefix.encode()))
+    parameters = {"payload": "\x7f" * (65_536 - len('{"payload":""}'))}
+    program = {
+        "source": source, "parameters": parameters,
+        "data_requirements": {"field_ids": ["price.close.adjusted"], "history_sessions": 1},
+    }
+    batch = {
+        "batch_kind": "strategy_sweep", "request_id": "maximum-python-batch",
+        "start_date": "2026-08-03", "end_date": "2026-08-04", "universe": "top300",
+        "strategies": [
+            {"item_key": str(i), "strategy_mode": "direct", "initial_cash_cny": "100000",
+             "program": program} for i in range(20)
+        ],
+    }
+    TypeAdapter(ResearchBatchAdmissionCommand).validate_python(batch)
+    assert _wire_request_bytes(CallToolRequestParams(
+        name="submit_research_batch", arguments=batch,
+    )) <= RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES
+    # MCP returns both structured and text content. Neither may truncate a
+    # valid explicit state at its 256 KiB contract limit.
+    state = {"payload": "x" * (256 * 1024 - len('{"payload":""}'))}
+    result = CallToolResult(
+        content=[TextContent(type="text", text=json.dumps(state))], structured_content=state,
+    )
+    context = SimpleNamespace(protocol_version=LATEST_HANDSHAKE_VERSION, request_id="request")
+    assert _wire_response_bytes(context, method="tools/call", result=result) <= (
+        RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES
+    )
+
+
+def test_wire_envelope_carries_twenty_frameworks_with_four_maximum_programs():
+    from pydantic import TypeAdapter
+
+    prefix = (
+        "def decide(context, state, parameters):\n"
+        "    return {'output': None, 'state': state}\n#"
+    )
+    source = prefix + "\x01" * (65_536 - len(prefix.encode()))
+    program = {
+        "source": source, "parameters": {"payload": "\x7f" * (65_536 - len('{"payload":""}'))},
+        "data_requirements": {"field_ids": [], "history_sessions": 1},
+    }
+    modules = {stage: {"kind": "python", "program": program} for stage in (
+        "universe_selection", "alpha", "portfolio_construction", "risk_management",
+    )}
+    batch = {
+        "batch_kind": "strategy_sweep", "request_id": "maximum-framework-batch",
+        "start_date": "2026-08-03", "end_date": "2026-08-04", "universe": "top300",
+        "strategies": [{
+            "item_key": str(index), "strategy_mode": "framework", "initial_cash_cny": "100000",
+            "modules": modules,
+        } for index in range(20)],
+    }
+    TypeAdapter(ResearchBatchAdmissionCommand).validate_python(batch)
+    size = _wire_request_bytes(CallToolRequestParams(
+        name="submit_research_batch", arguments=batch,
+    ))
+    assert size == 62_887_654
+    assert size <= RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES
+
+
+def test_mcp_origin_result_preserves_large_legal_framework_state_and_pending_target():
+    checksum = "a" * 64
+    target = {
+        "decision_session": "2026-08-03",
+        "execution": "next_research_session_open",
+        "contract_checksum": checksum,
+        "reason": "risk_limit",
+        "allocation": None,
+        "position_limits": {"equity:600001.SH": 0},
+    }
+    origin = DailyTrackOriginResultSection.model_validate({
+        "track_id": "track_test",
+        "seed_run_id": "run_test",
+        "seed_research_available": True,
+        "result_checksum_sha256": "b" * 64,
+        "terminal_account": {
+            "session": "2026-08-03",
+            "gross_cash": "100000", "net_cash": "100000",
+            "gross_nav": "100000", "net_nav": "100000",
+            "close_risk_nav_cny": "100000",
+            "cumulative_transaction_cost": "0",
+            "research_phase": {"origin_session": "2026-08-03", "report_session_count": 1},
+            "decision_state": {
+                "mode": "framework", "contract_checksum": checksum,
+                "selection_interval": None,
+                "module_states": {
+                    stage: {"payload": "x" * 240_000}
+                    for stage in (
+                        "universe_selection", "alpha",
+                        "portfolio_construction", "risk_management",
+                    )
+                },
+                "universe": [], "signals": [], "retained_proposal": target,
+            },
+            "contract_checksum": checksum,
+            "pending_target": target,
+        },
+        "positions": [],
+        "next_cursor": None,
+    })
+    reader = _DailyTrackReader()
+    reader.result_section = origin
+    anyio.run(_read_large_origin_through_mcp, reader, origin)
+
+
+async def _read_large_origin_through_mcp(
+    reader: _DailyTrackReader, origin: DailyTrackOriginResultSection,
+) -> None:
+    async with Client(_server(_registry(daily_tracks=reader), events=[])) as client:
+        response = await client.call_tool(
+            "get_daily_track_result", {"track_id": "track_test", "section": "origin"},
+        )
+    assert not response.is_error
+    assert response.structured_content == origin.model_dump(mode="json")
+    assert json.loads(response.content[0].text) == response.structured_content
+    assert len(response.content[0].text.encode()) > 900_000
+
+
+@pytest.mark.parametrize("page_mebibytes", [2, 4])
+def test_wire_response_preserves_complete_event_pages_in_both_mcp_representations(page_mebibytes):
+    # Targets use 2 MiB and Framework uses 4 MiB plus 32 KiB metadata. Backslashes
+    # exercise the extra escaping in MCP's text representation.
+    payload = {"page": "\\" * ((page_mebibytes * 1024 * 1024 + 32 * 1024) // 2 - 16)}
+    encoded = json.dumps(payload, separators=(",", ":"))
+    assert len(encoded) <= page_mebibytes * 1024 * 1024 + 32 * 1024
+    result = CallToolResult(
+        content=[TextContent(type="text", text=encoded)], structured_content=payload,
+    )
+    context = SimpleNamespace(protocol_version=LATEST_HANDSHAKE_VERSION, request_id="request")
+    assert _wire_response_bytes(context, method="tools/call", result=result) < (
+        RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES
+    )
 
 
 def test_v1_response_ceiling_counts_the_exact_jsonrpc_envelope() -> None:
@@ -2164,8 +2342,17 @@ async def _exercise_in_memory_protocol() -> None:
                     assert set(source["required"]) == {"request_id", "folder_id", "rerun_source"}
                     assert "rerun_source" in tool.description
                     schema = schema["$defs"]["ResearchRunAdmissionCommand"]
-                assert schema["discriminator"]["propertyName"] == discriminator
-                assert len(schema["oneOf"]) == 2
+                if tool.name == "submit_research_run":
+                    # Research kind plus strategy mode selects the concrete
+                    # command; JSON Schema represents its three exact branches.
+                    assert len(schema["oneOf"]) == 3
+                    direct = tool.input_schema["$defs"]["DirectStrategyAdmissionCommand"]
+                    assert direct["properties"]["strategy_mode"]["const"] == "direct"
+                    assert "program" in direct["required"]
+                    assert "formula" not in direct["properties"]
+                else:
+                    assert schema["discriminator"]["propertyName"] == discriminator
+                    assert len(schema["oneOf"]) == 2
                 for branch in schema["oneOf"]:
                     definition = tool.input_schema["$defs"][branch["$ref"].rsplit("/", 1)[-1]]
                     assert definition["additionalProperties"] is False
@@ -2173,7 +2360,7 @@ async def _exercise_in_memory_protocol() -> None:
                 assert tool.annotations.read_only_hint is False
                 assert tool.annotations.idempotent_hint is False
                 assert tool.input_schema["discriminator"]["propertyName"] == "section"
-                expected_section_count = 17 if tool.name == "get_research_run_result" else 13
+                expected_section_count = 18 if tool.name == "get_research_run_result" else 14
                 assert len(tool.input_schema["oneOf"]) == expected_section_count
                 for branch in tool.input_schema["oneOf"]:
                     definition = tool.input_schema["$defs"][branch["$ref"].rsplit("/", 1)[-1]]
@@ -2243,9 +2430,11 @@ async def _exercise_in_memory_protocol() -> None:
             if "StrategyBacktest" in branch["$ref"]
         )
         strategy_schema = submit_schema["$defs"][strategy_ref.rsplit("/", 1)[-1]]
-        assert {"initial_cash_cny", "holdings_count", "selection_every_sessions"} <= set(
-            strategy_schema["required"]
+        assert "initial_cash_cny" in strategy_schema["required"]
+        assert {"modules", "holdings_count", "selection_every_sessions"} <= set(
+            strategy_schema["properties"]
         )
+        assert not {"holdings_count", "selection_every_sessions"} & set(strategy_schema["required"])
         assert strategy_schema["properties"]["initial_cash_cny"]["type"] == "string"
         result_schema = tools["get_research_run_result"].input_schema
         collection_schemas = [
@@ -2884,7 +3073,7 @@ async def _exercise_wire_request_ceiling() -> None:
     async with Client(server) as client:
         result = await client.call_tool(
             "diagnose_alpha_formula",
-            {"source": "request-size-canary" * RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES},
+            {"source": "request-size-canary" + "x" * RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES},
         )
 
     assert result.is_error is True

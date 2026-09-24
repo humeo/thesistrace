@@ -12,6 +12,9 @@ class AttemptFailurePolicy:
 MAX_RESEARCH_RUN_ATTEMPTS = 3
 
 ATTEMPT_FAILURE_POLICIES = {
+    "StrategyProgramFailure": AttemptFailurePolicy(
+        code="STRATEGY_PROGRAM_FAILED", max_attempts=1,
+    ),
     "InsufficientCalculationWarmup": AttemptFailurePolicy(
         code="INSUFFICIENT_CALCULATION_WARMUP",
         max_attempts=1,

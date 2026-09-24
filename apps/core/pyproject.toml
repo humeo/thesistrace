@@ -15,6 +15,7 @@ dependencies = [
   "numpy>=2.3,<3",
   "mcp>=2,<3",
   "pyjwt>=2.13,<3",
+  "wasmtime==49.0.0",
 ]
 
 [project.scripts]
@@ -45,6 +46,7 @@ packages = ["src/thesistrace"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
+  "bounded_process: real guest/process deadline checks run without competing pytest workers",
   "database_restart: isolated final-phase acceptance that restarts its owned PostgreSQL",
   "dependency_restart: isolated final-phase acceptance that stops and restarts owned dependencies",
   "real_codex: explicit real-model Codex Host acceptance; excluded from deterministic release gates",

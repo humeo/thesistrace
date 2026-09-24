@@ -48,6 +48,15 @@ test("unknown or malformed admission errors never become raw server messages", (
   expect(readResearchIssues([issue("FOLDER_NOT_FOUND", null)])).toEqual([issue("FOLDER_NOT_FOUND", null)]);
 });
 
+test("Python diagnostics keep their type and line when the interface language changes", () => {
+  const syntax = issue("STRATEGY_PROGRAM_INVALID", {
+    kind: "strategy_program", error_type: "SyntaxError", line: 1,
+  });
+  expect(formatResearchIssue(syntax, "en")).toBe("Python syntax error at line 1.");
+  expect(formatResearchIssue(syntax, "zh-CN")).toBe("Python 语法错误，第 1 行。");
+  expect(formatResearchIssue({ ...syntax, details: null }, "zh-CN")).toBe("研究验证失败，请检查设置后重试。");
+});
+
 test("current-data rerun rejections preserve the source-setting and checkpoint causes", () => {
   const [setting, boundary] = readResearchIssues([
     { ...issue("RERUN_SOURCE_INVALID", null), field: "strategy.execution", details: {

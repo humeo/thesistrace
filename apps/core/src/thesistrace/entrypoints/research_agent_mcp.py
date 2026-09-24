@@ -147,7 +147,7 @@ def _claimed_bounded_stdin() -> Iterator[_BoundedStdin]:
     if wire_fd <= 2:
         os.close(wire_fd)
         raise RuntimeError("Research Agent stdin duplicate is not private")
-    wire = os.fdopen(wire_fd, "rb", buffering=0, closefd=True)
+    wire = os.fdopen(wire_fd, "rb", closefd=True)
     null_fd = os.open(os.devnull, os.O_RDONLY)
     try:
         os.dup2(null_fd, 0)

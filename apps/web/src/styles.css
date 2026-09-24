@@ -3586,6 +3586,36 @@ select { color-scheme: dark; }
 .research-inline-settings .run-configuration-grid { align-items: start; }
 .research-notes textarea { min-height: 72px; }
 
+.research-strategy-mode { display: grid; gap: 7px; max-width: 320px; margin-top: 16px; font-size: 12px; }
+.python-program-source { display: block; width: 100%; min-height: 280px; padding: 16px; resize: vertical; border: 0; border-radius: 0; background: var(--canvas); color: var(--ink); font: 13px/1.55 var(--mono); tab-size: 4; white-space: pre; }
+.python-program-settings { margin-top: 16px; align-items: start; }
+.python-program-settings textarea { font: 13px/1.55 var(--mono); resize: vertical; }
+.python-program-settings small, .python-program-contract p { color: var(--ink-muted); font-size: 12px; }
+.python-program-contract code { overflow-wrap: anywhere; }
+.framework-order { margin: 0 0 8px; color: var(--ink-muted); font-size: 12px; }
+.framework-module { min-width: 0; padding: 20px 0; border-top: 1px solid var(--line); }
+.framework-module-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.framework-module-heading h3 { margin: 0; font-size: 14px; }
+.framework-module-heading h3 span { margin-right: 8px; color: var(--ink-soft); font: 12px var(--mono); }
+.framework-module-heading select { width: auto; max-width: 100%; min-height: 36px; }
+.framework-module-help { margin: 8px 0 16px; color: var(--ink-muted); font-size: 12px; }
+.framework-module .formula-workbench, .framework-module .python-strategy-authoring { min-width: 0; }
+.framework-state { min-width: 0; margin: 12px 0; font-size: 12px; }
+.framework-state summary { min-height: 36px; padding: 8px 0; cursor: pointer; color: var(--ink-muted); }
+.framework-state p { color: var(--ink-muted); }
+.framework-state pre { max-width: 100%; max-height: 280px; overflow: auto; font: 12px/1.5 var(--mono); }
+@media (max-width: 640px) {
+  .framework-module-heading { align-items: stretch; flex-direction: column; gap: 8px; }
+  .framework-module-heading select { width: 100%; }
+}
+@media (any-pointer: coarse) {
+  .framework-module select, .python-program-contract summary, .framework-state summary,
+  .research-run-fact-program summary { min-height: 44px; min-width: 44px; }
+}
+.research-run-fact-program { grid-column: 1 / -1; min-width: 0; overflow-wrap: anywhere; }
+.research-run-fact-program summary { cursor: pointer; }
+.research-run-fact-program pre { max-height: 400px; overflow: auto; padding: 12px; background: var(--canvas); border: 1px solid var(--line); font: 13px/1.55 var(--mono); }
+
 .research-parameter-field { position: relative; display: grid; gap: 7px; min-width: 0; font-size: 12px; }
 .research-parameter-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 28px; }
 .research-exposure-expression { position: relative; }
@@ -3624,6 +3654,11 @@ select { color-scheme: dark; }
 .research-selection-settings > button { min-height: 44px; }
 .research-selection-settings > button:only-child { grid-column: 1 / -1; justify-self: end; }
 .research-inline-settings { margin-top: 16px; }
+.research-cost-settings { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--hairline); }
+.research-cost-settings h3 { margin: 0 0 8px; font-size: 14px; }
+.research-cost-settings > p { margin: 0 0 16px; color: var(--ink-subtle); font-size: 13px; }
+.research-cost-settings small { color: var(--ink-subtle); }
+.research-cost-settings small.inline-status-error { color: var(--danger); }
 .research-input-issues { padding: 12px 16px; border: 1px solid var(--danger); border-radius: 8px; color: var(--ink); }
 .research-input-issues p { margin: 0 0 6px; font-size: 13px; }
 .research-input-issues ul { margin: 0; padding-left: 18px; }
@@ -3636,3 +3671,16 @@ select { color-scheme: dark; }
 
 .research-quick-settings .research-date-field > label { display: flex; align-items: center; min-height: 28px; }
 .research-formula-error { margin: 0; padding: 8px 16px; font-size: 12px; }
+
+.take-profit-authoring fieldset {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+}
+.take-profit-authoring fieldset > div { display: grid; gap: 6px; min-width: 0; }
+.take-profit-authoring input { width: 100%; min-width: 0; box-sizing: border-box; }
+.take-profit-authoring legend { color: var(--ink-muted); font-size: 12px; }

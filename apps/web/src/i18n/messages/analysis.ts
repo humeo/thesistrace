@@ -102,6 +102,7 @@ export const analysisEn = {
   "events": {
     "title": "Trading events",
     "sections": {
+      "strategy_framework": "Framework decisions",
       "strategy_targets": "Rebalance targets",
       "strategy_orders": "Orders",
       "strategy_child_orders": "Child orders",
@@ -110,6 +111,7 @@ export const analysisEn = {
       "strategy_execution_constraints": "Execution constraints"
     },
     "descriptions": {
+      "strategy_framework": "Inspect Close decisions across candidates, signals, portfolio proposals and risk adjustments. Direct strategies do not emit these intermediate records.",
       "strategy_targets": "Selection and exposure targets formed at Close, dated by decision session.",
       "strategy_orders": "Simulated buy and sell orders, including rejected orders, dated by execution session.",
       "strategy_child_orders": "Simulated orders split according to per-order quantity rules.",
@@ -156,7 +158,7 @@ export const analysisEn = {
     "copyError": "Copy failed. Select the text below and copy it manually.",
     "rawJson": "Raw JSON",
     "related": "Related records",
-    "targetContext": "Rebalance target for {{date}}",
+    "targetContext": "{{section}} for {{date}}",
     "recordContext": "{{date}} · {{instrument}} · {{section}}",
     "viewTargets": "View targets",
     "viewOrders": "View orders",
@@ -165,7 +167,26 @@ export const analysisEn = {
     "viewConstraints": "View execution constraints",
     "records": "{{section}} records",
     "viewRaw": "View raw record: {{label}}",
+    "noUpdate": "No update",
+    "formed": "Formed",
+    "replaceRisk": "Replace or cancel",
+    "localCap": "Local cap",
+    "fillDetails": {
+      "title": "Fill price and cost details",
+      "explanation": "Slippage is included in the simulated execution price. Gross and net use the same fill path; their difference is explicit fees and rounding residuals.",
+      "rawOpen": "Raw Open (CNY)",
+      "executionPrice": "Simulated execution price (CNY)",
+      "priceSlippage": "Per-share slippage (CNY)",
+      "researchSettlement": "Research settlement (CNY)",
+      "commission": "Commission (CNY)",
+      "stampDuty": "Sell stamp duty (CNY)",
+      "transferFee": "Transfer fee (CNY)",
+      "cost": "Explicit fees (CNY)",
+      "cashRounding": "Cash rounding residual (CNY)"
+    },
     "labels": {
+      "rebalance": "Full portfolio",
+      "local": "Local reduction",
       "selection": "Selection rebalance",
       "reduce": "Reduce exposure",
       "increase": "Increase exposure",
@@ -181,6 +202,15 @@ export const analysisEn = {
       "sell": "Sell"
     },
     "columns": {
+      "candidates": "Candidates",
+      "proposal": "Portfolio proposal",
+      "riskAdjustment": "Risk adjustment",
+      "finalTarget": "Final target",
+      "scope": "Scope",
+      "portfolioStocks": "Portfolio instruments",
+      "positionLimits": "Local position cap (shares)",
+      "rawOpen": "Raw Open (CNY)",
+      "executionPrice": "Simulated execution price (CNY)",
       "mode": "Adjustment type",
       "stockCount": "Instruments",
       "exposure": "Target exposure",
@@ -352,6 +382,7 @@ export const analysisZh = {
   "events": {
     "title": "交易事件",
     "sections": {
+      "strategy_framework": "Framework 决策",
       "strategy_targets": "调仓目标",
       "strategy_orders": "委托",
       "strategy_child_orders": "子委托",
@@ -360,6 +391,7 @@ export const analysisZh = {
       "strategy_execution_constraints": "执行约束"
     },
     "descriptions": {
+      "strategy_framework": "按候选、信号、组合建议和风险调整查看收盘判断。Direct 策略不产生这些中间阶段记录。",
       "strategy_targets": "收盘时形成的选股和仓位目标，日期为决策日。",
       "strategy_orders": "回测生成的买卖委托，包括被拒绝的委托，日期为执行日。",
       "strategy_child_orders": "按单笔交易数量规则拆分的模拟委托。",
@@ -406,7 +438,7 @@ export const analysisZh = {
     "copyError": "复制失败，请在下方选择文本后手动复制。",
     "rawJson": "原始 JSON",
     "related": "关联记录",
-    "targetContext": "{{date}} 的调仓目标",
+    "targetContext": "{{date}} 的{{section}}",
     "recordContext": "{{date}} · {{instrument}} · {{section}}",
     "viewTargets": "查看目标",
     "viewOrders": "查看委托",
@@ -415,7 +447,26 @@ export const analysisZh = {
     "viewConstraints": "查看执行约束",
     "records": "{{section}}记录",
     "viewRaw": "查看原始记录：{{label}}",
+    "noUpdate": "无更新",
+    "formed": "已形成",
+    "replaceRisk": "替换／取消",
+    "localCap": "局部上限",
+    "fillDetails": {
+      "title": "成交价格与费用明细",
+      "explanation": "滑点已计入模拟成交价；Gross 与 Net 使用同一成交路径，差额仅为显式费用及舍入残差。",
+      "rawOpen": "原始 Open（元）",
+      "executionPrice": "模拟成交价（元）",
+      "priceSlippage": "每股滑点价差（元）",
+      "researchSettlement": "研究结算金额（元）",
+      "commission": "佣金（元）",
+      "stampDuty": "卖出印花税（元）",
+      "transferFee": "过户费（元）",
+      "cost": "显式费用合计（元）",
+      "cashRounding": "现金舍入残差（元）"
+    },
     "labels": {
+      "rebalance": "完整组合",
+      "local": "局部减仓",
       "selection": "选股调仓",
       "reduce": "降低仓位",
       "increase": "增加仓位",
@@ -431,6 +482,15 @@ export const analysisZh = {
       "sell": "卖出"
     },
     "columns": {
+      "candidates": "候选数",
+      "proposal": "组合建议",
+      "riskAdjustment": "风险调整",
+      "finalTarget": "最终目标",
+      "scope": "作用范围",
+      "portfolioStocks": "组合股票数",
+      "positionLimits": "局部持仓上限（股）",
+      "rawOpen": "原始开盘价（元）",
+      "executionPrice": "模拟成交价（元）",
       "mode": "调整类型",
       "stockCount": "股票数",
       "exposure": "目标仓位",

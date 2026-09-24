@@ -69,6 +69,25 @@ def test_three_value_result_codec_is_deterministic_and_reopens_parquet_rows() ->
     assert read_result_bundle(bundle, research_kind="strategy_backtest") == result
 
 
+def test_terminal_result_section_preserves_close_risk_nav_separately_from_open_nav() -> None:
+    from thesistrace.research_run.models import TerminalStrategyStateResultSection
+
+    terminal = _legal_result()["terminal_strategy_state"]
+    public_state = {
+        key: value for key, value in terminal.items()
+        if key not in {"positions", "last_daily_observation", "metric_state"}
+    }
+    public_state["close_risk_nav_cny"] = "9e+6"
+    section = TerminalStrategyStateResultSection.model_validate({
+        "run_id": "run-close-risk", **public_state,
+    })
+
+    result = section.model_dump(mode="json")
+    assert result["net_nav"] == "1e+7"
+    assert result["close_risk_nav_cny"] == "9e+6"
+    assert "positions" not in result
+
+
 def test_terminal_state_round_trip_preserves_absent_short_period_accumulators() -> None:
     result = _legal_result()
     metric_state = result["terminal_strategy_state"]["metric_state"]
@@ -368,7 +387,7 @@ def _legal_result() -> dict[str, object]:
             "gross_cash": "1e+7",
             "gross_nav": "1e+7",
             "net_cash": "1e+7",
-            "net_nav": "1e+7",
+            "net_nav": "1e+7", "close_risk_nav_cny": "1e+7",
             "pre_trade_gross_nav": "1e+7",
             "pre_trade_net_nav": "1e+7",
             "rebalance": False,
@@ -380,6 +399,7 @@ def _legal_result() -> dict[str, object]:
     metric_state.update(
         {
             "contract": "strategy-metric-state-v2",
+            "session_count": 1,
             "entry_session": "2024-01-02",
             "entry_session_ordinal": 1,
             "initial_cash_cny": "1e+7",
@@ -412,7 +432,7 @@ def _legal_result() -> dict[str, object]:
             {
                 "session": "2024-01-02",
                 "gross_nav": "1e+7",
-                "net_nav": "1e+7",
+                "net_nav": "1e+7", "close_risk_nav_cny": "1e+7",
                 "net_cash": "1e+7",
                 "transaction_cost_cny": "0",
                 "holdings_count": 0,
@@ -427,21 +447,22 @@ def _legal_result() -> dict[str, object]:
             "gross_cash": "1e+7",
             "net_cash": "1e+7",
             "gross_nav": "1e+7",
-            "net_nav": "1e+7",
+            "net_nav": "1e+7", "close_risk_nav_cny": "1e+7",
             "cumulative_transaction_cost": "0",
             "positions": [],
-            "selection_phase": {
+            "research_phase": {
                 "origin_session": "2024-01-02",
                 "report_session_count": 1,
-                "selection_interval": 1,
-                "completed_intervals": 0,
             },
-            "target_selection": {"eligibility_exclusions": {},
-                "signal_session": "2024-01-02", "selected_instrument_ids": [],
-                "relative_weights": {},
-                "signal_checksum": "signal", "contract_checksum": "contract",
+            "decision_state": {
+                "mode": "framework", "selection_interval": 1, "exposure": 1.0,
+                "selection": {"eligibility_exclusions": {},
+                    "signal_session": "2024-01-02", "selected_instrument_ids": [],
+                    "relative_weights": {},
+                    "signal_checksum": "signal", "contract_checksum": "c" * 64,
+                },
             },
-            "target_exposure": 1.0,
+            "contract_checksum": "c" * 64,
             "pending_target": None,
             "last_daily_observation": last_daily,
             "metric_state": metric_state,
@@ -523,6 +544,24 @@ def test_result_budget_accounts_for_permanent_events_separately_from_daily_metri
         result_bundle_byte_budget(64, strategy_event_count=-1)
 
 
+def test_result_budget_reserves_large_target_records_without_enlarging_fill_records():
+    # One 2 MiB target and one ordinary 24 KiB event, plus one session block.
+    expected = 3 * 1024 * 1024 + 24 * 1024
+    assert result_bundle_byte_budget(
+        1, strategy_event_count=2, strategy_target_count=1,
+    ) == expected
+    assert enforce_result_bundle_budget(
+        expected, 1, strategy_event_count=2, strategy_target_count=1,
+    ) == expected
+    with pytest.raises(ResearchResultError, match="exceeds"):
+        enforce_result_bundle_budget(
+            expected + 1, 1, strategy_event_count=2, strategy_target_count=1,
+        )
+    for invalid in (-1, 3, True):
+        with pytest.raises(ResearchResultError, match="target count"):
+            result_bundle_byte_budget(1, strategy_event_count=2, strategy_target_count=invalid)
+
+
 def test_strategy_reporting_does_not_download_permanent_event_history():
     from thesistrace.research_run.result import read_strategy_reporting_bundle
 
@@ -530,7 +569,7 @@ def test_strategy_reporting_does_not_download_permanent_event_history():
         _legal_result(), research_kind="strategy_backtest",
     ))
     event_names = {
-        "strategy_targets", "strategy_orders", "strategy_child_orders",
+        "strategy_framework", "strategy_targets", "strategy_orders", "strategy_child_orders",
         "strategy_fills", "strategy_adjustments", "strategy_fills.part-000000",
     }
 

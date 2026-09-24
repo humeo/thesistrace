@@ -8,13 +8,16 @@ const rerunDetailsSchema = z.object({
   reason: z.enum(["unsupported_setting", "checkpoint_boundary", "research_kind", "invalid_field", "invalid_source"]),
   expected: z.union([z.string(), z.number()]).nullable(), actual: z.string().nullable(), validation_type: z.string().nullable(),
 });
+const strategyProgramDetailsSchema = z.object({
+  kind: z.literal("strategy_program"), error_type: z.string().min(1), line: z.number().int().positive().nullable(),
+});
 export type ResearchRunAdmissionIssue = {
   code: string;
   field: string;
   message: string;
   severity: "error";
   range: FormulaDiagnostic["range"] | null;
-  details: DiagnosticDetails | AdmissionDetails | z.infer<typeof rerunDetailsSchema> | null;
+  details: DiagnosticDetails | AdmissionDetails | z.infer<typeof rerunDetailsSchema> | z.infer<typeof strategyProgramDetailsSchema> | null;
 };
 
 const issueSchema: z.ZodType<ResearchRunAdmissionIssue> = z.object({
@@ -23,6 +26,7 @@ const issueSchema: z.ZodType<ResearchRunAdmissionIssue> = z.object({
   details: z.union([
     diagnosticDetailsSchema,
     rerunDetailsSchema,
+    strategyProgramDetailsSchema,
     z.object({ kind: z.enum(["quota", "coverage", "warmup"]), expected: z.union([z.string(), z.number()]), actual: z.union([z.string(), z.array(z.string())]) }),
   ]).nullable(),
 });
@@ -32,7 +36,7 @@ export function readResearchIssues(value: unknown): ResearchRunAdmissionIssue[] 
 }
 
 export function alphaDetails(details: ResearchRunAdmissionIssue["details"]): DiagnosticDetails | null {
-  if (details == null || ["quota", "coverage", "warmup", "rerun_source"].includes(details.kind)) return null;
+  if (details == null || ["quota", "coverage", "warmup", "rerun_source", "strategy_program"].includes(details.kind)) return null;
   return details as DiagnosticDetails;
 }
 
@@ -41,6 +45,14 @@ export function formatResearchIssue(issue: ResearchRunAdmissionIssue, locale: In
   const failure = t("admission.unavailable");
   const details = issue.details;
   switch (issue.code) {
+    case "STRATEGY_PROGRAM_INVALID": {
+      if (details?.kind !== "strategy_program") return failure;
+      const problem = details.error_type === "SyntaxError"
+        ? t("programIssues.syntax") : t("programIssues.type", { errorType: details.error_type });
+      return details.line !== null
+        ? t("programIssues.withLine", { problem, line: details.line })
+        : t("programIssues.withoutLine", { problem });
+    }
     case "DAILY_RUN_QUOTA_EXCEEDED":
       return details?.kind === "quota" && Number.isSafeInteger(details.expected) && typeof details.actual === "string"
         ? t("admission.DAILY_RUN_QUOTA_EXCEEDED", { limit: details.expected, timezone: details.actual }) : failure;

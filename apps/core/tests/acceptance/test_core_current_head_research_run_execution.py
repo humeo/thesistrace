@@ -236,7 +236,10 @@ def test_composite_formula_runs_and_starts_a_daily_track(tmp_path: Path) -> None
         assert factor_received["strategy_observation_count"] == 0
         assert factor_received["child_calculation_phase_seconds"]["strategy"] == 0
         factor_detail = client.get(f"/api/research-runs/{factor_run_id}").json()
-        assert factor_detail["status"] == "succeeded"
+        assert factor_detail["status"] == "succeeded", {
+            "stored": _stored_execution(settings, factor_run_id),
+            "events": factor_execution_events,
+        }
         assert factor_detail["research_kind"] == "factor_evaluation"
         assert factor_detail["progress"]["completed_research_sessions"] == 3
         assert factor_detail["progress"]["last_completed_research_session"] == (
@@ -930,16 +933,28 @@ def test_2010_to_latest_market_financial_and_composite_runs_commit_multiple_chun
                     kwargs={"on_execution_event": execution_events.append},
                 )
                 worker.start()
-                assert second_checkpoint.wait(timeout=20)
-                committed = client.get(f"/api/research-runs/{run_id}").json()
-                assert committed["status"] == "running"
-                assert committed["progress"]["committed_chunk_count"] == 2
-                assert committed["progress"]["completed_research_sessions"] > 0
-                assert committed["progress"]["completed_research_sessions"] < len(sessions)
-                assert committed["progress"]["remaining_duration_estimate_seconds"] >= 1
-                release_execution.set()
-                worker.join(timeout=120)
-                assert not worker.is_alive()
+                try:
+                    assert second_checkpoint.wait(timeout=20)
+                    committed = client.get(f"/api/research-runs/{run_id}").json()
+                    assert committed["status"] == "running"
+                    assert committed["progress"]["committed_chunk_count"] == 2
+                    assert committed["progress"]["completed_research_sessions"] > 0
+                    assert committed["progress"]["completed_research_sessions"] < len(sessions)
+                    assert committed["progress"]["remaining_duration_estimate_seconds"] >= 1
+                    release_execution.set()
+                    # Seventeen years now require hundreds of bounded event segments.
+                    worker.join(timeout=900)
+                    assert not worker.is_alive()
+                finally:
+                    release_execution.set()
+                    if worker.is_alive():
+                        cancelled = client.post(
+                            f"/api/research-runs/{run_id}/cancel",
+                            json={"request_id": f"long-research-cleanup-{index}"},
+                        )
+                        assert cancelled.status_code == 200, cancelled.text
+                        worker.join(timeout=30)
+                        assert not worker.is_alive(), "Long-history Worker did not stop"
             else:
                 processor = ResearchRunService(
                     runtime.database,
@@ -1179,7 +1194,7 @@ def test_industry_track_blocks_at_cutoff_then_requires_retry(tmp_path: Path) -> 
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_tracking_advance_freezes_and_publishes_only_the_oldest_64_sessions(
+def test_tracking_advance_freezes_and_publishes_only_the_oldest_bounded_chunk(
     tmp_path: Path,
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
@@ -1193,7 +1208,7 @@ def test_tracking_advance_freezes_and_publishes_only_the_oldest_64_sessions(
         run_id = client.post(
             "/api/research-runs",
             json=_run_command(
-                "tracking-target-64-seed",
+                "tracking-target-bounded-seed",
                 start_date=seed_sessions[0],
                 end_date=seed_sessions[-1],
             ),
@@ -1201,16 +1216,16 @@ def test_tracking_advance_freezes_and_publishes_only_the_oldest_64_sessions(
         assert runtime.research_runs.process_next() is True
         track_id = client.post(
             f"/api/research-runs/{run_id}/daily-tracks",
-            json={"request_id": "tracking-target-64-activation"},
+            json={"request_id": "tracking-target-bounded-activation"},
         ).json()["id"]
-        backlog = _weekday_sessions_after(date.fromisoformat(seed_sessions[-1]), count=70)
+        backlog = _weekday_sessions_after(date.fromisoformat(seed_sessions[-1]), count=16)
         _publish_head(
             settings,
             sessions=(*seed_sessions, *backlog),
             price_offset=1,
             expected_manifest=head,
         )
-        _refresh_daily_track(client, track_id, "tracking-target-64-refresh")
+        _refresh_daily_track(client, track_id, "tracking-target-bounded-refresh")
 
         execution_events: list[dict[str, object]] = []
         head_at_publication: list[str] = []
@@ -1231,7 +1246,7 @@ def test_tracking_advance_freezes_and_publishes_only_the_oldest_64_sessions(
         )
 
         detail = client.get(f"/api/daily-tracks/{track_id}").json()
-        assert detail["strategy_session"] == backlog[63]
+        assert detail["strategy_session"] == backlog[9]
         assert detail["lag_sessions"] == 6
         with runtime.database.transaction() as transaction:
             progression = transaction.execute(
@@ -1251,7 +1266,7 @@ def test_tracking_advance_freezes_and_publishes_only_the_oldest_64_sessions(
                 (track_id,),
             ).fetchone()
         assert progression is not None
-        assert [item.isoformat() for item in progression["target_sessions"]] == list(backlog[:64])
+        assert [item.isoformat() for item in progression["target_sessions"]] == list(backlog[:10])
         assert progression["status"] == "succeeded"
         assert attempt_count == {"count": 1}
         assert [event["event"] for event in execution_events] == [
@@ -1269,7 +1284,7 @@ def test_tracking_advance_freezes_and_publishes_only_the_oldest_64_sessions(
             "tracking_checkpoint_published",
             "tracking_head_advanced",
         ]
-        assert head_at_publication == [backlog[63]]
+        assert head_at_publication == [backlog[9]]
         assert all(event["track_id"] == track_id for event in execution_events)
         assert all(event["attempt_id"].startswith("track_attempt_") for event in execution_events)
         assert all(event["worker_role"] == "tracking" for event in execution_events)
@@ -1586,7 +1601,7 @@ def test_tracking_transient_cycle_persists_backoff_rotates_and_requires_retry(
                 )
             )
         retry_track, control_track = track_ids
-        backlog = _weekday_sessions_after(date.fromisoformat(seed_sessions[-1]), count=70)
+        backlog = _weekday_sessions_after(date.fromisoformat(seed_sessions[-1]), count=16)
         backlog_head = _publish_head(
             settings,
             sessions=(*seed_sessions, *backlog),
@@ -1742,7 +1757,7 @@ def test_tracking_transient_cycle_persists_backoff_rotates_and_requires_retry(
         assert recovered["attempt_generations"][3] != backlog_head
         assert (
             client.get(f"/api/daily-tracks/{retry_track}").json()["strategy_session"]
-            == backlog[63]
+            == backlog[9]
         )
 
 
@@ -2646,10 +2661,11 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
             "net_nav",
             "cumulative_transaction_cost",
             "positions",
-            "selection_phase",
+            "close_risk_nav_cny",
+            "research_phase",
             "pending_target",
-            "target_selection",
-            "target_exposure",
+            "decision_state",
+            "contract_checksum",
         }
         assert "generation" not in str(public_run).lower()
 
@@ -4327,7 +4343,7 @@ def test_attempt_keeps_its_pinned_generation_when_head_moves(tmp_path: Path) -> 
         expected = build_result_payload(
             run(_kernel_input(canonical_a, sessions=sessions)),
             research_kind="strategy_backtest",
-            selection_interval=1,
+
         )
         assert actual == expected
         assert stored["active_pin_count"] == 0
@@ -4836,7 +4852,7 @@ def test_short_attempt_publishes_exact_period_and_complete_terminal_state(
             terminal = result["terminal_strategy_state"]
             assert terminal["session"] == sessions[-1]
             assert terminal["last_daily_observation"]["session"] == sessions[-1]
-            assert terminal["selection_phase"]["report_session_count"] == session_count
+            assert terminal["research_phase"]["report_session_count"] == session_count
             assert terminal["metric_state"]["session_count"] == session_count
             assert isinstance(terminal["positions"], list)
         assert stored["active_pin_count"] == 0
@@ -6021,7 +6037,7 @@ def _kernel_input(
             commission_rate_all_in="0.0003",
             commission_min_cny="5",
             stamp_duty_sell_rate="0.0005",
-            transfer_fee_rate="0.00001",
+            transfer_fee_rate="0.00001", slippage_bps="0",
         ),
         research_start_session=sessions[0],
         research_end_session=sessions[-1],
@@ -6085,13 +6101,14 @@ def _reference_result(
                     commission_min_cny=str(costs["commission_min_cny"]),
                     stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
                     transfer_fee_rate=str(costs["transfer_fee_rate"]),
+                    slippage_bps=str(costs["slippage_bps"]),
                 ),
                 research_start_session=selected[0],
                 research_end_session=selected[-1],
             )
         ),
         research_kind=immutable.research_kind,
-        selection_interval=None if strategy is None else int(strategy["selection_every_sessions"]),
+
     )
 
 

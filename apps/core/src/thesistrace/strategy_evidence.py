@@ -37,12 +37,16 @@ from thesistrace.research_kernel.strategy_events import (
     StrategyChildOrderEvent,
     StrategyExecutionConstraintEvent,
     StrategyFillEvent,
+    StrategyFrameworkEvent,
     StrategyOrderEvent,
     StrategyTargetEvent,
 )
 
 EVENT_PARTITION_ROWS = 512
-_JSON_FIELDS = frozenset({"relative_weights", "eligibility_exclusions"})
+_JSON_FIELDS = frozenset({
+    "allocation", "position_limits", "modules", "universe", "alpha", "proposal", "risk_adjustment",
+    "portfolio_retentions",
+})
 _INTEGER_FIELDS = frozenset(
     {
         "unrounded_quantity",
@@ -52,32 +56,34 @@ _INTEGER_FIELDS = frozenset(
         "submitted_quantity",
     }
 )
-_NULLABLE_FIELDS = frozenset({"unrounded_quantity", "legal_quantity", "rejection_reason"})
+_NULLABLE_FIELDS = frozenset({"unrounded_quantity", "legal_quantity", "rejection_reason",
+                              "maximum_stock_exposure"})
 
 
 def _field(name: str, section: str) -> pa.Field:
-    if name in _INTEGER_FIELDS:
-        data_type = pa.int64()
-    elif name == "exposure":
+    if name == "maximum_stock_exposure":
         data_type = pa.float64()
-    elif name == "selected_instrument_ids":
-        data_type = pa.list_(pa.string())
+    elif name in _INTEGER_FIELDS:
+        data_type = pa.int64()
     else:
         data_type = pa.string()
     nullable = name in _NULLABLE_FIELDS or (
         section == "strategy_execution_constraints" and name == "order_id"
+    ) or (
+        section == "strategy_framework" and name == "target_id"
     )
     return pa.field(name, data_type, nullable=nullable)
 
 
 def event_session_field(section: str) -> str:
-    return "decision_session" if section == "strategy_targets" else "session"
+    return ("decision_session" if section in {"strategy_targets", "strategy_framework"}
+            else "session")
 
 
 EVENT_CONTRACTS = {
     section: ParquetWriterContract(
         name="research-result-" + section.replace("_", "-"),
-        version=1,
+        version=3 if section in {"strategy_framework", "strategy_targets"} else 2,
         schema=pa.schema([_field(name, section) for name in model.model_fields]),
         sort_keys=(event_session_field(section), EVENT_ID_FIELDS[section]),
     )
@@ -113,9 +119,9 @@ def validated_event_rows(section: str, rows: Sequence[Mapping[str, object]]) -> 
     if not 1 <= len(rows) <= EVENT_PARTITION_ROWS:
         raise ValueError("Strategy evidence partition size is invalid")
     result = [EVENT_MODELS[section].model_validate(row).model_dump(mode="json") for row in rows]
-    from thesistrace.strategy_event_wire import MAX_EVENT_RECORD_BYTES
+    from thesistrace.strategy_event_wire import event_record_byte_limit
 
-    if any(len(json.dumps(row, separators=(",", ":")).encode()) > MAX_EVENT_RECORD_BYTES
+    if any(len(json.dumps(row, separators=(",", ":")).encode()) > event_record_byte_limit(section)
            for row in result):
         raise ValueError("Strategy event record exceeds its transport and page bound")
     keys = [event_order(section, row) for row in result]
@@ -138,6 +144,9 @@ def strategy_event_payload(
         }
         for row in values
     ]
+    if section == "strategy_targets":
+        for row in encoded:
+            row.setdefault("maximum_stock_exposure", None)
     return ParquetRowsPayload(rows=tuple(encoded), contract=EVENT_CONTRACTS[section])
 
 
@@ -214,22 +223,27 @@ class StrategyEvidencePublication:
         }
 
 
-def strategy_event_record_count(payloads: Mapping[str, object]) -> int:
+def strategy_event_record_count(
+    payloads: Mapping[str, object], *, section: str | None = None,
+) -> int:
     """Count validated builder descriptors for the permanent evidence byte allowance."""
+    if section is not None and section not in EVENT_MODELS:
+        raise ValueError("Unknown Strategy evidence section")
     if not set(EVENT_MODELS) & set(payloads):
         return 0
     if not set(EVENT_MODELS) <= set(payloads):
         raise ValueError("Strategy evidence section set is incomplete")
     count = 0
-    for section in EVENT_MODELS:
-        descriptor = payloads[section]
+    for name in EVENT_MODELS:
+        descriptor = payloads[name]
         if not isinstance(descriptor, JsonPayload):
             raise ValueError("Strategy event count requires a publication descriptor")
         for part in descriptor.value["partitions"]:
             size = part["row_count"]
             if type(size) is not int or not 1 <= size <= EVENT_PARTITION_ROWS:
                 raise ValueError("Strategy event partition count is invalid")
-            count += size
+            if section is None or section == name:
+                count += size
     return count
 
 
@@ -294,8 +308,8 @@ def event_matches(
         return False
     instrument = filters.get("instrument_id")
     if instrument is not None:
-        if section == "strategy_targets":
-            if instrument not in row["selected_instrument_ids"]:
+        if section in {"strategy_targets", "strategy_framework"}:
+            if instrument not in EVENT_MODELS[section].model_validate(row).instrument_ids:
                 return False
         elif row["instrument_id"] != instrument:
             return False
@@ -310,6 +324,10 @@ def _validate_event_relationships(evidence: Mapping, covered: set[str]) -> None:
     """Parents executing together must reconcile before any part is staged."""
     try:
         targets = {row["target_id"]: row for row in evidence["strategy_targets"]}
+        for row in evidence["strategy_framework"]:
+            if row["target_id"] is not None:
+                if targets[row["target_id"]]["decision_session"] != row["decision_session"]:
+                    raise ValueError("Framework evidence differs from its final target Session")
         orders = {row["order_id"]: row for row in evidence["strategy_orders"]}
         children = {row["child_order_id"]: row for row in evidence["strategy_child_orders"]}
         fills = evidence["strategy_fills"]
@@ -341,7 +359,7 @@ def _validate_event_relationships(evidence: Mapping, covered: set[str]) -> None:
             if order["decision_session"] in covered:
                 target = targets[order["target_id"]]
                 if (target["decision_session"] != order["decision_session"]
-                    or target["mode"] != order["reason"]):
+                    or target["reason"] != order["reason"]):
                     raise ValueError("Strategy event relationship differs from its target")
         context = ("target_id", "decision_session", "session", "instrument_id", "side")
         submitted_orders = {
@@ -352,14 +370,17 @@ def _validate_event_relationships(evidence: Mapping, covered: set[str]) -> None:
             if constraint["submitted_quantity"]:
                 if (order is None or order["order_id"] != constraint["order_id"]
                     or order["legal_quantity"] != constraint["submitted_quantity"]
-                    or order["reason"] != constraint["mode"]):
+                    or order["reason"] != constraint["decision_reason"]):
                     raise ValueError("Strategy constraint relationship differs from its order")
             elif order is not None:
                 raise ValueError("Skipped Strategy constraint relationship cannot have an order")
             if constraint["decision_session"] in covered:
                 target = targets[constraint["target_id"]]
+                allocation = target["allocation"]
                 if (target["decision_session"] != constraint["decision_session"]
-                    or target["mode"] != constraint["mode"]):
+                    or target["reason"] != constraint["decision_reason"]
+                    or (allocation["mode"] if allocation is not None else "local")
+                    != constraint["mode"]):
                     raise ValueError("Strategy constraint relationship differs from its target")
     except (KeyError, TypeError) as error:
         raise ValueError("Strategy event relationship has a missing or invalid parent") from error
@@ -514,6 +535,12 @@ class StrategyEventQuery(BaseModel):
 class StrategyTargetsQuery(StrategyEventQuery):
     section: Literal["strategy_targets"]
     target_id: EventFilterIdentity | None = None
+
+
+class StrategyFrameworkQuery(StrategyEventQuery):
+    section: Literal["strategy_framework"]
+    target_id: EventFilterIdentity | None = None
+    decision_id: EventFilterIdentity | None = None
 
 
 class StrategyOrdersQuery(StrategyEventQuery):
@@ -685,6 +712,10 @@ class StrategyTargetsPage(StrategyEventPage[StrategyTargetEvent]):
     section: Literal["strategy_targets"] = "strategy_targets"
 
 
+class StrategyFrameworkPage(StrategyEventPage[StrategyFrameworkEvent]):
+    section: Literal["strategy_framework"] = "strategy_framework"
+
+
 class StrategyOrdersPage(StrategyEventPage[StrategyOrderEvent]):
     section: Literal["strategy_orders"] = "strategy_orders"
 
@@ -706,6 +737,7 @@ class StrategyExecutionConstraintsPage(StrategyEventPage[StrategyExecutionConstr
 
 
 EVENT_PAGE_MODELS = {
+    "strategy_framework": StrategyFrameworkPage,
     "strategy_targets": StrategyTargetsPage,
     "strategy_orders": StrategyOrdersPage,
     "strategy_child_orders": StrategyChildOrdersPage,
@@ -722,7 +754,8 @@ def strategy_event_response(
     source: StrategyEvidenceSource,
     encode_cursor: Callable[[str], str],
 ):
-    from thesistrace._paging import fit_page
+    from thesistrace._paging import BUSINESS_PAGE_BYTES, fit_page
+    from thesistrace.strategy_event_wire import event_record_byte_limit
 
     def build(rows):
         has_more = len(rows) < len(read.rows) or read.next_after is not None
@@ -739,16 +772,21 @@ def strategy_event_response(
             next_cursor=cursor,
         )
 
-    return fit_page(read.rows, build)
+    return fit_page(read.rows, build, byte_budget=BUSINESS_PAGE_BYTES + (
+        event_record_byte_limit(query.section)
+        if query.section in {"strategy_targets", "strategy_framework"} else 0
+    ))
 
 
 type StrategyEventQueryInput = Annotated[
     StrategyTargetsQuery | StrategyOrdersQuery | StrategyChildOrdersQuery
-    | StrategyFillsQuery | StrategyAdjustmentsQuery | StrategyExecutionConstraintsQuery,
+    | StrategyFillsQuery | StrategyAdjustmentsQuery | StrategyExecutionConstraintsQuery
+    | StrategyFrameworkQuery,
     Field(discriminator="section"),
 ]
 type StrategyEventPageResponse = Annotated[
     StrategyTargetsPage | StrategyOrdersPage | StrategyChildOrdersPage
-    | StrategyFillsPage | StrategyAdjustmentsPage | StrategyExecutionConstraintsPage,
+    | StrategyFillsPage | StrategyAdjustmentsPage | StrategyExecutionConstraintsPage
+    | StrategyFrameworkPage,
     Field(discriminator="section"),
 ]

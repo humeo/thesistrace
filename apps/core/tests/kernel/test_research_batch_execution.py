@@ -12,6 +12,7 @@ from thesistrace.data import MountedGenerationStore
 from thesistrace.fixture import build_fixture
 from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.research_batch.execution import execute_research_batch_messages
+from thesistrace.research_definition import default_simulation_costs
 from thesistrace.research_kernel.numeric import NUMERIC_CONTRACT_ID
 from thesistrace.research_run.models import (
     DataAdmissionFacts,
@@ -20,7 +21,6 @@ from thesistrace.research_run.models import (
 )
 from thesistrace.research_run.planning import plan_research_chunks
 from thesistrace.research_run.service import (
-    FIXED_COSTS,
     FIXED_EXECUTION,
     FIXED_STRATEGY_KIND,
     SEMANTIC_VERSIONS,
@@ -121,6 +121,19 @@ def _completed_chunks(messages):
     ]
 
 
+def test_strategy_sweep_shares_alpha_with_distinct_costs_per_item(tmp_path):
+    request = _batch_request(tmp_path, kind="strategy_sweep")
+    for ordinal, item in enumerate(request["items"], start=1):
+        item["immutable_input"]["costs"].update(
+            commission_min_cny=str(ordinal), slippage_bps=str(ordinal * 10),
+        )
+    messages = list(execute_research_batch_messages(request))
+    assert any(
+        message["status"] == "shared_alpha_factor_succeeded" for message in messages
+    ), messages
+    assert len(_completed_chunks(messages)) == 3, messages
+
+
 def _batch_request(
     tmp_path: Path, *, kind: str, daily_fields: bool = False,
     formula: str = "rank(ts_mean(volume, 30))",
@@ -172,12 +185,19 @@ def _batch_request(
             hypothesis=None,
             requested_start_date=sessions[offset],
             requested_end_date=sessions[-1],
-            field_bindings={value: key for key, value in compiled.field_ids_by_identifier.items()},
+            field_bindings={
+                **{value: key for key, value in compiled.field_ids_by_identifier.items()},
+                **({"price.close.adjusted": "close"} if strategy else {}),
+            },
             universe="top300",
             neutralization="industry",
             research_kind="strategy_backtest" if strategy else "factor_evaluation",
             strategy={"volatility_window": 20, "weighting": "equal_weight",
                 "kind": FIXED_STRATEGY_KIND,
+                "modules": {
+                    "universe_selection": "dataset_universe/v1", "alpha": "alpha_formula/v1",
+                    "portfolio_construction": "periodic_top_n/v1", "risk_management": "no_risk/v1",
+                },
                 "holdings_count": holdings,
                 "selection_every_sessions": rebalance,
                 "initial_cash_cny": "10000000",
@@ -187,7 +207,7 @@ def _batch_request(
             }
             if strategy
             else None,
-            costs=FIXED_COSTS if strategy else None,
+            costs=default_simulation_costs().model_dump() if strategy else None,
             risk_free_rate="0" if strategy else None,
             numeric_execution_contract=NUMERIC_CONTRACT_ID,
             semantic_versions=SEMANTIC_VERSIONS,

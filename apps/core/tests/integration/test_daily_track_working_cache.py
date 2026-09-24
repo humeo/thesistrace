@@ -82,7 +82,7 @@ def test_worker_loads_the_cache_verified_by_the_published_predecessor(
     service = object.__new__(DailyTrackService)
     service._working_cache = cache
     predecessor = {
-        "schema_version": "daily-track-checkpoint-v3",
+        "schema_version": "daily-track-checkpoint-v5",
         "continuation_sha256": hashlib.sha256(
             canonical_json_bytes(CONTINUATION)
         ).hexdigest(),

@@ -167,7 +167,9 @@ def test_fast_host_gate_uses_bounded_parallelism_without_expensive_work() -> Non
 
     for command in (
         "uv run --project apps/core ruff check --config apps/core/pyproject.toml",
-        "--rootdir . -q -n 4 apps/core/tests/kernel apps/core/tests/architecture",
+        "--rootdir . -q -n 4 -m not bounded_process "
+        "apps/core/tests/kernel apps/core/tests/architecture",
+        "--rootdir . -q -m bounded_process apps/core/tests/kernel apps/core/tests/entrypoints",
         "pnpm --dir apps/web typecheck",
         "pnpm --dir apps/web test:shell",
     ):

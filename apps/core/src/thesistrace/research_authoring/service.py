@@ -8,8 +8,11 @@ from thesistrace.alpha_language.language import (
 from thesistrace.research_authoring.models import (
     ExposureAuthoringConstraints,
     FormulaAuthoringConstraints,
+    FrameworkAuthoringConstraints,
+    FrameworkStageConstraints,
     InitialCashConstraints,
     IntegerRange,
+    PythonProgramConstraints,
     ResearchAuthoringConstraints,
 )
 from thesistrace.research_batch.models import (
@@ -17,7 +20,30 @@ from thesistrace.research_batch.models import (
     MIN_RESEARCH_BATCH_ITEMS,
     RESEARCH_BATCH_KINDS,
 )
+from thesistrace.research_definition import default_simulation_costs
+from thesistrace.research_kernel.builtin_framework import (
+    BUILTIN_FRAMEWORK_MODULES,
+    BuiltinPortfolioModule,
+)
+from thesistrace.research_kernel.builtin_risk import BuiltinRiskModule
 from thesistrace.research_kernel.numeric import MAX_INITIAL_CASH_CNY
+from thesistrace.research_kernel.strategy_program_assets import PYTHON_VERSION
+from thesistrace.research_kernel.strategy_program_guest import AVAILABLE_MODULES
+from thesistrace.research_kernel.strategy_program_runtime import (
+    BOOTSTRAP_WALL_SECONDS,
+    INPUT_BYTES,
+    MEMORY_BYTES,
+    OUTPUT_BYTES,
+    PARAMETER_BYTES,
+    SOURCE_BYTES,
+    STATE_BYTES,
+    WALL_SECONDS,
+)
+from thesistrace.research_kernel.terminal_state_schema import (
+    FRAMEWORK_STATE_BYTES,
+    MAX_ACTIVE_SIGNALS,
+    MAX_SIGNAL_VALIDITY_SESSIONS,
+)
 from thesistrace.research_run.models import (
     MAX_HOLDINGS_COUNT,
     MAX_SELECTION_INTERVAL,
@@ -30,6 +56,63 @@ from thesistrace.research_run.models import (
 
 CURRENT_RESEARCH_AUTHORING_CONSTRAINTS = ResearchAuthoringConstraints(
     research_kinds=RESEARCH_KINDS,
+    strategy_modes=("framework", "direct"),
+    simulation_cost_defaults=default_simulation_costs(),
+    python_program=PythonProgramConstraints(
+        maximum_source_bytes=SOURCE_BYTES, maximum_parameter_bytes=PARAMETER_BYTES,
+        maximum_state_bytes=STATE_BYTES, maximum_input_bytes=INPUT_BYTES,
+        maximum_output_bytes=OUTPUT_BYTES, maximum_memory_bytes=MEMORY_BYTES,
+        maximum_wall_seconds=WALL_SECONDS,
+        maximum_bootstrap_wall_seconds=BOOTSTRAP_WALL_SECONDS, maximum_fields=32,
+        history_sessions=IntegerRange(minimum=1, maximum=253),
+        python_version=PYTHON_VERSION, modules=AVAILABLE_MODULES,
+    ),
+    framework=FrameworkAuthoringConstraints(
+        stages=tuple(FrameworkStageConstraints(
+            stage=stage, builtin_identity=identity, output_contract={
+                "universe_selection": (
+                    "Return {reason, instrument_ids} to replace selected candidates; "
+                    "null retains the prior selection."
+                ),
+                "alpha": (
+                    "Return {reason, signals: [{instrument_id, value, valid_for_sessions}]} "
+                    "to update active signals; null retains unexpired signals. "
+                    "Validity is in Research Sessions."
+                ),
+                "portfolio_construction": (
+                    "Return a complete Target Decision {reason, allocation, position_limits} "
+                    "with optional "
+                    "maximum_stock_exposure in [0, 1], "
+                    "or null for NoUpdate. Signals do not execute orders."
+                ),
+                "risk_management": (
+                    "Return null, {mode: limit_positions, reason, position_limits} for local "
+                    "caps, or {mode: replace, reason, target} to replace or cancel the proposal."
+                ),
+            }[stage],
+        ) for stage, identity in BUILTIN_FRAMEWORK_MODULES.items()),
+        builtin_risk_schema=BuiltinRiskModule.model_json_schema(),
+        builtin_portfolio_schema=BuiltinPortfolioModule.model_json_schema(),
+        account_observation=(
+            "Direct and Framework programs receive cash_cny, post_open_net_nav_cny, "
+            "close_risk_nav_cny and actual positions. Each position includes execution_shares, "
+            "adjusted_units, last_adjusted_price (Open), last_close_adjusted_price, "
+            "remaining_acquisition_cost_cny, holding_cycle_started_session and holding_age. "
+            "Age counts Research Sessions including the first actual buy. Builtin stop loss "
+            "compares Close research value to remaining acquisition cost, then caps that "
+            "holding at zero for the next Open. Maximum holding sessions requests exit at "
+            "the Nth Close. Minimum holding sessions reserves younger positions and slots "
+            "during ordinary portfolio changes; risk caps can override retention. "
+            "Take-profit tiers require strictly increasing positive profit thresholds "
+            "and cumulative "
+            "reduction fractions at most one. First trigger freezes the holding baseline; "
+            "actual fills advance progress and ordinary additions remain capped until full exit. "
+            "no_risk/v1 disables built-in risk."
+        ),
+        maximum_active_signals=MAX_ACTIVE_SIGNALS,
+        signal_validity_sessions=IntegerRange(minimum=1, maximum=MAX_SIGNAL_VALIDITY_SESSIONS),
+        maximum_state_bytes=FRAMEWORK_STATE_BYTES,
+    ),
     universes=RESEARCH_UNIVERSES,
     neutralizations=RESEARCH_NEUTRALIZATIONS,
     initial_cash_cny=InitialCashConstraints(maximum=str(MAX_INITIAL_CASH_CNY)),

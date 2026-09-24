@@ -2,9 +2,11 @@ import type { ParseKeys } from "i18next";
 import { i18n, useTranslation } from "../i18n";
 import { formatNumber, formatPercent } from "../i18n/format";
 import { Fragment, useId, useState } from "react";
+import Decimal from "decimal.js";
+import { FrameworkDecisionDetails, type FrameworkRecord } from "./FrameworkDecisionDetails";
 
 export const eventSections = [
-  "strategy_targets", "strategy_orders", "strategy_child_orders", "strategy_fills", "strategy_adjustments", "strategy_execution_constraints",
+  "strategy_framework", "strategy_targets", "strategy_orders", "strategy_child_orders", "strategy_fills", "strategy_adjustments", "strategy_execution_constraints",
 ] as const;
 export type EventSection = typeof eventSections[number];
 export type EventScope = { section: EventSection; session: string; instrument?: string };
@@ -12,23 +14,33 @@ export function eventSectionLabel(section: EventSection): string {
   return i18n.t(`analysis:events.sections.${section}`);
 }
 export function eventScopeLabel(scope: EventScope): string {
-  return scope.section === "strategy_targets"
-    ? i18n.t("analysis:events.targetContext", { date: scope.session })
+  return scope.section === "strategy_targets" || scope.section === "strategy_framework"
+    ? i18n.t("analysis:events.targetContext", { date: scope.session, section: eventSectionLabel(scope.section) })
     : i18n.t("analysis:events.recordContext", { date: scope.session, instrument: scope.instrument ?? "", section: eventSectionLabel(scope.section) });
 }
-type EventValue = string | number | null | string[] | Record<string, string | number>;
+type EventValue = string | number | boolean | null | EventValue[] | { [key: string]: EventValue };
 export type EventRow = Record<string, EventValue>;
 export type EventRelation = { target_id?: string; order_id?: string; child_order_id?: string };
 type Navigate = (section: EventSection, relation: EventRelation, context: EventScope) => void;
 const idFields: Record<EventSection, string> = {
+  strategy_framework: "decision_id",
   strategy_targets: "target_id", strategy_orders: "order_id", strategy_child_orders: "child_order_id",
   strategy_fills: "fill_id", strategy_adjustments: "adjustment_id", strategy_execution_constraints: "constraint_id",
 };
 const columns: Record<EventSection, { key: string; label: ParseKeys<"analysis">; numeric?: boolean }[]> = {
+  strategy_framework: [
+    { key: "decision_session", label: "events.decisionDate" },
+    { key: "universe.instrument_ids", label: "events.columns.candidates", numeric: true },
+    { key: "proposal.reason", label: "events.columns.proposal" },
+    { key: "risk_adjustment.mode", label: "events.columns.riskAdjustment" },
+    { key: "target_id", label: "events.columns.finalTarget" },
+  ],
   strategy_targets: [
-    { key: "decision_session", label: "events.decisionDate" }, { key: "mode", label: "events.columns.mode" },
-    { key: "selected_instrument_ids", label: "events.columns.stockCount", numeric: true },
-    { key: "exposure", label: "events.columns.exposure", numeric: true },
+    { key: "decision_session", label: "events.decisionDate" }, { key: "reason", label: "events.columns.reason" },
+    { key: "allocation.mode", label: "events.columns.scope" },
+    { key: "allocation.instrument_ids", label: "events.columns.portfolioStocks", numeric: true },
+    { key: "allocation.exposure", label: "events.columns.exposure", numeric: true },
+    { key: "position_limits", label: "events.columns.positionLimits" },
   ],
   strategy_orders: [
     { key: "session", label: "events.executionDate" }, { key: "instrument_id", label: "events.columns.instrument" },
@@ -42,7 +54,8 @@ const columns: Record<EventSection, { key: string; label: ParseKeys<"analysis">;
   strategy_fills: [
     { key: "session", label: "events.executionDate" }, { key: "instrument_id", label: "events.columns.instrument" },
     { key: "side", label: "events.columns.side" }, { key: "quantity", label: "events.columns.fillQuantity", numeric: true },
-    { key: "raw_open", label: "events.columns.price", numeric: true },
+    { key: "raw_open", label: "events.columns.rawOpen", numeric: true },
+    { key: "execution_price", label: "events.columns.executionPrice", numeric: true },
     { key: "cost", label: "events.columns.cost", numeric: true },
   ],
   strategy_adjustments: [
@@ -57,16 +70,27 @@ const columns: Record<EventSection, { key: string; label: ParseKeys<"analysis">;
   ],
 };
 export function instrumentLabel(value: string) { return value.replace(/^equity:/, ""); }
-function cellValue(key: string, value: EventValue | undefined) {
+function cellValue(path: string, row: EventRow) {
   const labels = i18n.t("analysis:events.labels", { returnObjects: true });
+  const [section, nested] = path.split(".");
+  const parent = row[section];
+  const value = nested && parent !== null && typeof parent === "object" && !Array.isArray(parent)
+    ? parent[nested] : nested ? undefined : parent;
+  const key = nested ?? section;
+  if (path === "proposal.reason" && parent === null) return i18n.t("analysis:events.noUpdate");
+  if (path === "target_id" && row.decision_id) return value ? i18n.t("analysis:events.formed") : i18n.t("analysis:events.noUpdate");
+  if (path === "risk_adjustment.mode" && value) return value === "replace" ? i18n.t("analysis:events.replaceRisk") : i18n.t("analysis:events.localCap");
+  if (path === "allocation.mode" && parent === null) return labels.local;
   if (value == null) return "—";
   if (key === "instrument_id") return instrumentLabel(String(value));
-  if (key === "selected_instrument_ids") return formatNumber((value as string[]).length);
+  if (key === "instrument_ids" || key === "selected_instrument_ids") return formatNumber((value as string[]).length);
+  if (key === "position_limits") return Object.entries(value as Record<string, EventValue>).map(([id, shares]) =>
+    `${instrumentLabel(id)} ≤ ${formatNumber(Number(shares))}`).join("; ") || "—";
   if (key === "exposure") return formatPercent(Number(value));
-  if (["side", "mode", "reason", "rejection_reason", "type"].includes(key)) return labels[String(value) as keyof typeof labels] ?? i18n.t("analysis:unknownReason");
+  if (["side", "mode", "reason", "rejection_reason", "type"].includes(key)) return labels[String(value) as keyof typeof labels] ?? String(value);
   if (key.endsWith("quantity")) return formatNumber(Number(value));
-  if (["raw_open", "cost", "valuation_delta"].includes(key)) return formatNumber(Number(value), {
-    minimumFractionDigits: 2, maximumFractionDigits: key === "raw_open" ? 6 : 2,
+  if (["raw_open", "execution_price", "cost", "valuation_delta"].includes(key)) return formatNumber(Number(value), {
+    minimumFractionDigits: 2, maximumFractionDigits: ["raw_open", "execution_price"].includes(key) ? 6 : 2,
   });
   return String(value);
 }
@@ -79,11 +103,23 @@ function EventRecord({ row, section, navigate }: { row: EventRow; section: Event
   const targetId = row.target_id == null ? undefined : String(row.target_id);
   const orderId = row.order_id == null ? undefined : String(row.order_id);
   const childId = row.child_order_id == null ? undefined : String(row.child_order_id);
-  const context: EventScope = { section, session: String(section === "strategy_targets" ? row.decision_session : row.session),
+  const context: EventScope = { section, session: String(section === "strategy_targets" || section === "strategy_framework" ? row.decision_session : row.session),
     ...(row.instrument_id == null ? {} : { instrument: instrumentLabel(String(row.instrument_id)) }) };
   const linkedFills = section === "strategy_targets" ? { target_id: targetId }
     : section === "strategy_child_orders" ? { child_order_id: childId } : { order_id: orderId };
   return <div className="strategy-event-record">
+    {section === "strategy_framework" && <FrameworkDecisionDetails row={row as FrameworkRecord} />}
+    {section === "strategy_fills" && <section aria-label={t("events.fillDetails.title")}>
+      <p>{t("events.fillDetails.explanation")}</p>
+      <dl className="research-run-facts">{([
+        ["raw_open", "rawOpen"], ["execution_price", "executionPrice"],
+        ["price_slippage", "priceSlippage"], ["research_settlement", "researchSettlement"],
+        ["commission_cny", "commission"], ["stamp_duty_cny", "stampDuty"],
+        ["transfer_fee_cny", "transferFee"], ["cost", "cost"],
+        ["cash_rounding_delta", "cashRounding"],
+      ] as const).map(([key, label]) => <div key={key}><dt>{t(`events.fillDetails.${label}`)}</dt>
+        <dd>{new Decimal(String(row[key])).toString()}</dd></div>)}</dl>
+    </section>}
     <div className="strategy-event-record-toolbar"><span>{t("events.raw")}</span>
       <button type="button" onClick={async () => {
         setCopyError(false);
@@ -131,7 +167,7 @@ export function StrategyEventTable({ rows, section, navigate }: {
               column.numeric ? "numeric" : "",
               column.key.endsWith("session") || column.key === "instrument_id" ? "mono" : "",
               column.key === "rejection_reason" && row[column.key] ? "strategy-event-rejected" : "",
-            ].filter(Boolean).join(" ")}>{cellValue(column.key, row[column.key])}</td>)}
+            ].filter(Boolean).join(" ")}>{cellValue(column.key, row)}</td>)}
             <td className="strategy-event-expand"><button type="button" aria-label={t("events.viewRaw", { label })}
               aria-expanded={open} aria-controls={open ? detailId : undefined} onClick={event => { event.stopPropagation(); toggle(); }}>
               <span aria-hidden="true" className={open ? "is-open" : undefined}>›</span>

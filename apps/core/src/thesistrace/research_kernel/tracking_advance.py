@@ -21,6 +21,7 @@ from thesistrace.research_kernel.kernel_advance import (
     _accept_target_research_data,
     _with_continuation,
     continuation_from_output,
+    empty_continuation,
 )
 from thesistrace.research_kernel.kernel_run import (
     KernelRunError,
@@ -47,7 +48,7 @@ def advance_tracking(
         raise KernelRunError("Tracking calculation requires columnar input")
     restored = _with_continuation(prior.output_snapshot(), value.continuation_snapshot())
     run_input = prior.run_input_with_research_data(data)
-    matrix = _tracking_delta(
+    matrix = None if not run_input.has_alpha else _tracking_delta(
         run_input, data, restored, appended,
     )
     exposure_observations = {}
@@ -61,10 +62,14 @@ def advance_tracking(
         observe_holdings=observe_holdings,
         cancellation_check=lambda: None,
     )
-    attach_common_input_evidence(matrix, exposure_observations, tuple(appended))
+    if matrix is not None:
+        attach_common_input_evidence(matrix, exposure_observations, tuple(appended))
     return KernelState(
         run_input=run_input,
-        output=compose_output(matrix, strategy.finalized),
+        output=compose_output(
+            matrix, strategy.finalized, exposure_observations, sessions=tuple(appended),
+            prior_common_inputs=restored["common_inputs"],
+        ),
         strategy_resume=strategy.resumable,
         origin_session=prior.origin_session,
     )
@@ -80,6 +85,9 @@ def advance_tracking_continuation(
     """Rebuild transient tracking state with the same delta calculation as warm Advance."""
     if not isinstance(target_research_data, ColumnarResearchSeries):
         raise KernelRunError("Tracking calculation requires columnar input")
+    if not run_input.has_alpha:
+        _with_continuation({}, prior_continuation)
+        return empty_continuation()
     restored = _with_continuation(
         {
             "alpha_matrix": {"sessions": []},

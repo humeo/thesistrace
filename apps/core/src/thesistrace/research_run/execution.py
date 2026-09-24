@@ -17,14 +17,17 @@ from thesistrace.research_kernel.holding_observations import holding_rows
 from thesistrace.research_kernel.kernel_run import (
     KernelRunError,
     RunInput,
-    StrategyRunInput,
 )
 from thesistrace.research_kernel.research_chunks import (
     AlphaFactorExecutionBinding,
     empty_research_continuation,
     execute_research_chunk,
 )
-from thesistrace.research_kernel.serialization import canonical_json_bytes
+from thesistrace.research_kernel.strategy_program_runtime import (
+    StrategyProgramError,
+    StrategyProgramFailure,
+)
+from thesistrace.research_kernel.terminal_state_schema import PendingTarget
 from thesistrace.research_run.models import ImmutableRunInput
 from thesistrace.research_run.supervised_child import (
     ChildTransportCancelled,
@@ -436,6 +439,8 @@ def execute_request_chunks(
             "category": "invalid_input",
             "message": str(error),
         }
+    except StrategyProgramError as error:
+        yield {"status": "failed", "category": "strategy_program", "message": str(error)}
     except KernelRunError as error:
         yield {"status": "failed", "category": "calculation", "message": str(error)}
     except MemoryError:
@@ -661,7 +666,9 @@ def _continuation_instrument_ids(
     if not isinstance(positions, list):
         raise ResearchExecutionInputInvalid("Research Strategy continuation is invalid")
     pending = strategy["pending_target"]
-    pending_ids = pending["selected_instrument_ids"] if pending is not None else []
+    pending_ids = (
+        PendingTarget.model_validate(pending).instrument_ids if pending is not None else []
+    )
     return frozenset([
         *(str(position["instrument_id"]) for position in positions), *pending_ids,
     ])
@@ -746,24 +753,6 @@ def _kernel_input(
     research_start_session: str,
     research_end_session: str,
 ) -> RunInput:
-    strategy = immutable_input.strategy
-    costs = immutable_input.costs
-    strategy_input = None
-    if immutable_input.research_kind == "strategy_backtest":
-        if strategy is None or costs is None:
-            raise ResearchExecutionInputInvalid("Strategy Backtest input is incomplete")
-        strategy_input = StrategyRunInput(
-            holdings_count=int(strategy["holdings_count"]),
-            selection_interval=int(strategy["selection_every_sessions"]),
-            weighting=strategy["weighting"],
-            volatility_window=strategy["volatility_window"],
-            initial_cash_cny=str(strategy["initial_cash_cny"]),
-            exposure_expression_json=canonical_json_bytes(strategy["exposure_expression"]),
-            commission_rate_all_in=str(costs["commission_rate_all_in"]),
-            commission_min_cny=str(costs["commission_min_cny"]),
-            stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
-            transfer_fee_rate=str(costs["transfer_fee_rate"]),
-        )
     return RunInput(
         research_data=research_data,
         alpha_expression=immutable_input.alpha_expression,
@@ -772,7 +761,7 @@ def _kernel_input(
         universe=immutable_input.universe,
         neutralization=immutable_input.neutralization,
         research_kind=immutable_input.research_kind,
-        strategy=strategy_input,
+        strategy=immutable_input.kernel_strategy(),
         research_start_session=research_start_session,
         research_end_session=research_end_session,
     )
@@ -835,6 +824,8 @@ def _chunk_from_response(
             raise ResearchExecutionInputInvalid(message)
         if category == "calculation":
             raise ResearchExecutionCalculationFailed(message)
+        if category == "strategy_program":
+            raise StrategyProgramFailure(message)
         if category == "resource_exhausted":
             raise ResearchExecutionResourceExhausted(message)
         raise ResearchExecutionError(message)

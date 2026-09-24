@@ -16,6 +16,485 @@ function recordDocumentRequests(page: Page): string[] {
   return documentRequests;
 }
 
+async function refreshPythonTrackThroughFixtureEnd(page: Page, trackId: string): Promise<void> {
+  let session = "";
+  let unavailableReads = 0;
+  const readTrack = async () => {
+    const response = await page.request.get(`/api/daily-tracks/${trackId}`);
+    if (response.status() === 503) {
+      unavailableReads++;
+      return false;
+    }
+    expect(response.ok()).toBe(true);
+    const track = await response.json() as {
+      strategy_session: string; status: string; blocked_reason: string | null;
+    };
+    expect(track.status, track.blocked_reason ?? "Track must remain active").not.toBe("blocked");
+    session = track.strategy_session;
+    return true;
+  };
+  await expect.poll(readTrack, { timeout: 30_000 }).toBe(true);
+  // Four missing fixture Sessions; every later bounded Advance needs a new action.
+  for (let advance = 0; advance < 4 && session < "2026-08-11"; advance++) {
+    const previousSession = session;
+    await page.getByRole("button", { name: "Refresh to latest data", exact: true }).click();
+    await expect.poll(async () => await readTrack() && session > previousSession,
+      { timeout: 240_000 }).toBe(true);
+    const reload = page.getByRole("button", { name: "Reload status", exact: true });
+    await reload.click();
+    await expect(reload).toBeEnabled();
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    await expect(page.getByText(`Last observation ${session}`, { exact: true })).toBeVisible();
+  }
+  expect(session).toBe("2026-08-11");
+  if (unavailableReads) test.info().annotations.push({ type: "dependency-recovery",
+    description: `Recovered ${unavailableReads} Track read 503 responses with bounded polling.` });
+}
+
+test("Framework modules author, execute, reuse frozen programs and refresh DailyTrack", { tag: "@isolated" }, async ({ page }, testInfo) => {
+  // Cold WASI compilation and multiple explicit Advances are outside each guest's
+  // decision timer; this product journey is not a throughput benchmark.
+  test.setTimeout(600_000);
+  const unavailableReads: string[] = [];
+  page.on("response", response => {
+    const path = new URL(response.url()).pathname;
+    if (response.status() === 503 && /^\/api\/research-runs\/run_[a-f0-9]+$/.test(path)) unavailableReads.push(path);
+  });
+  publishFinancialTrackHead("lagged");
+  await page.goto("/research?new");
+  await page.getByRole("radio", { name: /Strategy Backtest/ }).check();
+  await page.getByLabel("Research name").fill("Daily Framework modules");
+  await page.getByLabel("Research start date").fill("2026-08-04");
+  await page.getByLabel("Research end date").fill("2026-08-05");
+  await page.getByLabel("Universe", { exact: true }).selectOption("top300");
+  const programs = [
+    { stage: "universe_selection", label: "Universe Selection", source: [
+      'def decide(context, state, parameters):',
+      '    state["count"] = state.get("count", 0) + 1',
+      '    return {"output": {"reason": "visible_candidates", "instrument_ids": [',
+      '        row["instrument_id"] for row in context["candidates"]]}, "state": state}',
+    ].join("\n"), parameters: "{}" },
+    { stage: "alpha", label: "Alpha / Signals", source: [
+      'def decide(context, state, parameters):',
+      '    state["count"] = state.get("count", 0) + 1',
+      '    return {"output": {"reason": "opportunities", "signals": [',
+      '        {"instrument_id": row["instrument_id"], "value": 1.0, "valid_for_sessions": 2}',
+      '        for row in context["candidates"]]}, "state": state}',
+    ].join("\n"), parameters: "{}" },
+    { stage: "portfolio_construction", label: "Portfolio Construction", source: [
+      'def decide(context, state, parameters):',
+      '    state["count"] = state.get("count", 0) + 1',
+      '    signals = context["framework"]["signals"]',
+      '    output = None',
+      '    if signals and not context["account"]["positions"]:',
+      '        item = signals[0]["instrument_id"]',
+      '        output = {"reason": "new_opportunity", "allocation": {"mode": "rebalance",',
+      '                  "instrument_ids": [item], "relative_weights": {item: "1"},',
+      '                  "exposure": 1.0}, "position_limits": {}}',
+      '    return {"output": output, "state": state}',
+    ].join("\n"), parameters: "{}" },
+    { stage: "risk_management", label: "Risk Management", source: [
+      'def decide(context, state, parameters):',
+      '    state["count"] = state.get("count", 0) + 1',
+      '    state["label"] = parameters["label"]',
+      '    return {"output": None, "state": state}',
+    ].join("\n"), parameters: '{"label": "original_frozen_risk"}' },
+  ];
+  for (const program of programs) {
+    await page.getByRole("combobox", { name: `${program.label} module`, exact: true }).selectOption("python");
+    const editor = page.getByRole("region", { name: `${program.label} module`, exact: true });
+    await editor.getByLabel("Python source", { exact: true }).fill(program.source);
+    await editor.getByLabel("Parameters (JSON)", { exact: true }).fill(program.parameters);
+    await editor.getByLabel("Declared fields", { exact: true }).fill("");
+    await editor.getByLabel("History (trading sessions)", { exact: true }).fill("1");
+  }
+  const riskSource = page.getByRole("region", { name: "Risk Management module", exact: true }).getByLabel("Python source", { exact: true });
+  await riskSource.fill("def decide(:");
+  await page.getByRole("button", { name: "Check configuration" }).click();
+  await expect(page.locator("#risk_management-python-source-error")).toContainText("line 1", { timeout: 60_000 });
+  await riskSource.fill(programs[3].source);
+  await page.getByRole("button", { name: "Check configuration" }).click();
+  // All four modules are validated sequentially in isolated guest invocations.
+  await expect(page.getByText("Configuration is valid.", { exact: false })).toBeVisible({ timeout: 60_000 });
+  await page.getByRole("button", { name: "Run backtest", exact: true }).click();
+  await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/, { timeout: 60_000 });
+  const runUrl = page.url(), runId = runUrl.split("/").at(-1)!;
+  let outcome = { status: "", failure_reason: "" };
+  await expect.poll(async () => {
+    const response = await page.request.get(`/api/research-runs/${runId}`);
+    if (response.status() === 503) return false;
+    expect(response.ok()).toBe(true);
+    outcome = await response.json();
+    return ["succeeded", "failed", "cancelled"].includes(outcome.status);
+  }, { timeout: 240_000 }).toBe(true);
+  expect(outcome.status, outcome.failure_reason).toBe("succeeded");
+  if (await page.getByRole("alert").filter({ hasText: "ResearchRun unavailable" }).isVisible()) {
+    // A dependency outage stops UI polling and exposes an explicit Retry action.
+    expect(unavailableReads).toContain(`/api/research-runs/${runId}`);
+    testInfo.annotations.push({ type: "dependency-recovery", description: "Recovered a 503 Run read using the visible Retry action." });
+    await page.getByRole("button", { name: "Retry", exact: true }).click();
+  }
+  await expect(page.getByRole("heading", { name: "Strategy Summary" })).toBeVisible({ timeout: 30_000 });
+  const facts = page.getByRole("group", { name: "Research execution conditions" });
+  await expect(facts).not.toContainText("Holdings count");
+  await page.getByText("Risk Management · Frozen Python source and parameters", { exact: true }).click();
+  await expect(facts).toContainText("original_frozen_risk");
+  await expect(page.locator(".framework-state")).toContainText("active signals");
+  const accepted = await (await page.request.get(`/api/research-runs/${runId}`)).json();
+  for (const program of programs) {
+    expect(accepted.input.modules[program.stage].program.source).toBe(program.source);
+    expect(accepted.result.terminal_strategy_state.decision_state.module_states[program.stage].count).toBe(2);
+  }
+  const evidence = await page.request.post(`/api/research-runs/${runId}/events/query`, {
+    headers: sameOriginHeaders(), data: { section: "strategy_framework", limit: 50 },
+  });
+  expect(evidence.status()).toBe(200);
+  expect((await evidence.json()).rows).toHaveLength(2);
+  await page.screenshot({ path: testInfo.outputPath("framework-result.png"), fullPage: true });
+  await page.getByRole("button", { name: "Create draft", exact: true }).click();
+  await expect(page).toHaveURL(/\/research$/);
+  for (const program of programs) {
+    await expect(page.getByRole("region", { name: `${program.label} module`, exact: true })
+      .getByLabel("Python source", { exact: true })).toHaveValue(program.source);
+  }
+  await riskSource.fill("a later editable risk module");
+  await page.goto(runUrl);
+  await page.getByRole("button", { name: "Start Tracking", exact: true }).click();
+  await expect(page).toHaveURL(/\/daily-tracks\/track_[a-f0-9]+$/);
+  const trackId = page.url().split("/").at(-1)!;
+  await page.getByRole("tab", { name: /^Holdings/ }).click();
+  await expect(page.locator(".framework-state")).toContainText("active signals");
+  await refreshPythonTrackThroughFixtureEnd(page, trackId);
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  const latest = await (await page.request.get(`/api/daily-tracks/${trackId}`)).json();
+  for (const program of programs) expect(latest.observation.decision_state.module_states[program.stage].count).toBe(6);
+  expect(latest.observation.decision_state.module_states.risk_management.label).toBe("original_frozen_risk");
+  expect(latest.observation.selection_interval).toBeNull();
+  await page.screenshot({ path: testInfo.outputPath("framework-track.png"), fullPage: true });
+});
+
+test("Direct Python authoring executes, reuses frozen source and explicitly advances DailyTrack", { tag: "@isolated" }, async ({ page }) => {
+  test.setTimeout(360_000);
+  publishFinancialTrackHead("lagged");
+  await page.goto("/research?new");
+  await page.getByRole("radio", { name: /Strategy Backtest/ }).check();
+  await page.getByLabel("Research name").fill("Daily Python");
+  await page.getByLabel("Research start date").fill("2026-08-04");
+  await page.getByLabel("Research end date").fill("2026-08-05");
+  await page.getByLabel("Universe", { exact: true }).selectOption("top300");
+  await page.getByLabel("Strategy mode", { exact: true }).selectOption("direct");
+  await page.getByLabel("History (trading sessions)").fill("1");
+  await page.getByLabel("Declared fields", { exact: true }).fill("price.close.adjusted");
+  await page.getByLabel("Parameters (JSON)").fill('{"label": "visible_candidate"}');
+  const source = [
+    "def decide(context, state, parameters):",
+    "    state['count'] = state.get('count', 0) + 1",
+    "    output = None",
+    "    if not context['account']['positions']:",
+    "        item = context['candidates'][0]['instrument_id']",
+    "        output = {'reason': parameters['label'], 'allocation': {'mode': 'rebalance',",
+    "                  'instrument_ids': [item], 'relative_weights': {item: '1'},",
+    "                  'exposure': 1.0}, 'position_limits': {}}",
+    "    return {'output': output, 'state': state}",
+  ].join("\n");
+  await page.getByLabel("Python source", { exact: true }).fill("def decide(:");
+  await page.getByRole("button", { name: "Check configuration" }).click();
+  // The first validation also compiles the pinned guest in a fresh API process.
+  await expect(page.getByLabel("Configuration issues")).toContainText("line 1", { timeout: 60_000 });
+  await page.getByLabel("Python source", { exact: true }).fill(source);
+  await page.getByRole("button", { name: "Check configuration" }).click();
+  await expect(page.getByText("Configuration is valid.", { exact: false })).toBeVisible();
+  await page.getByRole("button", { name: "Run backtest", exact: true }).click();
+  await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
+  const runUrl = page.url();
+  const runId = runUrl.split("/").at(-1)!;
+  let runOutcome = { status: "", failure_reason: "" };
+  await expect.poll(async () => {
+    const response = await page.request.get(`/api/research-runs/${runId}`);
+    if (!response.ok()) return false;
+    runOutcome = await response.json();
+    return ["succeeded", "failed", "cancelled"].includes(runOutcome.status);
+  }, { timeout: 90_000 }).toBe(true);
+  expect(runOutcome.status, runOutcome.failure_reason).toBe("succeeded");
+  await expect(page.locator(".research-run-facts").getByText(/Status\s+succeeded/)).toBeVisible({ timeout: 90_000 });
+  const facts = page.getByRole("group", { name: "Research execution conditions" });
+  await expect(facts).toContainText("Direct · Python");
+  await expect(facts).not.toContainText("Holdings count");
+  await page.getByText("Frozen Python source and parameters", { exact: true }).click();
+  await expect(facts.locator("pre").first()).toHaveText(source);
+  await expect(page.getByRole("heading", { name: "Strategy Summary" })).toBeVisible();
+  const accepted = await (await page.request.get(`/api/research-runs/${runId}`)).json();
+  expect(accepted.result.terminal_strategy_state.decision_state.state).toEqual({ count: 2 });
+  await page.getByRole("button", { name: "Create draft", exact: true }).click();
+  await expect(page).toHaveURL(/\/research$/);
+  await expect(page.getByLabel("Python source", { exact: true })).toHaveValue(source);
+  await page.getByLabel("Python source", { exact: true }).fill("a later editable draft");
+  await page.goto(runUrl);
+  await page.getByRole("button", { name: "Start Tracking", exact: true }).click();
+  await expect(page).toHaveURL(/\/daily-tracks\/track_[a-f0-9]+$/);
+  const trackId = page.url().split("/").at(-1)!;
+  const origin = await (await page.request.get(`/api/daily-tracks/${trackId}`)).json();
+  expect(origin.strategy_session).toBe("2026-08-05");
+  expect(origin.observation.decision_state.state).toEqual({ count: 2 });
+  await refreshPythonTrackThroughFixtureEnd(page, trackId);
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  const latest = await (await page.request.get(`/api/daily-tracks/${trackId}`)).json();
+  expect(latest.observation.decision_state.state).toEqual({ count: 6 });
+  expect(latest.observation.selection_interval).toBeNull();
+});
+
+test("Custom fees and slippage survive Run reuse and DailyTrack refresh", { tag: "@isolated" }, async ({ page }, testInfo) => {
+  test.setTimeout(240_000);
+  publishFinancialTrackHead("lagged");
+  await page.goto("/research?new");
+  await fillCompleteDraft(page, { name: "Custom execution costs", formula: "close" });
+  await page.getByRole("button", { name: "Run settings", exact: true }).click();
+  await page.getByLabel("Price slippage (basis points)", { exact: true }).fill("15");
+  await page.getByLabel("Minimum commission per child order (CNY)", { exact: true }).fill("2");
+  await page.getByRole("button", { name: "Run settings", exact: true }).click();
+  await page.getByRole("button", { name: "Run backtest", exact: true }).click();
+  await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
+  const runUrl = page.url();
+  const runId = runUrl.split("/").at(-1)!;
+  await expect(page.locator(".research-run-facts").getByText(/Status\s+succeeded/)).toBeVisible({ timeout: 90_000 });
+  const costs = { commission_rate_all_in: "0.0003", commission_min_cny: "2",
+    stamp_duty_sell_rate: "0.0005", transfer_fee_rate: "0.00001", slippage_bps: "15" };
+  const accepted = await page.request.get(`/api/research-runs/${runId}`);
+  expect(accepted.ok()).toBe(true);
+  expect((await accepted.json()).input.costs).toEqual(costs);
+  await page.getByText("Frozen fees and slippage", { exact: true }).click();
+  await expect(page.getByRole("group", { name: "Research execution conditions" })).toContainText("Price slippage (basis points) 15");
+  await page.getByText("Trading events", { exact: true }).click();
+  await page.getByLabel("事件类型").selectOption("strategy_fills");
+  const table = page.getByRole("table", { name: "成交", exact: true });
+  await expect(table.getByRole("columnheader", { name: "模拟成交价（元）" })).toBeVisible();
+  await table.getByRole("button", { name: /查看原始记录/ }).first().click();
+  await expect(page.getByRole("region", { name: "成交价格与费用明细" })).toContainText("每股滑点价差");
+  const fills = await page.request.post(`/api/research-runs/${runId}/events/query`, {
+    headers: sameOriginHeaders(), data: { section: "strategy_fills", limit: 50 },
+  });
+  expect(fills.ok()).toBe(true);
+  const originalFills = (await fills.json()).rows;
+  expect(originalFills.length).toBeGreaterThan(0);
+  for (const fill of originalFills) {
+    expect(Number(fill.execution_price)).not.toBe(Number(fill.raw_open));
+    expect(fill).toHaveProperty("commission_cny");
+    expect(fill).toHaveProperty("stamp_duty_cny");
+    expect(fill).toHaveProperty("transfer_fee_cny");
+  }
+  await page.screenshot({ path: testInfo.outputPath("custom-costs-fill.png"), fullPage: true });
+  await page.getByRole("button", { name: "Create draft", exact: true }).click();
+  await expect(page).toHaveURL(/\/research$/);
+  await page.getByRole("button", { name: "Run settings", exact: true }).click();
+  await expect(page.getByLabel("Price slippage (basis points)", { exact: true })).toHaveValue("15");
+  await page.getByLabel("Price slippage (basis points)", { exact: true }).fill("25");
+  await page.goto(runUrl);
+  await page.getByRole("button", { name: "Start Tracking", exact: true }).click();
+  await expect(page).toHaveURL(/\/daily-tracks\/track_[a-f0-9]+$/);
+  const trackId = page.url().split("/").at(-1)!;
+  await refreshPythonTrackThroughFixtureEnd(page, trackId);
+  const trackFills = await page.request.post(`/api/daily-tracks/${trackId}/events/query`, {
+    headers: sameOriginHeaders(), data: { section: "strategy_fills", limit: 50 },
+  });
+  expect(trackFills.ok()).toBe(true);
+  expect((await trackFills.json()).rows.slice(0, originalFills.length)).toEqual(originalFills);
+  const source = await page.request.get(`/api/research-runs/${runId}`);
+  expect(source.ok()).toBe(true);
+  expect((await source.json()).input.costs).toEqual(costs);
+});
+
+for (const policyName of ["Close stop loss", "Holding periods", "Cumulative take profit", "Portfolio drawdown", "Combined risk rules"]) {
+const holdingPeriods = policyName === "Holding periods";
+const combined = policyName === "Combined risk rules";
+const drawdown = policyName === "Portfolio drawdown" || combined;
+const takeProfit = policyName === "Cumulative take profit";
+test(`${policyName} survives Run reuse and DailyTrack refresh`, { tag: "@isolated" }, async ({ page }, testInfo) => {
+  test.setTimeout(240_000);
+  publishFinancialTrackHead("lagged");
+  if (holdingPeriods || takeProfit || drawdown) await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/research?new");
+  await fillCompleteDraft(page, { name: "Close cost stop loss", formula: "close" });
+  if (drawdown) {
+    await page.getByLabel("Drawdown threshold (%)", { exact: true }).fill("1");
+    await page.getByLabel("Maximum stock exposure (%)", { exact: true }).fill("30");
+    await page.getByLabel("Cooldown (trading sessions)", { exact: true }).fill("2");
+    if (combined) {
+      await page.getByLabel("Stop loss (%)", { exact: true }).fill("1");
+      await page.getByLabel("Minimum holding (trading sessions)", { exact: true }).fill("3");
+      await page.getByLabel("Maximum holding (trading sessions)", { exact: true }).fill("5");
+      await page.getByRole("button", { name: "Add take-profit tier", exact: true }).click();
+      await page.getByLabel("Profit threshold (%)", { exact: true }).fill("1");
+      await page.getByLabel("Cumulative reduction (%)", { exact: true }).fill("30");
+    }
+  } else if (takeProfit) {
+    await page.getByRole("button", { name: "Add take-profit tier", exact: true }).click();
+    await page.getByLabel("Profit threshold (%)", { exact: true }).fill("0.01");
+    await page.getByLabel("Cumulative reduction (%)", { exact: true }).fill("30");
+  } else if (holdingPeriods) {
+    await page.getByLabel("Minimum holding (trading sessions)", { exact: true }).fill("2");
+    await page.getByLabel("Maximum holding (trading sessions)", { exact: true }).fill("2");
+  } else await page.getByLabel("Stop loss (%)", { exact: true }).fill("1");
+  await page.getByRole("button", { name: "Run settings", exact: true }).click();
+  await page.getByLabel("Price slippage (basis points)", { exact: true }).fill(holdingPeriods || takeProfit ? "0" : "1000");
+  if (holdingPeriods) {
+    await page.getByLabel("Holdings count").fill("1");
+    await page.getByLabel("Selection interval (trading days)").fill("1");
+  }
+  await page.getByRole("button", { name: "Run settings", exact: true }).click();
+  if (holdingPeriods) await page.screenshot({ path: testInfo.outputPath("holding-periods-mobile-config.png"), fullPage: true });
+  await page.getByRole("button", { name: "Run backtest", exact: true }).click();
+  await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
+  const runUrl = page.url();
+  const runId = runUrl.split("/").at(-1)!;
+  await expect(page.locator(".research-run-facts").getByText(/Status\s+succeeded/)).toBeVisible({ timeout: 90_000 });
+  const accepted = await page.request.get(`/api/research-runs/${runId}`);
+  expect(accepted.ok()).toBe(true);
+  const policy = drawdown ? { kind: "builtin_risk/v1", ...(combined ? {
+    stop_loss_threshold: 0.01, maximum_holding_sessions: 5,
+    take_profit_tiers: [{ profit_threshold: 0.01, cumulative_reduction: 0.3 }],
+  } : {}), portfolio_drawdown: {
+    drawdown_threshold: 0.01, maximum_stock_exposure: 0.3, cooldown_sessions: 2,
+  } } : takeProfit ? { kind: "builtin_risk/v1", take_profit_tiers: [
+    { profit_threshold: 0.0001, cumulative_reduction: 0.3 },
+  ] } : holdingPeriods ? { kind: "builtin_risk/v1", maximum_holding_sessions: 2 }
+    : { kind: "builtin_risk/v1", stop_loss_threshold: 0.01 };
+  expect((await accepted.json()).input.modules.risk_management).toEqual(policy);
+  await page.getByText("Close risk and holdings", { exact: true }).click();
+  await expect(page.getByText(/Close Risk NAV \(CNY\):/)).toBeVisible();
+  const events = await page.request.post(`/api/research-runs/${runId}/events/query`, {
+    headers: sameOriginHeaders(), data: { section: "strategy_framework", limit: 50 },
+  });
+  expect(events.ok()).toBe(true);
+  const rows = (await events.json()).rows;
+  if (drawdown) {
+    const trigger = rows.find((row: { risk_adjustment: { observations?: { reason: string; status?: string }[] } | null }) =>
+      row.risk_adjustment?.observations?.some(item => item.reason === "portfolio_drawdown" && item.status === "threshold_reached"));
+    expect(trigger).toBeTruthy();
+    await page.getByText("Trading events", { exact: true }).click();
+    await page.getByLabel("事件类型").selectOption("strategy_framework");
+    await page.getByRole("button", { name: `查看原始记录：${trigger.decision_session}`, exact: true }).click();
+    await expect(page.getByLabel("风险判断依据", { exact: true })).toContainText("股票目标上限 30%");
+    await expect(page.getByLabel("风险判断依据", { exact: true })).toContainText("历史最大回撤不重置");
+    if (combined) {
+      expect(trigger.risk_adjustment.observations.some((item: { reason: string }) => item.reason === "stop_loss")).toBe(true);
+      await expect(page.getByLabel("风险判断依据", { exact: true })).toContainText("止损");
+      await expect(page.getByLabel("组合建议", { exact: true })).toContainText("NoUpdate");
+      await page.getByRole("button", { name: `查看原始记录：${rows[0].decision_session}`, exact: true }).click();
+      await expect(page.getByLabel("组合建议", { exact: true })).toContainText("目标仓位 100.00%");
+      await page.getByRole("button", { name: `查看原始记录：${trigger.decision_session}`, exact: true }).click();
+      await page.getByRole("button", { name: "查看目标", exact: true }).click();
+      await page.getByRole("button", { name: `查看原始记录：${trigger.decision_session}`, exact: true }).click();
+      const target = JSON.parse(await page.getByLabel("原始 JSON", { exact: true }).innerText());
+      expect(target.target_id).toBe(trigger.target_id);
+      expect(target.maximum_stock_exposure).toBe(0.3);
+      expect(Object.values(target.position_limits).every(value => value === 0)).toBe(true);
+      await expect(page.getByRole("table", { name: "调仓目标", exact: true })).toContainText("≤ 0");
+      const fills = await page.request.post(`/api/research-runs/${runId}/events/query`, {
+        headers: sameOriginHeaders(), data: { section: "strategy_fills", limit: 50 },
+      });
+      expect(fills.ok()).toBe(true);
+      expect((await fills.json()).rows.every((row: { side: string }) => row.side === "buy")).toBe(true);
+      expect((await (await page.request.get(`/api/research-runs/${runId}`)).json()).result.terminal_strategy_state.pending_target).not.toBeNull();
+      await page.screenshot({ path: testInfo.outputPath("combined-risk-reasons.png"), fullPage: true });
+    }
+  } else if (takeProfit) {
+    const trigger = rows.find((row: { risk_adjustment: { observations?: { reason: string }[] } | null }) =>
+      row.risk_adjustment?.observations?.some(item => item.reason === "take_profit"));
+    expect(trigger).toBeTruthy();
+    await page.getByText("Trading events", { exact: true }).click();
+    await page.getByLabel("事件类型").selectOption("strategy_framework");
+    await page.getByRole("button", { name: `查看原始记录：${trigger.decision_session}`, exact: true }).click();
+    await expect(page.getByLabel("风险判断依据", { exact: true })).toContainText("累计减仓 30%");
+    await expect(page.getByLabel("风险判断依据", { exact: true })).toContainText("禁止普通补仓");
+  } else if (holdingPeriods) {
+    expect(rows[1].portfolio_retentions[0].holding_age).toBe(1);
+    await page.getByText("Trading events", { exact: true }).click();
+    await page.getByLabel("事件类型").selectOption("strategy_framework");
+    await page.getByRole("button", { name: "查看原始记录：2026-08-05", exact: true }).click();
+    await expect(page.getByLabel("最短持仓保留依据", { exact: true })).toContainText("未满最短 2 日");
+  } else expect(rows.some((row: { risk_adjustment: { mode: string } | null }) => row.risk_adjustment?.mode === "builtin_risk")).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("close-stop-loss-result.png"), fullPage: true });
+  await page.getByRole("button", { name: "Create draft", exact: true }).click();
+  if (drawdown) {
+    await expect(page.getByLabel("Drawdown threshold (%)", { exact: true })).toHaveValue("1");
+    await expect(page.getByLabel("Maximum stock exposure (%)", { exact: true })).toHaveValue("30");
+    await expect(page.getByLabel("Cooldown (trading sessions)", { exact: true })).toHaveValue("2");
+    await page.getByLabel("Maximum stock exposure (%)", { exact: true }).fill("20");
+  } else if (takeProfit) {
+    await expect(page.getByLabel("Profit threshold (%)", { exact: true })).toHaveValue("0.01");
+    await expect(page.getByLabel("Cumulative reduction (%)", { exact: true })).toHaveValue("30");
+    await page.getByLabel("Cumulative reduction (%)", { exact: true }).fill("60");
+  } else if (holdingPeriods) {
+    await expect(page.getByLabel("Minimum holding (trading sessions)", { exact: true })).toHaveValue("2");
+    await expect(page.getByLabel("Maximum holding (trading sessions)", { exact: true })).toHaveValue("2");
+    await page.getByLabel("Minimum holding (trading sessions)", { exact: true }).fill("1");
+  } else {
+    await expect(page.getByLabel("Stop loss (%)", { exact: true })).toHaveValue("1");
+    await page.getByLabel("Stop loss (%)", { exact: true }).fill("2");
+  }
+  await page.goto(runUrl);
+  await page.getByRole("button", { name: "Start Tracking", exact: true }).click();
+  await expect(page).toHaveURL(/\/daily-tracks\/track_[a-f0-9]+$/);
+  const trackId = page.url().split("/").at(-1)!;
+  await refreshPythonTrackThroughFixtureEnd(page, trackId);
+  const tracked = await page.request.post(`/api/daily-tracks/${trackId}/events/query`, {
+    headers: sameOriginHeaders(), data: { section: "strategy_framework", limit: 50 },
+  });
+  expect(tracked.ok()).toBe(true);
+  const trackRows = (await tracked.json()).rows;
+  expect(trackRows.slice(0, rows.length)).toEqual(rows);
+  if (combined) {
+    const fills = await page.request.post(`/api/daily-tracks/${trackId}/events/query`, {
+      headers: sameOriginHeaders(), data: { section: "strategy_fills", limit: 50 },
+    });
+    expect(fills.ok()).toBe(true);
+    const sale = (await fills.json()).rows.find((row: { side: string }) => row.side === "sell");
+    expect(sale).toBeTruthy();
+    await page.getByRole("tab", { name: /^Holdings/ }).click();
+    await page.getByText("Trading events", { exact: true }).click();
+    await page.getByLabel("事件类型").selectOption("strategy_fills");
+    await page.getByRole("button", { name: `查看原始记录：${sale.session} ${sale.instrument_id.replace(/^equity:/, "")}`, exact: true }).click();
+    const renderedFill = JSON.parse(await page.getByLabel("原始 JSON", { exact: true }).innerText());
+    expect(renderedFill).toMatchObject({ side: "sell", quantity: sale.quantity, session: sale.session, execution_price: sale.execution_price });
+    await expect(page.getByLabel("成交价格与费用明细", { exact: true })).toContainText("原始 Open");
+    await expect(page.getByLabel("成交价格与费用明细", { exact: true })).toContainText("模拟成交价");
+    await page.screenshot({ path: testInfo.outputPath("combined-next-open-fill.png"), fullPage: true });
+  }
+  if (drawdown) expect(trackRows.some((row: { risk_adjustment: { observations?: { reason: string; completed_cooldown_sessions?: number }[] } | null }) =>
+    row.risk_adjustment?.observations?.some(item => item.reason === "portfolio_drawdown" && Number(item.completed_cooldown_sessions) >= 2))).toBe(true);
+  if (takeProfit) expect(trackRows.some((row: { risk_adjustment: { observations?: { reason: string; executed_reduction_units?: string }[] } | null }) =>
+    row.risk_adjustment?.observations?.some(item => item.reason === "take_profit" && Number(item.executed_reduction_units) > 0))).toBe(true);
+  if (holdingPeriods) expect(trackRows.some((row: { risk_adjustment: { observations: { reason: string; holding_age: number }[] } | null }) =>
+    row.risk_adjustment?.observations.some(observation => observation.reason === "maximum_holding_period" && observation.holding_age === 2))).toBe(true);
+  await page.getByRole("tab", { name: /^Holdings/ }).click();
+  await page.getByText("Close risk and holdings", { exact: true }).click();
+  const riskFacts = page.locator("details").filter({ has: page.getByText("Close risk and holdings", { exact: true }) });
+  await expect(riskFacts).toContainText("2026-08-11");
+  await expect(riskFacts).toContainText("Close Risk NAV (CNY)");
+  await page.screenshot({ path: testInfo.outputPath("close-stop-loss-current-track.png"), fullPage: true });
+  const source = await page.request.get(`/api/research-runs/${runId}`);
+  expect(source.ok()).toBe(true);
+  expect((await source.json()).input.modules.risk_management).toEqual(policy);
+  if (combined) {
+    if (!/^run_[a-f0-9]+$/.test(runId)) throw new Error("Unexpected test Run identity");
+    execFileSync("docker", ["exec", testContainer("postgres"), "psql",
+      "--username", "thesistrace_owner", "--dbname", "thesistrace",
+      "--set", "ON_ERROR_STOP=1", "--command",
+      `UPDATE publication.payload_retention
+       SET published_at = now() - interval '8 days', expires_at = now() - interval '1 second'
+       WHERE manifest_sha256 = (SELECT result_manifest_sha256 FROM research_runs.runs WHERE id = '${runId}')`,
+    ], { stdio: ["ignore", "pipe", "pipe"] });
+    await page.goto(runUrl);
+    await expect(page.locator(".research-run-facts").getByText(/Status\s+succeeded/)).toBeVisible();
+    await page.getByText("Trading events", { exact: true }).click();
+    await page.getByLabel("事件类型").selectOption("strategy_fills");
+    await expect(page.getByRole("status").filter({ hasText: "交易明细已过期" })).toBeVisible();
+    await expect(page.getByText("本次查询没有匹配的记录。", { exact: true })).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath("combined-expired-events.png"), fullPage: true });
+  }
+});
+}
+
 test("ResearchRun return keeps the selected Type without a document reload", async ({ page }) => {
   const documentRequests = recordDocumentRequests(page);
   await page.route("**/api/research-folders", async (route) => {
@@ -431,6 +910,7 @@ test("Default Folder retains one local Research Draft with authoritative Formula
       universe: "top300",
       neutralization: "none",
       researchKind: "strategy_backtest",
+      strategyMode: "framework",
       holdingsCount: "10",
       selectionEverySessions: "2",
       lastAdmittedBaseline: null,

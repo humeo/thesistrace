@@ -27,6 +27,7 @@
     "@phosphor-icons/react": "^2.1.10",
     "@thesistrace/contracts": "workspace:*",
     "better-auth": "1.7.2",
+    "decimal.js": "^10.6.0",
     "i18next": "26.4.2",
     "lightweight-charts": "5.2.1",
     "react": "^19.0.0",

@@ -55,10 +55,10 @@ class DataDependencies:
 def resolve_data_dependencies(
     *,
     field_ids: set[str] | frozenset[str],
-    neutralization: str,
+    neutralization: str | None,
     require_industry: bool = False,
 ) -> DataDependencies:
-    if neutralization not in {"none", "industry"}:
+    if neutralization not in {None, "none", "industry"}:
         raise ValueError("neutralization is invalid")
     fields = {field.field_id: field for field in alpha_field_catalog()}
     unknown = field_ids - fields.keys()

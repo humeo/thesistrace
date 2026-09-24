@@ -28,7 +28,7 @@ from thesistrace.research_kernel.common_observations import common_input_observa
 from thesistrace.research_kernel.exposure import validate_exposure
 from thesistrace.research_kernel.factor import prepare_columnar_forward_labels
 from thesistrace.research_kernel.holding_observations import holding_rows
-from thesistrace.research_kernel.kernel_run import RunInput, StrategyRunInput
+from thesistrace.research_kernel.kernel_run import RunInput
 from thesistrace.research_kernel.research_chunks import (
     AlphaFactorChunkOutcome,
     AlphaFactorExecutionBinding,
@@ -39,7 +39,8 @@ from thesistrace.research_kernel.research_chunks import (
     execute_research_chunk,
     execute_strategy_chunk_from_alpha_factor_outcome,
 )
-from thesistrace.research_kernel.serialization import canonical_json_bytes
+from thesistrace.research_kernel.strategy_program_runtime import StrategyProgramError
+from thesistrace.research_kernel.terminal_state_schema import PendingTarget
 from thesistrace.research_run.execution import (
     ResearchExecutionCalculationFailed,
     ResearchExecutionError,
@@ -989,7 +990,7 @@ def _execute_strategy_sweep_messages(
                         research_sessions=window.research_sessions,
                         universe=shared_input.universe,
                         neutralization=shared_input.neutralization,
-                        field_bindings=union_bindings,
+                        field_bindings=union_bindings if shared_input.has_alpha else {},
                         require_industry=requires_common_industry(*shared_input.expression_trees),
                         effective_lookback=(shared_input.expression_admission.effective_lookback),
                         fact_instrument_ids=frozenset(),
@@ -1139,10 +1140,10 @@ def _validate_strategy_shared_contract(
 
     def shared_contract(value: ImmutableRunInput) -> dict[str, object]:
         contract = value.canonical_value()
-        # Each Exposure has its own dependencies, warmup and admitted budget.
-        # The shared artifact binds Signal identity, not those Strategy requirements.
+        # Costs and Exposure belong to each Strategy. The shared artifact binds
+        # Signal identity, not execution costs, dependencies, warmup or budget.
         for name in (
-            "strategy", "field_bindings", "expression_admission", "execution_plan",
+            "strategy", "costs", "field_bindings", "expression_admission", "execution_plan",
         ):
             contract.pop(name)
         data = contract["data_admission"]
@@ -1192,15 +1193,20 @@ def _execute_strategy_item_messages(
                 data_read_started = monotonic()
                 # Shared scores are frozen; each account owns its Exposure and Weighting data.
                 strategy = item.immutable_input.strategy
-                exposure = validate_exposure(strategy["exposure_expression"])
-                strategy_fields = {
-                    field_id: identifier
-                    for identifier, field_id in exposure.field_ids_by_identifier.items()
-                }
-                strategy_lookback = exposure.effective_lookback
-                if strategy["weighting"] == "inverse_volatility":
-                    strategy_fields["price.close.adjusted"] = "close"
-                    strategy_lookback = max(strategy_lookback, strategy["volatility_window"])
+                if item.immutable_input.programs:
+                    strategy_fields = item.immutable_input.field_bindings
+                    strategy_lookback = item.immutable_input.expression_admission.effective_lookback
+                else:
+                    exposure = validate_exposure(strategy["exposure_expression"])
+                    strategy_fields = {
+                        field_id: identifier
+                        for identifier, field_id in exposure.field_ids_by_identifier.items()
+                    }
+                    strategy_lookback = exposure.effective_lookback
+                    if strategy["weighting"] == "inverse_volatility":
+                        strategy_fields["price.close.adjusted"] = "close"
+                        strategy_lookback = max(strategy_lookback, strategy["volatility_window"])
+                strategy_fields = {**strategy_fields, "price.close.adjusted": "close"}
                 research_data = _read_shared_window(
                     store,
                     generation_id=generation_id,
@@ -1210,9 +1216,7 @@ def _execute_strategy_item_messages(
                     neutralization="none",
                     field_bindings=strategy_fields,
                     effective_lookback=strategy_lookback,
-                    require_industry=requires_common_industry(
-                        item.immutable_input.strategy["exposure_expression"],
-                    ),
+                    require_industry=requires_common_industry(*item.immutable_input.expression_trees),
                     fact_instrument_ids=_continuation_instrument_ids(strategy_continuation),
                 )
                 data_read_seconds += monotonic() - data_read_started
@@ -1326,7 +1330,7 @@ def _execute_strategy_item_messages(
                     final_alpha_continuation["completed_research_session_count"]
                 ),
                 "continuation": {
-                    "schema_version": "research-chunk-continuation-v2",
+                    "schema_version": "research-chunk-continuation-v4",
                     "research_kind": "strategy_backtest",
                     **final_alpha_continuation,
                     **strategy_continuation,
@@ -1340,19 +1344,7 @@ def _execute_strategy_item_messages(
     except (MemoryError, ResearchExecutionResourceExhausted):
         raise
     except Exception as error:
-        yield {
-            "status": "item_failed",
-            "category": "calculation",
-            "message": "Strategy item calculation failed.",
-            "error_type": type(error).__name__,
-            "item_ordinal": item.ordinal,
-            "item_key": item.item_key,
-            "run_id": item.run_id,
-            "child_peak_rss_bytes": _current_process_peak_rss_bytes(),
-            "alpha_factor_task_started": False,
-            "strategy_task_started": False,
-            "strategy_task_failed": True,
-        }
+        yield _item_failed_message(item, error, task_role="strategy")
 
 
 def _read_shared_window(
@@ -1462,7 +1454,9 @@ def _continuation_instrument_ids(
     if not isinstance(positions, list):
         raise ResearchExecutionInputInvalid("Research Strategy continuation is invalid")
     pending = strategy["pending_target"]
-    pending_ids = pending["selected_instrument_ids"] if pending is not None else []
+    pending_ids = (
+        PendingTarget.model_validate(pending).instrument_ids if pending is not None else []
+    )
     return frozenset([
         *(str(position["instrument_id"]) for position in positions), *pending_ids,
     ])
@@ -1487,7 +1481,8 @@ def _item_failed_message(
     return {
         "status": "item_failed",
         "category": "calculation",
-        "message": f"{task_role.title()} item calculation failed.",
+        "message": (str(error) if isinstance(error, StrategyProgramError)
+                    else f"{task_role.title()} item calculation failed."),
         "error_type": type(error).__name__,
         "item_ordinal": item.ordinal,
         "item_key": item.item_key,
@@ -1523,18 +1518,7 @@ def _strategy_run_input(
         universe=immutable_input.universe,
         neutralization=immutable_input.neutralization,
         research_kind="strategy_backtest",
-        strategy=StrategyRunInput(
-            holdings_count=int(strategy["holdings_count"]),
-            selection_interval=int(strategy["selection_every_sessions"]),
-            weighting=strategy["weighting"],
-            volatility_window=strategy["volatility_window"],
-            initial_cash_cny=str(strategy["initial_cash_cny"]),
-            exposure_expression_json=canonical_json_bytes(strategy["exposure_expression"]),
-            commission_rate_all_in=str(costs["commission_rate_all_in"]),
-            commission_min_cny=str(costs["commission_min_cny"]),
-            stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
-            transfer_fee_rate=str(costs["transfer_fee_rate"]),
-        ),
+        strategy=immutable_input.kernel_strategy(),
         research_start_session=research_start,
         research_end_session=research_end,
     )

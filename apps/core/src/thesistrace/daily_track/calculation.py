@@ -22,6 +22,7 @@ from thesistrace.research_kernel.common_inputs import requires_common_industry
 from thesistrace.research_kernel.holding_observations import holding_rows
 from thesistrace.research_kernel.numeric import require_current_numeric_contract
 from thesistrace.research_kernel.strategy_events import strategy_event_rows
+from thesistrace.research_kernel.terminal_state_schema import PendingTarget
 from thesistrace.research_kernel.tracking_advance import (
     advance_tracking,
     advance_tracking_continuation,
@@ -72,8 +73,10 @@ def origin_universe(origin: TrackingOrigin) -> str:
     return universe
 
 
-def origin_neutralization(origin: TrackingOrigin) -> str:
+def origin_neutralization(origin: TrackingOrigin) -> str | None:
     neutralization = origin.immutable_input.get("neutralization")
+    if origin.immutable_input["alpha_expression"] is None and neutralization is None:
+        return None
     if neutralization not in {"none", "industry"}:
         raise RuntimeError("Tracking Neutralization is invalid")
     return str(neutralization)
@@ -149,7 +152,7 @@ def execute_tracking_target(value: Mapping[str, object]) -> dict[str, object]:
     prior_research_data = slice_research_sessions(
         research_data, calendar[: local_current_index + 1]
     )
-    if predecessor.get("schema_version") == "daily-track-activation-checkpoint-v3":
+    if predecessor.get("schema_version") == "daily-track-activation-checkpoint-v4":
         prior = restore_tracking_origin(
             origin,
             _mapping_value(
@@ -218,6 +221,8 @@ def _rebuild_continuation(
     predecessor: Mapping[str, object],
 ) -> dict[str, object]:
     """Rebuild bounded transient state without retaining a 504-session data slice."""
+    if origin.immutable_input["alpha_expression"] is None:
+        return empty_continuation()
     lookback = origin_effective_lookback(origin)
     appended_start = max(calculation_start_index, current_index - 504 + 1)
     continuation = empty_continuation()
@@ -261,7 +266,7 @@ def _mapping_value(value: object, name: str) -> Mapping[str, object]:
 
 
 def _predecessor_instrument_ids(predecessor: Mapping[str, object]) -> frozenset[str]:
-    if predecessor.get("schema_version") == "daily-track-activation-checkpoint-v3":
+    if predecessor.get("schema_version") == "daily-track-activation-checkpoint-v4":
         terminal = _mapping_value(
             predecessor.get("terminal_strategy_state"),
             "Activation Terminal Strategy State",
@@ -279,5 +284,7 @@ def _predecessor_instrument_ids(predecessor: Mapping[str, object]) -> frozenset[
     if not isinstance(positions, list) or any(not isinstance(item, Mapping) for item in positions):
         raise RuntimeError("Tracking predecessor Positions are invalid")
     pending = terminal["pending_target"]
-    pending_ids = pending["selected_instrument_ids"] if pending is not None else []
+    pending_ids = (
+        PendingTarget.model_validate(pending).instrument_ids if pending is not None else []
+    )
     return frozenset([*(str(item["instrument_id"]) for item in positions), *pending_ids])

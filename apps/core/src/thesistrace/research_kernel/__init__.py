@@ -10,6 +10,7 @@ if TYPE_CHECKING:
         empty_continuation,
     )
     from thesistrace.research_kernel.kernel_run import (
+        DirectStrategyRunInput,
         InsufficientCalculationWarmupError,
         KernelRunError,
         KernelState,
@@ -21,6 +22,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "AdvanceInput",
+    "DirectStrategyRunInput",
     "InsufficientCalculationWarmupError",
     "KernelRunError",
     "KernelState",
@@ -71,6 +73,7 @@ def __getattr__(name: str) -> object:
             "first_divergence": first_divergence,
         }[name]
     if name in {
+        "DirectStrategyRunInput",
         "InsufficientCalculationWarmupError",
         "KernelRunError",
         "KernelState",
@@ -80,6 +83,7 @@ def __getattr__(name: str) -> object:
         "run",
     }:
         from thesistrace.research_kernel.kernel_run import (
+            DirectStrategyRunInput,
             InsufficientCalculationWarmupError,
             KernelRunError,
             KernelState,
@@ -90,6 +94,7 @@ def __getattr__(name: str) -> object:
         )
 
         return {
+            "DirectStrategyRunInput": DirectStrategyRunInput,
             "InsufficientCalculationWarmupError": InsufficientCalculationWarmupError,
             "KernelRunError": KernelRunError,
             "KernelState": KernelState,

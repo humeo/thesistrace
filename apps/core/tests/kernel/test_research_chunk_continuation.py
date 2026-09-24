@@ -170,6 +170,15 @@ class _ColumnarFixture:
     matrices: dict[str, np.ndarray]
 
     @property
+    def fields(self):
+        return {
+            field: {(session, instrument): float(matrix[item_index, session_index])
+                    for session_index, session in enumerate(self.sessions)
+                    for item_index, instrument in enumerate(self.instruments)}
+            for field, matrix in self.matrices.items()
+        }
+
+    @property
     def historical_universe_members(self):
         return self.universe_members
 
@@ -338,7 +347,7 @@ def _strategy_input(
             commission_rate_all_in="0.0003",
             commission_min_cny="5",
             stamp_duty_sell_rate="0.0005",
-            transfer_fee_rate="0.00001",
+            transfer_fee_rate="0.00001", slippage_bps="0",
         ),
         research_start_session=factor_input.research_start_session,
         research_end_session=factor_input.research_end_session,
@@ -452,7 +461,7 @@ def test_alpha_factor_chunk_outcome_is_bound_immutable_and_chunk_equivalent() ->
             commission_rate_all_in="0.0003",
             commission_min_cny="5",
             stamp_duty_sell_rate="0.0005",
-            transfer_fee_rate="0.00001",
+            transfer_fee_rate="0.00001", slippage_bps="0",
         ),
         research_start_session=research_sessions[0],
         research_end_session=research_sessions[-1],
@@ -609,7 +618,7 @@ def test_alpha_factor_outcome_hot_path_has_a_performance_regression_gate(
     def reject_full_matrix_serialization(value: object) -> bytes:
         nonlocal research_continuation_serializations
         if isinstance(value, Mapping) and value.get("schema_version") == (
-            "research-chunk-continuation-v2"
+            "research-chunk-continuation-v4"
         ):
             research_continuation_serializations += 1
         if isinstance(value, Mapping) and set(value) == {
@@ -996,6 +1005,20 @@ def test_strategy_consumer_rejects_incompatible_shared_outcome_binding() -> None
             cancellation_check=lambda: None,
         )
 
+    for invalid_close_nav in (None, "NaN", "not-a-number"):
+        malformed = first_strategy.continuation_snapshot()
+        daily = malformed["strategy_state"]["daily"][0]
+        if invalid_close_nav is None:
+            del daily["close_risk_nav_cny"]
+        else:
+            daily["close_risk_nav_cny"] = invalid_close_nav
+        with pytest.raises(ValueError, match="Strategy continuation is invalid"):
+            execute_strategy_chunk_from_alpha_factor_outcome(
+                run_input=strategy_input, binding=binding, alpha_factor_outcome=shared,
+                research_data=fixture, final_chunk=True, continuation=malformed,
+                cancellation_check=lambda: None,
+            )
+
 
 def test_repeated_strategy_consumption_has_a_shared_stage_performance_gate(
     monkeypatch: pytest.MonkeyPatch,
@@ -1124,7 +1147,9 @@ def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(
     )
     for instrument_index in range(40):
         for session_index in range(80):
-            if (instrument_index * 3 + session_index) % 29 == 0:
+            # Close is also the account valuation input: missing historical
+            # signal observations precede any actual holdings in this fixture.
+            if session_index < 20 and (instrument_index * 3 + session_index) % 29 == 0:
                 close[instrument_index, session_index] = np.nan
             if (instrument_index + session_index * 2) % 31 == 0:
                 revenue[instrument_index, session_index] = np.nan
@@ -1176,7 +1201,7 @@ def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(
             commission_rate_all_in="0.0003",
             commission_min_cny="5",
             stamp_duty_sell_rate="0.0005",
-            transfer_fee_rate="0.00001",
+            transfer_fee_rate="0.00001", slippage_bps="0",
         ),
         research_start_session=sessions[20],
         research_end_session=sessions[-1],
@@ -1196,7 +1221,7 @@ def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(
     legacy = build_result_payload(
         run_columnar_chunk(run_input, cancellation_check=lambda: None),
         research_kind="strategy_backtest",
-        selection_interval=5,
+
     )
     for boundaries in (
         ((20, 40), (40, 60), (60, 80)),
@@ -1235,7 +1260,7 @@ def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(
         )
         assert final.continuation["alpha_checksum"] == uninterrupted.continuation["alpha_checksum"]
         assert "alpha_checksum_state" not in final.continuation
-        assert final.continuation["schema_version"] == "research-chunk-continuation-v2"
+        assert final.continuation["schema_version"] == "research-chunk-continuation-v4"
         chunked_result = _read_staged_chunk_result(
             final.final_values,
             [list(calculation.strategy_daily_observations) for calculation in chunk_results],
@@ -1422,7 +1447,7 @@ def test_shared_signal_artifact_keeps_strategy_exposure_evidence_private(source)
                 holdings_count=5, selection_interval=5, initial_cash_cny='100000',
                 exposure_expression_json=canonical_json_bytes(compiled.expression),
                 commission_rate_all_in='0.0003', commission_min_cny='5',
-                stamp_duty_sell_rate='0.0005', transfer_fee_rate='0.00001',
+                stamp_duty_sell_rate='0.0005', transfer_fee_rate='0.00001', slippage_bps="0",
             ),
             research_start_session=sessions[0], research_end_session=sessions[-1],
         )

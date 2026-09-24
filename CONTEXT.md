@@ -162,7 +162,7 @@ _避免混用_: Research Folder, one combined Result Bundle, Batch-Incremental E
 
 **Research Batch Kind**:
 The immutable choice between evaluating several Alphas independently and
-scanning several Strategy parameter combinations for one shared Alpha.
+scanning parameter combinations of one Strategy.
 _避免混用_: Research Kind, mixed Batch, inferred Batch type
 
 **Research Batch Item**:
@@ -275,7 +275,9 @@ The irreversible end of a DailyTrack, complete only when its active advance has 
 _避免混用_: Pause, DailyTrack Deletion, retry
 
 **Tracking Origin**:
-The successful seed ResearchRun and its ending portfolio and performance state from which a DailyTrack continues. Its first investable Entry Open and Initial Cash remain the comparison baseline.
+The successful seed ResearchRun and its Terminal Strategy State from which a
+DailyTrack continues. Its first investable Entry Open and Initial Cash remain
+the comparison baseline.
 _避免混用_: Activation date, a new all-cash portfolio, rolling origin
 
 **Tracking Advance**:
@@ -305,6 +307,25 @@ The portfolio decision rules that determine target instruments, allocations,
 and changes over time.
 _避免混用_: Alpha, Factor, Investment Hypothesis
 
+**Strategy Program**:
+Researcher-authored code expressing a Strategy's portfolio decision rules.
+_避免混用_: Alpha Formula, Strategy parameters, Simulation Conditions
+
+**Direct Strategy**:
+A Strategy whose program directly determines Target Decisions from available
+research data and account observations.
+_避免混用_: Framework Strategy, direct account modification, brokerage execution
+
+**Framework Strategy**:
+A Strategy composed from separately defined rules for eligible instruments,
+Strategy Signals, portfolio construction, and risk adjustment.
+_避免混用_: Direct Strategy, a parameter form, a separate simulation account
+
+**Strategy Signal**:
+A Strategy's time-scoped assessment of an instrument's investment opportunity,
+used as an input to portfolio construction.
+_避免混用_: Alpha Values, Target Decision, Simulated Order, Actual Holdings
+
 **Simulation Conditions**:
 The fixed Initial Cash baseline and execution, valuation, and cost assumptions
 under which a Strategy account is simulated.
@@ -330,8 +351,8 @@ buy deficits when its allocation is restored.
 _避免混用_: Source order, Factor quantile rank
 
 **Holdings Count**:
-The explicit maximum number of Top-N targets selected by a Strategy.
-_避免混用_: Filled-position guarantee, percentage cutoff
+The explicit maximum number of targets in a score-based Top-N selection.
+_避免混用_: Actual Holdings Count, filled-position guarantee, mandatory limit for every Strategy Program
 
 **Initial Cash**:
 The fixed all-cash Gross and Net NAV baseline from which a Strategy Backtest
@@ -339,9 +360,13 @@ starts.
 _避免混用_: Current cash, deployable cash after costs
 
 **Rebalance**:
-A retargeting of stock and cash allocation following a Target Selection Update
-or an Exposure Adjustment, before execution constraints are applied.
+A Strategy-directed retargeting of stock and cash allocation before execution
+constraints are applied.
 _避免混用_: Selection Interval, every-session signal cohort, guaranteed trade
+
+**Rebalance Trigger**:
+A Strategy condition that calls for reconsidering stock and cash allocation.
+_避免混用_: Data arrival, every-session evaluation, execution time, guaranteed trade
 
 **Target Selection**:
 The ranked stock list and Relative Target Weights established by the
@@ -349,8 +374,8 @@ latest Target Selection Update, retained even when the Strategy holds only cash.
 _避免混用_: Actual Holdings, today's Alpha ranking, Target Exposure
 
 **Target Selection Update**:
-A scheduled refresh of Target Selection from the signal session's Final Alpha
-Cross-Section that forms a new allocation target, even if the stock list is unchanged.
+A Strategy-triggered refresh of Target Selection that forms a new allocation
+target, even if the stock list is unchanged.
 _避免混用_: Every Alpha evaluation, membership change only, filled order
 
 **Target Portfolio**:
@@ -359,9 +384,14 @@ execution constraints are applied.
 _避免混用_: Actual Holdings, guaranteed allocation
 
 **Target Decision**:
-A Strategy decision to establish a new Target Portfolio or make no target
-update at a Research Session.
-_避免混用_: Simulated Order, Simulated Fill, automatic rebalancing to old targets
+A Strategy's final decision to change portfolio allocation or individual
+positions, or leave targets unchanged, at a Research Session.
+_避免混用_: Intermediate portfolio proposal, Risk Adjustment, Simulated Order, Simulated Fill, automatic rebalancing to old targets
+
+**Risk Adjustment**:
+A risk-driven modification or restriction of proposed allocations or permitted
+position changes within a Strategy.
+_避免混用_: Strategy Signal, final Target Decision, Simulated Order, market execution constraint
 
 **Target Exposure**:
 The intended fraction of a Strategy account's net asset value allocated to
@@ -380,9 +410,24 @@ Target Selection Updates, subject to execution constraints.
 _避免混用_: Equal-weight reset, immediate guaranteed liquidation, intraday trading
 
 **Actual Holdings**:
-The positions and cash that remain after order eligibility, costs, and quantity
-rules are applied to a Target Portfolio.
-_避免混用_: Target Portfolio, pending order
+The positions and cash actually retained by the simulated account after
+execution constraints, fills and account adjustments.
+_避免混用_: Target Portfolio, Target Decision, pending order
+
+**Remaining Acquisition Cost**:
+The acquisition value, including incurred buy-side Transaction Costs, still
+attributed to an Actual Holding after proportional cost release on sales.
+_避免混用_: Market value, realized sale proceeds, per-purchase lot selection
+
+**Holding Cycle**:
+One instrument's continuous holding episode from its first actual buy until
+the position is fully removed.
+_避免混用_: Research Period, signal validity, each additional purchase
+
+**Holding Age**:
+The number of Research Sessions held within the current Holding Cycle,
+including the session of its first actual buy.
+_避免混用_: Calendar days, signal age, age of the latest additional purchase
 
 **Execution Share Quantity**:
 The non-negative integer share coordinate used for Strategy orders and market
@@ -451,13 +496,17 @@ and Transaction Costs under the Simulation Conditions.
 _避免混用_: Target Portfolio, Research Settlement, brokerage execution report
 
 **Transaction Costs**:
-The fixed deductions charged to filled Strategy orders under the current
-research cost contract.
-_避免混用_: Slippage, market impact, hidden fee
+The explicit fees charged to Simulated Fills under their frozen Simulation Conditions.
+_避免混用_: Price Slippage, market impact, hidden fee
+
+**Price Slippage**:
+The modeled difference between a Simulated Fill price and its Raw Market
+Price Open reference under the Simulation Conditions.
+_避免混用_: Transaction Costs, observed intraday price path, live execution guarantee
 
 **Transaction Cost Return Drag**:
 Gross Cumulative Return minus Net Cumulative Return from the same fill path.
-_避免混用_: Annualized drag, relative return ratio
+_避免混用_: Annualized drag, relative return ratio, total trading friction
 
 **Turnover**:
 The half-sum of absolute same-open changes in actual instrument and cash weights.
@@ -468,9 +517,9 @@ The number of Research Sessions between scheduled Target Selection Updates.
 _避免混用_: Rebalance Interval, natural-day interval, minimum time between trades
 
 **Open Execution Model**:
-The synthetic contract that attempts eligible Strategy orders at the next
-Research Session's Raw Market Price Open.
-_避免混用_: Intraday model, Adjusted execution price
+The synthetic contract that attempts eligible Strategy orders using the next
+Research Session's Raw Market Price Open as its execution reference.
+_避免混用_: Intraday model, exact-Open fill guarantee, Adjusted Research Price
 
 **Blocked Order**:
 A Strategy order that cannot execute at its single scheduled Open and is not
@@ -487,9 +536,9 @@ The classification of an instrument as having a valid traded session, a confirme
 _避免混用_: Missing data assumed to be suspension, pending order
 
 **Existing-Position Eligibility**:
-The scheduled reassessment of whether an Actual Holding remains eligible for the
-new Target Portfolio.
-_避免混用_: Immediate liquidation, permanent eligibility
+A Strategy's assessment of whether an Actual Holding may remain in a newly
+proposed Target Portfolio.
+_避免混用_: Fixed selection schedule, immediate liquidation, permanent eligibility
 
 ## Strategy Results
 
@@ -503,12 +552,9 @@ The minimal retained Strategy result for one Research Session.
 _避免混用_: Position history, order ledger, fill ledger
 
 **Trading Event Retention**:
-The seven-day idle lifetime of the target, order, child order, fill, adjustment,
-and execution constraint payloads of a published Strategy Result or Tracking
-Checkpoint. Successful explicit event queries renew that publication's event
-payloads; report reads do not. Expiry releases only diagnostic object references,
-retaining verified inventory tombstones and the immutable Result identity.
-Charts, performance metrics, Terminal Strategy State, and tracking remain available.
+The seven-day idle period during which a published Result or Tracking
+Checkpoint's detailed trading diagnostics remain available, renewed by explicit
+event reads. Expiry leaves its report, identity and continuation state intact.
 _避免混用_: Result lifetime, full ResearchRun deletion, daily holding retention
 
 **Daily Holding Observation**:
@@ -517,12 +563,15 @@ reporting point, used to inspect a simulated Strategy account's behavior.
 _避免混用_: Target Selection, Strategy Daily Observation, Terminal Strategy State
 
 **Terminal Strategy State**:
-The ending holdings, cash, and accumulated performance of a Strategy Backtest or Tracking Advance.
-_避免混用_: The full trading history, one daily observation
+The account, accumulated performance and Strategy state needed to continue
+from the end of a Strategy Backtest or Tracking Advance, including pending
+Target Decisions.
+_避免混用_: The full trading history, one daily observation, account balances alone
 
 **Gross NAV**:
-Gross Cash plus the adjusted value of Actual Holdings before Transaction Costs.
-_避免混用_: Net NAV, Target Portfolio value
+Gross Cash plus the adjusted value of Actual Holdings on the same fill path
+as Net NAV, before explicit Transaction Costs.
+_避免混用_: Net NAV, Target Portfolio value, separately executed frictionless portfolio
 
 **Net NAV**:
 Net Cash plus the adjusted value of Actual Holdings after Transaction Costs.
@@ -546,8 +595,9 @@ The compound growth rate of Net Excess NAV expressed on the research calendar’
 _避免混用_: Difference of two annualized returns
 
 **Maximum Drawdown**:
-The largest peak-to-trough loss magnitude in Net NAV over the Research Period.
-_避免混用_: Gross drawdown, single-session loss
+The largest peak-to-trough loss magnitude in the primary post-Open Net NAV
+series over the Research Period.
+_避免混用_: Gross drawdown, Risk Drawdown, single-session loss
 
 **Annualized Volatility**:
 The annualized sample standard deviation of consecutive Daily Net Returns.
@@ -565,6 +615,21 @@ _避免混用_: Sharpe Ratio, infinite zero-drawdown result
 The daily Strategy accounting sequence from pre-trade valuation through open
 execution to the post-trade NAV observation.
 _避免混用_: Close NAV, intraday marking
+
+**Close Risk NAV**:
+The net valuation of a Strategy account at a completed Research Session's Close,
+used to observe and evaluate portfolio risk.
+_避免混用_: Open NAV Cycle, primary performance observation, individual holding return
+
+**Risk Drawdown**:
+The decline of Close Risk NAV from its peak within the Strategy's current
+risk cycle.
+_避免混用_: Maximum Drawdown, individual holding return, permanent full-history peak
+
+**Risk Recovery**:
+The lifting of a Strategy's risk-imposed allocation restriction so that a new
+Target Decision may again increase exposure.
+_避免混用_: Automatic buyback, restored Actual Holdings, recovery to the historical NAV peak
 
 **Backtest Start Baseline**:
 The all-cash observation at the first Research Period Open before any Strategy
@@ -624,9 +689,9 @@ period reported by Factor Evaluation and Strategy Backtest.
 _避免混用_: Complete history, Calculation Warm-up
 
 **Calculation Warm-up**:
-The Research Sessions before a Research Period required only to evaluate the
-accepted research's expression and Portfolio Weighting dependencies.
-_避免混用_: Research Period, reported results
+The Research Sessions before a Research Period required only to satisfy the
+accepted research's calculation and Strategy dependencies.
+_避免混用_: Research Period, reported results, pre-period trading
 
 **Dataset Head**:
 The currently accepted Data Generation available to new research.
@@ -651,10 +716,10 @@ Strategy Comparison.
 _避免混用_: Dataset Coverage, Data Generation, lagging benchmark, carried level
 
 **Financial Coverage**:
-The quality-bearing Dataset Coverage of Point-in-Time Financial Data, including
-its discovery baseline, attempted-through and complete-through coordinates,
-pending instruments, discovery gaps, and reconciliation limits.
-_避免混用_: One observation-through date, non-null guarantee, market date range
+The quality-bearing extent of accepted financial inputs, including discovery
+progress, unresolved reports and gaps, with their disclosure and observed-revision
+evidence limits.
+_避免混用_: Complete historical revision evidence, non-null guarantee, market date range
 
 **Financial Coverage Start**:
 The first Research Session from which the bootstrap financial family can resolve
@@ -699,8 +764,8 @@ retain independent coverage, and unsuccessful collection preserves accepted fact
 _避免混用_: Market Refresh, complete Financial Coverage, publication on collection
 
 **Financial Disclosure Check**:
-A query of TuShare's structured disclosure lists for declared report periods.
-Actual publication dates identify due reports; scheduled dates do not.
+A review of structured disclosure evidence for specified report periods that
+identifies reports actually published by the observation boundary.
 _避免混用_: Financial statement values, completed Financial Refresh
 
 **Financial Discovery Attempted Through**:
@@ -719,9 +784,9 @@ some expected reports unknown.
 _避免混用_: A known instrument’s failed update, complete discovery
 
 **Financial Report Requirement**:
-A disclosed report expected for an instrument, source endpoint and report period.
-It remains pending until accepted evidence contains that period. Different source
-publication dates and nullable metrics do not imply a missing report.
+A disclosed report expected for an instrument, source endpoint and report period,
+pending until accepted evidence contains that period. Different source publication
+dates and nullable metrics do not imply a missing report.
 _避免混用_: Financial Fact, announcement text, successful collection alone
 
 **Canonical Data**:
@@ -787,8 +852,9 @@ _避免混用_: Parent-only statement, mixed scope
 
 **Session-Aligned Financial Field**:
 A Canonical financial field that resolves to at most one value per Instrument
-Identity and Research Session under fixed point-in-time semantics.
-_避免混用_: Raw statement column, implicit latest report
+Identity and Research Session under its governed availability rules and
+revision-evidence limits.
+_避免混用_: Raw statement column, implicit latest report, complete historical revision evidence
 
 **Latest Annual Financial Field**:
 A Session-Aligned Financial Field that selects the latest available full-year

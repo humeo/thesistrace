@@ -27,6 +27,12 @@ The root `package.json` provides the supported project commands. Application
 dependencies belong in their own manifests; the root owns cross-application test
 tools. Install JavaScript dependencies once from the root with the shared pnpm
 lockfile. Python dependencies use `uv sync --project apps/core --frozen`.
+`pnpm bootstrap` also installs the checksum-pinned Python/WASI Strategy runtime;
+the Core image installs the same dependency during its build. For host-only
+setup after `uv sync`, run
+`uv run --no-sync --project apps/core python -m thesistrace.research_kernel.strategy_program_assets`.
+The installer accepts `--archive PATH` for an already downloaded, verified archive.
+See the [Python program contract](docs/python-strategy.md) for its execution boundary.
 
 ## Local development
 

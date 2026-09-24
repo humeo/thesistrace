@@ -98,7 +98,7 @@ export function StrategyEvents({ endpoint }: { endpoint: string }) {
       </div>}
       <div className="strategy-events-status">
         <span>{filters.start_session || filters.end_session ? t("events.dateRange", { start: filters.start_session ?? t("events.earliest"), end: filters.end_session ?? t("events.latest") }) : t("events.allDates")} · {filters.instrument_id ? instrumentLabel(filters.instrument_id) : t("events.allStocks")}</span>
-        <span>{section === "strategy_targets" ? t("events.decisionDate") : section === "strategy_adjustments" ? t("events.adjustmentDate") : t("events.executionDate")} · {t("events.pageSize")}</span>
+        <span>{section === "strategy_targets" || section === "strategy_framework" ? t("events.decisionDate") : section === "strategy_adjustments" ? t("events.adjustmentDate") : t("events.executionDate")} · {t("events.pageSize")}</span>
       </div>
       {page?.status === "partially_expired" && <p role="status">{t("events.partialExpiry")}</p>}
       {error ? <p role="alert">{t(`events.${error}`)}</p> : page === null ? <p role="status">{t("events.loading")}</p>

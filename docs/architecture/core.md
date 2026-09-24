@@ -2,10 +2,13 @@
 
 > Status: current module-first product, execution, identity, ownership, and
 > public-entry boundary.
+> The Strategy contract in [ADR-0250](../adr/0250-admit-strategy-programs-with-explicit-simulation-coordinates.md)
+> implements isolated Python decisions and shared risk/cost execution; environment
+> qualification and explicit research retirement remain separate operations.
 
 ## Product boundary
 
-The active checkout closes one invite-only, multi-Researcher research loop:
+The active checkout closes one email-verified, multi-Researcher research loop:
 
 ```text
 Data Operator prepares the current Dataset Head and CSI 300 Benchmark Snapshot
@@ -13,22 +16,22 @@ Data Operator prepares the current Dataset Head and CSI 300 Benchmark Snapshot
     -> author one browser-local Draft inside a Research Folder
     -> Run compiles and atomically admits one immutable ResearchRun
     -> a ResearchRun Attempt pins the Generation frozen at admission
-    -> immutable Factor and Strategy Result
+    -> immutable Result for the selected Research Kind
     -> optionally start a DailyTrack
     -> explicitly Refresh that Track after later market sessions publish
 ```
 
 The browser-visible surfaces include Chat, MCP connections, Data Overview,
 Research Folders, Research (ResearchRuns), and DailyTracks. The Operator Console
-requires the singleton Operator Capability. Research Batches are a backend API resource in
-V1 and their child ResearchRuns appear in the Batch Research Folder; there is no
-Batch browser surface. Browser Draft is local authoring state rather than a
+requires the singleton Operator Capability. Research Batches have browser list
+and detail views, and their child ResearchRuns appear in the Batch Research
+Folder. Browser Draft is local authoring state rather than a
 server resource. Benchmark Store, Data Generation, execution Attempt, Tracking
 Checkpoint,
 Working Cache, publication manifest, and schema fingerprint are implementation
 concepts, not additional product resources.
 
-ADR-0233 places that research loop behind invite-only Researcher authentication
+ADR-0233 places that research loop behind email-verified Researcher authentication
 and direct per-Researcher Research Ownership. It adds no Workspace,
 Organization, role hierarchy, collaboration model, or Local/Hosted product
 mode.
@@ -120,9 +123,14 @@ recovery, and every 12 hours while active so Better Auth can refresh both its
 database Session and browser Cookie. FastAPI's private verification disables
 refresh and never forwards `Set-Cookie`.
 
-### Invitation and provisioning
+### Email verification, optional invitations and provisioning
 
-Researcher creation is invite-only. The Operator issues at most one effective
+Public access uses email OTP: the first successful verification creates a
+Researcher, and later verification authenticates the same canonical email.
+There is no invitation prerequisite and no separate public signup form.
+
+Operator-issued Researcher Invitations remain an optional provisioning path.
+The Operator issues at most one effective
 48-hour Researcher Invitation for one lowercase trimmed email through a private
 Auth command. Invitation delivery uses the existing Resend API directly and is
 usable only after Resend accepts the message; reissue revokes the preceding
@@ -136,14 +144,15 @@ character password plus confirmation. Better Auth's required `name` is derived
 from the complete canonical email local-part as an initial display label, not a
 verified human name, and invitation proof marks the email verified.
 
-The guarded Better Auth email sign-up endpoint validates the Invitation and
-bound email before creating a unique User and scrypt credential, creates a
-Login Session on success, and conditionally consumes the Invitation. Duplicate
+The invitation acceptance operation validates the Invitation and bound email
+before creating a unique User and scrypt credential through private Auth calls.
+It creates a Login Session on success and conditionally consumes the Invitation. Duplicate
 tabs, retries, and a response lost after User creation converge on the existing
 User and consumed Invitation; they never replace a password or create a second
 User.
 
-After invitation acceptance, the browser invokes idempotent
+After successful email verification or invitation acceptance, the browser
+invokes idempotent
 `POST /api/researcher/bootstrap`. Core creates the Researcher and that
 Researcher's Default and Batch Research system Folders in one transaction. A
 Session whose Researcher is still absent remains in a retryable setup state and
@@ -159,15 +168,12 @@ Production cookies are Secure, HttpOnly, SameSite=Lax, Path=/, and host-only;
 loopback HTTP uses non-Secure cookies only in Development and Test. The product
 offers no Remember Me switch.
 
-Ordinary logout revokes only the current Session. Password change revokes all
-other Sessions, and password reset revokes every Session. Reset requests always
-return an enumeration-safe response; deactivated Researchers receive no email.
-Reset tokens are single-use, expire after 30 minutes, travel only in a URL
-fragment, and are revoked on Researcher Deactivation. Better Auth's
-pre-persistence verification hook replaces the bearer token with its SHA-256
-identifier before the database adapter writes it; the Auth lifecycle performs
-all lookup and consumption by that digest. Passwords use Better Auth's scrypt
-implementation with no composition rules or periodic expiry.
+Ordinary logout revokes only the current Session. Public sign-in uses email
+OTP; password sign-in, password change and recovery are not public product
+flows. Optional invitation acceptance still provisions a credential privately,
+without opening general email/password signup or changing the normal OTP login
+path. Operator confirmations use the exact-action proof policy in ADR-0241;
+sign-in codes do not authorize separate invitation or session-revocation actions.
 
 Researcher Deactivation is reversible access revocation, not deletion or work
 cancellation. It revokes active Sessions and outstanding reset tokens, but
@@ -400,15 +406,18 @@ daily_tracks
 ```
 
 Their complete current definitions live in each module's `schema.sql`.
-Initialization is allowed only when none of the product schemas or
-`thesistrace_meta` exists. The initializer creates the schemas and records one
-fingerprint of the complete contract in `thesistrace_meta.schema_contract`.
+Initialization creates the complete contract only in an empty product scope,
+or verifies an existing exact current contract without resetting its data.
+The recorded fingerprint in `thesistrace_meta.schema_contract` identifies that
+complete schema contract.
 
 API, Worker, and Data Operator startup verify the exact schema set and
-fingerprint. Partial state or a mismatch fails immediately. Development fixes a
-mismatch with the destructive `pnpm dev:reset`; Test always starts from an empty
-isolated database. There is no upgrade, downgrade, fallback, or compatibility
-path.
+fingerprint. Partial state or a mismatch fails immediately. Supported upgrades
+use the explicit versioned, data-preserving operations in
+[database migrations](../database-migrations.md), including backup, preflight,
+transactional failure behavior and recorded outcomes; startup never migrates
+or clears data. Tests use the existing isolated topology. Runtime compatibility
+branches and manual fingerprint bypasses are not supported.
 
 An independent Better Auth-owned `auth` schema shares the same PostgreSQL
 database without sharing runtime privileges. The Core initializer owns only the
@@ -427,17 +436,21 @@ bootstrap and schema verification, `core_runtime` serves FastAPI, Workers, and
 Data Operator work, and `auth_runtime` serves Hono, Better Auth, and Auth
 commands. `core_runtime` has zero privileges on `auth`; `auth_runtime` has zero
 privileges on every Core product schema. A Better Auth version or plugin change
-that alters schema requires a newly generated, reviewed, and hard-cut snapshot.
+that alters schema requires a reviewed current snapshot and an explicit
+upgrade plan for existing data; it never authorizes automatic startup changes.
 
-The ownership cut resets existing ownerless Product State rather than assigning
-it to a synthetic Researcher. The mounted Canonical Data Store, Dataset Head,
-and immutable Data Generations are preserved. There is no data migration,
-legacy Draft read, compatibility role, or fallback identity.
+The original ownership cut used an explicitly scoped reset of ownerless
+Product State, preserving Canonical Data rather than assigning old research to
+a synthetic Researcher. That historical cut is not an ongoing reset policy:
+current schema upgrades preserve data through their declared migrations, with
+no fallback identity or compatibility role.
 
 ## Data
 
 The Researcher product interface is read-only. The singleton Operator Console
-adds password-confirmed private Refresh submission and safe receipt inspection:
+adds session-authorized, exact-action-confirmed Refresh submission and safe
+receipt inspection under ADR-0241; these Data Refresh actions require no
+per-action email code:
 
 ```text
 GET /api/data -> Dataset coverage and readiness plus Benchmark Snapshot readiness,
@@ -626,14 +639,21 @@ deletes the disposable cache.
 The Research Kernel owns Alpha evaluation, label maturation, Factor aggregation,
 Strategy transitions, numeric semantics, and deterministic ordering. Its Run
 and Advance paths share one implementation of those rules. Operators form a
-closed append-only catalog; there is no runtime plugin or arbitrary Python/SQL
-execution.
+closed append-only Alpha catalog; Alpha expressions do not execute arbitrary
+Python or SQL. Strategy Programs use the separate isolated decision boundary
+defined in ADR-0250: pinned CPython/WASI consumes a completed-session view and
+explicit state, returning one decision without account or fill authority. Direct
+and Framework share platform execution, frozen costs, valuation and bookkeeping.
+Primary Gross/Net NAV uses post-Open observations; Close Risk NAV is separate.
 
 The runtime executes one current calculation kernel and Numeric Execution
 Contract. Product State records that identity, and a result-changing update
-refuses old Product State until an explicit Development Product State Reset.
-There is no Tracking Generation branch, historical contract dispatcher, or
-automatic contract migration.
+refuses incompatible state until an explicitly supported contract transition
+has completed. The Strategy contract uses the authorized, reference-scoped
+old-research cutover only after the new contract is verified, preserving Dataset,
+Researcher identities and unrelated records; other schema changes use explicit
+data-preserving migrations. There is no Tracking Generation branch, historical
+contract dispatcher, automatic contract migration or automatic Product State reset.
 
 Publication is the shared module for immutable ResearchRun Results and
 DailyTrack Checkpoints. It hides canonical serialization, checksums,
@@ -652,21 +672,35 @@ An uploaded object followed by a PostgreSQL failure is invisible and may be
 collected later. Readers start from the PostgreSQL reference and verify every
 referenced object.
 
+A publisher holds a shared staging fence from its first temporary upload through
+reference commit or abandonment. This includes reused content-addressed objects
+that a prior publication has already queued for deletion. Ordinary Research
+holds it for each checkpoint and final publication, Tracking for result
+publication, and Batch for the attempt that accumulates staged item partitions.
+Publishers may run concurrently. Both queued deletion and orphan collection take
+the mutation fence first, then try the exclusive staging fence without waiting;
+active staging defers collection to a later maintenance step. Session loss
+releases the fence; subsequent staging and reference recording reject the lost
+session as infrastructure unavailability. This deliberately delays shared byte reclamation during a
+Batch attempt rather than adding time-based staging leases or exposing a
+prepare-to-record deletion window.
+
 ## Product routes
 
 The browser route boundary is:
 
 ```text
+/
 /login
 /accept-invitation
-/forgot-password
-/reset-password
 
 /chat
 /data
 /research
 /research-runs
 /research-runs/:runId
+/research-runs/batches
+/research-runs/batches/:batchId
 /daily-tracks
 /daily-tracks/:trackId
 /connections/mcp
@@ -675,19 +709,19 @@ The browser route boundary is:
 /operator/data
 ```
 
-There is no `/signup`. The four Auth routes are the only anonymous product
-pages. Root redirects an authenticated Researcher to `/data` and an anonymous
-browser to `/login`. A protected direct path is retained only as a validated
-same-origin relative `returnTo`. The lightweight browser router remains, but
-its location state includes pathname, search, and hash so Invitation and reset
-fragments can be removed before routing continues.
+Root serves the public landing page. `/login` and `/accept-invitation` are
+the two public Auth routes; there is no separate `/signup`, password-recovery
+or reset page. A protected direct path is retained only as a validated
+same-origin relative `returnTo`, and authenticated entry through an Auth route
+continues there or to `/data`. The lightweight router includes pathname, search
+and hash so Invitation fragments can be removed before routing continues.
 
 One Auth provider and Session gate protect all Research pages. A shared Core
 request client treats `401` as Session loss and stops polling before redirecting
 to login; `503` and network failure render a retryable unavailable state without
 logging out; product `403` and `404` remain resource errors. The sidebar account menu
-shows canonical email and the initial display label and provides only change
-password and logout. There is no Settings page or self-service email, name, or
+shows canonical email and the initial display label and provides logout. There
+is no Settings page or self-service email, name, or
 account deletion flow.
 
 Better Auth endpoints remain under `/api/auth/*`. Core adds authenticated,
@@ -811,10 +845,10 @@ Testing policy and commands are maintained in [AGENTS.md](../../AGENTS.md#testin
 
 ## Deliberately absent
 
-- Schema migration, compatibility, fallback, or downgrade paths.
+- Automatic startup migrations, runtime compatibility, and fallback paths.
 - User-facing Dataset Release history.
-- Public signup, Organizations, role hierarchies, workspaces, quotas,
-  collaboration, or billing.
+- A separate public signup form, Organizations, role hierarchies, workspaces,
+  quotas, collaboration, or billing.
 - MFA, passkeys, magic links, API keys, or a Remember Me choice.
 - Self-service email, display-label, or account-deletion flows.
 - Better Auth cookie Session cache, Redis, proxy identity headers, or direct

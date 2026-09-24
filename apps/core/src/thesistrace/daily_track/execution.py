@@ -12,6 +12,7 @@ from threading import Event, Lock, RLock, Thread
 from time import monotonic
 
 from thesistrace.research_kernel.numeric import NumericContractError
+from thesistrace.research_kernel.strategy_program_runtime import StrategyProgramFailure
 from thesistrace.strategy_event_wire import EventMessageAssembler
 
 ExecutionEvent = Callable[[dict[str, object]], None]
@@ -496,6 +497,8 @@ def _read_message(
                     )
                     continue
                 if value.get("status") != "succeeded":
+                    if value.get("category") == "StrategyProgramError":
+                        raise StrategyProgramFailure(str(value.get("message", "")))
                     if value.get("category") == "NumericContractError":
                         raise NumericContractError(str(value.get("message", "")))
                     raise TrackingExecutionError(

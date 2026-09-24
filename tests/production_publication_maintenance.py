@@ -48,9 +48,10 @@ try:
         )
         tx.execute(
             "UPDATE publication.maintenance_state SET next_due_at = now() + interval '1 day' "
-            "WHERE job = 'queued_deletions'"
+            "WHERE job <> 'orphan_scan'"
         )
     result = PublicationMaintenance(database, s3, bucket=bucket).run_once()
+    assert result["job"] == "orphan_scan" and result["status"] == "completed", result
     assert result["listed"] == 1000, result
     assert result["processed"] == 1000, result
     assert result["deleted"] == 0 and result["sweep_completed"] is False, result
@@ -64,6 +65,7 @@ try:
             "WHERE job = 'orphan_scan'"
         )
     resumed = PublicationMaintenance(database, s3, bucket=bucket).run_once()
+    assert resumed["job"] == "orphan_scan" and resumed["status"] == "completed", resumed
     assert resumed["listed"] == 1 and resumed["sweep_completed"] is True, resumed
     print(
         json.dumps(

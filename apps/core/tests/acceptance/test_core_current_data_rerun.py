@@ -192,22 +192,21 @@ def test_current_data_rerun_keeps_parameters_and_original_result_without_old_gen
         })
         assert wrong_checkpoint.status_code == 422, wrong_checkpoint.text
         assert "RERUN_SOURCE_NOT_FOUND" in wrong_checkpoint.text
-        # A now-unsupported source parameter must be diagnosed, never replaced by a default.
+        # An invalid source cost must be diagnosed, never replaced by a default.
         with runtime.database.transaction() as tx:
             tx.execute(
                 "UPDATE research_runs.runs SET immutable_input = jsonb_set(immutable_input, "
-                "'{costs,commission_min_cny}', '\"999\"'::jsonb) WHERE id = %s", (new_id,),
+                "'{costs,commission_min_cny}', '\"-1\"'::jsonb) WHERE id = %s", (new_id,),
             )
         unsupported = client.post("/api/research-runs", json={
             "request_id": "unsupported-source-cost", "folder_id": "folder_default",
             "rerun_source": {"kind": "research_run", "run_id": new_id},
         })
         assert unsupported.status_code == 422, unsupported.text
-        assert unsupported.json()["issues"][0]["field"] == "costs"
-        assert unsupported.json()["issues"][0]["details"] == {
-            "kind": "rerun_source", "reason": "unsupported_setting",
-            "expected": None, "actual": None, "validation_type": None,
-        }
+        assert unsupported.json()["issues"][0]["code"] == "RERUN_SOURCE_INVALID"
+        assert unsupported.json()["issues"][0]["field"].endswith("commission_min_cny")
+        assert unsupported.json()["issues"][0]["details"]["kind"] == "rerun_source"
+        assert unsupported.json()["issues"][0]["details"]["reason"] == "invalid_field"
         with runtime.database.transaction() as tx:
             tx.execute(
                 "UPDATE research_runs.runs SET immutable_input = jsonb_set(immutable_input, "

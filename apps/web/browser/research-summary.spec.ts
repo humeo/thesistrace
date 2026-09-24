@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 import { expect, test } from "@playwright/test";
+import { defaultSimulationCosts } from "../src/research/simulationCosts";
 import { build } from "vite";
 
 let script: string;
@@ -34,12 +35,17 @@ const run = {
       observations: [], comparison: { status: "unavailable", reason: "benchmark_snapshot_unavailable" },
     },
     terminal_strategy_state: {
-      session: "2026-08-04", net_cash: "100000", gross_cash: "100000", net_nav: "100000", gross_nav: "100000",
-      cumulative_transaction_cost: "0", positions: [], target_exposure: 1, pending_target: null,
-      target_selection: { signal_session: "2026-08-03", eligibility_exclusions: {} },
-      selection_phase: { origin_session: "2026-08-03", report_session_count: 2, selection_interval: 10, completed_intervals: 0 },
+      close_risk_nav_cny: "98995",
+      session: "2026-08-04", net_cash: "89995", gross_cash: "90000", net_nav: "99995", gross_nav: "100000",
+      cumulative_transaction_cost: "5", positions: [{
+        instrument_id: "equity:600001.SH", execution_shares: 1000, adjusted_units: "1000",
+        remaining_acquisition_cost_cny: "10005", holding_cycle_started_session: "2026-08-04",
+        holding_age: 1, last_adjusted_price: "10", last_close_adjusted_price: "9",
+      }], pending_target: null, contract_checksum: "contract",
+      decision_state: { mode: "framework", selection: { signal_session: "2026-08-03", eligibility_exclusions: {} }, selection_interval: 10, exposure: 1 },
+      research_phase: { origin_session: "2026-08-03", report_session_count: 2 },
     },
-    provenance: { schema_version: "research-result-v2", research_run_id: "run_cancel", immutable_input_sha256: "a".repeat(64),
+    provenance: { schema_version: "research-result-v3", research_run_id: "run_cancel", immutable_input_sha256: "a".repeat(64),
       calculation_contracts: {}, semantic_versions: {}, research_kind: "strategy_backtest" },
   },
 };
@@ -57,7 +63,7 @@ test("strategy summary prioritizes metrics and keeps execution conventions expan
   await page.addStyleTag({ content: styles });
   await page.addScriptTag({ content: script });
   const summary = page.locator(".research-result-section");
-  const conventions = summary.locator("summary");
+  const conventions = summary.locator("summary").filter({ hasText: "Execution conventions" });
   const explanation = summary.getByText(/Decisions execute at the next Open/);
   for (const width of [1050, 390]) {
     await page.setViewportSize({ width, height: 964 });
@@ -76,5 +82,49 @@ test("strategy summary prioritizes metrics and keeps execution conventions expan
     expect(await summary.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
     await conventions.press("Enter");
     await expect(explanation).not.toBeVisible();
+    const risk = summary.locator("details").filter({ has: page.getByText("Close risk and holdings", { exact: true }) });
+    await risk.locator("summary").click();
+    await expect(risk.getByText("98995", { exact: true })).toBeVisible();
+    await expect(risk.getByText("10005", { exact: true })).toBeVisible();
+    await expect(risk.getByText("Holding age (trading sessions)")).toBeVisible();
+    expect(await summary.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+    await page.screenshot({ path: `../../.local/browser-tests/close-risk-${width}.png`, fullPage: true });
+    await risk.locator("summary").click();
   }
+});
+
+test.describe("Frozen Framework touch controls", () => {
+  test.use({ hasTouch: true });
+  test("frozen module source disclosures work on wide and narrow touch layouts", async ({ page }) => {
+    const program = { source: "def decide(context, state, parameters):\n    return {'output': None, 'state': state}",
+      parameters: { threshold: 0.03 }, data_requirements: { field_ids: [], history_sessions: 1 } };
+    const input = { research_kind: "strategy_backtest", strategy_mode: "framework", initial_cash_cny: "100000", costs: defaultSimulationCosts(),
+      hypothesis: null, start_date: "2026-08-03", end_date: "2026-08-04", universe: "top300", modules: {
+        universe_selection: "dataset_universe/v1", alpha: { kind: "python", program },
+        portfolio_construction: { kind: "python", program }, risk_management: "no_risk/v1",
+      } };
+    await page.route("https://research-evidence.test/**", route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+      if (path === "/api/research-folders") return route.fulfill({ json: {
+        items: [{ id: "folder_default", name: "Default", is_default: true }], next_cursor: null,
+      } });
+      return route.fulfill({ json: { ...run, input } });
+    });
+    await page.goto("https://research-evidence.test/");
+    await page.addStyleTag({ content: styles });
+    await page.addScriptTag({ content: script });
+    for (const width of [1280, 390]) {
+      await page.setViewportSize({ width, height: 964 });
+      const disclosure = page.getByText("Portfolio Construction · Frozen Python source and parameters", { exact: true });
+      const bounds = await disclosure.boundingBox();
+      expect(bounds?.height).toBeGreaterThanOrEqual(44);
+      expect(bounds?.width).toBeGreaterThanOrEqual(44);
+      await disclosure.focus();
+      await disclosure.press("Enter");
+      await expect(disclosure.locator("..").getByText(program.source, { exact: true })).toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      await disclosure.press("Enter");
+    }
+  });
 });

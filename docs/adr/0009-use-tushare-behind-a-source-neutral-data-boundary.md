@@ -1,3 +1,3 @@
 # Use Tushare behind a source-neutral data boundary
 
-Tushare is the sole source of Canonical data values, while CNINFO supplies financial-announcement discovery evidence only; neither path falls back to another provider. Data owns a narrow source boundary and retained provenance so Research never depends on vendor field names or transport behavior.
+Tushare supplies Canonical data values and structured financial-disclosure discovery through separate source interfaces, with no alternate-provider fallback. Data owns those narrow boundaries and retained provenance so Research never depends on vendor field names or transport behavior; the current disclosure policy is defined in [ADR-0249](0249-discover-financial-reports-from-structured-disclosure-periods.md).

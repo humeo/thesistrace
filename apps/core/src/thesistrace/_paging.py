@@ -12,7 +12,8 @@ class PageCapacityError(ValueError):
 
 
 def fit_page[Record, Page: BaseModel](
-    records: list[Record], build: Callable[[list[Record]], Page]
+    records: list[Record], build: Callable[[list[Record]], Page],
+    *, byte_budget: int = BUSINESS_PAGE_BYTES,
 ) -> Page:
     """Return the largest fitting prefix, with metadata rebuilt for that prefix.
 
@@ -23,6 +24,6 @@ def fit_page[Record, Page: BaseModel](
     minimum = 1 if records else 0
     for count in range(len(records), minimum - 1, -1):
         page = build(records[:count])
-        if len(page.model_dump_json().encode("utf-8")) <= BUSINESS_PAGE_BYTES:
+        if len(page.model_dump_json().encode("utf-8")) <= byte_budget:
             return page
     raise PageCapacityError("Business page exceeds its declared record or metadata limit")

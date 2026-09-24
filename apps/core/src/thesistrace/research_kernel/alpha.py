@@ -238,7 +238,7 @@ def _compose_unneutralized_columnar_alpha_matrix(
         values = evaluated[indices, session_index]
         finite = np.isfinite(values)
         rows = [
-            {"instrument_id": instrument_id, "value": float(value)}
+            {"instrument_id": str(instrument_id), "value": float(value)}
             for instrument_id, value in zip(
                 np.asarray(instrument_ids, dtype=np.str_)[finite],
                 values[finite],

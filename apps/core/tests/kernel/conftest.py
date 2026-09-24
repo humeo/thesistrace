@@ -15,6 +15,7 @@ from thesistrace.research_kernel.alpha import (
     evaluate_alpha_matrix,
     validate_alpha,
 )
+from thesistrace.research_kernel.builtin_framework import BUILTIN_FRAMEWORK_MODULES
 from thesistrace.research_kernel.factor import build_forward_labels, evaluate_factor
 from thesistrace.research_kernel.strategy import run_strategy
 
@@ -31,6 +32,7 @@ def accepted_calculation_case() -> dict[str, object]:
         "neutralization": "none",
         "universe": "top300",
         "strategy": {"volatility_window": 20, "weighting": "equal_weight",
+            "mode": "framework", "modules": dict(BUILTIN_FRAMEWORK_MODULES),
             "holdings_count": 10,
             "selection_interval": 5,
             "exposure_expression": {"kind": "number", "value": 1},
@@ -41,6 +43,7 @@ def accepted_calculation_case() -> dict[str, object]:
             "commission_min_cny": "5",
             "stamp_duty_sell_rate": "0.0005",
             "transfer_fee_rate": "0.00001",
+            "slippage_bps": "0",
         },
     }
     research_data = aligned_market_data(
@@ -125,6 +128,7 @@ def accepted_kernel_run(
                 commission_min_cny=str(costs["commission_min_cny"]),
                 stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
                 transfer_fee_rate=str(costs["transfer_fee_rate"]),
+                slippage_bps=str(costs["slippage_bps"]),
             ),
             research_start_session=str(canonical["research_calendar"][20]),
             research_end_session=str(canonical["research_calendar"][-1]),

@@ -97,12 +97,13 @@ STRATEGY_RESULT_BASE_PAYLOAD_NAMES = frozenset(
 )
 STRATEGY_DAILY_OBSERVATIONS_CONTRACT = ParquetWriterContract(
     name="research-result-strategy-daily-observations",
-    version=2,
+    version=3,
     schema=pa.schema(
         [
             pa.field("session", pa.string(), nullable=False),
             pa.field("gross_nav", pa.string(), nullable=False),
             pa.field("net_nav", pa.string(), nullable=False),
+            pa.field("close_risk_nav_cny", pa.string(), nullable=False),
             pa.field("net_cash", pa.string(), nullable=False),
             pa.field("transaction_cost_cny", pa.string(), nullable=False),
             pa.field("holdings_count", pa.int64(), nullable=False),
@@ -116,13 +117,17 @@ STRATEGY_DAILY_OBSERVATIONS_CONTRACT = ParquetWriterContract(
 )
 TERMINAL_POSITIONS_CONTRACT = ParquetWriterContract(
     name="research-result-terminal-positions",
-    version=1,
+    version=2,
     schema=pa.schema(
         [
             pa.field("instrument_id", pa.string(), nullable=False),
             pa.field("execution_shares", pa.int64(), nullable=False),
             pa.field("adjusted_units", pa.string(), nullable=False),
             pa.field("last_adjusted_price", pa.string(), nullable=False),
+            pa.field("remaining_acquisition_cost_cny", pa.string(), nullable=False),
+            pa.field("holding_cycle_started_session", pa.string(), nullable=False),
+            pa.field("holding_age", pa.int64(), nullable=False),
+            pa.field("last_close_adjusted_price", pa.string(), nullable=False),
         ]
     ),
     sort_keys=("instrument_id",),
@@ -137,10 +142,11 @@ PUBLIC_TERMINAL_STATE_KEYS = frozenset(
         "net_cash",
         "gross_nav",
         "net_nav",
+        "close_risk_nav_cny",
         "cumulative_transaction_cost",
-        "selection_phase",
-        "target_selection",
-        "target_exposure",
+        "research_phase",
+        "decision_state",
+        "contract_checksum",
         "pending_target",
     }
 )
@@ -166,6 +172,7 @@ def read_strategy_reporting_bundle(
 
 def result_bundle_byte_budget(
     research_period_session_count: int, *, strategy_event_count: int = 0,
+    strategy_target_count: int = 0, strategy_framework_count: int = 0,
 ) -> int:
     if (
         isinstance(research_period_session_count, bool)
@@ -176,20 +183,37 @@ def result_bundle_byte_budget(
     blocks = (
         research_period_session_count + RESULT_BUDGET_SESSION_BLOCK - 1
     ) // RESULT_BUDGET_SESSION_BLOCK
-    from thesistrace.strategy_event_wire import MAX_EVENT_RECORD_BYTES
+    from thesistrace.strategy_event_wire import (
+        MAX_EVENT_RECORD_BYTES,
+        MAX_FRAMEWORK_RECORD_BYTES,
+        MAX_TARGET_RECORD_BYTES,
+    )
 
     if type(strategy_event_count) is not int or strategy_event_count < 0:
         raise ResearchResultError("Result budget requires a non-negative Strategy event count")
-    return blocks * RESULT_BUDGET_BYTE_BLOCK + strategy_event_count * MAX_EVENT_RECORD_BYTES
+    if (type(strategy_target_count) is not int
+            or not 0 <= strategy_target_count <= strategy_event_count):
+        raise ResearchResultError("Result budget requires a valid Strategy target count")
+    if (type(strategy_framework_count) is not int
+            or not 0 <= strategy_framework_count <= strategy_event_count - strategy_target_count):
+        raise ResearchResultError("Result budget requires a valid Framework event count")
+    return (blocks * RESULT_BUDGET_BYTE_BLOCK
+            + (strategy_event_count - strategy_target_count - strategy_framework_count)
+            * MAX_EVENT_RECORD_BYTES
+            + strategy_target_count * MAX_TARGET_RECORD_BYTES
+            + strategy_framework_count * MAX_FRAMEWORK_RECORD_BYTES)
 
 
 def enforce_result_bundle_budget(
     exact_bytes: int,
     research_period_session_count: int,
-    *, strategy_event_count: int = 0,
+    *, strategy_event_count: int = 0, strategy_target_count: int = 0,
+    strategy_framework_count: int = 0,
 ) -> int:
     budget = result_bundle_byte_budget(
         research_period_session_count, strategy_event_count=strategy_event_count,
+        strategy_target_count=strategy_target_count,
+        strategy_framework_count=strategy_framework_count,
     )
     if isinstance(exact_bytes, bool) or not isinstance(exact_bytes, int) or exact_bytes < 0:
         raise ResearchResultError("Result Bundle exact bytes are invalid")
@@ -570,14 +594,13 @@ def build_result_payload(
     output: RunOutput,
     *,
     research_kind: str,
-    selection_interval: int | None = None,
 ) -> dict[str, object]:
     """Project transient Kernel output into the bounded durable Result contract."""
     artifacts = output.artifacts_snapshot()
     if research_kind == "factor_evaluation":
         factor = _mapping(artifacts, "factor_evaluation")
         return {"factor_summary": _factor_summary(factor)}
-    if research_kind != "strategy_backtest" or selection_interval is None:
+    if research_kind != "strategy_backtest":
         raise ResearchResultError("Strategy Backtest Result inputs are incomplete")
     strategy = _mapping(artifacts, "strategy_backtest")
     daily = _rows(strategy, "daily")
@@ -586,10 +609,7 @@ def build_result_payload(
     return {
         "strategy_summary": _strategy_summary(strategy),
         "strategy_daily_observations": _strategy_daily_observations(strategy),
-        "terminal_strategy_state": _terminal_strategy_state(
-            strategy,
-            selection_interval=selection_interval,
-        ),
+        "terminal_strategy_state": _terminal_strategy_state(strategy),
     }
 
 
@@ -654,7 +674,7 @@ def _strategy_summary(
         None,
     )
     return {
-        "alpha_checksum": str(strategy["alpha_checksum"]),
+        "alpha_checksum": strategy["alpha_checksum"],
         "entry_session": entry_session,
         "initial_cash_cny": str(strategy["initial_cash_cny"]),
         "source_checksum": canonical_checksum_chain(_strategy_daily_observations(strategy)),
@@ -683,6 +703,7 @@ def _strategy_daily_observations(
                 "session": str(row["session"]),
                 "gross_nav": str(row["gross_nav"]),
                 "net_nav": str(row["net_nav"]),
+                "close_risk_nav_cny": str(row["close_risk_nav_cny"]),
                 "net_cash": str(row["net_cash"]),
                 "transaction_cost_cny": canonical_decimal(session_cost),
                 "holdings_count": int(row["holdings_count"]),
@@ -697,8 +718,6 @@ def _strategy_daily_observations(
 
 def _terminal_strategy_state(
     strategy: Mapping[str, object],
-    *,
-    selection_interval: int,
 ) -> dict[str, object]:
     daily = _rows(strategy, "daily")
     terminal = daily[-1]
@@ -719,16 +738,15 @@ def _terminal_strategy_state(
         "net_cash": str(terminal["net_cash"]),
         "gross_nav": str(terminal["gross_nav"]),
         "net_nav": str(terminal["net_nav"]),
+        "close_risk_nav_cny": str(terminal["close_risk_nav_cny"]),
         "cumulative_transaction_cost": str(terminal["cumulative_transaction_cost"]),
         "positions": [copy.deepcopy(dict(position)) for position in positions],
-        "selection_phase": {
+        "research_phase": {
             "origin_session": str(daily[0]["session"]),
             "report_session_count": len(daily),
-            "selection_interval": selection_interval,
-            "completed_intervals": len(daily) - 1,
         },
-        "target_selection": copy.deepcopy(strategy["target_selection"]),
-        "target_exposure": strategy["target_exposure"],
+        "decision_state": copy.deepcopy(strategy["decision_state"]),
+        "contract_checksum": strategy["contract_checksum"],
         "pending_target": pending_target,
         "last_daily_observation": copy.deepcopy(dict(terminal)),
         "metric_state": advance_strategy_metric_state(

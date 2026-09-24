@@ -62,14 +62,14 @@ class PostgresDatabase:
     @contextmanager
     def session_advisory_lock_shared(
         self, name: str, *, exclusive_name: str | None = None,
-    ) -> Iterator[None]:
+    ) -> Iterator[PostgresTransaction]:
         """Hold a shared fence and optional exclusive work lock on one connection."""
         if not name or (exclusive_name is not None and exclusive_name in {"", name}):
             raise ValueError("Advisory lock name must be non-empty")
         with self._session_advisory_locks(
             (name,), shared=True, following_exclusive=exclusive_name,
-        ):
-            yield
+        ) as connection:
+            yield connection
 
     @contextmanager
     def try_session_advisory_lock(self, name: str) -> Iterator[bool]:
@@ -112,7 +112,7 @@ class PostgresDatabase:
         *,
         shared: bool,
         following_exclusive: str | None = None,
-    ) -> Iterator[None]:
+    ) -> Iterator[PostgresTransaction]:
         lock_function = "pg_advisory_lock_shared" if shared else "pg_advisory_lock"
         with self._pool.connection() as connection:
             try:
@@ -131,7 +131,7 @@ class PostgresDatabase:
                 connection.close()
                 raise
             try:
-                yield
+                yield connection
             finally:
                 if following_exclusive is not None:
                     self._release_session_locks(connection, (following_exclusive,), shared=False)

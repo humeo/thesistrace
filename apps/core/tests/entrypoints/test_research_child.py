@@ -7,6 +7,8 @@ import sys
 
 import pytest
 
+pytestmark = pytest.mark.bounded_process
+
 _CHILD = """
 from thesistrace.entrypoints import research_child
 

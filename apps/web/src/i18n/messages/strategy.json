@@ -1,0 +1,414 @@
+{
+  "en": {
+    "stages": {
+      "universe_selection": "Universe Selection",
+      "alpha": "Alpha / Signals",
+      "portfolio_construction": "Portfolio Construction",
+      "risk_management": "Risk Management"
+    },
+    "builtin": {
+      "universe_selection": "Dataset candidates",
+      "alpha": "Alpha formula",
+      "portfolio_construction": "Periodic Top-N",
+      "risk_management": "Risk policies"
+    },
+    "explanations": {
+      "universe_selection": "Choose candidates from the Dataset Universe selected above.",
+      "alpha": "Produce scores or signals for the selected candidates.",
+      "portfolio_construction": "Propose holdings when the selected policy calls for an update. Built-in Top-N uses the selection and sizing settings below.",
+      "risk_management": "Inspect actual holdings and the new proposal at every Close. Adjustments combine into one final target before execution."
+    },
+    "authoring": {
+      "order": "Each Close: Universe → Alpha / Signals → Portfolio → Risk → final target.",
+      "module": "{{stage}} module",
+      "builtin": "Built-in · {{name}}",
+      "pythonModule": "Python module",
+      "stopLoss": "Stop loss (%)",
+      "off": "Off",
+      "stopLossHelp": "Leave blank to disable. Uses actual acquisition cost including buy fees. Checks at Close and attempts to sell at the next Open; gaps or trading restrictions can increase the loss.",
+      "maximumHolding": "Maximum holding (trading sessions)",
+      "maximumHoldingHelp": "Leave blank to disable. The first actual buy counts as session 1. At the Nth Close, request an exit at the next Open. Adding shares does not restart the count.",
+      "minimumHolding": "Minimum holding (trading sessions)",
+      "minimumHoldingHelp": "Leave blank to disable. Younger holdings retain their shares and occupy portfolio slots during ordinary changes. Risk exits can still reduce or sell them."
+    },
+    "python": {
+      "source": "Python source",
+      "signature": "decide(context, state, parameters) → output and state",
+      "parameters": "Parameters (JSON)",
+      "fields": "Declared fields",
+      "fieldsHelp": "Canonical field IDs, separated by commas or new lines. Only declared fields are available to the program.",
+      "history": "History (trading sessions)",
+      "historyHelp": "Includes the decision day. Earlier sessions provide warmup without moving the research start date.",
+      "contract": "Python contract and example",
+      "directExample": "The initial example replaces a holding only when another visible candidate has better momentum. Parameters set the required improvement.",
+      "historyContext": "context.history contains declared fields, with rows in instruments order and columns in sessions order, through the current Close. Missing values are None.",
+      "context": "context.candidates, context.account, context.fills and context.rejections are read-only. Return {{noUpdate}} for no update from this {{unit}}. A target contains reason, allocation and position_limits; weights use exact ratio strings such as \"1/2\".",
+      "module": "module",
+      "strategy": "strategy",
+      "frameworkContext": "context.framework contains the selected universe, active signals, universe_changed, signals_updated, expired_signals, removed_signals, this Close’s proposal and the last retained_proposal. A retained proposal is a reference, not a new order.",
+      "state": "State must be a JSON object and is restored explicitly each day. Source, parameters, data requirements and the execution environment are frozen when accepted. Execution uses the next trading session’s Open.",
+      "framework": {
+        "universe_selection": "Return {reason, instrument_ids} to select available Dataset candidates. None retains the previous available selection, initially empty. The example includes all current candidates.",
+        "alpha": "Return {reason, signals}. Each signal has instrument_id, value and valid_for_sessions (1–252). The host stamps its creation session. None retains unexpired signals. Expiry does not itself sell a holding. The example publishes six-session momentum signals.",
+        "portfolio_construction": "Return a target or None. The example buys a better-scoring candidate only when the improvement threshold is met, using current holdings and active signals. No update leaves holdings and drift unchanged.",
+        "risk_management": "Runs every Close, even without a new proposal. Return {mode: \"limit_positions\", reason, position_limits} to cap held shares; unspecified positions keep their shares when there is no proposal. Return {mode: \"replace\", reason, target} to replace the proposal, or target: None to cancel it. None leaves the new proposal unchanged. The example exits only symbols listed in exit_instruments; an empty list makes no adjustment."
+      }
+    },
+    "cost": {
+      "title": "Fees and slippage",
+      "help": "Frozen for this backtest and its DailyTrack. Defaults are simulation assumptions; actual broker and historical charges may differ.",
+      "labels": {
+        "commission_rate_all_in": "Buy/sell commission rate",
+        "commission_min_cny": "Minimum commission per child order (CNY)",
+        "stamp_duty_sell_rate": "Sell stamp duty rate",
+        "transfer_fee_rate": "Buy/sell transfer fee rate",
+        "slippage_bps": "Price slippage (basis points)"
+      },
+      "helpText": {
+        "commission_rate_all_in": "0.0003 means 0.03% of each fill.",
+        "commission_min_cny": "Applied separately to each filled child order, including split orders.",
+        "stamp_duty_sell_rate": "0.0005 means 0.05%. Charged only on sells.",
+        "transfer_fee_rate": "0.00001 means 0.001% of each fill.",
+        "slippage_bps": "10 bp raises buy prices and lowers sell prices by 0.1%. Must be below 10,000 bp."
+      }
+    },
+    "drawdown": {
+      "title": "Portfolio drawdown",
+      "help": "Leave all three fields blank to disable. When enabled, complete every field. Close account value is compared with the current risk-cycle peak; the next Open applies the stock exposure cap.",
+      "labels": {
+        "drawdownThreshold": "Drawdown threshold (%)",
+        "drawdownMaximumExposure": "Maximum stock exposure (%)",
+        "drawdownCooldownSessions": "Cooldown (trading sessions)"
+      },
+      "recovery": "Cooldown starts after the trigger day. Recovery also requires a new portfolio decision; it never buys back from an old target. The cap only reduces higher targets. Execution can be blocked, and the main Open performance history is not reset."
+    },
+    "takeProfit": {
+      "title": "Cumulative take profit",
+      "help": "Off when no tiers are configured. At the first trigger, freeze the holding baseline. A 30% tier followed by 60% sells another 30% of that baseline, not 60% of the remaining shares. Ordinary selections cannot add shares until this holding fully exits.",
+      "tier": "Tier {{count}}",
+      "profitThreshold": "Profit threshold (%)",
+      "cumulativeReduction": "Cumulative reduction (%)",
+      "remove": "Remove tier {{count}}",
+      "add": "Add take-profit tier",
+      "footer": "Both percentages must increase with each tier. Checks use acquisition cost at Close; fills at the following Open determine actual progress. Blocked sales and rounding remain uncompleted."
+    },
+    "frozen": {
+      "fees": "Frozen fees and slippage",
+      "feesHelp": "Minimum commission applies to each filled child order. Slippage changes execution prices and is not charged again as a fee.",
+      "python": "Frozen Python source and parameters",
+      "history": "History",
+      "sessions": "{{count}} sessions",
+      "fields": "Declared fields",
+      "none": "None",
+      "parameters": "Parameters",
+      "modules": "Frozen Framework modules",
+      "stopLoss": "Risk Management · Stop loss",
+      "maximumHolding": "Maximum holding (trading sessions)",
+      "drawdown": "Portfolio drawdown",
+      "drawdownSummary": "Threshold {{threshold}}%; stock exposure cap {{cap}}%; cooldown {{cooldown}} trading sessions. A fresh portfolio decision is required for recovery.",
+      "takeProfit": "Cumulative take profit",
+      "tier": "Profit {{profit}}% → cumulative reduction {{reduction}}%",
+      "baseline": "Baseline freezes at the first trigger. No ordinary additions until full exit.",
+      "evaluated": "Evaluated at Close; the next Open determines execution.",
+      "minimumHolding": "Minimum holding (trading sessions)",
+      "modulePython": "{{stage}} · Frozen Python source and parameters"
+    },
+    "state": {
+      "summary": "Framework state · {{candidates}} candidates · {{signals}} active signals",
+      "help": "Signals and module state inform later decisions. They do not represent orders or fills.",
+      "signals": "Active signals",
+      "module": "{{stage}} state"
+    },
+    "closeRisk": {
+      "title": "Close risk and holdings",
+      "nav": "{{session}} · Close Risk NAV (CNY):",
+      "help": "Uses closing prices for risk decisions. Performance charts and returns use post-Open NAV.",
+      "empty": "No actual holdings.",
+      "acquisition": "Remaining acquisition cost (CNY)",
+      "started": "Holding cycle started",
+      "age": "Holding age (trading sessions)",
+      "shares": "Actual shares",
+      "adjustedClose": "Adjusted Close"
+    },
+    "decision": {
+      "stages": {
+        "universe_selection": "Candidate selection",
+        "alpha": "Signals",
+        "portfolio_construction": "Portfolio proposal",
+        "risk_management": "Risk adjustment"
+      },
+      "limit": "{{stock}}: retain at most {{shares}} shares",
+      "reason": "Reason: {{reason}}",
+      "rebalance": "Full portfolio",
+      "reduce": "Reduce exposure",
+      "increase": "Increase exposure",
+      "targetExposure": "Target exposure {{percent}}%",
+      "weights": "Portfolio weights ({{count}} instruments)",
+      "retained": "Retain previous holdings: {{stocks}}. Only remaining cash follows these weights; risk adjustments may still exit.",
+      "cap": "Stock target cap {{percent}}%; only higher targets are reduced.",
+      "close": "{{session}} Close decision. The final target executes at the next Research Session Open.",
+      "universeUpdated": "Candidate selection updated",
+      "universeRetained": "No new selection today; retain still-available candidates",
+      "instrumentCount": "{{count}} instruments",
+      "candidates": "Candidate instruments",
+      "emptyCandidates": "Empty candidate set",
+      "alphaValues": "Alpha Values",
+      "strategySignals": "Strategy signals",
+      "formulaValues": "Formula values for {{count}} instruments today.",
+      "viewAlpha": "View Alpha Values",
+      "signalsUpdated": "Signals updated",
+      "signalsRetained": "No new signals today; retain unexpired signals",
+      "signalCount": "{{count}} active",
+      "expired": "Expired today: {{stocks}}",
+      "removed": "Removed from candidates: {{stocks}}",
+      "signalsHelp": "The portfolio module evaluates signal changes; they do not automatically create sell orders.",
+      "signalValidity": "Signals and validity",
+      "signalRow": "{{stock}}: {{value}} · created {{session}} · valid for {{count}} Research Sessions including creation",
+      "noProposal": "No new portfolio proposal today (NoUpdate).",
+      "retentionReasons": "Minimum-holding retention reasons",
+      "retentionRow": "{{stock}}: held {{age}} Research Sessions, below minimum {{minimum}}. Retain {{shares}} shares and one portfolio slot. Risk adjustments may still reduce or exit.",
+      "noRisk": "No risk adjustment today.",
+      "limitHelp": "Local caps limit listed holdings; the portfolio drawdown cap also limits overall stock exposure.",
+      "riskReasons": "Risk decision reasons",
+      "stopLossValues": "Remaining acquisition cost {{cost}} CNY; Close research market value {{value}} CNY.",
+      "stopLossThreshold": "Holding return {{return}}%; stop-loss threshold {{threshold}}%.",
+      "maximumReached": "Maximum holding period reached: {{count}} Research Sessions.",
+      "positionAtDecision": "Held {{shares}} shares for {{age}} Research Sessions at decision. Exit attempted at next Open; related records show actual fills and rejections.",
+      "replaced": "Replaced today’s portfolio proposal.",
+      "cancelled": "Explicitly cancelled today’s portfolio proposal; no new target is created.",
+      "targetFormed": "Final target formed; see related records for actual fills or rejections.",
+      "noTarget": "No new target formed; no automatic rebalance follows.",
+      "identities": "Module identities"
+    },
+    "drawdownFacts": {
+      "statuses": {
+        "observing": "Observing",
+        "threshold_reached": "Drawdown threshold reached",
+        "cooldown": "Cooling down",
+        "awaiting_new_portfolio": "Cooldown complete; awaiting a new portfolio decision",
+        "new_portfolio_recovery": "New portfolio decision released the drawdown cap"
+      },
+      "title": "Portfolio drawdown · {{status}}",
+      "cycle": "Risk cycle began {{start}}; Close Risk NAV {{nav}} CNY and cycle peak {{peak}} CNY.",
+      "drawdown": "Cycle drawdown {{drawdown}}%; trigger threshold {{threshold}}%.",
+      "triggered": "Triggered {{date}}; completed {{completed}} / {{total}} cooldown trading sessions since.",
+      "noCap": "No portfolio drawdown exposure cap applies now.",
+      "cap": "Stock target cap {{percent}}%; lower targets are not raised.",
+      "release": "Releasing the cap permits only a new portfolio target to execute; it does not mean actual exposure has recovered. Next Open fills, rejections and holdings show the outcome. The main report still uses Open NAV and its historical maximum drawdown is not reset."
+    },
+    "takeProfitFacts": {
+      "threshold": "Take-profit threshold {{threshold}}%; cumulative reduction {{reduction}}%.",
+      "return": " Current holding return {{return}}%.",
+      "baseline": "Initial baseline {{shares}} shares ({{units}} research holding units); cumulative target retains {{target}} units.",
+      "executed": "Actually sold {{sold}} units; {{remaining}} units remain to reduce. Research holding units and execution shares are measured separately; rejected and rounded unfilled amounts do not count as complete.",
+      "ended": "This holding cycle ended; a later decision may re-enter.",
+      "active": "Held {{shares}} shares at decision; ordinary additions are forbidden during this take-profit cycle until full exit. A reduction is attempted at next Open; related records show actual fills and rejections."
+    }
+  },
+  "zh-CN": {
+    "stages": {
+      "universe_selection": "候选选择",
+      "alpha": "Alpha／信号",
+      "portfolio_construction": "组合构建",
+      "risk_management": "风险管理"
+    },
+    "builtin": {
+      "universe_selection": "数据集候选",
+      "alpha": "Alpha 公式",
+      "portfolio_construction": "周期 Top-N",
+      "risk_management": "风险规则"
+    },
+    "explanations": {
+      "universe_selection": "从上方选择的数据集股票池中挑选候选。",
+      "alpha": "为选定的候选生成评分或信号。",
+      "portfolio_construction": "按所选规则提出持仓建议。内置 Top-N 使用下方的选股和仓位设置。",
+      "risk_management": "每个收盘时检查实际持仓和新建议。风险调整会在执行前合并为一个最终目标。"
+    },
+    "authoring": {
+      "order": "每次收盘：股票池 → Alpha／信号 → 组合 → 风险 → 最终目标。",
+      "module": "{{stage}}模块",
+      "builtin": "内置 · {{name}}",
+      "pythonModule": "Python 模块",
+      "stopLoss": "止损（%）",
+      "off": "关闭",
+      "stopLossHelp": "留空表示关闭。使用含买入费用的实际取得成本。收盘检查并尝试在下一开盘卖出；跳空或交易限制可能扩大亏损。",
+      "maximumHolding": "最长持有（交易日）",
+      "maximumHoldingHelp": "留空表示关闭。首次实际买入计为第 1 个交易日；第 N 个收盘时请求下一开盘退出。追加持仓不会重新计数。",
+      "minimumHolding": "最短持有（交易日）",
+      "minimumHoldingHelp": "留空表示关闭。未满期限的持仓在普通调仓中保留股数并占用组合名额；风险退出仍可减仓或卖出。"
+    },
+    "python": {
+      "source": "Python 源码",
+      "signature": "decide(context, state, parameters) → 输出与状态",
+      "parameters": "参数（JSON）",
+      "fields": "声明的数据字段",
+      "fieldsHelp": "使用字段的正式 ID，以逗号或换行分隔。程序只能读取声明的字段。",
+      "history": "历史窗口（交易日）",
+      "historyHelp": "包含决策当日。更早的交易日用于预热，不改变研究起始日期。",
+      "contract": "Python 契约与示例",
+      "directExample": "初始示例仅在可见候选具有更强动量时替换持仓；所需的改善幅度由参数决定。",
+      "historyContext": "context.history 包含已声明字段；行按 instruments 顺序、列按 sessions 顺序排列，覆盖至当前收盘。缺失值为 None。",
+      "context": "context.candidates、context.account、context.fills 和 context.rejections 只读。此{{unit}}无需更新时返回 {{noUpdate}}。目标包含 reason、allocation 和 position_limits；权重使用 \"1/2\" 等精确比例字符串。",
+      "module": "模块",
+      "strategy": "策略",
+      "frameworkContext": "context.framework 包含选定的 universe、活跃 signals、universe_changed、signals_updated、expired_signals、removed_signals、本次收盘的 proposal 和上次 retained_proposal。保留的建议仅是引用，不是新委托。",
+      "state": "状态必须是 JSON 对象，每日显式恢复。源码、参数、数据需求和执行环境在接纳时冻结。执行使用下一交易日开盘。",
+      "framework": {
+        "universe_selection": "返回 {reason, instrument_ids} 选择可用的数据集候选。None 会保留上一次可用选择；初始为空。示例包含全部当前候选。",
+        "alpha": "返回 {reason, signals}。每条信号包含 instrument_id、value 和 valid_for_sessions（1–252）；系统记录产生日期。None 保留未到期信号；信号到期本身不会卖出持仓。示例发布六日动量信号。",
+        "portfolio_construction": "返回目标或 None。示例结合当前持仓和活跃信号，仅在评分提升达到阈值时买入更优候选。无更新时持仓和漂移保持不变。",
+        "risk_management": "每次收盘均运行，即使没有新建议。返回 {mode: \"limit_positions\", reason, position_limits} 限制持有股数；没有建议时，未列出的持仓保持股数。返回 {mode: \"replace\", reason, target} 可替换建议，target: None 可取消建议。None 不改变新建议。示例只退出 exit_instruments 所列证券；空列表不作调整。"
+      }
+    },
+    "cost": {
+      "title": "费用与滑点",
+      "help": "费用设置在本次回测及其 DailyTrack 中冻结。默认值是模拟假设，实际券商和历史费用可能不同。",
+      "labels": {
+        "commission_rate_all_in": "买卖佣金费率",
+        "commission_min_cny": "每笔子委托最低佣金（元）",
+        "stamp_duty_sell_rate": "卖出印花税费率",
+        "transfer_fee_rate": "买卖过户费率",
+        "slippage_bps": "价格滑点（基点）"
+      },
+      "helpText": {
+        "commission_rate_all_in": "0.0003 表示每笔成交的 0.03%。",
+        "commission_min_cny": "对每笔已成交子委托分别收取，包括拆单。",
+        "stamp_duty_sell_rate": "0.0005 表示 0.05%，仅卖出时收取。",
+        "transfer_fee_rate": "0.00001 表示每笔成交的 0.001%。",
+        "slippage_bps": "10 基点使买价上升、卖价下降 0.1%；必须小于 10,000 基点。"
+      }
+    },
+    "drawdown": {
+      "title": "组合回撤",
+      "help": "三个字段全部留空表示关闭。启用后须填写所有字段。收盘账户价值与当前风险周期峰值比较；下一开盘应用股票仓位上限。",
+      "labels": {
+        "drawdownThreshold": "回撤阈值（%）",
+        "drawdownMaximumExposure": "股票最大仓位（%）",
+        "drawdownCooldownSessions": "冷却期（交易日）"
+      },
+      "recovery": "冷却期从触发日之后开始。解除限制还需要新的组合决策，不会按旧目标自动买回。上限只压低更高的目标。执行可能受阻，主报告的开盘收益历史不会重置。"
+    },
+    "takeProfit": {
+      "title": "累计止盈",
+      "help": "未设置层级时关闭。首次触发时冻结持仓基准。30% 后接 60% 的层级，是再卖出基准的 30%，不是剩余持仓的 60%。完全退出前，普通选股不能追加持仓。",
+      "tier": "第 {{count}} 层",
+      "profitThreshold": "盈利阈值（%）",
+      "cumulativeReduction": "累计减仓（%）",
+      "remove": "移除第 {{count}} 层",
+      "add": "添加止盈层级",
+      "footer": "两个百分比须随层级递增。收盘时按取得成本检查，下一开盘的成交决定实际进度；受阻卖出和取整未成交部分不计为完成。"
+    },
+    "frozen": {
+      "fees": "冻结的费用与滑点",
+      "feesHelp": "最低佣金适用于每笔已成交子委托。滑点改变成交价格，不会再作为费用重复收取。",
+      "python": "冻结的 Python 源码与参数",
+      "history": "历史窗口",
+      "sessions": "{{count}} 个交易日",
+      "fields": "声明的数据字段",
+      "none": "无",
+      "parameters": "参数",
+      "modules": "冻结的 Framework 模块",
+      "stopLoss": "风险管理 · 止损",
+      "maximumHolding": "最长持有（交易日）",
+      "drawdown": "组合回撤",
+      "drawdownSummary": "阈值 {{threshold}}%；股票仓位上限 {{cap}}%；冷却期 {{cooldown}} 个交易日。解除限制需要新的组合决策。",
+      "takeProfit": "累计止盈",
+      "tier": "盈利 {{profit}}% → 累计减仓 {{reduction}}%",
+      "baseline": "首次触发时冻结基准。完全退出前不得普通补仓。",
+      "evaluated": "收盘时评估，下一开盘决定实际执行。",
+      "minimumHolding": "最短持有（交易日）",
+      "modulePython": "{{stage}} · 冻结的 Python 源码与参数"
+    },
+    "state": {
+      "summary": "Framework 状态 · {{candidates}} 个候选 · {{signals}} 条活跃信号",
+      "help": "信号和模块状态为后续决策提供依据，不代表委托或成交。",
+      "signals": "活跃信号",
+      "module": "{{stage}}状态"
+    },
+    "closeRisk": {
+      "title": "收盘风险与持仓",
+      "nav": "{{session}} · 收盘风险净值（元）：",
+      "help": "风险决策使用收盘价格，表现图和收益使用开盘后净值。",
+      "empty": "无实际持仓。",
+      "acquisition": "剩余取得成本（元）",
+      "started": "持仓周期起始日",
+      "age": "持有时长（交易日）",
+      "shares": "实际股数",
+      "adjustedClose": "复权收盘价"
+    },
+    "decision": {
+      "stages": {
+        "universe_selection": "候选选择",
+        "alpha": "信号",
+        "portfolio_construction": "组合建议",
+        "risk_management": "风险调整"
+      },
+      "limit": "{{stock}}：最多保留 {{shares}} 股",
+      "reason": "原因：{{reason}}",
+      "rebalance": "完整组合",
+      "reduce": "降低仓位",
+      "increase": "增加仓位",
+      "targetExposure": "目标仓位 {{percent}}%",
+      "weights": "组合权重（{{count}} 只）",
+      "retained": "保留原持仓：{{stocks}}。仅剩余资金按上述权重分配，风险调整仍可退出。",
+      "cap": "股票目标上限 {{percent}}%；仅压低更高目标。",
+      "close": "{{session}} 收盘判断，最终目标交由下一研究交易日开盘执行。",
+      "universeUpdated": "已更新候选选择",
+      "universeRetained": "本日无新选择，保留仍可用的候选",
+      "instrumentCount": "{{count}} 只",
+      "candidates": "候选股票",
+      "emptyCandidates": "空候选集",
+      "alphaValues": "Alpha 值",
+      "strategySignals": "策略信号",
+      "formulaValues": "本日公式计算值，共 {{count}} 只股票。",
+      "viewAlpha": "查看 Alpha 值",
+      "signalsUpdated": "已更新信号",
+      "signalsRetained": "本日无新信号，保留尚未到期的信号",
+      "signalCount": "当前 {{count}} 条",
+      "expired": "本日到期：{{stocks}}",
+      "removed": "移出候选：{{stocks}}",
+      "signalsHelp": "信号变化由组合模块判断，不会自动生成卖单。",
+      "signalValidity": "信号与有效期",
+      "signalRow": "{{stock}}：{{value}} · {{session}} 产生 · 含产生日在内有效 {{count}} 个研究交易日",
+      "noProposal": "本日无新组合建议（NoUpdate）。",
+      "retentionReasons": "最短持仓保留依据",
+      "retentionRow": "{{stock}}：持有 {{age}} 个研究交易日，未满最短 {{minimum}} 日；组合保留 {{shares}} 股并占用一个名额。风险调整仍可减仓或退出。",
+      "noRisk": "本日无风险调整。",
+      "limitHelp": "局部上限限制列出的持仓；组合回撤上限同时限制整体股票目标。",
+      "riskReasons": "风险判断依据",
+      "stopLossValues": "剩余取得成本 {{cost}} 元；收盘研究市值 {{value}} 元。",
+      "stopLossThreshold": "持仓收益 {{return}}%；止损阈值 {{threshold}}%。",
+      "maximumReached": "已达到最长持仓期限：{{count}} 个研究交易日。",
+      "positionAtDecision": "判断时持仓 {{shares}} 股，持有 {{age}} 个研究交易日。下一开盘尝试退出，实际成交与拒绝由关联记录说明。",
+      "replaced": "替换本日组合建议。",
+      "cancelled": "明确取消本日组合建议，不产生新目标。",
+      "targetFormed": "已形成最终目标；实际成交或拒绝请查看关联记录。",
+      "noTarget": "未形成新的目标，不会因此自动调仓。",
+      "identities": "模块身份"
+    },
+    "drawdownFacts": {
+      "statuses": {
+        "observing": "观察中",
+        "threshold_reached": "回撤达到阈值",
+        "cooldown": "冷却中",
+        "awaiting_new_portfolio": "冷却结束，等待新的组合决策",
+        "new_portfolio_recovery": "新的组合决策解除回撤限制"
+      },
+      "title": "组合回撤 · {{status}}",
+      "cycle": "风险周期始于 {{start}}；收盘风险净值 {{nav}} 元，周期峰值 {{peak}} 元。",
+      "drawdown": "周期回撤 {{drawdown}}%；触发阈值 {{threshold}}%。",
+      "triggered": "触发日 {{date}}；其后已完成 {{completed}} / {{total}} 个冷却交易日。",
+      "noCap": "当前无组合回撤仓位限制。",
+      "cap": "股票目标上限 {{percent}}%；低于上限的目标不会被提高。",
+      "release": "解除限制只允许新组合目标参与执行，不表示实际仓位已恢复。下一开盘的成交、拒绝和持仓记录说明实际结果。主报告仍使用开盘净值，历史最大回撤不重置。"
+    },
+    "takeProfitFacts": {
+      "threshold": "止盈阈值 {{threshold}}%；累计减仓 {{reduction}}%。",
+      "return": " 当前持仓收益 {{return}}%。",
+      "baseline": "首次基准 {{shares}} 股（{{units}} 研究持仓单位）；累计目标保留 {{target}} 单位。",
+      "executed": "实际卖出 {{sold}} 单位；待减 {{remaining}} 单位。研究持仓单位与执行股数分开计量，拒绝和取整未成交部分不算完成。",
+      "ended": "本次持仓周期已结束；后续新决策可重新入场。",
+      "active": "判断时持仓 {{shares}} 股；止盈周期内禁止普通补仓，直至完全退出。下一开盘尝试减仓，实际成交与拒绝见关联记录。"
+    }
+  }
+}

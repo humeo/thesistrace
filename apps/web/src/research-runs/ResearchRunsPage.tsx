@@ -6,10 +6,14 @@ import { folderDisplayName } from "../research/folders";
 import { formatRunError, formatExecutionFailure, readOrganizationError, type OrganizationError, readCancelError, readTrackingError, type RunError, type CancelError, type HttpActionError } from "./errors";
 export { formatDuration } from "../i18n/format";
 import { i18n, useTranslation } from "../i18n";
+import { CloseRiskFacts } from "../analysis/CloseRiskFacts";
 import { CurrentDataRerunOrigin, type RerunOrigin } from "../analysis/CurrentDataRerun";
 import { DailyHoldings } from "../analysis/DailyHoldings";
 import { StrategyEvents } from "../analysis/StrategyEvents";
-import { SelectionEligibilityView, type SelectionEligibility } from "../research/SelectionEligibility";
+import { SelectionEligibilityView } from "../research/SelectionEligibility";
+import { isBuiltinFrameworkState, strategySelection, type StrategyDecisionState } from "../research/strategyDecisionState";
+import { FrameworkStateView } from "../research/FrameworkStateView";
+import { FrozenFrameworkModules, FrozenPythonProgram, FrozenSimulationCosts } from "../research/FrozenStrategyDefinition";
 import {
   CaretDown,
   CaretLeft,
@@ -63,6 +67,7 @@ type StrategyObservation = {
   session: string;
   gross_nav: string;
   net_nav: string;
+  close_risk_nav_cny: string;
   net_cash: string;
   transaction_cost_cny: string;
   holdings_count: number;
@@ -83,30 +88,40 @@ type StrategyMetrics = {
 };
 
 export type TerminalStrategyState = {
-  target_selection: SelectionEligibility;
+  decision_state: StrategyDecisionState;
+  contract_checksum: string;
   session: string;
   gross_cash: string;
   net_cash: string;
   gross_nav: string;
   net_nav: string;
+  close_risk_nav_cny: string;
   cumulative_transaction_cost: string;
   positions: Array<{
     instrument_id: string;
     execution_shares: number;
     adjusted_units: string;
     last_adjusted_price: string;
+    last_close_adjusted_price: string;
+    remaining_acquisition_cost_cny: string;
+    holding_cycle_started_session: string;
+    holding_age: number;
   }>;
-  selection_phase: {
+  research_phase: {
     origin_session: string;
     report_session_count: number;
-    selection_interval: number;
-    completed_intervals: number;
   };
-  target_exposure: number;
   pending_target: {
     decision_session: string;
-    mode: "selection" | "reduce" | "increase";
-    signal_session: string;
+    reason: string;
+    contract_checksum: string;
+    allocation: {
+      mode: "rebalance" | "reduce" | "increase";
+      instrument_ids: string[];
+      relative_weights: Record<string, string>;
+      exposure: number;
+    } | null;
+    position_limits: Record<string, number>;
     execution: "next_research_session_open";
   } | null;
 };
@@ -129,7 +144,7 @@ type FactorEvaluationResearchResult = {
 type StrategyBacktestResearchResult = {
   strategy: {
     summary: {
-      alpha_checksum: string;
+      alpha_checksum: string | null;
       entry_session: string | null;
       initial_cash_cny: string;
       source_checksum: string;
@@ -936,6 +951,7 @@ export function ResearchRunProgressView({
 export function ResearchRunFacts({ run }: { run: ResearchRun }) {
   const { t } = useTranslation("runs");
   const input = run.input;
+  const direct = input?.research_kind === "strategy_backtest" && input.strategy_mode === "direct";
   const factorConditionClass = input?.research_kind === "factor_evaluation"
     ? "research-run-fact-half"
     : undefined;
@@ -948,9 +964,9 @@ export function ResearchRunFacts({ run }: { run: ResearchRun }) {
       <p><strong>{t("status")}</strong> {t(`statuses.${run.status}`)}</p>
       <p><strong>{i18n.t("research:kind")}</strong> {researchKindLabel(run.research_kind)}</p>
       <p className="research-run-fact-name"><strong>{t("name")}</strong> {run.name}</p>
-      <p className="research-run-fact-formula">
+      {(input === undefined || "formula" in input) && <p className="research-run-fact-formula">
         <strong>{t("formula")}</strong> <code>{input?.formula ?? run.formula_summary}</code>
-      </p>
+      </p>}
       <p className="research-run-fact-period">
         <strong>{t("period")}</strong> {t("dateRange", { start: run.start_date, end: run.end_date })}
       </p>
@@ -959,20 +975,27 @@ export function ResearchRunFacts({ run }: { run: ResearchRun }) {
           <p className={factorConditionClass}>
             <strong>{i18n.t("research:universe")}</strong> {universeLabel(input.universe)}
           </p>
-          <p className={factorConditionClass}>
+          {"neutralization" in input && input.neutralization !== undefined && <p className={factorConditionClass}>
             <strong>{i18n.t("research:neutralization")}</strong> {neutralizationLabel(input.neutralization)}
-          </p>
+          </p>}
           {input.research_kind === "strategy_backtest" ? (
             <>
+              <p><strong>{t("strategyMode")}</strong> {t(input.strategy_mode === "direct" ? "directMode" : "frameworkMode")}</p>
               <p><strong>{i18n.t("research:initialCash")}</strong> {input.initial_cash_cny}</p>
-              <p><strong>{i18n.t("research:holdings")}</strong> {formatNumber(input.holdings_count)}</p>
-              {input.weighting === "inverse_volatility" && <p><strong>{t("volatilityWindow")}</strong> {formatNumber(input.volatility_window)} {t("sessions")}</p>}
-              <p><strong>{i18n.t("research:weighting")}</strong> {i18n.t(`research:weightings.${input.weighting}`)}</p>
+              <FrozenSimulationCosts costs={input.costs} />
+              {input.strategy_mode === "direct" ? <FrozenPythonProgram program={input.program} /> : <>
+              <FrozenFrameworkModules modules={input.modules} />
+              {input.selection_every_sessions !== undefined && <>
+              <p><strong>{i18n.t("research:holdings")}</strong> {formatNumber(input.holdings_count!)}</p>
+              {input.weighting === "inverse_volatility" && <p><strong>{t("volatilityWindow")}</strong> {formatNumber(input.volatility_window!)} {t("sessions")}</p>}
+              {input.weighting !== undefined && <p><strong>{i18n.t("research:weighting")}</strong> {i18n.t(`research:weightings.${input.weighting}`)}</p>}
               <p><strong>{t("exposureExpression")}</strong> <code>{input.exposure_expression}</code></p>
               <p>
                 <strong>{t("selection")}</strong>{" "}
                 {selectionLabel(input.selection_every_sessions)}
               </p>
+              </>}
+              </>}
             </>
           ) : null}
         </>
@@ -1462,6 +1485,7 @@ export function ResearchResultView({ result }: { result: ResearchResult }) {
   const strategyHelp = strategyMetricHelp();
   const strategyResult = "strategy" in result ? result : null;
   const factorResult = "factor" in result ? result : null;
+  const selection = strategyResult ? strategySelection(strategyResult.terminal_strategy_state.decision_state) : null;
   return (
     <div className="research-result">
       {factorResult !== null ? <section className="research-result-section">
@@ -1508,14 +1532,20 @@ export function ResearchResultView({ result }: { result: ResearchResult }) {
           <div className="strategy-context-row">
             <h3>{t("result.exposure")}</h3>
             <dl className="strategy-exposure-values">
-              <div><dt>{t("result.lastCloseTarget")}</dt><dd>{formatPercent(strategyResult.terminal_strategy_state.target_exposure)}</dd></div>
+              <div><dt>{t("result.lastCloseTarget")}</dt><dd>{formatPercent(isBuiltinFrameworkState(strategyResult.terminal_strategy_state.decision_state)
+                ? strategyResult.terminal_strategy_state.decision_state.exposure
+                : strategyResult.terminal_strategy_state.pending_target?.allocation?.exposure ?? null)}</dd></div>
               <div><dt>{t("result.actualOpenAllocation")}</dt><dd>{formatPercent(1 - Number(strategyResult.terminal_strategy_state.net_cash) / Number(strategyResult.terminal_strategy_state.net_nav))}</dd></div>
             </dl>
           </div>
-          <div className="strategy-context-row">
+          {selection !== null ? <div className="strategy-context-row">
             <h3>{t("result.selection")}</h3>
-            <SelectionEligibilityView selection={strategyResult.terminal_strategy_state.target_selection} />
-          </div>
+            <SelectionEligibilityView selection={selection} />
+          </div> : null}
+          <CloseRiskFacts session={strategyResult.terminal_strategy_state.session}
+            nav={strategyResult.terminal_strategy_state.close_risk_nav_cny}
+            positions={strategyResult.terminal_strategy_state.positions} />
+          <FrameworkStateView state={strategyResult.terminal_strategy_state.decision_state} />
           <details className="strategy-execution-notes">
             <summary>{t("result.conventions")}<CaretDown aria-hidden="true" size={14} /></summary>
             <ul>
@@ -1581,7 +1611,7 @@ export function universeLabel(value: FrozenResearchAuthorableInput["universe"]):
   return i18n.t("research:top", { count: Number(value.slice(3)) });
 }
 
-export function neutralizationLabel(value: FrozenResearchAuthorableInput["neutralization"]): string {
+export function neutralizationLabel(value: "none" | "industry"): string {
   return i18n.t(`research:${value}`);
 }
 

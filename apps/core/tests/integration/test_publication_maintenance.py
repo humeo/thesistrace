@@ -538,3 +538,41 @@ def test_lost_delete_response_does_not_advance_past_unconfirmed_object(maintenan
     _scan_due(database)
     second = PublicationMaintenance(database, s3, bucket=bucket).run_once()
     assert second["listed"] == 0 and second["sweep_completed"] is True
+
+
+def test_orphan_scan_preserves_staged_object_and_retries_after_abandonment(
+    maintenance_dependencies,
+):
+    from thesistrace.publication import JsonPayload, Publication, PublicationMaintenance
+
+    database, s3, bucket = maintenance_dependencies
+    publication = Publication(database, s3, bucket=bucket)
+    maintenance = PublicationMaintenance(database, s3, bucket=bucket)
+    with publication.staging():
+        publication.prepare(
+            kind="staging.orphan", payloads={"state": JsonPayload({"uncommitted": True})},
+            provenance={},
+        )
+        # Advance the retention clock, without sleeps or changing the stored bytes.
+        cutoff = datetime.now(UTC) + timedelta(minutes=5)
+        with database.transaction() as transaction:
+            transaction.execute(
+                "UPDATE publication.maintenance_state SET next_due_at = now() + interval '1 day' "
+                "WHERE job <> 'orphan_scan'"
+            )
+            transaction.execute(
+                "UPDATE publication.maintenance_state SET cutoff = %s, sweep_started_at = %s, "
+                "next_due_at = now() WHERE job = 'orphan_scan'",
+                (cutoff, cutoff + timedelta(hours=1)),
+            )
+        protected = maintenance.run_once()
+        assert protected["deleted"] == 0
+        assert protected["processed"] == 0
+        assert protected["sweep_completed"] is False
+    with database.transaction() as transaction:
+        transaction.execute(
+            "UPDATE publication.maintenance_state SET next_due_at = now() WHERE job = 'orphan_scan'"
+        )
+    collected = maintenance.run_once()
+    assert collected["deleted"] == 1
+    assert collected["sweep_completed"] is True

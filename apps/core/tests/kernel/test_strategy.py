@@ -7,6 +7,7 @@ from series import aligned_market_data
 
 from thesistrace.fixture import build_fixture
 from thesistrace.research_kernel.alpha import evaluate_alpha_matrix, validate_alpha
+from thesistrace.research_kernel.builtin_framework import BUILTIN_FRAMEWORK_MODULES
 from thesistrace.research_kernel.strategy import (
     Position,
     StrategyCalculationError,
@@ -40,6 +41,7 @@ def test_a_share_quantity_child_order_and_cost_rules() -> None:
         "commission_min_cny": Decimal("5"),
         "stamp_duty_sell_rate": Decimal("0.0005"),
         "transfer_fee_rate": Decimal("0.00001"),
+        "slippage_bps": Decimal("0"),
     }
     assert transaction_cost(Decimal("1000"), "buy", costs) == Decimal("5.01000")
     assert transaction_cost(Decimal("1000"), "sell", costs) == Decimal("5.51000")
@@ -51,16 +53,28 @@ def test_position_valuation_is_invariant_to_continuation_rehydration_order() -> 
             execution_shares=1,
             adjusted_units=Decimal("1e28"),
             last_adjusted_price=Decimal("1"),
+            remaining_acquisition_cost_cny=Decimal("1"),
+            holding_cycle_started_session="2026-01-05",
+            holding_age=1,
+            last_close_adjusted_price=Decimal("1"),
         ),
         "equity:a-small.SH": Position(
             execution_shares=1,
             adjusted_units=Decimal("3"),
             last_adjusted_price=Decimal("1"),
+            remaining_acquisition_cost_cny=Decimal("1"),
+            holding_cycle_started_session="2026-01-05",
+            holding_age=1,
+            last_close_adjusted_price=Decimal("1"),
         ),
         "equity:b-small.SH": Position(
             execution_shares=1,
             adjusted_units=Decimal("3"),
             last_adjusted_price=Decimal("1"),
+            remaining_acquisition_cost_cny=Decimal("1"),
+            holding_cycle_started_session="2026-01-05",
+            holding_age=1,
+            last_close_adjusted_price=Decimal("1"),
         ),
     }
     marks = {instrument_id: Decimal("1") for instrument_id in positions}
@@ -125,6 +139,7 @@ def test_top_n_strategy_runs_one_deterministic_net_primary_account() -> None:
     definition = {
         "universe": "top300",
         "strategy": {"volatility_window": 20, "weighting": "equal_weight",
+            "mode": "framework", "modules": dict(BUILTIN_FRAMEWORK_MODULES),
             "holdings_count": 10,
             "selection_interval": 5,
             "exposure_expression": {"kind": "number", "value": 1},
@@ -135,6 +150,7 @@ def test_top_n_strategy_runs_one_deterministic_net_primary_account() -> None:
             "commission_min_cny": "5",
             "stamp_duty_sell_rate": "0.0005",
             "transfer_fee_rate": "0.00001",
+            "slippage_bps": "0",
         },
     }
 
@@ -252,6 +268,7 @@ def test_unexplained_missing_held_open_fails_instead_of_becoming_suspension() ->
     definition = {
         "universe": "top300",
         "strategy": {"volatility_window": 20, "weighting": "equal_weight",
+            "mode": "framework", "modules": dict(BUILTIN_FRAMEWORK_MODULES),
             "holdings_count": 10,
             "selection_interval": 1,
             "exposure_expression": {"kind": "number", "value": 1},
@@ -262,6 +279,7 @@ def test_unexplained_missing_held_open_fails_instead_of_becoming_suspension() ->
             "commission_min_cny": "5",
             "stamp_duty_sell_rate": "0.0005",
             "transfer_fee_rate": "0.00001",
+            "slippage_bps": "0",
         },
     }
     report_start = 0
@@ -461,6 +479,7 @@ def strategy_definition(*, selection_interval: int) -> dict[str, object]:
     return {
         "universe": "top300",
         "strategy": {"volatility_window": 20, "weighting": "equal_weight",
+            "mode": "framework", "modules": dict(BUILTIN_FRAMEWORK_MODULES),
             "holdings_count": 10,
             "selection_interval": selection_interval,
             "exposure_expression": {"kind": "number", "value": 1},
@@ -471,5 +490,6 @@ def strategy_definition(*, selection_interval: int) -> dict[str, object]:
             "commission_min_cny": "5",
             "stamp_duty_sell_rate": "0.0005",
             "transfer_fee_rate": "0.00001",
+            "slippage_bps": "0",
         },
     }

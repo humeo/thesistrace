@@ -5,9 +5,15 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Iterator, Mapping
 
-EVENT_FRAME_ROWS = 512
-MAX_EVENT_RECORD_BYTES = 24 * 1024
-MAX_EVENT_SEGMENT_BYTES = 64 * 1024 * 1024
+from thesistrace.research_kernel.strategy_event_limits import (
+    EVENT_FRAME_ROWS,
+    MAX_EVENT_FRAME_BYTES,
+    MAX_EVENT_RECORD_BYTES,
+    MAX_EVENT_SEGMENT_BYTES,
+    MAX_FRAMEWORK_RECORD_BYTES,
+    MAX_TARGET_RECORD_BYTES,
+)
+
 _EVENT_SECTIONS = frozenset(
     {
         "strategy_targets",
@@ -16,6 +22,7 @@ _EVENT_SECTIONS = frozenset(
         "strategy_fills",
         "strategy_adjustments",
         "strategy_execution_constraints",
+        "strategy_framework",
     }
 )
 
@@ -42,13 +49,19 @@ def _replace_events(message: Mapping, key: str, value: object) -> dict:
     )
 
 
-def _row_bytes(rows: list) -> int:
+def event_record_byte_limit(section: str) -> int:
+    if section == "strategy_framework":
+        return MAX_FRAMEWORK_RECORD_BYTES
+    return MAX_TARGET_RECORD_BYTES if section == "strategy_targets" else MAX_EVENT_RECORD_BYTES
+
+
+def _row_bytes(rows: list, section: str) -> int:
     total = 0
     for row in rows:
         if not isinstance(row, dict):
             raise ValueError("Strategy event row must be an object")
         size = len(json.dumps(row, separators=(",", ":")).encode())
-        if size > MAX_EVENT_RECORD_BYTES:
+        if size > event_record_byte_limit(section):
             raise ValueError("Strategy event record exceeds its transport and page bound")
         total += size
     return total
@@ -72,16 +85,27 @@ def strategy_event_messages(message: Mapping) -> Iterator[dict]:
         if not isinstance(rows, list):
             raise ValueError("Strategy event rows are invalid")
         counts[section] = len(rows)
-        for start in range(0, len(rows), EVENT_FRAME_ROWS):
-            selected = rows[start : start + EVENT_FRAME_ROWS]
-            total += _row_bytes(selected)
+        selected, start, frame_bytes = [], 0, 0
+        for row in rows:
+            size = _row_bytes([row], section)
+            total += size
             if total > MAX_EVENT_SEGMENT_BYTES:
                 raise ValueError("Strategy event segment exceeds its transport capacity")
+            if selected and (
+                len(selected) == EVENT_FRAME_ROWS or frame_bytes + size > MAX_EVENT_FRAME_BYTES
+            ):
+                yield {
+                    "status": "strategy_event_frame", "section": section,
+                    "offset": start, "rows": selected,
+                }
+                start += len(selected)
+                selected, frame_bytes = [], 0
+            selected.append(row)
+            frame_bytes += size
+        if selected:
             yield {
-                "status": "strategy_event_frame",
-                "section": section,
-                "offset": start,
-                "rows": selected,
+                "status": "strategy_event_frame", "section": section,
+                "offset": start, "rows": selected,
             }
     yield _replace_events(message, "strategy_event_counts", counts)
 
@@ -105,7 +129,10 @@ class EventMessageAssembler:
             existing = self._rows.setdefault(section, [])
             if type(offset) is not int or offset != len(existing):
                 raise ValueError("Strategy event frame order is invalid")
-            self._bytes += _row_bytes(rows)
+            frame_bytes = _row_bytes(rows, section)
+            if frame_bytes > MAX_EVENT_FRAME_BYTES:
+                raise ValueError("Strategy event frame exceeds its transport capacity")
+            self._bytes += frame_bytes
             if self._bytes > MAX_EVENT_SEGMENT_BYTES:
                 raise ValueError("Strategy event segment exceeds its transport capacity")
             existing.extend(rows)

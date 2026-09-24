@@ -10,7 +10,7 @@ from collections.abc import Callable
 from cryptography.fernet import Fernet, InvalidToken
 from pydantic import BaseModel
 
-from thesistrace._paging import fit_page
+from thesistrace._paging import BUSINESS_PAGE_BYTES, fit_page
 from thesistrace._postgres import PostgresDatabase
 
 
@@ -41,6 +41,7 @@ class ResearchAgentPagination:
         cursor: str | None,
         limit: int,
         build: Callable[[list[Item], str | None], Page],
+        byte_budget: int = BUSINESS_PAGE_BYTES,
     ) -> Page:
         if isinstance(limit, bool) or not 1 <= limit <= 50:
             raise ValueError("Page limit must be between 1 and 50")
@@ -84,4 +85,4 @@ class ResearchAgentPagination:
                 ).decode("ascii")
             return build(kept, next_cursor)
 
-        return fit_page(items[offset : offset + limit], render)
+        return fit_page(items[offset : offset + limit], render, byte_budget=byte_budget)
