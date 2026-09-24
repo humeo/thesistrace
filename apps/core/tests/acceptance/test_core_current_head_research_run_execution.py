@@ -277,7 +277,7 @@ def test_composite_formula_runs_and_starts_a_daily_track(tmp_path: Path) -> None
         )
         assert factor_track.status_code == 409
         assert factor_track.json() == {
-            "detail": "Start Tracking requires a Strategy Backtest Result"
+            "detail": {"code": "TRACKING_STRATEGY_REQUIRED", "limit": None}
         }
 
         financial_only = client.post(
