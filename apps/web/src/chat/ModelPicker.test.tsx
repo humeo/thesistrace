@@ -38,8 +38,8 @@ test("shows all configured Luna efforts and selects Max", async () => {
     selection={resolveModelSelection(current, current.default_model_key, null)} />);
   await act(async () => document.querySelector<HTMLButtonElement>(".chat-model-picker-trigger")!.click());
   const options = [...document.querySelectorAll<HTMLButtonElement>('[data-picker-column="reasoning"]')];
-  expect(options.map((button) => button.textContent)).toEqual(["None", "Low", "Medium", "High", "X-high", "Max"]);
-  await act(async () => options[5].click());
+  expect(options.map((button) => button.textContent)).toEqual(["Low", "Medium", "High", "X-high", "Max"]);
+  await act(async () => options[4].click());
   expect(onReasoningChange).toHaveBeenCalledWith("max");
   expect(document.querySelector('[role="dialog"]')).toBeNull();
 });

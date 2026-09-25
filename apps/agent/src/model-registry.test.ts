@@ -87,17 +87,24 @@ describe("model Registry", () => {
       }), environment)).toThrow("Agent configuration is invalid");
     }
   });
-  it("publishes every configured Luna effort from the maintained model file", () => {
+  it("publishes only the GPT-6 models within the short-context pricing and daily reservation limits", () => {
     const registry = readModelRegistry(
       readFileSync(new URL("../config/model-registry.json", import.meta.url), "utf8"),
       environment,
     );
-    expect(registry.safeCatalog.models[0]).toMatchObject({
-      key: "gpt-5.6-luna",
-      default_reasoning_effort: "high",
-      reasoning_efforts: ["none", "low", "medium", "high", "xhigh", "max"],
-    });
-    expect(registry.models[0]?.contextWindow).toBe(258_000);
+    expect(registry.safeCatalog.default_model_key).toBe("gpt-6-luna");
+    expect(registry.safeCatalog.models.map((model) => model.key)).toEqual(["gpt-6-sol", "gpt-6-luna"]);
+    expect(registry.models.map((model) => model.providerModelId)).toEqual(["gpt-6-sol", "gpt-6-luna"]);
+    expect(registry.models.find((model) => model.key === "gpt-6-sol")?.contextWindow).toBe(258_000);
+    for (const model of registry.models) {
+      expect(model.defaultReasoningEffort).toBe("high");
+      expect(model.reasoningEfforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
+      expect(model.contextWindow).toBeLessThanOrEqual(272_000);
+      const price = model.pricing;
+      const reservation = model.contextWindow * Math.max(price.input, price.cacheRead, price.cacheWrite)
+        + model.maxOutputTokens * price.output;
+      expect(reservation).toBeLessThanOrEqual(1_000_000_000);
+    }
   });
   it("builds one safe multi-provider Catalog and omits disabled models", () => {
     const registry = readModelRegistry(encoded(), environment);

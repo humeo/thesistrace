@@ -1,7 +1,7 @@
 import http from "node:http";
 
 const apiKey = required("THESISTRACE_AGENT_TEST_OPENAI_API_KEY");
-const model = "gpt-5.6-luna";
+const model = "gpt-6-luna";
 let responseOrdinal = 0;
 
 http.createServer(async (request, response) => {

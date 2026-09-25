@@ -59,8 +59,11 @@ actual token usage, including configured cache prices. No token-count endpoint i
 required: gateway estimates can omit provider-added input. The configured model
 capacity must bound provider usage. A small remaining daily budget can reject a
 call whose eventual cost would be lower; interrupted calls without final usage
-retain their reservation. This deployment keeps the GPT-5.6 Luna token prices in
-`apps/agent/config/model-registry.json`; it does not treat subscription calls as free.
+retain their reservation. The GPT-6 Sol and Luna prices in
+`apps/agent/config/model-registry.json` use the published Standard short-context
+rates. Their configured input ceilings stay below the 272K-token long-context
+pricing threshold, and each maximum reservation fits the ordinary $1 daily
+model budget. Subscription calls are not treated as free.
 
 For an existing local research dataset, copy a consistent Canonical and benchmark
 snapshot into the server's new data volumes before starting data updates. Verify the

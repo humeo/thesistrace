@@ -1,16 +1,15 @@
 {
   "min_compaction_context_window": 65536,
-  "default_model_key": "gpt-5.6-luna",
+  "default_model_key": "gpt-6-luna",
   "models": [
     {
       "default_reasoning_effort": "high",
-      "display_name": "GPT-5.6 Luna",
+      "display_name": "GPT-6 Luna",
       "enabled": true,
-      "key": "gpt-5.6-luna",
+      "key": "gpt-6-luna",
       "provider_adapter": "openai",
-      "provider_model_id": "gpt-5.6-luna",
+      "provider_model_id": "gpt-6-luna",
       "reasoning_efforts": [
-        "none",
         "low",
         "medium",
         "high",

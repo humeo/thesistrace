@@ -56,11 +56,12 @@ test("rejects a model or effort not enabled by the startup registry", () => {
   expect(() => runtime.resolve("anthropic", "minimal")).toThrow();
 });
 
-test.each(["none", "low", "medium", "high", "xhigh", "max"] as const)(
-  "sends %s reasoning and continues OpenAI tool results without stored items", async (effort) => {
-  const lunaRegistry = readModelRegistry(JSON.stringify({
-    min_compaction_context_window: 65_536, default_model_key: "luna",
-    models: [model("luna", "openai", "gpt-5.6-luna", [effort])],
+test.each((["gpt-6-sol", "gpt-6-luna"] as const).flatMap((modelId) =>
+  (["none", "low", "medium", "high", "xhigh", "max"] as const).map((effort) => [modelId, effort] as const)))(
+  "sends %s with %s reasoning and continues OpenAI tool results without stored items", async (modelId, effort) => {
+  const modelRegistry = readModelRegistry(JSON.stringify({
+    min_compaction_context_window: 65_536, default_model_key: "selected",
+    models: [model("selected", "openai", modelId, [effort])],
   }), environment);
   const requests: Record<string, unknown>[] = [];
   vi.stubGlobal("fetch", async (_url: unknown, init: RequestInit) => {
@@ -72,14 +73,14 @@ test.each(["none", "low", "medium", "high", "xhigh", "max"] as const)(
       return Response.json({ error: { type: "invalid_request_error", message: "Item not found in stateless service." } }, { status: 404 });
     }
     return Response.json({
-      id: "resp_stateless_fixture", created_at: 1_788_148_800, model: "gpt-5.6-luna",
+      id: "resp_stateless_fixture", created_at: 1_788_148_800, model: modelId,
       output: [{ type: "message", id: "msg_stateless_fixture", role: "assistant",
         content: [{ type: "output_text", text: "Value: 17", annotations: [] }] }],
       usage: { input_tokens: 20, output_tokens: 4, output_tokens_details: { reasoning_tokens: 0 } },
     });
   });
   try {
-    const selection = new RegisteredModelRuntime(lunaRegistry).resolve("luna", effort);
+    const selection = new RegisteredModelRuntime(modelRegistry).resolve("selected", effort);
     const result = await selection.languageModel.doGenerate({
       providerOptions: selection.providerOptions,
       prompt: [
@@ -95,6 +96,7 @@ test.each(["none", "low", "medium", "high", "xhigh", "max"] as const)(
     });
     expect(result.content).toMatchObject([{ type: "text", text: "Value: 17" }]);
     expect(requests).toMatchObject([{
+      model: modelId,
       store: false, include: ["reasoning.encrypted_content"],
       reasoning: { effort },
       input: [

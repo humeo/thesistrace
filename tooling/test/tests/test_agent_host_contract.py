@@ -225,7 +225,7 @@ def test_agent_image_smoke_uses_the_production_openai_adapter() -> None:
     assert "THESISTRACE_AGENT_OPENAI_API_KEY" in compose
     assert "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET" not in compose
     assert '"provider_adapter":"openai"' in registry
-    assert '"provider_model_id":"gpt-5.6-luna"' in registry
+    assert '"provider_model_id":"gpt-6-luna"' in registry
     assert '"provider_adapter":"scripted"' not in registry
     assert "-e THESISTRACE_AGENT_OPENAI_API_KEY=" in runner
 
