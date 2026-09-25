@@ -54,6 +54,10 @@ The current Strategy contract in [ADR-0250](0250-admit-strategy-programs-with-ex
 - [ADR-0239 — Grant one Operator capability without general RBAC](0239-expose-one-capability-gated-operator-console.md)
 - [ADR-0241 — Keep Operator authority split between Auth and Core](0241-keep-operator-authority-split-between-auth-and-core.md)
 
+## Frontend presentation
+
+- [ADR-0251 — Own console components through shadcn/ui and Base UI](0251-own-console-components-through-shadcn-base-ui.md)
+
 ## Research lifecycle, Daily Tracking, and Batches
 
 - [ADR-0095 — Persist ResearchRun lifecycle and isolate infrastructure Attempts](0095-persist-researchrun-lifecycle-and-isolate-infrastructure-attempts.md)

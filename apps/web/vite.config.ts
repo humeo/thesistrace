@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 import { fileURLToPath } from "node:url";
 
 const webPort = Number(process.env.THESISTRACE_WEB_PORT ?? "5173");
@@ -10,6 +11,7 @@ const agentOrigin = process.env.THESISTRACE_AGENT_ORIGIN ?? "http://127.0.0.1:84
 export default defineConfig({
   plugins: [
     react(),
+    tailwindcss(),
     {
       name: "reject-removed-web-entries",
       configureServer(server) {
@@ -25,6 +27,11 @@ export default defineConfig({
       },
     },
   ],
+  resolve: {
+    alias: {
+      "@": fileURLToPath(new URL("./src", import.meta.url)),
+    },
+  },
   build: {
     rollupOptions: {
       input: {

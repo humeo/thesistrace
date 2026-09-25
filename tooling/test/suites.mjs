@@ -23,5 +23,6 @@ export const quickCommands = [
   ...['typecheck', 'test', 'test:eval-preflight'].map(name => ['pnpm', ['--dir', 'apps/agent', name]]),
   ...['typecheck', 'test'].map(name => ['pnpm', ['--dir', 'apps/auth', name]]),
   ['pnpm', ['exec', 'tsc', '-p', 'tests/tsconfig.json']],
+  ['pnpm', ['--dir', 'apps/web', 'check:ui-ownership']],
   ...['typecheck', 'test:shell'].map(name => ['pnpm', ['--dir', 'apps/web', name]]),
 ];

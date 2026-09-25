@@ -1,15 +1,10 @@
 import { fontStylesheet, serveBrandAssets } from "./brand-assets";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { buildProductFixture } from "./build-product-fixture";
 import { expect, test } from "@playwright/test";
-import { build } from "vite";
-const styles = readFileSync(new URL("../src/styles.css", import.meta.url),"utf8");
+let styles: string;
 let script: string;
 test.beforeAll(async()=>{
-  const result=await build({configFile:false,logLevel:"silent",esbuild:{jsx:"automatic"},define:{"process.env.NODE_ENV":JSON.stringify("production")},build:{write:false,minify:false,lib:{entry:fileURLToPath(new URL("./fixtures/email-login.tsx",import.meta.url)),formats:["iife"],name:"EmailLogin"}}});
-  if("on" in result)throw new Error("one-off build required");
-  const chunk=(Array.isArray(result)?result:[result]).flatMap(b=>b.output).find(o=>o.type==="chunk"&&o.isEntry);
-  if(chunk?.type!=="chunk")throw new Error("entry missing"); script=chunk.code;
+  ({ script, styles } = await buildProductFixture(new URL("./fixtures/email-login.tsx", import.meta.url), "EmailLogin"));
 });
 for(const width of [1200,390,320]) {
   test(`email-only signup and existing-account login at ${width}px`,async({page})=>{
@@ -48,6 +43,10 @@ for(const width of [1200,390,320]) {
     await page.getByRole("button",{name:"Continue with email"}).click();
     await expect(page.getByLabel("Verification code")).toBeFocused();
     await page.screenshot({path:test.info().outputPath(`email-code-${width}.png`)});
+    if (width < 768) {
+      const editHeight = await page.getByRole("button",{name:"Edit",exact:true}).evaluate(button => button.getBoundingClientRect().height);
+      expect(editHeight).toBeGreaterThanOrEqual(44);
+    }
     await expect(page.getByRole("button",{name:/Resend code in/})).toBeDisabled();
     await expect(page.getByRole("button",{name:"Verify and continue"})).toBeDisabled();
     await page.getByRole("button",{name:"Edit",exact:true}).click();
@@ -66,3 +65,65 @@ for(const width of [1200,390,320]) {
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   });
 }
+
+test("invitation mismatch, failed acceptance and retry preserve entered values", async ({page}) => {
+  let authenticated = false;
+  let failAccept = true;
+  const user = {id:"00000000-0000-4000-8000-000000000003",email:"invited@example.com",name:"invited",active:true};
+  await page.route("http://auth.fixture/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/accept-invitation") {
+      await route.fulfill({contentType:"text/html",body:`${fontStylesheet}<style>${styles}</style><div id="root"></div>`});
+      return;
+    }
+    if (path === "/api/auth/get-session") {
+      await route.fulfill({contentType:"application/json",body:JSON.stringify(authenticated ? {session:{id:"00000000-0000-4000-8000-000000000004"},user} : null)});
+      return;
+    }
+    if (path === "/api/auth/researcher-invitation/inspect") {
+      await route.fulfill({contentType:"application/json",body:JSON.stringify({email:user.email})});
+      return;
+    }
+    if (path === "/api/auth/researcher-invitation/accept") {
+      const payload = route.request().postDataJSON();
+      expect(payload).toEqual({password:"Secure-password-123",token:"fixture-token"});
+      if (failAccept) {
+        failAccept = false;
+        await route.fulfill({status:503,contentType:"application/json",body:JSON.stringify({code:"AUTH_SERVICE_UNAVAILABLE"})});
+        return;
+      }
+      authenticated = true;
+      await route.fulfill({contentType:"application/json",body:"{}"});
+      return;
+    }
+    if (path === "/api/researcher/bootstrap") {
+      await route.fulfill({contentType:"application/json",body:JSON.stringify({researcher_id:user.id,system_folders:{default:"folder_default",batch_research:"folder_batch_research"}})});
+      return;
+    }
+    if (path === "/api/auth/operator/capability") {
+      await route.fulfill({status:404,body:""});
+      return;
+    }
+    throw new Error(`unexpected request ${path}`);
+  });
+  await serveBrandAssets(page);
+  await page.setViewportSize({width:390,height:850});
+  await page.goto("http://auth.fixture/accept-invitation");
+  await page.addScriptTag({content:script});
+  await expect(page.getByRole("heading",{name:"Create your Quantgrove access"})).toBeVisible();
+  await expect(page.getByLabel("Email",{exact:true})).toHaveValue(user.email);
+  const password = page.getByLabel("Password",{exact:true});
+  const confirmation = page.getByLabel("Confirm password",{exact:true});
+  await password.fill("Secure-password-123");
+  await confirmation.fill("Different-password-123");
+  await page.getByRole("button",{name:"Accept invitation"}).click();
+  await expect(page.getByRole("alert")).toBeVisible();
+  await confirmation.fill("Secure-password-123");
+  await page.getByRole("button",{name:"Accept invitation"}).click();
+  await expect(page.getByRole("alert")).toBeVisible();
+  await expect(password).toHaveValue("Secure-password-123");
+  await expect(confirmation).toHaveValue("Secure-password-123");
+  await page.getByRole("button",{name:"Accept invitation"}).click();
+  await expect(page.getByRole("status")).toHaveText("Signed in as invited@example.com");
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+});

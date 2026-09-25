@@ -14,6 +14,9 @@ import {
 import { authenticatedResearcherId } from "./auth/session";
 import { CoreApp } from "./shell/CoreApp";
 import { synchronizeEntryLanguage, useTranslation } from "./i18n";
+import { Button } from "./components/ui/button";
+import { Alert, AlertDescription } from "./components/ui/alert";
+import { Spinner } from "./components/ui/spinner";
 import "./styles.css";
 
 const LandingPage = lazy(() => import('./landing/LandingPage'));
@@ -161,11 +164,17 @@ function AuthStatus({ title, message, action, actionLabel }: {
   const { t } = useTranslation("auth");
   return (
     <AuthSurface eyebrow={t("workspace")} title={title}>
-      <p role="status">{message}</p>
       {action !== undefined ? (
-        <button className="button-primary auth-submit" onClick={action} type="button">
+        <Alert variant="destructive"><AlertDescription>{message}</AlertDescription></Alert>
+      ) : (
+        <p className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
+          <Spinner aria-hidden="true" />{message}
+        </p>
+      )}
+      {action !== undefined ? (
+        <Button className="mt-4 w-full" onClick={action} type="button">
           {actionLabel}
-        </button>
+        </Button>
       ) : null}
     </AuthSurface>
   );
