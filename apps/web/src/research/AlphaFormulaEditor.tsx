@@ -19,57 +19,17 @@ import { builtinDisplay, catalogLabel, fieldDisplay } from "../i18n/catalog";
 import { alphaLanguageExtensions } from "./alpha-language";
 import { formatResearchIssue, type ResearchRunAdmissionIssue } from "./admission";
 import { formatFormulaDiagnostic, type FormulaDiagnostic } from "./diagnostics";
+import { researchEditorTheme } from "./editorTheme";
 import type { EditorState as StoredEditorState } from "./draft";
 
-const alphaEditorTheme = EditorView.theme({
-  "&": {
-    height: "100%",
-    minHeight: "0",
-    color: "var(--ink)",
-    backgroundColor: "var(--canvas)",
-    font: "14px/1.65 var(--mono)",
-  },
-  "&.cm-focused": { outline: "0" },
-  ".cm-scroller": { height: "100%", overflow: "auto" },
-  ".cm-content": { padding: "14px 10px", caretColor: "var(--ink)" },
-  ".cm-gutters": {
-    minWidth: "36px",
-    color: "var(--ink-faint)",
-    backgroundColor: "var(--surface-1)",
-    borderRightColor: "var(--line)",
-  },
-  ".cm-lineNumbers .cm-gutterElement": { padding: "0 8px 0 6px" },
-  ".cm-activeLine": { backgroundColor: "rgb(94 106 210 / .06)" },
-  ".cm-activeLineGutter": {
-    color: "var(--ink-soft)",
-    backgroundColor: "var(--surface-2)",
-  },
-  ".cm-placeholder": { color: "var(--ink-faint)", fontStyle: "normal" },
-  ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
-    backgroundColor: "rgb(94 106 210 / .28) !important",
-  },
-  ".cm-alpha-function": { color: "#aab3ff", fontWeight: "500" },
-  ".cm-alpha-field": { color: "#8bd5ca", fontWeight: "500" },
-  ".cm-alpha-number": { color: "#7cc4ff" },
-  ".cm-alpha-operator": { color: "var(--ink-soft)" },
-  ".cm-tooltip": {
-    color: "var(--ink-muted)",
-    backgroundColor: "var(--surface-3)",
-    borderColor: "var(--line-strong)",
-  },
-  ".cm-tooltip-autocomplete > ul > li[aria-selected]": {
-    color: "var(--ink)",
-    backgroundColor: "var(--primary)",
-  },
-}, { dark: true });
-
-export type AlphaFormulaEditorHandle = { focus: () => void };
+export type AlphaFormulaEditorHandle = { focus: () => void; insertAtSelection: (text: string) => void };
 export type EditorDiagnostic = FormulaDiagnostic | (ResearchRunAdmissionIssue & { range: FormulaDiagnostic["range"] });
 
 export function AlphaFormulaEditor({
   ref,
   catalog,
   context = "signal",
+  className,
   diagnostics,
   formula,
   selection,
@@ -78,6 +38,7 @@ export function AlphaFormulaEditor({
   ref?: Ref<AlphaFormulaEditorHandle>;
   catalog: AlphaCatalog;
   context?: "signal" | "exposure";
+  className?: string;
   diagnostics: EditorDiagnostic[];
   formula: string;
   selection: StoredEditorState;
@@ -89,7 +50,20 @@ export function AlphaFormulaEditor({
   const view = useRef<EditorView | null>(null);
   const presentation = useRef(new Compartment());
   const presentationLocale = useRef<InterfaceLocale | null>(null);
-  useImperativeHandle(ref, () => ({ focus: () => view.current?.focus() }), []);
+  useImperativeHandle(ref, () => ({
+    focus: () => view.current?.focus(),
+    insertAtSelection: (text) => {
+      const editor = view.current;
+      if (editor === null) return;
+      const selection = editor.state.selection.main;
+      editor.dispatch({
+        changes: { from: selection.from, to: selection.to, insert: text },
+        selection: { anchor: selection.from + text.length },
+        userEvent: "input",
+      });
+      editor.focus();
+    },
+  }), []);
   const applyingExternalValue = useRef(false);
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
@@ -108,7 +82,7 @@ export function AlphaFormulaEditor({
         highlightActiveLineGutter(),
         bracketMatching(),
         alphaLanguageExtensions,
-        alphaEditorTheme,
+        researchEditorTheme,
         EditorView.lineWrapping,
         history(),
         keymap.of(historyKeymap),
@@ -171,7 +145,8 @@ export function AlphaFormulaEditor({
     editor.dispatch(setDiagnostics(editor.state, mapped));
   }, [diagnostics, locale, formula]);
 
-  return <div aria-label={t(context === "signal" ? "formulaEditor" : "exposureEditor")} className="alpha-formula-editor" ref={host} />;
+  return <div aria-label={t(context === "signal" ? "formulaEditor" : "exposureEditor")}
+    className={className ?? "alpha-formula-editor"} ref={host} />;
 }
 
 function editorPresentation(catalog: AlphaCatalog, context: "signal" | "exposure", locale: InterfaceLocale) {

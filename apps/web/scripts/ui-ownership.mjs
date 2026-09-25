@@ -4,7 +4,8 @@ const basicControls = new Set(["button", "input", "select", "textarea", "dialog"
 
 export function isMigratedUiFile(relativePath) {
   return relativePath === "main.tsx" || relativePath === "shell/AppShell.tsx" ||
-    relativePath === "chat/SessionHistoryList.tsx" || relativePath.startsWith("auth/");
+    relativePath === "chat/SessionHistoryList.tsx" || relativePath.startsWith("auth/") ||
+    relativePath === "research/ResearchDateInput.tsx" || relativePath === "research/ResearchFieldBrowser.tsx";
 }
 
 /** Return source-level ownership violations without depending on rendered DOM. */

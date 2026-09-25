@@ -16,8 +16,8 @@ export function buildResearchDatePresets(
 ): ResearchDatePreset[] {
   const coverage = coverageStart !== null &&
     coverageEnd !== null &&
-    isIsoDate(coverageStart) &&
-    isIsoDate(coverageEnd) &&
+    isResearchIsoDate(coverageStart) &&
+    isResearchIsoDate(coverageEnd) &&
     coverageStart <= coverageEnd
     ? { startDate: coverageStart, endDate: coverageEnd }
     : null;
@@ -42,7 +42,7 @@ export function buildResearchDatePresets(
   ];
 }
 
-function isIsoDate(value: string): boolean {
+export function isResearchIsoDate(value: string): boolean {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
   if (match === null) return false;
   const [, yearText, monthText, dayText] = match;
@@ -55,8 +55,21 @@ function isIsoDate(value: string): boolean {
     date.getUTCDate() === day;
 }
 
+export function calendarDateFromIso(value: string): Date | undefined {
+  if (!isResearchIsoDate(value)) return undefined;
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(0);
+  date.setFullYear(year, month - 1, day);
+  date.setHours(12, 0, 0, 0);
+  return date;
+}
+
+export function isoFromCalendarDate(value: Date): string {
+  return `${String(value.getFullYear()).padStart(4, "0")}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+}
+
 function subtractCalendarYears(value: string, years: number): string | null {
-  if (!isIsoDate(value)) return null;
+  if (!isResearchIsoDate(value)) return null;
   const [year, month, day] = value.split("-").map(Number);
   const targetYear = year - years;
   const finalDay = Math.min(day, new Date(Date.UTC(targetYear, month, 0)).getUTCDate());

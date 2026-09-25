@@ -502,18 +502,19 @@ describe("browser Research Draft", () => {
   it("renders the DSL as the only Alpha surface without server-edit controls", () => {
     const markup = renderToStaticMarkup(<ResearchDraftWorkspace catalog={catalog} data={data} folder={folder} researcherId={researcherId} storage={new MemoryStorage()} />);
     expect(markup).toContain("Alpha formula editor");
-    expect(markup).toContain('class="formula-workbench"');
-    expect(markup).toContain('id="alpha-formula-title">Alpha formula</h2>');
-    expect(markup).toContain("Draft name");
+    expect(markup).toContain('class="h-[280px] min-w-0 overflow-hidden bg-card"');
+    expect(markup).toContain('id="alpha-formula-title"');
+    expect(markup).toContain('>Alpha formula</h2>');
+    expect(markup).toContain('aria-label="Research name"');
     expect(markup).toContain("New research");
     expect(markup).toContain('autoComplete="off"');
 
     expect(markup).toContain("Run evaluation");
-    expect(markup).toContain('aria-controls="research-parameters"');
-    expect(markup).toContain('class="visually-hidden">Research type</legend>');
+    expect(markup).toContain('aria-label="Run settings"');
+    expect(markup).toContain('class="sr-only">Research type</legend>');
     expect(markup).not.toContain("Research period");
-    expect(markup).toContain('name="research-kind"');
-    expect(markup).toMatch(/<input[^>]*checked=""[^>]*value="factor_evaluation"/);
+    expect(markup).toContain('role="radiogroup"');
+    expect(markup).toContain('aria-checked="true"');
     expect(markup).toContain("Factor Evaluation");
     expect(markup).toContain("Strategy Backtest");
     expect(markup).not.toContain("Holdings count");
@@ -528,7 +529,7 @@ describe("browser Research Draft", () => {
     expect(markup).not.toContain("run-settings-link");
     expect(markup).not.toContain("Close run settings");
     expect(markup).not.toContain(">Cancel<");
-    expect(markup).not.toContain("Saved in this browser");
+    expect(markup).toContain("New draft");
     expect(markup).not.toContain("Financial fields");
     expect(markup).not.toContain("revenue");
     for (const removed of ["Save Research", "Refresh", "Revision", "Definition", "Add Alpha"]) expect(markup).not.toContain(removed);
@@ -601,15 +602,13 @@ describe("browser Research Draft", () => {
         activeFolder={folder}
         error={null}
         folders={[folder, custom]}
-        onCreate={async () => undefined}
-        onDelete={async () => undefined}
-        onRename={async () => undefined}
+        onCreate={async () => true}
+        onDelete={async () => true}
+        onRename={async () => true}
       />,
     );
-    expect(markup).toContain('href="/research"');
-    expect(markup).toContain('href="/research?folder=folder_signals"');
-    expect(markup).toContain("Folder");
-    expect(markup).toContain("Signals");
+    expect(markup).toContain('aria-label="Research Folders"');
+    expect(markup).toContain("Default folder");
     expect(markup).not.toContain("Rename Folder");
     expect(markup).not.toContain("Delete Folder");
   });

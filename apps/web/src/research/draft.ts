@@ -10,6 +10,7 @@ import {
   type FrameworkModules, type FrameworkModulesDraft, type FrameworkStage,
 } from "./frameworkModules";
 import { frameworkExample } from "./frameworkExamples";
+import { isResearchIsoDate } from "./dateRange";
 
 export type PortfolioWeighting = "equal_weight" | "rank_weight" | "inverse_volatility";
 
@@ -143,15 +144,24 @@ export function loadResearchDraft(
   researcherId: string,
   folderId: string,
 ): ResearchDraft {
+  return loadResearchDraftState(storage, researcherId, folderId).draft;
+}
+
+export function loadResearchDraftState(
+  storage: Pick<Storage, "getItem">,
+  researcherId: string,
+  folderId: string,
+): { draft: ResearchDraft; restored: boolean } {
   const stored = storage.getItem(researchDraftKey(researcherId, folderId));
   if (stored === null || new TextEncoder().encode(stored).byteLength > MAX_DRAFT_BYTES) {
-    return emptyResearchDraft();
+    return { draft: emptyResearchDraft(), restored: false };
   }
   try {
     const value: unknown = JSON.parse(stored);
-    return readDraft(value) ?? emptyResearchDraft();
+    const draft = readDraft(value);
+    return draft === null ? { draft: emptyResearchDraft(), restored: false } : { draft, restored: true };
   } catch {
-    return emptyResearchDraft();
+    return { draft: emptyResearchDraft(), restored: false };
   }
 }
 
@@ -358,16 +368,20 @@ export function isValidInitialCash(value: string): boolean {
 export type ResearchInputField = DrawdownField | TakeProfitField | `costs.${CostField}` | ProgramInputField | `${FrameworkStage}.${ProgramInputField}`
   | "formula" | "hypothesis" | "startDate" | "endDate" | "universe" | "neutralization" | "initialCashCny"
   | "stopLossThreshold" | "maximumHoldingSessions" | "minimumHoldingSessions" | "holdingsCount" | "selectionEverySessions" | "exposureExpression" | "volatilityWindow";
-export type ResearchInputIssueCode = "formulaRequired" | "startRequired" | "endRequired" | "dateOrder" | "universeRequired" | "neutralizationRequired" | "holdingsRange" | "intervalRange" | "cashRange" | "volatilityRange" | "exposureRequired" | "exposureRange" | "notesLength" | "costInvalid" | "slippageRange" | "drawdownCooldown" | "drawdownThreshold" | "drawdownExposure" | "takeProfitThreshold" | "takeProfitReduction" | "takeProfitOrder" | "stopLossRange" | "holdingSessions" | "holdingOrder" | "programSource" | "programParameters" | "programFields" | "programHistory";
+export type ResearchInputIssueCode = "formulaRequired" | "startRequired" | "startInvalid" | "endRequired" | "endInvalid" | "dateOrder" | "universeRequired" | "neutralizationRequired" | "holdingsRange" | "intervalRange" | "cashRange" | "volatilityRange" | "exposureRequired" | "exposureRange" | "notesLength" | "costInvalid" | "slippageRange" | "drawdownCooldown" | "drawdownThreshold" | "drawdownExposure" | "takeProfitThreshold" | "takeProfitReduction" | "takeProfitOrder" | "stopLossRange" | "holdingSessions" | "holdingOrder" | "programSource" | "programParameters" | "programFields" | "programHistory";
 export type ResearchInputIssue = { field: ResearchInputField; code: ResearchInputIssueCode };
 
 export function researchInputIssues(inputs: ResearchInputs): ResearchInputIssue[] {
   const issues: ResearchInputIssue[] = [];
   const direct = inputs.researchKind === "strategy_backtest" && inputs.strategyMode === "direct";
   if (usesBuiltinAlpha(inputs) && !inputs.formula.trim()) issues.push({ field: "formula", code: "formulaRequired" });
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(inputs.startDate)) issues.push({ field: "startDate", code: "startRequired" });
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(inputs.endDate)) issues.push({ field: "endDate", code: "endRequired" });
-  else if (inputs.startDate > inputs.endDate) issues.push({ field: "endDate", code: "dateOrder" });
+  if (inputs.startDate === "") issues.push({ field: "startDate", code: "startRequired" });
+  else if (!isResearchIsoDate(inputs.startDate)) issues.push({ field: "startDate", code: "startInvalid" });
+  if (inputs.endDate === "") issues.push({ field: "endDate", code: "endRequired" });
+  else if (!isResearchIsoDate(inputs.endDate)) issues.push({ field: "endDate", code: "endInvalid" });
+  if (isResearchIsoDate(inputs.startDate) && isResearchIsoDate(inputs.endDate) && inputs.startDate > inputs.endDate) {
+    issues.push({ field: "endDate", code: "dateOrder" });
+  }
   if (!["top300", "top1000", "top2000", "top3000"].includes(inputs.universe)) issues.push({ field: "universe", code: "universeRequired" });
   if (usesBuiltinAlpha(inputs) && !["none", "industry"].includes(inputs.neutralization)) issues.push({ field: "neutralization", code: "neutralizationRequired" });
   if (inputs.researchKind === "strategy_backtest" && !isValidInitialCash(inputs.initialCashCny)) issues.push({ field: "initialCashCny", code: "cashRange" });

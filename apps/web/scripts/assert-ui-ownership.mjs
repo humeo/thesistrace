@@ -4,8 +4,8 @@ import { isMigratedUiFile, uiOwnershipViolations } from "./ui-ownership.mjs";
 
 const sourceRoot = fileURLToPath(new URL("../src/", import.meta.url));
 
-// Tickets 01–02 own authentication, the app shell, and session history. Tickets
-// 03–17 will expand this set as each module migrates: research, research-runs, analysis,
+// Tickets 01–03 own authentication, navigation, and the new research date/field controls. Tickets
+// 04–17 will expand this set as each module migrates: research, research-runs, analysis,
 // data, daily-tracks, chat, mcp and operator. The public landing retains its
 // established markup; specialized editor/chart internals keep their APIs.
 function* sourceFiles(directory, prefix = "") {
@@ -23,5 +23,5 @@ if (violations.length > 0) {
   console.error(violations.join("\n"));
   process.exitCode = 1;
 } else {
-  console.log("UI ownership passed for migrated authentication and navigation entrypoints; pending modules are listed in the checker.");
+  console.log("UI ownership passed for migrated authentication, navigation and research controls; pending modules are listed in the checker.");
 }

@@ -1,7 +1,6 @@
 import { drawdownFields, type DrawdownField } from "./portfolioDrawdown";
 import type { TakeProfitField } from "./takeProfit";
 import {
-  CalendarBlank,
   CaretDown,
   FolderSimple,
   Minus,
@@ -21,41 +20,42 @@ import { interfaceLocale, useTranslation } from "../i18n";
 import { ResearchFieldCatalog, type DataOverview } from "../data/DataPage";
 import { AlphaFormulaEditor, type AlphaFormulaEditorHandle, type EditorDiagnostic } from "./AlphaFormulaEditor";
 import { folderDisplayName, folderMutationError, type FolderError } from "./folders";
-import { formatResearchIssue, readResearchIssues, researchIssueField, type ResearchRunAdmissionIssue } from "./admission";
+import { formatResearchIssue, researchIssueField, type ResearchRunAdmissionIssue } from "./admission";
 import { PythonStrategyAuthoring } from "./PythonStrategyAuthoring";
 import { FrameworkAuthoring } from "./FrameworkAuthoring";
 import { SimulationCostSettings } from "./SimulationCostSettings";
 import type { CostField } from "./simulationCosts";
 import { frameworkStages, type FrameworkStage } from "./frameworkModules";
 import { programInputFields, type ProgramInputField } from "./pythonStrategy";
-import { buildResearchDatePresets } from "./dateRange";
+import { buildResearchDatePresets, isResearchIsoDate } from "./dateRange";
+import { ResearchDateInput } from "./ResearchDateInput";
+import { ResearchFieldBrowser } from "./ResearchFieldBrowser";
+import { useResearchDraftController } from "./useResearchDraftController";
+import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
+import { Textarea } from "../components/ui/textarea";
+import { Field, FieldGroup, FieldLabel } from "../components/ui/field";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
+import { RadioGroup, RadioGroupItem } from "../components/ui/radio-group";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "../components/ui/sheet";
+import { PageContent, PageHeader } from "../components/layout/Page";
+import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "../components/ui/popover";
 import {
-  createDiagnosticsScheduler,
-  formatFormulaDiagnostic,
-  type DiagnosticState,
-  type FormulaDiagnostic,
-} from "./diagnostics";
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "../components/ui/alert-dialog";
+import { formatFormulaDiagnostic, type FormulaDiagnostic } from "./diagnostics";
 import {
-  beginResearchRun,
-  emptyResearchDraft,
-  researchSpec,
-  finishResearchRun,
-  hasUnexecutedChanges,
-  researchInputIssues,
   type ResearchInputField,
   isValidInitialCash,
   isValidVolatilityWindow,
   MAX_HYPOTHESIS_LENGTH,
-  loadResearchDraft,
-  persistResearchDraft,
-  researchInputs,
   researchDraftKey,
   selectResearchKind,
   selectStrategyMode,
   selectFrameworkModule,
   usesBuiltinAlpha,
   usesBuiltinPortfolio,
-  type ResearchDraft,
 } from "./draft";
 
 export type ResearchFolder = {
@@ -130,7 +130,7 @@ export function ResearchWorkspacePage({ location, researcherId }: { location: Br
       <p>{t("opening")}</p>
     </section>
   );
-  async function createFolder(name: string): Promise<void> {
+  async function createFolder(name: string): Promise<boolean> {
     setFolderError(null);
     try {
       const response = await coreFetch("/api/research-folders", {
@@ -140,7 +140,7 @@ export function ResearchWorkspacePage({ location, researcherId }: { location: Br
       });
       if (!response.ok) {
         setFolderError(await folderMutationError(response));
-        return;
+        return false;
       }
       const folder = (await response.json()) as ResearchFolder;
       setResources((current) => current === null ? current : {
@@ -149,12 +149,14 @@ export function ResearchWorkspacePage({ location, researcherId }: { location: Br
         folders: [...current.folders, folder],
       });
       window.history.replaceState(null, "", `/research?folder=${folder.id}`);
+      return true;
     } catch {
       setFolderError("unavailable");
+      return false;
     }
   }
 
-  async function renameFolder(folderId: string, name: string): Promise<void> {
+  async function renameFolder(folderId: string, name: string): Promise<boolean> {
     setFolderError(null);
     try {
       const response = await coreFetch(`/api/research-folders/${folderId}`, {
@@ -164,7 +166,7 @@ export function ResearchWorkspacePage({ location, researcherId }: { location: Br
       });
       if (!response.ok) {
         setFolderError(await folderMutationError(response));
-        return;
+        return false;
       }
       const renamed = (await response.json()) as ResearchFolder;
       setResources((current) => current === null ? current : {
@@ -172,21 +174,22 @@ export function ResearchWorkspacePage({ location, researcherId }: { location: Br
         folder: current.folder.id === renamed.id ? renamed : current.folder,
         folders: current.folders.map((folder) => folder.id === renamed.id ? renamed : folder),
       });
+      return true;
     } catch {
       setFolderError("unavailable");
+      return false;
     }
   }
 
-  async function deleteFolder(folder: ResearchFolder): Promise<void> {
+  async function deleteFolder(folder: ResearchFolder): Promise<boolean> {
     const currentResources = resources;
-    if (currentResources === null) return;
-    if (!window.confirm(t("deleteFolderConfirm", { name: folderDisplayName(folder) }))) return;
+    if (currentResources === null) return false;
     setFolderError(null);
     try {
       const response = await coreFetch(`/api/research-folders/${folder.id}`, { method: "DELETE" });
       if (!response.ok) {
         setFolderError(await folderMutationError(response));
-        return;
+        return false;
       }
       window.localStorage.removeItem(researchDraftKey(researcherId, folder.id));
       const defaultFolder = currentResources.folders.find((item) => item.is_default);
@@ -197,8 +200,10 @@ export function ResearchWorkspacePage({ location, researcherId }: { location: Br
         folders: currentResources.folders.filter((item) => item.id !== folder.id),
       });
       window.history.replaceState(null, "", "/research");
+      return true;
     } catch {
       setFolderError("unavailable");
+      return false;
     }
   }
 
@@ -234,63 +239,89 @@ export function ResearchFolderNavigation({
   activeFolder: ResearchFolder;
   folders: ResearchFolder[];
   error: FolderError | null;
-  onCreate: (name: string) => Promise<void>;
-  onRename: (folderId: string, name: string) => Promise<void>;
-  onDelete: (folder: ResearchFolder) => Promise<void>;
+  onCreate: (name: string) => Promise<boolean>;
+  onRename: (folderId: string, name: string) => Promise<boolean>;
+  onDelete: (folder: ResearchFolder) => Promise<boolean>;
 }) {
   const { t } = useTranslation("research");
   const [newName, setNewName] = useState("");
   const [renameName, setRenameName] = useState(activeFolder.name);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<ResearchFolder | null>(null);
+  const [folderPending, setFolderPending] = useState(false);
   useEffect(() => setRenameName(activeFolder.name), [activeFolder.id, activeFolder.name]);
   return (
-    <div className="research-folder-control">
-      <details aria-label={t("folderMenu")} className="research-folder-navigation">
-        <summary>
-          <FolderSimple aria-hidden="true" size={18} weight="regular" />
-          <span>{t("activeFolder", { name: folderDisplayName(activeFolder) })}</span>
-          <CaretDown aria-hidden="true" className="folder-menu-caret" size={16} weight="regular" />
-        </summary>
-        <div className="folder-menu-panel">
-          <div className="folder-navigation-heading">
-            <span>{t("folders")}</span>
-          </div>
-          <nav aria-label={t("folderNavigation")}>
+    <div className="min-w-0">
+      <Popover open={menuOpen} onOpenChange={setMenuOpen}>
+        <PopoverTrigger render={<Button variant="outline" size="sm" className="max-[767px]:min-h-11" aria-label={t("folderMenu")} />}>
+          <FolderSimple aria-hidden="true" size={17} />
+          <span className="max-w-48 truncate">{t("activeFolder", { name: folderDisplayName(activeFolder) })}</span>
+          <CaretDown aria-hidden="true" size={14} />
+        </PopoverTrigger>
+        <PopoverContent align="start" className="w-[min(360px,calc(100vw-32px))] gap-4 p-4">
+          <PopoverTitle>{t("folders")}</PopoverTitle>
+          <nav aria-label={t("folderNavigation")} className="grid max-h-48 gap-1 overflow-auto">
             {folders.map((folder) => (
               <a
+                className="flex min-h-9 items-center justify-between gap-2 rounded-md px-2 text-sm text-foreground hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring aria-[current=page]:bg-muted max-[767px]:min-h-11"
                 aria-current={folder.id === activeFolder.id ? "page" : undefined}
                 href={folder.is_default ? "/research" : `/research?folder=${folder.id}`}
                 key={folder.id}
               >
-                <span>{folderDisplayName(folder)}</span>
-                {folder.is_default ? <small>{t("defaultFolder")}</small> : null}
+                <span className="truncate">{folderDisplayName(folder)}</span>
+                {folder.is_default ? <small className="text-muted-foreground">{t("defaultFolder")}</small> : null}
               </a>
             ))}
           </nav>
-          <form onSubmit={(event) => {
+          <form className="grid gap-2 border-t border-border pt-3" onSubmit={(event) => {
             event.preventDefault();
-            if (newName.trim() === "") return;
-            void onCreate(newName).then(() => setNewName(""));
+            if (newName.trim() === "" || folderPending) return;
+            setFolderPending(true);
+            void onCreate(newName).then((success) => { if (success) setNewName(""); }).finally(() => setFolderPending(false));
           }}>
-            <label htmlFor="new-folder-name">{t("newFolder")}</label>
-            <div className="folder-inline-action">
-              <input id="new-folder-name" maxLength={120} onChange={(event) => setNewName(event.target.value)} value={newName} />
-              <button aria-label={t("createFolder")} disabled={newName.trim() === ""} type="submit">
-                <Plus aria-hidden="true" size={16} weight="regular" />
-                {t("create")}
-              </button>
+            <label className="text-sm font-medium" htmlFor="new-folder-name">{t("newFolder")}</label>
+            <div className="flex gap-2">
+              <Input id="new-folder-name" className="max-[767px]:min-h-11" maxLength={120} onChange={(event) => setNewName(event.target.value)} value={newName} />
+              <Button disabled={newName.trim() === "" || folderPending} size="sm" className="max-[767px]:min-h-11" type="submit">
+                <Plus aria-hidden="true" size={16} />{t("create")}
+              </Button>
             </div>
           </form>
           {!activeFolder.is_default ? (
-            <section aria-label={t("folderActions")} className="folder-actions">
-              <label htmlFor="rename-folder-name">{t("folderName")}</label>
-              <input id="rename-folder-name" maxLength={120} onChange={(event) => setRenameName(event.target.value)} value={renameName} />
-              <button disabled={renameName.trim() === "" || renameName.trim() === activeFolder.name} onClick={() => void onRename(activeFolder.id, renameName)}>{t("renameFolder")}</button>
-              <button className="folder-delete" onClick={() => void onDelete(activeFolder)}>{t("deleteFolder")}</button>
+            <section aria-label={t("folderActions")} className="grid gap-2 border-t border-border pt-3">
+              <label className="text-sm font-medium" htmlFor="rename-folder-name">{t("folderName")}</label>
+              <Input id="rename-folder-name" className="max-[767px]:min-h-11" maxLength={120} onChange={(event) => setRenameName(event.target.value)} value={renameName} />
+              <div className="flex flex-wrap gap-2">
+                <Button variant="outline" size="sm" className="max-[767px]:min-h-11" disabled={folderPending || renameName.trim() === "" || renameName.trim() === activeFolder.name}
+                  onClick={() => { setFolderPending(true); void onRename(activeFolder.id, renameName).finally(() => setFolderPending(false)); }}>
+                  {t("renameFolder")}
+                </Button>
+                <Button variant="destructive" size="sm" className="max-[767px]:min-h-11" disabled={folderPending} onClick={() => { setMenuOpen(false); setDeleteTarget(activeFolder); }}>
+                  {t("deleteFolder")}
+                </Button>
+              </div>
             </section>
           ) : null}
-          {error !== null ? <p className="inline-status inline-status-error" role="alert">{t(`folderErrors.${error}`)}</p> : null}
-        </div>
-      </details>
+          {error !== null ? <p className="text-sm text-destructive" role="alert">{t(`folderErrors.${error}`)}</p> : null}
+        </PopoverContent>
+      </Popover>
+      <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => { if (!open && !folderPending) setDeleteTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("deleteFolder")}</AlertDialogTitle>
+            <AlertDialogDescription>{t("deleteFolderConfirm", { name: folderDisplayName(deleteTarget ?? activeFolder) })}</AlertDialogDescription>
+          </AlertDialogHeader>
+          {error !== null ? <p className="m-0 text-sm text-destructive" role="alert">{t(`folderErrors.${error}`)}</p> : null}
+          <AlertDialogFooter>
+            <AlertDialogCancel className="max-[767px]:min-h-11" disabled={folderPending}>{t("cancel")}</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" className="max-[767px]:min-h-11" disabled={folderPending} onClick={() => {
+              if (deleteTarget === null) return;
+              setFolderPending(true);
+              void onDelete(deleteTarget).then((success) => { if (success) setDeleteTarget(null); }).finally(() => setFolderPending(false));
+            }}>{t("deleteFolder")}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -393,28 +424,29 @@ export function ResearchDraftWorkspace({
   confirmDiscard?: (message: string) => boolean;
   startNewOnOpen?: boolean;
 }) {
-  const [draft, setDraft] = useState<ResearchDraft>(() =>
-    loadResearchDraft(storage, researcherId, folder.id));
   const { t } = useTranslation("research");
   const locale = interfaceLocale();
-  const [storageError, setStorageError] = useState<"failed" | "accepted" | null>(null);
-  const [diagnosticState, setDiagnosticState] = useState<DiagnosticState>({ kind: "idle", result: null });
-  const [admissionFeedback, setAdmissionFeedback] = useState<AdmissionFeedback | null>(null);
-  const [submitting, setSubmitting] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const workspace = useRef<HTMLElement>(null);
   const alphaEditor = useRef<AlphaFormulaEditorHandle>(null);
   const exposureEditor = useRef<AlphaFormulaEditorHandle>(null);
-  const [validationAttempted, setValidationAttempted] = useState(false);
   const [pendingInput, setPendingInput] = useState<ResearchInputField | null>(null);
+  function focusInput(field: ResearchInputField) {
+    if (field.startsWith("costs.") || ["neutralization", "initialCashCny", "volatilityWindow", "exposureExpression"].includes(field)) setSettingsOpen(true);
+    setPendingInput(field);
+  }
+  const {
+    draft, hasStoredDraft, storageError, diagnosticState, exposureDiagnosticState,
+    admissionFeedback, specFeedback, specKey, submitting, validationAttempted, inputIssues, inputError,
+    updateDraft, startNewResearch, checkConfiguration, runResearch,
+  } = useResearchDraftController({
+    researcherId, folderId: folder.id, storage, confirmDiscard, startNewOnOpen,
+    onInvalidInput: focusInput, onNew: () => setSettingsOpen(false),
+  });
   const direct = draft.researchKind === "strategy_backtest" && draft.strategyMode === "direct";
+  const factor = draft.researchKind === "factor_evaluation";
   const builtinAlpha = usesBuiltinAlpha(draft);
   const builtinPortfolio = usesBuiltinPortfolio(draft);
-  const inputIssues = validationAttempted ? researchInputIssues(researchInputs(draft)) : [];
-  const inputError = (field: ResearchInputField) => {
-    const issue = inputIssues.find((item) => item.field === field);
-    return issue === undefined ? undefined : t(`inputErrors.${issue.code}`);
-  };
   useEffect(() => {
     if (pendingInput === null) return;
     if (pendingInput === "formula") alphaEditor.current?.focus();
@@ -427,204 +459,20 @@ export function ResearchDraftWorkspace({
     }
     setPendingInput(null);
   }, [pendingInput, settingsOpen]);
-  function focusInput(field: ResearchInputField) {
-    if (field.startsWith("costs.") || ["neutralization", "initialCashCny", "volatilityWindow", "exposureExpression"].includes(field)) setSettingsOpen(true);
-    setPendingInput(field);
-  }
-  function validateInputs(): boolean {
-    setValidationAttempted(true);
-    const issues = researchInputIssues(researchInputs(draft));
-    if (issues.length === 0) return true;
-    focusInput(issues[0].field);
-    return false;
-  }
   const [fieldsOpen, setFieldsOpen] = useState(false);
   const fieldsTrigger = useRef<HTMLButtonElement>(null);
   const fieldsPanel = useRef<HTMLElement>(null);
-  useEffect(() => {
-    if (fieldsOpen) fieldsPanel.current?.querySelector<HTMLInputElement>('input[role="searchbox"]')?.focus();
-  }, [fieldsOpen]);
+  const restoreEditorFocus = useRef(false);
   function closeFields() {
     setFieldsOpen(false);
-    fieldsTrigger.current?.focus();
   }
   function fieldsButton() {
-    return <button className="button button-quiet" type="button" aria-expanded={fieldsOpen}
+    return <Button variant="outline" size="sm" className="max-[767px]:min-h-11" type="button" aria-expanded={fieldsOpen}
       aria-controls="research-fields-panel" onClick={event => {
         fieldsTrigger.current = event.currentTarget;
         setFieldsOpen(open => !open);
-      }}>{t("browseFields")}</button>;
+      }}>{t("browseFields")}</Button>;
   }
-  const [exposureDiagnosticState, setExposureDiagnosticState] = useState<DiagnosticState>({ kind: "idle", result: null });
-  const exposureDiagnostics = useRef(createDiagnosticsScheduler(coreFetch, undefined, "exposure"));
-  const [specFeedback, setSpecFeedback] = useState<{
-    key: string; checking: boolean; status: "checking" | "valid" | "invalid" | "unavailable"; issues: ResearchRunAdmissionRejection["issues"];
-  } | null>(null);
-  const specController = useRef<AbortController | null>(null);
-  const specKey = JSON.stringify(researchInputs(draft));
-  const diagnostics = useRef(createDiagnosticsScheduler());
-  const handledGlobalNew = useRef(false);
-  const admissionGeneration = useRef(0);
-  const admissionController = useRef<AbortController | null>(null);
-
-  useEffect(() => {
-    diagnostics.current.diagnose(builtinAlpha ? draft.formula : "", setDiagnosticState);
-  }, [draft.formula, builtinAlpha]);
-  useEffect(() => {
-    exposureDiagnostics.current.diagnose(
-      builtinPortfolio ? draft.exposureExpression : "",
-      setExposureDiagnosticState,
-    );
-  }, [draft.exposureExpression, builtinPortfolio]);
-  useEffect(() => {
-    specController.current?.abort();
-  }, [specKey]);
-  useEffect(() => () => {
-    diagnostics.current.dispose();
-    exposureDiagnostics.current.dispose();
-    specController.current?.abort();
-    admissionGeneration.current += 1;
-    admissionController.current?.abort();
-  }, []);
-  useEffect(() => {
-    if (!startNewOnOpen || handledGlobalNew.current) return;
-    handledGlobalNew.current = true;
-    startNewResearch();
-    if (typeof window !== "undefined") window.history.replaceState(null, "", "/research");
-  }, [startNewOnOpen]);
-
-  function updateDraft(change: (current: ResearchDraft) => ResearchDraft): void {
-    setDraft((current) => {
-      const next = change(current);
-      try {
-        persistResearchDraft(storage, researcherId, folder.id, next);
-        setStorageError(null);
-      } catch {
-        setStorageError("failed");
-      }
-      return next;
-    });
-  }
-
-  function startNewResearch(): void {
-    if (
-      hasUnexecutedChanges(draft) &&
-      !confirmDiscard(t("discardConfirm"))
-    ) return;
-    storage.removeItem(researchDraftKey(researcherId, folder.id));
-    setDraft(emptyResearchDraft());
-    setValidationAttempted(false);
-    setSettingsOpen(false);
-    setStorageError(null);
-    setAdmissionFeedback(null);
-  }
-
-  async function checkConfiguration(): Promise<void> {
-    if (!validateInputs()) return;
-    specController.current?.abort();
-    const controller = new AbortController();
-    specController.current = controller;
-    const key = specKey;
-    setSpecFeedback({ key, checking: true, status: "checking", issues: [] });
-    try {
-      const response = await coreFetch("/api/research/diagnostics", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(researchSpec(researchInputs(draft))), signal: controller.signal,
-      });
-      if (!response.ok) throw new Error("Configuration check is unavailable. Try again.");
-      const result = await response.json() as { valid: boolean; issues: ResearchRunAdmissionRejection["issues"] };
-      if (typeof result.valid !== "boolean") throw new Error("Invalid configuration response");
-      const issues = readResearchIssues(result.issues);
-      if (result.valid !== (issues.length === 0)) throw new Error("Inconsistent configuration response");
-      if (controller.signal.aborted) return;
-      setSpecFeedback({
-        key, checking: false, issues,
-        status: result.valid ? "valid" : "invalid",
-      });
-    } catch {
-      if (controller.signal.aborted) return;
-      setSpecFeedback({ key, checking: false, issues: [], status: "unavailable" });
-    }
-  }
-
-  async function runResearch(): Promise<void> {
-    if (submitting || !validateInputs()) return;
-    const begun = beginResearchRun(
-      draft,
-      folder.id,
-      () => `research_${crypto.randomUUID()}`,
-    );
-    try {
-      persistResearchDraft(storage, researcherId, folder.id, begun.draft);
-      setStorageError(null);
-    } catch {
-      setStorageError("failed");
-      return;
-    }
-    setDraft(begun.draft);
-    setAdmissionFeedback(null);
-    setSubmitting(true);
-    const generation = ++admissionGeneration.current;
-    admissionController.current?.abort();
-    const controller = new AbortController();
-    admissionController.current = controller;
-    try {
-      const response = await coreFetch("/api/research-runs", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(begun.command),
-        signal: controller.signal,
-      });
-      if (generation !== admissionGeneration.current) return;
-      if (response.status === 422) {
-        const rejection = (await response.json()) as ResearchRunAdmissionRejection;
-        const issues = readResearchIssues(rejection.issues);
-        if (issues.length === 0) throw new Error("Empty research rejection");
-        if (generation !== admissionGeneration.current) return;
-        setAdmissionFeedback({ key: JSON.stringify(researchInputs(begun.draft)), issues });
-        return;
-      }
-      if (!response.ok) throw new Error(`Research Run request failed (${response.status})`);
-      const accepted = (await response.json()) as { id: string };
-      if (generation !== admissionGeneration.current) return;
-      let next: ResearchDraft | null;
-      try {
-        next = finishResearchRun(
-          storage,
-          researcherId,
-          folder.id,
-          begun.command.request_id,
-        );
-      } catch {
-        setStorageError("accepted");
-        return;
-      }
-      if (next === null) return;
-      setDraft(next);
-      setStorageError(null);
-      window.location.assign(`/research-runs/${accepted.id}`);
-    } catch (reason: unknown) {
-      if (reason instanceof DOMException && reason.name === "AbortError") return;
-      if (generation !== admissionGeneration.current) return;
-      setAdmissionFeedback({
-        key: JSON.stringify(researchInputs(begun.draft)),
-        issues: [{
-          code: "RUN_UNAVAILABLE",
-          field: "run",
-          message: reason instanceof Error ? reason.message : "Research Run request failed",
-          severity: "error",
-          range: null,
-          details: null,
-        }],
-      });
-    } finally {
-      if (generation === admissionGeneration.current) {
-        admissionController.current = null;
-        setSubmitting(false);
-      }
-    }
-  }
-
   const coverage = data.market_research_readiness ? data.market_coverage : null;
   const previewDiagnostics = diagnosticState.kind === "complete"
     ? diagnosticState.result.diagnostics
@@ -674,9 +522,9 @@ export function ResearchDraftWorkspace({
     return inputError(path) ?? (issue ? formatResearchIssue(issue, locale) : undefined);
   }
   const alphaAuthoring = <>
-        <div className="formula-workbench">
-          <header className="formula-heading">
-            <h2 id="alpha-formula-title">{t("formula")}</h2>
+        <div className={factor ? "overflow-hidden rounded-lg border border-border bg-card focus-within:ring-2 focus-within:ring-ring/30" : "formula-workbench"}>
+          <header className={factor ? "flex min-h-12 items-center justify-between gap-3 border-b border-border px-4" : "formula-heading"}>
+            <h2 id="alpha-formula-title" className={factor ? "m-0 text-base font-semibold" : undefined}>{t("formula")}</h2>
             {fieldsButton()}
           </header>
           {inputError("formula") && <p className="research-formula-error inline-status-error">{inputError("formula")}</p>}
@@ -685,10 +533,13 @@ export function ResearchDraftWorkspace({
             catalog={catalog}
             diagnostics={serverDiagnostics}
             formula={draft.formula}
+            className={factor ? "h-[280px] min-w-0 overflow-hidden bg-card" : undefined}
             onChange={(formula, editor) => updateDraft((current) => ({ ...current, formula, editor }))}
             selection={draft.editor}
           />
-          <footer className="formula-status"><span>{t("autocomplete")}</span><span>{coverage ? t("marketThrough", { date: coverage.end }) : t("marketNotReady")}</span></footer>
+          <footer className={factor ? "flex flex-wrap justify-between gap-2 border-t border-border px-4 py-2 text-xs text-muted-foreground" : "formula-status"}>
+            <span>{t("autocomplete")}</span><span>{coverage ? t("marketThrough", { date: coverage.end }) : t("marketNotReady")}</span>
+          </footer>
         </div>
         {diagnosticState.kind === "complete" && diagnosticState.result.diagnostics.length > 0 ? (
           <ul aria-label={t("formulaDiagnostics")} className="formula-diagnostics">
@@ -703,6 +554,155 @@ export function ResearchDraftWorkspace({
           <p className="inline-status inline-status-error" role="status">{t("diagnosticsUnavailable")}</p>
         ) : null}
   </>;
+  if (factor) return (
+    <section ref={workspace} aria-label={t("title")} className="@container min-w-0">
+      <PageContent width="wide">
+        <PageHeader
+          title={<Input id="research-name" aria-label={t("name")} autoComplete="off" maxLength={200}
+            className="h-11 w-full max-w-[720px] border-transparent bg-transparent px-0 text-2xl font-semibold placeholder:text-foreground hover:border-border focus-visible:border-ring focus-visible:px-2"
+            onChange={(event) => updateDraft((current) => ({ ...current, name: event.target.value }))}
+            placeholder={t("untitled")} value={draft.name} />}
+          description={storageError === null ? t(hasStoredDraft ? "draftSavedLocal" : "draftNew") : t(`storage.${storageError}`)}
+          actions={<>{folderNavigation}<Button variant="outline" className="max-[767px]:min-h-11" disabled={submitting} onClick={startNewResearch}>
+            <Plus aria-hidden="true" />{t("newResearch")}</Button></>}
+        />
+        <fieldset className="mb-6 min-w-0 border-0 p-0">
+          <legend className="sr-only">{t("kind")}</legend>
+          <RadioGroup className="flex flex-wrap gap-2" value={draft.researchKind}
+            onValueChange={(value) => {
+              if (value === "factor_evaluation" || value === "strategy_backtest") {
+                updateDraft((current) => selectResearchKind(current, value));
+              }
+            }}>
+            <label className="flex min-h-10 cursor-pointer items-center gap-2 rounded-md border border-border bg-card px-3 text-sm font-medium has-[[data-checked]]:border-primary has-[[data-checked]]:bg-secondary max-[767px]:min-h-11">
+              <RadioGroupItem value="factor_evaluation" />{t("factor_evaluation")}
+            </label>
+            <label className="flex min-h-10 cursor-pointer items-center gap-2 rounded-md border border-border bg-card px-3 text-sm font-medium has-[[data-checked]]:border-primary has-[[data-checked]]:bg-secondary max-[767px]:min-h-11">
+              <RadioGroupItem value="strategy_backtest" />{t("strategy_backtest")}
+            </label>
+          </RadioGroup>
+        </fieldset>
+
+        <div className="grid min-w-0 gap-6 pb-8 @min-[960px]:grid-cols-[minmax(0,1fr)_320px] @min-[960px]:items-start">
+          <section aria-label={t("authoring")} className="grid min-w-0 content-start gap-6">
+            {alphaAuthoring}
+            {visibleIssues.length > 0 ? (
+              <ul aria-label={t("runIssues")} className="m-0 grid gap-2 rounded-lg border border-destructive p-4 text-sm text-destructive">
+                {visibleIssues.map((issue, index) => <li key={`${issue.code}-${index}`}>{formatResearchIssue(issue, locale)}</li>)}
+              </ul>
+            ) : null}
+            <FieldGroup className="rounded-lg border border-border bg-card p-4">
+              <Field>
+                <FieldLabel htmlFor="research-notes">{t("notes")}</FieldLabel>
+                <Textarea id="research-notes" rows={3} aria-describedby="research-notes-limit"
+                  aria-invalid={Array.from(draft.hypothesis).length > MAX_HYPOTHESIS_LENGTH}
+                  placeholder={t("notesPlaceholder")} value={draft.hypothesis}
+                  onChange={(event) => updateDraft((current) => ({ ...current, hypothesis: event.target.value }))} />
+                <span id="research-notes-limit" className="text-right text-xs text-muted-foreground">
+                  {t("characters", { used: Array.from(draft.hypothesis).length, maximum: MAX_HYPOTHESIS_LENGTH })}
+                </span>
+              </Field>
+            </FieldGroup>
+          </section>
+
+          <aside aria-label={t("settings")} className="grid min-w-0 gap-5 rounded-lg border border-border bg-card p-4 @min-[960px]:sticky @min-[960px]:top-4">
+            <h2 className="m-0 text-base font-semibold">{t("settings")}</h2>
+            <ResearchDateFields
+              compact
+              startError={inputError("startDate")} endError={inputError("endDate")}
+              coverageEnd={coverage?.end ?? null} coverageStart={coverage?.start ?? null}
+              endDate={draft.endDate} startDate={draft.startDate}
+              onChange={({ startDate, endDate }) => updateDraft((current) => ({ ...current, startDate, endDate }))}
+            />
+            <FieldGroup className="gap-4">
+              <Field>
+                <FieldLabel htmlFor="research-universe">{t("universe")}</FieldLabel>
+                <Select value={draft.universe || null} onValueChange={(value) => updateDraft((current) => ({ ...current, universe: value ?? "" }))}>
+                  <SelectTrigger id="research-universe" aria-invalid={Boolean(inputError("universe"))}
+                    aria-describedby={inputError("universe") ? "universe-error" : undefined} className="w-full">
+                    <SelectValue placeholder={t("notSelected")}>
+                      {draft.universe ? t("top", { count: Number(draft.universe.slice(3)) }) : undefined}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent><SelectGroup>
+                    {[300, 1000, 2000, 3000].map((count) => <SelectItem value={`top${count}`} key={count}>{t("top", { count })}</SelectItem>)}
+                  </SelectGroup></SelectContent>
+                </Select>
+                {inputError("universe") && <small id="universe-error" className="text-destructive">{inputError("universe")}</small>}
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="research-neutralization">{t("neutralization")}</FieldLabel>
+                <Select value={draft.neutralization || null}
+                  onValueChange={(value) => updateDraft((current) => ({ ...current, neutralization: value ?? "" }))}>
+                  <SelectTrigger id="research-neutralization" aria-invalid={Boolean(inputError("neutralization"))}
+                    aria-describedby={inputError("neutralization") ? "neutralization-error" : undefined} className="w-full">
+                    <SelectValue placeholder={t("notSelected")}>
+                      {draft.neutralization === "none" || draft.neutralization === "industry" ? t(draft.neutralization) : undefined}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent><SelectGroup>
+                    <SelectItem value="none">{t("none")}</SelectItem>
+                    <SelectItem value="industry">{t("industry")}</SelectItem>
+                  </SelectGroup></SelectContent>
+                </Select>
+                {inputError("neutralization") && <small id="neutralization-error" className="text-destructive">{inputError("neutralization")}</small>}
+              </Field>
+            </FieldGroup>
+          </aside>
+        </div>
+
+        {storageError !== null ? <p className="text-sm text-destructive" role="alert">{t(`storage.${storageError}`)}</p> : null}
+        {specFeedback?.key === specKey ? <div className="mb-4 rounded-lg border border-border bg-card p-4 text-sm" role="status">
+          <p className="m-0">{t(`configuration.${specFeedback.status}`)}</p>
+          {specFeedback.issues.length > 0 ? <ul aria-label={t("configurationIssues")}>
+            {specFeedback.issues.map((issue, index) => <li key={`${issue.field}-${issue.code}-${index}`}>
+              <strong>{researchIssueField(issue.field, locale)}</strong>: {formatResearchIssue(issue, locale)}
+            </li>)}
+          </ul> : null}
+        </div> : null}
+        {inputIssues.length > 0 ? <div className="mb-4 rounded-lg border border-destructive p-4 text-sm" role="alert">
+          <p className="m-0 font-medium">{t("completeSettings")}</p>
+          <ul className="mb-0">{inputIssues.map((issue) => <li key={issue.field}>
+            <Button variant="link" size="sm" className="h-auto px-0 text-destructive max-[767px]:min-h-11" onClick={() => focusInput(issue.field)}>
+              {t(`inputErrors.${issue.code}`)}
+            </Button>
+          </li>)}</ul>
+        </div> : null}
+        <footer className="sticky bottom-0 z-10 flex flex-wrap justify-end gap-3 border-t border-border bg-background/95 py-4 backdrop-blur-sm max-[767px]:static">
+          <Button variant="outline" type="button" className="max-[767px]:min-h-11" disabled={submitting || (specFeedback?.key === specKey && specFeedback.checking)}
+            onClick={() => void checkConfiguration()}>{t("check")}</Button>
+          <Button type="button" className="max-[767px]:min-h-11" disabled={submitting} onClick={() => void runResearch()}>
+            <Play aria-hidden="true" weight="fill" />{t(submitting ? "running" : "runEvaluation")}
+          </Button>
+        </footer>
+      </PageContent>
+
+      <Sheet open={fieldsOpen} onOpenChange={(open) => { if (open) setFieldsOpen(true); else closeFields(); }}>
+        <SheetContent side="right" showCloseButton={false} className="w-full max-w-[520px] overflow-y-auto p-4"
+          initialFocus={() => fieldsPanel.current?.querySelector<HTMLInputElement>('input[role="searchbox"]') ?? null}
+          finalFocus={() => {
+            if (restoreEditorFocus.current) {
+              restoreEditorFocus.current = false;
+              alphaEditor.current?.focus();
+              return false;
+            }
+            return fieldsTrigger.current;
+          }}>
+          <SheetHeader className="flex flex-row items-center justify-between p-0 pb-4">
+            <SheetTitle className="text-base">{t("fieldBrowser")}</SheetTitle>
+            <Button variant="ghost" size="icon-sm" className="max-[767px]:size-11" aria-label={t("closeFields")} onClick={closeFields}><X aria-hidden="true" /></Button>
+          </SheetHeader>
+          <section id="research-fields-panel" ref={fieldsPanel} className="min-w-0">
+            {fieldsOpen ? <ResearchFieldBrowser catalog={catalog} onInsert={(identifier) => {
+              alphaEditor.current?.insertAtSelection(identifier);
+              restoreEditorFocus.current = true;
+              setFieldsOpen(false);
+            }} /> : null}
+          </section>
+        </SheetContent>
+      </Sheet>
+    </section>
+  );
   return (
     <section ref={workspace} aria-label={t("title")} className="page-section research-workspace">
       <header className="research-workspace-header">
@@ -997,18 +997,13 @@ export function ResearchDraftWorkspace({
   );
 }
 
-type ResearchRunAdmissionRejection = { issues: ResearchRunAdmissionIssue[] };
-type AdmissionFeedback = {
-  key: string;
-  issues: ResearchRunAdmissionIssue[];
-};
-
 function issueAsFormulaDiagnostic(issue: ResearchRunAdmissionIssue): EditorDiagnostic[] {
   if (issue.field !== "formula" || issue.range === null) return [];
   return [{ ...issue, range: issue.range }];
 }
 
 export function ResearchDateFields({
+  compact = false,
   coverageStart,
   coverageEnd,
   startDate,
@@ -1017,6 +1012,7 @@ export function ResearchDateFields({
   startError,
   endError,
 }: {
+  compact?: boolean;
   startError?: string;
   endError?: string;
   coverageStart: string | null;
@@ -1026,42 +1022,31 @@ export function ResearchDateFields({
   onChange: (range: { startDate: string; endDate: string }) => void;
 }) {
   const { t } = useTranslation("research");
-  const startDateInput = useRef<HTMLInputElement>(null);
-  const endDateInput = useRef<HTMLInputElement>(null);
-  const commitDateRange = () => onChange({
-    startDate: startDateInput.current?.value ?? startDate,
-    endDate: endDateInput.current?.value ?? endDate,
-  });
   const presets = buildResearchDatePresets(coverageStart, coverageEnd);
   return (
-    <div aria-label={t("dates")} className="research-date-range" role="group">
-      <div className="research-date-field">
-        <label htmlFor="research-start-date">{t("startDate")}</label>
-        <div className="research-date-control">
-          <input id="research-start-date" aria-invalid={Boolean(startError)} aria-describedby={startError ? "start-date-error" : undefined} ref={startDateInput} aria-label={t("startDateInput")} max={endDate || coverageEnd || undefined} min={coverageStart ?? undefined} onBlur={commitDateRange} onChange={commitDateRange} onClick={() => startDateInput.current?.showPicker()} type="date" value={startDate} />
-          <button aria-label={t("openStartCalendar")} onClick={() => startDateInput.current?.showPicker()} type="button">
-            <CalendarBlank aria-hidden="true" size={18} weight="regular" />
-          </button>
-        </div>
-        {startError && <small id="start-date-error" className="inline-status-error">{startError}</small>}
+    <div aria-label={t("dates")} className="grid min-w-0 gap-4" role="group">
+      <div className={compact ? "grid gap-4" : "grid grid-cols-1 gap-4 sm:grid-cols-2"}>
+        <ResearchDateInput id="research-start-date" label={t("startDateInput")}
+          openLabel={t("openStartCalendar")} value={startDate} minimum={coverageStart}
+          maximum={isResearchIsoDate(endDate) ? endDate : coverageEnd}
+          error={startError} errorId="start-date-error"
+          onChange={startDate => onChange({ startDate, endDate })} />
+        <ResearchDateInput id="research-end-date" label={t("endDateInput")}
+          openLabel={t("openEndCalendar")} value={endDate}
+          minimum={isResearchIsoDate(startDate) ? startDate : coverageStart}
+          maximum={coverageEnd} error={endError} errorId="end-date-error"
+          onChange={endDate => onChange({ startDate, endDate })} />
       </div>
-      <div className="research-date-field">
-        <label htmlFor="research-end-date">{t("endDate")}</label>
-        <div className="research-date-control">
-          <input id="research-end-date" aria-invalid={Boolean(endError)} aria-describedby={endError ? "end-date-error" : undefined} ref={endDateInput} aria-label={t("endDateInput")} max={coverageEnd ?? undefined} min={startDate || coverageStart || undefined} onBlur={commitDateRange} onChange={commitDateRange} onClick={() => endDateInput.current?.showPicker()} type="date" value={endDate} />
-          <button aria-label={t("openEndCalendar")} onClick={() => endDateInput.current?.showPicker()} type="button">
-            <CalendarBlank aria-hidden="true" size={18} weight="regular" />
-          </button>
-        </div>
-        {endError && <small id="end-date-error" className="inline-status-error">{endError}</small>}
-      </div>
-      <div aria-label={t("quickDates")} className="research-date-presets" role="group">
+      <div aria-label={t("quickDates")} className="flex flex-wrap gap-2" role="group">
         {presets.map((preset) => {
           const active = preset.startDate !== null &&
             preset.startDate === startDate &&
             preset.endDate === endDate;
           return (
-            <button
+            <Button
+              variant={active ? "secondary" : "outline"}
+              size="sm"
+              className="max-[767px]:min-h-11"
               aria-label={t(`presetLabels.${preset.id}`)}
               aria-pressed={active}
               disabled={preset.startDate === null || preset.endDate === null}
@@ -1073,7 +1058,7 @@ export function ResearchDateFields({
               type="button"
             >
               {t(`presets.${preset.id}`)}
-            </button>
+            </Button>
           );
         })}
       </div>

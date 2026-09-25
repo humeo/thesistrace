@@ -173,6 +173,25 @@ test("Framework modules author, execute, reuse frozen programs and refresh Daily
   await page.screenshot({ path: testInfo.outputPath("framework-track.png"), fullPage: true });
 });
 
+test("Classic Factor authoring submits one ResearchRun", { tag: "@isolated" }, async ({ page }) => {
+  test.setTimeout(180_000);
+  await page.goto("/research?new");
+  await expect(page.getByRole("radio", { name: /Factor Evaluation/ })).toBeChecked();
+  await page.getByLabel("Research name").fill("Classic Factor smoke");
+  await replaceFormula(page, "close");
+  await page.getByLabel("Research start date").fill("2026-08-04");
+  await page.getByLabel("Research end date").fill("2026-08-05");
+  await page.getByRole("combobox", { name: "Universe" }).click();
+  await page.getByRole("option", { name: "Top 300", exact: true }).click();
+  await expect(page.getByRole("combobox", { name: "Neutralization" })).toContainText("None");
+  await page.getByRole("button", { name: "Check configuration" }).click();
+  await expect(page.getByText("Configuration is valid.", { exact: false })).toBeVisible();
+  await page.getByRole("button", { name: "Run evaluation" }).click();
+  await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
+  await expect(page.locator(".research-run-facts").getByText(/Status\s+succeeded/)).toBeVisible({ timeout: 150_000 });
+  await expect(page.getByRole("heading", { name: "Factor Summary" })).toBeVisible();
+});
+
 test("Direct Python authoring executes, reuses frozen source and explicitly advances DailyTrack", { tag: "@isolated" }, async ({ page }) => {
   test.setTimeout(360_000);
   publishFinancialTrackHead("lagged");

@@ -1,11 +1,9 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
-import { build } from "vite";
 import { fontStylesheet, serveBrandAssets } from "./brand-assets";
+import { buildProductFixture } from "./build-product-fixture";
 
 let script: string;
-const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+let styles: string;
 
 for (const width of [1280, 390]) {
   test(`fees remain editable, validate beside the field and submit exactly at ${width}px`, async ({ page }) => {
@@ -55,6 +53,34 @@ for (const width of [1280, 390]) {
     } });
   });
 }
+
+test("Factor admission ignores a second click before React paints the pending state", async ({ page }) => {
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  const submissions: Record<string, unknown>[] = [];
+  await page.route("https://exposure.test/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/api/alpha/diagnostics") return route.fulfill({ json: { valid: true, diagnostics: [] } });
+    if (path === "/api/research-runs") {
+      submissions.push(route.request().postDataJSON());
+      await pending;
+      return route.fulfill({ status: 202, json: { id: "run_factor" } });
+    }
+    return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+  });
+  await page.goto("https://exposure.test/?factor");
+  await page.addStyleTag({ content: styles });
+  await page.addScriptTag({ content: script });
+  await page.getByRole("combobox", { name: "Universe" }).click();
+  await page.getByRole("option", { name: "Top 300", exact: true }).click();
+  await page.getByRole("button", { name: "Run evaluation" }).evaluate((button) => {
+    (button as HTMLButtonElement).click();
+    (button as HTMLButtonElement).click();
+  });
+  await expect.poll(() => submissions.length).toBe(1);
+  release();
+  expect(submissions).toHaveLength(1);
+});
 
 for (const width of [1280, 390]) {
   test(`Framework modules retain independent drafts and locate errors at ${width}px`, async ({ page }) => {
@@ -210,20 +236,91 @@ test("switching back to built-in Framework removes the Python definition", async
   expect(draft.programFields).toBe("");
 });
 test.beforeAll(async () => {
-  const result = await build({
-    configFile: false, logLevel: "silent", esbuild: { jsx: "automatic" },
-    define: { "process.env.NODE_ENV": JSON.stringify("production") },
-    build: { write: false, minify: false, lib: {
-      entry: fileURLToPath(new URL("./fixtures/selection-exposure.tsx", import.meta.url)),
-      formats: ["iife"], name: "SelectionExposureFixture",
-    } },
-  });
-  if ("on" in result) throw new Error("Expected one-off build");
-  const chunk = (Array.isArray(result) ? result : [result]).flatMap(bundle => bundle.output)
-    .find(output => output.type === "chunk" && output.isEntry);
-  if (chunk?.type !== "chunk") throw new Error("Missing component bundle");
-  script = chunk.code;
+  ({ script, styles } = await buildProductFixture(new URL("./fixtures/selection-exposure.tsx", import.meta.url), "SelectionExposureFixture"));
 });
+
+test("a malformed local draft is shown as a new draft", async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem("thesistrace.research-draft.exposure-test.folder_default", "{broken");
+  });
+  await page.route("https://exposure.test/**", route => route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' }));
+  await page.goto("https://exposure.test/?factor");
+  await page.addStyleTag({ content: styles });
+  await page.addScriptTag({ content: script });
+  await expect(page.getByText("New draft · stored in this browser when edited")).toBeVisible();
+  await expect(page.getByText("Draft saved in this browser")).toHaveCount(0);
+});
+
+for (const width of [1280, 768, 390, 320]) {
+  test(`Factor authoring retains manual dates and inserts a catalog field at ${width}px`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 });
+    const submissions: Record<string, unknown>[] = [];
+    await page.route("https://exposure.test/**", route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === "/api/alpha/diagnostics") return route.fulfill({ json: { valid: true, diagnostics: [] } });
+      if (path === "/api/research/diagnostics") return route.fulfill({ json: { valid: true, issues: [] } });
+      if (path === "/api/research-runs") {
+        submissions.push(route.request().postDataJSON());
+        return route.fulfill({ status: 202, json: { id: "run_factor" } });
+      }
+      return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    });
+    await page.goto("https://exposure.test/?factor");
+    await page.addStyleTag({ content: styles });
+    await page.addScriptTag({ content: script });
+    const editor = page.locator(".cm-content").first();
+    const authoring = page.getByRole("region", { name: "Alpha authoring" });
+    const settings = page.getByRole("complementary", { name: "Run settings" });
+    const start = page.getByRole("textbox", { name: "Research start date" });
+    const end = page.getByRole("textbox", { name: "Research end date" });
+    await expect(editor).toBeVisible();
+    const authoringBox = (await authoring.boundingBox())!;
+    const settingsBox = (await settings.boundingBox())!;
+    if (width >= 960) expect(settingsBox.x).toBeGreaterThan(authoringBox.x + authoringBox.width);
+    else expect(settingsBox.y).toBeGreaterThan(authoringBox.y + authoringBox.height);
+    await start.fill("2025-02-29");
+    await page.getByRole("button", { name: "Run evaluation" }).click();
+    await expect(start).toHaveAttribute("aria-invalid", "true");
+    await expect(page.getByRole("alert")).toContainText("valid start date");
+    expect(submissions).toHaveLength(0);
+    await start.fill("2026-08-03");
+    await expect(end).toHaveValue("2026-08-05");
+    await page.getByRole("button", { name: "Open start date calendar" }).click();
+    const calendar = page.getByRole("dialog", { name: "Open start date calendar" });
+    await expect(calendar).toBeVisible();
+    const calendarBox = (await calendar.boundingBox())!;
+    expect(calendarBox.x).toBeGreaterThanOrEqual(0);
+    expect(calendarBox.x + calendarBox.width).toBeLessThanOrEqual(width);
+    const selectedDay = calendar.getByRole("button", { name: /Monday, August 3rd, 2026/ });
+    await selectedDay.focus();
+    await expect(selectedDay.locator("xpath=..")).toHaveAttribute("data-focused", "true");
+    await page.keyboard.press("ArrowRight");
+    const nextDay = calendar.getByRole("button", { name: /Tuesday, August 4th, 2026/ });
+    await expect(nextDay).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(start).toHaveValue("2026-08-04");
+    await start.fill("2026-08-03");
+    await page.getByRole("button", { name: "Open start date calendar" }).click();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("button", { name: "Open start date calendar" })).toBeFocused();
+    await page.getByRole("button", { name: "Browse fields" }).click();
+    const browser = page.getByRole("dialog", { name: "Field browser" });
+    await expect(browser).toBeVisible();
+    await browser.getByRole("searchbox", { name: "Search fields" }).fill("close");
+    await browser.getByRole("button", { name: "Insert into formula" }).click();
+    await expect(browser).not.toBeVisible();
+    await expect(editor).toContainText("closeclose");
+    await expect(editor).toBeFocused();
+    await page.getByRole("button", { name: "简体中文" }).click();
+    await expect(page.getByLabel("研究开始日期")).toHaveValue("2026-08-03");
+    await expect(editor).toContainText("closeclose");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`factor-authoring-${width}.png`), fullPage: true });
+    await page.getByRole("button", { name: "运行评估" }).click();
+    await expect.poll(() => submissions.length).toBe(1);
+    expect(submissions[0]).toMatchObject({ formula: "closeclose", start_date: "2026-08-03", end_date: "2026-08-05" });
+  });
+}
 
 for (const weighting of ["rank_weight", "inverse_volatility"] as const) {
 test(`Exposure, ${weighting}, retained draft and submission share one source`, async ({ page }) => {
@@ -475,21 +572,23 @@ for (const width of [1280, 390, 320]) {
     await trigger.click();
     await page.getByRole("radio", { name: "Factor Evaluation" }).check();
     await expect(page.getByRole("button", { name: "Run evaluation" })).toBeVisible();
-    await trigger.click();
+    await expect(page.getByRole("complementary", { name: "Run settings" })).toBeVisible();
     await expect(page.getByLabel("Portfolio weighting", { exact: false })).not.toBeVisible();
-    await page.getByRole("button", { name: "Run settings", exact: true }).click();
     await page.getByLabel("Notes", { exact: true }).fill("Compare the signal across market regimes.");
     const browse = page.getByRole("button", { name: "Browse fields", exact: true });
+    const controlledPanelId = await browse.getAttribute("aria-controls");
+    expect(controlledPanelId).toBe("research-fields-panel");
     await browse.click();
-    const fields = page.getByRole("complementary", { name: "Field browser" });
+    const fields = page.getByRole("dialog", { name: "Field browser" });
     await expect(fields).toBeVisible();
+    await expect(page.locator(`#${controlledPanelId}`)).toHaveCount(1);
     await expect(fields.getByRole("searchbox", { name: "Search fields" })).toBeFocused();
     await fields.getByRole("searchbox").fill("close");
-    await expect(fields.getByRole("button", { name: "Adjusted close" })).toBeVisible();
-    await expect(fields.locator("#data-field-detail")).toContainText("causal cumulative-adjusted close");
+    await expect(fields.getByRole("button", { name: /Adjusted close/ })).toBeVisible();
+    await expect(fields.getByRole("region", { name: "Field details" })).toContainText("causal cumulative-adjusted close");
     await fields.getByRole("searchbox").fill("not_a_field");
-    await expect(fields.getByText("No fields match these filters.")).toBeVisible();
-    await fields.getByRole("button", { name: "Clear search" }).click();
+    await expect(fields.getByText("No matching fields")).toBeVisible();
+    await fields.getByRole("searchbox").fill("");
     await fields.getByRole("searchbox").press("Escape");
     await expect(fields).not.toBeVisible();
     await expect(browse).toBeFocused();
