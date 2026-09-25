@@ -28,7 +28,7 @@ test("Chinese public entry survives real email authentication and a saved consol
   await expect(page).toHaveURL(/\/data$/);
   await expect(page.getByRole("heading", { name: "数据", exact: true })).toBeVisible();
   await expect(page.locator("html")).toHaveAttribute("lang", "zh-CN");
-  await page.locator(".account-menu > summary").click();
+  await page.getByRole("button", { name: "账户菜单" }).click();
   await page.getByRole("button", { name: "简体中文", exact: true }).click();
   await page.reload();
   await expect(page.getByRole("heading", { name: "数据", exact: true })).toBeVisible();

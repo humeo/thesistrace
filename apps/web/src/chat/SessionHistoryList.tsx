@@ -1,96 +1,60 @@
 import {
-  ChatCircle,
-  CircleNotch,
-  DotsThree,
-  NotePencil,
-  Question,
-  Trash,
-  X,
+  ChatCircle, CircleNotch, DotsThree, NotePencil, Question, Trash,
 } from "@phosphor-icons/react";
-import {
-  useEffect,
-  useRef,
-  useState,
-  type FormEvent,
-  type KeyboardEvent,
-} from "react";
-import { createPortal } from "react-dom";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Trans, useTranslation } from "react-i18next";
+
+import { Alert, AlertDescription } from "../components/ui/alert";
+import {
+  AlertDialog, AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
+  AlertDialogHeader, AlertDialogTitle,
+} from "../components/ui/alert-dialog";
+import { Button } from "../components/ui/button";
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from "../components/ui/dialog";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuTrigger,
+} from "../components/ui/dropdown-menu";
+import { Field, FieldLabel } from "../components/ui/field";
+import { Input } from "../components/ui/input";
 import { i18n } from "../i18n";
 import type { ChatErrorKey } from "../i18n/messages/chat";
-
-import { chatSessionHref } from "./chatNavigation";
 import { handleWorkspaceNavigation } from "../shell/navigation";
+import { chatSessionHref } from "./chatNavigation";
 import {
-  AgentSessionActiveRunError,
-  AgentSessionChangedError,
-  AgentSessionInvalidError,
-  AgentSessionNotFoundError,
-  AgentSessionTitleInvalidError,
-  groupSessionsByRecency,
+  AgentSessionActiveRunError, AgentSessionChangedError, AgentSessionInvalidError,
+  AgentSessionNotFoundError, AgentSessionTitleInvalidError, groupSessionsByRecency,
   type AgentSessionSummary,
 } from "./sessionHistory";
 import type { SessionHistoryController } from "./useSessionHistory";
 
-type SessionDialog = Readonly<{
-  kind: "rename" | "delete";
-  session: AgentSessionSummary;
-}>;
-
-type SessionMenuPlacement = Readonly<{
-  left: number;
-  top: number;
-}>;
-
-const SESSION_MENU_WIDTH = 150;
-const SESSION_MENU_MAX_HEIGHT = 104;
-const SESSION_MENU_GAP = 4;
-const SESSION_MENU_VIEWPORT_MARGIN = 8;
+export type SessionDialog = Readonly<{ kind: "rename" | "delete"; session: AgentSessionSummary }>;
 
 export function SessionHistoryList({
-  controller,
-  currentSessionId,
-  navigate,
-  navigationInteractive,
-  restoreFocus,
+  controller, currentSessionId, navigate, navigationInteractive, restoreFocus, onDecision,
 }: {
   controller: SessionHistoryController;
   currentSessionId: string | null;
   navigate: (href: string) => void;
   navigationInteractive: boolean;
   restoreFocus: (deletedCurrentSession: boolean) => void;
+  onDecision: (dialog: SessionDialog) => void;
 }) {
   const { t } = useTranslation("chat");
   const displayTitle = (title: string) => title === "Untitled" ? t("untitled") : title;
   const [openMenu, setOpenMenu] = useState<string | null>(null);
-  const [menuPlacement, setMenuPlacement] = useState<SessionMenuPlacement | null>(null);
-  const [dialog, setDialog] = useState<SessionDialog | null>(null);
   const menuButtons = useRef(new Map<string, HTMLButtonElement>());
-  const openMenuActivity = useRef<Readonly<{
-    activeRun: boolean;
-    id: string;
-  }> | null>(null);
+  const openMenuActivity = useRef<Readonly<{ activeRun: boolean; id: string }> | null>(null);
   const groups = groupSessionsByRecency(controller.sessions);
   const openMenuSession = controller.sessions.find((session) => session.id === openMenu);
   const openMenuHasActiveTurn = openMenuSession?.current_turn !== null
     && openMenuSession?.current_turn !== undefined;
 
   useEffect(() => {
-    if (openMenu === null) return;
-    const menu = document.getElementById(`chat-session-menu-${openMenu}`);
-    menu?.querySelector<HTMLButtonElement>('button[role="menuitem"]')?.focus();
-  }, [openMenu]);
-
-  useEffect(() => {
     if (openMenu === null || openMenuSession !== undefined) return;
-    const removedSessionId = openMenu;
     setOpenMenu(null);
-    setMenuPlacement(null);
-    window.requestAnimationFrame(() => {
-      const trigger = menuButtons.current.get(removedSessionId);
-      if (trigger?.isConnected) trigger.focus();
-      else restoreFocus(false);
-    });
+    restoreFocus(false);
   }, [openMenu, openMenuSession, restoreFocus]);
 
   useEffect(() => {
@@ -99,156 +63,61 @@ export function SessionHistoryList({
       return;
     }
     const previous = openMenuActivity.current;
-    openMenuActivity.current = {
-      activeRun: openMenuHasActiveTurn,
-      id: openMenuSession.id,
-    };
-    if (
-      previous?.id === openMenuSession.id
-      && !previous.activeRun
-      && openMenuHasActiveTurn
-    ) {
-      closeMenu(true);
+    openMenuActivity.current = { activeRun: openMenuHasActiveTurn, id: openMenuSession.id };
+    if (previous?.id === openMenuSession.id && !previous.activeRun && openMenuHasActiveTurn) {
+      setOpenMenu(null);
     }
   }, [openMenu, openMenuHasActiveTurn, openMenuSession]);
 
   useEffect(() => {
     if (openMenu === null) return;
-    const dismissForLayoutChange = () => closeMenu(true);
+    const close = () => setOpenMenu(null);
     const dismissForAnchorScroll = (event: Event) => {
       const trigger = menuButtons.current.get(openMenu);
-      // Independent content can scroll as a Run settles without moving this
-      // sidebar anchor. Only scrolling its ancestors invalidates placement.
-      if (trigger && event.target instanceof Node && event.target.contains(trigger)) {
-        closeMenu(true);
-      }
+      if (trigger && event.target instanceof Node && event.target.contains(trigger)) close();
     };
-    const dismissFromOutside = (event: PointerEvent) => {
-      const target = event.target;
-      if (!(target instanceof Node)) {
-        closeMenu(false);
-        return;
-      }
-      const menu = document.getElementById(`chat-session-menu-${openMenu}`);
-      const trigger = menuButtons.current.get(openMenu);
-      if (menu?.contains(target) || trigger?.contains(target)) return;
-      closeMenu(false);
-    };
-    window.addEventListener("resize", dismissForLayoutChange);
-    document.addEventListener("pointerdown", dismissFromOutside, true);
+    window.addEventListener("resize", close);
     document.addEventListener("scroll", dismissForAnchorScroll, true);
     return () => {
-      window.removeEventListener("resize", dismissForLayoutChange);
-      document.removeEventListener("pointerdown", dismissFromOutside, true);
+      window.removeEventListener("resize", close);
       document.removeEventListener("scroll", dismissForAnchorScroll, true);
     };
   }, [openMenu]);
 
   useEffect(() => {
-    if (navigationInteractive) return;
-    const hadOpenMenu = openMenu !== null;
-    setOpenMenu(null);
-    setMenuPlacement(null);
-    if (hadOpenMenu) window.requestAnimationFrame(() => restoreFocus(false));
-  }, [navigationInteractive, openMenu, restoreFocus]);
+    if (!navigationInteractive) setOpenMenu(null);
+  }, [navigationInteractive]);
 
   useEffect(() => {
-    if (openMenu !== null) closeMenu(true);
+    setOpenMenu(null);
   }, [currentSessionId]);
 
-  function closeMenu(shouldRestoreFocus: boolean): void {
-    const sessionId = openMenu;
+  function openDecision(kind: SessionDialog["kind"], session: AgentSessionSummary): void {
     setOpenMenu(null);
-    setMenuPlacement(null);
-    if (shouldRestoreFocus && sessionId !== null) {
-      window.requestAnimationFrame(() => {
-        const trigger = menuButtons.current.get(sessionId);
-        if (trigger?.isConnected) trigger.focus();
-        else restoreFocus(false);
-      });
-    }
-  }
-
-  function openDialog(kind: SessionDialog["kind"], session: AgentSessionSummary): void {
-    setDialog({ kind, session });
-    setOpenMenu(null);
-    setMenuPlacement(null);
-  }
-
-  function toggleMenu(sessionId: string, trigger: HTMLButtonElement): void {
-    if (openMenu === sessionId) {
-      closeMenu(false);
-      return;
-    }
-    const bounds = trigger.getBoundingClientRect();
-    const opensToRight = bounds.right <= SESSION_MENU_WIDTH + SESSION_MENU_VIEWPORT_MARGIN * 2;
-    const unclampedLeft = opensToRight
-      ? bounds.right + SESSION_MENU_GAP
-      : bounds.right - SESSION_MENU_WIDTH;
-    const maxLeft = Math.max(
-      SESSION_MENU_VIEWPORT_MARGIN,
-      window.innerWidth - SESSION_MENU_WIDTH - SESSION_MENU_VIEWPORT_MARGIN,
-    );
-    const preferredTop = bounds.bottom + SESSION_MENU_GAP;
-    const opensBelow = preferredTop + SESSION_MENU_MAX_HEIGHT
-      <= window.innerHeight - SESSION_MENU_VIEWPORT_MARGIN;
-    const unclampedTop = opensBelow
-      ? preferredTop
-      : bounds.top - SESSION_MENU_MAX_HEIGHT - SESSION_MENU_GAP;
-    setMenuPlacement({
-      left: Math.min(Math.max(unclampedLeft, SESSION_MENU_VIEWPORT_MARGIN), maxLeft),
-      top: Math.max(unclampedTop, SESSION_MENU_VIEWPORT_MARGIN),
-    });
-    setOpenMenu(sessionId);
-  }
-
-  function closeDialog(): void {
-    const sessionId = dialog?.session.id;
-    setDialog(null);
-    if (sessionId !== undefined) {
-      window.requestAnimationFrame(() => {
-        const trigger = menuButtons.current.get(sessionId);
-        if (trigger?.isConnected) trigger.focus();
-        else restoreFocus(false);
-      });
-    }
-  }
-
-  function completeDelete(sessionId: string): void {
-    const deletedCurrentSession = sessionId === currentSessionId;
-    setDialog(null);
-    if (deletedCurrentSession) navigate("/chat");
-    window.requestAnimationFrame(() => restoreFocus(deletedCurrentSession));
+    onDecision({ kind, session });
   }
 
   const historyContent = controller.status === "loading" ? (
-    <p
-      className="chat-session-status chat-session-status-loading"
-      role="status"
-      title={t("historyLoading")}
-    >
+    <p className="chat-session-status chat-session-status-loading" role="status" title={t("historyLoading")}>
       {t("historyLoading")}
     </p>
   ) : controller.status === "error" && controller.sessions.length === 0 ? (
-      <div className="chat-session-status chat-session-status-error">
-        <p role="alert">{controller.error}</p>
-        <button className="button-quiet" onClick={controller.refresh} type="button">{t("retry")}</button>
-      </div>
+    <div className="chat-session-status chat-session-status-error">
+      <p role="alert">{controller.error}</p>
+      <Button variant="ghost" onClick={controller.refresh} type="button">{t("retry")}</Button>
+    </div>
   ) : controller.sessions.length === 0 ? (
-      <div className="chat-session-empty" title={t("historyEmpty")}>
-        <ChatCircle aria-hidden="true" size={16} weight="regular" />
-        <span className="chat-session-empty-full">{t("historyEmpty")}</span>
-        <span className="chat-session-empty-compact">{t("empty")}</span>
-      </div>
+    <div className="chat-session-empty" title={t("historyEmpty")}>
+      <ChatCircle aria-hidden="true" size={16} weight="regular" />
+      <span className="chat-session-empty-full">{t("historyEmpty")}</span>
+      <span className="chat-session-empty-compact">{t("empty")}</span>
+    </div>
   ) : (
     <>
       <div className="chat-session-groups">
         {groups.map((group) => (
           <section aria-labelledby={`chat-session-group-${group.id}`} key={group.id}>
-            <h3
-              data-collapsed-label={collapsedGroupLabel(group.id)}
-              id={`chat-session-group-${group.id}`}
-            >
+            <h3 data-collapsed-label={collapsedGroupLabel(group.id)} id={`chat-session-group-${group.id}`}>
               {t(`recency.${group.id}`)}
             </h3>
             <div className="chat-session-list">
@@ -275,106 +144,58 @@ export function SessionHistoryList({
                       </em>
                     )}
                   </a>
-                  <button
-                    aria-controls={openMenu === session.id
-                      ? `chat-session-menu-${session.id}`
-                      : undefined}
-                    aria-expanded={openMenu === session.id}
-                    aria-haspopup="menu"
-                    aria-label={t("actionsFor", { name: displayTitle(session.title) })}
-                    className="chat-session-menu-trigger"
-                    onClick={(event) => toggleMenu(session.id, event.currentTarget)}
-                    ref={(element) => {
-                      if (element === null) menuButtons.current.delete(session.id);
-                      else menuButtons.current.set(session.id, element);
-                    }}
-                    type="button"
+                  <DropdownMenu
+                    open={openMenu === session.id && navigationInteractive}
+                    onOpenChange={(next) => setOpenMenu(next ? session.id : null)}
                   >
-                    <DotsThree aria-hidden="true" size={17} weight="bold" />
-                  </button>
+                    <DropdownMenuTrigger
+                      aria-label={t("actionsFor", { name: displayTitle(session.title) })}
+                      render={<Button variant="ghost" size="icon-sm" className="chat-session-menu-trigger" type="button" />}
+                      ref={(element) => {
+                        if (element === null) menuButtons.current.delete(session.id);
+                        else menuButtons.current.set(session.id, element);
+                      }}
+                    >
+                      <DotsThree aria-hidden="true" size={17} weight="bold" />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent
+                      aria-label={t("actionsFor", { name: displayTitle(session.title) })}
+                      className="chat-session-menu w-42"
+                      id={`chat-session-menu-${session.id}`}
+                      side="right"
+                    >
+                      <DropdownMenuGroup>
+                        <DropdownMenuItem onClick={() => openDecision("rename", session)}>
+                          <NotePencil aria-hidden="true" size={16} />{t("rename")}
+                        </DropdownMenuItem>
+                        {session.current_turn === null ? (
+                          <DropdownMenuItem variant="destructive" onClick={() => openDecision("delete", session)}>
+                            <Trash aria-hidden="true" size={16} />{t("deleteChat")}
+                          </DropdownMenuItem>
+                        ) : null}
+                      </DropdownMenuGroup>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </div>
               ))}
             </div>
           </section>
         ))}
       </div>
-      {controller.error === null ? null : (
-        <p
-          className="chat-session-pagination-error"
-          role="alert"
-          title={controller.error}
-        >
-          {controller.error}
-        </p>
-      )}
+      {controller.error === null ? null : <p className="chat-session-pagination-error" role="alert" title={controller.error}>{controller.error}</p>}
       {controller.nextCursor === null ? null : (
-        <button
-          className="chat-session-load-more button-quiet"
-          disabled={controller.loadingMore}
-          onClick={() => void controller.loadMore()}
-          type="button"
-        >
+        <Button variant="ghost" className="chat-session-load-more" disabled={controller.loadingMore} onClick={() => void controller.loadMore()} type="button">
           {t(controller.loadingMore ? "loadingMore" : "loadMore")}
-        </button>
+        </Button>
       )}
     </>
   );
 
-  return (
-    <>
-      {historyContent}
-      {openMenuSession === undefined
-        || menuPlacement === null
-        || !navigationInteractive
-        || typeof document === "undefined"
-        ? null
-        : createPortal(
-            <div
-              aria-label={t("actionsFor", { name: displayTitle(openMenuSession.title) })}
-              className="chat-session-menu"
-              id={`chat-session-menu-${openMenuSession.id}`}
-              onKeyDown={(event) => handleMenuKeyDown(event, () => closeMenu(true))}
-              role="menu"
-              style={menuPlacement}
-            >
-              <button
-                onClick={() => openDialog("rename", openMenuSession)}
-                role="menuitem"
-                type="button"
-              >
-                <NotePencil aria-hidden="true" size={15} />
-                {t("rename")}
-              </button>
-              {openMenuSession.current_turn === null ? (
-                <button
-                  onClick={() => openDialog("delete", openMenuSession)}
-                  role="menuitem"
-                  type="button"
-                >
-                  <Trash aria-hidden="true" size={15} />
-                  {t("deleteChat")}
-                </button>
-              ) : null}
-            </div>,
-            document.body,
-          )}
-      {dialog === null ? null : (
-        <SessionDecisionDialog
-          controller={controller}
-          dialog={dialog}
-          onClose={closeDialog}
-          onDeleted={completeDelete}
-        />
-      )}
-    </>
-  );
+  return historyContent;
 }
 
-function SessionDecisionDialog({
-  controller,
-  dialog,
-  onClose,
-  onDeleted,
+export function SessionDecisionDialog({
+  controller, dialog, onClose, onDeleted,
 }: {
   controller: SessionHistoryController;
   dialog: SessionDialog;
@@ -382,26 +203,9 @@ function SessionDecisionDialog({
   onDeleted: (sessionId: string) => void;
 }) {
   const { t } = useTranslation("chat");
-  const panelRef = useRef<HTMLDialogElement>(null);
-  const initialFocusRef = useRef<HTMLInputElement | HTMLButtonElement>(null);
   const [title, setTitle] = useState(dialog.session.title);
   const [errorKey, setErrorKey] = useState<ChatErrorKey | null>(null);
   const [submitting, setSubmitting] = useState(false);
-
-  useEffect(() => {
-    const element = panelRef.current;
-    if (element === null) return;
-    element.showModal();
-    initialFocusRef.current?.focus();
-    return () => {
-      if (element.open) element.close();
-    };
-  }, []);
-
-  function dismissDialog(): void {
-    panelRef.current?.close();
-    onClose();
-  }
 
   async function submit(event: FormEvent): Promise<void> {
     event.preventDefault();
@@ -411,11 +215,9 @@ function SessionDecisionDialog({
     try {
       if (dialog.kind === "rename") {
         await controller.renameSession(dialog.session, title);
-        dismissDialog();
+        onClose();
       } else {
         await controller.deleteSession(dialog.session);
-        // Release native modality before the parent navigates and restores focus.
-        panelRef.current?.close();
         onDeleted(dialog.session.id);
       }
     } catch (caught) {
@@ -428,9 +230,7 @@ function SessionDecisionDialog({
       } else if (caught instanceof AgentSessionNotFoundError) {
         setErrorKey("chatGone");
         controller.refresh();
-      } else if (caught instanceof AgentSessionTitleInvalidError) {
-        setErrorKey(sessionDialogErrorKey(dialog.kind, caught));
-      } else if (caught instanceof AgentSessionInvalidError) {
+      } else if (caught instanceof AgentSessionTitleInvalidError || caught instanceof AgentSessionInvalidError) {
         setErrorKey(sessionDialogErrorKey(dialog.kind, caught));
       } else {
         setErrorKey(dialog.kind === "rename" ? "renameFailed" : "deleteFailed");
@@ -440,96 +240,48 @@ function SessionDecisionDialog({
     }
   }
 
-  function handleKeyDown(event: KeyboardEvent<HTMLDialogElement>): void {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      event.stopPropagation();
-      if (!submitting) dismissDialog();
-      return;
-    }
-    if (event.key !== "Tab") return;
-    const focusable = [...(panelRef.current?.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), input:not([disabled])',
-    ) ?? [])];
-    const first = focusable[0];
-    const last = focusable.at(-1);
-    if (first === undefined || last === undefined) return;
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first.focus();
-    }
+  if (dialog.kind === "delete") {
+    return (
+      <AlertDialog open onOpenChange={(next) => { if (!next && !submitting) onClose(); }}>
+        <AlertDialogContent className="chat-session-dialog w-[min(440px,calc(100vw-32px))] max-w-none text-muted-foreground">
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("deleteChatQuestion")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              <Trans i18nKey="deleteDescription" ns="chat" components={{ name: <strong>{dialog.session.title === "Untitled" ? t("untitled") : dialog.session.title}</strong> }} />
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <form onSubmit={(event) => void submit(event)}>
+            {errorKey === null ? null : <Alert variant="destructive"><AlertDescription>{t(`errors.${errorKey}`)}</AlertDescription></Alert>}
+            <AlertDialogFooter>
+              <Button autoFocus variant="outline" disabled={submitting} onClick={onClose} type="button">{t("cancel")}</Button>
+              <Button variant="destructive" disabled={submitting} type="submit">{t(submitting ? "deleting" : "deleteChat")}</Button>
+            </AlertDialogFooter>
+          </form>
+        </AlertDialogContent>
+      </AlertDialog>
+    );
   }
 
-  const titleId = `chat-session-${dialog.kind}-title`;
-  const descriptionId = `chat-session-${dialog.kind}-description`;
   return (
-    <dialog
-      aria-describedby={descriptionId}
-      aria-labelledby={titleId}
-      aria-modal="true"
-      className="chat-session-dialog"
-      onCancel={(event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        if (!submitting) dismissDialog();
-      }}
-      onKeyDown={handleKeyDown}
-      ref={panelRef}
-    >
-      <header>
-        <div>
-          <p className="eyebrow">{t("session")}</p>
-          <h2 id={titleId}>{t(dialog.kind === "rename" ? "renameChat" : "deleteChatQuestion")}</h2>
-        </div>
-        <button aria-label={t("closeDialog")} disabled={submitting} onClick={dismissDialog} type="button">
-          <X aria-hidden="true" size={18} />
-        </button>
-      </header>
-      <form onSubmit={(event) => void submit(event)}>
-        {dialog.kind === "rename" ? (
-          <label className="chat-session-title-field">
-            <span>{t("title")}</span>
-            <input
-              onChange={(event) => setTitle(event.target.value)}
-              ref={initialFocusRef as React.RefObject<HTMLInputElement>}
-              required
-              value={title}
-            />
-          </label>
-        ) : (
-          <p id={descriptionId}><Trans i18nKey="deleteDescription" ns="chat" components={{ name: <strong>{dialog.session.title === "Untitled" ? t("untitled") : dialog.session.title}</strong> }} /></p>
-        )}
-        {dialog.kind === "rename" ? (
-          <p id={descriptionId}>{t("renameDescription")}</p>
-        ) : null}
-        {errorKey === null ? null : <p className="chat-dialog-error" role="alert">{t(`errors.${errorKey}`)}</p>}
-        <footer>
-          <button
-            className="button-quiet"
-            disabled={submitting}
-            onClick={dismissDialog}
-            ref={dialog.kind === "delete"
-              ? initialFocusRef as React.RefObject<HTMLButtonElement>
-              : undefined}
-            type="button"
-          >
-            {t("cancel")}
-          </button>
-          <button
-            className={dialog.kind === "delete" ? "button-danger" : "button-primary"}
-            disabled={submitting}
-            type="submit"
-          >
-            {t(submitting
-              ? dialog.kind === "delete" ? "deleting" : "saving"
-              : dialog.kind === "delete" ? "deleteChat" : "saveTitle")}
-          </button>
-        </footer>
-      </form>
-    </dialog>
+    <Dialog open onOpenChange={(next) => { if (!next && !submitting) onClose(); }}>
+      <DialogContent className="chat-session-dialog w-[min(440px,calc(100vw-32px))] max-w-none text-muted-foreground" showCloseButton={false}>
+        <DialogHeader>
+          <DialogTitle>{t("renameChat")}</DialogTitle>
+          <DialogDescription>{t("renameDescription")}</DialogDescription>
+        </DialogHeader>
+        <form onSubmit={(event) => void submit(event)}>
+          <Field data-invalid={errorKey !== null}>
+            <FieldLabel htmlFor="chat-session-title">{t("title")}</FieldLabel>
+            <Input autoFocus id="chat-session-title" aria-invalid={errorKey !== null} onChange={(event) => setTitle(event.target.value)} required value={title} />
+          </Field>
+          {errorKey === null ? null : <Alert variant="destructive"><AlertDescription>{t(`errors.${errorKey}`)}</AlertDescription></Alert>}
+          <DialogFooter>
+            <Button variant="outline" disabled={submitting} onClick={onClose} type="button">{t("cancel")}</Button>
+            <Button disabled={submitting} type="submit">{t(submitting ? "saving" : "saveTitle")}</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -537,12 +289,8 @@ export function sessionDialogErrorKey(
   kind: SessionDialog["kind"],
   error: AgentSessionInvalidError | AgentSessionTitleInvalidError,
 ): ChatErrorKey {
-  if (error instanceof AgentSessionTitleInvalidError) {
-    return "titleInvalid";
-  }
-  return kind === "rename"
-    ? "titleResponseInvalid"
-    : "deleteResponseInvalid";
+  if (error instanceof AgentSessionTitleInvalidError) return "titleInvalid";
+  return kind === "rename" ? "titleResponseInvalid" : "deleteResponseInvalid";
 }
 
 export function sessionDialogErrorMessage(
@@ -550,33 +298,6 @@ export function sessionDialogErrorMessage(
   error: AgentSessionInvalidError | AgentSessionTitleInvalidError,
 ): string {
   return i18n.t(`chat:errors.${sessionDialogErrorKey(kind, error)}`);
-}
-
-function handleMenuKeyDown(
-  event: KeyboardEvent<HTMLDivElement>,
-  close: () => void,
-): void {
-  if (event.key === "Escape") {
-    event.preventDefault();
-    event.stopPropagation();
-    close();
-    return;
-  }
-  if (!["ArrowDown", "ArrowUp", "Home", "End", "Tab"].includes(event.key)) return;
-  event.preventDefault();
-  const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>(
-    'button[role="menuitem"]',
-  )];
-  if (items.length === 0) return;
-  const current = items.indexOf(document.activeElement as HTMLButtonElement);
-  const next = event.key === "Home"
-    ? 0
-    : event.key === "End"
-      ? items.length - 1
-      : event.key === "ArrowDown" || (event.key === "Tab" && !event.shiftKey)
-        ? (current + 1 + items.length) % items.length
-        : (current - 1 + items.length) % items.length;
-  items[next]?.focus();
 }
 
 function collapsedGroupLabel(id: "today" | "previous" | "older"): string {

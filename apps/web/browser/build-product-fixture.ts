@@ -1,12 +1,12 @@
 import tailwindcss from "@tailwindcss/vite";
 import { fileURLToPath } from "node:url";
-import { build } from "vite";
+import { build, type PluginOption } from "vite";
 
 /** Build fixture JavaScript and CSS through the product's Tailwind pipeline. */
-export async function buildProductFixture(entry: URL, name: string): Promise<{ script: string; styles: string }> {
+export async function buildProductFixture(entry: URL, name: string, fixturePlugins: PluginOption[] = []): Promise<{ script: string; styles: string }> {
   const result = await build({
     configFile: false,
-    plugins: [tailwindcss()],
+    plugins: [...fixturePlugins, tailwindcss()],
     resolve: { alias: { "@": fileURLToPath(new URL("../src", import.meta.url)) } },
     logLevel: "silent",
     esbuild: { jsx: "automatic" },

@@ -16,7 +16,9 @@ test("rejects native disclosure controls in migrated code", () => {
   const source = `export const Page = () => <details><summary>More</summary></details>;`;
   assert.equal(isMigratedUiFile("auth/AccessHelp.tsx"), true);
   assert.equal(uiOwnershipViolations("auth/AccessHelp.tsx", source, isMigratedUiFile("auth/AccessHelp.tsx")).length, 2);
-  assert.equal(isMigratedUiFile("auth/AccountMenu.tsx"), false);
+  assert.equal(isMigratedUiFile("auth/AccountMenu.tsx"), true);
+  assert.equal(isMigratedUiFile("shell/AppShell.tsx"), true);
+  assert.equal(isMigratedUiFile("chat/SessionHistoryList.tsx"), true);
 });
 
 test("rejects primitive imports outside the foundation even before migration", () => {

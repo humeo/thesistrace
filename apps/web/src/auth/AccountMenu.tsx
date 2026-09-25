@@ -1,14 +1,15 @@
 import { CaretRight, CaretUpDown, SignOut } from "@phosphor-icons/react";
-import {
-  useRef,
-  useState,
-  type KeyboardEvent,
-} from "react";
+import { useState } from "react";
 
-import { useAuth } from "./AuthProvider";
-import type { PublicSession } from "./session";
+import { Alert, AlertDescription } from "../components/ui/alert";
+import { Button } from "../components/ui/button";
+import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "../components/ui/popover";
+import { Separator } from "../components/ui/separator";
+import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group";
 import { changeInterfaceLanguage, interfaceLocale, useTranslation } from "../i18n";
+import { useAuth } from "./AuthProvider";
 import type { AuthErrorCode, AuthResult } from "./errors";
+import type { PublicSession } from "./session";
 
 type AccountMenuContentProps = Readonly<{
   session: PublicSession;
@@ -27,17 +28,12 @@ export function AccountMenu() {
   );
 }
 
-export function AccountMenuContent({
-  session,
-  signOut,
-}: AccountMenuContentProps) {
+export function AccountMenuContent({ session, signOut }: AccountMenuContentProps) {
   const { t } = useTranslation(["common", "auth"]);
   const locale = interfaceLocale();
   const [open, setOpen] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const [message, setMessage] = useState<AuthErrorCode | null>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
-  const summaryRef = useRef<HTMLElement>(null);
   const initials = session.displayLabel.trim().split(/\s+/u)
     .map((part) => Array.from(part)[0]).slice(0, 2).join("").toLocaleUpperCase();
 
@@ -51,38 +47,6 @@ export function AccountMenuContent({
     </>
   );
 
-  function handleMenuKeyDown(event: KeyboardEvent<HTMLDetailsElement>): void {
-    if (!open) return;
-    if (event.key === "Escape") {
-      event.preventDefault();
-      event.stopPropagation();
-      setOpen(false);
-      summaryRef.current?.focus();
-      return;
-    }
-    if (event.key !== "Tab") return;
-
-    const summary = summaryRef.current;
-    const panel = panelRef.current;
-    if (summary === null || panel === null) return;
-    const focusable = [
-      summary,
-      ...panel.querySelectorAll<HTMLElement>(
-        "a[href], button:not([disabled]), input:not([disabled])",
-      ),
-    ];
-    const first = focusable[0];
-    const last = focusable.at(-1);
-    if (first === undefined || last === undefined) return;
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first.focus();
-    }
-  }
-
   async function submitSignOut(): Promise<void> {
     if (signingOut) return;
     setSigningOut(true);
@@ -95,55 +59,46 @@ export function AccountMenuContent({
   }
 
   return (
-    <details
-      className="account-menu"
-      onKeyDown={handleMenuKeyDown}
-      onToggle={(event) => setOpen(event.currentTarget.open)}
-      open={open}
-    >
-      <summary
-        aria-expanded={open}
-        aria-label={t("accountMenu")}
-        ref={summaryRef}
-      >
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger aria-label={t("accountMenu")} render={<Button variant="ghost" type="button" className="account-trigger" />}>
         {identity}
         <CaretUpDown className="account-trigger-chevron" aria-hidden="true" size={18} />
-      </summary>
-      <div className="account-menu-panel" ref={panelRef}>
-        <div className="account-identity">
-          {identity}
-        </div>
-        {message !== null ? <p className="account-message" role="status">{t(`auth:errors.${message}`)}</p> : null}
-        <a
-          className="button account-action"
-          href="https://discord.gg/tdwxubVhMJ"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
+        <span className="sr-only">{t("accountMenu")}</span>
+      </PopoverTrigger>
+      <PopoverContent side="top" align="start" className="account-menu-panel">
+        <PopoverTitle className="sr-only">{t("accountMenu")}</PopoverTitle>
+        <div className="account-identity">{identity}</div>
+        {message !== null ? <Alert variant="destructive"><AlertDescription>{t(`auth:errors.${message}`)}</AlertDescription></Alert> : null}
+        <Button variant="ghost" className="account-action" render={
+          <a href="https://discord.gg/tdwxubVhMJ" target="_blank" rel="noopener noreferrer" />
+        }>
           <img src="/brand/discord-symbol-white.svg" alt="" width={20} height={16} />
           <span>{t("joinCommunity")}</span>
           <CaretRight className="account-action-chevron" aria-hidden="true" size={16} />
-        </a>
-        <button
-          className="account-action"
-          disabled={signingOut}
-          onClick={() => void submitSignOut()}
-          type="button"
-        >
+        </Button>
+        <Button variant="ghost" className="account-action" disabled={signingOut} onClick={() => void submitSignOut()} type="button">
           <SignOut aria-hidden="true" size={20} />
           <span>{t(signingOut ? "signingOut" : "signOut")}</span>
           <CaretRight className="account-action-chevron" aria-hidden="true" size={16} />
-        </button>
-        <div className="account-language" role="group" aria-label={t("language")}>
+        </Button>
+        <Separator />
+        <div className="account-language">
           <span>{t("language")}</span>
-          <div className="account-language-options">
-            <button type="button" lang="en" aria-pressed={locale === "en"}
-              onClick={() => changeInterfaceLanguage("en")}>English</button>
-            <button type="button" lang="zh-CN" aria-pressed={locale === "zh-CN"}
-              onClick={() => changeInterfaceLanguage("zh-CN")}>简体中文</button>
-          </div>
+          <ToggleGroup
+            aria-label={t("language")}
+            value={[locale]}
+            onValueChange={(value) => {
+              const selected = value[0] ?? locale;
+              if (selected === "en" || selected === "zh-CN") void changeInterfaceLanguage(selected);
+            }}
+            variant="outline"
+            className="account-language-options"
+          >
+            <ToggleGroupItem value="en" lang="en">English</ToggleGroupItem>
+            <ToggleGroupItem value="zh-CN" lang="zh-CN">简体中文</ToggleGroupItem>
+          </ToggleGroup>
         </div>
-      </div>
-    </details>
+      </PopoverContent>
+    </Popover>
   );
 }

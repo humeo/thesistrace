@@ -17,15 +17,14 @@ test("shows only the compact account identity and supported actions", () => {
   );
 
   expect(markup).toContain('aria-label="Account menu"');
-  expect(markup).not.toContain("aria-haspopup");
+  expect(markup).toContain('aria-haspopup="dialog"');
   expect(markup).toContain("researcher@example.test");
   expect(markup).not.toContain("Change password");
-  expect(markup).toContain("Log out");
   expect(markup).not.toContain("Settings");
   expect(markup).not.toContain("Profile");
 });
 
-test("offers both interface languages without hiding the current identity", () => {
+test("keeps the current identity available before the menu opens", () => {
   const markup = renderToStaticMarkup(
     <AccountMenuContent
       session={{ displayLabel: "研究员", email: "researcher@example.test", operator: false,
@@ -33,8 +32,6 @@ test("offers both interface languages without hiding the current identity", () =
       signOut={async () => ({ ok: true })}
     />,
   );
-  expect(markup).toContain("English");
-  expect(markup).toContain("简体中文");
-  expect(markup).toContain('aria-pressed="true"');
   expect(markup).toContain("研究员");
+  expect(markup).toContain('aria-expanded="false"');
 });

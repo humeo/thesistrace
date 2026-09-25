@@ -3,8 +3,8 @@ import ts from "typescript";
 const basicControls = new Set(["button", "input", "select", "textarea", "dialog", "table", "details", "summary"]);
 
 export function isMigratedUiFile(relativePath) {
-  return relativePath === "main.tsx" ||
-    (relativePath.startsWith("auth/") && relativePath !== "auth/AccountMenu.tsx");
+  return relativePath === "main.tsx" || relativePath === "shell/AppShell.tsx" ||
+    relativePath === "chat/SessionHistoryList.tsx" || relativePath.startsWith("auth/");
 }
 
 /** Return source-level ownership violations without depending on rendered DOM. */

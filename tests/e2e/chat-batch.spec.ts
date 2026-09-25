@@ -136,7 +136,7 @@ test(`Chat Batch ${mode} preserves ordered child Results independently of its Se
   await expect.poll(() => transcript.evaluate(element => element.scrollTop)).toBeLessThan(scrollBefore);
   await expect(deleteMenu).toBeVisible();
   await deleteMenu.click();
-  await page.getByRole("dialog", { name: "Delete Chat?" }).getByRole("button", { name: "Delete Chat" }).click();
+  await page.getByRole("alertdialog", { name: "Delete Chat?" }).getByRole("button", { name: "Delete Chat" }).click();
   await expect(page).toHaveURL(/\/chat$/);
   expect((await page.request.get(`/api/agent/sessions/${sessionId}`, { headers: sameOriginHeaders() })).status()).toBe(404);
   expect(await batch(page, batchId)).toEqual(complete);

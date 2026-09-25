@@ -119,7 +119,7 @@ test("Chat DailyTrack replays lost Start and Retry responses while Tracking adva
     await send(page, reloadPrompt);
     await expect(page.getByRole("article", { name: "Research surface" }).last()).toContainText("The next calculation period exceeds available execution capacity.");
     const beforeLanguageSwitch = trackFacts(researcher.id);
-    await page.locator(".account-menu > summary").click();
+    await page.getByRole("button", { name: "Account menu" }).click();
     await page.getByRole("button", { name: "简体中文", exact: true }).click();
     await expect(page.locator(".chat-a2ui-surface").last()).toContainText("下一计算区间超出可用执行容量。");
     await page.getByRole("button", { name: "English", exact: true }).click();
@@ -197,7 +197,7 @@ async function deleteChat(page: Page): Promise<void> {
     name: /^Actions for /,
   }).click();
   await page.getByRole("menuitem", { name: "Delete Chat" }).click();
-  await page.getByRole("dialog", { name: "Delete Chat?" }).getByRole("button", { name: "Delete Chat" }).click();
+  await page.getByRole("alertdialog", { name: "Delete Chat?" }).getByRole("button", { name: "Delete Chat" }).click();
   await expect(page).toHaveURL(/\/chat$/);
   expect((await page.request.get(`/api/agent/sessions/${id}`, { headers: sameOriginHeaders() })).status()).toBe(404);
 }

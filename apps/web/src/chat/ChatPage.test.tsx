@@ -123,6 +123,7 @@ test.each([
       navigate={vi.fn()}
       navigationInteractive
       restoreFocus={vi.fn()}
+      onDecision={vi.fn()}
     />,
   );
   expect(markup).toContain(`class="${className}"`);

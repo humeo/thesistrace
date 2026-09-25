@@ -143,7 +143,7 @@ test("Chat exposes the registered Catalog and responsive Session sidebar through
   await collapse.click();
 
   await page.setViewportSize({ width: 390, height: 844 });
-  const open = page.getByRole("button", { name: "Open navigation" });
+  const open = page.locator(".mobile-navigation-toggle");
   await expect(page.locator(".context-bar")).toHaveCount(0);
   const openBox = (await open.boundingBox())!;
   expect(openBox.x).toBe(8);
@@ -158,11 +158,10 @@ test("Chat exposes the registered Catalog and responsive Session sidebar through
     () => page.locator(".chat-main").evaluate((element) => element.getBoundingClientRect().x),
   ).toBe(0);
   await page.screenshot({ path: test.info().outputPath("chat-mobile.png") });
-  await expect(sidebar).toHaveAttribute("inert", "");
+  await expect(sidebar).toHaveCount(0);
   await open.click();
   await expect(open).toHaveAttribute("aria-expanded", "true");
-  await expect(sidebar).not.toHaveAttribute("inert", "");
-  await expect(page.locator(".app-shell")).toHaveClass(/app-shell-navigation-open/);
+  await expect(page.getByRole("dialog", { name: "Navigation" })).toBeVisible();
   await expect.poll(
     () => sidebar.evaluate((element) => element.getBoundingClientRect().left),
   ).toBe(0);
@@ -172,19 +171,18 @@ test("Chat exposes the registered Catalog and responsive Session sidebar through
   const closeBox = await close.boundingBox();
   expect(closeBox?.width).toBeGreaterThanOrEqual(44);
   expect(closeBox?.height).toBeGreaterThanOrEqual(44);
-  const sendBox = await page.getByRole("button", { name: "Send" }).boundingBox();
+  const sendBox = await page.locator(".chat-main-action").boundingBox();
   expect(sendBox?.width).toBeGreaterThanOrEqual(44);
   expect(sendBox?.height).toBeGreaterThanOrEqual(44);
   await page.keyboard.press("Escape");
   await expect(open).toBeFocused();
   await expect(open).toHaveAttribute("aria-expanded", "false");
-  await expect(sidebar).toHaveAttribute("inert", "");
-  await expect(page.locator(".app-shell")).not.toHaveClass(/app-shell-navigation-open/);
+  await expect(sidebar).toHaveCount(0);
   await page.emulateMedia({ reducedMotion: "reduce" });
   await open.press("Enter");
   await expect(close).toBeFocused();
   const home = sidebar.getByRole("link", { name: "Quantgrove home" });
-  const account = sidebar.getByLabel("Account menu");
+  const account = sidebar.getByRole("button", { name: "Account menu" });
   await home.focus();
   await home.press("Shift+Tab");
   await expect(account).toBeFocused();
@@ -211,21 +209,24 @@ for (const mobile of [false, true]) {
     page.on("request", (request) => {
       if (request.resourceType() === "document") documentRequests.push(request.url());
     });
-    const sidebarElement = await sidebar.elementHandle();
+    const shellElement = await page.locator(".app-shell").elementHandle();
     if (!mobile) await page.getByRole("button", { name: "Collapse sidebar" }).click();
 
     for (const [path, label] of [
       ["/data", "Data"], ["/research", "Research"],
       ["/research-runs", "Research Runs"], ["/daily-tracks", "Daily Tracks"],
     ]) {
-      if (mobile) await page.getByRole("button", { name: "Open navigation" }).click();
+      if (mobile) {
+        await page.getByRole("button", { name: "Open navigation" }).click();
+        await expect(sessionLink).toHaveCount(1);
+      }
       await sidebar.getByRole("link", { name: label!, exact: true }).click();
       await expect(page).toHaveURL(new RegExp(`${path}$`));
       await expect(page.locator(".context-bar")).toHaveCount(0);
-      await expect(sessionLink).toHaveCount(1);
-      await expect(sidebar.locator(`.resource-nav a[href="${path}"]`)).toHaveAttribute("aria-current", "page");
-      expect(await sidebarElement!.evaluate((element) => element.isConnected)).toBe(true);
-      if (mobile) await expect(sidebar).toHaveAttribute("inert", "");
+      await expect(sessionLink).toHaveCount(mobile ? 0 : 1);
+      if (!mobile) await expect(sidebar.locator(`.resource-nav a[href="${path}"]`)).toHaveAttribute("aria-current", "page");
+      expect(await shellElement!.evaluate((element) => element.isConnected)).toBe(true);
+      if (mobile) await expect(sidebar).toHaveCount(0);
       else await expect(page.getByRole("button", { name: "Expand sidebar" })).toBeVisible();
     }
     if (mobile) await page.getByRole("button", { name: "Open navigation" }).click();
@@ -239,9 +240,9 @@ for (const mobile of [false, true]) {
     await page.goForward();
     await expect(page).toHaveURL(sessionUrl);
     await expect(page.locator(".chat-message-user .chat-message-content")).toHaveText("Build a low volatility Alpha.");
-    expect(await sidebarElement!.evaluate((element) => element.isConnected)).toBe(true);
+    expect(await shellElement!.evaluate((element) => element.isConnected)).toBe(true);
     expect(documentRequests).toEqual([]);
-    await expect(page.locator("aside")).toHaveCount(1);
+    await expect(page.locator(".app-shell")).toHaveCount(1);
   });
 }
 
@@ -312,7 +313,7 @@ for (const viewport of [
     await page.locator(".chat-session-row").hover();
     await actions.click();
     await page.getByRole("menuitem", { name: "Delete Chat", exact: true }).click();
-    const dialog = page.getByRole("dialog", { name: "Delete Chat?", exact: true });
+    const dialog = page.getByRole("alertdialog", { name: "Delete Chat?", exact: true });
     await expect(dialog.getByRole("button", { name: "Cancel", exact: true })).toBeFocused();
     await dialog.getByRole("button", { name: "Delete Chat", exact: true }).click();
     await expect(page).toHaveURL(/\/chat$/);
@@ -325,7 +326,7 @@ for (const viewport of [
     await expect(focusTarget).toBeFocused();
     if (viewport.name === "mobile") {
       await expect(navigation).toHaveAttribute("aria-expanded", "false");
-      await expect(page.locator("#primary-navigation")).toHaveAttribute("inert", "");
+      await expect(page.locator("#primary-navigation")).toHaveCount(0);
     }
     await page.goto(sessionUrl);
     await expect(page.getByRole("heading", { name: "Chat not found" })).toBeVisible();
@@ -412,7 +413,7 @@ test("first Chat turn streams through Caddy and reload replays without another r
   await page.locator(".chat-session-row-current").hover();
   await page.getByRole("button", { name: "Actions for Untitled" }).click();
   await page.getByRole("menuitem", { name: "Delete Chat" }).click();
-  const failedDeleteDialog = page.getByRole("dialog", { name: "Delete Chat?" });
+  const failedDeleteDialog = page.getByRole("alertdialog", { name: "Delete Chat?" });
   await failedDeleteDialog.getByRole("button", { name: "Delete Chat" }).click();
   await expect(failedDeleteDialog.getByRole("alert")).toHaveText(
     "The Chat could not be deleted.",
@@ -607,7 +608,7 @@ test("first Chat turn streams through Caddy and reload replays without another r
   }
   await mobileActions.click();
   await expect(page.getByRole("menu", { name: `Actions for ${renamedTitle}` })).toBeVisible();
-  const navigationBackdrop = page.locator(".navigation-backdrop");
+  const navigationBackdrop = page.locator('[data-slot="sheet-overlay"]');
   const navigationBackdropBounds = await navigationBackdrop.boundingBox();
   if (navigationBackdropBounds === null) {
     throw new Error("Mobile navigation exposed no clickable backdrop");
@@ -619,18 +620,18 @@ test("first Chat turn streams through Caddy and reload replays without another r
     },
   });
   await expect(page.getByRole("menu", { name: `Actions for ${renamedTitle}` })).toHaveCount(0);
-  await expect(page.locator("#primary-navigation")).toHaveAttribute("inert", "");
+  await expect(page.locator("#primary-navigation")).toHaveCount(0);
   await expect(openNavigation).toBeFocused();
   await openNavigation.click();
   await page.locator(".chat-session-row-current").hover();
   await mobileActions.click();
   await page.keyboard.press("Escape");
-  await expect(page.locator(".app-shell")).toHaveClass(/app-shell-navigation-open/);
+  await expect(page.getByRole("dialog", { name: "Navigation" })).toBeVisible();
   await expect(mobileActions).toBeFocused();
   await mobileActions.click();
   await page.getByRole("menuitem", { name: "Rename" }).click();
   await page.keyboard.press("Escape");
-  await expect(page.locator(".app-shell")).toHaveClass(/app-shell-navigation-open/);
+  await expect(page.getByRole("dialog", { name: "Navigation" })).toBeVisible();
   await expect(mobileActions).toBeFocused();
   await mobileActions.click();
   await expect(page.getByRole("menu", { name: `Actions for ${renamedTitle}` })).toBeVisible();
@@ -660,10 +661,10 @@ test("first Chat turn streams through Caddy and reload replays without another r
   });
   await expect(page.getByRole("menu", { name: `Actions for ${renamedTitle}` })).toHaveCount(0);
   await expect(page.getByText("No conversations yet", { exact: true })).toBeVisible();
-  await expect(page.locator(".app-shell")).toHaveClass(/app-shell-navigation-open/);
+  await expect(page.getByRole("dialog", { name: "Navigation" })).toBeVisible();
   await expect(page.getByRole("link", { name: "New Chat", exact: true })).toBeFocused();
   await page.keyboard.press("Escape");
-  await expect(page.locator(".app-shell")).not.toHaveClass(/app-shell-navigation-open/);
+  await expect(page.getByRole("dialog", { name: "Navigation" })).toBeHidden();
   await expect(openNavigation).toBeFocused();
 });
 
@@ -739,7 +740,7 @@ test("Chat executes a real protected MCP read Tool and renders only its safe lif
   const response = await runResponse;
   expect(response.status()).toBe(200);
   await page.setViewportSize({ width: 320, height: 720 });
-  await expect(page.locator("#primary-navigation")).toHaveCSS("visibility", "hidden");
+  await expect(page.locator("#primary-navigation")).toHaveCount(0);
   const compactToolLayout = await tool.evaluate((element) => {
     const toolBounds = element.getBoundingClientRect();
     const fields = [...element.querySelectorAll<HTMLElement>(":scope > code, :scope > span")];
@@ -1227,7 +1228,7 @@ test("admitted Research artifacts and a DailyTrack outlive the Chat that created
   await page.getByRole("button", { name: `Actions for ${currentTitle}` }).locator("..").hover();
   await page.getByRole("button", { name: `Actions for ${currentTitle}` }).click();
   await page.getByRole("menuitem", { name: "Delete Chat" }).click();
-  const deleteDialog = page.getByRole("dialog", { name: "Delete Chat?" });
+  const deleteDialog = page.getByRole("alertdialog", { name: "Delete Chat?" });
   await expect(deleteDialog).toContainText(
     "ResearchRuns, Results, and Daily Tracks remain independent and are not deleted.",
   );

@@ -22,7 +22,7 @@ test("Chat scrolling preserves an open sidebar menu; scrolling its anchor dismis
   };
   try {
     await act(async () => root.render(<SessionHistoryList controller={controller} currentSessionId={session.id}
-      navigate={vi.fn()} navigationInteractive restoreFocus={vi.fn()} />));
+      navigate={vi.fn()} navigationInteractive restoreFocus={vi.fn()} onDecision={vi.fn()} />));
     const trigger = host.querySelector<HTMLButtonElement>('button[aria-label="Actions for Research"]')!;
     await act(async () => trigger.click());
     expect(document.querySelector('[role="menu"]')).not.toBeNull();
@@ -52,7 +52,7 @@ test("locale changes only the Untitled sentinel display and retains an open hist
   };
   try {
     await act(async () => root.render(<SessionHistoryList controller={controller} currentSessionId={null}
-      navigate={vi.fn()} navigationInteractive restoreFocus={vi.fn()} />));
+      navigate={vi.fn()} navigationInteractive restoreFocus={vi.fn()} onDecision={vi.fn()} />));
     expect(host.querySelector<HTMLAnchorElement>(`a[href="${chatSessionHref(sessions[0].id)}"]`)?.textContent).toBe("Untitled");
     const trigger = host.querySelector<HTMLButtonElement>(`button[aria-label="Actions for Untitled"]`)!;
     await act(async () => trigger.click());
@@ -61,7 +61,7 @@ test("locale changes only the Untitled sentinel display and retains an open hist
     expect(host.querySelector<HTMLAnchorElement>(`a[href="${chatSessionHref(sessions[0].id)}"]`)?.textContent).toBe("未命名");
     expect(host.querySelector<HTMLAnchorElement>(`a[href="${chatSessionHref(sessions[1].id)}"]`)?.textContent).toBe("未命名");
     expect(document.querySelector('[role="menu"]')?.getAttribute("aria-label")).toBe("未命名 的操作");
-    expect(document.querySelector('[role="menu"] button:focus')?.textContent).toContain("重命名");
+    expect(document.querySelector('[role="menuitem"]:focus')?.textContent).toContain("重命名");
     await act(async () => changeInterfaceLanguage("en"));
     expect(host.querySelector<HTMLAnchorElement>(`a[href="${chatSessionHref(sessions[0].id)}"]`)?.textContent).toBe("Untitled");
     expect(host.querySelector<HTMLAnchorElement>(`a[href="${chatSessionHref(sessions[1].id)}"]`)?.textContent).toBe("未命名");

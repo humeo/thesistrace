@@ -44,7 +44,7 @@ test("renders New Chat, Research resources and MCP with only the active content"
   expect(markup).toContain('href="/connections/mcp"');
   expect(markup).toContain('href="/research"');
   expect(markup).not.toContain("Definitions");
-  expect(markup).toContain('aria-current="page" href="/research-runs"');
+  expect(markup).toMatch(/<a[^>]*href="\/research-runs"[^>]*aria-current="page"/);
   expect(markup).toContain('href="/daily-tracks"');
   expect(markup).not.toContain("Canonical data");
   expect(markup).not.toContain("Through ");
@@ -61,9 +61,7 @@ test("places the Operator destination at the bottom only for the Operator", () =
   );
   const ordinaryMarkup = renderShell("/data");
 
-  expect(operatorMarkup).toContain(
-    'aria-current="page" href="/operator/researchers"',
-  );
+  expect(operatorMarkup).toMatch(/<a[^>]*href="\/operator\/researchers"[^>]*aria-current="page"/);
   expect(operatorMarkup.indexOf('href="/operator/researchers"')).toBeGreaterThan(
     operatorMarkup.indexOf('href="/daily-tracks"'),
   );
@@ -72,9 +70,7 @@ test("places the Operator destination at the bottom only for the Operator", () =
   expect(ordinaryMarkup).not.toContain(">Operator<");
 
   const dataMarkup = renderShell("/operator/data", "Operator data", true);
-  expect(dataMarkup).toContain(
-    'aria-current="page" href="/operator/researchers"',
-  );
+  expect(dataMarkup).toMatch(/<a[^>]*href="\/operator\/researchers"[^>]*aria-current="page"/);
   expect(dataMarkup).toContain("Operator data");
 });
 

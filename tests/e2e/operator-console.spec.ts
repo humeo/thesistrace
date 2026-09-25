@@ -86,20 +86,20 @@ test("Operator access control and responsive navigation", { tag: "@isolated" }, 
   await expectMinimumTouchTarget(openNavigation);
   await openNavigation.focus();
   await openNavigation.press("Enter");
-  await expect(applicationShell).toHaveClass(/app-shell-navigation-open/);
+  await expect(page.getByRole("dialog", { name: "Navigation" })).toBeVisible();
   const closeNavigation = page.locator(".mobile-navigation-close");
   await expect(closeNavigation).toBeFocused();
   await expectMinimumTouchTarget(closeNavigation);
   const mobileOperatorLink = page.getByRole("link", { name: "Operator", exact: true });
   const mobileHomeLink = page.getByRole("link", { name: "Quantgrove home" });
-  const mobileAccountMenu = applicationSidebar.getByLabel("Account menu");
+  const mobileAccountMenu = applicationSidebar.getByRole("button", { name: "Account menu" });
   await expect(mobileOperatorLink).toBeVisible();
   await mobileHomeLink.focus();
   await mobileHomeLink.press("Shift+Tab");
   await expect(mobileAccountMenu).toBeFocused();
   await mobileAccountMenu.press("Tab");
   await expect(mobileHomeLink).toBeFocused();
-  const reducedTransitionSeconds = await page.locator(".navigation-backdrop").evaluate(
+  const reducedTransitionSeconds = await page.locator('[data-slot="sheet-overlay"]').evaluate(
     (element) => {
       const value = getComputedStyle(element).transitionDuration;
       const duration = Number.parseFloat(value) || 0;
@@ -108,7 +108,7 @@ test("Operator access control and responsive navigation", { tag: "@isolated" }, 
   );
   expect(reducedTransitionSeconds).toBeLessThanOrEqual(0.00001);
   await page.keyboard.press("Escape");
-  await expect(applicationShell).not.toHaveClass(/app-shell-navigation-open/);
+  await expect(page.getByRole("dialog", { name: "Navigation" })).toBeHidden();
   await expect(openNavigation).toBeFocused();
   await expect(operatorRow.locator('[data-label="Researcher ID"]')).toBeVisible();
   await expect(operatorRow.locator('[data-label="Access"]')).toHaveText("Active");

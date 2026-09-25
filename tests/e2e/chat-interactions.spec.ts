@@ -30,7 +30,7 @@ test("Staged FIFO survives reload, Steer stays in the active Turn, and two tabs 
 
     const draft = "Unsent bilingual draft";
     await page.getByRole("textbox", { name: "Message", exact: true }).fill(draft);
-    await page.locator(".account-menu > summary").click();
+    await page.getByRole("button", { name: "Account menu" }).click();
     await page.getByRole("button", { name: "简体中文", exact: true }).click();
     await expect(status(page)).toHaveText("Research Agent 正在工作");
     await expect(page.getByRole("textbox", { name: "消息", exact: true })).toHaveValue(draft);

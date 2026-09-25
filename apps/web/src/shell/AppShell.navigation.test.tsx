@@ -81,7 +81,7 @@ test("retains the same sidebar, history scroll, and collapsed state across Chat 
   expect(document.querySelector(".app-shell-collapsed")).not.toBeNull();
   expect(conversationLink.getAttribute("aria-current")).toBe("page");
   expect(dataLink.getAttribute("aria-current")).toBeNull();
-  expect(document.querySelectorAll("aside")).toHaveLength(1);
+  expect(document.querySelectorAll('[data-slot="sidebar"]')).toHaveLength(1);
   expect(document.querySelector(".context-bar")).toBeNull();
   const expand = document.querySelector<HTMLButtonElement>('[aria-label="Expand sidebar"]')!;
   expect(sidebar?.contains(expand)).toBe(true);
@@ -114,44 +114,15 @@ test("leaves modified navigation clicks to the browser", async () => {
   expect(document.querySelector("h1")?.textContent).toBe("Conversation");
 });
 
-test("mobile focus wraps through the account trigger, excluding closed menu controls", async () => {
-  vi.spyOn(window, "matchMedia").mockReturnValue({
-    matches: true, media: "(max-width: 768px)", onchange: null,
-    addEventListener: vi.fn(), removeEventListener: vi.fn(),
-    addListener: vi.fn(), removeListener: vi.fn(), dispatchEvent: vi.fn(),
-  });
-  // Chromium reports layout boxes even for controls inside closed details.
-  vi.spyOn(Element.prototype, "getClientRects").mockReturnValue(
-    [new DOMRect(0, 0, 44, 44)] as unknown as DOMRectList,
-  );
+test("does not add a sidebar keyboard shortcut or persist its collapse state", async () => {
   const container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
   await act(async () => root!.render(<Routes />));
-  const open = document.querySelector<HTMLButtonElement>('[aria-label="Open navigation"]')!;
-  expect(open).not.toBeNull();
-  expect(open.closest(".context-bar")).toBeNull();
-  await act(async () => open.click());
-  const home = document.querySelector<HTMLAnchorElement>('[aria-label="Quantgrove home"]')!;
-  const account = document.querySelector<HTMLElement>('[aria-label="Account menu"]')!;
-  await act(async () => {
-    home.focus();
-    home.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true, cancelable: true }));
-  });
-  expect(document.activeElement).toBe(account);
-  await act(async () => account.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true })));
-  expect(document.activeElement).toBe(home);
-
-  const dataLink = document.querySelector<HTMLAnchorElement>('.resource-nav a[href="/data"]')!;
-  await act(async () => dataLink.click());
-  expect(document.querySelector("h1")?.textContent).toBe("Data overview");
-  expect(document.querySelector(".context-bar")).toBeNull();
-  expect(open.getAttribute("aria-expanded")).toBe("false");
-  expect(document.querySelector("#primary-navigation")?.hasAttribute("inert")).toBe(true);
-  await act(async () => open.click());
-  expect(open.getAttribute("aria-expanded")).toBe("true");
-  const close = document.querySelector<HTMLButtonElement>(".mobile-navigation-close")!;
-  expect(document.activeElement).toBe(close);
-  await act(async () => close.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
-  expect(open.getAttribute("aria-expanded")).toBe("false");
+  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "b", metaKey: true, bubbles: true })));
+  expect(document.querySelector(".app-shell-collapsed")).toBeNull();
+  const collapse = document.querySelector<HTMLButtonElement>('[aria-label="Collapse sidebar"]')!;
+  await act(async () => collapse.click());
+  expect(document.querySelector(".app-shell-collapsed")).not.toBeNull();
+  expect(document.cookie).not.toContain("sidebar_state=");
 });

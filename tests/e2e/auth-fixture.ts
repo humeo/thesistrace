@@ -206,12 +206,16 @@ export async function emailToken(email: string, path: string): Promise<string> {
 }
 
 export async function emailCode(email: string): Promise<string> {
-  const payload = requestResendFixture("GET");
-  if (!isRecord(payload) || !Array.isArray(payload.emails)) throw new Error("Invalid mail fixture");
-  for (const candidate of [...payload.emails].reverse()) {
-    if (!isRecord(candidate) || !Array.isArray(candidate.to) || !candidate.to.includes(email) || typeof candidate.text !== "string") continue;
-    const code = candidate.text.match(/\b[0-9]{6}\b/);
-    if (code) return code[0];
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const payload = requestResendFixture("GET");
+    if (!isRecord(payload) || !Array.isArray(payload.emails)) throw new Error("Invalid mail fixture");
+    for (const candidate of [...payload.emails].reverse()) {
+      if (!isRecord(candidate) || !Array.isArray(candidate.to) || !candidate.to.includes(email) || typeof candidate.text !== "string") continue;
+      const code = candidate.text.match(/\b[0-9]{6}\b/);
+      if (code) return code[0];
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
   }
   throw new Error("Verification code was not delivered");
 }
