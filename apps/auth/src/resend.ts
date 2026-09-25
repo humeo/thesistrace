@@ -5,6 +5,12 @@ export type ResendSettings = Readonly<{
 }>;
 
 export type ResendEmail = Readonly<{
+  attachments?: readonly Readonly<{
+    content: string;
+    content_id: string;
+    content_type: string;
+    filename: string;
+  }>[];
   html: string;
   subject: string;
   text: string;
@@ -26,6 +32,7 @@ export async function sendResendEmail(
   try {
     const response = await fetcher(`${settings.apiUrl}/emails`, {
       body: JSON.stringify({
+        attachments: email.attachments,
         from: settings.fromEmail,
         html: email.html,
         subject: email.subject,

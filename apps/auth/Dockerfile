@@ -26,6 +26,7 @@ COPY --from=build --chown=node:node /auth-runtime/package.json ./package.json
 COPY --from=build --chown=node:node /auth-runtime/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/apps/auth/dist ./dist
 COPY --from=build --chown=node:node /app/apps/auth/schema ./schema
+COPY --chown=node:node apps/web/public/brand/quantgrove-icon-128.png /app/web/public/brand/quantgrove-icon-128.png
 
 USER node
 EXPOSE 8200

@@ -15,6 +15,7 @@ compose() {
     test "$(compose exec -T auth id -u)" -ne 0
     test "$(compose exec -T auth node --version)" = v24.14.0
     compose exec -T auth test ! -e /app/auth/dist/$stale_canary_name
+    compose exec -T auth test -s /app/web/public/brand/quantgrove-icon-128.png
 
     curl --fail --silent --show-error \
       -H 'Cookie: cookie-canary=do-not-log' \

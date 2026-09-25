@@ -42,6 +42,27 @@ describe("direct Resend delivery", () => {
     expect(init?.signal).toBeInstanceOf(AbortSignal);
   });
 
+  it("sends an inline image attachment with the email", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => Response.json({ id: "email-id" }));
+    const attachment = {
+      content: "iVBORw0KGgo=",
+      content_id: "quantgrove-icon",
+      content_type: "image/png",
+      filename: "quantgrove-icon.png",
+    };
+
+    await sendResendEmail(settings, {
+      attachments: [attachment],
+      html: '<img src="cid:quantgrove-icon" alt="">',
+      subject: "Verification code",
+      text: "Verification code",
+      to: "researcher@example.com",
+    }, fetcher);
+
+    const [, init] = fetcher.mock.calls[0] ?? [];
+    expect(JSON.parse(String(init?.body)).attachments).toEqual([attachment]);
+  });
+
   it.each([
     [
       "provider rejection",

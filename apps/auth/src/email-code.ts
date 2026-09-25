@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+
 import type { ThesisTraceAuth } from "./auth.js";
 import type { CredentialOperationCoordinator } from "./coordination.js";
 import { canonicalizeEmail } from "./identity.js";
@@ -7,7 +9,6 @@ import type { ResendEmail } from "./resend.js";
 export class EmailCodeDelivery {
   constructor(private readonly dependencies: Readonly<{
     auth: ThesisTraceAuth;
-    publicOrigin: string;
     coordinator: CredentialOperationCoordinator;
     sendEmail: (email: ResendEmail) => Promise<void>;
   }>) {}
@@ -22,10 +23,7 @@ export class EmailCodeDelivery {
       const otp = await auth.api.createVerificationOTP({body: {email, type}});
       const purpose = type === "sign-in" ? "sign in to Quantgrove" : "confirm your Operator action";
       try {
-        await sendEmail({to: email, subject: "Your Quantgrove verification code",
-          text: `Use ${otp} to ${purpose}. This code expires in 5 minutes.`,
-          html: verificationCodeHtml(otp, purpose, this.dependencies.publicOrigin),
-        });
+        await sendEmail(await verificationCodeEmail(email, otp, purpose));
       } catch {
         await context.internalAdapter.deleteVerificationByIdentifier(identifier);
         throw new Error("EMAIL_CODE_DELIVERY_FAILED");
@@ -34,7 +32,23 @@ export class EmailCodeDelivery {
   }
 }
 
-export function verificationCodeHtml(otp: string, purpose: string, publicOrigin: string): string {
+export async function verificationCodeEmail(to: string, otp: string, purpose: string): Promise<ResendEmail> {
+  const icon = await readFile(new URL("../../web/public/brand/quantgrove-icon-128.png", import.meta.url));
+  return {
+    to,
+    subject: "Your Quantgrove verification code",
+    text: `Use ${otp} to ${purpose}. This code expires in 5 minutes.`,
+    html: verificationCodeHtml(otp, purpose),
+    attachments: [{
+      content: icon.toString("base64"),
+      content_id: "quantgrove-icon",
+      content_type: "image/png",
+      filename: "quantgrove-icon.png",
+    }],
+  };
+}
+
+function verificationCodeHtml(otp: string, purpose: string): string {
   const escape = (value: string) => value.replace(/[&<>"']/g, character =>
     ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"})[character]!);
   return `<!doctype html>
@@ -44,7 +58,7 @@ export function verificationCodeHtml(otp: string, purpose: string, publicOrigin:
 <table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td align="center" style="padding:32px 16px;">
 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:480px;background:#ffffff;border:1px solid #e2e4da;border-radius:12px;">
 <tr><td style="padding:28px;border-bottom:1px solid #e2e4da;">
-<table role="presentation" cellspacing="0" cellpadding="0"><tr><td style="padding:6px;background:#0f3d2e;border-radius:8px;"><img src="${escape(new URL('/brand/quantgrove-icon-128.png', publicOrigin).href)}" width="32" height="32" alt="" style="display:block;border:0;"></td><td style="padding-left:12px;font-family:Georgia,'Times New Roman',serif;font-size:24px;font-weight:400;letter-spacing:-0.5px;">Quantgrove</td></tr></table>
+<table role="presentation" cellspacing="0" cellpadding="0"><tr><td style="padding:6px;background:#0f3d2e;border-radius:8px;"><img src="cid:quantgrove-icon" width="32" height="32" alt="" style="display:block;border:0;"></td><td style="padding-left:12px;font-family:Georgia,'Times New Roman',serif;font-size:24px;font-weight:400;letter-spacing:-0.5px;">Quantgrove</td></tr></table>
 </td></tr>
 <tr><td style="padding:28px;">
 <h1 style="margin:0 0 12px;font-family:Georgia,'Times New Roman',serif;font-size:26px;line-height:1.3;font-weight:400;letter-spacing:-0.5px;">Your verification code</h1>
