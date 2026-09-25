@@ -61,6 +61,20 @@ describe("MCP product page", () => {
     expect(copied).toHaveBeenLastCalledWith(endpoint);
     expect(requested.every(path => !path.includes("revoke") && !path.includes("consent"))).toBe(true);
   });
+  it("uses the Quantgrove server alias in client setup and login instructions", async () => {
+    await mount();
+    const details = [...host.querySelectorAll("details")].find(element => element.querySelector("summary")?.textContent === "Add with a command")!;
+    await click(details.querySelector("summary")!);
+    expect(details.textContent).toContain(`codex mcp add quantgrove --url '${endpoint}'`);
+    expect(details.textContent).toContain("codex mcp login quantgrove");
+    await click(button("Copy login command"));
+    expect(copied).toHaveBeenLastCalledWith("codex mcp login quantgrove");
+    await click(button("Claude Code"));
+    const claudeDetails = [...host.querySelectorAll("details")].find(element => element.querySelector("summary")?.textContent === "Add with a command")!;
+    await click(claudeDetails.querySelector("summary")!);
+    expect(claudeDetails.textContent).toContain(`claude mcp add --transport http --scope user quantgrove '${endpoint}'`);
+    expect(claudeDetails.textContent).toContain("Select quantgrove");
+  });
   it("localizes expanded tool instructions while preserving discovery and protocol identifiers", async () => {
     await mount();
     const requestsBeforeSwitch = [...requested];
@@ -113,7 +127,7 @@ describe("MCP product page", () => {
     expect(copied).toHaveBeenLastCalledWith(expect.stringContaining(endpoint));
     await click(button("Claude Code"));
     const command = [...host.querySelectorAll("pre code")].find(element => element.textContent?.startsWith("claude mcp add"));
-    expect(command?.textContent).toBe(`claude mcp add --transport http --scope user quanttrace '${endpoint}'`);
+    expect(command?.textContent).toBe(`claude mcp add --transport http --scope user quantgrove '${endpoint}'`);
     expect(requested).not.toContain("/api/auth/oauth2/consent");
   });
 });

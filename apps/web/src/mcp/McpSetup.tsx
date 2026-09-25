@@ -2,11 +2,12 @@ import { ChatCircle, Terminal } from "@phosphor-icons/react";
 import { useState } from "react";
 import { interfaceLocale, useTranslation } from "../i18n";
 import { CopyButton } from "./CopyButton";
-import { addCommand, clients, setupPrompt, type McpClient } from "./setup";
+import { addCommand, clients, mcpServerName, setupPrompt, type McpClient } from "./setup";
 export function McpSetup({ endpoint }: { endpoint: string }) {
   const { t } = useTranslation("mcp");
   const [client, setClient] = useState<McpClient>("codex");
   const prompt = setupPrompt(client, endpoint);
+  const loginCommand = `codex mcp login ${mcpServerName}`;
   return <section className="mcp-setup" aria-labelledby="mcp-setup-heading">
     <div className="mcp-section-heading"><div><h2 id="mcp-setup-heading">{t("connect")}</h2><p className="mcp-muted">{t("chooseClient")}</p></div>
       <div className="mcp-client-picker" role="group" aria-label={t("client")}>
@@ -28,7 +29,7 @@ export function McpSetup({ endpoint }: { endpoint: string }) {
           <div className="mcp-section-heading"><h3><Terminal size={15} />{t("terminalStep")}</h3><CopyButton text={addCommand(client, endpoint)} label={t("copyCommand")} /></div>
           <pre tabIndex={0} aria-label={t("addCommandAria", { client: clients[client] })}><code>{addCommand(client, endpoint)}</code></pre>
           <h3>{t("authorizeStep")}</h3>
-          {client === "codex" ? <div className="mcp-login-command"><code>codex mcp login quanttrace</code><CopyButton text="codex mcp login quanttrace" label={t("copyLogin")} /></div> : <p>{t("claudeOpen")} <code>/mcp</code>. {t("claudeSelect")} <code>quanttrace</code> {t("claudeFollow")}</p>}
+          {client === "codex" ? <div className="mcp-login-command"><code>{loginCommand}</code><CopyButton text={loginCommand} label={t("copyLogin")} /></div> : <p>{t("claudeOpen")} <code>/mcp</code>. {t("claudeSelect")} <code>{mcpServerName}</code> {t("claudeFollow")}</p>}
           <p>{t("thenList", { client: clients[client] })}</p>
         </>}</div>
       </details>
