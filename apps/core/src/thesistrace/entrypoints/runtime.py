@@ -44,6 +44,7 @@ from thesistrace.research_batch import (
 )
 from thesistrace.research_batch.execution import SupervisedResearchBatchExecutor
 from thesistrace.research_folder import ResearchFolderService
+from thesistrace.research_kernel.capacity import DEFAULT_MAX_CHUNK_SESSIONS
 from thesistrace.research_run import (
     ResearchRunService,
     research_result_manifest_is_referenced,
@@ -77,6 +78,7 @@ class CoreSettings:
     batch_attempt_control_directory: Path
     s3_region: str = "us-east-1"
     research_execution_memory_bytes: int = DEFAULT_RESEARCH_EXECUTION_MEMORY_BYTES
+    research_max_chunk_sessions: int = DEFAULT_MAX_CHUNK_SESSIONS
     tracking_execution_memory_bytes: int = DEFAULT_TRACKING_EXECUTION_MEMORY_BYTES
 
     @classmethod
@@ -109,6 +111,11 @@ class CoreSettings:
         )
         if research_execution_memory_bytes <= 0:
             raise RuntimeError("Research execution memory must be positive")
+        research_max_chunk_sessions = int(os.environ.get(
+            "THESISTRACE_RESEARCH_WORKER_MAX_CHUNK_SESSIONS", str(DEFAULT_MAX_CHUNK_SESSIONS),
+        ))
+        if research_max_chunk_sessions <= 0:
+            raise RuntimeError("Research Chunk maximum must be positive")
         tracking_execution_memory_bytes = int(
             os.environ.get(
                 "THESISTRACE_TRACKING_WORKER_EXECUTION_MEMORY_BYTES",
@@ -141,6 +148,7 @@ class CoreSettings:
             batch_attempt_control_directory=batch_attempt_control_directory,
             s3_region=os.environ.get("THESISTRACE_S3_REGION", "us-east-1"),
             research_execution_memory_bytes=research_execution_memory_bytes,
+            research_max_chunk_sessions=research_max_chunk_sessions,
             tracking_execution_memory_bytes=tracking_execution_memory_bytes,
         )
 
@@ -276,6 +284,7 @@ def _open_runtime(
             ),
             execution_memory_bytes=settings.research_execution_memory_bytes,
             lifecycle_event=emit_operational_event_data,
+            max_chunk_sessions=settings.research_max_chunk_sessions,
             annualized_excess_calculator=annualized_excess_calculator,
             strategy_comparison=strategy_comparison,
         )

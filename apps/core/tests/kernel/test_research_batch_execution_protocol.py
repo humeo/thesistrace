@@ -78,6 +78,30 @@ def test_supervisor_preserves_resource_exhausted_child_category(
         )
 
 
+def test_event_byte_budget_exhaustion_is_permanent_resource_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    frame = json.dumps({
+        "status": "strategy_event_frame", "section": "strategy_orders", "offset": 0,
+        "rows": [{"order_id": "over-budget"}],
+    })
+    process = subprocess.Popen(
+        [sys.executable, "-c", f"import sys; sys.stdin.readline(); print({frame!r}, flush=True)"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    transport = SupervisedChildTransport(process, None)
+    monkeypatch.setattr(
+        SupervisedChildTransport, "spawn", classmethod(lambda _cls, _module: transport),
+    )
+    executor = SupervisedResearchBatchExecutor(
+        tmp_path, attempt_control_directory=tmp_path / ".batch-attempts",
+        execution_memory_bytes=16,
+    )
+    with pytest.raises(ResearchExecutionResourceExhausted, match="event.*budget"):
+        executor.execute(_empty_request(), emit=lambda _event: None, cancel_requested=lambda: False)
+    assert process.poll() is not None
+
+
 def test_supervised_child_rejects_an_unknown_batch_kind(tmp_path: Path) -> None:
     executor = SupervisedResearchBatchExecutor(
         tmp_path,

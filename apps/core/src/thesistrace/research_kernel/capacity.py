@@ -5,7 +5,6 @@ from typing import Literal
 
 from thesistrace.research_kernel.strategy_event_limits import (
     MAX_EVENT_RECORD_BYTES,
-    MAX_EVENT_SEGMENT_BYTES,
     MAX_FRAMEWORK_RECORD_BYTES,
     MAX_TARGET_RECORD_BYTES,
 )
@@ -19,7 +18,7 @@ from thesistrace.research_kernel.strategy_program_runtime import (
 )
 from thesistrace.research_kernel.terminal_state_schema import FRAMEWORK_STATE_BYTES
 
-MAX_CHUNK_SESSION_COUNT = 64
+DEFAULT_MAX_CHUNK_SESSIONS = 64
 CHUNK_TIME_TARGET_SECONDS = 30
 CHUNK_TIME_TARGET_WORK = 15_000_000
 _FIXED_EXECUTION_OVERHEAD_BYTES = 64 * 1024**2
@@ -56,7 +55,10 @@ def plan_session_capacity(
     additional_live_columns: int = 0,
     decision_mode: DecisionMode = "factor_evaluation",
     python_program_count: int = 0,
+    max_chunk_sessions: int = DEFAULT_MAX_CHUNK_SESSIONS,
 ) -> SessionCapacityPlan:
+    if type(max_chunk_sessions) is not int or max_chunk_sessions < 1:
+        raise ValueError("Research Chunk maximum must be a positive integer")
     _validate_decision_capacity(decision_mode, python_program_count)
     continuation_bytes, per_session_bytes = _capacity_memory_components(
         node_count=node_count,
@@ -75,7 +77,7 @@ def plan_session_capacity(
             "Worker capacity cannot fit one complete full-Universe Research Session"
         )
     memory_session_count = min(
-        decision_segment_session_limit(decision_mode),
+        max_chunk_sessions,
         (execution_memory_bytes - fixed_bytes) // per_session_bytes,
     )
     per_session_work = _session_work(
@@ -86,7 +88,7 @@ def plan_session_capacity(
     session_count = min(
         memory_session_count,
         1 if time_target_exceeded else time_session_count,
-        decision_segment_session_limit(decision_mode),
+        max_chunk_sessions,
     )
     session_count = max(1, int(session_count))
     return SessionCapacityPlan(
@@ -112,11 +114,9 @@ def estimate_session_peak_bytes(
 ) -> int:
     """Estimate one frozen Chunk using the ordinary ResearchRun memory model."""
 
-    if not 1 <= session_count <= MAX_CHUNK_SESSION_COUNT:
+    if type(session_count) is not int or session_count < 1:
         raise ValueError("Research Chunk session count is invalid")
     _validate_decision_capacity(decision_mode, python_program_count)
-    if session_count > decision_segment_session_limit(decision_mode):
-        raise ValueError("Research Chunk exceeds the bounded Strategy event segment")
     continuation_bytes, per_session_bytes = _capacity_memory_components(
         node_count=node_count,
         field_count=field_count,
@@ -142,14 +142,12 @@ def estimate_session_work(
     python_program_count: int = 0,
 ) -> int:
     if (
-        not 1 <= session_count <= MAX_CHUNK_SESSION_COUNT
+        type(session_count) is not int or session_count < 1
         or formula_work < 0
         or maximum_universe_cardinality <= 0
     ):
         raise ValueError("Research Chunk work facts are invalid")
     _validate_decision_capacity(decision_mode, python_program_count)
-    if session_count > decision_segment_session_limit(decision_mode):
-        raise ValueError("Research Chunk exceeds the bounded Strategy event segment")
     return session_count * _session_work(formula_work, maximum_universe_cardinality,
                                          python_program_count)
 
@@ -173,18 +171,13 @@ def _decision_fixed_bytes(mode: DecisionMode, programs: int) -> int:
 
 
 def _decision_session_bytes(mode: DecisionMode) -> int:
+    # Admission allowance, not measured RSS or a transport/session limit.
+    # The receiver independently checks actual encoded bytes per Chunk.
     if mode == "factor_evaluation":
         return 0
     return ((MAX_FRAMEWORK_RECORD_BYTES if mode == "framework" else 0)
             + MAX_TARGET_RECORD_BYTES
             + _OTHER_STRATEGY_RECORDS_PER_SESSION * MAX_EVENT_RECORD_BYTES)
-
-
-def decision_segment_session_limit(mode: DecisionMode) -> int:
-    if mode == "factor_evaluation":
-        return MAX_CHUNK_SESSION_COUNT
-    return min(MAX_CHUNK_SESSION_COUNT,
-               MAX_EVENT_SEGMENT_BYTES // _decision_session_bytes(mode))
 
 
 def _session_work(formula_work: int, cardinality: int, programs: int) -> int:
@@ -193,7 +186,7 @@ def _session_work(formula_work: int, cardinality: int, programs: int) -> int:
 
 
 def estimate_python_program_work(*, program_count: int, session_count: int) -> int:
-    if program_count < 0 or not 1 <= session_count <= MAX_CHUNK_SESSION_COUNT:
+    if program_count < 0 or type(session_count) is not int or session_count < 1:
         raise ValueError("Python program work facts are invalid")
     return (program_count * session_count
             * (BOOTSTRAP_WALL_SECONDS + WALL_SECONDS) * _WORK_PER_SECOND)

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import date
 
 from thesistrace.research_kernel.capacity import (
-    MAX_CHUNK_SESSION_COUNT,
+    DEFAULT_MAX_CHUNK_SESSIONS,
     DecisionMode,
     SessionCapacityError,
     plan_session_capacity,
@@ -36,7 +36,7 @@ def plan_tracking_advance(
 ) -> TrackingAdvancePlan:
     if not unpublished_sessions:
         raise ValueError("Tracking Advance needs an unpublished Research Session")
-    candidates = unpublished_sessions[:MAX_CHUNK_SESSION_COUNT]
+    candidates = unpublished_sessions[:DEFAULT_MAX_CHUNK_SESSIONS]
     try:
         capacity = plan_session_capacity(
             formula_work=formula_work,

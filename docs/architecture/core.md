@@ -555,6 +555,12 @@ Alpha, Label, and daily Factor histories. An eligible infrastructure retry pins
 the same frozen Generation and resumes only from the latest valid Checkpoint;
 unchecked partial outputs are never combined or published.
 
+Research admission reads `THESISTRACE_RESEARCH_WORKER_MAX_CHUNK_SESSIONS`
+(default 64). The planner selects the minimum of that ceiling, the memory
+estimate, and the calculation work budget, then freezes the selected size in
+the execution plan. Batch capacity may reduce the shared size further.
+Changing the setting never replans an admitted Run or retry.
+
 `Create draft` is the sole reuse action. It copies frozen authorable input into
 one selected Folder's browser-local Draft and creates no server state. A later
 ordinary Run creates an independent ResearchRun. Mutable Research name and
@@ -823,6 +829,16 @@ acknowledges its checkpoint. A Tracking child calculates from the authoritative
 Tracking Head and returns one all-or-nothing Advance result without a private
 checkpoint. Attempt end or supervisor-connection loss ends the child; a child
 never crosses into another Attempt.
+
+Strategy events and daily holdings travel in frames of at most 512 rows and
+8 MiB of encoded row data. The supervisor counts actual received event bytes
+against the execution budget and spools bodies above 8 MiB to temporary
+storage. It exposes row views only after the final counts reconcile. Stored
+Strategy event partitions use the same row and byte bounds. Frame
+acknowledgments allow transport to proceed; only the complete Chunk's durable
+checkpoint acknowledgment permits execution to advance. Event record size
+allowances remain conservative memory planning inputs, not a fixed session
+limit. Temporary transport data has no recovery authority.
 
 When idle, any role may reclaim at most one pending shared Publication object
 per poll under the Publication mutation fence. Only the Tracking Worker

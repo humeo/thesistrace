@@ -53,6 +53,7 @@ function validateFields(values, mode) {
     if (name.endsWith('_PORT') && (Number(value) < 1 || Number(value) > 65535)) fail('CONFIG_PORT_INVALID', name);
   }
   const token = values.THESISTRACE_TUSHARE_TOKEN;
+  if (Number(values.THESISTRACE_RESEARCH_WORKER_MAX_CHUNK_SESSIONS) < 1) fail('CONFIG_WORKER_CAPACITY_INVALID', 'THESISTRACE_RESEARCH_WORKER_MAX_CHUNK_SESSIONS');
   if (token.length < 8 || token.length > 512 || /\s/.test(token) || /^(test-|development-|placeholder|changeme$|dummy$|example$|tushare-test-token$|<.*>$)/i.test(token)) fail('CONFIG_CREDENTIAL_INVALID', 'THESISTRACE_TUSHARE_TOKEN');
   for (const role of ['RESEARCH', 'BATCH_RESEARCH', 'TRACKING']) {
     const prefix = `THESISTRACE_${role}_WORKER_`;

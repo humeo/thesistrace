@@ -70,7 +70,7 @@ def test_large_direct_target_survives_worker_wire_publication_and_complete_recor
     }
     assert 32 * 1024 < len(json.dumps(target)) < 1024 * 1024
     message = {"strategy_events": {"strategy_targets": [target] * 200}}
-    assembler = EventMessageAssembler()
+    assembler = EventMessageAssembler(max_event_bytes=128 * 1024**2)
     restored = None
     for frame in strategy_event_messages(message):
         assert len(json.dumps(frame).encode()) < 16 * 1024 * 1024

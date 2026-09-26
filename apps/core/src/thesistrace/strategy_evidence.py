@@ -30,6 +30,7 @@ from thesistrace.publication import (
     VerifiedBundle,
 )
 from thesistrace.publication.serialization import ParquetWriterContract
+from thesistrace.research_kernel.strategy_event_limits import MAX_EVENT_FRAME_BYTES
 from thesistrace.research_kernel.strategy_events import (
     EVENT_ID_FIELDS,
     EVENT_MODELS,
@@ -395,13 +396,22 @@ def _event_parts(
     covered = set(sessions)
     _validate_event_relationships(evidence, covered)
     for section, rows in evidence.items():
-        if not isinstance(rows, list) or any(
-            not isinstance(row, Mapping) or row.get(event_session_field(section)) not in covered
-            for row in rows
-        ):
+        if not isinstance(rows, Sequence):
             raise ValueError("Strategy evidence is outside the completed segment")
-        for start in range(0, len(rows), EVENT_PARTITION_ROWS):
-            yield section, rows[start : start + EVENT_PARTITION_ROWS]
+        part, encoded_bytes = [], 0
+        for row in rows:
+            if (not isinstance(row, Mapping)
+                    or row.get(event_session_field(section)) not in covered):
+                raise ValueError("Strategy evidence is outside the completed segment")
+            size = len(json.dumps(row, separators=(",", ":")).encode())
+            if part and (len(part) == EVENT_PARTITION_ROWS
+                         or encoded_bytes + size > MAX_EVENT_FRAME_BYTES):
+                yield section, part
+                part, encoded_bytes = [], 0
+            part.append(row)
+            encoded_bytes += size
+        if part:
+            yield section, part
 
 
 def strategy_evidence_payloads(

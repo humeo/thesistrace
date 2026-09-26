@@ -78,3 +78,33 @@ Data Operator. The Data page is a read-only view of the current Dataset Head.
 
 Testing commands, purposes, verification selection, and timing guidance are
 maintained in [AGENTS.md](AGENTS.md#testing).
+
+### Research Chunk capacity
+
+Set the maximum sessions per Research Chunk in `.env`. The default is 64; for
+example, this configuration permits 128 sessions while keeping the existing
+2 GiB Worker container limit and 1.5 GiB execution budget:
+
+```dotenv
+THESISTRACE_RESEARCH_WORKER_MAX_CHUNK_SESSIONS=128
+THESISTRACE_RESEARCH_WORKER_MEMORY_BYTES=2147483648
+THESISTRACE_RESEARCH_WORKER_EXECUTION_MEMORY_BYTES=1610612736
+```
+
+The session maximum must be a positive integer. Admission may choose fewer
+sessions to fit its memory estimate or calculation work budget, including the
+Python Strategy program time budget. The estimate is a planning allowance, not
+a measurement of actual RSS. The execution budget governs admission, measured
+child peak RSS checks, and actual received event bytes per Chunk; the Worker
+container limit caps total container memory. Keep the execution budget at or
+below three quarters of the container limit to reserve supervisor overhead.
+
+Run `pnpm config:check`, then recreate the API and affected Research Workers to
+apply configuration. Ordinary Runs and Batch children freeze their Chunk plan
+at admission; existing Runs and retries retain that plan. Batch planning may
+further reduce the shared Chunk to fit its combined workload. Tracking keeps
+its own default maximum of 64 sessions and its separate memory budget.
+
+Event frames and stored partitions are bounded by their actual encoded size;
+their size no longer imposes a fixed 10-session limit. The supervisor spools
+large event bodies to temporary storage and publishes only complete Chunks.

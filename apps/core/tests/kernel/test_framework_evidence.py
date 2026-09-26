@@ -36,7 +36,7 @@ def event(index=0):
 def test_framework_no_update_retains_lifecycle_evidence_through_storage_and_filters():
     row = event()
     message = {"status": "completed", "strategy_events": {"strategy_framework": [row]}}
-    assembler = EventMessageAssembler()
+    assembler = EventMessageAssembler(max_event_bytes=128 * 1024**2)
     restored = None
     for frame in strategy_event_messages(message):
         restored = assembler.accept(frame)
@@ -55,6 +55,41 @@ def test_framework_no_update_retains_lifecycle_evidence_through_storage_and_filt
         assert parsed.section == 'strategy_framework'
         with pytest.raises(ValidationError):
             TypeAdapter(model).validate_python({**query, key: "id", "order_id": "invalid"})
+
+
+def test_received_large_framework_events_publish_as_byte_bounded_partitions():
+    from thesistrace.research_kernel.strategy_event_limits import MAX_EVENT_FRAME_BYTES
+    from thesistrace.research_kernel.strategy_events import EVENT_MODELS
+    from thesistrace.strategy_evidence import strategy_evidence_payloads
+
+    template = event()
+    identifiers = [f"equity:{i:06d}.SH" for i in range(3000)]
+    template["universe"]["instrument_ids"] = identifiers
+    template["alpha"]["signals"] = [{
+        "instrument_id": item, "value": 1.0, "created_session": "2026-09-01",
+        "created_session_number": 1, "valid_for_sessions": 252,
+    } for item in identifiers]
+    rows = [{**template, "decision_id": f"framework_{index:03d}"} for index in range(24)]
+    evidence = {section: [] for section in EVENT_MODELS}
+    evidence["strategy_framework"] = rows
+    assembler = EventMessageAssembler(max_event_bytes=128 * 1024**2)
+    for frame in strategy_event_messages({"strategy_events": evidence}):
+        restored = assembler.accept(frame)
+    payloads = strategy_evidence_payloads(
+        restored["strategy_events"], sessions=["2026-09-01"],
+    )
+    parts = payloads["strategy_framework"].value["partitions"]
+    assert len(parts) > 1
+    actual = []
+    for part in parts:
+        payload = payloads[part["name"]]
+        decoded = read_strategy_event_partition(
+            "strategy_framework", parquet_bytes(payload.rows, payload.contract),
+        )
+        assert sum(len(json.dumps(row, separators=(",", ":")).encode())
+                   for row in decoded) <= MAX_EVENT_FRAME_BYTES
+        actual.extend(decoded)
+    assert actual == rows
 
 
 def test_large_framework_evidence_remains_a_complete_page_record():

@@ -47,4 +47,5 @@ export const fields = {
   THESISTRACE_TRACKING_WORKER_CPU_COUNT: { "section": "Worker capacity: threads <= CPUs, execution memory <= 3/4 of memory.", "type": "integer", "default": "1", "required": true, "sensitive": false },
   THESISTRACE_TRACKING_WORKER_MEMORY_BYTES: { "section": "Worker capacity: threads <= CPUs, execution memory <= 3/4 of memory.", "type": "integer", "default": "1073741824", "required": true, "sensitive": false },
   THESISTRACE_TRACKING_WORKER_CALCULATION_THREADS: { "section": "Worker capacity: threads <= CPUs, execution memory <= 3/4 of memory.", "type": "integer", "default": "1", "required": true, "sensitive": false },
+  THESISTRACE_RESEARCH_WORKER_MAX_CHUNK_SESSIONS: { "section": "Research admission: positive maximum sessions per Chunk; memory and work budgets may select fewer.", "type": "integer", "default": "64", "required": true, "sensitive": false },
 };

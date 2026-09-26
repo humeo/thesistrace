@@ -44,6 +44,16 @@ def test_strategy_sweep_capacity_accounts_for_private_artifact_copy() -> None:
     assert sweep.estimated_peak_bytes > factor.estimated_peak_bytes
 
 
+def test_strategy_sweep_preserves_a_128_session_child_plan_when_budget_fits() -> None:
+    child = _prepared_child(
+        field_id="price.close.adjusted", execution_memory_bytes=3 * 1024**3,
+        chunk_session_count=128, calculation_session_count=256,
+    )
+    plan = _validate_research_batch_capacity("strategy_sweep", [child])
+    assert plan.session_count == 128
+    assert plan.estimated_peak_bytes <= 3 * 1024**3
+
+
 def test_framework_batch_reserves_guest_time_state_and_stage_records_per_child() -> None:
     ordinary = _prepared_child(
         field_id="price.close.adjusted", execution_memory_bytes=1024 * 1024**2,
