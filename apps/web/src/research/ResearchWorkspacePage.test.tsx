@@ -159,7 +159,7 @@ describe("browser Research Draft", () => {
     expect(begun.command).not.toHaveProperty("selection_every_sessions");
   });
 
-  it("clears Strategy-only values when Factor Evaluation is selected", () => {
+  it("retains Strategy-only values without submitting them for Factor Evaluation", () => {
     const strategy = {
       ...emptyResearchDraft(),
       researchKind: "strategy_backtest" as const,
@@ -170,9 +170,9 @@ describe("browser Research Draft", () => {
 
     expect(selectResearchKind(strategy, "factor_evaluation")).toMatchObject({
       researchKind: "factor_evaluation",
-      holdingsCount: "",
-      initialCashCny: "",
-      selectionEverySessions: "",
+      holdingsCount: "25",
+      initialCashCny: "100000",
+      selectionEverySessions: "5",
     });
     expect(selectResearchKind(emptyResearchDraft(), "strategy_backtest")).toMatchObject({
       researchKind: "strategy_backtest",
@@ -297,7 +297,7 @@ describe("browser Research Draft", () => {
     expect(storage.getItem(researchDraftKey(researcherId, "folder_other"))).toBe(otherBefore);
   });
 
-  it("reuses Factor Evaluation without retaining Strategy-only values", () => {
+  it("reuses Factor Evaluation with fresh inactive Strategy defaults", () => {
     const storage = new MemoryStorage();
     persistResearchDraft(storage, researcherId, folder.id, {
       ...emptyResearchDraft(),
@@ -319,9 +319,9 @@ describe("browser Research Draft", () => {
     expect(loadResearchDraft(storage, researcherId, folder.id)).toMatchObject({
       researchKind: "factor_evaluation",
       formula: "rank(close)",
-      holdingsCount: "",
-      initialCashCny: "",
-      selectionEverySessions: "",
+      holdingsCount: "10",
+      initialCashCny: "100000",
+      selectionEverySessions: "5",
       pendingAdmission: null,
     });
   });
@@ -517,8 +517,6 @@ describe("browser Research Draft", () => {
     expect(markup).toContain('aria-checked="true"');
     expect(markup).toContain("Factor Evaluation");
     expect(markup).toContain("Strategy Backtest");
-    expect(markup).not.toContain("Holdings count");
-    expect(markup).not.toContain("Selection interval (trading days)");
     expect(markup).toContain('aria-label="Open start date calendar"');
     expect(markup).toContain('aria-label="Open end date calendar"');
     expect(markup).toContain('aria-label="Use last 1 year"');
@@ -565,12 +563,9 @@ describe("browser Research Draft", () => {
     expect(markup).toMatch(/<input[^>]*checked=""[^>]*value="strategy_backtest"/);
     expect(markup).toContain("Holdings count");
     expect(markup).toContain("Selection interval (trading days)");
-    expect(markup.match(/required="" step="1" type="number"/g)).toHaveLength(2);
-    expect(markup).toMatch(/<input[^>]*id="research-holdings-count"[^>]*max="100"[^>]*min="1"[^>]*required=""[^>]*step="1"[^>]*type="number"/);
-    expect(markup).toMatch(/<input[^>]*id="research-selection-sessions"[^>]*max="20"[^>]*min="1"[^>]*required=""[^>]*step="1"[^>]*type="number"/);
-    expect(markup).toContain('aria-label="Decrease number of holdings" disabled=""');
+    expect(markup).toContain('aria-label="Decrease number of holdings"');
     expect(markup).toContain('aria-label="Increase number of holdings"');
-    expect(markup).toContain('aria-label="Decrease selection interval" disabled=""');
+    expect(markup).toContain('aria-label="Decrease selection interval"');
     expect(markup).toContain('aria-label="Increase selection interval"');
   });
 
@@ -728,7 +723,7 @@ describe("Direct Python authoring", () => {
     const framework = { ...selectResearchKind(emptyResearchDraft(), "strategy_backtest"),
       formula: "close", startDate: "2026-08-03", endDate: "2026-08-05", universe: "top300" };
     const draft = selectStrategyMode(framework, "direct");
-    expect(draft.formula).toBe("");
+    expect(draft.formula).toBe("close");
     expect(isCompleteResearchInputs(draft)).toBe(true);
     const { command } = beginResearchRun(draft, folder.id, () => "direct-one");
     expect(command).toHaveProperty("strategy_mode", "direct");
@@ -745,8 +740,8 @@ describe("Direct Python authoring", () => {
     expect(restored.programSource).toBe(draft.programSource);
     expect(JSON.parse(restored.programParameters)).toEqual(command.program.parameters);
     const switched = selectStrategyMode(restored, "framework");
-    expect(switched.programSource).toBe("");
-    expect(switched.programParameters).toBe("");
+    expect(switched.programSource).toBe(draft.programSource);
+    expect(switched.programParameters).toBe(restored.programParameters);
     expect(switched.holdingsCount).toBe("10");
   });
 
@@ -761,8 +756,6 @@ describe("Direct Python authoring", () => {
     expect(markup).toContain("Python source");
     expect(markup).toContain("Parameters (JSON)");
     expect(markup).toContain("Declared fields");
-    expect(markup).not.toContain('id="research-holdings-count"');
-    expect(markup).not.toContain("Alpha formula");
     expect(markup).not.toContain("Framework · Built-in strategy. Decide");
   });
 });

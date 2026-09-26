@@ -1,9 +1,17 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page, type Locator } from "@playwright/test";
 import { fontStylesheet, serveBrandAssets } from "./brand-assets";
 import { buildProductFixture } from "./build-product-fixture";
 
 let script: string;
 let styles: string;
+const optionNames = {
+  direct: "Direct · Python", framework: "Framework · Decision modules", python: "Python module",
+  equal_weight: "Equal weight", rank_weight: "Rank weight", inverse_volatility: "Inverse volatility",
+} as const;
+async function select(page: Page, control: Locator, value: keyof typeof optionNames) {
+  await control.click();
+  await page.getByRole("option", { name: optionNames[value], exact: true }).click();
+}
 
 for (const width of [1280, 390]) {
   test(`fees remain editable, validate beside the field and submit exactly at ${width}px`, async ({ page }) => {
@@ -24,13 +32,13 @@ for (const width of [1280, 390]) {
       await page.addScriptTag({ content: script });
     };
     await mount();
-    await page.getByRole("button", { name: "Run settings", exact: true }).click();
+    await page.getByRole("button", { name: "Fees and slippage", exact: true }).click();
     const slippage = page.getByLabel("Price slippage (basis points)", { exact: true });
     await expect(slippage).toHaveValue("0");
     await expect(page.getByLabel("Buy/sell commission rate", { exact: true })).toHaveValue("0.0003");
     await expect(page.getByLabel("Minimum commission per child order (CNY)", { exact: true })).toHaveValue("5");
     await slippage.fill("10000");
-    await page.getByRole("button", { name: "Run settings", exact: true }).click();
+    await page.getByRole("button", { name: "Fees and slippage", exact: true }).click();
     await page.getByRole("button", { name: "Run backtest", exact: true }).click();
     await expect(slippage).toBeFocused();
     await expect(slippage).toHaveAttribute("aria-invalid", "true");
@@ -39,8 +47,8 @@ for (const width of [1280, 390]) {
     await slippage.fill("15");
     await page.getByLabel("Minimum commission per child order (CNY)", { exact: true }).fill("2");
     await mount();
-    await page.getByLabel("Strategy mode", { exact: true }).selectOption("direct");
-    await page.getByRole("button", { name: "Run settings", exact: true }).click();
+    await select(page, page.getByLabel("Strategy mode", { exact: true }), "direct");
+    await page.getByRole("button", { name: "Fees and slippage", exact: true }).click();
     await expect(slippage).toHaveValue("15");
     await expect(page.getByLabel("Minimum commission per child order (CNY)", { exact: true })).toHaveValue("2");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
@@ -110,25 +118,25 @@ for (const width of [1280, 390]) {
       await page.addScriptTag({ content: script });
     };
     await mount();
-    await page.getByRole("combobox", { name: "Alpha / Signals module", exact: true }).selectOption("python");
-    await page.getByRole("combobox", { name: "Portfolio Construction module", exact: true }).selectOption("python");
+    await select(page, page.getByRole("combobox", { name: "Alpha / Signals module", exact: true }), "python");
+    await select(page, page.getByRole("combobox", { name: "Portfolio Construction module", exact: true }), "python");
     const alpha = page.getByRole("region", { name: "Alpha / Signals module", exact: true });
     const portfolio = page.getByRole("region", { name: "Portfolio Construction module", exact: true });
-    await expect(alpha.getByLabel("Python source", { exact: true })).toContainText("momentum_signals");
-    await expect(portfolio.getByLabel("Python source", { exact: true })).toContainText("better_signal_candidate");
-    await expect(page.getByLabel("Alpha formula", { exact: true })).toHaveCount(0);
-    await expect(page.getByLabel("Holdings count", { exact: true })).toHaveCount(0);
-    await portfolio.getByLabel("Parameters (JSON)", { exact: true }).fill("{");
+    await expect(alpha.getByRole("textbox", { name: "Python source", exact: true })).toContainText("momentum_signals");
+    await expect(portfolio.getByRole("textbox", { name: "Python source", exact: true })).toContainText("better_signal_candidate");
+    await expect(page.getByLabel("Alpha formula", { exact: true })).not.toBeVisible();
+    await expect(page.getByLabel("Holdings count", { exact: true })).not.toBeVisible();
+    await portfolio.getByRole("textbox", { name: "Parameters (JSON)", exact: true }).fill("{");
     await page.getByRole("button", { name: "Run backtest", exact: true }).click();
-    await expect(portfolio.getByLabel("Parameters (JSON)", { exact: true })).toBeFocused();
+    await expect(portfolio.getByRole("textbox", { name: "Parameters (JSON)", exact: true })).toBeFocused();
     expect(submissions).toHaveLength(0);
     await mount();
-    await expect(portfolio.getByLabel("Parameters (JSON)", { exact: true })).toHaveValue("{");
-    await portfolio.getByLabel("Parameters (JSON)", { exact: true }).fill('{"improvement": 0.04}');
+    await expect(portfolio.getByRole("textbox", { name: "Parameters (JSON)", exact: true })).toHaveValue("{");
+    await portfolio.getByRole("textbox", { name: "Parameters (JSON)", exact: true }).fill('{"improvement": 0.04}');
     await page.getByRole("button", { name: "Check configuration" }).click();
     await expect(portfolio.locator("#portfolio_construction-python-source-error")).toContainText("line 1");
-    await expect(alpha.getByLabel("Python source", { exact: true })).not.toHaveAttribute("aria-invalid", "true");
-    await portfolio.getByLabel("Python source", { exact: true }).fill("def decide(context, state, parameters):\n    return {'output': None, 'state': state}\n");
+    await expect(alpha.getByRole("textbox", { name: "Python source", exact: true })).not.toHaveAttribute("aria-invalid", "true");
+    await portfolio.getByRole("textbox", { name: "Python source", exact: true }).fill("def decide(context, state, parameters):\n    return {'output': None, 'state': state}\n");
     await page.getByRole("button", { name: "Check configuration" }).click();
     await expect(page.getByText("Configuration is valid.", { exact: false })).toBeVisible();
     expect(checks[1]).toMatchObject({ strategy_mode: "framework", modules: {
@@ -179,26 +187,26 @@ for (const width of [1280, 390]) {
       await page.addScriptTag({ content: script });
     };
     await mount();
-    await page.getByLabel("Strategy mode", { exact: true }).selectOption("direct");
-    await expect(page.getByLabel("Python source", { exact: true })).toContainText("def decide");
-    await expect(page.getByLabel("Alpha formula", { exact: true })).toHaveCount(0);
-    await expect(page.getByLabel("Holdings count", { exact: true })).toHaveCount(0);
-    await page.getByLabel("Parameters (JSON)", { exact: true }).fill("{");
+    await select(page, page.getByLabel("Strategy mode", { exact: true }), "direct");
+    await expect(page.getByRole("textbox", { name: "Python source", exact: true })).toContainText("def decide");
+    await expect(page.getByLabel("Alpha formula", { exact: true })).not.toBeVisible();
+    await expect(page.getByLabel("Holdings count", { exact: true })).not.toBeVisible();
+    await page.getByRole("textbox", { name: "Parameters (JSON)", exact: true }).fill("{");
     await page.getByRole("button", { name: "Run backtest", exact: true }).click();
-    await expect(page.getByRole("alert")).toContainText("JSON");
-    await expect(page.getByLabel("Parameters (JSON)", { exact: true })).toBeFocused();
-    await page.getByLabel("Python source", { exact: true }).focus();
+    await expect(page.getByRole("alert", { name: "Complete these settings to continue:", exact: true })).toContainText("JSON");
+    await expect(page.getByRole("textbox", { name: "Parameters (JSON)", exact: true })).toBeFocused();
+    await page.getByRole("textbox", { name: "Python source", exact: true }).focus();
     await expect(page.locator("#python-parameters-error")).toContainText("JSON");
     expect(submissions).toHaveLength(0);
     await mount();
-    await expect(page.getByLabel("Parameters (JSON)", { exact: true })).toHaveValue("{");
-    await page.getByLabel("Parameters (JSON)", { exact: true }).fill('{"improvement": 0.03}');
-    await page.getByLabel("Python source", { exact: true }).fill("def decide(:");
+    await expect(page.getByRole("textbox", { name: "Parameters (JSON)", exact: true })).toHaveValue("{");
+    await page.getByRole("textbox", { name: "Parameters (JSON)", exact: true }).fill('{"improvement": 0.03}');
+    await page.getByRole("textbox", { name: "Python source", exact: true }).fill("def decide(:");
     await page.getByRole("button", { name: "Check configuration" }).click();
     await expect(page.getByLabel("Configuration issues")).toContainText("line 1");
     await expect(page.locator("#python-source-error")).toContainText("line 1");
     const source = "def decide(context, state, parameters):\n    return {'output': None, 'state': state}\n";
-    await page.getByLabel("Python source", { exact: true }).fill(source);
+    await page.getByRole("textbox", { name: "Python source", exact: true }).fill(source);
     await expect(page.getByLabel("Configuration issues")).not.toBeVisible();
     await page.getByRole("button", { name: "Check configuration" }).click();
     await expect(page.getByText("Configuration is valid.", { exact: false })).toBeVisible();
@@ -217,7 +225,7 @@ for (const width of [1280, 390]) {
   });
 }
 
-test("switching back to built-in Framework removes the Python definition", async ({ page }) => {
+test("switching back to built-in Framework retains the inactive Python draft", async ({ page }) => {
   await page.route("https://exposure.test/**", route => route.fulfill({
     contentType: "text/html", body: '<div id="root"></div>',
   }));
@@ -225,17 +233,60 @@ test("switching back to built-in Framework removes the Python definition", async
   await page.addStyleTag({ content: styles });
   await page.addScriptTag({ content: script });
   const mode = page.getByLabel("Strategy mode", { exact: true });
-  await mode.selectOption("direct");
-  await page.getByLabel("Python source", { exact: true }).fill("private draft");
-  await mode.selectOption("framework");
-  await expect(page.getByLabel("Python source", { exact: true })).toHaveCount(0);
+  await select(page, mode, "direct");
+  await page.getByRole("textbox", { name: "Python source", exact: true }).fill("private draft");
+  await select(page, mode, "framework");
+  await expect(page.getByRole("textbox", { name: "Python source", exact: true })).toHaveCount(0);
   await expect(page.getByLabel("Alpha formula", { exact: true })).toBeVisible();
   const draft = await page.evaluate(() => JSON.parse(localStorage.getItem("thesistrace.research-draft.exposure-test.folder_default")!));
-  expect(draft.programSource).toBe("");
-  expect(draft.programParameters).toBe("");
-  expect(draft.programFields).toBe("");
+  expect(draft.programSource).toBe("private draft");
+  expect(JSON.parse(draft.programParameters)).toEqual({ improvement: 0.02 });
+  expect(draft.programFields).toBe("price.close.adjusted");
+  await select(page, mode, "direct");
+  await expect(page.getByRole("textbox", { name: "Python source", exact: true })).toHaveText("private draft");
 });
+test("Python editors keep completion, selection and undo across module, language and width changes", async ({ page }) => {
+  await page.route("https://exposure.test/**", route => {
+    if (new URL(route.request().url()).pathname === "/api/alpha/diagnostics") return route.fulfill({ json: { valid: true, diagnostics: [] } });
+    return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+  });
+  await page.goto("https://exposure.test/");
+  await page.addStyleTag({ content: styles });
+  await page.addScriptTag({ content: script });
+  const module = page.getByRole("combobox", { name: "Alpha / Signals module", exact: true });
+  await select(page, module, "python");
+  const source = page.locator("#alpha-python-source");
+  await source.fill("pri");
+  await source.press("Control+Space");
+  await expect(page.getByRole("option").filter({ hasText: /^print/ })).toBeVisible();
+  await source.press("Escape");
+  await source.fill("threshold = 1");
+  await source.press("End");
+  await page.keyboard.insertText(" + 2");
+  await source.press("Home");
+  for (let index = 0; index < 9; index++) await source.press("Shift+ArrowRight");
+  const selectedText = () => source.evaluate(() => window.getSelection()?.toString());
+  await expect.poll(selectedText).toBe("threshold");
+  await page.getByRole("button", { name: "简体中文", exact: true }).dispatchEvent("click");
+  await page.setViewportSize({ width: 320, height: 800 });
+  await expect(source).toBeFocused();
+  await expect.poll(selectedText).toBe("threshold");
+  await page.getByRole("button", { name: "English", exact: true }).dispatchEvent("click");
+  await module.click();
+  await page.getByRole("option", { name: /^Built-in/ }).click();
+  await expect(source).not.toBeVisible();
+  await select(page, module, "python");
+  await source.focus();
+  await expect.poll(selectedText).toBe("threshold");
+  await page.keyboard.insertText("limit");
+  await expect(source).toHaveText("limit = 1 + 2");
+  await source.press("ControlOrMeta+z");
+  await expect(source).toHaveText("threshold = 1 + 2");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
 test.beforeAll(async () => {
+  test.setTimeout(120_000); // Fixture compilation is separate from each interaction timeout.
   ({ script, styles } = await buildProductFixture(new URL("./fixtures/selection-exposure.tsx", import.meta.url), "SelectionExposureFixture"));
 });
 
@@ -268,7 +319,7 @@ for (const width of [1280, 768, 390, 320]) {
     await page.goto("https://exposure.test/?factor");
     await page.addStyleTag({ content: styles });
     await page.addScriptTag({ content: script });
-    const editor = page.locator(".cm-content").first();
+    const editor = page.getByRole("textbox", { name: /^(Alpha formula|Alpha 公式)$/, exact: true });
     const authoring = page.getByRole("region", { name: "Alpha authoring" });
     const settings = page.getByRole("complementary", { name: "Run settings" });
     const start = page.getByRole("textbox", { name: "Research start date" });
@@ -281,7 +332,7 @@ for (const width of [1280, 768, 390, 320]) {
     await start.fill("2025-02-29");
     await page.getByRole("button", { name: "Run evaluation" }).click();
     await expect(start).toHaveAttribute("aria-invalid", "true");
-    await expect(page.getByRole("alert")).toContainText("valid start date");
+    await expect(page.getByRole("alert", { name: "Complete these settings to continue:", exact: true })).toContainText("valid start date");
     expect(submissions).toHaveLength(0);
     await start.fill("2026-08-03");
     await expect(end).toHaveValue("2026-08-05");
@@ -352,9 +403,9 @@ test(`Exposure, ${weighting}, retained draft and submission share one source`, a
   };
   await mount();
   await expect(page.getByText(/Framework · Decision modules\. Decide/)).toBeVisible();
-  await page.getByRole("button", { name: "Run settings", exact: true }).click();
-  await expect(page.getByLabel("Portfolio weighting", { exact: false })).toHaveValue("equal_weight");
-  await page.getByLabel("Portfolio weighting", { exact: false }).selectOption(weighting);
+
+  await expect(page.getByRole("combobox", { name: "Portfolio weighting" })).toContainText("Equal weight");
+  await select(page, page.getByLabel("Portfolio weighting", { exact: false }), weighting);
   if (weighting === "inverse_volatility") {
     await expect(page.getByLabel("Volatility window", { exact: false })).toHaveValue("20");
     await page.getByLabel("Volatility window", { exact: false }).fill("10");
@@ -364,28 +415,28 @@ test(`Exposure, ${weighting}, retained draft and submission share one source`, a
   await page.getByLabel("Exposure expression", { exact: true }).fill("0.7");
   await expect(page.getByLabel("Exposure expression", { exact: true })).toHaveText("0.7");
   await mount();
-  await page.getByRole("button", { name: "Run settings", exact: true }).click();
-  await expect(page.getByLabel("Portfolio weighting", { exact: false })).toHaveValue(weighting);
+
+  await expect(page.getByRole("combobox", { name: "Portfolio weighting" })).toContainText(optionNames[weighting]);
   if (weighting === "inverse_volatility") {
     await expect(page.getByLabel("Volatility window", { exact: false })).toHaveValue("10");
   }
   await expect(page.getByLabel("Exposure expression", { exact: true })).toHaveText("0.7");
   await page.getByLabel("Exposure expression", { exact: true }).fill("7 / 10");
   await expect(page.getByLabel("Fixed exposure (%)", { exact: true })).toHaveCount(0);
-  await page.getByRole("button", { name: "Run settings", exact: true }).click();
+
   await page.getByRole("button", { name: "Check configuration" }).click();
   await expect(page.getByText("Configuration is valid.", { exact: false })).toBeVisible();
   expect(diagnostics).toHaveLength(1);
   expect(diagnostics[0]).toMatchObject({ exposure_expression: "7 / 10", weighting, volatility_window: weighting === "inverse_volatility" ? 10 : 20, selection_every_sessions: 5, initial_cash_cny: "100000" });
   expect(diagnostics[0]).not.toHaveProperty("request_id");
   expect(submissions).toHaveLength(0);
-  await page.getByRole("button", { name: "Run settings", exact: true }).click();
+
   await page.getByLabel("Exposure expression", { exact: true }).fill("0");
   await expect(page.getByText("Configuration is valid.", { exact: false })).not.toBeVisible();
   await expect(page.getByLabel("Exposure expression", { exact: true })).toHaveText("0");
   await expect.poll(() => localContexts.includes("exposure")).toBe(true);
   await page.screenshot({ path: `../../.local/browser-tests/selection-${weighting}.png`, fullPage: true });
-  await page.getByRole("button", { name: "Run settings", exact: true }).click();
+
   await page.getByRole("button", { name: "Run backtest", exact: true }).click();
   await expect.poll(() => submissions.length).toBe(1);
   expect(submissions[0]).toMatchObject({ exposure_expression: "0", weighting, volatility_window: weighting === "inverse_volatility" ? 10 : 20, selection_every_sessions: 5, initial_cash_cny: "100000" });
@@ -416,15 +467,15 @@ test("configuration checks show rejection and recover from an unavailable servic
   await page.addStyleTag({ content: styles });
   await page.addScriptTag({ content: script });
     await page.evaluate(() => document.fonts.ready);
-  await page.getByRole("button", { name: "Run settings", exact: true }).click();
+
   await page.getByLabel("Exposure expression", { exact: true }).fill("1 + 0.1");
-  await page.getByRole("button", { name: "Run settings", exact: true }).click();
+
   const check = page.getByRole("button", { name: "Check configuration" });
   await check.click();
   await expect(page.getByLabel("Configuration issues")).toContainText("Position sizing formula");
-  await page.getByRole("button", { name: "Run settings", exact: true }).click();
+
   await page.getByLabel("Exposure expression", { exact: true }).fill("0.3");
-  await page.getByRole("button", { name: "Run settings", exact: true }).click();
+
   await expect(page.getByLabel("Configuration issues")).not.toBeVisible();
   await check.click();
   await expect(page.getByText("Configuration check is unavailable. Try again.")).toBeVisible();
@@ -450,7 +501,7 @@ test("Exposure completion excludes stock scope and keeps daily expression in the
     await page.evaluate(() => document.fonts.ready);
   };
   await mount();
-  await page.getByRole("button", { name: "Run settings", exact: true }).click();
+
   const editor = page.getByLabel("Exposure expression", { exact: true });
   await editor.fill("");
   await editor.press("Control+Space");
@@ -462,9 +513,9 @@ test("Exposure completion excludes stock scope and keeps daily expression in the
   await editor.fill(expression);
   await expect(page.getByLabel("Fixed exposure (%)", { exact: true })).toHaveCount(0);
   await mount();
-  await page.getByRole("button", { name: "Run settings", exact: true }).click();
+
   await expect(page.getByLabel("Exposure expression", { exact: true })).toHaveText(expression);
-  await page.getByRole("button", { name: "Run settings", exact: true }).click();
+
   const signal = page.getByLabel("Alpha formula", { exact: true });
   await signal.fill("");
   await signal.press("Control+Space");
@@ -489,16 +540,16 @@ for (const weighting of ["equal_weight", "rank_weight"] as const) {
     await page.addStyleTag({ content: styles });
     await page.addScriptTag({ content: script });
     await page.evaluate(() => document.fonts.ready);
-    await page.getByRole("button", { name: "Run settings", exact: true }).click();
+
     const selector = page.getByLabel("Portfolio weighting", { exact: false });
-    await selector.selectOption("inverse_volatility");
+    await select(page, selector, "inverse_volatility");
     await page.getByLabel("Volatility window", { exact: false }).fill("253");
     await page.getByRole("button", { name: "Run backtest", exact: true }).click();
-    await expect(page.getByRole("alert")).toContainText("Volatility window");
-    await selector.selectOption(weighting);
+    await expect(page.getByRole("alert", { name: "Complete these settings to continue:", exact: true })).toContainText("Volatility window");
+    await select(page, selector, weighting);
     await expect(page.getByLabel("Volatility window", { exact: false })).not.toBeVisible();
     await expect(page.getByRole("button", { name: "Check configuration" })).toBeEnabled();
-    await page.getByRole("button", { name: "Run settings", exact: true }).click();
+
   await page.getByRole("button", { name: "Run backtest", exact: true }).click();
     await expect.poll(() => submissions.length).toBe(1);
     expect(submissions[0]).toMatchObject({ weighting, volatility_window: 20 });
@@ -519,36 +570,41 @@ for (const width of [1280, 390, 320]) {
     await page.addStyleTag({ content: styles });
     await page.addScriptTag({ content: script });
     await page.evaluate(() => document.fonts.ready);
-    const dialog = page.getByRole("region", { name: "Run settings", exact: true });
-    const trigger = page.getByRole("button", { name: "Run settings", exact: true });
-    await expect(dialog).not.toBeVisible();
-    await expect(page.getByRole("button", { name: "Run backtest" })).toBeInViewport();
+    const settings = page.getByRole("complementary", { name: "Run settings", exact: true });
+    await expect(settings).toBeVisible();
+    await expect(settings.getByRole("heading", { name: "Run settings", exact: true })).toHaveCSS("font-size", "16px");
+    if (width < 768) {
+      for (const control of [page.getByRole("button", { name: "Increase number of holdings" }),
+        page.getByRole("button", { name: "Cash requirements" }),
+        page.getByRole("combobox", { name: "Alpha / Signals module", exact: true }),
+        page.getByRole("spinbutton", { name: "Holdings count", exact: true }),
+        page.getByRole("textbox", { name: "Research start date", exact: true })]) {
+        const box = (await control.boundingBox())!;
+        expect(box.height).toBeGreaterThanOrEqual(44);
+        expect(box.width).toBeGreaterThanOrEqual(44);
+      }
+    }
     const notes = page.getByLabel("Notes", { exact: true });
-    await expect(notes).not.toBeVisible();
-    const notesDisclosure = page.locator("summary").filter({ hasText: /^Notes$/ });
-    await notesDisclosure.focus();
-    await notesDisclosure.press("Enter");
     await expect(notes).toBeVisible();
-    await trigger.click();
-    await expect(dialog).toBeVisible();
-    await expect(page.getByRole("tooltip")).toHaveCount(0);
     const help = page.getByRole("button", { name: "Cash requirements" });
-    await help.hover();
-    await expect(page.getByRole("tooltip")).toContainText("two decimal places");
+    await help.click();
+    await expect(page.getByRole("dialog")).toContainText("two decimal places");
+    await expect(page.getByRole("dialog").getByRole("heading")).toHaveCSS("font-size", "14px");
     await help.focus();
     await help.press("Escape");
-    await expect(page.getByRole("tooltip")).toHaveCount(0);
+    await expect(page.getByRole("dialog")).toHaveCount(0);
     await page.getByLabel("Initial cash (CNY)", { exact: true }).focus();
     await help.click();
-    await expect(page.getByRole("tooltip")).toBeVisible();
+    await expect(page.getByRole("dialog")).toBeVisible();
 
-    await page.getByLabel("Initial cash (CNY)", { exact: true }).focus();
+    await help.press("Escape");
+    await expect(help).toBeFocused();
     await page.setViewportSize({ width, height: 500 });
     for (const name of ["Weighting help", "Exposure formula help"]) {
       const exampleHelp = page.getByRole("button", { name, exact: true });
       await exampleHelp.evaluate((element) => element.scrollIntoView({ block: "center" }));
       await exampleHelp.click();
-      const tooltip = page.getByRole("tooltip");
+      const tooltip = page.getByRole("dialog");
       await expect(tooltip).toContainText("50,000 CNY");
       const bounds = await tooltip.boundingBox();
       expect(bounds).not.toBeNull();
@@ -562,14 +618,8 @@ for (const width of [1280, 390, 320]) {
     await page.setViewportSize({ width, height: 964 });
 
     await page.getByLabel("Initial cash (CNY)", { exact: false }).fill("250000");
-    await trigger.click();
-    await expect(dialog).not.toBeVisible();
-    await expect(trigger).toBeFocused();
-    await trigger.click();
     await expect(page.getByLabel("Initial cash (CNY)", { exact: false })).toHaveValue("250000");
-    await expect(trigger).toHaveAttribute("aria-expanded", "true");
     await expect(page.getByRole("textbox", { name: "Alpha formula", exact: true })).toBeVisible();
-    await trigger.click();
     await page.getByRole("radio", { name: "Factor Evaluation" }).check();
     await expect(page.getByRole("button", { name: "Run evaluation" })).toBeVisible();
     await expect(page.getByRole("complementary", { name: "Run settings" })).toBeVisible();
@@ -631,7 +681,7 @@ test("switching during configuration validation preserves inputs and translates 
   await page.addStyleTag({ content: styles });
   await page.addScriptTag({ content: script });
   await page.getByLabel("Alpha formula", { exact: true }).fill("ts_mean(close, 253)");
-  await page.getByRole("button", { name: "Run settings", exact: true }).click();
+
   const cash = page.locator("#initial-cash");
   await cash.fill("250000");
   await page.getByRole("button", { name: "Check configuration" }).click();
@@ -640,7 +690,7 @@ test("switching during configuration validation preserves inputs and translates 
   await page.getByRole("button", { name: "简体中文", exact: true }).dispatchEvent("click");
   await expect(page.getByText("正在检查配置…", { exact: true })).toBeVisible();
   await expect(cash).toBeFocused();
-  await expect(page.getByRole("region", { name: "运行设置", exact: true })).toBeVisible();
+  await expect(page.getByRole("complementary", { name: "运行设置", exact: true })).toBeVisible();
   await expect(page.getByLabel("初始资金（CNY）", { exact: true })).toHaveValue("250000");
   finish();
   await expect(page.getByLabel("配置问题")).toContainText("窗口必须在 1 到 252 之间，实际为 253。");
@@ -669,22 +719,24 @@ for (const width of [1280, 390, 320]) {
     await page.evaluate(() => document.fonts.ready);
     await expect(page.getByLabel("Holdings count", { exact: true })).toBeVisible();
     await expect(page.getByLabel("Selection interval (trading days)", { exact: true })).toHaveValue("5");
-    await page.getByRole("button", { name: "Run settings", exact: true }).click();
+
     await page.getByLabel("Initial cash (CNY)", { exact: true }).fill("");
-    await page.getByRole("button", { name: "Run settings", exact: true }).click();
+
     await page.getByRole("button", { name: "Run backtest", exact: true }).click();
-    await expect(page.getByRole("alert")).toContainText("Initial cash");
+    await expect(page.getByRole("alert", { name: "Complete these settings to continue:", exact: true })).toContainText("Initial cash");
     await expect(page.getByLabel("Initial cash (CNY)", { exact: true })).toBeFocused();
     expect(submissions).toBe(0);
     await page.getByLabel("Initial cash (CNY)", { exact: true }).fill("100000");
     await page.getByLabel("Exposure expression", { exact: true }).fill("1.1");
     await page.getByRole("button", { name: "Run backtest", exact: true }).click();
-    await expect(page.getByRole("alert")).toContainText("between 0 and 1");
+    await expect(page.getByRole("alert", { name: "Complete these settings to continue:", exact: true })).toContainText("between 0 and 1");
     await expect(page.getByLabel("Exposure expression", { exact: true })).toBeFocused();
+    await expect(page.getByLabel("Exposure expression", { exact: true })).toHaveAttribute("aria-invalid", "true");
+    await expect(page.getByLabel("Exposure expression", { exact: true })).toHaveAccessibleDescription(/between 0 and 1/);
     expect(submissions).toBe(0);
     const expression = "if_else(universe_return() > 0, 1, 0.3)";
     await page.getByLabel("Exposure expression", { exact: true }).fill(expression);
-    await page.getByRole("button", { name: "Run settings", exact: true }).click();
+
     await page.getByLabel("Alpha formula", { exact: true }).fill("");
     await page.getByRole("button", { name: "Run backtest", exact: true }).click();
     await expect(page.getByLabel("Alpha formula", { exact: true })).toBeFocused();
@@ -716,7 +768,7 @@ for (const width of [1280, 390]) {
     await mount();
     const threshold = page.getByLabel("Stop loss (%)", { exact: true });
     await expect(threshold).toHaveValue("");
-    await expect(page.locator("#stop-loss-help")).toContainText("next Open");
+    await expect(page.locator("#stop-loss-threshold-help")).toContainText("next Open");
     await threshold.fill("100");
     await page.getByRole("button", { name: "Run backtest", exact: true }).click();
     await expect(threshold).toBeFocused();

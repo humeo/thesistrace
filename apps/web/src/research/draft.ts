@@ -2,14 +2,13 @@ import { drawdownDraft, drawdownFields, drawdownIssues, emptyDrawdownInputs, typ
 import { readTakeProfitDraft, takeProfitDraft, takeProfitIssues, type TakeProfitField, type TakeProfitTierDraft } from "./takeProfit";
 import { costFields, costInputError, defaultSimulationCosts, readCostInputs, type CostField, type SimulationCosts } from "./simulationCosts";
 import {
-  DIRECT_EXAMPLE, emptyProgramInputs, programDraft, programInputFields, programInputIssues,
+  DIRECT_EXAMPLE, programDraft, programInputFields, programInputIssues,
   parseProgramParameters, programSpec, type ProgramInputField, type ProgramInputs, type PythonProgram,
 } from "./pythonStrategy";
 import {
   builtinModulesDraft, frameworkDraft, frameworkSpec, frameworkStages, frozenStopLossPercentage, stopLossInputError, frozenMaximumHoldingSessions, frozenMinimumHoldingSessions, holdingSessionsInputError,
   type FrameworkModules, type FrameworkModulesDraft, type FrameworkStage,
 } from "./frameworkModules";
-import { frameworkExample } from "./frameworkExamples";
 import { isResearchIsoDate } from "./dateRange";
 
 export type PortfolioWeighting = "equal_weight" | "rank_weight" | "inverse_volatility";
@@ -115,7 +114,9 @@ export function emptyResearchDraft(): ResearchDraft {
     stopLossThreshold: "",
     maximumHoldingSessions: "",
     minimumHoldingSessions: "",
-    ...emptyProgramInputs(), frameworkModules: builtinModulesDraft(),
+    programSource: DIRECT_EXAMPLE, programParameters: '{"improvement": 0.02}',
+    programFields: "price.close.adjusted", programHistorySessions: "6",
+    frameworkModules: builtinModulesDraft(),
     name: "",
     formula: "",
     hypothesis: "",
@@ -123,9 +124,9 @@ export function emptyResearchDraft(): ResearchDraft {
     endDate: "",
     universe: "",
     neutralization: "none",
-    initialCashCny: "", costs: defaultSimulationCosts(),
-    holdingsCount: "",
-    selectionEverySessions: "",
+    initialCashCny: "100000", costs: defaultSimulationCosts(),
+    holdingsCount: "10",
+    selectionEverySessions: "5",
     exposureExpression: "1",
     weighting: "equal_weight",
     volatilityWindow: "20",
@@ -201,62 +202,24 @@ export function selectResearchKind(
   draft: ResearchDraft,
   researchKind: ResearchInputs["researchKind"],
 ): ResearchDraft {
-  return researchKind === "factor_evaluation" ? {
-    ...draft,
-    researchKind, strategyMode: "framework",
-    ...emptyProgramInputs(), frameworkModules: builtinModulesDraft(),
-    neutralization: draft.neutralization || "none",
-    initialCashCny: "", costs: defaultSimulationCosts(),
-    holdingsCount: "",
-    selectionEverySessions: "",
-    exposureExpression: "1",
-    weighting: "equal_weight",
-    volatilityWindow: "20",
-  } : {
-    ...draft,
-    researchKind,
-    initialCashCny: draft.researchKind === "factor_evaluation" ? "100000" : draft.initialCashCny,
-    holdingsCount: draft.researchKind === "factor_evaluation" ? "10" : draft.holdingsCount,
-    selectionEverySessions: draft.researchKind === "factor_evaluation" ? "5" : draft.selectionEverySessions,
-  };
+  return { ...draft, researchKind };
 }
 
 export function selectStrategyMode(draft: ResearchDraft, mode: ResearchInputs["strategyMode"]): ResearchDraft {
   if (draft.strategyMode === mode) return draft;
-  return mode === "direct" ? {
-    ...draft, strategyMode: mode, formula: "", neutralization: "", holdingsCount: "",
-    selectionEverySessions: "", exposureExpression: "", weighting: "equal_weight", volatilityWindow: "",
-    programSource: DIRECT_EXAMPLE, programParameters: '{"improvement": 0.02}',
-    programFields: "price.close.adjusted", programHistorySessions: "6",
-    frameworkModules: builtinModulesDraft(),
-    editor: { anchor: 0, head: 0 }, pendingAdmission: null,
-  } : {
-    ...draft, strategyMode: mode, ...emptyProgramInputs(), frameworkModules: builtinModulesDraft(),
-    formula: "", neutralization: "none", holdingsCount: "10", selectionEverySessions: "5",
-    exposureExpression: "1", weighting: "equal_weight", volatilityWindow: "20",
-    editor: { anchor: 0, head: 0 }, pendingAdmission: null,
-  };
+  return { ...draft, strategyMode: mode, pendingAdmission: null };
 }
 
 export function selectFrameworkModule(
   draft: ResearchDraft, stage: FrameworkStage, kind: "builtin" | "python",
 ): ResearchDraft {
   if (draft.frameworkModules[stage].kind === kind) return draft;
-  const next: ResearchDraft = {
+  return {
     ...draft, pendingAdmission: null,
     frameworkModules: { ...draft.frameworkModules, [stage]: {
-      kind, program: kind === "python" ? frameworkExample(stage) : emptyProgramInputs(),
+      ...draft.frameworkModules[stage], kind,
     } },
   };
-  if (stage === "alpha") Object.assign(next, {
-    formula: "", neutralization: kind === "builtin" ? "none" : "", editor: { anchor: 0, head: 0 },
-  });
-  if (stage === "portfolio_construction") Object.assign(next, {
-    holdingsCount: kind === "builtin" ? "10" : "", selectionEverySessions: kind === "builtin" ? "5" : "",
-    exposureExpression: kind === "builtin" ? "1" : "", weighting: "equal_weight",
-    volatilityWindow: kind === "builtin" ? "20" : "",
-  });
-  return next;
 }
 
 export function usesBuiltinAlpha(inputs: ResearchInputs): boolean {
@@ -324,7 +287,7 @@ export function researchSpec(inputs: ResearchInputs): ResearchSpec {
     ...(usesBuiltinAlpha(inputs) ? alpha : {}),
     ...(usesBuiltinPortfolio(inputs) ? {
       holdings_count: Number(inputs.holdingsCount), selection_every_sessions: Number(inputs.selectionEverySessions),
-      exposure_expression: inputs.exposureExpression, weighting: inputs.weighting, volatility_window: Number(inputs.volatilityWindow),
+      exposure_expression: inputs.exposureExpression, weighting: inputs.weighting, volatility_window: inputs.weighting === "inverse_volatility" ? Number(inputs.volatilityWindow) : 20,
     } : {}),
   };
 }
@@ -395,7 +358,7 @@ export function researchInputIssues(inputs: ResearchInputs): ResearchInputIssue[
     const holdings = Number(inputs.holdingsCount), interval = Number(inputs.selectionEverySessions);
     if (!Number.isInteger(holdings) || holdings < 1 || holdings > 100) issues.push({ field: "holdingsCount", code: "holdingsRange" });
     if (!Number.isInteger(interval) || interval < 1 || interval > 20) issues.push({ field: "selectionEverySessions", code: "intervalRange" });
-    if (!isValidVolatilityWindow(inputs.volatilityWindow)) issues.push({ field: "volatilityWindow", code: "volatilityRange" });
+    if (inputs.weighting === "inverse_volatility" && !isValidVolatilityWindow(inputs.volatilityWindow)) issues.push({ field: "volatilityWindow", code: "volatilityRange" });
     if (!inputs.exposureExpression.trim()) issues.push({ field: "exposureExpression", code: "exposureRequired" });
     else if (Number(inputs.exposureExpression) < 0 || Number(inputs.exposureExpression) > 1) issues.push({ field: "exposureExpression", code: "exposureRange" });
   }
@@ -471,16 +434,16 @@ export function useResearchAsDraft(
     ...researchInputs(emptyResearchDraft()), name: current.name,
     formula: "formula" in input ? input.formula ?? "" : "",
     hypothesis: input.hypothesis ?? "", startDate: input.start_date, endDate: input.end_date,
-    universe: input.universe, neutralization: "neutralization" in input ? input.neutralization ?? "" : "",
+    universe: input.universe, neutralization: "neutralization" in input ? input.neutralization ?? "none" : "none",
     researchKind: input.research_kind, strategyMode: direct ? "direct" : "framework",
-    initialCashCny: input.research_kind === "strategy_backtest" ? input.initial_cash_cny : "",
+    initialCashCny: input.research_kind === "strategy_backtest" ? input.initial_cash_cny : "100000",
     costs: input.research_kind === "strategy_backtest" ? { ...input.costs } : defaultSimulationCosts(),
-    holdingsCount: framework && input.holdings_count !== undefined ? String(input.holdings_count) : "",
-    exposureExpression: framework ? input.exposure_expression ?? "" : direct ? "" : "1",
-    volatilityWindow: framework ? input.volatility_window === undefined ? "" : String(input.volatility_window) : direct ? "" : "20",
+    holdingsCount: framework && input.holdings_count !== undefined ? String(input.holdings_count) : "10",
+    exposureExpression: framework ? input.exposure_expression ?? "1" : "1",
+    volatilityWindow: framework && input.volatility_window !== undefined ? String(input.volatility_window) : "20",
     weighting: framework ? input.weighting ?? "equal_weight" : "equal_weight",
-    selectionEverySessions: framework && input.selection_every_sessions !== undefined ? String(input.selection_every_sessions) : "",
-    ...(direct ? programDraft(input.program) : emptyProgramInputs()),
+    selectionEverySessions: framework && input.selection_every_sessions !== undefined ? String(input.selection_every_sessions) : "5",
+    ...(direct ? programDraft(input.program) : {}),
     frameworkModules: framework ? frameworkDraft(input.modules) : builtinModulesDraft(),
     takeProfitTiers: framework && typeof input.modules.risk_management !== "string" && input.modules.risk_management.kind === "builtin_risk/v1"
       ? takeProfitDraft(input.modules.risk_management.take_profit_tiers ?? []) : [],

@@ -1,17 +1,25 @@
+import { cn } from "cn";
+import type { ReactNode } from "react";
+
+import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "../components/ui/field";
+import { Input } from "../components/ui/input";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
+import { useTranslation } from "../i18n";
+import type { ResearchInputField } from "./draft";
+import { frameworkStages, type FrameworkModulesDraft, type FrameworkStage } from "./frameworkModules";
 import { PortfolioDrawdownAuthoring } from "./PortfolioDrawdownAuthoring";
 import type { DrawdownInputs } from "./portfolioDrawdown";
+import { PythonStrategyAuthoring } from "./PythonStrategyAuthoring";
+import type { ProgramInputs } from "./pythonStrategy";
 import { TakeProfitAuthoring } from "./TakeProfitAuthoring";
 import type { TakeProfitTierDraft } from "./takeProfit";
-import type { ReactNode } from "react";
-import type { ResearchInputField } from "./draft";
-import {
-  frameworkStages, type FrameworkModulesDraft, type FrameworkStage,
-} from "./frameworkModules";
-import type { ProgramInputs } from "./pythonStrategy";
-import { PythonStrategyAuthoring } from "./PythonStrategyAuthoring";
-import { useTranslation } from "../i18n";
 
-export function FrameworkAuthoring({ drawdown, updateDrawdown, modules, selectModule, updateProgram, stopLossThreshold, updateStopLoss, maximumHoldingSessions, updateMaximumHoldingSessions, minimumHoldingSessions, updateMinimumHoldingSessions, takeProfitTiers, updateTakeProfitTiers, error, fieldsButton, alphaEditor }: {
+/** Keeps each editor at a stable position while the selected authoring mode changes. */
+export function FrameworkAuthoring({ factor = false, drawdown, updateDrawdown, modules, selectModule, updateProgram,
+  stopLossThreshold, updateStopLoss, maximumHoldingSessions, updateMaximumHoldingSessions,
+  minimumHoldingSessions, updateMinimumHoldingSessions, takeProfitTiers, updateTakeProfitTiers,
+  error, errorLine, fieldsButton, alphaEditor, portfolioSettings }: {
+  factor?: boolean;
   drawdown: DrawdownInputs; updateDrawdown: (changes: Partial<DrawdownInputs>) => void;
   modules: FrameworkModulesDraft;
   takeProfitTiers: TakeProfitTierDraft[];
@@ -25,52 +33,78 @@ export function FrameworkAuthoring({ drawdown, updateDrawdown, modules, selectMo
   selectModule: (stage: FrameworkStage, kind: "builtin" | "python") => void;
   updateProgram: (stage: FrameworkStage, changes: Partial<ProgramInputs>) => void;
   error: (field: ResearchInputField) => string | undefined;
+  errorLine?: (stage: FrameworkStage) => number | null;
   fieldsButton: () => ReactNode;
   alphaEditor: ReactNode;
+  portfolioSettings?: ReactNode;
 }) {
   const { t } = useTranslation("strategy");
-  return <div className="framework-authoring">
-    <p className="framework-order">{t("authoring.order")}</p>
-    {frameworkStages.map((stage, index) => <section key={stage} className="framework-module" aria-label={t("authoring.module", { stage: t(`stages.${stage}`) })}>
-      <div className="framework-module-heading">
-        <h3><span>{index + 1}</span> {t(`stages.${stage}`)}</h3>
-        <select aria-label={t("authoring.module", { stage: t(`stages.${stage}`) })} value={modules[stage].kind} onChange={event => {
-          if (event.target.value === "builtin" || event.target.value === "python") selectModule(stage, event.target.value);
-        }}>
-          <option value="builtin">{t("authoring.builtin", { name: t(`builtin.${stage}`) })}</option>
-          <option value="python">{t("authoring.pythonModule")}</option>
-        </select>
-      </div>
-      <p className="framework-module-help">{t(`explanations.${stage}`)}</p>
-      {modules[stage].kind === "python" ? <PythonStrategyAuthoring stage={stage}
-        inputs={modules[stage].program} onChange={changes => updateProgram(stage, changes)}
-        error={field => error(`${stage}.${field}`)} fieldsButton={fieldsButton()} />
-        : stage === "alpha" ? alphaEditor : stage === "risk_management" ? <div className="research-parameter-field">
-          <PortfolioDrawdownAuthoring values={drawdown} onChange={updateDrawdown} error={error} />
-          <TakeProfitAuthoring tiers={takeProfitTiers} onChange={updateTakeProfitTiers} error={error} />
-          <label htmlFor="stop-loss-threshold">{t("authoring.stopLoss")}</label>
-          <input id="stop-loss-threshold" type="text" inputMode="decimal" placeholder={t("authoring.off")} maxLength={128}
-            value={stopLossThreshold} onChange={event => updateStopLoss(event.target.value)}
-            aria-invalid={Boolean(error("stopLossThreshold"))}
-            aria-describedby={error("stopLossThreshold") ? "stop-loss-help stop-loss-error" : "stop-loss-help"} />
-          <p id="stop-loss-help" className="framework-module-help">{t("authoring.stopLossHelp")}</p>
-          {error("stopLossThreshold") && <p id="stop-loss-error" className="inline-status-error">{error("stopLossThreshold")}</p>}
-          <label htmlFor="maximum-holding-sessions">{t("authoring.maximumHolding")}</label>
-          <input id="maximum-holding-sessions" type="text" inputMode="numeric" placeholder={t("authoring.off")} maxLength={16}
-            value={maximumHoldingSessions} onChange={event => updateMaximumHoldingSessions(event.target.value)}
-            aria-invalid={Boolean(error("maximumHoldingSessions"))}
-            aria-describedby={error("maximumHoldingSessions") ? "maximum-holding-help maximum-holding-error" : "maximum-holding-help"} />
-          <p id="maximum-holding-help" className="framework-module-help">{t("authoring.maximumHoldingHelp")}</p>
-          {error("maximumHoldingSessions") && <p id="maximum-holding-error" className="inline-status-error">{error("maximumHoldingSessions")}</p>}
-        </div> : stage === "portfolio_construction" ? <div className="research-parameter-field">
-          <label htmlFor="minimum-holding-sessions">{t("authoring.minimumHolding")}</label>
-          <input id="minimum-holding-sessions" type="text" inputMode="numeric" placeholder={t("authoring.off")} maxLength={16}
-            value={minimumHoldingSessions} onChange={event => updateMinimumHoldingSessions(event.target.value)}
-            aria-invalid={Boolean(error("minimumHoldingSessions"))}
-            aria-describedby={error("minimumHoldingSessions") ? "minimum-holding-help minimum-holding-error" : "minimum-holding-help"} />
-          <p id="minimum-holding-help" className="framework-module-help">{t("authoring.minimumHoldingHelp")}</p>
-          {error("minimumHoldingSessions") && <p id="minimum-holding-error" className="inline-status-error">{error("minimumHoldingSessions")}</p>}
-        </div> : null}
-    </section>)}
+  return <div className="grid min-w-0 gap-6">
+    {!factor && <p className="m-0 text-sm text-muted-foreground">{t("authoring.order")}</p>}
+    {frameworkStages.map((stage, index) => {
+      const hidden = factor && stage !== "alpha";
+      const python = !factor && modules[stage].kind === "python";
+      const label = t("authoring.module", { stage: t(`stages.${stage}`) });
+      return <section key={stage} hidden={hidden} aria-label={factor && stage === "alpha" ? undefined : label}
+        className={cn("grid min-w-0 gap-4", !factor && "rounded-lg border border-border bg-card p-4", hidden && "hidden")}>
+        {!factor && <>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h3 className="m-0 flex items-center gap-2 text-base font-semibold">
+              <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-secondary text-xs text-secondary-foreground">{index + 1}</span>
+              {t(`stages.${stage}`)}
+            </h3>
+            <Field className="w-auto max-w-full">
+              <FieldLabel className="sr-only" htmlFor={`module-${stage}`}>{label}</FieldLabel>
+              <Select value={modules[stage].kind} onValueChange={kind => {
+                if (kind === "builtin" || kind === "python") selectModule(stage, kind);
+              }}>
+                <SelectTrigger id={`module-${stage}`} className="w-full max-w-full">
+                  <SelectValue>{python ? t("authoring.pythonModule") : t("authoring.builtin", { name: t(`builtin.${stage}`) })}</SelectValue>
+                </SelectTrigger>
+                <SelectContent><SelectGroup>
+                  <SelectItem value="builtin">{t("authoring.builtin", { name: t(`builtin.${stage}`) })}</SelectItem>
+                  <SelectItem value="python">{t("authoring.pythonModule")}</SelectItem>
+                </SelectGroup></SelectContent>
+              </Select>
+            </Field>
+          </div>
+          <p className="m-0 text-sm text-muted-foreground">{t(`explanations.${stage}`)}</p>
+        </>}
+        <div hidden={!python} className={cn("min-w-0", !python && "hidden")}>
+          <PythonStrategyAuthoring stage={stage} inputs={modules[stage].program}
+            onChange={changes => updateProgram(stage, changes)} error={field => error(`${stage}.${field}`)}
+            errorLine={errorLine?.(stage)} fieldsButton={fieldsButton()} />
+        </div>
+        <div hidden={python} className={cn("min-w-0", python && "hidden")}>
+          {stage === "alpha" ? alphaEditor : stage === "risk_management" ? <FieldGroup className="gap-6">
+            <PortfolioDrawdownAuthoring values={drawdown} onChange={updateDrawdown} error={error} />
+            <TakeProfitAuthoring tiers={takeProfitTiers} onChange={updateTakeProfitTiers} error={error} />
+            <PolicyInput id="stop-loss-threshold" label={t("authoring.stopLoss")} help={t("authoring.stopLossHelp")}
+              inputMode="decimal" value={stopLossThreshold} onChange={updateStopLoss} error={error("stopLossThreshold")} />
+            <PolicyInput id="maximum-holding-sessions" label={t("authoring.maximumHolding")} help={t("authoring.maximumHoldingHelp")}
+              value={maximumHoldingSessions} onChange={updateMaximumHoldingSessions} error={error("maximumHoldingSessions")} />
+          </FieldGroup> : stage === "portfolio_construction" ? <FieldGroup className="gap-6">
+            {portfolioSettings}
+            <PolicyInput id="minimum-holding-sessions" label={t("authoring.minimumHolding")} help={t("authoring.minimumHoldingHelp")}
+              value={minimumHoldingSessions} onChange={updateMinimumHoldingSessions} error={error("minimumHoldingSessions")} />
+          </FieldGroup> : null}
+        </div>
+      </section>;
+    })}
   </div>;
+}
+
+function PolicyInput({ id, label, help, value, onChange, error, inputMode = "numeric" }: {
+  id: string; label: string; help: string; value: string; onChange: (value: string) => void;
+  error?: string; inputMode?: "numeric" | "decimal";
+}) {
+  const { t } = useTranslation("strategy");
+  return <Field data-invalid={Boolean(error)}>
+    <FieldLabel htmlFor={id}>{label}</FieldLabel>
+    <Input id={id} type="text" inputMode={inputMode} placeholder={t("authoring.off")}
+      maxLength={inputMode === "numeric" ? 16 : 128} value={value} onChange={event => onChange(event.target.value)}
+      aria-invalid={Boolean(error)} aria-describedby={`${id}-help${error ? ` ${id}-error` : ""}`} />
+    <FieldDescription id={`${id}-help`}>{help}</FieldDescription>
+    <FieldError id={`${id}-error`}>{error}</FieldError>
+  </Field>;
 }

@@ -64,7 +64,7 @@ export function ResearchDateInput({
               <PopoverTitle className="sr-only">{openLabel}</PopoverTitle>
               <Calendar
                 aria-label={label}
-                className="p-1 [--cell-size:--spacing(11)]"
+                className="p-1 max-[359px]:p-0 [--cell-size:--spacing(11)]"
                 mode="single"
                 locale={interfaceLocale() === "zh-CN" ? zhCN : enUS}
                 selected={selected}

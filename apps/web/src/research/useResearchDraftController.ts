@@ -98,8 +98,8 @@ export function useResearchDraftController({
     });
   }
 
-  function startNewResearch(): void {
-    if (hasUnexecutedChanges(draft) && !confirmDiscard(t("discardConfirm"))) return;
+  function startNewResearch(confirmed = false): void {
+    if (!confirmed && hasUnexecutedChanges(draft) && !confirmDiscard(t("discardConfirm"))) return;
     try {
       storage.removeItem(researchDraftKey(researcherId, folderId));
     } catch {

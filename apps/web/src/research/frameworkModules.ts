@@ -1,7 +1,8 @@
 import { drawdownEnabled, drawdownSpec, type DrawdownInputs, type PortfolioDrawdownPolicy } from "./portfolioDrawdown";
 import { takeProfitSpec, type TakeProfitTier, type TakeProfitTierDraft } from "./takeProfit";
 import Decimal from "decimal.js";
-import { emptyProgramInputs, programDraft, programSpec, type ProgramInputs, type PythonProgram } from "./pythonStrategy";
+import { programDraft, programSpec, type ProgramInputs, type PythonProgram } from "./pythonStrategy";
+import { frameworkExample } from "./frameworkExamples";
 
 export const builtinFrameworkModules = {
   universe_selection: "dataset_universe/v1",
@@ -27,7 +28,7 @@ export type FrameworkModules = {
 
 export function builtinModulesDraft(): FrameworkModulesDraft {
   return Object.fromEntries(frameworkStages.map(stage => [stage, {
-    kind: "builtin", program: emptyProgramInputs(),
+    kind: "builtin", program: frameworkExample(stage),
   }])) as FrameworkModulesDraft;
 }
 export function frameworkSpec(draft: FrameworkModulesDraft, policies: DrawdownInputs & {
@@ -48,7 +49,7 @@ export function frameworkSpec(draft: FrameworkModulesDraft, policies: DrawdownIn
 export function frameworkDraft(modules: FrameworkModules): FrameworkModulesDraft {
   return Object.fromEntries(frameworkStages.map(stage => {
     const module = modules[stage];
-    return [stage, (typeof module === "string" || module.kind !== "python") ? { kind: "builtin", program: emptyProgramInputs() }
+    return [stage, (typeof module === "string" || module.kind !== "python") ? { kind: "builtin", program: frameworkExample(stage) }
       : { kind: "python", program: programDraft(module.program) }];
   })) as FrameworkModulesDraft;
 }

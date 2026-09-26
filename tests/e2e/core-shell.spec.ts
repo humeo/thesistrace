@@ -66,7 +66,8 @@ test("Framework modules author, execute, reuse frozen programs and refresh Daily
   await page.getByLabel("Research name").fill("Daily Framework modules");
   await page.getByLabel("Research start date").fill("2026-08-04");
   await page.getByLabel("Research end date").fill("2026-08-05");
-  await page.getByLabel("Universe", { exact: true }).selectOption("top300");
+  await page.getByRole("combobox", { name: "Universe", exact: true }).click();
+  await page.getByRole("option", { name: "Top 300", exact: true }).click();
   const programs = [
     { stage: "universe_selection", label: "Universe Selection", source: [
       'def decide(context, state, parameters):',
@@ -101,14 +102,15 @@ test("Framework modules author, execute, reuse frozen programs and refresh Daily
     ].join("\n"), parameters: '{"label": "original_frozen_risk"}' },
   ];
   for (const program of programs) {
-    await page.getByRole("combobox", { name: `${program.label} module`, exact: true }).selectOption("python");
+    await page.getByRole("combobox", { name: `${program.label} module`, exact: true }).click();
+    await page.getByRole("option", { name: "Python module", exact: true }).click();
     const editor = page.getByRole("region", { name: `${program.label} module`, exact: true });
-    await editor.getByLabel("Python source", { exact: true }).fill(program.source);
-    await editor.getByLabel("Parameters (JSON)", { exact: true }).fill(program.parameters);
-    await editor.getByLabel("Declared fields", { exact: true }).fill("");
-    await editor.getByLabel("History (trading sessions)", { exact: true }).fill("1");
+    await editor.getByRole("textbox", { name: "Python source", exact: true }).fill(program.source);
+    await editor.getByRole("textbox", { name: "Parameters (JSON)", exact: true }).fill(program.parameters);
+    await editor.getByRole("textbox", { name: "Declared fields", exact: true }).fill("");
+    await editor.getByRole("spinbutton", { name: "History (trading sessions)", exact: true }).fill("1");
   }
-  const riskSource = page.getByRole("region", { name: "Risk Management module", exact: true }).getByLabel("Python source", { exact: true });
+  const riskSource = page.getByRole("region", { name: "Risk Management module", exact: true }).getByRole("textbox", { name: "Python source", exact: true });
   await riskSource.fill("def decide(:");
   await page.getByRole("button", { name: "Check configuration" }).click();
   await expect(page.locator("#risk_management-python-source-error")).toContainText("line 1", { timeout: 60_000 });
@@ -155,7 +157,7 @@ test("Framework modules author, execute, reuse frozen programs and refresh Daily
   await expect(page).toHaveURL(/\/research$/);
   for (const program of programs) {
     await expect(page.getByRole("region", { name: `${program.label} module`, exact: true })
-      .getByLabel("Python source", { exact: true })).toHaveValue(program.source);
+      .getByRole("textbox", { name: "Python source", exact: true })).toHaveText(program.source, { useInnerText: true });
   }
   await riskSource.fill("a later editable risk module");
   await page.goto(runUrl);
@@ -203,10 +205,12 @@ test("Direct Python authoring executes, reuses frozen source and explicitly adva
   await page.getByLabel("Research name").fill("Daily Python");
   await page.getByLabel("Research start date").fill("2026-08-04");
   await page.getByLabel("Research end date").fill("2026-08-05");
-  await page.getByLabel("Universe", { exact: true }).selectOption("top300");
-  await page.getByLabel("Strategy mode", { exact: true }).selectOption("direct");
+  await page.getByRole("combobox", { name: "Universe", exact: true }).click();
+  await page.getByRole("option", { name: "Top 300", exact: true }).click();
+  await page.getByRole("combobox", { name: "Strategy mode", exact: true }).click();
+  await page.getByRole("option", { name: "Direct · Python", exact: true }).click();
   await page.getByLabel("History (trading sessions)").fill("1");
-  await page.getByLabel("Declared fields", { exact: true }).fill("price.close.adjusted");
+  await page.getByRole("textbox", { name: "Declared fields", exact: true }).fill("price.close.adjusted");
   await page.getByLabel("Parameters (JSON)").fill('{"label": "visible_candidate"}');
   const source = [
     "def decide(context, state, parameters):",
@@ -219,11 +223,11 @@ test("Direct Python authoring executes, reuses frozen source and explicitly adva
     "                  'exposure': 1.0}, 'position_limits': {}}",
     "    return {'output': output, 'state': state}",
   ].join("\n");
-  await page.getByLabel("Python source", { exact: true }).fill("def decide(:");
+  await page.getByRole("textbox", { name: "Python source", exact: true }).fill("def decide(:");
   await page.getByRole("button", { name: "Check configuration" }).click();
   // The first validation also compiles the pinned guest in a fresh API process.
   await expect(page.getByLabel("Configuration issues")).toContainText("line 1", { timeout: 60_000 });
-  await page.getByLabel("Python source", { exact: true }).fill(source);
+  await page.getByRole("textbox", { name: "Python source", exact: true }).fill(source);
   await page.getByRole("button", { name: "Check configuration" }).click();
   await expect(page.getByText("Configuration is valid.", { exact: false })).toBeVisible();
   await page.getByRole("button", { name: "Run backtest", exact: true }).click();
@@ -249,8 +253,8 @@ test("Direct Python authoring executes, reuses frozen source and explicitly adva
   expect(accepted.result.terminal_strategy_state.decision_state.state).toEqual({ count: 2 });
   await page.getByRole("button", { name: "Create draft", exact: true }).click();
   await expect(page).toHaveURL(/\/research$/);
-  await expect(page.getByLabel("Python source", { exact: true })).toHaveValue(source);
-  await page.getByLabel("Python source", { exact: true }).fill("a later editable draft");
+  await expect(page.getByRole("textbox", { name: "Python source", exact: true })).toHaveText(source, { useInnerText: true });
+  await page.getByRole("textbox", { name: "Python source", exact: true }).fill("a later editable draft");
   await page.goto(runUrl);
   await page.getByRole("button", { name: "Start Tracking", exact: true }).click();
   await expect(page).toHaveURL(/\/daily-tracks\/track_[a-f0-9]+$/);
@@ -270,10 +274,10 @@ test("Custom fees and slippage survive Run reuse and DailyTrack refresh", { tag:
   publishFinancialTrackHead("lagged");
   await page.goto("/research?new");
   await fillCompleteDraft(page, { name: "Custom execution costs", formula: "close" });
-  await page.getByRole("button", { name: "Run settings", exact: true }).click();
+  await page.getByRole("button", { name: "Fees and slippage", exact: true }).click();
   await page.getByLabel("Price slippage (basis points)", { exact: true }).fill("15");
   await page.getByLabel("Minimum commission per child order (CNY)", { exact: true }).fill("2");
-  await page.getByRole("button", { name: "Run settings", exact: true }).click();
+  await page.getByRole("button", { name: "Fees and slippage", exact: true }).click();
   await page.getByRole("button", { name: "Run backtest", exact: true }).click();
   await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
   const runUrl = page.url();
@@ -307,7 +311,7 @@ test("Custom fees and slippage survive Run reuse and DailyTrack refresh", { tag:
   await page.screenshot({ path: testInfo.outputPath("custom-costs-fill.png"), fullPage: true });
   await page.getByRole("button", { name: "Create draft", exact: true }).click();
   await expect(page).toHaveURL(/\/research$/);
-  await page.getByRole("button", { name: "Run settings", exact: true }).click();
+  await page.getByRole("button", { name: "Fees and slippage", exact: true }).click();
   await expect(page.getByLabel("Price slippage (basis points)", { exact: true })).toHaveValue("15");
   await page.getByLabel("Price slippage (basis points)", { exact: true }).fill("25");
   await page.goto(runUrl);
@@ -356,13 +360,13 @@ test(`${policyName} survives Run reuse and DailyTrack refresh`, { tag: "@isolate
     await page.getByLabel("Minimum holding (trading sessions)", { exact: true }).fill("2");
     await page.getByLabel("Maximum holding (trading sessions)", { exact: true }).fill("2");
   } else await page.getByLabel("Stop loss (%)", { exact: true }).fill("1");
-  await page.getByRole("button", { name: "Run settings", exact: true }).click();
+
   await page.getByLabel("Price slippage (basis points)", { exact: true }).fill(holdingPeriods || takeProfit ? "0" : "1000");
   if (holdingPeriods) {
     await page.getByLabel("Holdings count").fill("1");
     await page.getByLabel("Selection interval (trading days)").fill("1");
   }
-  await page.getByRole("button", { name: "Run settings", exact: true }).click();
+
   if (holdingPeriods) await page.screenshot({ path: testInfo.outputPath("holding-periods-mobile-config.png"), fullPage: true });
   await page.getByRole("button", { name: "Run backtest", exact: true }).click();
   await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
@@ -708,8 +712,7 @@ test("Notes keeps multiline research context visible", async ({ page }) => {
   await page.goto("/research");
 
   const notes = page.getByLabel("Notes", { exact: true });
-  await expect(notes).toBeHidden();
-  await page.locator("summary").filter({ hasText: /^Notes$/ }).click();
+  await expect(notes).toBeVisible();
   await notes.fill(
     "Long turnover-amount leaders in Top 300; 20 holdings, rebalance every 5 sessions.",
   );
@@ -723,16 +726,16 @@ test("Notes keeps multiline research context visible", async ({ page }) => {
   expect(layout.scrollHeight).toBeLessThanOrEqual(layout.clientHeight);
 });
 
-test("Alpha formula editor keeps line numbers on the dark workbench surface", async ({ page }) => {
+test("Alpha formula editor keeps line numbers on the Classic workbench surface", async ({ page }) => {
   await page.goto("/research");
 
-  await expect(page.locator(".cm-gutters")).toHaveCSS(
+  await expect(page.getByRole("textbox", { name: "Alpha formula", exact: true }).locator("..").locator(".cm-gutters")).toHaveCSS(
     "background-color",
-    "rgb(15, 16, 17)",
+    "rgb(241, 243, 236)",
   );
-  await expect(page.locator(".cm-activeLineGutter")).toHaveCSS(
+  await expect(page.getByRole("textbox", { name: "Alpha formula", exact: true }).locator("..").locator(".cm-activeLineGutter")).toHaveCSS(
     "background-color",
-    "rgb(20, 21, 22)",
+    "rgb(241, 243, 236)",
   );
 });
 
@@ -750,10 +753,12 @@ test("date inputs retain a browser-populated value when focus leaves the field",
   await page.getByLabel("Research name").fill("Browser populated dates");
   await page.getByRole("textbox", { name: "Alpha formula", exact: true }).click();
   await page.keyboard.type("close");
-  await page.getByLabel("Universe", { exact: true }).selectOption("top300");
-  await page.getByRole("button", { name: "Run settings", exact: true }).click();
-  await page.getByLabel("Neutralization").selectOption("none");
-  await page.getByRole("button", { name: "Run settings", exact: true }).click();
+  await page.getByRole("combobox", { name: "Universe", exact: true }).click();
+  await page.getByRole("option", { name: "Top 300", exact: true }).click();
+
+  await page.getByRole("combobox", { name: "Neutralization", exact: true }).click();
+  await page.getByRole("option", { name: "None", exact: true }).click();
+
 
   for (const [label, value] of [
     ["Research start date", "2025-08-13"],
@@ -811,8 +816,8 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await expect(page.getByRole("group", { name: "Research type" })).toBeVisible();
     await expect(factorEvaluation).toBeChecked();
     await expect(strategyBacktest).not.toBeChecked();
-    await expect(page.getByLabel("Holdings count")).toHaveCount(0);
-    await expect(page.getByLabel("Selection interval (trading days)")).toHaveCount(0);
+    await expect(page.getByLabel("Holdings count")).not.toBeVisible();
+    await expect(page.getByLabel("Selection interval (trading days)")).not.toBeVisible();
     await page.setViewportSize({ width: 480, height: 900 });
     await expect(factorEvaluation).toBeVisible();
     await expect(strategyBacktest).toBeVisible();
@@ -835,7 +840,7 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await factorEvaluation.focus();
     await page.keyboard.press("ArrowRight");
     await expect(strategyBacktest).toBeChecked();
-    await page.getByRole("button", { name: "Run settings", exact: true }).click();
+
     const initialCash = page.getByLabel("Initial cash (CNY)");
     await initialCash.fill("0");
     await expect(initialCash).toHaveAttribute("aria-invalid", "true");
@@ -873,7 +878,6 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await holdingsCount.press("ArrowDown");
     await expect(holdingsCount).toHaveValue("10");
 
-    await page.getByRole("button", { name: "Run settings", exact: true }).click();
     await page.getByLabel("Research name").fill("Browser Mean Research");
     const editor = page.getByRole("textbox", { name: "Alpha formula", exact: true });
     await editor.click();
@@ -901,26 +905,26 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await fillResearchNotes(page, "Short rolling mean retains signal.");
     await page.getByLabel("Research start date").fill("2026-08-03");
     await page.getByLabel("Research end date").fill("2026-08-05");
-    await page.getByLabel("Universe", { exact: true }).selectOption("top300");
-    await page.getByRole("button", { name: "Run settings", exact: true }).click();
-    await page.getByLabel("Neutralization").selectOption("none");
+    await page.getByRole("combobox", { name: "Universe", exact: true }).click();
+  await page.getByRole("option", { name: "Top 300", exact: true }).click();
+
+    await page.getByRole("combobox", { name: "Neutralization", exact: true }).click();
+  await page.getByRole("option", { name: "None", exact: true }).click();
     await page.getByLabel("Initial cash (CNY)").fill("100000");
     await page.getByLabel("Holdings count").fill("10");
     await page.getByLabel("Selection interval (trading days)").fill("2");
 
-    await page.getByRole("button", { name: "Run settings", exact: true }).click();
     await strategyBacktest.focus();
     await page.keyboard.press("ArrowLeft");
     await expect(factorEvaluation).toBeChecked();
-    await expect(page.getByLabel("Holdings count")).toHaveCount(0);
-    await expect(page.getByLabel("Selection interval (trading days)")).toHaveCount(0);
+    await expect(page.getByLabel("Holdings count")).not.toBeVisible();
+    await expect(page.getByLabel("Selection interval (trading days)")).not.toBeVisible();
     await strategyBacktest.check();
-    await page.getByRole("button", { name: "Run settings", exact: true }).click();
+
     await page.getByLabel("Initial cash (CNY)").fill("100000");
     await page.getByLabel("Holdings count").fill("10");
     await page.getByLabel("Selection interval (trading days)").fill("2");
 
-    await page.getByRole("button", { name: "Run settings", exact: true }).click();
     const browserKeys = await page.evaluate(() => Object.keys(localStorage));
     expect(browserKeys).toEqual([defaultDraftKey]);
     const retainedDraft = await page.evaluate((draftKey) => JSON.parse(
@@ -942,14 +946,14 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await expect(page.getByLabel("Research name")).toHaveValue("Browser Mean Research");
     await expect(page.getByRole("textbox", { name: "Alpha formula", exact: true })).toHaveText("ts_mean(close, 2)");
     await expect(page.getByLabel("Notes")).toHaveValue("Short rolling mean retains signal.");
-    await expect(page.getByLabel("Universe", { exact: true })).toHaveValue("top300");
+    await expect(page.getByRole("combobox", { name: "Universe", exact: true })).toContainText("Top 300");
 
-    page.once("dialog", async (dialog) => dialog.dismiss());
-    const workspaceNew = page.locator(".research-workspace-header").getByRole("button", { name: "New research" });
+    const workspaceNew = page.getByRole("button", { name: "New research", exact: true });
     await workspaceNew.click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Cancel", exact: true }).click();
     await expect(page.getByLabel("Research name")).toHaveValue("Browser Mean Research");
-    page.once("dialog", async (dialog) => dialog.accept());
     await workspaceNew.click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "New research", exact: true }).click();
     await expect(page.getByLabel("Research name")).toHaveValue("");
     await expect(page.locator(".cm-placeholder")).toHaveText("Start with a field or function");
     expect(await page.evaluate((draftKey) => localStorage.getItem(draftKey), defaultDraftKey)).toBeNull();
@@ -967,8 +971,8 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await page.keyboard.type("volume");
 
     await closeResearchFolderMenu(page);
-    page.once("dialog", async (dialog) => dialog.dismiss());
     await workspaceNew.click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Cancel", exact: true }).click();
     await expect(page.getByLabel("Research name")).toHaveValue("Signals browser Draft");
 
     await page.getByRole("link", { name: "Research", exact: true }).click();
@@ -1612,7 +1616,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
       selection_every_sessions: 2,
     });
     await expect(
-      page.locator(".research-workspace-header").getByRole("button", { name: "New research" }),
+      page.getByRole("button", { name: "New research", exact: true }),
     ).toBeDisabled();
 
     await replaceFormula(page, "ts_mean(close, 3)");
@@ -1725,22 +1729,22 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await page.getByRole("alertdialog").getByRole("button", { name: "Replace draft" }).click();
     await expect(page).toHaveURL(/\/research$/);
     await expect(page.getByRole("radio", { name: /Factor Evaluation/ })).toBeChecked();
-    await expect(page.getByLabel("Holdings count")).toHaveCount(0);
-    await expect(page.getByLabel("Selection interval (trading days)")).toHaveCount(0);
+    await expect(page.getByLabel("Holdings count")).not.toBeVisible();
+    await expect(page.getByLabel("Selection interval (trading days)")).not.toBeVisible();
     const factorHistoryAfterReuse = await page.request.get("/api/research-runs");
     expect(((await factorHistoryAfterReuse.json()).items as unknown[])).toHaveLength(factorHistoryCount);
 
     await page.getByRole("radio", { name: /Strategy Backtest/ }).check();
     await expect(page.getByRole("button", { name: /^Run (backtest|evaluation)$/, exact: true })).toBeEnabled();
     await page.getByLabel("Research name").fill("Converted Factor Strategy");
-    await page.getByRole("button", { name: "Run settings", exact: true }).click();
+
     await expect(page.getByLabel("Initial cash (CNY)")).toHaveValue("100000");
     await expect(page.getByLabel("Holdings count")).toHaveValue("10");
     await expect(page.getByLabel("Selection interval (trading days)")).toHaveValue("5");
     await page.getByLabel("Initial cash (CNY)").fill("100000");
     await page.getByLabel("Holdings count").fill("10");
     await page.getByLabel("Selection interval (trading days)").fill("2");
-    await page.getByRole("button", { name: "Run settings", exact: true }).click();
+
     await page.getByRole("button", { name: /^Run (backtest|evaluation)$/, exact: true }).click();
     await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
     const convertedRunId = page.url().split("/").at(-1);
@@ -1867,7 +1871,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await expect(page.getByLabel("Notes")).toHaveValue("Browser Run acceptance.");
     await expect(page.getByLabel("Research start date")).toHaveValue("2026-08-04");
     await expect(page.getByLabel("Research end date")).toHaveValue("2026-08-05");
-    await expect(page.getByLabel("Universe", { exact: true })).toHaveValue("top300");
+    await expect(page.getByRole("combobox", { name: "Universe", exact: true })).toContainText("Top 300");
     await expect(page.getByLabel("Neutralization")).toHaveValue("none");
     await expect(page.getByRole("radio", { name: /Strategy Backtest/ })).toBeChecked();
     await expect(page.getByLabel("Holdings count")).toHaveValue("10");
@@ -2053,20 +2057,22 @@ async function fillCompleteDraft(
   await page.getByLabel("Research start date").fill("2026-08-04");
   await page.getByLabel("Research end date").fill("2026-08-05");
   if (researchKind === "strategy_backtest") {
-    await page.getByLabel("Universe", { exact: true }).selectOption("top300");
-    await page.getByRole("button", { name: "Run settings", exact: true }).click();
-    await page.getByLabel("Neutralization").selectOption("none");
+    await page.getByRole("combobox", { name: "Universe", exact: true }).click();
+  await page.getByRole("option", { name: "Top 300", exact: true }).click();
+
+    await page.getByRole("combobox", { name: "Neutralization", exact: true }).click();
+  await page.getByRole("option", { name: "None", exact: true }).click();
     await page.getByLabel("Initial cash (CNY)").fill("100000");
     await page.getByLabel("Holdings count").fill("10");
     await page.getByLabel("Selection interval (trading days)").fill("2");
-    await page.getByRole("button", { name: "Run settings", exact: true }).click();
+
   } else {
     await page.getByRole("combobox", { name: "Universe", exact: true }).click();
     await page.getByRole("option", { name: "Top 300", exact: true }).click();
     await page.getByRole("combobox", { name: "Neutralization", exact: true }).click();
     await page.getByRole("option", { name: "None", exact: true }).click();
-    await expect(page.getByLabel("Holdings count")).toHaveCount(0);
-    await expect(page.getByLabel("Selection interval (trading days)")).toHaveCount(0);
+    await expect(page.getByLabel("Holdings count")).not.toBeVisible();
+    await expect(page.getByLabel("Selection interval (trading days)")).not.toBeVisible();
   }
   await expect(page.getByRole("button", { name: /^Run (backtest|evaluation)$/, exact: true })).toBeEnabled();
 }
@@ -2137,8 +2143,5 @@ async function confirmTrackStop(page: Page) {
 
 async function fillResearchNotes(page: Page, value: string): Promise<void> {
   const notes = page.getByLabel("Notes", { exact: true });
-  if (!(await notes.isVisible())) {
-    await page.locator("summary").filter({ hasText: /^Notes$/ }).click();
-  }
   await notes.fill(value);
 }

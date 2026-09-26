@@ -9,7 +9,9 @@ export async function buildProductFixture(entry: URL, name: string, fixturePlugi
     plugins: [...fixturePlugins, tailwindcss()],
     resolve: { alias: { "@": fileURLToPath(new URL("../src", import.meta.url)) } },
     logLevel: "silent",
-    esbuild: { jsx: "automatic" },
+    // A preceding Vite dev-server test can leave NODE_ENV=development in this worker.
+    // Keep generated JSX consistent with the production React runtime defined below.
+    esbuild: { jsx: "automatic", jsxDev: false },
     define: { "process.env.NODE_ENV": JSON.stringify("production") },
     build: {
       write: false,

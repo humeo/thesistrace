@@ -11,7 +11,7 @@ const migratedRunsFunctions = new Set([
 export function isMigratedUiFile(relativePath) {
   return relativePath === "main.tsx" || relativePath === "shell/AppShell.tsx" ||
     relativePath === "chat/SessionHistoryList.tsx" || relativePath.startsWith("auth/") ||
-    relativePath === "research/ResearchDateInput.tsx" || relativePath === "research/ResearchFieldBrowser.tsx" ||
+    (relativePath.startsWith("research/") && !["research/FrameworkStateView.tsx", "research/FrozenStrategyDefinition.tsx"].includes(relativePath)) ||
     relativePath === "research-runs/FactorResultView.tsx" ||
     relativePath === "components/product/MetricGroup.tsx" ||
     ["FactorEvidence", "CommonInputObservations", "MetricHelp", "StrategyPerformanceChart"].some(

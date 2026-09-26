@@ -111,7 +111,7 @@ describe("Framework authoring contract", () => {
     expect(researchSpec(loadResearchDraft(saved, "researcher", "folder"))).toEqual(spec);
   });
 
-  it("maps per-module validation and clears inactive programs when changing stages or mode", () => {
+  it("maps per-module validation while ignoring retained inactive programs", () => {
     let current = selectFrameworkModule(draft(), "risk_management", "python");
     current = { ...current, frameworkModules: { ...current.frameworkModules, risk_management: {
       kind: "python", program: { ...current.frameworkModules.risk_management.program,
@@ -125,8 +125,9 @@ describe("Framework authoring contract", () => {
     expect(researchSpec(current)).toMatchObject({ modules: builtinFrameworkModules });
     current = selectStrategyMode(selectFrameworkModule(current, "alpha", "python"), "direct");
     expect(researchSpec(current)).not.toHaveProperty("modules");
-    expect(Object.values(current.frameworkModules).every(module => module.kind === "builtin"
-      && module.program.programSource === "")).toBe(true);
+    expect(current.frameworkModules.alpha.kind).toBe("python");
+    expect(current.frameworkModules.risk_management.program.programParameters).toBe("not JSON");
+    expect(researchInputIssues(current)).toEqual([]);
   });
 
   it("keeps pending admission identity and compares nested frozen values without false discard prompts", () => {

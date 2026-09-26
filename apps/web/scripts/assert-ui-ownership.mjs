@@ -4,8 +4,8 @@ import { isMigratedUiFile, uiOwnershipViolations } from "./ui-ownership.mjs";
 
 const sourceRoot = fileURLToPath(new URL("../src/", import.meta.url));
 
-// Tickets 01–04 own authentication, navigation, factor authoring and migrated result/analysis controls. Tickets
-// 05–17 will expand this set as each module migrates: research, research-runs, analysis,
+// Tickets 01–05 own authentication, navigation, research authoring and migrated result/analysis controls. Tickets
+// 06–17 will expand this set as each module migrates: research, research-runs, analysis,
 // data, daily-tracks, chat, mcp and operator. The public landing retains its
 // established markup; specialized editor/chart internals keep their APIs.
 function* sourceFiles(directory, prefix = "") {

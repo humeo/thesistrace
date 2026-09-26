@@ -30,6 +30,7 @@ export function AlphaFormulaEditor({
   catalog,
   context = "signal",
   className,
+  error,
   diagnostics,
   formula,
   selection,
@@ -39,6 +40,7 @@ export function AlphaFormulaEditor({
   catalog: AlphaCatalog;
   context?: "signal" | "exposure";
   className?: string;
+  error?: string;
   diagnostics: EditorDiagnostic[];
   formula: string;
   selection: StoredEditorState;
@@ -49,6 +51,7 @@ export function AlphaFormulaEditor({
   const host = useRef<HTMLDivElement | null>(null);
   const view = useRef<EditorView | null>(null);
   const presentation = useRef(new Compartment());
+  const validation = useRef(new Compartment());
   const presentationLocale = useRef<InterfaceLocale | null>(null);
   useImperativeHandle(ref, () => ({
     focus: () => view.current?.focus(),
@@ -87,6 +90,7 @@ export function AlphaFormulaEditor({
         history(),
         keymap.of(historyKeymap),
         presentation.current.of(editorPresentation(catalog, context, interfaceLocale())),
+        validation.current.of([]),
         EditorView.updateListener.of((update) => {
           if (applyingExternalValue.current) return;
           if (!update.docChanged && !update.selectionSet) return;
@@ -102,6 +106,13 @@ export function AlphaFormulaEditor({
       view.current = null;
     };
   }, [catalog, context]);
+
+  useEffect(() => {
+    // A description on the editable element works across the editor's Shadow DOM boundary.
+    view.current?.dispatch({ effects: validation.current.reconfigure(EditorView.contentAttributes.of({
+      "aria-invalid": String(Boolean(error)), ...(error ? { "aria-description": error } : {}),
+    })) });
+  }, [error, catalog, context]);
 
   useEffect(() => {
     const editor = view.current;
