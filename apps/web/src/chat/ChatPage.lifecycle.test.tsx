@@ -26,7 +26,7 @@ test.each([
 ] as const)("renders the state machine's %s primary action with an action name", async (kind, label) => {
   const execute = vi.fn(async () => undefined);
   await mount(composerController({ action: { enabled: true, kind, label }, executeMainAction: execute }));
-  const button = document.querySelector<HTMLButtonElement>(`.chat-main-action-${kind}`);
+  const button = document.querySelector<HTMLButtonElement>(`button[type="submit"]`);
   expect(button?.getAttribute("aria-label")).toBe(label);
   await act(async () => button?.click());
   expect(execute).toHaveBeenCalledOnce();
@@ -101,7 +101,7 @@ test.each(["single_select", "multi_select", "free_text"] as const)("keeps %s que
   expect(document.querySelector<HTMLButtonElement>('[aria-label="Send answer"]')?.disabled).toBe(true);
   expect(document.body.textContent).not.toContain("Model settings");
   if (mode !== "free_text") {
-    await act(async () => document.querySelector<HTMLInputElement>('input[value="Quality"]')?.click());
+    await act(async () => document.querySelector<HTMLInputElement>('[data-slot="checkbox"], [data-slot="radio-group-item"]')?.click());
     expect(selections).toHaveBeenCalledWith(["Quality"]);
   }
 });
@@ -136,7 +136,7 @@ test.each(["opening", "recovering", "stopping"] as const)("retains but locks the
   }));
   expect(document.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("Retained note");
   expect(document.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(true);
-  expect(document.querySelector<HTMLInputElement>('input[value="Quality"]')?.checked).toBe(true);
+  expect(document.querySelector<HTMLInputElement>('[data-slot="checkbox"], [data-slot="radio-group-item"]')?.getAttribute("data-checked")).toBe("");
   expect(document.querySelector<HTMLFieldSetElement>("fieldset")?.disabled).toBe(true);
   expect(document.querySelector<HTMLButtonElement>('[aria-label="Stop"]')?.disabled).toBe(true);
 });

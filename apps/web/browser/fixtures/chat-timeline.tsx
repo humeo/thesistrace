@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
+import { Toaster } from "../../src/components/ui/toast";
 import { ChatTimeline } from "../../src/chat/ChatTimeline";
 import type { ChatConversationController } from "../../src/chat/useChatConversation";
 import type { TimelineEntry, TimelineTurn } from "../../src/chat/chatProtocol";
@@ -71,8 +72,9 @@ function TimelineFixture() {
       <button onClick={() => respond("Hello. How can I help?")}>Short reply</button>
       <button onClick={() => respond("**数据截至：**2026-08-27\n\n`**原文：**保持`", true)}>CJK reply</button>
       <button onClick={() => respond("Hello. How can I help?", true)}>Finish reply</button>
+      <button onClick={() => respond("[X](/research-runs/run_0123456789abcdef0123)", true)}>Run link reply</button>
       <button onClick={() => respond("A longer streamed paragraph.\n\n".repeat(60))}>Long reply</button></nav>
-    <ChatTimeline controller={controller} onAnnounce={() => undefined} />
+    <ChatTimeline controller={controller} onAnnounce={() => undefined} /><Toaster />
   </main>;
 }
 function RecoveryFixture() {

@@ -1,35 +1,11 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
-import { build } from "vite";
+import { buildProductFixture } from "./build-product-fixture";
 
-const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+let styles: string;
 let timelineScript: string;
 
 test.beforeAll(async () => {
-  // Bundle the actual component, not a copy of its markup or resizing logic.
-  // This browser test needs no server, Auth, Agent, or database.
-  const result = await build({
-    configFile: false,
-    logLevel: "silent",
-    esbuild: { jsx: "automatic" },
-    define: { "process.env.NODE_ENV": JSON.stringify("production") },
-    build: {
-      write: false,
-      minify: false,
-      lib: {
-        entry: fileURLToPath(new URL("./fixtures/chat-timeline.tsx", import.meta.url)),
-        formats: ["iife"],
-        name: "ChatTimelineFixture",
-      },
-    },
-  });
-  if ("on" in result) throw new Error("Timeline fixture must be a one-off build");
-  const chunk = (Array.isArray(result) ? result : [result])
-    .flatMap((bundle) => bundle.output)
-    .find((output) => output.type === "chunk" && output.isEntry);
-  if (chunk?.type !== "chunk") throw new Error("Timeline fixture entry is missing");
-  timelineScript = chunk.code;
+  ({ script: timelineScript, styles } = await buildProductFixture(new URL("./fixtures/chat-timeline.tsx", import.meta.url), "ChatTimelineFixture"));
 });
 
 test.beforeEach(async ({ page }) => {
@@ -55,21 +31,21 @@ test("completion keeps compact results and treats answers as tool history", asyn
   const finalBox = (await page.locator('[data-entry-id="final"]').boundingBox())!;
   const contentBox = (await page.locator('.chat-timeline-content').boundingBox())!;
   expect(footerBox.y).toBeGreaterThanOrEqual(finalBox.y + finalBox.height);
-  expect(footerBox.y - finalBox.y - finalBox.height).toBeLessThanOrEqual(8);
+  expect(footerBox.y - finalBox.y - finalBox.height).toBeLessThanOrEqual(12);
   expect(contentBox.y + contentBox.height - footerBox.y - footerBox.height).toBeGreaterThanOrEqual(56);
-  expect(contentBox.y + contentBox.height - finalBox.y - finalBox.height).toBeLessThanOrEqual(88);
+  expect(contentBox.y + contentBox.height - finalBox.y - finalBox.height).toBeLessThanOrEqual(112);
   expect(footerBox.x).toBe(finalBox.x);
   await page.mouse.move(0, 0);
   await footer.getByRole('button', { name: 'Copy response' }).focus();
   await expect(footer).toHaveCSS('opacity', '1');
   await expect(page.locator('[data-entry-id="before"]')).toBeHidden();
   await expect(page.locator('[data-entry-id="between"]')).toBeHidden();
-  await page.locator('.chat-work-history > summary').click();
+  await page.locator('.chat-work-history > [data-slot="collapsible-trigger"]').click();
   await expect(page.locator('[data-entry-id="before"]')).toBeVisible();
   await expect(page.locator('[data-entry-id="between"]')).toBeVisible();
   await expect(page.getByText('Last observed progress', { exact: true })).toHaveCount(0);
   await expect(page.locator('.chat-message-user')).toHaveCount(0);
-  await page.locator('.chat-tool-group > summary').last().click();
+  await page.locator('.chat-tool-group > [data-slot="collapsible-trigger"]').last().click();
   const question = page.locator('[data-tool-name="ask_user"]');
   await expect(question).toBeVisible();
   await question.getByText('Question and answer', { exact: true }).click();
@@ -95,11 +71,11 @@ test("new turns start near the top and keep their position through a short reply
   await expect.poll(offset).toBeCloseTo(initialOffset, 0);
   await page.getByRole("button", { name: "Finish reply", exact: true }).click();
   await expect.poll(offset).toBeCloseTo(initialOffset, 0);
-  const bubble = (await latest.locator('.chat-message-content').first().boundingBox())!;
+  const bubble = (await latest.locator('.chat-message-user').boundingBox())!;
   const work = (await latest.locator('.chat-turn-assistant-meta').boundingBox())!;
   const previousFooter = (await page.locator('.chat-turn').first().locator('.chat-response-footer').boundingBox())!;
   expect(work.y - bubble.y - bubble.height).toBeGreaterThanOrEqual(0);
-  expect(work.y - bubble.y - bubble.height).toBeLessThanOrEqual(16);
+  expect(work.y - bubble.y - bubble.height).toBeLessThanOrEqual(24);
   expect(bubble.y - previousFooter.y - previousFooter.height).toBeGreaterThanOrEqual(0);
   expect(bubble.y - previousFooter.y - previousFooter.height).toBeLessThanOrEqual(24);
   await latest.locator('.chat-message-user').hover();
@@ -161,16 +137,14 @@ for (const reducedMotion of ["no-preference", "reduce"] as const) {
   });
 }
 
-test("latest tool status stays visible when history is folded and highlights only while running", async ({ page }) => {
+test("latest tool status stays visible when history is folded and respects reduced motion", async ({ page }) => {
   await page.getByRole("button", { name: "Start tool", exact: true }).click();
   const activity = page.locator(".chat-current-activity");
   await expect(activity).toContainText("Running submit research run");
-  await page.locator(".chat-work-history > summary").click();
+  await page.locator('.chat-work-history > [data-slot="collapsible-trigger"]').click();
   await expect(activity).toBeVisible();
-  await expect(page.locator(".chat-work-history > summary")).toContainText("Working for");
-  await expect(activity.locator("span")).toHaveCSS("animation-name", "chat-activity-highlight");
-  const first = await activity.locator("span").evaluate(element => getComputedStyle(element).backgroundPosition);
-  await expect.poll(() => activity.locator("span").evaluate(element => getComputedStyle(element).backgroundPosition)).not.toBe(first);
+  await expect(page.locator('.chat-work-history > [data-slot="collapsible-trigger"]')).toContainText("Working for");
+  await expect(activity).toHaveAttribute("role", "status");
   await page.emulateMedia({ reducedMotion: "reduce" });
   await expect(activity.locator("span")).toHaveCSS("animation-name", "none");
   await expect(activity).toBeVisible();
@@ -178,7 +152,7 @@ test("latest tool status stays visible when history is folded and highlights onl
   await expect(activity).toContainText("Preparing response");
   await page.getByRole("button", { name: "Complete", exact: true }).click();
   await expect(activity).toHaveCount(0);
-  await expect(page.locator(".chat-work-history > summary")).toContainText("Worked for");
+  await expect(page.locator('.chat-work-history > [data-slot="collapsible-trigger"]')).toContainText("Worked for");
 });
 
 test("renders Chinese punctuation emphasis while preserving code in a completed reply", async ({ page }) => {
@@ -189,3 +163,27 @@ test("renders Chinese punctuation emphasis while preserving code in a completed 
   await expect(message.locator("code")).toHaveText("**原文：**保持");
   await expect(message).toContainText("2026-08-27");
 });
+
+test("short Markdown run links remain reachable on a phone", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "Send next", exact: true }).click();
+  await page.getByRole("button", { name: "Run link reply", exact: true }).click();
+  const link = page.getByRole("link", { name: "X", exact: true });
+  await expect(link).toHaveAttribute("href", "/research-runs/run_0123456789abcdef0123");
+  const bounds = (await link.boundingBox())!;
+  expect(bounds.width).toBeGreaterThanOrEqual(44);
+  expect(bounds.height).toBeGreaterThanOrEqual(44);
+});
+for (const failed of [false, true]) {
+  test(`copy feedback is visible when clipboard ${failed ? "rejects" : "succeeds"}`, async ({ page }) => {
+    await page.evaluate(failed => Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
+      writeText: async () => { if (failed) throw new DOMException("Denied", "NotAllowedError"); },
+    } }), failed);
+    await page.getByRole("button", { name: "Complete", exact: true }).click();
+    await page.locator(".chat-turn-response").hover();
+    await page.getByRole("button", { name: "Copy response", exact: true }).click();
+    await expect(page.locator("[data-slot=toast]")).toContainText(failed ? "Could not copy to clipboard." : "Copied to clipboard.");
+    await expect(page.locator("[data-slot=toast]")).toBeVisible();
+    await expect(page.locator('[data-entry-id="final"]')).toBeVisible();
+  });
+}

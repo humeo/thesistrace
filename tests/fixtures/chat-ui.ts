@@ -17,10 +17,11 @@ export async function revealToolActivity(
   const activity = toolActivity(page, name, status);
   await activity.first().waitFor({ state: "attached" });
   // Open outer execution history before its nested Tool group, as a user would.
-  const groups = activity.locator("xpath=ancestor::details");
+  const groups = activity.locator("xpath=ancestor::*[@data-slot='collapsible']");
   for (const group of await groups.all()) {
-    if (await group.getAttribute("open") === null) {
-      await group.locator(":scope > summary").click();
+    const trigger = group.locator(":scope > [data-slot=collapsible-trigger]");
+    if (await trigger.getAttribute("aria-expanded") === "false") {
+      await trigger.click();
     }
   }
   return activity;

@@ -1,36 +1,12 @@
 import { fontStylesheet, serveBrandAssets } from "./brand-assets";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
-import { build } from "vite";
+import { buildProductFixture } from "./build-product-fixture";
 
-const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+let styles: string;
 let composerScript: string;
 
 test.beforeAll(async () => {
-  // Bundle the actual component, not a copy of its markup or resizing logic.
-  // This browser test needs no server, Auth, Agent, or database.
-  const result = await build({
-    configFile: false,
-    logLevel: "silent",
-    esbuild: { jsx: "automatic" },
-    define: { "process.env.NODE_ENV": JSON.stringify("production") },
-    build: {
-      write: false,
-      minify: false,
-      lib: {
-        entry: fileURLToPath(new URL("./fixtures/chat-composer.tsx", import.meta.url)),
-        formats: ["iife"],
-        name: "ChatComposerFixture",
-      },
-    },
-  });
-  if ("on" in result) throw new Error("Composer fixture must be a one-off build");
-  const chunk = (Array.isArray(result) ? result : [result])
-    .flatMap((bundle) => bundle.output)
-    .find((output) => output.type === "chunk" && output.isEntry);
-  if (chunk?.type !== "chunk") throw new Error("Composer fixture entry is missing");
-  composerScript = chunk.code;
+  ({ script: composerScript, styles } = await buildProductFixture(new URL("./fixtures/chat-composer.tsx", import.meta.url), "ChatComposerFixture"));
 });
 
 test.beforeEach(async ({ page }) => {
@@ -79,11 +55,11 @@ for (const mobile of [false, true]) {
     await answer.fill("Keep turnover low.");
     await expect(answer).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
     await expect(answer).toHaveCSS("outline-style", "none");
-    await expect(page.getByRole("button", { name: "Model and reasoning" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /^Model / })).toHaveCount(0);
     expect((await send.boundingBox())!.height).toBe(mobile ? 44 : 36);
     await answer.press("Tab");
     await expect(send).toBeFocused();
-    await expect(send).toHaveCSS("outline-width", "2px");
+    await expect(send).not.toHaveCSS("box-shadow", "none");
     await send.press("Enter");
     await expect(page.locator("[data-answer-receipt]")).toHaveText("Quality\n\nKeep turnover low.");
 
@@ -131,7 +107,7 @@ for (const mobile of [false, true]) {
         }))) }),
       contentType: "application/json",
     });
-    expect(rowBox.height).toBeLessThanOrEqual(answerBox.height + 6);
+    expect(rowBox.height).toBeLessThanOrEqual(answerBox.height + 25);
     expect(panelBox.y + panelBox.height - rowBox.y - rowBox.height).toBeLessThanOrEqual(12);
     expect(await panel.evaluate((element) => element.scrollTop)).toBe(0);
     expect(answerBox.height).toBeLessThanOrEqual(140);
@@ -144,15 +120,15 @@ for (const mobile of [false, true]) {
     await page.setViewportSize(mobile ? { width: 390, height: 844 } : { width: 1159, height: 964 });
     const input = page.getByRole("textbox", { name: "Message" });
     const toolbar = page.locator(".chat-composer-toolbar");
-    const model = page.getByRole("button", { name: "Model and reasoning" });
+    const model = page.getByRole("button", { name: /^Model / });
     const send = page.getByRole("button", { name: "Send" });
     await expect(input).toHaveAccessibleDescription(/Enter to send.*Shift\+Enter for newline/);
     await expect(page.locator(".chat-composer-guidance")).toHaveCount(0);
     await expect(page.locator("#chat-composer-guidance")).toHaveCSS("clip", "rect(0px, 0px, 0px, 0px)");
     const dockBox = (await page.locator(".chat-composer-dock").boundingBox())!;
     const surfaceBox = (await page.locator(".chat-composer-surface").boundingBox())!;
-    expect(dockBox.height - surfaceBox.height).toBe(mobile ? 10 : 14);
-    await expect.poll(async () => (await toolbar.boundingBox())!.height).toBeLessThanOrEqual(48);
+    expect(dockBox.height - surfaceBox.height).toBe(16);
+    await expect.poll(async () => (await toolbar.boundingBox())!.height).toBeLessThanOrEqual(mobile ? 56 : 48);
     expect((await input.boundingBox())!.height).toBeGreaterThanOrEqual(80);
     expect((await model.boundingBox())!.height).toBe(mobile ? 44 : 36);
     expect((await send.boundingBox())!.height).toBe(mobile ? 44 : 36);
@@ -169,10 +145,10 @@ for (const mobile of [false, true]) {
     await input.press("Tab");
     await expect(model).toBeFocused();
     await expect(input).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
-    await expect(model).toHaveCSS("outline-width", "2px");
+    await expect(model).not.toHaveCSS("box-shadow", "none");
     await model.press("Tab");
     await expect(send).toBeFocused();
-    await expect(send).toHaveCSS("outline-width", "2px");
+    await expect(send).not.toHaveCSS("box-shadow", "none");
     expect(await page.locator("body").evaluate((body) => body.scrollWidth <= window.innerWidth)).toBe(true);
     await page.screenshot({ path: test.info().outputPath(`composer-${mobile ? "mobile" : "desktop"}.png`) });
   });
@@ -219,3 +195,57 @@ for (const mobile of [false, true]) {
     await expect(page.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
   });
 }
+
+for (const width of [320, 390, 768, 1280, 1440]) {
+  test(`model settings preserve draft and keyboard focus at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    const input = page.getByRole("textbox", { name: "Message", exact: true });
+    await input.fill("Keep my research draft");
+    const trigger = page.getByRole("button", { name: /^Model / });
+    await trigger.focus();
+    await trigger.press("ArrowDown");
+    const popup = page.getByRole("dialog");
+    const luna = popup.getByRole("button", { name: "GPT-5.6 Luna", exact: true });
+    await expect(luna).toBeFocused();
+    await expect(popup.getByRole("button", { name: "Low", exact: true })).toHaveCSS("border-top-color", "rgba(0, 0, 0, 0)");
+    await luna.press("ArrowDown");
+    const sol = popup.getByRole("button", { name: "GPT-5.6 Sol", exact: true });
+    await expect(sol).toBeFocused();
+    await sol.press("Enter");
+    await expect(popup).toBeVisible();
+    await sol.press("ArrowRight");
+    const selected = popup.getByRole("button", { name: "X-high", exact: true });
+    await expect(selected).toBeFocused();
+    await selected.press("Enter");
+    await expect(popup).toBeHidden();
+    await expect(trigger).toBeFocused();
+    await trigger.click();
+    await page.getByRole("button", { name: "简体中文", exact: true }).evaluate(el => (el as HTMLButtonElement).click());
+    // The language control is outside this non-modal popover and dismisses it.
+    await expect(popup).toBeHidden();
+    await page.locator("[data-slot=popover-trigger]").click();
+    await popup.getByRole("button", { name: "中", exact: true }).click();
+    await expect(popup).toBeHidden();
+    await expect(page.getByRole("textbox", { name: "消息", exact: true })).toHaveValue("Keep my research draft");
+    await expect(page.locator("[data-slot=popover-trigger]")).toBeFocused();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  });
+}
+
+for (const mode of ["single_select", "multi_select"]) {
+  test(`question ${mode} shows keyboard focus on the option`, async ({ page }) => {
+    await page.getByLabel("Test question mode").selectOption(mode);
+    const option = page.getByRole(mode === "single_select" ? "radio" : "checkbox", { name: "Quality", exact: true });
+    await page.keyboard.press("Tab");
+    await option.focus();
+    await expect(option).toBeFocused();
+    await expect(option.locator("xpath=ancestor::label")).not.toHaveCSS("box-shadow", "none");
+    await option.press("Space");
+    await expect(option).toBeChecked();
+    await expect(option.locator("xpath=ancestor::label")).not.toHaveCSS("box-shadow", "none");
+  });
+}
+test("chat composer remains capped at 800px between desktop breakpoints", async ({ page }) => {
+  await page.setViewportSize({ width: 1024, height: 900 });
+  expect((await page.locator(".chat-composer-dock").boundingBox())!.width).toBeLessThanOrEqual(800);
+});

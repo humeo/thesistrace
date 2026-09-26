@@ -189,7 +189,7 @@ async function send(page: Page, prompt: string): Promise<void> {
   const turnId = await submitChatPrompt(page, prompt);
   const turn = page.locator(`.chat-turn[data-turn-id="${turnId}"]`);
   await expect(turn.locator(".chat-response-footer time")).toBeVisible({ timeout: 90_000 });
-  await expect(turn.locator("details.chat-work-history[open]")).toHaveCount(0);
+  await expect(turn.locator(".chat-work-history > [aria-expanded=true]")).toHaveCount(0);
   await expect(runStatus(page)).toHaveText("Run complete", { timeout: 90_000 });
 }
 

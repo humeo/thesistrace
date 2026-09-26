@@ -67,7 +67,7 @@ test("renders Chat within the shared workspace hierarchy and integrated model pi
   expect(positions).toEqual([...positions].sort((left, right) => left - right));
   expect(markup).toContain('aria-label="Chats"');
   expect(markup).not.toContain(">Chats<");
-  expect(markup).toContain('class="chat-composer-surface chat-composer-surface-locked"');
+  expect(markup).toMatch(/<textarea[^>]*disabled=""/);
   expect(markup).toContain('aria-label="Model Research Primary, reasoning Medium"');
   expect(markup).not.toContain("Next Turn settings");
   expect(markup).not.toContain('class="context-bar"');
@@ -94,7 +94,7 @@ test("keeps loading and Not Found states in the chat canvas without a top bar", 
   const missing = renderToStaticMarkup(
     <TestWorkspace><ChatContent {...common} preferenceState={{ status: "not-found" }} selectedSessionState={{ status: "not-found" }} /></TestWorkspace>,
   );
-  expect(missing).toContain("<h1>Chat not found</h1>");
+  expect(missing).toMatch(/<h1[^>]*>Chat not found<\/h1>/);
   expect(missing).not.toContain('class="context-bar"');
 });
 

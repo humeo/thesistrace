@@ -1,3 +1,8 @@
+import { cn } from "cn";
+import styles from "./ChatLayout.module.css";
+import { toast } from "../components/ui/toast";
+import { Button } from "../components/ui/button";
+import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "../components/ui/collapsible";
 import type { ActivityMessage } from "@ag-ui/core";
 import {
   ArrowDown,
@@ -236,11 +241,11 @@ export function ChatTimeline({
   }
 
   return (
-    <div className="chat-timeline-shell">
+    <div className={cn("chat-timeline-shell", styles.timelineShell)}>
       <div
         aria-label={t("timeline")}
         aria-live="off"
-        className={`chat-timeline${empty ? " chat-timeline-empty" : ""}`}
+        className={cn("chat-timeline", styles.timeline, empty && "grid place-items-center")}
         onKeyDown={handleKeyDown}
         onScroll={updateFollowing}
         onTouchMove={(event) => {
@@ -258,21 +263,21 @@ export function ChatTimeline({
         tabIndex={0}
       >
         {empty ? <ChatIntroduction opening={controller.phase === "opening"} /> : (
-          <div className="chat-timeline-content">
-            <div aria-hidden="true" className="chat-top-sentinel" ref={topSentinelRef} />
+          <div className={cn("chat-timeline-content", styles.content)}>
+            <div aria-hidden="true" className="h-px shrink-0" ref={topSentinelRef} />
             {controller.loadingOlder ? (
-              <CircleNotch aria-label={t("loadingEarlier")} className="chat-timeline-loading chat-spinning" size={15} />
+              <CircleNotch aria-label={t("loadingEarlier")} className="chat-timeline-loading animate-spin motion-reduce:animate-none text-muted-foreground" size={15} />
             ) : null}
             {controller.timelineError ? (
-              <div className="chat-timeline-error">
+              <div data-timeline-error className="flex items-center gap-3 text-sm text-destructive">
                 <span>{t("timelineError")}</span>
-                <button
-                  className="button-quiet"
+                <Button
+                  variant="ghost"
                   onClick={() => void controller.retryTimeline()}
                   type="button"
                 >
                   {t("retry")}
-                </button>
+                </Button>
               </div>
             ) : null}
             {controller.turns.map((turn) => (
@@ -288,10 +293,10 @@ export function ChatTimeline({
         )}
       </div>
       {!following && latestBelowViewport && !empty ? (
-        <button className="chat-back-to-latest" onClick={backToLatest} type="button">
+        <Button variant="outline" className="chat-back-to-latest absolute bottom-4 left-1/2 -translate-x-1/2" onClick={backToLatest} type="button">
           <ArrowDown aria-hidden="true" size={14} />
           {t("backToLatest")}
-        </button>
+        </Button>
       ) : null}
     </div>
   );
@@ -353,34 +358,34 @@ function TimelineTurnView({
       ));
 
   return (
-    <section className="chat-turn" data-turn-id={turn.id} style={{ minHeight }}>
+    <section className="chat-turn flex min-w-0 flex-col gap-6" data-turn-id={turn.id} style={{ minHeight }}>
       {leading.map((entry) => (
         <TimelineItem controller={controller} entry={entry} key={entry.entry_id} onAnnounce={onAnnounce} />
       ))}
-      <div className="chat-turn-response">
+      <div className={cn("chat-turn-response grid min-w-0 gap-3", styles.response)}>
         {!showAssistantSection ? null : (
-          <div className="chat-turn-assistant-meta chat-work-meta">
+          <div className="chat-turn-assistant-meta chat-work-meta min-w-0 text-xs text-muted-foreground">
             {processEntries.length > 0 ? (
-              <details className="chat-work-history" open={workOpen} onToggle={(event) => setWorkOpen(event.currentTarget.open)}>
-                <summary><WorkedFor turn={turn} /><CaretDown aria-hidden="true" size={14} /></summary>
-                <div className="chat-work-content">{renderEntries(processEntries)}</div>
-              </details>
+              <Collapsible className="chat-work-history min-w-0" open={workOpen} onOpenChange={setWorkOpen}>
+                <CollapsibleTrigger render={<Button variant="ghost" className="min-h-11" />}><WorkedFor turn={turn} /><CaretDown aria-hidden="true" /></CollapsibleTrigger>
+                <CollapsibleContent keepMounted className="chat-work-content grid min-w-0 gap-3 border-l border-border pl-4">{renderEntries(processEntries)}</CollapsibleContent>
+              </Collapsible>
             ) : <span><WorkedFor turn={turn} /></span>}
           </div>
         )}
         {renderEntries(resultEntries)}
         {showCurrentActivity ? (
-          <div className={`chat-current-activity${turn.status === "stopping" ? "" : " chat-current-activity-running"}`} role="status" aria-live="polite">
+          <div className="chat-current-activity text-sm text-muted-foreground" role="status" aria-live="polite">
             <span>{currentActivity}</span>
           </div>
         ) : null}
         {activeWithoutText && !showCurrentActivity ? (
-          <div aria-label={t("preparingResponse")} className="chat-response-indicator">
-            <span aria-hidden="true" />
+          <div aria-label={t("preparingResponse")} className="chat-response-indicator flex min-h-6 items-center">
+            <CircleNotch aria-hidden="true" className="size-4 animate-spin motion-reduce:animate-none text-muted-foreground" />
           </div>
         ) : null}
         {assistantText.length > 0 || turn.completed_at !== null ? (
-          <footer className="chat-response-footer">
+          <footer className={cn("chat-response-footer", styles.footer)}>
             {assistantText.length > 0 ? <CopyTextButton content={assistantText} label={t("copyResponse")} onAnnounce={onAnnounce} /> : null}
             {turn.completed_at !== null ? <time dateTime={turn.completed_at} title={formatTimestamp(turn.completed_at, { dateStyle: "medium", timeStyle: "medium" })}>
               {formatTimestamp(turn.completed_at, { hour: "numeric", minute: "2-digit" })}
@@ -418,23 +423,23 @@ function TimelineItem({
   const { t } = useTranslation("chat");
   if (entry.kind === "user_input") {
     return (
-      <article className="chat-message chat-message-user" data-entry-id={entry.entry_id}>
-        <div className="chat-message-actions">
+      <article className="chat-message chat-message-user group/message relative ml-auto grid max-w-full gap-2 rounded-lg bg-muted p-4" data-entry-id={entry.entry_id}>
+        <div className="chat-message-actions flex justify-end">
           <CopyTextButton content={entry.payload.content} label={t("copyMessage")} onAnnounce={onAnnounce} />
         </div>
-        <div className="chat-message-content">{entry.payload.content}</div>
-        {entry.payload.source === "steer" ? <span className="chat-input-source">{t("steered")}</span> : null}
+        <div className="chat-message-content min-w-0 text-base leading-[26px] whitespace-pre-wrap [overflow-wrap:anywhere]">{entry.payload.content}</div>
+        {entry.payload.source === "steer" ? <span className="text-xs text-muted-foreground">{t("steered")}</span> : null}
       </article>
     );
   }
   if (entry.kind === "assistant_message") {
     return (
-      <article className="chat-message chat-message-assistant" data-entry-id={entry.entry_id}>
-        <div className="chat-message-content">
+      <article className="chat-message chat-message-assistant grid min-w-0 gap-2" data-entry-id={entry.entry_id}>
+        <div className="chat-message-content min-w-0 text-base leading-[26px] whitespace-pre-wrap [overflow-wrap:anywhere]">
           <AssistantMarkdown content={entry.payload.content} streaming={entry.payload.status === "streaming"} />
         </div>
         {entry.payload.recovery ? (
-          <span className="chat-assistant-outcome" role="status">
+          <span className="chat-assistant-outcome text-xs text-muted-foreground" role="status">
             {t(entry.payload.recovery.status === "recovering" ? "partialRecovering"
               : entry.payload.recovery.status === "succeeded" ? "partialReplaced"
               : entry.payload.recovery.attempts === 1 ? "partialRecoveryFailed"
@@ -442,7 +447,7 @@ function TimelineItem({
               : "contextTooLarge")}
           </span>
         ) : entry.payload.status === "stopped" || entry.payload.status === "failed" ? (
-          <span className={`chat-assistant-outcome chat-assistant-outcome-${entry.payload.status}`}>
+          <span className={cn("chat-assistant-outcome text-xs", entry.payload.status === "failed" ? "text-destructive" : "text-muted-foreground")}>
             {t(entry.payload.status === "stopped" ? "partialStopped" : "partialFailed")}
           </span>
         ) : null}
@@ -487,17 +492,17 @@ function ToolActivityGroup({ entries }: { entries: readonly ToolEntry[] }) {
     counts.stopped === 0 ? null : t("toolStopped", { count: counts.stopped }),
   ].filter((value) => value !== null);
   return (
-    <details className="chat-tool-group" data-entry-id={entries[0]?.entry_id}>
-      <summary>
+    <Collapsible className="chat-tool-group min-w-0" data-entry-id={entries[0]?.entry_id}>
+      <CollapsibleTrigger render={<Button variant="ghost" className="min-h-11 max-w-full justify-start whitespace-normal text-left" />}>
         <Wrench aria-hidden="true" size={15} />
         <span>{t(counts.active > 0 ? "usingTools" : "usedTools", { count: entries.length })}</span>
         {details.length === 0 ? null : <small>{details.join(" · ")}</small>}
-        <CaretDown aria-hidden="true" className="chat-tool-group-caret" size={13} />
-      </summary>
-      <ol>
+        <CaretDown aria-hidden="true" className="shrink-0" size={13} />
+      </CollapsibleTrigger>
+      <CollapsibleContent keepMounted><ol className="m-0 grid list-none gap-2 py-2 pl-4">
         {entries.map((entry) => <ToolActivityItem entry={entry} key={entry.entry_id} />)}
-      </ol>
-    </details>
+      </ol></CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -510,16 +515,17 @@ function ToolActivityItem({ entry }: { entry: ToolEntry }) {
   const label = t(`toolStatus.${status}`);
   return (
     <li
+      className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 text-xs text-muted-foreground [&_code]:break-all"
       aria-label={t("toolAria", { name: entry.payload.name, status: label })}
       data-entry-id={entry.entry_id}
       data-tool-name={entry.payload.name}
       data-tool-status={status}
       role="article"
     >
-      <Icon aria-hidden="true" className={status === "running" ? "chat-spinning" : undefined} size={14} />
+      <Icon aria-hidden="true" className={cn(status === "running" && "animate-spin motion-reduce:animate-none")} size={14} />
       <code>{entry.payload.name}</code>
       <span>{label}</span>
-      {entry.questionDetails ? <details className="chat-tool-question"><summary>{t("questionAndAnswer")}</summary><p>{entry.questionDetails.question}</p>{entry.questionDetails.answer ? <p>{entry.questionDetails.answer}</p> : null}</details> : null}
+      {entry.questionDetails ? <Collapsible className="chat-tool-question col-span-full"><CollapsibleTrigger render={<Button variant="ghost" className="min-h-11 max-w-full justify-start whitespace-normal text-left" />}>{t("questionAndAnswer")}</CollapsibleTrigger><CollapsibleContent keepMounted className="grid gap-2 whitespace-pre-wrap [overflow-wrap:anywhere]"><p>{entry.questionDetails.question}</p>{entry.questionDetails.answer ? <p>{entry.questionDetails.answer}</p> : null}</CollapsibleContent></Collapsible> : null}
     </li>
   );
 }
@@ -554,18 +560,18 @@ function QuestionSurface({
 }) {
   const { t } = useTranslation("chat");
   return (
-    <section className="chat-question-activity" data-entry-id={entryId}>
-      <details>
-        <summary>
+    <section className="chat-question-activity grid min-w-0 gap-2" data-entry-id={entryId}>
+      <Collapsible>
+        <CollapsibleTrigger render={<Button variant="ghost" className="min-h-11 max-w-full justify-start whitespace-normal text-left" />}>
           <Question aria-hidden="true" size={16} />
           <span>{t(question.status === "answered" ? "questionAnswered" : question.status === "stopped" ? "questionStopped" : "askingQuestions")}</span>
           <CaretDown aria-hidden="true" size={13} />
-        </summary>
-        <p>{question.question}</p>
-      </details>
-      {active ? <button className="chat-question-waiting" onClick={controller.focusComposer} type="button">
+        </CollapsibleTrigger>
+        <CollapsibleContent keepMounted className="py-2 text-sm [overflow-wrap:anywhere]">{question.question}</CollapsibleContent>
+      </Collapsible>
+      {active ? <Button variant="ghost" className="chat-question-waiting min-h-11" onClick={controller.focusComposer} type="button">
         <ListChecks aria-hidden="true" size={16} /><span>{t("waitingAnswer")}</span>
-      </button> : null}
+      </Button> : null}
     </section>
   );
 }
@@ -579,7 +585,7 @@ function TurnOutcome({ entry }: { entry: Extract<TimelineEntry, { kind: "turn_ou
     ? entry.payload.errorCode : null;
   return (
     <div
-      className={`chat-turn-outcome chat-turn-outcome-${entry.payload.status}`}
+      className={cn("chat-turn-outcome flex min-w-0 items-start gap-2 text-sm", entry.payload.status === "failed" ? "text-destructive" : "text-muted-foreground")}
       data-entry-id={entry.entry_id}
       data-failure-code={entry.payload.errorCode}
       data-turn-outcome={entry.payload.status}
@@ -589,7 +595,7 @@ function TurnOutcome({ entry }: { entry: Extract<TimelineEntry, { kind: "turn_ou
       {explanationCode === null ? <>
         <span>{t(entry.payload.status === "stopped" ? "turnStopped" : "turnFailed")}</span>
         {entry.payload.errorCode === undefined ? null : <code>{entry.payload.errorCode}</code>}
-      </> : <span className="chat-turn-failure-explanation">
+      </> : <span className="grid min-w-0 gap-1 [overflow-wrap:anywhere]">
         <strong>{t(`agentFailures.${explanationCode}.label`)}</strong>
         <span>{t(`agentFailures.${explanationCode}.message`)}</span>
       </span>}
@@ -618,16 +624,23 @@ function CopyTextButton({
       await navigator.clipboard.writeText(content);
       setCopied(true);
       onAnnounce("copied");
+      toast.add({ title: <CopyFeedback message="copied" />, type: "success" });
     } catch {
       onAnnounce("copyFailed");
+      toast.add({ title: <CopyFeedback message="copyFailed" />, type: "error" });
     }
   }
   return (
-    <button aria-label={label} disabled={content.length === 0} onClick={() => void copy()} type="button">
+    <Button variant="ghost" className="min-h-11" aria-label={label} disabled={content.length === 0} onClick={() => void copy()} type="button">
       {copied ? <Check aria-hidden="true" size={14} /> : <Copy aria-hidden="true" size={14} />}
       <span>{t("copy")}</span>
-    </button>
+    </Button>
   );
+}
+
+function CopyFeedback({ message }: { message: ChatAnnouncement }) {
+  const { t } = useTranslation("chat");
+  return t(message);
 }
 
 function formatDuration(milliseconds: number): string {
@@ -641,7 +654,7 @@ function formatDuration(milliseconds: number): string {
 
 export function AssistantMarkdown({ content, streaming = false }: { content: string; streaming?: boolean }) {
   return (
-    <div className={`chat-assistant-markdown chat-assistant-markdown-${streaming ? "streaming" : "static"}`}>
+    <div className={cn("chat-assistant-markdown", styles.markdown)} data-streaming={streaming || undefined}>
       <ReactMarkdown
         components={{ a: SafeMarkdownLink, code: SafeMarkdownCode, img: HiddenMarkdownImage, pre: SafeMarkdownPre }}
         remarkPlugins={RESEARCH_MARKDOWN_REMARK_PLUGINS}
@@ -656,8 +669,8 @@ export function AssistantMarkdown({ content, streaming = false }: { content: str
 function SafeMarkdownLink({ children, href }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { node?: unknown }) {
   const safeHref = parseResearchRunHref(href);
   return safeHref === null
-    ? <span className="chat-markdown-link-disabled">{children}</span>
-    : <a className="chat-markdown-run-link" href={safeHref}>{children}</a>;
+    ? <span className="chat-markdown-link-disabled text-muted-foreground">{children}</span>
+    : <a className="chat-markdown-run-link text-primary underline underline-offset-4" href={safeHref}>{children}</a>;
 }
 
 function SafeMarkdownCode({ children, className }: React.HTMLAttributes<HTMLElement> & { node?: unknown }) {
@@ -675,14 +688,14 @@ function HiddenMarkdownImage(_props: React.ImgHTMLAttributes<HTMLImageElement> &
 export function ChatIntroduction({ opening = false }: { opening?: boolean }) {
   const { t } = useTranslation("chat");
   return (
-    <section className="chat-empty-state">
-      <span className="chat-empty-symbol" aria-hidden="true">α</span>
-      <p className="eyebrow">{t("researchAgent")}</p>
-      <h1>{t("introTitle")}</h1>
-      <p className="chat-empty-copy">
+    <section className="chat-empty-state flex w-full max-w-[800px] flex-col items-center gap-3 px-4 text-center">
+      <span className="font-serif text-4xl text-primary" aria-hidden="true">α</span>
+      <p className="text-sm text-muted-foreground">{t("researchAgent")}</p>
+      <h1 className="text-2xl leading-8 font-semibold">{t("introTitle")}</h1>
+      <p className="max-w-xl text-sm leading-[22px] text-muted-foreground">
         {t("introDescription")}
       </p>
-      {opening ? <p className="chat-history-status">{t("openingConversation")}</p> : null}
+      {opening ? <p className="text-sm text-muted-foreground">{t("openingConversation")}</p> : null}
     </section>
   );
 }

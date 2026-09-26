@@ -1,3 +1,8 @@
+import "../../src/styles.css";
+import styles from "../../src/chat/ChatLayout.module.css";
+import { ModelPicker } from "../../src/chat/ModelPicker";
+import { resolveModelSelection } from "../../src/chat/chatState";
+import type { AgentModelCatalog } from "../../src/chat/modelCatalog";
 import { useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 
@@ -10,7 +15,13 @@ const noCommand = async () => undefined;
 
 // Mount the production component with browser-local draft state only. This
 // fixture has no Agent, persistence, or network commands.
+const catalog: AgentModelCatalog = { default_model_key: "luna", models: [
+  { key: "luna", display_name: "GPT-5.6 Luna", default_reasoning_effort: "high", reasoning_efforts: ["low", "medium", "high", "xhigh", "max"] },
+  { key: "sol", display_name: "GPT-5.6 Sol", default_reasoning_effort: "xhigh", reasoning_efforts: ["low", "medium", "high", "xhigh"] },
+] };
 function ComposerFixture() {
+  const [modelKey, setModelKey] = useState("luna");
+  const [effort, setEffort] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [mode, setMode] = useState("normal");
   const [selections, setSelections] = useState<readonly string[]>([]);
@@ -66,8 +77,8 @@ function ComposerFixture() {
   return (
     <>
     <div style={{ position: "absolute", right: 0, top: 0, zIndex: 10 }}><LanguageControls /></div>
-    <main className="chat-main">
-      <div className="chat-timeline-shell">
+    <main className={styles.main}>
+      <div className={styles.timelineShell}>
         <label>Test question mode <select aria-label="Test question mode" value={mode}
           onChange={(event) => { setMode(event.target.value); setDraft(""); setSelections([]); }}>
           {["normal", "single_select", "multi_select", "free_text", "long"].map((value) => <option key={value}>{value}</option>)}
@@ -77,13 +88,8 @@ function ComposerFixture() {
     <ChatComposer
       announcement=""
       controller={controller}
-      modelControls={(
-        <div className="chat-model-picker">
-          <button aria-label="Model and reasoning" className="chat-model-picker-trigger" type="button">
-            <strong>GPT-5.6 Luna</strong><span>High</span>
-          </button>
-        </div>
-      )}
+      modelControls={<ModelPicker catalog={catalog} selection={resolveModelSelection(catalog, modelKey, effort)}
+        onModelChange={key => { setModelKey(key); setEffort(null); }} onReasoningChange={setEffort} />}
     />
     </main>
     </>

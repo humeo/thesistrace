@@ -1,17 +1,14 @@
 import { CaretDown, Check } from "@phosphor-icons/react";
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useRef, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import "../i18n";
-
+import { Button } from "../components/ui/button";
+import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "../components/ui/popover";
+import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group";
 import type { ResolvedModelSelection } from "./chatState";
 import type { AgentModelCatalog, ReasoningEffort } from "./modelCatalog";
 
-export function ModelPicker({
-  catalog,
-  onModelChange,
-  onReasoningChange,
-  selection,
-}: {
+export function ModelPicker({ catalog, onModelChange, onReasoningChange, selection }: {
   catalog: AgentModelCatalog;
   onModelChange: (modelKey: string) => void;
   onReasoningChange: (reasoningEffort: string) => void;
@@ -20,137 +17,46 @@ export function ModelPicker({
   const { t } = useTranslation("chat");
   const effortLabel = (effort: ReasoningEffort) => t(`reasoningLabels.${effort}`);
   const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const popupRef = useRef<HTMLDivElement>(null);
+  const firstInColumn = (column: string) => popupRef.current?.querySelector<HTMLButtonElement>(`[data-picker-column="${column}"][aria-pressed="true"]`)
+    ?? popupRef.current?.querySelector<HTMLButtonElement>(`[data-picker-column="${column}"]`) ?? null;
 
-  useEffect(() => {
-    if (!open) return;
-    const selectedModel = rootRef.current?.querySelector<HTMLButtonElement>(
-      '[data-picker-column="model"][aria-pressed="true"]',
-    );
-    const firstModel = rootRef.current?.querySelector<HTMLButtonElement>(
-      '[data-picker-column="model"]',
-    );
-    window.requestAnimationFrame(() => (selectedModel ?? firstModel)?.focus());
-    const dismiss = (event: PointerEvent) => {
-      const target = event.target;
-      if (target instanceof Node && !rootRef.current?.contains(target)) setOpen(false);
-    };
-    document.addEventListener("pointerdown", dismiss, true);
-    return () => document.removeEventListener("pointerdown", dismiss, true);
-  }, [open]);
-
-  function closeAndRestore(): void {
-    setOpen(false);
-    window.requestAnimationFrame(() => triggerRef.current?.focus());
-  }
-
-  function handleMenuKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
-    if (event.key === "Escape") {
+  // The two groups own vertical roving focus; Left/Right moves between settings.
+  function moveColumn(event: KeyboardEvent<HTMLDivElement>) {
+    const column = (event.target as HTMLElement).closest<HTMLElement>("[data-picker-column]")?.dataset.pickerColumn;
+    if ((column === "model" && event.key === "ArrowRight") || (column === "reasoning" && event.key === "ArrowLeft")) {
       event.preventDefault();
-      closeAndRestore();
-      return;
+      firstInColumn(column === "model" ? "reasoning" : "model")?.focus();
     }
-    const target = event.target;
-    if (!(target instanceof HTMLButtonElement)) return;
-    const column = target.dataset.pickerColumn;
-    if (column === undefined) return;
-    const currentColumn = [...event.currentTarget.querySelectorAll<HTMLButtonElement>(
-      `[data-picker-column="${column}"]`,
-    )];
-    const currentIndex = currentColumn.indexOf(target);
-    if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
-      event.preventDefault();
-      const nextIndex = event.key === "Home"
-        ? 0
-        : event.key === "End"
-          ? currentColumn.length - 1
-          : (currentIndex + (event.key === "ArrowDown" ? 1 : -1) + currentColumn.length) % currentColumn.length;
-      currentColumn[nextIndex]?.focus();
-      return;
-    }
-    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-    const nextColumn = column === "model" ? "reasoning" : "model";
-    if ((event.key === "ArrowRight") !== (column === "model")) return;
-    event.preventDefault();
-    const selected = event.currentTarget.querySelector<HTMLButtonElement>(
-      `[data-picker-column="${nextColumn}"][aria-pressed="true"]`,
-    );
-    const first = event.currentTarget.querySelector<HTMLButtonElement>(`[data-picker-column="${nextColumn}"]`);
-    (selected ?? first)?.focus();
   }
-
-  return (
-    <div className={`chat-model-picker${open ? " chat-model-picker-open" : ""}`} ref={rootRef}>
-      <button
-        aria-expanded={open}
-        aria-haspopup="dialog"
-        aria-label={selection === null
-          ? t("nextTurnModel")
-          : t("selectedModel", { model: selection.model.display_name, reasoning: effortLabel(selection.reasoningEffort) })}
-        className="chat-model-picker-trigger"
-        onClick={() => setOpen((current) => !current)}
-        onKeyDown={(event) => {
-          if (!open && ["ArrowDown", "Enter", " "].includes(event.key)) {
-            event.preventDefault();
-            setOpen(true);
-          }
-        }}
-        ref={triggerRef}
-        type="button"
-      >
-        <strong>{selection?.model.display_name ?? t("chooseModel")}</strong>
-        {selection === null ? null : <span>{effortLabel(selection.reasoningEffort)}</span>}
-        <CaretDown aria-hidden="true" size={14} />
-      </button>
-      {!open ? null : (
-        <div
-          aria-label={t("modelDialog")}
-          className="chat-model-picker-menu"
-          onKeyDown={handleMenuKeyDown}
-          role="dialog"
-        >
-          <div aria-label={t("model")} className="chat-model-picker-column" role="group">
-            <span>{t("model")}</span>
-            {catalog.models.map((model) => {
-              const selected = selection?.model.key === model.key;
-              return (
-                <button
-                  aria-pressed={selected}
-                  data-picker-column="model"
-                  key={model.key}
-                  onClick={() => onModelChange(model.key)}
-                  type="button"
-                >
-                  <span>{model.display_name}</span>
-                  {selected ? <Check aria-hidden="true" size={13} weight="bold" /> : null}
-                </button>
-              );
-            })}
-          </div>
-          <div aria-label={t("reasoning")} className="chat-model-picker-column" role="group">
-            <span>{t("reasoning")}</span>
-            {selection?.model.reasoning_efforts.map((effort) => {
-              const selected = selection.reasoningEffort === effort;
-              return (
-                <button
-                  aria-pressed={selected}
-                  data-picker-column="reasoning"
-                  key={effort}
-                  onClick={() => {
-                    onReasoningChange(effort);
-                    closeAndRestore();
-                  }}
-                  type="button"
-                >
-                  <span>{effortLabel(effort)}</span>
-                  {selected ? <Check aria-hidden="true" size={13} weight="bold" /> : null}
-                </button>
-              );
-            }) ?? <span className="chat-model-picker-empty">{t("chooseModel")}</span>}
-          </div>
+  return <Popover open={open} onOpenChange={setOpen}>
+    <PopoverTrigger ref={triggerRef} render={<Button variant="ghost" className="min-w-0 max-w-full gap-2 px-2" />}
+      aria-label={selection === null ? t("nextTurnModel") : t("selectedModel", { model: selection.model.display_name, reasoning: effortLabel(selection.reasoningEffort) })}
+      onKeyDown={event => { if (!open && event.key === "ArrowDown") { event.preventDefault(); setOpen(true); } }}>
+      <strong className="min-w-0 truncate text-sm">{selection?.model.display_name ?? t("chooseModel")}</strong>
+      {selection ? <span className="text-xs text-muted-foreground">{effortLabel(selection.reasoningEffort)}</span> : null}<CaretDown aria-hidden="true" />
+    </PopoverTrigger>
+    <PopoverContent ref={popupRef} side="top" align="end" className="w-[min(380px,calc(100vw-32px))] gap-4 p-4" initialFocus={() => firstInColumn("model")} finalFocus={triggerRef} onKeyDown={moveColumn}>
+      <PopoverTitle>{t("modelDialog")}</PopoverTitle>
+      <div className="grid min-w-0 grid-cols-2 gap-4">
+        <div className="min-w-0"><p className="m-0 mb-2 text-xs text-muted-foreground">{t("model")}</p>
+          <ToggleGroup orientation="vertical" className="w-full" aria-label={t("model")} value={selection ? [selection.model.key] : []}
+            onValueChange={values => { if (values[0]) onModelChange(values[0]); }}>
+            {catalog.models.map(model => <ToggleGroupItem key={model.key} value={model.key} data-picker-column="model" className="h-auto min-h-11 w-full justify-between whitespace-normal text-left">
+              <span className="min-w-0 [overflow-wrap:anywhere]">{model.display_name}</span>{selection?.model.key === model.key ? <Check aria-hidden="true" /> : null}
+            </ToggleGroupItem>)}
+          </ToggleGroup>
         </div>
-      )}
-    </div>
-  );
+        <div className="min-w-0 border-l border-border pl-4"><p className="m-0 mb-2 text-xs text-muted-foreground">{t("reasoning")}</p>
+          {selection ? <ToggleGroup orientation="vertical" className="w-full" aria-label={t("reasoning")} value={[selection.reasoningEffort]}
+            >
+            {selection.model.reasoning_efforts.map(effort => <ToggleGroupItem key={effort} value={effort} onClick={() => { onReasoningChange(effort); setOpen(false); }} data-picker-column="reasoning" className="min-h-11 w-full justify-between">
+              <span>{effortLabel(effort)}</span>{selection.reasoningEffort === effort ? <Check aria-hidden="true" /> : null}
+            </ToggleGroupItem>)}
+          </ToggleGroup> : <p className="text-xs text-muted-foreground">{t("chooseModel")}</p>}
+        </div>
+      </div>
+    </PopoverContent>
+  </Popover>;
 }

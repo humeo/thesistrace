@@ -105,12 +105,12 @@ test("groups only consecutive tool activity into collapsed inline disclosures", 
     ])],
   }));
 
-  const groups = [...document.querySelectorAll<HTMLDetailsElement>(".chat-tool-group")];
+  const groups = [...document.querySelectorAll<HTMLElement>(".chat-tool-group")];
   expect(groups).toHaveLength(2);
-  expect(groups[0]?.open).toBe(false);
-  expect(groups[0]?.querySelector("summary")?.textContent).toContain("Using 2 tools");
-  expect(groups[0]?.querySelector("summary")?.textContent).toContain("1 active");
-  expect(groups[1]?.querySelector("summary")?.textContent).toContain("1 failed");
+  expect(groups[0]?.querySelector("[aria-expanded]")?.getAttribute("aria-expanded")).toBe("false");
+  expect(groups[0]?.querySelector("[data-slot=collapsible-trigger]")?.textContent).toContain("Using 2 tools");
+  expect(groups[0]?.querySelector("[data-slot=collapsible-trigger]")?.textContent).toContain("1 active");
+  expect(groups[1]?.querySelector("[data-slot=collapsible-trigger]")?.textContent).toContain("1 failed");
   const firstTool = groups[0]?.querySelector<HTMLElement>('[role="article"]');
   expect(firstTool?.getAttribute("aria-label")).toBe("Tool read_context: Completed");
   expect(firstTool?.textContent).toBe("read_contextCompleted");
@@ -161,8 +161,8 @@ test("keeps a compact question activity and directs answering to the composer", 
     ], { completed_at: null, status: "waiting_for_user" })],
   }));
 
-  expect(document.querySelector(".chat-question-activity summary")?.textContent).toBe("Asking questions");
-  expect(document.querySelector(".chat-question-activity p")?.textContent).toBe("Which objective should lead?");
+  expect(document.querySelector(".chat-question-activity [data-slot=collapsible-trigger]")?.textContent).toBe("Asking questions");
+  expect(document.querySelector(".chat-question-activity [data-slot=collapsible-content]")?.textContent).toBe("Which objective should lead?");
   expect(document.querySelector(".chat-question-activity input")).toBeNull();
   await act(async () => document.querySelector<HTMLButtonElement>(".chat-question-waiting")?.click());
   expect(focusComposer).toHaveBeenCalledOnce();
@@ -245,7 +245,7 @@ test("uses the controller's authoritative retry target for timeline failures", a
     ])],
   }));
 
-  await act(async () => document.querySelector<HTMLButtonElement>(".chat-timeline-error button")?.click());
+  await act(async () => document.querySelector<HTMLButtonElement>("[data-timeline-error] button")?.click());
 
   expect(retryTimeline).toHaveBeenCalledOnce();
   expect(loadOlder).not.toHaveBeenCalled();
@@ -398,9 +398,9 @@ test("completed Turns omit progress while keeping distinct final results visible
   ])] }));
   expect(document.querySelector('[data-entry-id="progress"]')).toBeNull();
   expect(document.body.textContent).not.toContain("Last observed progress");
-  expect(document.querySelector('[data-entry-id="result"]')?.closest("details")).toBeNull();
-  expect(document.querySelector('[data-entry-id="other-result"]')?.closest("details")).toBeNull();
-  expect(document.querySelector('[data-entry-id="final"]')?.closest("details")).toBeNull();
+  expect(document.querySelector('[data-entry-id="result"]')?.closest("[data-slot=collapsible]")).toBeNull();
+  expect(document.querySelector('[data-entry-id="other-result"]')?.closest("[data-slot=collapsible]")).toBeNull();
+  expect(document.querySelector('[data-entry-id="final"]')?.closest("[data-slot=collapsible]")).toBeNull();
 });
 
 test("active Turns replace older progress only for the same research resources", async () => {
@@ -426,10 +426,10 @@ test("Worked for folds the complete execution history but leaves the final answe
     entry("tool_activity", "call-two", { name: "get_results", status: "complete" }),
     entry("assistant_message", "final", { content: "Finished.", status: "complete" }),
   ])] }));
-  const work = document.querySelector<HTMLDetailsElement>(".chat-work-history")!;
+  const work = document.querySelector<HTMLElement>(".chat-work-history")!;
   expect(work).not.toBeNull();
-  expect(work.open).toBe(false);
-  expect(work.querySelector("summary")?.textContent).toContain("Worked for");
+  expect(work.querySelector("[aria-expanded]")?.getAttribute("aria-expanded")).toBe("false");
+  expect(work.querySelector("[data-slot=collapsible-trigger]")?.textContent).toContain("Worked for");
   expect(work.querySelector('[data-entry-id="before"]')).not.toBeNull();
   expect(work.querySelector('[data-entry-id="between"]')).not.toBeNull();
   expect(work.querySelector('[data-entry-id="call-two"]')).not.toBeNull();
@@ -461,7 +461,7 @@ test("keeps the current tool visible outside folded history and clears running s
     turns: [timelineTurn(entries, { completed_at: null, status: "running" })] }));
   const live = document.querySelector(".chat-current-activity");
   expect(live?.textContent).toContain("Running submit research run");
-  expect(live?.closest("details")).toBeNull();
+  expect(live?.closest("[data-slot=collapsible]")).toBeNull();
   expect(document.querySelector(".chat-work-meta")?.textContent).toContain("Working for");
   await mount(controller({ currentTurnId: TURN_ID, phase: "active", hasFirstAssistantText: true,
     turns: [timelineTurn([entries[0], entry("tool_activity", "tool:running", { name: "submit_research_run", status: "complete" })],

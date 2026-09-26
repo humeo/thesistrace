@@ -723,9 +723,9 @@ test("Chat executes a real protected MCP read Tool and renders only its safe lif
     .waitFor({ state: "attached" });
   await waitForChatTurn(page, toolTurnId);
   await expect(agentRunStatus(page)).toHaveText("Run complete");
-  await expect(page.locator("details.chat-work-history")).not.toHaveAttribute("open", "");
-  const toolGroup = page.locator("details.chat-tool-group").last();
-  await expect(toolGroup).not.toHaveAttribute("open", "");
+  await expect(page.locator(".chat-work-history > [data-slot=collapsible-trigger]")).toHaveAttribute("aria-expanded", "false");
+  const toolGroup = page.locator(".chat-tool-group > [data-slot=collapsible-trigger]").last();
+  await expect(toolGroup).toHaveAttribute("aria-expanded", "false");
   const tool = await revealToolActivity(page, "get_research_context", "complete");
   await expect(tool).toBeVisible();
   await expect(tool).toHaveText("get_research_contextCompleted");

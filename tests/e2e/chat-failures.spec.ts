@@ -26,7 +26,7 @@ for (const [code, prompt] of Object.entries(SCRIPTED_FAILURE_PROMPTS)) {
     const started = performance.now();
     await page.goto("/chat");
     await send(page, prompt);
-    const error = page.locator(`.chat-turn-outcome-failed[data-failure-code="${code}"]`);
+    const error = page.locator(`[data-turn-outcome="failed"][data-failure-code="${code}"]`);
     await expect(error).toBeVisible();
     await expect(status(page)).toHaveText("Run failed");
     if (code === "PROVIDER_TIMEOUT") {
@@ -77,14 +77,14 @@ test("Chat provider failure preserves admitted Core work and completed Tools wit
     controlWorker("pause"); paused = true;
     await page.goto("/chat");
     await send(page, SCRIPTED_FAILURE_AFTER_ADMISSION_PROMPT);
-    await expect(page.locator('.chat-turn-outcome-failed[data-failure-code="PROVIDER_TIMEOUT"]')).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator('[data-turn-outcome="failed"][data-failure-code="PROVIDER_TIMEOUT"]')).toBeVisible({ timeout: 30_000 });
     await expect((await revealToolActivity(page, "submit_research_run", "complete")).last()).toBeVisible();
     const before = databaseFacts(researcher.id);
     expect(before).toMatchObject({ agent_runs: 1, user_messages: 1, active_runs: 0, core_runs: 1 });
     const coreRunId = before.core_run_ids[0]!;
     await page.reload();
     await expect((await revealToolActivity(page, "submit_research_run", "complete")).last()).toBeVisible();
-    await expect(page.locator('.chat-turn-outcome-failed[data-failure-code="PROVIDER_TIMEOUT"]')).toBeVisible();
+    await expect(page.locator('[data-turn-outcome="failed"][data-failure-code="PROVIDER_TIMEOUT"]')).toBeVisible();
     expect(requests).toHaveLength(1);
     controlWorker("unpause"); paused = false;
     await expect.poll(async () => {

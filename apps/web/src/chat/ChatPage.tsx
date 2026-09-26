@@ -1,3 +1,4 @@
+import { Button } from "../components/ui/button";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -145,7 +146,7 @@ export function ChatContent({
           || selectedSessionState.status === "loading"
         ) ? (
           <AuthoritativeStaticChatMain
-            modelControls={<p className="chat-catalog-status" role="status">{t("loadingSettings")}</p>}
+            modelControls={<p className="text-xs text-muted-foreground" role="status">{t("loadingSettings")}</p>}
             opening
           />
         ) : thread.kind === "session" && (
@@ -179,18 +180,15 @@ export function ChatContent({
 function ChatNotFoundMain({ navigate }: { navigate: () => void }) {
   const { t } = useTranslation("chat");
   return (
-    <main className="chat-main chat-not-found-main">
-      <section className="chat-not-found" role="alert">
-        <p className="eyebrow">{t("session")}</p>
-        <h1>{t("chatNotFound")}</h1>
+    <main className="grid min-h-dvh place-items-center p-4 md:p-8">
+      <section className="flex max-w-lg flex-col items-start gap-4" role="alert">
+        <p className="text-sm text-muted-foreground">{t("session")}</p>
+        <h1 className="text-2xl leading-8 font-semibold">{t("chatNotFound")}</h1>
         <p>{t("chatNotFoundDescription")}</p>
-        <a
-          className="button button-primary"
-          href="/chat"
-          onClick={(event) => handleWorkspaceNavigation(event, navigate)}
+        <Button nativeButton={false} role="link" render={<a href="/chat" onClick={(event) => handleWorkspaceNavigation(event, navigate)} />}
         >
           {t("newChat")}
-        </a>
+        </Button>
       </section>
     </main>
   );
@@ -213,11 +211,11 @@ function CatalogControls({
 }) {
   const { t } = useTranslation("chat");
   if (catalogState.status === "loading") {
-    return <p className="chat-catalog-status" role="status">{t("loadingModels")}</p>;
+    return <p className="text-xs text-muted-foreground" role="status">{t("loadingModels")}</p>;
   }
   if (catalogState.status === "ready" && selectionRequired) {
     return (
-      <div className="chat-model-picker-with-error">
+      <div className="min-w-0">
         <p className="visually-hidden" role="alert">
           {t("modelUnavailable")}
         </p>
@@ -237,12 +235,12 @@ function CatalogControls({
         ? t("invalidCatalog")
         : t("agentHostUnavailable");
     return (
-      <div className="chat-catalog-error" role="alert">
+      <div className="flex min-w-0 items-center gap-2 text-xs text-destructive" role="alert">
         <span>{message}</span>
         {catalogState.status !== "authentication-required" ? (
-          <button className="button-quiet" onClick={reloadCatalog} type="button">
+          <Button variant="ghost" onClick={reloadCatalog} type="button">
             {t("retry")}
-          </button>
+          </Button>
         ) : null}
       </div>
     );

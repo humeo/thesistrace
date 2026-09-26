@@ -181,7 +181,7 @@ async function send(page: Page, prompt: string, status = "Run complete"): Promis
   const turnId = await submitChatPrompt(page, prompt);
   const turn = page.locator(`.chat-turn[data-turn-id="${turnId}"]`);
   await expect(turn.locator(".chat-response-footer time")).toBeVisible({ timeout: 90_000 });
-  await expect(turn.locator("details.chat-work-history[open]")).toHaveCount(0);
+  await expect(turn.locator(".chat-work-history > [aria-expanded=true]")).toHaveCount(0);
   await expect(page.locator("[data-chat-status]")).toHaveText(status, { timeout: 90_000 });
 }
 

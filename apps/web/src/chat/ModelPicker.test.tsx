@@ -36,7 +36,7 @@ test("shows all configured Luna efforts and selects Max", async () => {
   await mount(<ModelPicker catalog={current} onModelChange={vi.fn()}
     onReasoningChange={onReasoningChange}
     selection={resolveModelSelection(current, current.default_model_key, null)} />);
-  await act(async () => document.querySelector<HTMLButtonElement>(".chat-model-picker-trigger")!.click());
+  await act(async () => document.querySelector<HTMLButtonElement>('[data-slot=popover-trigger]')!.click());
   const options = [...document.querySelectorAll<HTMLButtonElement>('[data-picker-column="reasoning"]')];
   expect(options.map((button) => button.textContent)).toEqual(["Low", "Medium", "High", "X-high", "Max"]);
   await act(async () => options[4].click());
@@ -46,11 +46,11 @@ test("shows all configured Luna efforts and selects Max", async () => {
 
 test("keeps a two-column picker open for Model, then closes and restores focus for Reasoning", async () => {
   await mount();
-  const trigger = document.querySelector<HTMLButtonElement>(".chat-model-picker-trigger")!;
+  const trigger = document.querySelector<HTMLButtonElement>('[data-slot=popover-trigger]')!;
   await act(async () => trigger.click());
 
   const menu = document.querySelector<HTMLElement>('[role="dialog"]')!;
-  expect(menu.querySelectorAll('.chat-model-picker-column[role="group"]')).toHaveLength(2);
+  expect(menu.querySelectorAll('[data-slot=toggle-group][role="group"]')).toHaveLength(2);
   const sol = [...menu.querySelectorAll<HTMLButtonElement>('[data-picker-column="model"]')]
     .find((button) => button.textContent?.includes("GPT-5.6 Sol"))!;
   await act(async () => sol.click());
@@ -68,7 +68,7 @@ test("keeps a two-column picker open for Model, then closes and restores focus f
 
 test("supports keyboard opening, column movement, and Escape focus restoration", async () => {
   await mount();
-  const trigger = document.querySelector<HTMLButtonElement>(".chat-model-picker-trigger")!;
+  const trigger = document.querySelector<HTMLButtonElement>('[data-slot=popover-trigger]')!;
   trigger.focus();
   await act(async () => trigger.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" })));
   await act(async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
@@ -93,7 +93,7 @@ test("focuses the first Model when a removed selection must be replaced", async 
       selection={null}
     />,
   );
-  const trigger = document.querySelector<HTMLButtonElement>(".chat-model-picker-trigger")!;
+  const trigger = document.querySelector<HTMLButtonElement>('[data-slot=popover-trigger]')!;
   trigger.focus();
   await act(async () => trigger.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" })));
   await act(async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));

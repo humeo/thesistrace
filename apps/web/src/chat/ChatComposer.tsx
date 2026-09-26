@@ -1,3 +1,8 @@
+import { cn } from "cn";
+import styles from "./ChatLayout.module.css";
+import { Button } from "../components/ui/button";
+import { Textarea } from "../components/ui/textarea";
+import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "../components/ui/collapsible";
 import {
   ArrowClockwise,
   ArrowUp,
@@ -59,7 +64,7 @@ export function ChatComposer({
   }
 
   return (
-    <form className="chat-composer-dock" onSubmit={submit}>
+    <form className={cn("chat-composer-dock", styles.dock)} onSubmit={submit}>
       {controller.queue.length === 0 ? null : (
         <StagedQueue
           controller={controller}
@@ -69,20 +74,20 @@ export function ChatComposer({
       )}
       {controller.error === null ? null : (
         <div
-          className="chat-run-error"
+          className="chat-run-error mb-3 flex items-center justify-between gap-3 rounded-lg border border-destructive p-3 text-sm text-destructive"
           data-failure-code={controller.errorCode ?? undefined}
           role="alert"
         >
           <span>{controller.error}</span>
-          <button className="button-quiet" onClick={() => void controller.retryRecovery()} type="button">{t("retry")}</button>
+          <Button variant="ghost" onClick={() => void controller.retryRecovery()} type="button">{t("retry")}</Button>
         </div>
       )}
-      {tooLarge ? <p className="chat-composer-validation" id="chat-composer-validation">{t("inputTooLarge")}</p> : null}
+      {tooLarge ? <p className="chat-composer-validation my-2 text-xs text-destructive" id="chat-composer-validation">{t("inputTooLarge")}</p> : null}
       {question !== null ? (
         <QuestionComposer controller={controller} question={question} locked={interactionLocked}
           tooLarge={tooLarge} onKeyDown={keyDown} />
-      ) : <div className={`chat-composer-surface${interactionLocked ? " chat-composer-surface-locked" : ""}`}>
-        <textarea
+      ) : <div className={cn("chat-composer-surface", styles.surface, interactionLocked && "opacity-60")}>
+        <Textarea className={styles.input}
           aria-describedby={tooLarge ? "chat-composer-guidance chat-composer-validation" : "chat-composer-guidance"}
           aria-invalid={tooLarge || undefined}
           aria-label={t("message")}
@@ -94,27 +99,27 @@ export function ChatComposer({
           rows={2}
           value={controller.draft}
         />
-        <div className="chat-composer-toolbar">
+        <div className="chat-composer-toolbar flex min-h-12 items-center justify-between gap-3 px-3 pb-2">
           {controller.draftBytes < MAX_CHAT_MESSAGE_BYTES * .8 ? null : (
-            <span className={`chat-byte-count${tooLarge ? " chat-byte-count-invalid" : ""}`}>
+            <span className={cn("chat-byte-count whitespace-nowrap text-xs", tooLarge ? "text-destructive" : "text-muted-foreground")}>
               {t("byteCount", { current: formatNumber(controller.draftBytes), limit: formatNumber(MAX_CHAT_MESSAGE_BYTES) })}
             </span>
           )}
-          <div className="chat-composer-toolbar-actions">
+          <div className="chat-composer-toolbar-actions ml-auto flex min-w-0 items-center gap-2">
             {modelControls}
-            <button
+            <Button
               aria-label={t(actionLabelKey(controller.action.kind, controller.phase))}
-              className={`chat-main-action chat-main-action-${controller.action.kind}`}
+              className="chat-main-action" size="icon"
               disabled={!controller.action.enabled}
               type="submit"
             >
               <MainActionIcon kind={controller.action.kind} />
-            </button>
+            </Button>
           </div>
         </div>
       </div>}
       {question !== null && controller.draftBytes >= MAX_CHAT_MESSAGE_BYTES * .8 ? (
-        <span className={`chat-byte-count${tooLarge ? " chat-byte-count-invalid" : ""}`}>
+        <span className={cn("chat-byte-count whitespace-nowrap text-xs", tooLarge ? "text-destructive" : "text-muted-foreground")}>
           {t("byteCount", { current: formatNumber(controller.draftBytes), limit: formatNumber(MAX_CHAT_MESSAGE_BYTES) })}
         </span>
       ) : null}
@@ -147,20 +152,20 @@ function StagedQueue({
 }) {
   const { t } = useTranslation("chat");
   return (
-    <section aria-label={t("stagedInputs")} className="chat-staged-queue">
-      <button aria-expanded={expanded} className="chat-staged-heading" onClick={onToggle} type="button">
+    <Collapsible open={expanded} onOpenChange={onToggle} aria-label={t("stagedInputs")} className="chat-staged-queue mb-3 overflow-hidden rounded-lg border border-border bg-card">
+      <CollapsibleTrigger render={<Button variant="ghost" className="chat-staged-heading min-h-11 w-full justify-between" />} >
         <span>{t("stagedInputs")}</span>
         <span>{formatNumber(controller.queue.length)}</span>
-        <CaretDown aria-hidden="true" className={expanded ? "chat-caret-open" : undefined} size={14} />
-      </button>
-      {!expanded ? null : (
-        <ol>
+        <CaretDown aria-hidden="true" className={cn(expanded && "rotate-180")} size={14} />
+      </CollapsibleTrigger>
+      <CollapsibleContent keepMounted>
+        <ol className="m-0 grid max-h-[min(230px,28dvh)] list-none overflow-y-auto border-t border-border p-0">
           {controller.queue.map((item, index) => (
             <StagedQueueItem controller={controller} head={index === 0} item={item} key={item.inputId} />
           ))}
         </ol>
-      )}
-    </section>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -176,21 +181,21 @@ function StagedQueueItem({
   const { t } = useTranslation("chat");
   const locked = controller.queueLocked || item.status === "submitting";
   return (
-    <li className={item.status === "submitting" ? "chat-staged-submitting" : undefined}>
-      <details>
-        <summary>
-          <span className="chat-staged-position">{t(head ? "next" : "queued")}</span>
-          <span className="chat-staged-preview">{oneLine(item.content)}</span>
-          <span className="chat-staged-state">{t(item.status === "submitting" ? "submitting" : "staged")}</span>
-        </summary>
-        <p>{item.content}</p>
-      </details>
-      <div className="chat-staged-actions">
+    <li className={cn("grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 p-2", item.status === "submitting" && "opacity-60")}>
+      <Collapsible className="min-w-0">
+        <CollapsibleTrigger render={<Button variant="ghost" className="min-h-11 w-full justify-start gap-2 text-left" />}>
+          <span className="chat-staged-position text-xs text-muted-foreground">{t(head ? "next" : "queued")}</span>
+          <span className="chat-staged-preview min-w-0 truncate">{oneLine(item.content)}</span>
+          <span className="chat-staged-state text-xs text-muted-foreground">{t(item.status === "submitting" ? "submitting" : "staged")}</span>
+        </CollapsibleTrigger>
+        <CollapsibleContent keepMounted className="px-2 pb-2 text-sm whitespace-pre-wrap [overflow-wrap:anywhere]">{item.content}</CollapsibleContent>
+      </Collapsible>
+      <div className="chat-staged-actions flex items-center gap-1">
         {head && controller.phase === "active" ? (
-          <button disabled={locked} onClick={() => void controller.steerStaged(item)} type="button">{t("steer")}</button>
+          <Button variant="outline" disabled={locked} onClick={() => void controller.steerStaged(item)} type="button">{t("steer")}</Button>
         ) : null}
-        <button
-          aria-label={t("editStaged")}
+        <Button
+          variant="ghost" size="icon" aria-label={t("editStaged")}
           disabled={locked || controller.question !== null || controller.draft.length !== 0}
           onClick={() => void controller.editStaged(item)}
           title={t(controller.question !== null ? "finishAnswerFirst"
@@ -198,10 +203,10 @@ function StagedQueueItem({
           type="button"
         >
           <PencilSimple aria-hidden="true" size={14} />
-        </button>
-        <button aria-label={t("deleteStaged")} disabled={locked} onClick={() => void controller.removeStaged(item)} type="button">
+        </Button>
+        <Button variant="ghost" size="icon" aria-label={t("deleteStaged")} disabled={locked} onClick={() => void controller.removeStaged(item)} type="button">
           <Trash aria-hidden="true" size={14} />
-        </button>
+        </Button>
       </div>
     </li>
   );
