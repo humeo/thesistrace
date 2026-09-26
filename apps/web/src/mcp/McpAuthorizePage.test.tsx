@@ -36,3 +36,17 @@ test("switching language preserves the signed OAuth query and displayed authoriz
   expect(host.textContent).toContain("读取研究上下文、运行和结果");
   expect(host.textContent).toContain("researcher@example.test");
 });
+
+test("failed denial retains the authorization request and signed query for retry", async () => {
+  const search = "?client_id=abc&state=signed%2Bstate";
+  await act(async () => root.render(<McpAuthorizePage search={search} />));
+  coreFetch.mockImplementation(async () => new Response(null, { status: 503 }));
+  const cancel = [...host.querySelectorAll("button")].find(button => button.textContent === "Cancel")!;
+  await act(async () => cancel.click());
+  const [url, init] = coreFetch.mock.calls.at(-1)!;
+  expect(url).toBe("/api/auth/oauth2/consent");
+  expect(JSON.parse(init.body)).toEqual({ accept: false, oauth_query: search.slice(1) });
+  expect(host.querySelector('[role="alert"]')).not.toBeNull();
+  expect(cancel.disabled).toBe(false);
+  expect(host.textContent).toContain("Research client");
+});

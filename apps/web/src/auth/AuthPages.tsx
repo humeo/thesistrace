@@ -326,7 +326,8 @@ export function returnToFromLocation(location: BrowserLocation): string | null {
   );
 }
 
-export function AuthSurface({ eyebrow, title, children }: {
+export function AuthSurface({ eyebrow, title, children, as: Root = "main" }: {
+  as?: "main" | "section";
   eyebrow: string;
   title: string;
   children: ReactNode;
@@ -337,7 +338,7 @@ export function AuthSurface({ eyebrow, title, children }: {
     document.querySelector('meta[name="description"]')?.setAttribute("content", t("footer"));
   }, [title, t]);
   return (
-    <main className="auth-page">
+    <Root className="auth-page">
       <section aria-labelledby="auth-title" className="auth-panel">
         <a className="auth-brand" href={`/login?lang=${publicLanguageCode(interfaceLocale())}`}>
           <Brand />
@@ -348,6 +349,6 @@ export function AuthSurface({ eyebrow, title, children }: {
         </header>
         {children}
       </section>
-    </main>
+    </Root>
   );
 }

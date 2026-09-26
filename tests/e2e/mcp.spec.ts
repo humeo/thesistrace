@@ -11,8 +11,8 @@ test("MCP product connects an external client through login, consent, discovery 
   await expect(page.getByRole("region", { name: "Quantgrove MCP", exact: true }).getByRole("status")).toContainText("Service available");
   await expect(page.getByText("No authorized apps yet")).toBeVisible();
   await page.getByText("View setup prompt", { exact: true }).click();
-  await expect(page.locator(".mcp-agent-prompt")).toContainText(`Add Quantgrove MCP to Codex using ${base}/mcp`);
-  await expect(page.locator(".mcp-agent-prompt")).not.toContainText(".example");
+  await expect(page.locator("p[lang]")).toContainText(`Add Quantgrove MCP to Codex using ${base}/mcp`);
+  await expect(page.locator("p[lang]")).not.toContainText(".example");
   await page.screenshot({ path: testInfo.outputPath("mcp-desktop.png"), fullPage: true, animations: "disabled" });
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
@@ -75,9 +75,9 @@ test("MCP product connects an external client through login, consent, discovery 
     expect(listing.result.tools.some(tool => tool.name === "get_research_context")).toBe(true);
     expect(listing.result.tools.some(tool => tool.name === "submit_research_run")).toBe(false);
     await page.goto(`${base}/connections/mcp`);
-    await expect(page.locator(".mcp-app")).toContainText("MCP acceptance client");
+    await expect(page.getByRole("article", { name: "MCP acceptance client" })).toContainText("MCP acceptance client");
     await page.getByRole("button", { name: "Revoke access for MCP acceptance client" }).click();
-    await page.getByRole("dialog").getByRole("button", { name: "Revoke access", exact: true }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Revoke access", exact: true }).click();
     await expect(page.getByText("No authorized apps yet")).toBeVisible();
     const rejected = await external.post(`${base}/mcp`, { headers, data: { jsonrpc: "2.0", id: 3, method: "tools/list", params: {} } });
     expect(rejected.status()).toBe(401);

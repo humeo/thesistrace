@@ -3,6 +3,10 @@ import { useTranslation } from "../i18n";
 import { formatNumber } from "../i18n/format";
 import type { mcpEn } from "../i18n/messages/mcp";
 import { toolPresentation } from "./toolPresentation";
+import { Disclosure } from "../components/layout/Disclosure";
+import { Badge } from "../components/ui/badge";
+import { Empty, EmptyHeader, EmptyTitle, EmptyDescription } from "../components/ui/empty";
+import styles from "./McpLayout.module.css";
 type KnownToolName = keyof typeof mcpEn.toolNames;
 const groups = ["preparation", "runs", "batches", "tracks", "other"] as const;
 type Group = typeof groups[number];
@@ -16,14 +20,13 @@ function title(name: string): string { return name.replaceAll("_", " ").replace(
 export function McpTools({ tools, checking }: { tools: Connection["tools"] | null; checking: boolean }) {
   const { t } = useTranslation("mcp");
   const toolCount = (count: number) => t("toolCount", { count, countLabel: formatNumber(count) });
-  return <section aria-labelledby="mcp-tools-heading">
-    <div className="mcp-section-heading"><h2 id="mcp-tools-heading">{t("toolSet")}</h2><span className="mcp-tag">{checking ? t("checking") : tools ? toolCount(tools.length) : t("unverified")}</span></div>
-    {!tools ? <div className="mcp-empty"><div><strong>{checking ? t("discovering") : t("toolNotVerified")}</strong><p>{checking ? t("waitingService") : t("checkAgain")}</p></div></div> : groups.map(groupId => {
+  return <section className={styles.stack} aria-labelledby="mcp-tools-heading">
+    <div className={styles.row}><h2 id="mcp-tools-heading">{t("toolSet")}</h2><Badge variant="secondary">{checking ? t("checking") : tools ? toolCount(tools.length) : t("unverified")}</Badge></div>
+    {!tools ? <Empty><EmptyHeader><EmptyTitle>{checking ? t("discovering") : t("toolNotVerified")}</EmptyTitle><EmptyDescription>{checking ? t("waitingService") : t("checkAgain")}</EmptyDescription></EmptyHeader></Empty> : groups.map(groupId => {
       const members = tools.filter(tool => group(tool.name) === groupId);
-      return members.length ? <details className="mcp-tool-group" key={groupId}>
-        <summary><span>{t(`groups.${groupId}`)}</span><small>{toolCount(members.length)}</small></summary>
-        {members.map(tool => <details className="mcp-tool" key={tool.name}><summary>{toolPresentation[tool.name] ? <><span className="mcp-tool-label"><strong>{t(`toolNames.${tool.name}.title` as `toolNames.${KnownToolName}.title`)}</strong><span>{t(`toolNames.${tool.name}.description` as `toolNames.${KnownToolName}.description`)}</span></span><span className="mcp-tag">{t(`effects.${toolPresentation[tool.name].effect}`)}</span></> : title(tool.name)}</summary><div><code>{tool.name}</code>{toolPresentation[tool.name] ? <p>{t("permission")} <code>{toolPresentation[tool.name].scope}</code></p> : null}<p>{toolPresentation[tool.name] ? t(`toolDetails.${tool.name}` as `toolDetails.${KnownToolName}`) : t("unrecognizedTool")}</p></div></details>)}
-      </details> : null;
+      return members.length ? <Disclosure key={groupId} title={<span className={styles.row}><span>{t(`groups.${groupId}`)}</span><Badge variant="secondary">{toolCount(members.length)}</Badge></span>}>
+        {members.map(tool => <Disclosure key={tool.name} title={toolPresentation[tool.name] ? <><span className={styles.toolLabel}><strong>{t(`toolNames.${tool.name}.title` as `toolNames.${KnownToolName}.title`)}</strong><span>{t(`toolNames.${tool.name}.description` as `toolNames.${KnownToolName}.description`)}</span></span><Badge variant="secondary">{t(`effects.${toolPresentation[tool.name].effect}`)}</Badge></> : title(tool.name)}><div><code>{tool.name}</code>{toolPresentation[tool.name] ? <p>{t("permission")} <code>{toolPresentation[tool.name].scope}</code></p> : null}<p>{toolPresentation[tool.name] ? t(`toolDetails.${tool.name}` as `toolDetails.${KnownToolName}`) : t("unrecognizedTool")}</p></div></Disclosure>)}
+      </Disclosure> : null;
     })}
   </section>;
 }

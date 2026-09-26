@@ -7,7 +7,14 @@ import { McpSetup } from "./McpSetup";
 import { scopeLabel } from "./setup";
 import { McpTools } from "./McpTools";
 import { BrandMark } from "../brand/Brand";
-import "./mcp.css";
+import { Button } from "../components/ui/button";
+import { Badge } from "../components/ui/badge";
+import { Alert, AlertDescription } from "../components/ui/alert";
+import { Card, CardHeader, CardTitle, CardContent } from "../components/ui/card";
+import { Empty, EmptyHeader, EmptyTitle, EmptyDescription } from "../components/ui/empty";
+import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter } from "../components/ui/alert-dialog";
+import { Page, PageContent, PageHeader } from "../components/layout/Page";
+import styles from "./McpLayout.module.css";
 
 export function McpPage() {
   const { t } = useTranslation("mcp");
@@ -20,7 +27,9 @@ export function McpPage() {
   const [revoking, setRevoking] = useState(false);
   const [notice, setNotice] = useState<{ name: string } | null>(null);
   const [revokeError, setRevokeError] = useState(false);
-  const dialog = useRef<HTMLDialogElement>(null);
+  const revokeTrigger = useRef<HTMLButtonElement | null>(null);
+  const appsHeading = useRef<HTMLHeadingElement>(null);
+  const cancelTrigger = useRef<HTMLButtonElement>(null);
   const load = useCallback(async (signal?: AbortSignal) => {
     setCatalogError(false);
     try { const data = await loadConnections(signal); if (!signal?.aborted) setCatalog(data); }
@@ -40,44 +49,49 @@ export function McpPage() {
     window.addEventListener("focus", refresh);
     return () => { controller.abort(); window.removeEventListener("focus", refresh); };
   }, [load, check]);
-  useEffect(() => { if (selected) { setRevokeError(false); dialog.current?.showModal(); } }, [selected]);
-  function closeDialog() { if (revoking) return; dialog.current?.close(); setSelected(null); }
-  return <section className="page-section mcp-page" aria-labelledby="mcp-page-heading">
-    <header className="mcp-page-heading"><h1 id="mcp-page-heading">MCP</h1><p>{t("subtitle")}</p></header>
-    <section className="mcp-server" aria-labelledby="mcp-connection-heading">
-      <div className="mcp-service"><div className="mcp-service-name"><BrandMark size={36} inverse /><div><h2 id="mcp-connection-heading">Quantgrove MCP</h2></div></div>
-        <div role="status" className="mcp-service-status"><span className={`mcp-status mcp-status-${status}`}>{t(status)}</span><small>{checkedAt ? t("checked", { time: formatTimestamp(checkedAt, { hour: "numeric", minute: "2-digit", second: "2-digit" }) }) : t("notChecked")}</small></div>
-        <button type="button" disabled={status === "checking"} onClick={() => void check()}><ArrowClockwise size={15} />{status === "checking" ? t("checking") : t("checkService")}</button>
-      </div>
-      {status === "unavailable" ? <p className="mcp-feedback" role="status">{t("serviceError")}</p> : null}
-      {catalogError ? <div className="mcp-feedback" role="alert">{t("catalogError")} <button type="button" onClick={() => void load()}>{t("retry")}</button></div> : null}
-    </section>
+  async function revokeSelected() {
+    if (!selected || revoking) return;
+    setRevoking(true); setRevokeError(false);
+    try {
+      await revokeApp(selected.id);
+      setCatalog(current => current ? { ...current, apps: current.apps.filter(app => app.client_id !== selected.client_id) } : null);
+      setNotice({ name: selected.name || selected.client_id }); setSelected(null);
+    } catch { setRevokeError(true); }
+    finally { setRevoking(false); }
+  }
+  return <Page aria-label="MCP"><PageContent className={styles.page}>
+    <PageHeader title="MCP" description={t("subtitle")} />
+    <Card role="region" aria-label="Quantgrove MCP"><CardHeader className={styles.row}>
+      <div className={styles.row}><BrandMark size={36} /><CardTitle role="heading" aria-level={2}>Quantgrove MCP</CardTitle></div>
+      <div role="status" className={styles.stack}><Badge variant={status === "available" ? "default" : status === "unavailable" ? "destructive" : "secondary"}>{t(status)}</Badge><small>{checkedAt ? t("checked", { time: formatTimestamp(checkedAt, { hour: "numeric", minute: "2-digit", second: "2-digit" }) }) : t("notChecked")}</small></div>
+      <Button variant="outline" disabled={status === "checking"} onClick={() => void check()}><ArrowClockwise data-icon="inline-start" />{status === "checking" ? t("checking") : t("checkService")}</Button>
+    </CardHeader>
+    {status === "unavailable" || catalogError ? <CardContent className={styles.stack}>
+      {status === "unavailable" ? <Alert role="status"><AlertDescription>{t("serviceError")}</AlertDescription></Alert> : null}
+      {catalogError ? <Alert variant="destructive"><AlertDescription>{t("catalogError")}</AlertDescription><Button variant="outline" onClick={() => void load()}>{t("retry")}</Button></Alert> : null}
+    </CardContent> : null}</Card>
     {catalog ? <McpSetup endpoint={catalog.server_url} /> : null}
-    <div className="mcp-library">
+    <div className={styles.library}>
       <McpTools tools={connection?.tools ?? null} checking={status === "checking"} />
-      <section className="mcp-apps" aria-labelledby="mcp-apps-heading">
-        <div className="mcp-section-heading"><h2 id="mcp-apps-heading">{t("authorizedApps")}</h2>{catalog && !catalogError ? <span className="mcp-tag">{formatNumber(catalog.apps.length)}</span> : null}</div>
-        <p className="mcp-muted">{t("appDescription")}</p>
-        <div role="status">{notice ? t("revoked", notice) : null}</div>
-        {!catalog || catalogError ? <p>{catalogError ? t("appUnverified") : t("loadingApps")}</p> : catalog.apps.length === 0 ? <div className="mcp-empty"><ShieldCheck size={23} /><div><strong>{t("noApps")}</strong><p>{t("noAppsDescription")}</p></div></div> : catalog.apps.map(app => <article className="mcp-app" key={app.id}>
-          <div className="mcp-section-heading"><strong>{app.name || app.client_id}</strong><span className="mcp-tag">{t("authorized")}</span></div>
-          <ul>{app.scopes.map(scope => <li key={scope}>{scopeLabel(scope)}</li>)}</ul>
-          <p className="mcp-muted">{t("authorizedAt", { time: formatTimestamp(app.authorized_at, { dateStyle: "medium", timeStyle: "short" }) })}</p>
-          <button type="button" onClick={() => setSelected(app)}>{t("revoke")}<span className="visually-hidden">{t("revokeFor", { name: app.name || app.client_id })}</span></button>
+      <section className={styles.stack} aria-labelledby="mcp-apps-heading">
+        <div className={styles.row}><h2 ref={appsHeading} tabIndex={-1} id="mcp-apps-heading">{t("authorizedApps")}</h2>{catalog && !catalogError ? <Badge variant="secondary">{formatNumber(catalog.apps.length)}</Badge> : null}</div>
+        <p>{t("appDescription")}</p><div role="status">{notice ? t("revoked", notice) : null}</div>
+        {!catalog || catalogError ? <p>{catalogError ? t("appUnverified") : t("loadingApps")}</p> : catalog.apps.length === 0 ? <Empty><ShieldCheck aria-hidden="true" /><EmptyHeader><EmptyTitle>{t("noApps")}</EmptyTitle><EmptyDescription>{t("noAppsDescription")}</EmptyDescription></EmptyHeader></Empty> : catalog.apps.map(app => <article aria-label={app.name || app.client_id} key={app.id}>
+          <Card><CardHeader><CardTitle>{app.name || app.client_id}</CardTitle><Badge variant="secondary">{t("authorized")}</Badge></CardHeader><CardContent className={styles.stack}>
+            <ul>{app.scopes.map(scope => <li key={scope}>{scopeLabel(scope)}</li>)}</ul>
+            <p>{t("authorizedAt", { time: formatTimestamp(app.authorized_at, { dateStyle: "medium", timeStyle: "short" }) })}</p>
+            <Button variant="destructive" onClick={event => { revokeTrigger.current = event.currentTarget; setRevokeError(false); setSelected(app); }}>{t("revoke")}<span className="sr-only">{t("revokeFor", { name: app.name || app.client_id })}</span></Button>
+          </CardContent></Card>
         </article>)}
-        <p className="mcp-app-note"><Info size={14} />{t("appNote")}</p>
+        <p className={styles.row}><Info aria-hidden="true" />{t("appNote")}</p>
       </section>
     </div>
-    <dialog className="mcp-dialog" ref={dialog} aria-labelledby="mcp-revoke-title" onCancel={event => { if (revoking) event.preventDefault(); else setSelected(null); }}>
-      {selected ? <><h2 id="mcp-revoke-title">{t("revokeTitle", { name: selected.name || selected.client_id })}</h2><p>{t("revokeDescription")}</p>
-        {revokeError ? <p role="alert">{t("revokeError")}</p> : null}
-        <footer><button type="button" onClick={closeDialog} disabled={revoking}>{t("cancel")}</button><button className="mcp-danger" type="button" disabled={revoking} onClick={async () => {
-          if (revoking) return;
-          setRevoking(true); setRevokeError(false);
-          try { await revokeApp(selected.id); setCatalog(current => current ? { ...current, apps: current.apps.filter(app => app.client_id !== selected.client_id) } : null); setNotice({ name: selected.name || selected.client_id }); dialog.current?.close(); setSelected(null); }
-          catch { setRevokeError(true); }
-          finally { setRevoking(false); }
-        }}>{revoking ? t("revoking") : t("revoke")}</button></footer></> : null}
-    </dialog>
-  </section>;
+    <AlertDialog open={selected !== null} onOpenChange={open => { if (!open && !revoking) setSelected(null); }}>
+      <AlertDialogContent initialFocus={cancelTrigger} finalFocus={() => revokeTrigger.current?.isConnected ? revokeTrigger.current : appsHeading.current}>
+        <AlertDialogHeader><AlertDialogTitle>{t("revokeTitle", { name: selected?.name || selected?.client_id || "" })}</AlertDialogTitle><AlertDialogDescription>{t("revokeDescription")}</AlertDialogDescription></AlertDialogHeader>
+        {revokeError ? <Alert variant="destructive">{t("revokeError")}</Alert> : null}
+        <AlertDialogFooter><Button ref={cancelTrigger} variant="outline" disabled={revoking} onClick={() => setSelected(null)}>{t("cancel")}</Button><Button variant="destructive" disabled={revoking} onClick={() => void revokeSelected()}>{revoking ? t("revoking") : t("revoke")}</Button></AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  </PageContent></Page>;
 }
