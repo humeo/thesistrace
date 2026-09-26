@@ -67,3 +67,31 @@ test("requires strategy results and renders them without Factor evidence", async
   expect(document.body.textContent).toContain("Not available");
   expect(document.body.textContent).not.toContain("Rank IC");
 });
+
+test("transient refresh failure preserves prior facts and their read time", async () => {
+  request.mockResolvedValueOnce(new Response(JSON.stringify(run())))
+    .mockResolvedValueOnce(new Response(null, { status: 503 }));
+  await mount([first]);
+  const readTime = document.querySelector("time")?.getAttribute("datetime");
+  await act(async () => document.querySelector('button')!.click());
+  expect(document.querySelector('[role="alert"]')).not.toBeNull();
+  expect(document.body.textContent).toContain("0.125");
+  expect(document.querySelector("time")?.getAttribute("datetime")).toBe(readTime);
+});
+
+test.each([403, 404])("refresh %s removes facts that are no longer accessible", async status => {
+  request.mockResolvedValueOnce(new Response(JSON.stringify(run()))).mockResolvedValueOnce(new Response(null, { status }));
+  await mount([first]);
+  await act(async () => document.querySelector('button')!.click());
+  expect(document.body.textContent).toContain("Resource unavailable or access denied");
+  expect(document.body.textContent).not.toContain("0.125");
+  expect(document.querySelector("time")).toBeNull();
+});
+
+test("malformed JSON on refresh clears the last facts as an invalid response", async () => {
+  request.mockResolvedValueOnce(new Response(JSON.stringify(run()))).mockResolvedValueOnce(new Response("{broken"));
+  await mount([first]);
+  await act(async () => document.querySelector('button')!.click());
+  expect(document.body.textContent).not.toContain("0.125");
+  expect(document.querySelector("time")).toBeNull();
+});

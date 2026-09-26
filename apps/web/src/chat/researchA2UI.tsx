@@ -18,6 +18,18 @@ import {
   RESEARCH_A2UI_CATALOG_ID,
 } from "@thesistrace/contracts/research-a2ui";
 
+import { cn } from "cn";
+import { CaretDown } from "@phosphor-icons/react";
+import { Button } from "../components/ui/button";
+import { Badge } from "../components/ui/badge";
+import { Card, CardHeader, CardTitle, CardContent } from "../components/ui/card";
+import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "../components/ui/collapsible";
+import { Separator } from "../components/ui/separator";
+import { Spinner } from "../components/ui/spinner";
+import { Alert, AlertDescription } from "../components/ui/alert";
+import { toast } from "../components/ui/toast";
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell, TableCaption } from "../components/ui/table";
+import styles from "./A2UISurfaces.module.css";
 import { ResearchResourceCards } from "./ResearchResourceCards";
 
 const pairSchema = (labelLength: number, valueLength: number) => z.object({
@@ -99,21 +111,21 @@ const researchA2UICatalog = createCatalog(
   researchA2UICatalogDefinitions,
   {
     Text: ({ props }) => (
-      <p className={`chat-a2ui-text chat-a2ui-text-${props.variant ?? "body"}`}>
+      <p className={cn(styles.text, styles[props.variant ?? "body"])}>
         {props.text}
       </p>
     ),
     Row: ({ children, props }) => (
-      <div className={`chat-a2ui-row chat-a2ui-gap-${props.gap ?? "normal"} chat-a2ui-align-${props.align ?? "stretch"}`}>
-        {props.children.map((id) => <span className="chat-a2ui-child" key={id}>{children(id)}</span>)}
+      <div className={cn(styles.row, styles[props.gap ?? "normal"], styles[props.align ?? "stretch"])}>
+        {props.children.map((id) => <span className={styles.child} key={id}>{children(id)}</span>)}
       </div>
     ),
     Column: ({ children, props }) => (
-      <div className={`chat-a2ui-column chat-a2ui-gap-${props.gap ?? "normal"} chat-a2ui-align-${props.align ?? "stretch"}`}>
-        {props.children.map((id) => <div className="chat-a2ui-child" key={id}>{children(id)}</div>)}
+      <div className={cn(styles.column, styles[props.gap ?? "normal"], styles[props.align ?? "stretch"])}>
+        {props.children.map((id) => <div className={styles.child} key={id}>{children(id)}</div>)}
       </div>
     ),
-    Divider: () => <hr className="chat-a2ui-divider" />,
+    Divider: () => <Separator />,
     Formula: ({ props }) => <FormulaSurface expression={props.expression} label={props.label} />,
     AlphaProposal: ({ props }) => <AlphaProposalSurface props={props} />,
     ResearchRun: ({ props }) => <ResearchResourceCards kind="run" ids={[props.runId]} />,
@@ -131,24 +143,23 @@ const researchA2UICatalog = createCatalog(
 function AlphaProposalSurface({ props }: { props: z.infer<typeof researchA2UICatalogDefinitions.AlphaProposal.props> }) {
   const { t } = useTranslation("chat");
   return (
-      <section aria-label={t("a2ui.alphaProposal", { title: props.title })} className="chat-a2ui-domain-section chat-a2ui-proposal">
-        <header>
-          <span>{t("a2ui.proposal")}</span>
-          <strong>{t("a2ui.chatOwned")}</strong>
-        </header>
-        <h2>{props.title}</h2>
-        <dl className="chat-a2ui-facts">
+      <section aria-label={t("a2ui.alphaProposal", { title: props.title })} >
+        <Card><CardHeader>
+          <div className={styles.row}><span>{t("a2ui.proposal")}</span><Badge variant="secondary">{t("a2ui.chatOwned")}</Badge></div>
+          <CardTitle role="heading" aria-level={2}>{props.title}</CardTitle>
+        </CardHeader><CardContent className={styles.column}>
+        <dl className={styles.facts}>
           <Fact label={t("a2ui.hypothesis")} value={props.hypothesis} wide />
           <Fact label={t("a2ui.universe")} value={props.universe} />
           <Fact label={t("a2ui.period")} value={props.period} />
           <Fact label={t("a2ui.researchType")} value={props.researchType} />
           {props.strategy.map((entry) => <Fact key={entry.label} label={entry.label} value={entry.value} />)}
         </dl>
-        <div className="chat-a2ui-proposal-formula">
+        <div className={styles.column}>
           <span>{t("a2ui.formulaWord")}</span>
-          <code>{props.formula}</code>
+          <code className={styles.code}>{props.formula}</code>
         </div>
-        <p>{props.explanation}</p>
+        <p>{props.explanation}</p></CardContent></Card>
       </section>
   );
 }
@@ -157,8 +168,8 @@ function ResearchNavigation({ href: sourceHref, label }: { href: string; label: 
   const { t } = useTranslation("chat");
   const href = parseResearchA2UINavigationHref(sourceHref);
   return href === null
-    ? <p className="chat-a2ui-error" role="alert">{t("a2ui.unavailableLink")}</p>
-    : <a className="chat-a2ui-navigation" href={href}>{label}</a>;
+    ? <Alert variant="destructive">{t("a2ui.unavailableLink")}</Alert>
+    : <Button variant="link" className="h-auto min-h-11 max-w-full whitespace-normal text-left" nativeButton={false} role="link" render={<a href={href} />}>{label}</Button>;
 }
 
 export function ResearchA2UIActivity({
@@ -171,23 +182,23 @@ export function ResearchA2UIActivity({
   const projection = projectResearchA2UIContent(message.content);
   if (projection.kind === "loading") {
     return (
-      <article aria-label={t("a2ui.preparing")} className="chat-a2ui-lifecycle" role="status">
-        <span aria-hidden="true" className="chat-a2ui-loading-mark" />
+      <article aria-label={t("a2ui.preparing")} className={styles.row} role="status">
+        <Spinner aria-hidden="true" />
         <span>{t(projection.content.status === "retrying" ? "a2ui.rebuilding" : "a2ui.building")}</span>
       </article>
     );
   }
   if (projection.kind === "error") {
     return (
-      <article className="chat-a2ui-error" role="alert">
+      <Alert variant="destructive">
         {t("a2ui.preparationFailed")}
-        <small>{t("a2ui.reference", { id: message.id, code: String(projection.content.errorCode) })}</small>
-      </article>
+        <AlertDescription>{t("a2ui.reference", { id: message.id, code: String(projection.content.errorCode) })}</AlertDescription>
+      </Alert>
     );
   }
   const operationsJson = JSON.stringify(projection.content.a2ui_operations);
   return (
-    <article aria-label={t("a2ui.surface")} className="chat-a2ui-surface">
+    <article aria-label={t("a2ui.surface")} className={styles.surface}>
       <A2UIProvider catalog={researchA2UICatalog} onAction={() => undefined}>
         <ReadyA2UIRenderer
           key={message.id}
@@ -209,12 +220,10 @@ function ReadyA2UIRenderer({ operationsJson }: { operationsJson: string }) {
     processMessages(operations);
   }, [operations, processMessages]);
   return surfaceId === null ? (
-    <p className="chat-a2ui-error" role="alert">
-      {t("a2ui.displayFailed")}
-    </p>
+    <Alert variant="destructive">{t("a2ui.displayFailed")}</Alert>
   ) : (
     <A2UIRenderer
-      fallback={<span className="chat-a2ui-loading-mark" role="status" />}
+      fallback={<Spinner role="status" aria-label={t("a2ui.preparing")} />}
       surfaceId={surfaceId}
     />
   );
@@ -241,22 +250,29 @@ function FormulaSurface({ expression, label }: { expression: string; label?: str
     try {
       await navigator.clipboard.writeText(expression);
       setCopyState("copied");
+      toast.add({ title: <FormulaCopyFeedback message="a2ui.formulaCopied" />, type: "success" });
     } catch {
       setCopyState("failed");
+      toast.add({ title: <FormulaCopyFeedback message="a2ui.formulaCopyFailed" />, type: "error" });
     }
   }
   return (
-    <section aria-label={label ?? t("a2ui.formula")} className="chat-a2ui-formula">
-      <header>
+    <section aria-label={label ?? t("a2ui.formula")} className={styles.formula}>
+      <header className={styles.row}>
         <span>{label ?? t("a2ui.formula")}</span>
-        <button onClick={() => void copy()} type="button">{t("copy")}</button>
+        <Button variant="outline" onClick={() => void copy()}>{t("copy")}</Button>
       </header>
-      <code>{expression}</code>
-      <span aria-live="polite" className="visually-hidden">
+      <code className={styles.code}>{expression}</code>
+      <span className="sr-only">
         {copyState === "copied" ? t("a2ui.formulaCopied") : copyState === "failed" ? t("a2ui.formulaCopyFailed") : ""}
       </span>
     </section>
   );
+}
+
+function FormulaCopyFeedback({ message }: { message: "a2ui.formulaCopied" | "a2ui.formulaCopyFailed" }) {
+  const { t } = useTranslation("chat");
+  return t(message);
 }
 
 function ResearchTable({
@@ -275,36 +291,36 @@ function ResearchTable({
   const headerId = useId();
   return (
     <LocalDisclosure initiallyExpanded={initiallyExpanded} summary={summary}>
-      <div className="chat-a2ui-table-scroll">
-        <table role="table">
-          <caption>{caption}</caption>
-          <thead role="rowgroup">
-            <tr role="row">
+      <div className={styles.child}>
+        <Table role="table" scrollLabel={caption}>
+          <TableCaption>{caption}</TableCaption>
+          <TableHeader role="rowgroup">
+            <TableRow role="row">
               {columns.map((column, index) => (
-                <th id={`${headerId}-${index}`} key={`${index}:${column}`} role="columnheader" scope="col">
+                <TableHead id={`${headerId}-${index}`} key={`${index}:${column}`} role="columnheader" scope="col">
                   {column}
-                </th>
+                </TableHead>
               ))}
-            </tr>
-          </thead>
-          <tbody role="rowgroup">
+            </TableRow>
+          </TableHeader>
+          <TableBody role="rowgroup">
             {rows.map((row, rowIndex) => (
-              <tr key={`${rowIndex}:${row.join("\u0000")}`} role="row">
+              <TableRow key={`${rowIndex}:${row.join("\u0000")}`} role="row">
                 {row.map((cell, columnIndex) => (
-                  <td
+                  <TableCell
                     data-label={columns[columnIndex]}
                     headers={`${headerId}-${columnIndex}`}
                     key={`${columnIndex}:${cell}`}
                     role="cell"
                   >
-                    <span aria-hidden="true" className="chat-a2ui-cell-label">{columns[columnIndex]}</span>
+                    <span aria-hidden="true" className="chat-a2ui-cell-label sr-only">{columns[columnIndex]}</span>
                     <span className="chat-a2ui-cell-value">{cell}</span>
-                  </td>
+                  </TableCell>
                 ))}
-              </tr>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </div>
     </LocalDisclosure>
   );
@@ -319,27 +335,17 @@ function LocalDisclosure({
   initiallyExpanded?: boolean;
   summary: string;
 }) {
-  const [expanded, setExpanded] = useState(initiallyExpanded);
-  const contentId = useId();
-  return (
-    <section className="chat-a2ui-disclosure">
-      <button
-        aria-controls={contentId}
-        aria-expanded={expanded}
-        onClick={() => setExpanded((current) => !current)}
-        type="button"
-      >
-        <span>{summary}</span>
-        <span aria-hidden="true">{expanded ? "−" : "+"}</span>
-      </button>
-      {expanded ? <div id={contentId}>{children}</div> : null}
-    </section>
-  );
+  return <Collapsible defaultOpen={initiallyExpanded} className="min-w-0 rounded-lg border border-border">
+    <CollapsibleTrigger render={<Button variant="ghost" className="h-auto min-h-11 w-full justify-between whitespace-normal p-3 text-left" />}>
+      {summary}<CaretDown aria-hidden="true" data-icon="inline-end" />
+    </CollapsibleTrigger>
+    <CollapsibleContent keepMounted className="min-w-0 p-3">{children}</CollapsibleContent>
+  </Collapsible>;
 }
 
 function Fact({ label, value, wide = false }: { label: string; value: string; wide?: boolean }) {
   return (
-    <div className={wide ? "chat-a2ui-fact-wide" : undefined}>
+    <div className={cn(wide && styles.wide)}>
       <dt>{label}</dt>
       <dd>{value}</dd>
     </div>

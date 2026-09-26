@@ -29,3 +29,47 @@ test("A2UI resource references read Core and isolate an unavailable sibling", as
   await expect(page.getByText("0.125", { exact: true })).toHaveCount(3);
   await expect(page.getByText("running · Factor Evaluation")).toHaveCount(0);
 });
+
+for (const width of [320, 390, 768, 1280, 1440]) {
+  test(`catalog table and authoritative refresh remain usable at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    let failure = false;
+    await page.route("http://research.test/**", route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+      if (path.endsWith("run_1123456789abcdef0123")) return route.fulfill({ status: 403 });
+      if (failure) return route.fulfill({ status: 503 });
+      return route.fulfill({ json: { id: "run_0123456789abcdef0123", name: "Core research long name ".repeat(8), status: "succeeded", formula_summary: "rank(close)", start_date: "2026-01-01", end_date: "2026-08-27", research_kind: "factor_evaluation", result: { factor: { horizons: Object.fromEntries(["1", "5", "20"].map(h => [h, { summary: { rank_ic: { mean: 0.125 } } }])) } } } });
+    });
+    await page.addInitScript(() => Object.defineProperty(navigator, "clipboard", { value: { writeText: async () => undefined }, configurable: true }));
+    await page.goto("http://research.test/?catalog=1");
+    await page.addStyleTag({ content: styles });
+    await page.addScriptTag({ content: timelineScript });
+    const card = page.getByRole("region", { name: "ResearchRun run_0123456789abcdef0123", exact: true });
+    await expect(card.getByText("0.125", { exact: true })).toHaveCount(3);
+    const readAt = await card.locator("time").getAttribute("datetime");
+    const disclosure = page.getByRole("button", { name: "Inspect sample" });
+    await disclosure.focus();
+    await page.keyboard.press("Enter");
+    const table = page.getByRole("table", { name: "Research sample" });
+    await expect(table.getByRole("cell")).toHaveCount(1200);
+    const scroll = page.getByRole("region", { name: "Research sample", exact: true });
+    await scroll.focus();
+    await page.keyboard.press("ArrowRight");
+    await expect.poll(() => scroll.evaluate(el => el.scrollLeft)).toBeGreaterThan(0);
+    await page.getByRole("button", { name: "Copy", exact: true }).click();
+    await expect(page.locator('[data-slot="toast-title"]')).toContainText("Formula copied");
+    failure = true;
+    await card.getByRole("button", { name: "Reload view" }).click();
+    await expect(card.getByRole("alert")).toBeVisible();
+    await expect(card.getByText("0.125", { exact: true })).toHaveCount(3);
+    await expect(card.locator("time")).toHaveAttribute("datetime", readAt!);
+    await page.getByRole("button", { name: "简体中文" }).click();
+    await expect(disclosure).toHaveAttribute("aria-expanded", "true");
+    await expect(table.getByRole("cell")).toHaveCount(1200);
+    await expect(page.locator('[data-slot="toast-title"]')).toContainText("公式已复制");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await disclosure.click();
+    await expect(table).toBeHidden();
+  });
+}

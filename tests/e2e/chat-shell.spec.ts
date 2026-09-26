@@ -917,7 +917,7 @@ test("A2UI shows real running state and supports keyboard and narrow-screen resu
     await keyboardFocus(page, navigation);
     await page.keyboard.press("Enter");
     await expect(page).toHaveURL(new RegExp(`/research-runs/${runId}$`));
-    await expect(page.locator(".research-run-facts")).toContainText("Status succeeded");
+    await expect(page.locator(".research-run-page header [data-slot=badge]")).toHaveText("succeeded");
   } finally {
     try {
       if (worker !== undefined) {
@@ -970,8 +970,7 @@ async function keyboardFocus(page: Page, target: Locator): Promise<void> {
     if (await target.evaluate((element) => element === document.activeElement)) break;
   }
   await expect(target).toBeFocused();
-  await expect(target).toHaveCSS("outline-style", "solid");
-  await expect(target).toHaveCSS("outline-width", "2px");
+  await expect.poll(() => target.evaluate(el => getComputedStyle(el).boxShadow)).not.toBe("none");
 }
 
 async function expectAccessibleNarrowTable(table: Locator, columns: number): Promise<void> {
@@ -985,7 +984,7 @@ async function expectAccessibleNarrowTable(table: Locator, columns: number): Pro
         return header?.getAttribute("role") === "columnheader"
           && label?.textContent === header.textContent
           && label.getAttribute("aria-hidden") === "true"
-          && getComputedStyle(label).display !== "none";
+          && label.classList.contains("sr-only");
       }),
       pageOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
     };
@@ -1273,7 +1272,7 @@ test("admitted Research artifacts and a DailyTrack outlive the Chat that created
 
   await page.goto(runHref);
   await expect(page).toHaveURL(new RegExp(`/research-runs/${runId}$`));
-  await expect(page.locator(".research-run-facts")).toContainText("Status succeeded");
+  await expect(page.locator(".research-run-page header [data-slot=badge]")).toHaveText("succeeded");
   await expect(page.getByRole("heading", { name: "Factor Summary" })).toBeVisible();
 });
 

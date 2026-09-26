@@ -3,7 +3,7 @@ import ts from "typescript";
 const basicControls = new Set(["button", "input", "select", "textarea", "dialog", "table", "details", "summary"]);
 export function isMigratedUiFile(relativePath) {
   return relativePath === "main.tsx" || relativePath === "shell/AppShell.tsx" ||
-    ["SessionHistoryList", "ChatPage", "ChatConversation", "ChatTimeline", "ChatComposer", "QuestionComposer", "ModelPicker"].some(name => relativePath === `chat/${name}.tsx`) || relativePath.startsWith("auth/") ||
+    ["SessionHistoryList", "ChatPage", "ChatConversation", "ChatTimeline", "ChatComposer", "QuestionComposer", "ModelPicker", "ResearchResourceCards", "researchA2UI"].some(name => relativePath === `chat/${name}.tsx`) || relativePath.startsWith("auth/") ||
     relativePath.startsWith("research/") || relativePath.startsWith("data/") || relativePath.startsWith("daily-tracks/") ||
     ["research-runs/ResearchBatchesPage.tsx", "research-runs/ResearchFolderLoadFailure.tsx", "research-runs/ResearchRunsPage.tsx", "research-runs/ResearchRunList.tsx", "research-runs/ResearchRunsNavigation.tsx", "components/layout/PageNavigation.tsx", "research-runs/FactorResultView.tsx", "research-runs/StrategyResultView.tsx", "components/layout/Disclosure.tsx"].includes(relativePath) ||
     relativePath === "components/product/MetricGroup.tsx" ||

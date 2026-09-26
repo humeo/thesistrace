@@ -29,12 +29,12 @@ test("Chat DailyTrack uses the full grant and explains a real Strategy's current
   const detail = await track(page, id);
   expect(detail.status).toBe("active");
   await expect(surface).toContainText(detail.origin.seed_run_id);
-  await expect(surface.locator(".chat-a2ui-facts")).toContainText(detail.data_through_session);
+  await expect(surface.locator("dl")).toContainText(detail.data_through_session);
   await assertCurrentObservation(page, detail);
-  const oldFacts = await surface.locator(".chat-a2ui-facts").textContent();
+  const oldFacts = await surface.locator("dl").textContent();
   const sessionUrl = page.url();
   await page.reload();
-  await expect(page.getByRole("article", { name: "Research surface" }).last().locator(".chat-a2ui-facts")).toHaveText(oldFacts!);
+  await expect(page.getByRole("article", { name: "Research surface" }).last().locator("dl")).toHaveText(oldFacts!);
   await send(page, reloadPrompt);
   await assertCurrentObservation(page, await track(page, id));
   await send(page, startPrompt);
@@ -121,7 +121,7 @@ test("Chat DailyTrack replays lost Start and Retry responses while Tracking adva
     const beforeLanguageSwitch = trackFacts(researcher.id);
     await page.getByRole("button", { name: "Account menu" }).click();
     await page.getByRole("button", { name: "简体中文", exact: true }).click();
-    await expect(page.locator(".chat-a2ui-surface").last()).toContainText("下一计算区间超出可用执行容量。");
+    await expect(page.getByRole("article").filter({ has: page.getByRole("region", { name: /^DailyTrack track_/ }) }).last()).toContainText("下一计算区间超出可用执行容量。");
     await page.getByRole("button", { name: "English", exact: true }).click();
     await page.keyboard.press("Escape");
     expect(trackFacts(researcher.id)).toEqual(beforeLanguageSwitch);
@@ -168,7 +168,7 @@ async function assertCurrentObservation(page: Page, detail: Track): Promise<void
   expect(observation.session).toBe(detail.strategy_session);
   const card = page.getByRole("region", { name: `DailyTrack ${detail.id}`, exact: true }).last();
   await expect(card).toBeVisible();
-  const facts = card.locator(".chat-a2ui-facts");
+  const facts = card.locator("dl");
   for (const value of [detail.origin.seed_run_id, detail.strategy_session, detail.data_through_session]) {
     await expect(facts).toContainText(value);
   }
