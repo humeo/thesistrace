@@ -19,6 +19,13 @@ test("rejects native disclosure controls in migrated code", () => {
   assert.equal(isMigratedUiFile("auth/AccountMenu.tsx"), true);
   assert.equal(isMigratedUiFile("shell/AppShell.tsx"), true);
   assert.equal(isMigratedUiFile("chat/SessionHistoryList.tsx"), true);
+  assert.equal(isMigratedUiFile("analysis/FactorEvidence.tsx"), true);
+  assert.equal(isMigratedUiFile("research-runs/FactorResultView.tsx"), true);
+  assert.equal(isMigratedUiFile("research-runs/ResearchRunsPage.tsx"), false);
+  const runs = `function FactorRunDetail() { return <button>Run</button>; }
+    function ResearchRunHistory() { return <button>Legacy list</button>; }`;
+  assert.equal(uiOwnershipViolations("research-runs/ResearchRunsPage.tsx", runs, false).length, 1);
+  assert.match(uiOwnershipViolations("research-runs/ResearchRunsPage.tsx", runs, false)[0], /replace native <button>/);
 });
 
 test("rejects primitive imports outside the foundation even before migration", () => {

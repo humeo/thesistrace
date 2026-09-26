@@ -14,6 +14,8 @@ import { interfaceLocale, useTranslation } from "../i18n";
 import { catalogLabel } from "../i18n/catalog";
 import { formatNumber, formatPercent, formatSessionDate } from "../i18n/format";
 import type { StrategyComparisonCurvePoint } from "./strategyComparison";
+import { chartTheme } from "./chartTheme";
+import { Button } from "../components/ui/button";
 
 // TradingView Lightweight Charts™
 // Copyright (с) 2025 TradingView, Inc. https://www.tradingview.com/
@@ -31,9 +33,6 @@ const RANGE_SESSIONS: Record<Exclude<VisibleRange, "All">, number> = {
   "3Y": 756,
   "5Y": 1260,
 };
-
-const STRATEGY_COLOR = "#828fff";
-const BENCHMARK_COLOR = "#777b84";
 
 export function strategyChartPoints(
   curves: StrategyComparisonCurvePoint[],
@@ -61,28 +60,29 @@ export function StrategyPerformanceChart({
   useEffect(() => {
     const container = containerRef.current;
     if (container === null || points.length === 0) return;
+    const theme = chartTheme(container);
     const chart = createChart(container, {
       width: container.clientWidth,
       height: container.clientWidth <= 768 ? 240 : 320,
       autoSize: false,
       layout: {
-        background: { type: ColorType.Solid, color: "#0f1011" },
-        textColor: "#8a8f98",
+        background: { type: ColorType.Solid, color: theme.background },
+        textColor: theme.text,
         fontFamily: "Inter, Noto Sans SC, -apple-system, BlinkMacSystemFont, sans-serif",
         fontSize: 11,
         attributionLogo: false,
       },
       grid: {
-        vertLines: { color: "#18191a" },
-        horzLines: { color: "#23252a" },
+        vertLines: { color: theme.grid },
+        horzLines: { color: theme.grid },
       },
       crosshair: { mode: CrosshairMode.Normal },
       rightPriceScale: {
-        borderColor: "#34343a",
+        borderColor: theme.border,
         scaleMargins: { top: 0.1, bottom: 0.12 },
       },
       timeScale: {
-        borderColor: "#34343a",
+        borderColor: theme.border,
         rightOffset: 1,
         fixLeftEdge: true,
         fixRightEdge: true,
@@ -97,13 +97,13 @@ export function StrategyPerformanceChart({
     });
     chartRef.current = chart;
     const strategySeries = chart.addSeries(LineSeries, {
-      color: STRATEGY_COLOR,
+      color: theme.strategy,
       lineWidth: 2,
       priceLineVisible: false,
       lastValueVisible: false,
     });
     const benchmarkSeries = chart.addSeries(LineSeries, {
-      color: BENCHMARK_COLOR,
+      color: theme.benchmark,
       lineWidth: 2,
       priceLineVisible: false,
       lastValueVisible: false,
@@ -118,7 +118,7 @@ export function StrategyPerformanceChart({
     })));
     strategySeries.createPriceLine({
       price: 0,
-      color: "#62666d",
+      color: theme.zero,
       lineWidth: 1,
       lineStyle: 2,
       axisLabelVisible: false,
@@ -194,14 +194,16 @@ export function StrategyPerformanceChart({
       </figcaption>
       <div className="strategy-chart-toolbar" aria-label={t("chart.range")}>
         {(["1Y", "3Y", "5Y", "All"] as const).map((range) => (
-          <button
+          <Button
+            variant="ghost"
+            size="sm"
             aria-pressed={visibleRange === range}
             key={range}
             onClick={() => selectRange(range)}
             type="button"
           >
             {t(`chart.ranges.${range}`)}
-          </button>
+          </Button>
         ))}
       </div>
       <div className="strategy-chart-canvas" ref={containerRef} />

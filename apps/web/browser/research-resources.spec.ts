@@ -1,35 +1,11 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
-import { build } from "vite";
+import { buildProductFixture } from "./build-product-fixture";
 
-const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
 let timelineScript: string;
+let styles: string;
 
 test.beforeAll(async () => {
-  // Bundle the actual component, not a copy of its markup or resizing logic.
-  // This browser test needs no server, Auth, Agent, or database.
-  const result = await build({
-    configFile: false,
-    logLevel: "silent",
-    esbuild: { jsx: "automatic" },
-    define: { "process.env.NODE_ENV": JSON.stringify("production") },
-    build: {
-      write: false,
-      minify: false,
-      lib: {
-        entry: fileURLToPath(new URL("./fixtures/research-resources.tsx", import.meta.url)),
-        formats: ["iife"],
-        name: "ChatTimelineFixture",
-      },
-    },
-  });
-  if ("on" in result) throw new Error("Timeline fixture must be a one-off build");
-  const chunk = (Array.isArray(result) ? result : [result])
-    .flatMap((bundle) => bundle.output)
-    .find((output) => output.type === "chunk" && output.isEntry);
-  if (chunk?.type !== "chunk") throw new Error("Timeline fixture entry is missing");
-  timelineScript = chunk.code;
+  ({ script: timelineScript, styles } = await buildProductFixture(new URL("./fixtures/research-resources.tsx", import.meta.url), "ChatTimelineFixture"));
 });
 
 

@@ -1,26 +1,14 @@
-import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
-import { build } from "vite";
+import { buildProductFixture } from "./build-product-fixture";
 
 let script: string;
+let styles: string;
 test.beforeAll(async () => {
-  const result = await build({
-    configFile: false, logLevel: "silent", esbuild: { jsx: "automatic" },
-    define: { "process.env.NODE_ENV": JSON.stringify("production") },
-    build: { write: false, minify: false, lib: {
-      entry: fileURLToPath(new URL("./fixtures/research-evidence.tsx", import.meta.url)),
-      formats: ["iife"], name: "ResearchEvidenceFixture",
-    } },
-  });
-  if ("on" in result) throw new Error("Expected a one-off build");
-  const chunk = (Array.isArray(result) ? result : [result]).flatMap(bundle => bundle.output)
-    .find(output => output.type === "chunk" && output.isEntry);
-  if (chunk?.type !== "chunk") throw new Error("Missing component bundle");
-  script = chunk.code;
+  ({ script, styles } = await buildProductFixture(new URL("./fixtures/research-evidence.tsx", import.meta.url), "ResearchEvidenceFixture"));
 });
 
 const run = {
-  id: "run_evidence", status: "succeeded", name: "Evidence regression",
+  id: "run_evidence", status: "succeeded", name: "Evidence <br/> & regression",
   folder_id: "folder_default", created_at: "2026-09-15T00:00:00Z",
   start_date: "2026-08-03", end_date: "2026-08-04", formula_summary: "rank(-pb)",
   research_kind: "strategy_backtest",
@@ -57,6 +45,7 @@ test("ResearchRun updates preserve one working events and holdings section", asy
     return route.fulfill({ json: run });
   });
   await page.goto("https://research-evidence.test/");
+  await page.addStyleTag({ content: styles });
   await page.addScriptTag({ content: script });
   await expect(page.getByText("Trading events", { exact: true })).toHaveCount(1);
   await page.getByText("Trading events", { exact: true }).click();
@@ -64,8 +53,12 @@ test("ResearchRun updates preserve one working events and holdings section", asy
   // Opening and dismissing the confirmation only updates the actual parent page;
   // it must not replace these independent sections or leave orphaned DOM nodes.
   for (let i = 0; i < 3; i++) {
-    await page.getByRole("button", { name: "Delete Research", exact: true }).click();
+    await page.locator(".research-run-header").getByRole("button", { name: "Delete Research", exact: true }).click();
+    await expect(page.getByRole("alertdialog")).toContainText("DailyTracks will remain.");
+    await expect(page.getByRole("alertdialog")).toContainText("Evidence <br/> & regression");
+    await expect(page.getByRole("alertdialog").locator("br")).toHaveCount(0);
     await page.getByRole("button", { name: "Keep Research", exact: true }).click();
+    await expect(page.getByRole("alertdialog")).not.toBeVisible();
     await expect(page.getByText("Trading events", { exact: true })).toHaveCount(1);
     await expect(page.getByRole("button", { name: "Daily holdings", exact: true })).toHaveCount(1);
     await expect(page.getByText("No matching Orders records.")).toBeVisible();

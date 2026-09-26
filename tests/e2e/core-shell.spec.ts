@@ -188,8 +188,11 @@ test("Classic Factor authoring submits one ResearchRun", { tag: "@isolated" }, a
   await expect(page.getByText("Configuration is valid.", { exact: false })).toBeVisible();
   await page.getByRole("button", { name: "Run evaluation" }).click();
   await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
-  await expect(page.locator(".research-run-facts").getByText(/Status\s+succeeded/)).toBeVisible({ timeout: 150_000 });
-  await expect(page.getByRole("heading", { name: "Factor Summary" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Factor Summary" })).toBeVisible({ timeout: 150_000 });
+  await expect(page.getByRole("tab", { name: "Overview" })).toHaveAttribute("data-active", "");
+  await expect(page.getByRole("group", { name: "1-session Factor" })).toContainText("Rank IC");
+  await page.getByRole("tab", { name: "Configuration" }).click();
+  await expect(page.getByRole("group", { name: "Research execution conditions" })).toContainText("Status succeeded");
 });
 
 test("Direct Python authoring executes, reuses frozen source and explicitly advances DailyTrack", { tag: "@isolated" }, async ({ page }) => {
@@ -675,7 +678,7 @@ test("Research deletion uses an in-page decision instead of a browser dialog", a
   await page.goto(`/research-runs/${runId}`);
   await page.getByRole("button", { name: "Delete Research", exact: true }).click();
 
-  const decision = page.getByRole("dialog", { name: "Delete Research?" });
+  const decision = page.getByRole("alertdialog", { name: "Delete Research?" });
   await expect(decision).toBeVisible();
   expect(nativeDialogs).toEqual([]);
   await expect(decision).toContainText("Deletion dialog regression");
@@ -953,12 +956,12 @@ test("Default Folder retains one local Research Draft with authoritative Formula
 
     await openResearchFolderMenu(page);
     await page.getByLabel("New Folder").fill("Signals");
-    await page.getByRole("button", { name: "Create Folder" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Create", exact: true }).click();
     await expect(page).toHaveURL(/\/research\?folder=folder_[a-f0-9]+$/);
     const customFolderId = new URL(page.url()).searchParams.get("folder");
     expect(customFolderId).toMatch(/^folder_[a-f0-9]+$/);
     if (customFolderId === null) throw new Error("Custom Folder route is missing folder id");
-    await expect(page.locator(".research-folder-navigation > summary")).toHaveText("Signals folder");
+    await expect(page.getByRole("button", { name: "Research Folders", exact: true })).toContainText("Signals folder");
     await page.getByLabel("Research name").fill("Signals browser Draft");
     await page.getByRole("textbox", { name: "Alpha formula", exact: true }).click();
     await page.keyboard.type("volume");
@@ -995,11 +998,12 @@ test("Default Folder retains one local Research Draft with authoritative Formula
       headers: sameOriginHeaders(),
     });
     expect(protectedDefault.status()).toBe(409);
-    page.once("dialog", async (dialog) => dialog.dismiss());
     await page.getByRole("button", { name: "Delete Folder" }).click();
+    await page.getByRole("alertdialog", { name: "Delete Folder" }).getByRole("button", { name: "Cancel", exact: true }).click();
+    await openResearchFolderMenu(page);
     await expect(page.getByRole("link", { name: "Momentum", exact: true })).toBeVisible();
-    page.once("dialog", async (dialog) => dialog.accept());
     await page.getByRole("button", { name: "Delete Folder" }).click();
+    await page.getByRole("alertdialog", { name: "Delete Folder" }).getByRole("button", { name: "Delete Folder", exact: true }).click();
     await expect(page).toHaveURL(/\/research$/);
     await expect(page.getByRole("link", { name: "Momentum", exact: true })).toHaveCount(0);
     expect(await page.evaluate(
@@ -1189,9 +1193,9 @@ test("Complete field catalog composes one Formula and starts its DailyTrack", { 
     await expect(terminalProgress.getByText("Warm-up", { exact: true })).toHaveCount(0);
     await expect(terminalProgress.getByText("Committed chunks", { exact: true })).toHaveCount(0);
     await expect(terminalProgress.getByText("Execution complete", { exact: true })).toBeVisible();
-    await expect(terminalProgress.locator("summary")).toContainText(/\d+ \/ \d+ sessions/);
+    await expect(terminalProgress.getByRole("button", { name: /Timing details/ })).toContainText(/\d+ \/ \d+ sessions/);
     await expect(terminalProgress.getByText("Started", { exact: true })).toBeHidden();
-    await terminalProgress.locator("summary").click();
+    await terminalProgress.getByRole("button", { name: /Timing details/ }).click();
     await expect(terminalProgress.getByText("Started", { exact: true })).toBeVisible();
     await expect(terminalProgress.getByText("Finished", { exact: true })).toBeVisible();
     await expect(terminalProgress.locator("time")).toHaveCount(2);
@@ -1490,7 +1494,8 @@ test("Batch children keep ordinary Research organization, reuse, tracking, and d
   const folderId = ((await folderResponse.json()) as { id: string }).id;
   await page.reload();
   await page.getByLabel("Research name", { exact: true }).fill("Reviewed Batch Child");
-  await page.getByLabel("Folder", { exact: true }).selectOption(folderId);
+  await page.getByRole("combobox", { name: "Folder", exact: true }).click();
+  await page.getByRole("option", { name: "Browser Batch Review" }).click();
   await page.getByRole("button", { name: "Save changes" }).click();
   await expect(page.locator(".research-run-facts")).toContainText("Reviewed Batch Child");
 
@@ -1499,7 +1504,8 @@ test("Batch children keep ordinary Research organization, reuse, tracking, and d
     items: Array<{ research_run_id: string }>;
   }).items.map((item) => item.research_run_id)).toEqual([firstRunId, siblingRunId]);
 
-  await page.getByLabel("Target Folder").selectOption(folderId);
+  await page.getByRole("combobox", { name: "Target Folder" }).click();
+  await page.getByRole("option", { name: "Browser Batch Review" }).click();
   await page.getByRole("button", { name: "Create draft" }).click();
   await expect(page).toHaveURL(new RegExp(`/research\\?folder=${folderId}$`));
   await expect(page.getByRole("radio", { name: /Strategy Backtest/ })).toBeChecked({ timeout: 30_000 });
@@ -1663,7 +1669,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
 
     await openResearchFolderMenu(page);
     await page.getByLabel("New Folder").fill("Signals");
-    await page.getByRole("button", { name: "Create Folder" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Create", exact: true }).click();
     await expect(page).toHaveURL(/\/research\?folder=folder_[a-f0-9]+$/);
     const customFolderId = new URL(page.url()).searchParams.get("folder");
     expect(customFolderId).toMatch(/^folder_[a-f0-9]+$/);
@@ -1677,13 +1683,17 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
     const customRunId = page.url().split("/").at(-1);
     if (customRunId === undefined) throw new Error("Custom Research route is missing run id");
-    await expect(page.locator(".research-run-facts").getByText(/Status\s+succeeded/)).toBeVisible({ timeout: 90_000 });
+    await expect(page.getByRole("tab", { name: "Overview" })).toHaveAttribute("data-active", "", { timeout: 90_000 });
+    await expect(page.getByRole("heading", { name: "Factor Summary" })).toBeVisible();
+    await page.getByRole("tab", { name: "Configuration" }).click();
+    await expect(page.locator(".research-run-facts")).toContainText("Status succeeded");
     await expect(page.locator(".research-run-facts")).toContainText("Research type Factor Evaluation");
     const factorConditions = page.getByRole("group", { name: "Research execution conditions" });
     await expect(factorConditions).toContainText("Universe Top 300");
     await expect(factorConditions).toContainText("Neutralization None");
     await expect(factorConditions.getByText("Holdings count", { exact: true })).toHaveCount(0);
     await expect(factorConditions.getByText("Selection", { exact: true })).toHaveCount(0);
+    await page.getByRole("tab", { name: "Overview" }).click();
     await expect(page.getByRole("heading", { name: "Factor Summary" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Strategy Summary" })).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Daily Observations" })).toHaveCount(0);
@@ -1707,9 +1717,12 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
 
     const factorHistoryBeforeReuse = await page.request.get("/api/research-runs");
     const factorHistoryCount = ((await factorHistoryBeforeReuse.json()).items as unknown[]).length;
-    await page.getByLabel("Target Folder").selectOption("folder_default");
-    page.once("dialog", async (dialog) => dialog.accept());
+    await page.getByRole("tab", { name: "Configuration" }).click();
+    await page.getByRole("combobox", { name: "Target Folder" }).click();
+    await page.getByRole("option", { name: "Default" }).click();
     await page.getByRole("button", { name: "Create draft" }).click();
+    await expect(page.getByRole("alertdialog")).toContainText("discard unexecuted browser changes");
+    await page.getByRole("alertdialog").getByRole("button", { name: "Replace draft" }).click();
     await expect(page).toHaveURL(/\/research$/);
     await expect(page.getByRole("radio", { name: /Factor Evaluation/ })).toBeChecked();
     await expect(page.getByLabel("Holdings count")).toHaveCount(0);
@@ -1751,6 +1764,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
       },
     });
     await page.goto(`/research-runs/${customRunId}`);
+    await page.getByRole("tab", { name: "Configuration" }).click();
 
     const draftsBeforeOrganization = await page.evaluate(() => Object.fromEntries(
       Object.entries(localStorage).filter(([key]) => key.startsWith("thesistrace.research-draft.")),
@@ -1773,7 +1787,8 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await page.unroute(`**/api/research-runs/${customRunId}`);
     await expect(page.locator(".research-run-facts")).toContainText("Renamed Research");
     await page.getByLabel("Research name", { exact: true }).fill("Duplicate Name");
-    await page.getByLabel("Folder", { exact: true }).selectOption("folder_default");
+    await page.getByRole("combobox", { name: "Folder", exact: true }).click();
+    await page.getByRole("option", { name: "Default" }).click();
     await page.getByRole("button", { name: "Save changes" }).click();
     await expect(page.locator(".research-run-facts")).toContainText("Duplicate Name");
     const organizedDetail = await page.request.get(`/api/research-runs/${customRunId}`);
@@ -1786,6 +1801,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     expect(await page.evaluate(() => Object.fromEntries(
       Object.entries(localStorage).filter(([key]) => key.startsWith("thesistrace.research-draft.")),
     ))).toEqual(draftsBeforeOrganization);
+    await page.getByRole("tab", { name: "Overview" }).click();
     await expect(page.getByRole("heading", { name: "Factor Summary" })).toBeVisible();
 
     await page.goto("/research-runs");
@@ -1842,7 +1858,8 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     const sourceBeforeReuse = await sourceBeforeReuseResponse.json();
     const historyBeforeReuse = await page.request.get("/api/research-runs");
     const historyCountBeforeReuse = ((await historyBeforeReuse.json()).items as unknown[]).length;
-    await page.getByLabel("Target Folder").selectOption(customFolderId);
+    await page.getByRole("combobox", { name: "Target Folder" }).click();
+    await page.getByRole("option", { name: "Signals" }).click();
     await page.getByRole("button", { name: "Create draft" }).click();
     await expect(page).toHaveURL(new RegExp(`/research\\?folder=${customFolderId}$`));
     await expect(page.getByLabel("Research name")).toHaveValue("Target Local Name");
@@ -2007,8 +2024,8 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
 });
 
 async function openResearchDeleteDialog(page: Page): Promise<Locator> {
-  await page.getByRole("button", { name: "Delete Research", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "Delete Research?" });
+  await page.getByRole("button", { name: "Delete Research", exact: true }).first().click();
+  const dialog = page.getByRole("alertdialog", { name: "Delete Research?" });
   await expect(dialog).toBeVisible();
   return dialog;
 }
@@ -2035,18 +2052,22 @@ async function fillCompleteDraft(
   await fillResearchNotes(page, "Browser Run acceptance.");
   await page.getByLabel("Research start date").fill("2026-08-04");
   await page.getByLabel("Research end date").fill("2026-08-05");
-  await page.getByLabel("Universe", { exact: true }).selectOption("top300");
-  await page.getByRole("button", { name: "Run settings", exact: true }).click();
-  await page.getByLabel("Neutralization").selectOption("none");
   if (researchKind === "strategy_backtest") {
+    await page.getByLabel("Universe", { exact: true }).selectOption("top300");
+    await page.getByRole("button", { name: "Run settings", exact: true }).click();
+    await page.getByLabel("Neutralization").selectOption("none");
     await page.getByLabel("Initial cash (CNY)").fill("100000");
     await page.getByLabel("Holdings count").fill("10");
     await page.getByLabel("Selection interval (trading days)").fill("2");
+    await page.getByRole("button", { name: "Run settings", exact: true }).click();
   } else {
+    await page.getByRole("combobox", { name: "Universe", exact: true }).click();
+    await page.getByRole("option", { name: "Top 300", exact: true }).click();
+    await page.getByRole("combobox", { name: "Neutralization", exact: true }).click();
+    await page.getByRole("option", { name: "None", exact: true }).click();
     await expect(page.getByLabel("Holdings count")).toHaveCount(0);
     await expect(page.getByLabel("Selection interval (trading days)")).toHaveCount(0);
   }
-  await page.getByRole("button", { name: "Run settings", exact: true }).click();
   await expect(page.getByRole("button", { name: /^Run (backtest|evaluation)$/, exact: true })).toBeEnabled();
 }
 
@@ -2058,16 +2079,16 @@ async function replaceFormula(page: Page, formula: string): Promise<void> {
 }
 
 async function openResearchFolderMenu(page: Page): Promise<void> {
-  const menu = page.locator(".research-folder-navigation");
-  if ((await menu.getAttribute("open")) === null) {
-    await menu.locator("summary").click();
+  const trigger = page.getByRole("button", { name: "Research Folders", exact: true });
+  if ((await trigger.getAttribute("aria-expanded")) !== "true") {
+    await trigger.click();
   }
 }
 
 async function closeResearchFolderMenu(page: Page): Promise<void> {
-  const menu = page.locator(".research-folder-navigation");
-  if ((await menu.getAttribute("open")) !== null) {
-    await menu.locator("summary").click();
+  const trigger = page.getByRole("button", { name: "Research Folders", exact: true });
+  if ((await trigger.getAttribute("aria-expanded")) === "true") {
+    await trigger.click();
   }
 }
 

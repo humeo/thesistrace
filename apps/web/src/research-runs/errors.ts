@@ -2,7 +2,7 @@ import { z } from "zod";
 import { i18n } from "../i18n";
 import { formatNumber } from "../i18n/format";
 
-export type RunError = { code: "loadError" | "trackingError" | "trackingExists" | "trackingResult" | "trackingNotCompleted" | "trackingStrategy" | "trackingRequestConflict" }
+export type RunError = { code: "loadError" | "runNotFound" | "runForbidden" | "trackingError" | "trackingExists" | "trackingResult" | "trackingNotCompleted" | "trackingStrategy" | "trackingRequestConflict" }
   | { code: "trackingLimit"; limit: number };
 export type CancelError = "cancelError" | "cancelBatch" | "cancelConflict" | "cancelState";
 export type HttpActionError = { status: number | null };

@@ -1,10 +1,9 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { expect, test, type Page } from "@playwright/test";
-import { build } from "vite";
+import { buildProductFixture } from "./build-product-fixture";
+import { emptyResearchDraft, researchDraftKey } from "../src/research/draft";
 
-const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
 let script: string;
+let styles: string;
 const summary = {
   id: "run_cancel", status: "running", name: "Cancellation regression",
   folder_id: "folder_default", created_at: "2026-09-15T00:00:00Z",
@@ -26,25 +25,10 @@ const detail = {
 };
 
 test.beforeAll(async () => {
-  const result = await build({
-    configFile: false, logLevel: "silent", esbuild: { jsx: "automatic" },
-    define: { "process.env.NODE_ENV": JSON.stringify("production") },
-    build: {
-      write: false, minify: false,
-      lib: {
-        entry: fileURLToPath(new URL("./fixtures/research-cancellation.tsx", import.meta.url)),
-        formats: ["iife"], name: "ResearchCancellationFixture",
-      },
-    },
-  });
-  if ("on" in result) throw new Error("Expected a one-off build");
-  const chunk = (Array.isArray(result) ? result : [result])
-    .flatMap(bundle => bundle.output).find(output => output.type === "chunk" && output.isEntry);
-  if (chunk?.type !== "chunk") throw new Error("Fixture entry is missing");
-  script = chunk.code;
+  ({ script, styles } = await buildProductFixture(new URL("./fixtures/research-cancellation.tsx", import.meta.url), "ResearchCancellationFixture"));
 });
 
-async function openResearch(page: Page) {
+async function openResearch(page: Page, expectFacts = true) {
   await page.route("http://127.0.0.1/", route => route.fulfill({
     contentType: "text/html", body: '<div id="root"></div>',
   }));
@@ -54,8 +38,140 @@ async function openResearch(page: Page) {
   await page.goto("http://127.0.0.1/");
   await page.addStyleTag({ content: styles });
   await page.addScriptTag({ content: script });
-  await expect(page.getByRole("group", { name: "Research execution conditions" })).toContainText("Top 1000");
+  if (expectFacts) await expect(page.getByRole("group", { name: "Research execution conditions" })).toContainText("Top 1000");
 }
+
+const horizon = (value: 1 | 5 | 20) => ({
+  horizon: value,
+  summary: {
+    ic: { mean: value === 1 ? 0.12345 : null, sample_deviation: null, icir: null, positive_fraction: null, valid_session_count: 8 },
+    rank_ic: { mean: 0, sample_deviation: null, icir: 1.82, positive_fraction: null, valid_session_count: 9 },
+    quantile_returns: { q1: null, q2: null, q3: null, q4: null, q5: null }, top_bottom_return: null,
+  },
+  coverage: { signal_session_count: 10, ic_valid_session_count: 8, rank_ic_valid_session_count: 9,
+    quantile_valid_session_count: 0 },
+});
+
+test("completed Factor result preserves metrics, visited views, folders and mobile layout", async ({ page }, testInfo) => {
+  const reads: string[] = [];
+  await page.route("**/api/research-runs/run_cancel/factor-periods?**", route => {
+    reads.push("evidence");
+    return route.fulfill({ json: { section: "factor_periods", items: [], next_cursor: null } });
+  });
+  await page.route("**/api/research-runs/run_cancel/common-input-observations?**", route => {
+    reads.push("inputs");
+    return route.fulfill({ json: { items: [], next_cursor: null } });
+  });
+  await page.route("**/api/research-runs/run_cancel", route => route.fulfill({ json: {
+    ...detail, status: "succeeded", progress: { ...detail.progress, phase: "succeeded" },
+    result: { factor: { horizons: { "1": horizon(1), "5": horizon(5), "20": horizon(20) } },
+      provenance: { schema_version: "research-result-v3", research_kind: "factor_evaluation", research_run_id: detail.id,
+        immutable_input_sha256: "a".repeat(64), calculation_contracts: {}, semantic_versions: {} } },
+  } }));
+  await openResearch(page, false);
+  await expect(page.getByRole("heading", { name: "Cancellation regression" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Overview" })).toHaveAttribute("data-active", "");
+  await expect(page.getByRole("group", { name: "1-session Factor" })).toContainText("0.123");
+  await expect(page.getByRole("group", { name: "1-session Factor" })).toContainText("0.000");
+  await expect(page.getByRole("group", { name: "5-session Factor" })).toContainText("—");
+  expect(reads).toEqual([]);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.screenshot({ path: testInfo.outputPath("factor-overview-1280.png"), fullPage: true });
+  await page.setViewportSize({ width: 320, height: 900 });
+  await page.screenshot({ path: testInfo.outputPath("factor-overview-320.png"), fullPage: true });
+  await page.getByRole("tab", { name: "Factor evidence" }).click();
+  await expect(page.getByText("No observations in this selection.")).toBeVisible();
+  await page.getByRole("combobox", { name: "Horizon" }).click();
+  await page.getByRole("option", { name: "20 sessions" }).click();
+  await page.getByRole("tab", { name: "Common inputs" }).click();
+  await expect(page.getByText("This research does not use common market inputs.")).toBeVisible();
+  await page.getByRole("tab", { name: "Factor evidence" }).click();
+  await expect(page.getByRole("combobox", { name: "Horizon" })).toContainText("20 sessions");
+  expect(reads).toEqual(["evidence", "evidence", "inputs"]);
+  await page.getByRole("tab", { name: "Configuration" }).click();
+  await expect(page.getByRole("group", { name: "Research execution conditions" })).toContainText("Top 1000");
+  await page.getByRole("combobox", { name: "Folder", exact: true }).click();
+  await expect(page.getByRole("option", { name: "Default" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Delete Research", exact: true }).first().click();
+  const decision = page.getByRole("alertdialog");
+  await expect(decision).toContainText("DailyTracks will remain.");
+  await decision.getByRole("button", { name: "Keep Research" }).focus();
+  await page.locator('nav[aria-label="Fixture language"] button').nth(1).evaluate(element => (element as HTMLButtonElement).click());
+  await expect(decision).toContainText("每日跟踪将保留。");
+  await expect(decision.getByRole("button", { name: "保留研究" })).toBeFocused();
+  await page.locator('nav[aria-label="Fixture language"] button').nth(0).evaluate(element => (element as HTMLButtonElement).click());
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("alertdialog")).not.toBeVisible();
+  await expect(page.getByRole("tab", { name: "Configuration" })).toHaveAttribute("data-active", "");
+  for (const width of [1280, 390, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  }
+  await page.screenshot({ path: testInfo.outputPath("factor-result-320.png"), fullPage: true });
+});
+
+test("failed Factor run leads with the server reason and keeps its frozen configuration", async ({ page }) => {
+  await page.route("**/api/research-runs/run_cancel", route => route.fulfill({ json: {
+    ...detail, status: "failed", failure_reason: "WorkerLost",
+  } }));
+  await openResearch(page);
+  const failure = page.getByRole("alert", { name: "Failure" });
+  await expect(failure).toContainText("research worker stopped responding");
+  const configuration = page.getByRole("group", { name: "Research execution conditions" });
+  await expect(configuration).toContainText("rank(-pb)");
+  await expect(configuration).toContainText("Top 1000");
+  await expect(page.getByRole("button", { name: "Delete Research" }).first()).toBeVisible();
+});
+
+test("reusing a Factor run asks before replacing unsent browser changes", async ({ page }) => {
+  const key = researchDraftKey("test", "folder_default");
+  const draft = { ...emptyResearchDraft(), formula: "local unsent formula", storageSchema: "research-draft/v7" };
+  await page.route("**/api/research-runs/run_cancel", route => route.fulfill({ json: { ...detail, status: "failed" } }));
+  await page.route("http://127.0.0.1/research", route => route.fulfill({ contentType: "text/html", body: "<div id=\"root\"></div>" }));
+  await openResearch(page);
+  await page.evaluate(({ key, draft }) => localStorage.setItem(key, JSON.stringify(draft)), { key, draft });
+  await page.getByRole("button", { name: "Create draft" }).click();
+  const decision = page.getByRole("alertdialog");
+  await expect(decision).toContainText("discard unexecuted browser changes");
+  await decision.getByRole("button", { name: "Keep current draft" }).click();
+  await expect(decision).not.toBeVisible();
+  expect(await page.evaluate(key => JSON.parse(localStorage.getItem(key) ?? "null").formula, key)).toBe("local unsent formula");
+  await page.getByRole("button", { name: "Create draft" }).click();
+  await page.evaluate(key => {
+    const setItem = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (name, value) {
+      if (name === key) {
+        Storage.prototype.setItem = setItem;
+        throw new DOMException("Storage full", "QuotaExceededError");
+      }
+      setItem.call(this, name, value);
+    };
+  }, key);
+  await decision.getByRole("button", { name: "Replace draft" }).click();
+  await expect(decision).not.toBeVisible();
+  await expect(page.getByRole("alert").filter({ hasText: "could not be copied" })).toBeVisible();
+  expect(await page.evaluate(key => JSON.parse(localStorage.getItem(key) ?? "null").formula, key)).toBe("local unsent formula");
+  await page.getByRole("button", { name: "Create draft" }).click();
+  await decision.getByRole("button", { name: "Replace draft" }).click();
+  await expect(page).toHaveURL("http://127.0.0.1/research");
+  expect(await page.evaluate(key => JSON.parse(localStorage.getItem(key) ?? "null").formula, key)).toBe("rank(-pb)");
+});
+
+test("a missing or forbidden Factor run offers a way back to Research Runs", async ({ page }) => {
+  let status = 404;
+  await page.route("**/api/research-runs/run_cancel", route => route.fulfill({ status }));
+  await page.route("**/api/research-folders", route => route.fulfill({ json: { items: [], next_cursor: null } }));
+  await page.route("http://127.0.0.1/", route => route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' }));
+  await page.goto("http://127.0.0.1/");
+  await page.addStyleTag({ content: styles });
+  await page.addScriptTag({ content: script });
+  await expect(page.getByRole("alert")).toHaveText("This research is no longer available.");
+  await expect(page.getByRole("link", { name: "Back to Research Runs" })).toHaveAttribute("href", "/research-runs");
+  status = 403;
+  await page.getByRole("button", { name: "Retry" }).click();
+  await expect(page.getByRole("alert")).toHaveText("You do not have access to this research.");
+});
 
 test("completed execution keeps timing in a keyboard-accessible disclosure on desktop and mobile", async ({ page }) => {
   await page.route("**/api/research-runs/run_cancel", route => route.fulfill({ json: {
@@ -69,7 +185,7 @@ test("completed execution keeps timing in a keyboard-accessible disclosure on de
   } }));
   await openResearch(page);
   const progress = page.getByRole("region", { name: "ResearchRun progress", exact: true });
-  const disclosure = progress.locator("summary");
+  const disclosure = progress.getByRole("button", { name: /Timing details/ });
   await expect(progress).toContainText("Execution complete");
   await expect(progress).toContainText("5 / 5 sessions");
   await expect(progress).toContainText("2m 39s");

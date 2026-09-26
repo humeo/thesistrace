@@ -1,29 +1,14 @@
 import { fontStylesheet, serveBrandAssets } from "./brand-assets";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
-import { build } from "vite";
+import { buildProductFixture } from "./build-product-fixture";
 
 test.beforeEach(async ({ page }) => { await serveBrandAssets(page); });
 
 let script: string;
-const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8")
-  + readFileSync(new URL("../src/analysis/factor-evidence.css", import.meta.url), "utf8");
+let styles: string;
 
 test.beforeAll(async () => {
-  const result = await build({
-    configFile: false, logLevel: "silent", esbuild: { jsx: "automatic" },
-    define: { "process.env.NODE_ENV": JSON.stringify("production") },
-    build: { write: false, minify: false, lib: {
-      entry: fileURLToPath(new URL("./fixtures/factor-evidence.tsx", import.meta.url)),
-      formats: ["iife"], name: "FactorEvidenceFixture",
-    } },
-  });
-  if ("on" in result) throw new Error("Expected a one-off build");
-  const chunk = (Array.isArray(result) ? result : [result]).flatMap(bundle => bundle.output)
-    .find(output => output.type === "chunk" && output.isEntry);
-  if (chunk?.type !== "chunk") throw new Error("Missing component bundle");
-  script = chunk.code;
+  ({ script, styles } = await buildProductFixture(new URL("./fixtures/factor-evidence.tsx", import.meta.url), "FactorEvidenceFixture"));
 });
 
 
@@ -63,10 +48,12 @@ test("Factor evidence loads on demand, resets cursors with filters and shows dai
   await expect(page.getByRole("cell", { name: "2026-08", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Next", exact: true }).click();
   await expect(page.getByRole("button", { name: "Next", exact: true })).toBeDisabled();
-  await page.getByLabel("Horizon").selectOption("20");
+  await page.getByRole("combobox", { name: "Horizon" }).click();
+  await page.getByRole("option", { name: "20 sessions" }).click();
   await expect.poll(() => reads.at(-1)?.searchParams.get("horizon")).toBe("20");
   expect(reads.at(-1)?.searchParams.has("cursor")).toBe(false);
-  await page.getByLabel("View").selectOption("daily");
+  await page.getByRole("combobox", { name: "View" }).click();
+  await page.getByRole("option", { name: "Daily", exact: true }).click();
   await expect(page.getByRole("cell", { name: "2026-08-03", exact: true })).toBeVisible();
   await page.getByText("Coverage and label", { exact: true }).click();
   await expect(page.getByText("Missing signal: 1", { exact: true })).toBeVisible();
@@ -75,8 +62,8 @@ test("Factor evidence loads on demand, resets cursors with filters and shows dai
   const beforeLanguageReads = reads.length;
   await page.getByRole("button", { name: "简体中文", exact: true }).click();
   await expect(page.getByText("缺少信号: 1", { exact: true })).toBeVisible();
-  await expect(page.getByLabel("预测周期")).toHaveValue("20");
-  await expect(page.getByLabel("视图")).toHaveValue("daily");
+  await expect(page.getByRole("combobox", { name: "预测周期" })).toContainText("20 个交易日");
+  await expect(page.getByRole("combobox", { name: "视图" })).toContainText("逐日");
   expect(reads).toHaveLength(beforeLanguageReads);
   for (const width of [1050, 390, 320]) {
     await page.setViewportSize({ width, height: 964 });
@@ -121,14 +108,19 @@ test("narrow Factor view preserves missing values and rejects reversed signal da
   await page.addScriptTag({ content: script });
   await page.getByText("Factor evidence", { exact: true }).focus();
   await page.keyboard.press("Enter");
-  await page.getByLabel("View").selectOption("daily");
+  await page.getByRole("combobox", { name: "View" }).click();
+  await page.getByRole("option", { name: "Daily", exact: true }).click();
   await expect(page.getByRole("cell", { name: "—", exact: true }).first()).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: "../../.local/browser-tests/factor-evidence-mobile.png", fullPage: true });
-  await page.getByLabel("Signal from").fill("2026-08-10");
+  await page.getByRole("textbox", { name: "Signal from" }).fill("2026-08-10");
   await expect(page.getByRole("cell", { name: "2026-08-03", exact: true })).toBeVisible();
   const beforeInvalid = reads;
-  await page.getByLabel("Signal through").fill("2026-08-01");
+  await page.getByRole("textbox", { name: "Signal through" }).fill("2026-08-01");
   await expect(page.getByRole("alert")).toHaveText("Signal through must be on or after Signal from.");
+  await expect(page.getByRole("textbox", { name: "Signal through" })).toHaveAttribute("aria-invalid", "true");
+  const errorId = await page.getByRole("textbox", { name: "Signal through" }).getAttribute("aria-describedby");
+  expect(errorId).toBeTruthy();
+  await expect(page.locator(`[id="${errorId}"]`)).toHaveText("Signal through must be on or after Signal from.");
   expect(reads).toBe(beforeInvalid);
 });

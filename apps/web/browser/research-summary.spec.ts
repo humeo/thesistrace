@@ -1,25 +1,11 @@
-import { fileURLToPath } from "node:url";
-import { readFileSync } from "node:fs";
 import { expect, test } from "@playwright/test";
 import { defaultSimulationCosts } from "../src/research/simulationCosts";
-import { build } from "vite";
+import { buildProductFixture } from "./build-product-fixture";
 
 let script: string;
-const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+let styles: string;
 test.beforeAll(async () => {
-  const result = await build({
-    configFile: false, logLevel: "silent", esbuild: { jsx: "automatic" },
-    define: { "process.env.NODE_ENV": JSON.stringify("production") },
-    build: { write: false, minify: false, lib: {
-      entry: fileURLToPath(new URL("./fixtures/research-cancellation.tsx", import.meta.url)),
-      formats: ["iife"], name: "ResearchEvidenceFixture",
-    } },
-  });
-  if ("on" in result) throw new Error("Expected a one-off build");
-  const chunk = (Array.isArray(result) ? result : [result]).flatMap(bundle => bundle.output)
-    .find(output => output.type === "chunk" && output.isEntry);
-  if (chunk?.type !== "chunk") throw new Error("Missing component bundle");
-  script = chunk.code;
+  ({ script, styles } = await buildProductFixture(new URL("./fixtures/research-cancellation.tsx", import.meta.url), "ResearchEvidenceFixture"));
 });
 
 const run = {

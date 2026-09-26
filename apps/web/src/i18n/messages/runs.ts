@@ -7,6 +7,8 @@ export const runsEn = {
   "runs": "Runs",
   "batches": "Batches",
   "loadError": "ResearchRun unavailable",
+  "runNotFound": "This research is no longer available.",
+  "runForbidden": "You do not have access to this research.",
   "folderError": "Research Folders unavailable",
   "loadingRun": "Loading ResearchRun…",
   "loadingRuns": "Loading Research Runs…",
@@ -116,6 +118,8 @@ export const runsEn = {
     "description": "Copy this Run’s frozen inputs into a browser draft to inspect or edit.",
     "folder": "Target Folder",
     "create": "Create draft",
+    "keepCurrent": "Keep current draft",
+    "replace": "Replace draft",
     "error": "This Research could not be copied into the browser Draft."
   },
   "organization": {
@@ -171,6 +175,11 @@ export const runsEn = {
   "resultSummary": "Result summary",
   "result": {
     "factor": "Factor Summary",
+    "views": "Result views",
+    "overview": "Overview",
+    "evidence": "Factor evidence",
+    "inputs": "Common inputs",
+    "configuration": "Configuration",
     "strategy": "Strategy Summary",
     "accountThrough": "Account through",
     "netCumulative": "Net cumulative",
@@ -214,6 +223,8 @@ export const runsZh = {
   "runs": "运行",
   "batches": "批次",
   "loadError": "研究运行不可用",
+  "runNotFound": "此研究已不可用。",
+  "runForbidden": "你无权访问此研究。",
   "folderError": "研究文件夹不可用",
   "loadingRun": "正在加载研究运行…",
   "loadingRuns": "正在加载研究运行…",
@@ -323,6 +334,8 @@ export const runsZh = {
     "description": "将此运行的冻结输入复制为浏览器草稿，以供查看或编辑。",
     "folder": "目标文件夹",
     "create": "创建草稿",
+    "keepCurrent": "保留当前草稿",
+    "replace": "替换草稿",
     "error": "无法将此研究复制为浏览器草稿。"
   },
   "organization": {
@@ -378,6 +391,11 @@ export const runsZh = {
   "resultSummary": "结果摘要",
   "result": {
     "factor": "因子摘要",
+    "views": "结果视图",
+    "overview": "概览",
+    "evidence": "因子证据",
+    "inputs": "公共输入",
+    "configuration": "配置",
     "strategy": "策略摘要",
     "accountThrough": "账户截至",
     "netCumulative": "净累计收益",

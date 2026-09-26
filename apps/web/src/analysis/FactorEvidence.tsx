@@ -2,6 +2,13 @@ import { i18n, useTranslation } from "../i18n";
 import { formatDecimal, formatNumber, formatPercent } from "../i18n/format";
 import { useEffect, useId, useState } from "react";
 import { coreFetch } from "../auth/coreFetch";
+import { Button } from "../components/ui/button";
+import { Field, FieldGroup, FieldLabel } from "../components/ui/field";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../components/ui/collapsible";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
+import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
+import { ResearchDateInput } from "../research/ResearchDateInput";
+import { isResearchIsoDate } from "../research/dateRange";
 import "./factor-evidence.css";
 
 type Groups = Record<"q1" | "q2" | "q3" | "q4" | "q5", number | null>;
@@ -45,36 +52,49 @@ function SampleCoverage({ value }: { value: Coverage }) {
     <Exclusions values={value.alpha_exclusions} /><Exclusions values={value.label_exclusions} /></>;
 }
 
-export function FactorEvidence({ runId }: { runId: string }) {
+export function FactorEvidence({ runId, embedded = false }: { runId: string; embedded?: boolean }) {
   const { t } = useTranslation("analysis");
   const [open, setOpen] = useState(false);
   const [filters, setFilters] = useState<Filters>({ horizon: "5", view: "month", start: "", end: "" });
   const id = useId();
-  return <details className="factor-evidence" onToggle={event => setOpen(event.currentTarget.open)}>
-    <summary>{t("factor.title")}</summary>
-    {open && <div className="factor-evidence-content">
+  const invalidStart = filters.view === "daily" && filters.start !== "" && !isResearchIsoDate(filters.start);
+  const invalidEnd = filters.view === "daily" && filters.end !== "" && !isResearchIsoDate(filters.end);
+  const invalidRange = filters.view === "daily" && !invalidStart && !invalidEnd && filters.start !== "" && filters.end !== "" && filters.start > filters.end;
+  const content = <div className="factor-evidence-content">
       <p>{t("factor.explanation")}</p>
-      <div className="factor-evidence-controls">
-        <label htmlFor={`${id}-horizon`}>{t("factor.horizon")}<select id={`${id}-horizon`} value={filters.horizon}
-          onChange={event => setFilters({ ...filters, horizon: event.target.value })}>
-          {[1, 5, 20].map(h => <option value={h} key={h}>{t("factor.sessions", { count: h })}</option>)}
-        </select></label>
-        <label htmlFor={`${id}-view`}>{t("factor.view")}<select id={`${id}-view`} value={filters.view}
-          onChange={event => setFilters({ ...filters, view: event.target.value as Filters["view"] })}>
-          <option value="daily">{t("factor.daily")}</option><option value="month">{t("factor.month")}</option>
-          <option value="year">{t("factor.year")}</option><option value="all">{t("factor.all")}</option>
-        </select></label>
+      <FieldGroup className="factor-evidence-controls">
+        <Field><FieldLabel htmlFor={`${id}-horizon`}>{t("factor.horizon")}</FieldLabel>
+          <Select value={filters.horizon} onValueChange={value => setFilters({ ...filters, horizon: value ?? "5" })}>
+            <SelectTrigger id={`${id}-horizon`} aria-label={t("factor.horizon")}><SelectValue>{t("factor.sessions", { count: Number(filters.horizon) })}</SelectValue></SelectTrigger>
+            <SelectContent><SelectGroup>{[1, 5, 20].map(h => <SelectItem value={String(h)} key={h}>{t("factor.sessions", { count: h })}</SelectItem>)}</SelectGroup></SelectContent>
+          </Select>
+        </Field>
+        <Field><FieldLabel htmlFor={`${id}-view`}>{t("factor.view")}</FieldLabel>
+          <Select value={filters.view} onValueChange={value => setFilters({ ...filters, view: (value ?? "month") as Filters["view"] })}>
+            <SelectTrigger id={`${id}-view`} aria-label={t("factor.view")}><SelectValue>{t(filters.view === "daily" ? "factor.daily" : filters.view === "month" ? "factor.month" : filters.view === "year" ? "factor.year" : "factor.all")}</SelectValue></SelectTrigger>
+            <SelectContent><SelectGroup>
+              <SelectItem value="daily">{t("factor.daily")}</SelectItem><SelectItem value="month">{t("factor.month")}</SelectItem>
+              <SelectItem value="year">{t("factor.year")}</SelectItem><SelectItem value="all">{t("factor.all")}</SelectItem>
+            </SelectGroup></SelectContent>
+          </Select>
+        </Field>
         {filters.view === "daily" && <>
-          <label htmlFor={`${id}-start`}>{t("factor.from")}<input id={`${id}-start`} type="date" value={filters.start}
-            onChange={event => setFilters({ ...filters, start: event.target.value })} /></label>
-          <label htmlFor={`${id}-end`}>{t("factor.through")}<input id={`${id}-end`} type="date" value={filters.end}
-            onChange={event => setFilters({ ...filters, end: event.target.value })} /></label>
+          <ResearchDateInput id={`${id}-start`} label={t("factor.from")} openLabel={t("factor.openFromCalendar")} value={filters.start}
+            minimum={null} maximum={filters.end || null} error={invalidStart ? t("factor.invalidDate") : undefined} errorId={`${id}-start-error`}
+            onChange={value => setFilters({ ...filters, start: value })} />
+          <ResearchDateInput id={`${id}-end`} label={t("factor.through")} openLabel={t("factor.openThroughCalendar")} value={filters.end}
+            minimum={filters.start || null} maximum={null} error={invalidEnd ? t("factor.invalidDate") : invalidRange ? t("factor.invalidRange") : undefined} errorId={`${id}-end-error`}
+            onChange={value => setFilters({ ...filters, end: value })} />
         </>}
-      </div>
+      </FieldGroup>
       {filters.view !== "daily" && <p>{t("factor.grouping")}</p>}
       <EvidencePage key={`${runId}:${JSON.stringify(filters)}`} runId={runId} filters={filters} />
-    </div>}
-  </details>;
+    </div>;
+  return embedded ? <section aria-label={t("factor.title")} className="factor-evidence">{content}</section>
+    : <Collapsible open={open} onOpenChange={setOpen} className="factor-evidence">
+      <CollapsibleTrigger render={<Button variant="ghost" className="min-h-11" />}>{t("factor.title")}</CollapsibleTrigger>
+      <CollapsibleContent>{open ? content : null}</CollapsibleContent>
+    </Collapsible>;
 }
 
 function EvidencePage({ runId, filters }: { runId: string; filters: Filters }) {
@@ -85,8 +105,9 @@ function EvidencePage({ runId, filters }: { runId: string; filters: Filters }) {
   const [retry, setRetry] = useState(0);
   const cursor = cursors[cursors.length - 1];
   const invalidRange = filters.view === "daily" && filters.start !== "" && filters.end !== "" && filters.start > filters.end;
+  const invalidDate = filters.view === "daily" && [filters.start, filters.end].some(value => value !== "" && !isResearchIsoDate(value));
   useEffect(() => {
-    if (invalidRange) return;
+    if (invalidRange || invalidDate) return;
     const controller = new AbortController();
     setPage(null); setError(null);
     const query = new URLSearchParams({ horizon: filters.horizon, limit: "20" });
@@ -105,39 +126,39 @@ function EvidencePage({ runId, filters }: { runId: string; filters: Filters }) {
         if (!controller.signal.aborted) setError("load");
       });
     return () => controller.abort();
-  }, [runId, filters, cursor, retry, invalidRange]);
-  if (invalidRange) return <p role="alert">{t("factor.invalidRange")}</p>;
+  }, [runId, filters, cursor, retry, invalidRange, invalidDate]);
+  if (invalidDate || invalidRange) return null;
   return <>
-    {error ? <div role="alert"><p>{t(error === "cursor" ? "factor.cursorError" : "factor.loadError")}</p><button type="button" onClick={() => { setCursors([null]); setRetry(value => value + 1); }}>{t("reloadFirst")}</button></div>
+    {error ? <div role="alert"><p>{t(error === "cursor" ? "factor.cursorError" : "factor.loadError")}</p><Button variant="outline" onClick={() => { setCursors([null]); setRetry(value => value + 1); }}>{t("reloadFirst")}</Button></div>
       : page === null ? <p role="status">{t("factor.loading")}</p>
       : page.items.length === 0 ? <p>{t("factor.empty")}</p>
-      : <div className="factor-evidence-table"><table>
-        <caption>{page.section === "factor_observations" ? t("factor.dailyCaption") : t("factor.periodCaption")}</caption>
-        <thead><tr><th>{page.section === "factor_observations" ? t("factor.signalDate") : t("factor.period")}</th><th>IC</th><th>Rank IC</th>
-          {page.section === "factor_periods" && <><th>ICIR</th><th>Rank ICIR</th></>}
-          {groups.map(group => <th key={group}>{group.toUpperCase()}</th>)}<th>Q5 − Q1</th><th>{t("factor.evidence")}</th></tr></thead>
-        <tbody>{page.section === "factor_observations" ? page.items.map(row => <tr key={row.session}>
-          <td>{row.session}</td><td>{number(row.ic)}</td><td>{number(row.rank_ic)}</td>
-          {groups.map(group => <td key={group}>{percent(row.quantile_returns[group])}<small>n={row.quantile_counts[group] === null ? "—" : formatNumber(row.quantile_counts[group])}</small></td>)}
-          <td>{percent(row.top_bottom_return)}</td><td><details><summary>{t("factor.coverage")}</summary>
+      : <div className="factor-evidence-table"><Table>
+        <TableCaption>{page.section === "factor_observations" ? t("factor.dailyCaption") : t("factor.periodCaption")}</TableCaption>
+        <TableHeader><TableRow><TableHead>{page.section === "factor_observations" ? t("factor.signalDate") : t("factor.period")}</TableHead><TableHead>IC</TableHead><TableHead>Rank IC</TableHead>
+          {page.section === "factor_periods" && <><TableHead>ICIR</TableHead><TableHead>Rank ICIR</TableHead></>}
+          {groups.map(group => <TableHead key={group}>{group.toUpperCase()}</TableHead>)}<TableHead>Q5 − Q1</TableHead><TableHead>{t("factor.evidence")}</TableHead></TableRow></TableHeader>
+        <TableBody>{page.section === "factor_observations" ? page.items.map(row => <TableRow key={row.session}>
+          <TableCell>{row.session}</TableCell><TableCell>{number(row.ic)}</TableCell><TableCell>{number(row.rank_ic)}</TableCell>
+          {groups.map(group => <TableCell key={group}>{percent(row.quantile_returns[group])}<small>n={row.quantile_counts[group] === null ? "—" : formatNumber(row.quantile_counts[group])}</small></TableCell>)}
+          <TableCell>{percent(row.top_bottom_return)}</TableCell><TableCell><Collapsible><CollapsibleTrigger render={<Button variant="ghost" size="sm" />}>{t("factor.coverage")}</CollapsibleTrigger><CollapsibleContent>
             <SampleCoverage value={row} />
             <p>{t("factor.open", { start: row.label_entry_session ?? "—", end: row.label_exit_session ?? "—" })}</p>
             {row.label_status === "right_censored_by_research_period_end" && <p>{t("factor.reasons.right_censored_by_research_period_end")}</p>}
             {row.correlation_reason && <p>{reasonLabel(row.correlation_reason)}</p>}
-          </details></td></tr>) : page.items.map(row => <tr key={row.period}>
-          <td>{row.period}</td><td>{number(row.summary.ic.mean)}</td><td>{number(row.summary.rank_ic.mean)}</td>
-          <td>{number(row.summary.ic.icir)}</td><td>{number(row.summary.rank_ic.icir)}</td>
-          {groups.map(group => <td key={group}>{percent(row.summary.quantile_returns[group])}</td>)}
-          <td>{percent(row.summary.top_bottom_return)}</td><td><details><summary>{t("factor.coverageCount", { valid: formatNumber(row.coverage.label_evaluable_session_count), total: formatNumber(row.coverage.signal_session_count) })}</summary>
+          </CollapsibleContent></Collapsible></TableCell></TableRow>) : page.items.map(row => <TableRow key={row.period}>
+          <TableCell>{row.period}</TableCell><TableCell>{number(row.summary.ic.mean)}</TableCell><TableCell>{number(row.summary.rank_ic.mean)}</TableCell>
+          <TableCell>{number(row.summary.ic.icir)}</TableCell><TableCell>{number(row.summary.rank_ic.icir)}</TableCell>
+          {groups.map(group => <TableCell key={group}>{percent(row.summary.quantile_returns[group])}</TableCell>)}
+          <TableCell>{percent(row.summary.top_bottom_return)}</TableCell><TableCell><Collapsible><CollapsibleTrigger render={<Button variant="ghost" size="sm" />}>{t("factor.coverageCount", { valid: formatNumber(row.coverage.label_evaluable_session_count), total: formatNumber(row.coverage.signal_session_count) })}</CollapsibleTrigger><CollapsibleContent>
             <p>{t("factor.signals", { start: row.coverage.first_signal_session, end: row.coverage.last_signal_session })}</p>
             <p>{t("factor.evaluable", { start: row.coverage.first_evaluable_signal_session ?? "—", end: row.coverage.last_evaluable_signal_session ?? "—" })}</p>
             <p>{t("factor.validDays", { ic: formatNumber(row.coverage.ic_valid_session_count), rankIc: formatNumber(row.coverage.rank_ic_valid_session_count), tail: formatNumber(row.coverage.right_censored_session_count) })}</p>
             <SampleCoverage value={row.coverage} />
-          </details></td></tr>)}</tbody>
-      </table></div>}
-    <nav aria-label={t("factor.pages")}><button type="button" disabled={cursors.length === 1 || page === null || error !== null}
-      onClick={() => setCursors(values => values.slice(0, -1))}>{t("previous")}</button>
-      <span>{t("page", { page: formatNumber(cursors.length) })}</span><button type="button" disabled={!page?.next_cursor || error !== null}
-        onClick={() => { if (page?.next_cursor) setCursors(values => [...values, page.next_cursor]); }}>{t("next")}</button></nav>
+          </CollapsibleContent></Collapsible></TableCell></TableRow>)}</TableBody>
+      </Table></div>}
+    <nav aria-label={t("factor.pages")}><Button variant="outline" disabled={cursors.length === 1 || page === null || error !== null}
+      onClick={() => setCursors(values => values.slice(0, -1))}>{t("previous")}</Button>
+      <span>{t("page", { page: formatNumber(cursors.length) })}</span><Button variant="outline" disabled={!page?.next_cursor || error !== null}
+        onClick={() => { if (page?.next_cursor) setCursors(values => [...values, page.next_cursor]); }}>{t("next")}</Button></nav>
   </>;
 }

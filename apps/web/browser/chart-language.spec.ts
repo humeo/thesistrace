@@ -1,20 +1,11 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
-import { build } from "vite";
 import { fontStylesheet, serveBrandAssets } from "./brand-assets";
+import { buildProductFixture } from "./build-product-fixture";
 
 let script: string;
-const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+let styles: string;
 test.beforeAll(async () => {
-  const result = await build({ configFile: false, logLevel: "silent", esbuild: { jsx: "automatic" },
-    define: { "process.env.NODE_ENV": JSON.stringify("production") },
-    build: { write: false, minify: false, lib: { entry: fileURLToPath(new URL("./fixtures/chart-language.tsx", import.meta.url)), formats: ["iife"], name: "ChartLanguageFixture" } },
-  });
-  if ("on" in result) throw new Error("Expected one-off build");
-  const chunk = (Array.isArray(result) ? result : [result]).flatMap(bundle => bundle.output).find(output => output.type === "chunk" && output.isEntry);
-  if (chunk?.type !== "chunk") throw new Error("Missing fixture");
-  script = chunk.code;
+  ({ script, styles } = await buildProductFixture(new URL("./fixtures/chart-language.tsx", import.meta.url), "ChartLanguageFixture"));
 });
 
 test("chart language updates keep manually zoomed and panned observations", async ({ page }, testInfo) => {

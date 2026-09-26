@@ -5,7 +5,6 @@ import { builtinFrameworkModules } from "../research/frameworkModules";
 
 import {
   ResearchFolderLoadFailure,
-  ResearchDeleteDialog,
   ResearchOrganizationPanel,
   ResearchResultView,
   ResearchRunBackLink,
@@ -28,35 +27,6 @@ describe("ResearchRunBackLink", () => {
 
     expect(markup).toContain('href="/research-runs"');
     expect(markup).toContain("Back to Research Runs");
-  });
-});
-
-describe("ResearchDeleteDialog", () => {
-  it("preserves markup-like user names as literal text in the deletion decision", () => {
-    const markup = renderToStaticMarkup(<ResearchDeleteDialog deleting={false} error={null}
-      name={'Signal <br/> <strong>alpha</strong> & v2'} onConfirm={() => {}} onDismiss={() => {}} open />);
-    expect(markup).toContain("Signal &lt;br/&gt; &lt;strong&gt;alpha&lt;/strong&gt; &amp; v2");
-  });
-
-  it("renders an explicit in-page decision with the permanent and retained effects", () => {
-    const markup = renderToStaticMarkup(
-      <ResearchDeleteDialog
-        deleting={false}
-        error={null}
-        name="Deletion dialog regression"
-        onConfirm={() => undefined}
-        onDismiss={() => undefined}
-        open
-      />,
-    );
-
-    expect(markup).toContain("<dialog");
-    expect(markup).toContain('aria-modal="true"');
-    expect(markup).toContain("Delete Research?");
-    expect(markup).toContain("Deletion dialog regression");
-    expect(markup).toContain("This cannot be undone.");
-    expect(markup).toContain("DailyTracks will remain.");
-    expect(markup).toContain("Keep Research");
   });
 });
 
@@ -264,7 +234,7 @@ describe("ResearchRunProgressView", () => {
     expect(markup).not.toMatch(/checkpoint|staged|payload|alpha value/i);
   });
 
-  it("shows fixed start and finish timestamps for terminal execution", () => {
+  it("keeps final timing available in a closed disclosure until requested", () => {
     const markup = renderToStaticMarkup(
       <ResearchRunProgressView
         progress={{
@@ -296,8 +266,8 @@ describe("ResearchRunProgressView", () => {
     expect(markup).not.toContain("<progress");
     expect(markup).not.toContain("100%");
     expect(markup).toContain("2m 46s");
-    expect(markup).toContain("2026-08-13 01:00:00 UTC");
-    expect(markup).toContain("2026-08-13 01:02:46 UTC");
+    expect(markup).toContain('aria-expanded="false"');
+    expect(markup).not.toContain("2026-08-13 01:00:00 UTC");
   });
 });
 
@@ -686,10 +656,10 @@ describe("ResearchResultView", () => {
     for (const horizon of [1, 5, 20]) {
       expect(markup).toContain(`aria-label="${horizon}-session Factor"`);
     }
-    expect(markup.match(/<span>Rank IC<\/span>/g)).toHaveLength(3);
-    expect(markup.match(/<span>Rank ICIR<\/span>/g)).toHaveLength(3);
-    expect(markup.match(/<span>IC<\/span>/g)).toHaveLength(3);
-    expect(markup.match(/<span>ICIR<\/span>/g)).toHaveLength(3);
+    expect(markup.match(/<span[^>]*>Rank IC<\/span>/g)).toHaveLength(3);
+    expect(markup.match(/<span[^>]*>Rank ICIR<\/span>/g)).toHaveLength(3);
+    expect(markup.match(/<span[^>]*>IC<\/span>/g)).toHaveLength(3);
+    expect(markup.match(/<span[^>]*>ICIR<\/span>/g)).toHaveLength(3);
     expect(markup.match(/Rank IC coverage 9\//g)).toHaveLength(3);
     expect(markup.match(/IC coverage 8\//g)).toHaveLength(3);
     expect(markup).not.toMatch(/Quantile|Top-Bottom|Positive fraction|Sample deviation/i);
@@ -724,7 +694,7 @@ describe("ResearchOrganizationPanel", () => {
     expect(markup).toContain("Research name");
     expect(markup).toContain("Name and folder");
     expect(markup).toContain("Folder");
-    expect(markup).toContain("Signals");
+    expect(markup).toContain('role="combobox"');
     expect(markup).toContain("Save changes");
     expect(markup).not.toMatch(/Draft|Rerun|Revision/);
   });
@@ -759,7 +729,6 @@ describe("UseAsDraftPanel", () => {
           exposure_expression: "1",
           weighting: "equal_weight", volatility_window: 20,
         }}
-        confirmDiscard={() => true}
         navigate={() => undefined}
         researcherId="00000000-0000-4000-8000-000000000001"
         sourceFolderId="folder_default"

@@ -4,6 +4,7 @@ import { useState } from "react";
 
 import { Button } from "../components/ui/button";
 import { Calendar } from "../components/ui/calendar";
+import { Field, FieldError, FieldLabel } from "../components/ui/field";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "../components/ui/input-group";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "../components/ui/popover";
 import { interfaceLocale } from "../i18n";
@@ -37,8 +38,8 @@ export function ResearchDateInput({
   const end = maximum === null ? undefined : calendarDateFromIso(maximum);
 
   return (
-    <div className="grid min-w-0 gap-2 text-sm">
-      <label htmlFor={id} className="font-medium text-foreground">{label}</label>
+    <Field className="min-w-0 text-sm" data-invalid={Boolean(error)}>
+      <FieldLabel htmlFor={id}>{label}</FieldLabel>
       <InputGroup className="min-w-0 max-[767px]:h-11">
         <InputGroupInput
           id={id}
@@ -85,7 +86,7 @@ export function ResearchDateInput({
           </Popover>
         </InputGroupAddon>
       </InputGroup>
-      {error && <small id={errorId} className="text-destructive">{error}</small>}
-    </div>
+      {error && <FieldError id={errorId}>{error}</FieldError>}
+    </Field>
   );
 }

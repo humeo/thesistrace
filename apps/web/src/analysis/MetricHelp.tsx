@@ -1,5 +1,7 @@
 import { Question, X } from "@phosphor-icons/react";
-import { useEffect, useId, useRef, useState, type MouseEvent } from "react";
+import { useState } from "react";
+import { Button } from "../components/ui/button";
+import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "../components/ui/popover";
 import { useTranslation } from "../i18n";
 
 export type MetricHelpContent = Readonly<{
@@ -12,75 +14,23 @@ export type MetricHelpContent = Readonly<{
 
 export function MetricHelp({ label, content }: { label: string; content: MetricHelpContent }) {
   const { t } = useTranslation("analysis");
-  const id = useId();
-  const panelRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
-
-  useEffect(() => {
-    if (!open) return;
-    const dismiss = (event: Event) => {
-      if (event.target instanceof Node && panelRef.current?.contains(event.target)) return;
-      panelRef.current?.hidePopover();
-    };
-    window.addEventListener("resize", dismiss);
-    document.addEventListener("scroll", dismiss, true);
-    return () => {
-      window.removeEventListener("resize", dismiss);
-      document.removeEventListener("scroll", dismiss, true);
-    };
-  }, [open]);
-
-  function toggle(event: MouseEvent<HTMLButtonElement>) {
-    event.preventDefault();
-    const panel = panelRef.current;
-    if (panel === null || !panel.togglePopover()) return;
-    const trigger = event.currentTarget.getBoundingClientRect();
-    const bounds = panel.getBoundingClientRect();
-    const margin = 12;
-    const gap = 8;
-    panel.style.left = `${Math.max(margin, Math.min(
-      trigger.right - bounds.width,
-      document.documentElement.clientWidth - bounds.width - margin,
-    ))}px`;
-    panel.style.top = `${trigger.bottom + gap + bounds.height <= window.innerHeight - margin
-      ? trigger.bottom + gap
-      : Math.max(margin, trigger.top - bounds.height - gap)}px`;
-  }
-
-  return (
-    <>
-      <button
-        aria-label={t("help.about", { label })}
-        className="metric-help-trigger"
-        onClick={toggle}
-        popoverTarget={id}
-        type="button"
-      >
-        <Question aria-hidden="true" size={15} />
-      </button>
-      <div
-        aria-labelledby={`${id}-title`}
-        className="metric-help-popover"
-        id={id}
-        onToggle={(event) => setOpen(event.newState === "open")}
-        popover="auto"
-        ref={panelRef}
-        role="dialog"
-      >
-        <header>
-          <h3 id={`${id}-title`}>{label}</h3>
-          <button aria-label={t("help.close")} className="metric-help-close" popoverTarget={id} popoverTargetAction="hide" type="button">
-            <X aria-hidden="true" size={15} />
-          </button>
-        </header>
-        <p>{content.description}</p>
-        <dl>
-          <dt>{t("help.formula")}</dt><dd>{content.formula}</dd>
-          <dt>{t("help.range")}</dt><dd>{content.range}</dd>
-          <dt>{t("help.direction")}</dt><dd>{content.direction}</dd>
-        </dl>
-        {content.note === undefined ? null : <p className="metric-help-note">{content.note}</p>}
+  return <Popover open={open} onOpenChange={setOpen}>
+    <PopoverTrigger render={<Button variant="ghost" size="icon-xs" className="size-11 sm:size-7" aria-label={t("help.about", { label })} />}>
+      <Question aria-hidden="true" />
+    </PopoverTrigger>
+    <PopoverContent className="max-h-[calc(100dvh-24px)] w-[min(360px,calc(100vw-24px))] overflow-y-auto p-4" align="end">
+      <div className="flex items-start justify-between gap-3">
+        <PopoverTitle className="text-sm font-semibold">{label}</PopoverTitle>
+        <Button variant="ghost" size="icon-xs" className="size-11 sm:size-7" aria-label={t("help.close")} onClick={() => setOpen(false)}><X aria-hidden="true" /></Button>
       </div>
-    </>
-  );
+      <p className="m-0 text-sm leading-[22px] text-muted-foreground">{content.description}</p>
+      <dl className="m-0 grid gap-2 text-sm">
+        <div><dt className="font-medium">{t("help.formula")}</dt><dd className="m-0 text-muted-foreground">{content.formula}</dd></div>
+        <div><dt className="font-medium">{t("help.range")}</dt><dd className="m-0 text-muted-foreground">{content.range}</dd></div>
+        <div><dt className="font-medium">{t("help.direction")}</dt><dd className="m-0 text-muted-foreground">{content.direction}</dd></div>
+      </dl>
+      {content.note ? <p className="m-0 border-t border-border pt-2 text-xs text-muted-foreground">{content.note}</p> : null}
+    </PopoverContent>
+  </Popover>;
 }

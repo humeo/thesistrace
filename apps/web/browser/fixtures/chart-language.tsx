@@ -1,6 +1,7 @@
 import { createRoot } from "react-dom/client";
 import { StrategyPerformanceChart } from "../../src/analysis/StrategyPerformanceChart";
 import { MetricHelp } from "../../src/analysis/MetricHelp";
+import "../../src/styles.css";
 import { strategyMetricHelp } from "../../src/research-runs/metricHelp";
 import { useTranslation, changeInterfaceLanguage } from "../../src/i18n";
 

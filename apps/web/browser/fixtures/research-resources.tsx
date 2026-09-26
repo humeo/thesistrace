@@ -1,3 +1,4 @@
+import "../../src/styles.css";
 import { createRoot } from "react-dom/client";
 import { CopilotKitContext, CopilotKitCoreReact, EMPTY_SET } from "@copilotkit/react-core/v2/context";
 import { ResearchA2UIActivity } from "../../src/chat/researchA2UI";

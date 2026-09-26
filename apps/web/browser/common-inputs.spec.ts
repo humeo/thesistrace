@@ -1,29 +1,14 @@
 import { fontStylesheet, serveBrandAssets } from "./brand-assets";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
-import { build } from "vite";
+import { buildProductFixture } from "./build-product-fixture";
 
 test.beforeEach(async ({ page }) => { await serveBrandAssets(page); });
 
 let script: string;
-const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8")
-  + readFileSync(new URL("../src/analysis/common-input-observations.css", import.meta.url), "utf8");
+let styles: string;
 
 test.beforeAll(async () => {
-  const result = await build({
-    configFile: false, logLevel: "silent", esbuild: { jsx: "automatic" },
-    define: { "process.env.NODE_ENV": JSON.stringify("production") },
-    build: { write: false, minify: false, lib: {
-      entry: fileURLToPath(new URL("./fixtures/common-inputs.tsx", import.meta.url)),
-      formats: ["iife"], name: "CommonInputsFixture",
-    } },
-  });
-  if ("on" in result) throw new Error("Expected a one-off build");
-  const chunk = (Array.isArray(result) ? result : [result]).flatMap(bundle => bundle.output)
-    .find(output => output.type === "chunk" && output.isEntry);
-  if (chunk?.type !== "chunk") throw new Error("Missing component bundle");
-  script = chunk.code;
+  ({ script, styles } = await buildProductFixture(new URL("./fixtures/common-inputs.tsx", import.meta.url), "CommonInputsFixture"));
 });
 
 const first = { session: "2026-08-03", identifier: "universe_return", industry_code: null,
