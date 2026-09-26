@@ -1,11 +1,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
+import { TrackingOriginView, TrackingProgressView } from "./DailyTrackFacts";
 import {
   dailyTrackCanRefresh,
   dailyTrackNeedsPolling,
-  TrackingOriginView,
-  TrackingProgressView,
   type DailyTrackDetail,
 } from "./DailyTracksPage";
 import {
@@ -41,7 +40,7 @@ describe("Daily observation presentation", () => {
     } }} />);
     expect(markup).toContain("Framework state");
     expect(markup).toContain("0 active signals");
-    expect(markup).toContain("<td>100</td>");
+    expect(markup).toMatch(/<td[^>]*>100<\/td>/);
     expect(markup).not.toContain("Close target");
     expect(markup).not.toContain("NaN");
   });
@@ -60,18 +59,18 @@ describe("Daily observation presentation", () => {
   it("renders actual shares separately from adjusted market value and cash", () => {
     const markup = renderToStaticMarkup(<CurrentHoldings observation={observation} />);
     expect(markup).toContain("000001.SZ");
-    expect(markup).toContain("<td>100</td>");
+    expect(markup).toMatch(/<td[^>]*>100<\/td>/);
     expect(markup).toContain("CN¥900.00");
     expect(markup).toContain("81.82%");
     expect(markup).toContain("18.18%");
   });
 
   it("keeps stale schedules distinct from available trade instructions", () => {
-    const markup = renderToStaticMarkup(<SelectionSchedule observation={observation} isBehind isStopped={false} />);
+    const markup = renderToStaticMarkup(<SelectionSchedule observation={observation} isStopping={false} isBehind isStopped={false} />);
     expect(markup).toContain("Next signal in 4 trading sessions");
     expect(markup).toContain("Tracking is behind the available data");
     expect(markup).toContain("Buy and sell instructions are not available yet");
-    const stopped = renderToStaticMarkup(<SelectionSchedule observation={observation} isBehind isStopped />);
+    const stopped = renderToStaticMarkup(<SelectionSchedule observation={observation} isStopping={false} isBehind isStopped />);
     expect(stopped).toContain("Tracking stopped");
     expect(stopped).not.toContain("Update the track");
   });

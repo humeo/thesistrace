@@ -4,13 +4,20 @@ import { formatNumber } from "../i18n/format";
 import { DailyHoldings } from "../analysis/DailyHoldings";
 import { StrategyEvents } from "../analysis/StrategyEvents";
 import { CommonInputObservations } from "../analysis/CommonInputObservations";
-import { useState, type KeyboardEvent, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { ArrowLeftIcon, CalendarBlankIcon, WarningCircleIcon } from "@phosphor-icons/react";
 
 import type { DailyTrackDetail } from "./DailyTracksPage";
-import { TrackingOriginView, TrackingProgressView } from "./DailyTracksPage";
+import { TrackingOriginView, TrackingProgressView } from "./DailyTrackFacts";
 import { DailyTrackAnalysisView } from "./DailyTrackAnalysisView";
 import { CurrentHoldings, ObservationSummary, SelectionSchedule, TrackingReturnChart, formatMoney } from "./DailyTrackObservationView";
+import { Page, PageContent, PageHeader, Section } from "../components/layout/Page";
+import { Disclosure } from "../components/layout/Disclosure";
+import { Button } from "../components/ui/button";
+import { Badge } from "../components/ui/badge";
+import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "../components/ui/tabs";
+import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group";
 import { blockedReason } from "./blockedReason";
 
 const VIEWS = ["performance", "holdings", "rebalance"] as const;
@@ -31,77 +38,51 @@ export function DailyTrackWorkspace({ track, actions, notices }: {
   const { t } = useTranslation("daily");
   const [view, setView] = useState<View>("performance");
   const [period, setPeriod] = useState<"tracking" | "full">("tracking");
-  function navigateViews(event: KeyboardEvent<HTMLButtonElement>, index: number) {
-    const next = event.key === "ArrowRight" ? (index + 1) % VIEWS.length
-      : event.key === "ArrowLeft" ? (index + VIEWS.length - 1) % VIEWS.length
-      : event.key === "Home" ? 0 : event.key === "End" ? VIEWS.length - 1 : null;
-    if (next === null) return;
-    event.preventDefault();
-    setView(VIEWS[next]);
-    event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>("button")[next]?.focus();
-  }
   return (
-    <section className="daily-track-workspace" aria-label={t("title") }>
-      <a className="track-back" href="/daily-tracks"><ArrowLeftIcon aria-hidden="true" size={14} />{t("allTracks")} </a>
-      <header className="track-header">
-        <div><div className="track-title-row"><h1>{t("trackHeading")} </h1>
-          <span className="track-status" data-status={track.status}>{trackStatusLabel(track)}</span></div>
-          <p className="track-identity">{t("strategyObservation")} <code>{track.id}</code></p></div>
-        <div className="track-actions">{actions}</div>
-      </header>
-      <div className="track-dates">
-        <span><CalendarBlankIcon aria-hidden="true" size={15} />{t("trackingFrom")} <time>{track.origin.strategy_session}</time></span>
-        <span>{t("lastObservation")} <time>{track.strategy_session}</time></span>
-        <span>{t("dataThrough")} <time>{track.data_through_session}</time></span>
-      </div>
+    <Page className="px-4 py-6 sm:px-6 lg:px-8" aria-label={t("title")}><PageContent className="flex flex-col gap-6">
+      <Button variant="link" nativeButton={false} role="link" render={<a href="/daily-tracks" />} className="self-start"><ArrowLeftIcon aria-hidden="true" />{t("allTracks")}</Button>
+      <PageHeader title={<span className="flex flex-wrap items-center gap-3">{t("trackHeading")}<Badge variant={track.status === "blocked" ? "destructive" : "secondary"}>{trackStatusLabel(track)}</Badge></span>}
+        description={<>{t("strategyObservation")} <code className="[overflow-wrap:anywhere]">{track.id}</code></>} actions={actions} />
+      <dl className="m-0 flex flex-wrap gap-x-8 gap-y-4 text-sm [&_dd]:m-0 [&_dt]:text-muted-foreground">
+        <div><dt className="flex items-center gap-2"><CalendarBlankIcon aria-hidden="true" />{t("trackingFrom")}</dt><dd><time>{track.origin.strategy_session}</time></dd></div>
+        <div><dt>{t("lastObservation")}</dt><dd><time>{track.strategy_session}</time></dd></div>
+        <div><dt>{t("dataThrough")}</dt><dd><time>{track.data_through_session}</time></dd></div>
+      </dl>
       {notices}
-      {track.status === "blocked" ? <div className="track-alert" role="status">
-        <WarningCircleIcon size={20} aria-hidden="true" />
-        <div><strong>{t("needsUpdate")} </strong>
-          <p>{blockedReason(track.blocked_code)}</p>
-          <span>{t("blockedObservation", { date: track.strategy_session, count: track.lag_sessions })}</span></div>
-      </div> : track.lag_sessions > 0 && track.status === "active" && track.progress.phase === "waiting" ? (
-        <p className="track-inline-notice">{t("newSessions", { count: track.lag_sessions })}</p>
-      ) : track.status === "stopped" ? <p className="track-inline-notice">{t("stoppedNotice")} </p> : null}
-
+      {track.status === "blocked" ? <Alert role="status"><WarningCircleIcon aria-hidden="true" /><AlertTitle>{t("needsUpdate")}</AlertTitle>
+        <AlertDescription><p>{blockedReason(track.blocked_code)}</p><p>{t("blockedObservation", { date: track.strategy_session, count: track.lag_sessions })}</p></AlertDescription>
+      </Alert> : track.lag_sessions > 0 && track.status === "active" && track.progress.phase === "waiting" ? (
+        <Alert role="status"><AlertDescription>{t("newSessions", { count: track.lag_sessions })}</AlertDescription></Alert>
+      ) : track.status === "stopped" ? <Alert role="status"><AlertDescription>{t("stoppedNotice")}</AlertDescription></Alert> : null}
       <ObservationSummary observation={track.observation} originSession={track.origin.strategy_session} />
-      <div className="track-tabs" role="tablist" aria-label={t("viewsTitle") }>
-        {VIEWS.map((item, index) => <button key={item} id={`track-tab-${item}`} role="tab"
-          aria-selected={view === item} aria-controls={`track-panel-${item}`} tabIndex={view === item ? 0 : -1}
-          onKeyDown={(event) => navigateViews(event, index)} onClick={() => setView(item)}>
-          {t(`views.${item}`)}{item === "holdings" ? <span className="track-count">{formatNumber(track.observation.holdings.length)}</span> : null}
-        </button>)}
-      </div>
-      <div className="track-view" id={`track-panel-${view}`} role="tabpanel" aria-labelledby={`track-tab-${view}`} tabIndex={0}>
-        {view === "performance" ? <>
-          <div className="track-section-heading"><div><h2>{t("performance")} </h2>
-            <p>{period === "tracking" ? t("trackingDescription") : t("fullDescription", { date: track.origin.strategy_session })}</p></div>
-            <div className="track-period" role="group" aria-label={t("period") }>
-              <button aria-pressed={period === "tracking"} onClick={() => setPeriod("tracking")}>{t("sinceTracking")} </button>
-              <button aria-pressed={period === "full"} onClick={() => setPeriod("full")}>{t("fullStrategy")} </button>
+      <Tabs value={view} onValueChange={value => setView(value as View)} className="min-w-0 gap-6">
+        <TabsList variant="line" aria-label={t("viewsTitle")} className="max-w-full flex-wrap">
+          {VIEWS.map(item => <TabsTrigger key={item} value={item}>{t(`views.${item}`)}{item === "holdings" ? <Badge variant="secondary">{formatNumber(track.observation.holdings.length)}</Badge> : null}</TabsTrigger>)}
+        </TabsList>
+        <TabsContent keepMounted value="performance" className="min-w-0">
+          <Section title={t("performance")} actions={<ToggleGroup value={[period]} onValueChange={values => { if (values[0]) setPeriod(values[0] as typeof period); }} variant="outline" aria-label={t("period")}>
+            <ToggleGroupItem value="tracking">{t("sinceTracking")}</ToggleGroupItem><ToggleGroupItem value="full">{t("fullStrategy")}</ToggleGroupItem>
+          </ToggleGroup>}>
+            <p className="m-0 text-sm text-muted-foreground">{period === "tracking" ? t("trackingDescription") : t("fullDescription", { date: track.origin.strategy_session })}</p>
+            <div hidden={period !== "tracking"}>
+              <TrackingReturnChart observation={track.observation} originSession={track.origin.strategy_session} />
+              <div className="mt-3 flex flex-wrap justify-between gap-2 text-xs text-muted-foreground"><span>{t("sessionsObserved", { count: track.observation.session_count })}</span><span>{t("trackingCosts", { cost: formatMoney(track.observation.transaction_cost_cny) })}</span></div>
             </div>
-          </div>
-          {period === "tracking" ? <>
-            <TrackingReturnChart observation={track.observation} originSession={track.origin.strategy_session} />
-            <div className="track-performance-footnote"><span>{t("sessionsObserved", { count: track.observation.session_count })}</span>
-              <span>{t("trackingCosts", { cost: formatMoney(track.observation.transaction_cost_cny) })}</span></div>
-          </> : <DailyTrackAnalysisView analysis={{ strategy: track.strategy }} />}
-        </> : view === "holdings" ? <CurrentHoldings observation={track.observation} />
-          : <SelectionSchedule observation={track.observation} isStopped={track.status === "stopped" || track.status === "stopping"} isBehind={track.lag_sessions > 0} />}
-      </div>
-      <div className="track-supporting">
+            <div hidden={period !== "full"}><DailyTrackAnalysisView analysis={{ strategy: track.strategy }} /></div>
+          </Section>
+        </TabsContent>
+        <TabsContent keepMounted value="holdings"><CurrentHoldings observation={track.observation} /></TabsContent>
+        <TabsContent keepMounted value="rebalance"><SelectionSchedule observation={track.observation} isStopped={track.status === "stopped"} isStopping={track.status === "stopping"} isBehind={track.lag_sessions > 0} /></TabsContent>
+      </Tabs>
+      <div className="flex min-w-0 flex-col gap-6 border-t border-border pt-6">
         <DailyHoldings key={`holdings:${track.id}`} rerun={{ folderId: "folder_default", source: {
-          kind: "daily_track", track_id: track.id,
-          checkpoint_manifest_sha256: track.checkpoint_manifest_sha256,
-          through_session: track.strategy_session,
+          kind: "daily_track", track_id: track.id, checkpoint_manifest_sha256: track.checkpoint_manifest_sha256, through_session: track.strategy_session,
         } }} endpoint={`/api/daily-tracks/${encodeURIComponent(track.id)}/holdings/query`} />
         <StrategyEvents key={`events:${track.id}`} endpoint={`/api/daily-tracks/${encodeURIComponent(track.id)}/events/query`} />
         <CommonInputObservations key={`${track.id}:${track.strategy_session}`} endpoint={`/api/daily-tracks/${encodeURIComponent(track.id)}/common-input-observations`} />
-        <details className="track-disclosure"><summary>{t("updateDetails")} <span>{trackStatusLabel(track)}</span></summary>
-          <div className="track-disclosure-content"><TrackingProgressView progress={track.progress} /></div></details>
-        <details className="track-disclosure"><summary>{t("originDisclosure")} <span>{track.origin.strategy_session}</span></summary>
-          <TrackingOriginView origin={track.origin} /></details>
+        <Disclosure title={<>{t("updateDetails")} <span>{trackStatusLabel(track)}</span></>}><TrackingProgressView progress={track.progress} /></Disclosure>
+        <Disclosure title={<>{t("originDisclosure")} <span>{track.origin.strategy_session}</span></>}><TrackingOriginView origin={track.origin} /></Disclosure>
       </div>
-    </section>
+    </PageContent></Page>
   );
 }

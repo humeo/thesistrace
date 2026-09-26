@@ -1,5 +1,4 @@
 import { useTranslation } from "react-i18next";
-import { formatCurrency, formatNumber, formatUtcTimestamp } from "../i18n/format";
 import { useEffect, useRef, useState } from "react";
 
 import { coreFetch } from "../auth/coreFetch";
@@ -7,7 +6,14 @@ import type { DailyTrackAnalysis } from "./DailyTrackAnalysisView";
 import type { DailyTrackObservation } from "./DailyTrackObservationView";
 import { DailyTrackWorkspace } from "./DailyTrackWorkspace";
 import type { TerminalStrategyState } from "../research-runs/ResearchRunsPage";
-import "./daily-tracks.css";
+import { Page, PageHeader, PageContent } from "../components/layout/Page";
+import { Button } from "../components/ui/button";
+import { Badge } from "../components/ui/badge";
+import { Alert, AlertDescription } from "../components/ui/alert";
+import { Empty, EmptyHeader, EmptyTitle, EmptyDescription } from "../components/ui/empty";
+import { Table, TableHeader, TableBody, TableHead, TableCell, TableRow } from "../components/ui/table";
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "../components/ui/dropdown-menu";
+import { AlertDialog, AlertDialogContent, AlertDialogTitle, AlertDialogDescription, AlertDialogHeader, AlertDialogFooter } from "../components/ui/alert-dialog";
 
 type DailyTrackSummary = {
   id: string;
@@ -87,6 +93,11 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
   const [error, setError] = useState(false);
   const [actionError, setActionError] = useState<ActionError | null>(null);
   const [confirmStop, setConfirmStop] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const manageTrigger = useRef<HTMLButtonElement>(null);
+  const reloadTrigger = useRef<HTMLButtonElement>(null);
+  const mutationPending = useRef(false);
+  const mutationController = useRef<AbortController | null>(null);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [refreshGeneration, setRefreshGeneration] = useState(0);
   const [advanceState, setAdvanceState] = useState<RefreshState>(null);
@@ -105,11 +116,16 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
     setDeleteError(null);
     setActionError(null);
     setConfirmStop(false);
+    setConfirmDelete(false);
+    setTrack(null);
+    setItems(null);
+    setLoadState("loading");
   }, [trackId]);
 
   useEffect(() => () => {
     deleteGeneration.current += 1;
     deleteController.current?.abort();
+    mutationController.current?.abort();
   }, [trackId]);
 
   useEffect(() => {
@@ -164,12 +180,16 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
   }
 
   async function refreshToLatestData() {
-    if (!trackId || !track || !dailyTrackCanRefresh(track)) return;
+    if (!trackId || !track || !dailyTrackCanRefresh(track) || advanceState !== null || mutationPending.current) return;
+    mutationPending.current = true;
+    const controller = new AbortController();
+    mutationController.current = controller;
     setAdvanceState("submitting");
     setActionError(null);
     try {
       const response = await coreFetch(`/api/daily-tracks/${trackId}/refresh`, {
         method: "POST",
+        signal: controller.signal,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ request_id: `refresh_${crypto.randomUUID()}` }),
       });
@@ -178,18 +198,25 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
       setAdvanceState("accepted");
       setRefreshGeneration((value) => value + 1);
     } catch {
+      if (controller.signal.aborted) return;
       setAdvanceState(null);
       setActionError("refreshError");
+    } finally {
+      mutationPending.current = false;
     }
   }
 
   async function retryBlockedTrack() {
-    if (!trackId) return;
+    if (!trackId || track?.status !== "blocked" || retryState !== null || mutationPending.current) return;
+    mutationPending.current = true;
+    const controller = new AbortController();
+    mutationController.current = controller;
     setRetryState("submitting");
     setActionError(null);
     try {
       const response = await coreFetch(`/api/daily-tracks/${trackId}/retry`, {
         method: "POST",
+        signal: controller.signal,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ request_id: `retry_${crypto.randomUUID()}` }),
       });
@@ -198,18 +225,25 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
       setRetryState("accepted");
       setRefreshGeneration((value) => value + 1);
     } catch {
+      if (controller.signal.aborted) return;
       setRetryState(null);
       setActionError("retryError");
+    } finally {
+      mutationPending.current = false;
     }
   }
 
   async function stopTrack() {
-    if (!trackId) return;
+    if (!trackId || !track || !["active", "blocked"].includes(track.status) || stopState !== null || mutationPending.current) return;
+    mutationPending.current = true;
+    const controller = new AbortController();
+    mutationController.current = controller;
     setStopState("submitting");
     setActionError(null);
     try {
       const response = await coreFetch(`/api/daily-tracks/${trackId}/stop`, {
         method: "POST",
+        signal: controller.signal,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ request_id: `stop_${crypto.randomUUID()}` }),
       });
@@ -219,14 +253,17 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
       setConfirmStop(false);
       setRefreshGeneration((value) => value + 1);
     } catch {
+      if (controller.signal.aborted) return;
       setStopState(null);
       setActionError("stopError");
+    } finally {
+      mutationPending.current = false;
     }
   }
 
   async function deleteTrack(): Promise<void> {
-    if (!trackId || track?.status !== "stopped" || deleting) return;
-    if (!window.confirm(t("deleteConfirm", { id: trackId }))) return;
+    if (!trackId || track?.status !== "stopped" || deleting || mutationPending.current) return;
+    mutationPending.current = true;
     const generation = ++deleteGeneration.current;
     deleteController.current?.abort();
     const controller = new AbortController();
@@ -249,177 +286,81 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
       if (generation === deleteGeneration.current) {
         deleteController.current = null;
         setDeleting(false);
+        mutationPending.current = false;
       }
     }
   }
 
+  const submitting = advanceState === "submitting" || retryState === "submitting" || stopState === "submitting" || deleting;
   if (error && track === null && items === null) {
-    return (
-      <section aria-label={t("title") } className="state-section">
-        <h1>{t("track")} </h1>
-        <p role="alert">{t("unavailable")} </p>
-        <button onClick={reloadStatus}>{t("retry")} </button>
-      </section>
-    );
+    return <Page className="px-4 py-6 sm:px-6 lg:px-8" aria-label={t("title")}><PageContent><PageHeader title={t("title")} />
+      <Alert variant="destructive"><AlertDescription>{t("unavailable")}<Button variant="outline" onClick={reloadStatus}>{t("retry")}</Button></AlertDescription></Alert>
+    </PageContent></Page>;
   }
-  if (trackId && track === null) {
-    return <TrackLoading detail />;
-  }
-  if (!trackId && items === null) {
-    return <TrackLoading detail={false} />;
-  }
-  if (track) {
+  if (trackId && track === null) return <TrackLoading detail />;
+  if (!trackId && items === null) return <TrackLoading detail={false} />;
+  if (trackId && track) {
     return <>
       <DailyTrackWorkspace key={track.id} track={track} actions={<>
-        {track.status === "active" ? <button className="primary-action"
-          disabled={!dailyTrackCanRefresh(track) || advanceState !== null}
-          onClick={() => void refreshToLatestData()}>
-          {t(advanceState === "submitting" ? "queuing" : dailyTrackNeedsPolling(track) ? "updating" : "refresh")}
-        </button> : null}
-        {track.status === "blocked" ? <button className="primary-action" disabled={retryState !== null}
-          onClick={() => void retryBlockedTrack()}>{t("retryBlocked")} </button> : null}
-        <button disabled={loadState !== null || deleting} onClick={reloadStatus}>{t("reloadStatus")} </button>
-        <details className="track-manage"><summary>{t("manage")} </summary><div>
-          {track.status === "active" || track.status === "blocked" ? <button onClick={() => setConfirmStop(true)}
-            disabled={stopState !== null}>{t("stop")} </button> : null}
-          {track.status === "stopped" ? <button disabled={deleting} onClick={() => void deleteTrack()}>
-            {t(deleting ? "deleting" : "delete")}</button> : null}
-          {track.status === "stopping" ? <span>{t("stoppingTrack")} </span> : null}
-        </div></details>
+        {track.status === "active" ? <Button disabled={!dailyTrackCanRefresh(track) || advanceState !== null || submitting}
+          onClick={() => void refreshToLatestData()}>{t(advanceState === "submitting" ? "queuing" : dailyTrackNeedsPolling(track) ? "updating" : "refresh")}</Button> : null}
+        {track.status === "blocked" ? <Button disabled={retryState !== null || submitting} onClick={() => void retryBlockedTrack()}>{t("retryBlocked")}</Button> : null}
+        <Button ref={reloadTrigger} variant="outline" disabled={loadState !== null || submitting} onClick={reloadStatus}>{t("reloadStatus")}</Button>
+        <DropdownMenu><DropdownMenuTrigger render={<Button variant="outline" ref={manageTrigger} />} disabled={submitting || track.status === "stopping"}>{t("manage")}</DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-56">
+            {track.status === "active" || track.status === "blocked" ? <DropdownMenuItem variant="destructive" onClick={() => { setActionError(null); setConfirmStop(true); }} disabled={stopState !== null}>{t("stop")}</DropdownMenuItem> : null}
+            {track.status === "stopped" ? <DropdownMenuItem variant="destructive" onClick={() => { setDeleteError(null); setConfirmDelete(true); }}>{t("delete")}</DropdownMenuItem> : null}
+          </DropdownMenuContent>
+        </DropdownMenu>
       </>} notices={<>
-        {error ? <p className="track-action-error" role="alert">{t("reloadFailed")} </p> : null}
-        {loadState === "reloading" ? <p className="track-action-notice" role="status">{t("reloading")} </p> : null}
-        {advanceState === "accepted" ? <p className="track-action-notice" role="status">{t("refreshAccepted")} </p> : null}
-        {retryState !== null ? <p className="track-action-notice" role="status">{t(retryState === "submitting" ? "retrying" : "retryAccepted")}</p> : null}
-        {track.status === "stopping" ? <p className="track-action-notice" role="status">{t("stopWaiting")} </p> : null}
-        {actionError || deleteError ? <p className="track-action-error" role="alert">{actionError ? t(actionError) : deleteError?.status == null ? t("deleteError") : t("deleteHttpError", { status: deleteError.status })}</p> : null}
+        {error ? <Alert variant="destructive"><AlertDescription>{t("reloadFailed")}</AlertDescription></Alert> : null}
+        {loadState === "reloading" ? <p role="status">{t("reloading")}</p> : null}
+        {advanceState === "accepted" ? <p role="status">{t("refreshAccepted")}</p> : null}
+        {retryState !== null ? <p role="status">{t(retryState === "submitting" ? "retrying" : "retryAccepted")}</p> : null}
+        {track.status === "stopping" ? <p role="status">{t("stopWaiting")}</p> : null}
+        {actionError || deleteError ? <Alert variant="destructive"><AlertDescription>{actionError ? t(actionError) : deleteError?.status == null ? t("deleteError") : t("deleteHttpError", { status: deleteError.status })}</AlertDescription></Alert> : null}
       </>} />
-      <StopTrackDialog open={confirmStop} submitting={stopState === "submitting"}
-        error={actionError} onCancel={() => setConfirmStop(false)} onConfirm={() => void stopTrack()} />
+      <TrackActionDialog open={confirmStop} submitting={stopState === "submitting"} title={t("stopTitle")} description={t("stopDescription")}
+        cancelLabel={t("keep")} confirmLabel={t(stopState === "submitting" ? "stopping" : "stop")}
+        error={actionError ? t(actionError) : null} onCancel={() => setConfirmStop(false)} onConfirm={() => void stopTrack()} finalFocus={() => stopState === "accepted" || manageTrigger.current?.disabled ? reloadTrigger.current : manageTrigger.current} />
+      <TrackActionDialog open={confirmDelete} submitting={deleting} title={t("delete")} description={t("deleteConfirm", { id: trackId })}
+        cancelLabel={t("cancel")} confirmLabel={t(deleting ? "deleting" : "delete")}
+        error={deleteError ? deleteError.status == null ? t("deleteError") : t("deleteHttpError", { status: deleteError.status }) : null}
+        onCancel={() => setConfirmDelete(false)} onConfirm={() => void deleteTrack()} finalFocus={() => stopState === "accepted" || manageTrigger.current?.disabled ? reloadTrigger.current : manageTrigger.current} />
     </>;
   }
-  return (
-    <section aria-label={t("title") } className="daily-track-list">
-      <header className="track-header"><div><h1>{t("title")} </h1>
-        <p>{t("description")} </p></div>
-        <button disabled={loadState !== null} onClick={reloadStatus}>{t("reloadStatus")} </button></header>
-      {error ? <p className="track-action-error" role="alert">{t("listReloadFailed")} </p> : null}
-      {items?.length === 0 ? <div className="track-list-empty"><h2>{t("emptyTitle")} </h2>
-        <p>{t("emptyDescription")} </p>
-        <a className="track-text-link" href="/research-runs">{t("browseRuns")} </a></div> : (
-        <div className="track-table-scroll" role="region" aria-label={t("list") } tabIndex={0}>
-          <table className="track-table"><thead><tr><th scope="col">{t("trackColumn")} </th><th scope="col">{t("status")} </th>
-            <th scope="col">{t("trackingFrom")} </th><th scope="col">{t("lastObservation")} </th><th scope="col">{t("seed")} </th></tr></thead>
-            <tbody>{items?.map((item) => <tr key={item.id}>
-              <th scope="row"><a href={`/daily-tracks/${item.id}`}>{item.id}</a></th>
-              <td><span className="track-status" data-status={item.status}>{t(`statuses.${item.status}`)}</span></td>
-              <td><time>{item.origin_session}</time></td><td><time>{item.strategy_session}</time></td>
-              <td><code>{item.seed_run_id}</code></td>
-            </tr>)}</tbody></table>
-        </div>
-      )}
-    </section>
-  );
+  return <Page aria-label={t("title")} className="px-4 py-6 sm:px-6 lg:px-8"><PageContent className="flex flex-col gap-6">
+    <PageHeader title={t("title")} description={t("description")} actions={<Button variant="outline" disabled={loadState !== null} onClick={reloadStatus}>{t("reloadStatus")}</Button>} />
+    {error ? <Alert variant="destructive"><AlertDescription>{t("listReloadFailed")}</AlertDescription></Alert> : null}
+    {items?.length === 0 ? <Empty><EmptyHeader><EmptyTitle role="heading" aria-level={2}>{t("emptyTitle")}</EmptyTitle><EmptyDescription>{t("emptyDescription")}</EmptyDescription></EmptyHeader>
+      <Button nativeButton={false} role="link" render={<a href="/research-runs" />}>{t("browseRuns")}</Button>
+    </Empty> : <Table scrollLabel={t("list")} className="min-w-[640px]">
+      <TableHeader><TableRow>{(["trackColumn", "status", "trackingFrom", "lastObservation", "seed"] as const).map(label => <TableHead key={label}>{t(label)}</TableHead>)}</TableRow></TableHeader>
+      <TableBody>{items?.map(item => <TableRow key={item.id}>
+        <TableHead scope="row"><Button variant="link" nativeButton={false} role="link" render={<a href={`/daily-tracks/${item.id}`} />} className="block h-auto min-h-11 w-full whitespace-normal text-left [overflow-wrap:anywhere]">{item.id}</Button></TableHead>
+        <TableCell><Badge variant={item.status === "blocked" ? "destructive" : "secondary"}>{t(`statuses.${item.status}`)}</Badge></TableCell>
+        <TableCell><time>{item.origin_session}</time></TableCell><TableCell><time>{item.strategy_session}</time></TableCell><TableCell><code>{item.seed_run_id}</code></TableCell>
+      </TableRow>)}</TableBody>
+    </Table>}
+  </PageContent></Page>;
 }
 
 function TrackLoading({ detail }: { detail: boolean }) {
   const { t } = useTranslation("daily");
-  return <section className="state-section" aria-label={t("title") } aria-busy="true">
-    <p role="status">{t(detail ? "loading" : "loadingList")}</p>
-  </section>;
+  return <Page className="px-4 py-6 sm:px-6 lg:px-8" aria-label={t("title")} aria-busy="true"><PageContent><p role="status">{t(detail ? "loading" : "loadingList")}</p></PageContent></Page>;
 }
 
-function StopTrackDialog({ open, submitting, error, onCancel, onConfirm }: {
-  open: boolean; submitting: boolean; error: ActionError | null; onCancel: () => void; onConfirm: () => void;
+function TrackActionDialog({ open, submitting, title, description, cancelLabel, confirmLabel, error, onCancel, onConfirm, finalFocus }: {
+  open: boolean; submitting: boolean; title: string; description: string; cancelLabel: string; confirmLabel: string; error: string | null;
+  onCancel: () => void; onConfirm: () => void; finalFocus: () => HTMLButtonElement | null;
 }) {
-  const { t } = useTranslation("daily");
-  const dialogRef = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    if (open && !dialog.open) dialog.showModal();
-    if (!open && dialog.open) dialog.close();
-  }, [open]);
-  return <dialog ref={dialogRef} className="track-stop-dialog" aria-labelledby="track-stop-title"
-    onCancel={(event) => { event.preventDefault(); if (!submitting) onCancel(); }}>
-    <h2 id="track-stop-title">{t("stopTitle")} </h2>
-    <p>{t("stopDescription")} </p>
-    {error ? <p role="alert">{t(error)}</p> : null}
-    <footer><button onClick={onCancel} disabled={submitting}>{t("keep")} </button>
-      <button className="track-danger-button" onClick={onConfirm} disabled={submitting}>{t(submitting ? "stopping" : "stop")}</button></footer>
-  </dialog>;
-}
-
-export function TrackingProgressView({
-  progress,
-}: {
-  progress: DailyTrackDetail["progress"];
-}) {
-  const { t } = useTranslation("daily");
-  return (
-    <>
-      <p><strong>{t("advancePhase")} </strong> {t(`phases.${progress.phase}`)}</p>
-      {progress.target_start_session && progress.target_end_session ? (
-        <p>
-          <strong>{t("frozenTarget")} </strong>{" "}
-          {t("targetRange", { start: progress.target_start_session, end: progress.target_end_session, count: progress.target_session_count })}
-        </p>
-      ) : null}
-      {progress.current_session ? (
-        <p><strong>{t("currentSession")} </strong> {progress.current_session}</p>
-      ) : null}
-      {progress.cycle_attempt ? (
-        <p><strong>{t("attemptCycle")} </strong> {formatNumber(progress.cycle_attempt)}/{formatNumber(progress.cycle_attempt_limit)}</p>
-      ) : null}
-      {progress.retry_wait && progress.next_attempt_eligible_at ? (
-        <p><strong>{t("retryEligible")} </strong> {formatUtcTimestamp(progress.next_attempt_eligible_at, true)}</p>
-      ) : null}
-    </>
-  );
-}
-
-export function TrackingOriginView({ origin }: { origin: DailyTrackDetail["origin"] }) {
-  const { t } = useTranslation("daily");
-  return (
-    <section className="research-result-section">
-      <div className="section-heading">
-        <div>
-          <p className="eyebrow">{t("immutableAccount")} </p>
-          <h2>{t("origin")} </h2>
-        </div>
-      </div>
-      <div className="research-run-facts">
-        <p>
-          <strong>{t("seed")} </strong>{" "}
-          {origin.seed_research_available ? (
-            <a href={`/research-runs/${origin.seed_run_id}`}>{origin.seed_run_id}</a>
-          ) : (
-            <span>{origin.seed_run_id}{t("deleted")}</span>
-          )}
-        </p>
-        <p><strong>{t("originSession")} </strong> {origin.strategy_session}</p>
-        <p>{t("originDescription")} </p>
-        <p>
-          <strong>{t("originNav")} </strong>{" "}
-          <span title={origin.terminal_account.net_nav}>
-            {formatCnyDecimal(origin.terminal_account.net_nav)}
-          </span>
-        </p>
-        <p>
-          <strong>{t("originCash")} </strong>{" "}
-          <span title={origin.terminal_account.net_cash}>
-            {formatCnyDecimal(origin.terminal_account.net_cash)}
-          </span>
-        </p>
-        <p><strong>{t("originHoldings")} </strong> {formatNumber(origin.terminal_account.positions.length)}</p>
-        <p><strong>{t("checksum")} </strong> {origin.result_checksum_sha256}</p>
-      </div>
-    </section>
-  );
-}
-
-function formatCnyDecimal(value: string): string {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return value;
-  return formatCurrency(numeric);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  return <AlertDialog open={open} onOpenChange={value => { if (!value && !submitting) onCancel(); }}>
+    <AlertDialogContent initialFocus={cancelRef} finalFocus={finalFocus}>
+      <AlertDialogHeader><AlertDialogTitle>{title}</AlertDialogTitle><AlertDialogDescription className="[overflow-wrap:anywhere]">{description}</AlertDialogDescription></AlertDialogHeader>
+      {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
+      <AlertDialogFooter><Button variant="outline" ref={cancelRef} onClick={onCancel} disabled={submitting}>{cancelLabel}</Button>
+        <Button variant="destructive" onClick={onConfirm} disabled={submitting}>{confirmLabel}</Button></AlertDialogFooter>
+    </AlertDialogContent>
+  </AlertDialog>;
 }

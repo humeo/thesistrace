@@ -5,6 +5,7 @@ import {
   LineSeries,
   createChart,
   type IChartApi,
+  type LogicalRange,
   type LineData,
   type MouseEventParams,
   type Time,
@@ -55,6 +56,7 @@ export function StrategyPerformanceChart({
   const points = useMemo(() => strategyChartPoints(curves), [curves]);
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  const savedRange = useRef<LogicalRange | null>(null);
   const [visibleRange, setVisibleRange] = useState<VisibleRange>("All");
   const [tooltip, setTooltip] = useState<StrategyChartPoint | null>(null);
 
@@ -125,7 +127,8 @@ export function StrategyPerformanceChart({
       axisLabelVisible: false,
       title: "",
     });
-    chart.timeScale().fitContent();
+    if (savedRange.current) chart.timeScale().setVisibleLogicalRange(savedRange.current);
+    else chart.timeScale().fitContent();
 
     const onCrosshairMove = (event: MouseEventParams<Time>) => {
       if (event.time === undefined) {
@@ -150,6 +153,7 @@ export function StrategyPerformanceChart({
     });
     observer.observe(container);
     return () => {
+      savedRange.current = chart.timeScale().getVisibleLogicalRange();
       observer.disconnect();
       chart.unsubscribeCrosshairMove(onCrosshairMove);
       chart.remove();

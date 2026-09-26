@@ -44,7 +44,7 @@ async function refreshPythonTrackThroughFixtureEnd(page: Page, trackId: string):
     await reload.click();
     await expect(reload).toBeEnabled();
     await expect(page.getByRole("alert")).toHaveCount(0);
-    await expect(page.getByText(`Last observation ${session}`, { exact: true })).toBeVisible();
+    await expect(page.locator("dl > div").filter({ has: page.locator("dt", { hasText: "Last observation" }) }).getByText(session, { exact: true })).toBeVisible();
   }
   expect(session).toBe("2026-08-11");
   if (unavailableReads) test.info().annotations.push({ type: "dependency-recovery",
@@ -1237,7 +1237,7 @@ test("Complete field catalog composes one Formula and starts its DailyTrack", { 
     await expect(page).toHaveURL(/\/daily-tracks\/track_[a-f0-9]+$/);
     trackId = new URL(page.url()).pathname.split("/").at(-1);
     if (trackId === undefined) throw new Error("DailyTrack route has no identity");
-    await expect(page.locator(".track-title-row .track-status")).toHaveText("Up to date", { timeout: 30_000 });
+    await expect(page.getByRole("heading", { level: 1 }).locator("[data-slot=badge]")).toHaveText("Up to date", { timeout: 30_000 });
     await expect(page.getByLabel("Tracking account")).toContainText("Return since tracking");
     await page.getByRole("tab", { name: /Holdings/ }).click();
     await expect(page.getByRole("table")).toContainText("Symbol");
@@ -1295,10 +1295,10 @@ test("Complete field catalog composes one Formula and starts its DailyTrack", { 
       (await (await page.request.get(`/api/daily-tracks/${trackId}`)).json() as { status: string }).status
     ), { timeout: 90_000 }).toBe("blocked");
     await page.getByRole("button", { name: "Reload status" }).click();
-    await expect(page.locator(".track-title-row .track-status")).toHaveText("Update blocked");
-    await page.locator(".track-disclosure > summary").filter({ hasText: "Update details" }).click();
-    await expect(page.locator(".track-disclosure-content")).toContainText("Advance phase blocked");
-    await expect(page.locator(".track-disclosure-content")).toContainText("Frozen target");
+    await expect(page.getByRole("heading", { level: 1 }).locator("[data-slot=badge]")).toHaveText("Update blocked");
+    await page.getByRole("button", { name: /Update details/ }).click();
+    await expect(page.locator("[data-slot=collapsible-content]").filter({ hasText: "Advance phase" })).toContainText("Advance phase blocked");
+    await expect(page.locator("[data-slot=collapsible-content]").filter({ hasText: "Advance phase" })).toContainText("Frozen target");
     await expect(page.getByText("Financial Coverage ends before the next Research Session.")).toBeVisible();
 
     publishFinancialTrackHead("recovered");
@@ -1321,8 +1321,8 @@ test("Complete field catalog composes one Formula and starts its DailyTrack", { 
       return ((await response.json()) as { strategy_session: string }).strategy_session;
     }, { timeout: 90_000 }).toBe("2026-08-11");
     await page.getByRole("button", { name: "Reload status" }).click();
-    await expect(page.locator(".track-title-row .track-status")).toHaveText("Up to date");
-    await expect(page.locator(".track-dates")).toContainText("Last observation 2026-08-11");
+    await expect(page.getByRole("heading", { level: 1 }).locator("[data-slot=badge]")).toHaveText("Up to date");
+    await expect(page.locator("dl > div").filter({ has: page.locator("dt", { hasText: "Last observation" }) }).getByText("2026-08-11", { exact: true })).toBeVisible();
     const finalObservation = (await (await page.request.get(`/api/daily-tracks/${trackId}`)).json()).observation;
     expect(finalObservation.session).toBe("2026-08-11");
     expect(finalObservation.session_count).toBeGreaterThan(0);
@@ -1560,12 +1560,14 @@ test("Batch children keep ordinary Research organization, reuse, tracking, and d
   }).items.map((item) => item.run_availability)).toEqual(["deleted", "deleted"]);
 
   await page.goto(`/daily-tracks/${trackId}`);
-  await page.locator(".track-disclosure > summary").filter({ hasText: "Tracking origin" }).click();
+  await page.getByRole("button", { name: /Tracking origin/ }).click();
   await expect(page.getByText(`${firstRunId} (deleted)`, { exact: true })).toBeVisible();
   await confirmTrackStop(page);
-  await expect(page.locator(".track-title-row .track-status")).toHaveText("Stopped", { timeout: 90_000 });
-  page.once("dialog", async (dialog) => dialog.accept());
-  await page.getByRole("button", { name: "Delete DailyTrack" }).click();
+  await expect(page.getByRole("heading", { level: 1 }).locator("[data-slot=badge]")).toHaveText("Stopped", { timeout: 90_000 });
+  await page.getByRole("button", { name: "Manage", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Delete DailyTrack", exact: true }).click();
+  await page.getByRole("alertdialog", { name: "Delete DailyTrack", exact: true }).getByRole("button", { name: "Delete DailyTrack", exact: true }).click();
+  await expect(page).toHaveURL(/\/daily-tracks$/);
   expect((await page.request.delete(`/api/research-folders/${folderId}`, {
     headers: sameOriginHeaders(),
   })).status()).toBe(204);
@@ -1926,7 +1928,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     const trackId = page.url().split("/").at(-1);
     expect(trackId).toMatch(/^track_[a-f0-9]+$/);
     if (trackId === undefined) throw new Error("DailyTrack route is missing track id");
-    await page.locator(".track-disclosure > summary").filter({ hasText: "Tracking origin" }).click();
+    await page.getByRole("button", { name: /Tracking origin/ }).click();
     const sourceRunLink = page.getByRole("link", { name: reusedRunId, exact: true });
     await expect(sourceRunLink).toBeVisible();
     await expect(page.getByRole("button", { name: "Delete DailyTrack" })).toHaveCount(0);
@@ -1973,11 +1975,11 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
       return ((await response.json()) as { strategy_session: string }).strategy_session;
     }, { timeout: 90_000 }).toBe("2026-08-11");
     await page.goto(`/daily-tracks/${trackId}`);
-    await page.locator(".track-disclosure > summary").filter({ hasText: "Tracking origin" }).click();
+    await page.getByRole("button", { name: /Tracking origin/ }).click();
     await expectRemovedAuthoringControlsToBeAbsent(page);
     await expect(page.getByText(`${reusedRunId} (deleted)`, { exact: true })).toBeVisible();
     await expect(page.getByRole("link", { name: reusedRunId, exact: true })).toHaveCount(0);
-    await expect(page.locator(".track-dates")).toContainText("Last observation 2026-08-11");
+    await expect(page.locator("dl > div").filter({ has: page.locator("dt", { hasText: "Last observation" }) }).getByText("2026-08-11", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Delete DailyTrack" })).toHaveCount(0);
 
     // Expire only this test's published Track diagnostics; permanent history must survive.
@@ -2024,15 +2026,16 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await page.goto(`/daily-tracks/${trackId}`);
 
     await confirmTrackStop(page);
-    await expect(page.locator(".track-title-row .track-status")).toHaveText("Stopped");
-    const deleteTrackButton = page.getByRole("button", { name: "Delete DailyTrack" });
-    await expect(deleteTrackButton).toBeVisible();
-    page.once("dialog", async (dialog) => dialog.dismiss());
-    await deleteTrackButton.click();
+    await expect(page.getByRole("heading", { level: 1 }).locator("[data-slot=badge]")).toHaveText("Stopped");
+    await page.getByRole("button", { name: "Manage", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Delete DailyTrack", exact: true }).click();
+    const deleteTrackDialog = page.getByRole("alertdialog", { name: "Delete DailyTrack", exact: true });
+    await deleteTrackDialog.getByRole("button", { name: "Cancel", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/daily-tracks/${trackId}$`));
     expect((await page.request.get(`/api/daily-tracks/${trackId}`)).status()).toBe(200);
-    page.once("dialog", async (dialog) => dialog.accept());
-    await deleteTrackButton.click();
+    await page.getByRole("button", { name: "Manage", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Delete DailyTrack", exact: true }).click();
+    await deleteTrackDialog.getByRole("button", { name: "Delete DailyTrack", exact: true }).click();
     await expect(page).toHaveURL(/\/daily-tracks$/);
     expect((await page.request.get(`/api/daily-tracks/${trackId}`)).status()).toBe(404);
     await expect(page.getByRole("heading", { name: "Your strategy watch starts with a backtest" })).toBeVisible();
@@ -2144,13 +2147,14 @@ function publishFinancialTrackHead(mode: "lagged" | "recovered"): void {
 }
 
 async function confirmTrackStop(page: Page) {
-  await page.locator(".track-manage > summary").click();
-  await page.getByRole("button", { name: "Stop DailyTrack", exact: true }).click();
-  const decision = page.getByRole("dialog", { name: "Stop this DailyTrack?" });
+  await page.getByRole("button", { name: "Manage", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Stop DailyTrack", exact: true }).click();
+  const decision = page.getByRole("alertdialog", { name: "Stop this DailyTrack?" });
   await expect(decision).toBeVisible();
   await decision.getByRole("button", { name: "Keep tracking" }).click();
   await expect(decision).not.toBeVisible();
-  await page.getByRole("button", { name: "Stop DailyTrack", exact: true }).click();
+  await page.getByRole("button", { name: "Manage", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Stop DailyTrack", exact: true }).click();
   await decision.getByRole("button", { name: "Stop DailyTrack", exact: true }).click();
 }
 

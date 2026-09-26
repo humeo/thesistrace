@@ -1,3 +1,10 @@
+import { Metric, MetricGroup } from "../components/product/MetricGroup";
+import { Section } from "../components/layout/Page";
+import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell, TableFooter } from "../components/ui/table";
+import { Empty, EmptyHeader, EmptyTitle, EmptyDescription } from "../components/ui/empty";
+import { chartTheme } from "../analysis/chartTheme";
 import { useTranslation } from "react-i18next";
 import { interfaceLocale } from "../i18n";
 import { formatCurrency, formatNumber, formatSessionDate } from "../i18n/format";
@@ -6,7 +13,7 @@ import { CloseRiskFacts, type CloseRiskPosition } from "../analysis/CloseRiskFac
 import { isBuiltinFrameworkState, strategySelection, type StrategyDecisionState } from "../research/strategyDecisionState";
 import { FrameworkStateView } from "../research/FrameworkStateView";
 import { useEffect, useRef, useState } from "react";
-import { ColorType, LineSeries, createChart, type Time, type IChartApi } from "lightweight-charts";
+import { ColorType, LineSeries, createChart, type Time, type IChartApi, type LogicalRange } from "lightweight-charts";
 
 export type DailyTrackObservation = {
   decision_state: StrategyDecisionState;
@@ -37,23 +44,13 @@ export function ObservationSummary({ observation, originSession }: {
 }) {
   const { t } = useTranslation("daily");
   return (
-    <dl className="track-account-strip" aria-label={t("account") }>
-      <div>
-        <dt>{t("returnSince")} </dt>
-        <dd className={observation.net_return < 0 ? "track-negative" : ""}>
-          {formatReturn(observation.net_return)}
-        </dd>
-        <span>{t("sinceDate", { date: originSession })}</span>
-      </div>
-      <div><dt>{t("maximumDrawdown")} </dt><dd>{formatReturn(observation.maximum_drawdown)}</dd>
-        <span>{t("sinceDate", { date: originSession })}</span></div>
-      <div><dt>{t("nav")} </dt><dd>{formatMoney(observation.net_asset_value_cny)}</dd>
-        <span>{t("changeSince", { amount: formatMoney(observation.net_change_cny) })}</span></div>
-      <div><dt>{t("cashAvailable")} </dt><dd>{formatMoney(observation.cash_cny)}</dd>
-        <span>{t("simulatedCny")} </span></div>
-      <div><dt>{t("holdings")} </dt><dd>{formatNumber(observation.holdings.length)}<small>{t("securities")} </small></dd>
-        <span>{t("asOf", { date: observation.session })}</span></div>
-    </dl>
+    <MetricGroup label={t("account")} className="sm:grid-cols-3 xl:grid-cols-5">
+      <Metric label={t("returnSince")} value={formatReturn(observation.net_return)} detail={t("sinceDate", { date: originSession })} />
+      <Metric label={t("maximumDrawdown")} value={formatReturn(observation.maximum_drawdown)} detail={t("sinceDate", { date: originSession })} />
+      <Metric label={t("nav")} value={formatMoney(observation.net_asset_value_cny)} detail={t("changeSince", { amount: formatMoney(observation.net_change_cny) })} />
+      <Metric label={t("cashAvailable")} value={formatMoney(observation.cash_cny)} detail={t("simulatedCny")} />
+      <Metric label={t("holdings")} value={`${formatNumber(observation.holdings.length)}${t("securities")}`} detail={t("asOf", { date: observation.session })} />
+    </MetricGroup>
   );
 }
 
@@ -63,63 +60,60 @@ export function CurrentHoldings({ observation }: { observation: DailyTrackObserv
   const holdings = observation.holdings.filter((item) => item.instrument_id.toLowerCase().includes(query.toLowerCase()));
   const selection = strategySelection(observation.decision_state);
   return (
-    <section className="track-holdings" aria-label={t("holdings") }>
-      <div className="track-section-heading">
-        <div><h2>{t("holdings")}</h2><p>{isBuiltinFrameworkState(observation.decision_state)
+    <section className="flex min-w-0 flex-col gap-4" aria-label={t("holdings") }>
+      <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+        <div><h2 className="m-0 text-base font-semibold">{t("holdings")}</h2><p>{isBuiltinFrameworkState(observation.decision_state)
           ? t("holdingsDescription", { date: observation.session, target: formatReturn(observation.decision_state.exposure), actual: formatReturn(1 - Number(observation.cash_cny) / Number(observation.net_asset_value_cny)) })
           : t("holdingsDescriptionWithoutTarget", { date: observation.session, actual: formatReturn(1 - Number(observation.cash_cny) / Number(observation.net_asset_value_cny)) })}</p></div>
-        <input aria-label={t("filterHoldings")} placeholder={t("findSymbol")} type="search"
+        <Input className="w-full md:w-60 md:shrink-0" aria-label={t("filterHoldings")} placeholder={t("findSymbol")} type="search"
           value={query} onChange={(event) => setQuery(event.target.value)} />
       </div>
       {selection && <SelectionEligibilityView selection={selection} />}
       <FrameworkStateView state={observation.decision_state} />
       <CloseRiskFacts session={observation.session} nav={observation.close_risk_nav_cny}
         positions={observation.holdings.map(item => ({ ...item, execution_shares: item.shares }))} />
-      <div className="track-table-scroll" tabIndex={0} role="region" aria-label={t("holdingsTable")}>
-        <table className="track-table">
-          <thead><tr><th scope="col">{t("symbol")} </th><th scope="col">{t("shares")} </th><th scope="col">{t("marketValue")} </th><th scope="col">{t("weight")} </th></tr></thead>
-          <tbody>
+      <Table scrollLabel={t("holdingsTable")} className="min-w-[480px]">
+          <TableHeader><TableRow><TableHead scope="col">{t("symbol")} </TableHead><TableHead scope="col">{t("shares")} </TableHead><TableHead scope="col">{t("marketValue")} </TableHead><TableHead scope="col">{t("weight")} </TableHead></TableRow></TableHeader>
+          <TableBody>
             {holdings.map((item) => (
-              <tr key={item.instrument_id}>
-                <th scope="row" title={item.instrument_id}>{item.instrument_id.replace(/^equity:/, "")}</th>
-                <td>{formatNumber(item.shares)}</td>
-                <td>{formatMoney(item.market_value_cny)}</td>
-                <td><span className="track-weight"><span aria-hidden="true" className="track-weight-bar"
-                  style={{ width: `${Math.min(100, Math.max(0, item.weight * 100))}%` }} />{formatReturn(item.weight)}</span></td>
-              </tr>
+              <TableRow key={item.instrument_id}>
+                <TableHead scope="row" title={item.instrument_id}>{item.instrument_id.replace(/^equity:/, "")}</TableHead>
+                <TableCell>{formatNumber(item.shares)}</TableCell>
+                <TableCell>{formatMoney(item.market_value_cny)}</TableCell>
+                <TableCell><span className="relative inline-block min-w-16"><span aria-hidden="true" className="absolute -bottom-1 right-0 h-0.5 bg-primary"
+                  style={{ width: `${Math.min(100, Math.max(0, item.weight * 100))}%` }} />{formatReturn(item.weight)}</span></TableCell>
+              </TableRow>
             ))}
-            {holdings.length === 0 ? <tr><td colSpan={4} className="track-table-empty">
+            {holdings.length === 0 ? <TableRow><TableCell colSpan={4} className="py-8 text-center text-muted-foreground">
               {t(query ? "noSymbols" : "cashOnly")}
-            </td></tr> : null}
-          </tbody>
-          <tfoot><tr><th scope="row">{t("cash")} </th><td>—</td><td>{formatMoney(observation.cash_cny)}</td>
-            <td>{formatReturn(Number(observation.cash_cny) / Number(observation.net_asset_value_cny))}</td></tr></tfoot>
-        </table>
-      </div>
-      <p className="track-footnote">{t("holdingsNote")} </p>
+            </TableCell></TableRow> : null}
+          </TableBody>
+          <TableFooter><TableRow><TableHead scope="row">{t("cash")} </TableHead><TableCell>—</TableCell><TableCell>{formatMoney(observation.cash_cny)}</TableCell>
+            <TableCell>{formatReturn(Number(observation.cash_cny) / Number(observation.net_asset_value_cny))}</TableCell></TableRow></TableFooter>
+      </Table>
+      <p className="m-0 text-xs text-muted-foreground">{t("holdingsNote")} </p>
     </section>
   );
 }
 
-export function SelectionSchedule({ observation, isStopped, isBehind }: {
-  observation: DailyTrackObservation; isStopped: boolean; isBehind: boolean;
+export function SelectionSchedule({ observation, isStopped, isStopping, isBehind }: {
+  observation: DailyTrackObservation; isStopped: boolean; isStopping: boolean; isBehind: boolean;
 }) {
   const { t } = useTranslation("daily");
   return (
-    <section className="track-rebalance" aria-label={t("schedule")}>
-      <div className="track-section-heading"><div><h2>{t("schedule")}</h2>
-        <p>{t(observation.selection_interval === null ? "scheduleConditionDescription" : "scheduleDescription")}</p></div></div>
-      <dl className="track-schedule-facts">
+    <Section title={t("schedule")}>
+      <p className="m-0 text-sm text-muted-foreground">{t(observation.selection_interval === null ? "scheduleConditionDescription" : "scheduleDescription")}</p>
+      <dl className="m-0 grid gap-4 text-sm [&_dt]:text-muted-foreground [&_dd]:m-0">
         <div><dt>{t("frequency")}</dt><dd>{observation.selection_interval === null ? t("conditionDriven") : t("every", { count: observation.selection_interval })}</dd></div>
         <div><dt>{t("lastSignal")}</dt><dd>{observation.pending_target_session ?? t("noSignal")}</dd></div>
-        <div><dt>{t("nextStep")}</dt><dd>{isStopped ? t("trackingStopped") : observation.pending_target_session ? t("nextOpen") : observation.selection_interval === null ? t("nextCondition") : t("nextSignal", { count: observation.sessions_until_next_signal! })}</dd></div>
+        <div><dt>{t("nextStep")}</dt><dd>{isStopped ? t("trackingStopped") : isStopping ? t("trackingStopping") : observation.pending_target_session ? t("nextOpen") : observation.selection_interval === null ? t("nextCondition") : observation.sessions_until_next_signal === null ? "—" : t("nextSignal", { count: observation.sessions_until_next_signal })}</dd></div>
       </dl>
-      {isBehind && !isStopped ? <p className="track-inline-notice">{t("behindNote")} </p> : null}
-      <div className="track-guidance-empty">
+      {isBehind && !isStopped && !isStopping ? <p className="m-0 rounded-lg border border-border bg-muted p-4 text-sm">{t("behindNote")} </p> : null}
+      <div className="rounded-lg border border-dashed border-border p-4 text-sm">
         <h3>{t("ordersUnavailable")} </h3>
         <p>{t("ordersDescription")} </p>
       </div>
-    </section>
+    </Section>
   );
 }
 
@@ -129,45 +123,46 @@ export function TrackingReturnChart({ observation, originSession }: {
   const { t, i18n } = useTranslation("daily");
   const chartRef = useRef<IChartApi | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const visibleRange = useRef<LogicalRange | null>(null);
   const [selected, setSelected] = useState<{ session: string; net_return: number } | null>(null);
   useEffect(() => {
     const element = containerRef.current;
     if (!element || observation.returns.length < 2) return;
     setSelected(null);
+    const theme = chartTheme(element);
     const chart = createChart(element, {
       width: element.clientWidth, height: 280,
-      layout: { background: { type: ColorType.Solid, color: "#0f1011" }, textColor: "#8a8f98", fontFamily: "Inter, Noto Sans SC, -apple-system, BlinkMacSystemFont, sans-serif", attributionLogo: false },
-      grid: { vertLines: { visible: false }, horzLines: { color: "#23252a" } },
-      rightPriceScale: { borderColor: "#34343a" },
-      timeScale: { borderColor: "#34343a", fixLeftEdge: true, fixRightEdge: true },
+      layout: { background: { type: ColorType.Solid, color: theme.background }, textColor: theme.text, fontFamily: "Inter, Noto Sans SC, -apple-system, BlinkMacSystemFont, sans-serif", attributionLogo: false },
+      grid: { vertLines: { visible: false }, horzLines: { color: theme.grid } },
+      rightPriceScale: { borderColor: theme.border },
+      timeScale: { borderColor: theme.border, fixLeftEdge: true, fixRightEdge: true },
       localization: { locale: interfaceLocale(), priceFormatter: formatReturn },
     });
     chartRef.current = chart;
-    const series = chart.addSeries(LineSeries, { color: "#828fff", lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
+    const series = chart.addSeries(LineSeries, { color: theme.strategy, lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
     series.setData(observation.returns.map((point) => ({ time: point.session as Time, value: point.net_return })));
-    series.createPriceLine({ price: 0, color: "#62666d", lineStyle: 2, lineWidth: 1, axisLabelVisible: false, title: "" });
-    chart.timeScale().fitContent();
+    series.createPriceLine({ price: 0, color: theme.zero, lineStyle: 2, lineWidth: 1, axisLabelVisible: false, title: "" });
+    if (visibleRange.current) chart.timeScale().setVisibleLogicalRange(visibleRange.current);
+    else chart.timeScale().fitContent();
     chart.subscribeCrosshairMove((event) => {
       setSelected(observation.returns.find((point) => point.session === event.time) ?? null);
     });
     const resize = new ResizeObserver(([entry]) => {
-      if (entry) chart.applyOptions({ width: Math.floor(entry.contentRect.width) });
+      if (entry && entry.contentRect.width > 0) chart.applyOptions({ width: Math.floor(entry.contentRect.width) });
     });
     resize.observe(element);
-    return () => { chartRef.current = null; resize.disconnect(); chart.remove(); };
+    return () => { visibleRange.current = chart.timeScale().getVisibleLogicalRange(); chartRef.current = null; resize.disconnect(); chart.remove(); };
   }, [observation.returns]);
   useEffect(() => {
     chartRef.current?.applyOptions({ localization: { locale: interfaceLocale(), priceFormatter: formatReturn } });
   }, [i18n.language, observation.returns]);
   if (observation.returns.length < 2) {
-    return <div className="track-chart-empty">
-      <h3>{t("chartEmpty")} </h3>
-      <p>{t("chartEmptyDescription", { date: originSession })}</p></div>;
+    return <Empty><EmptyHeader><EmptyTitle>{t("chartEmpty")}</EmptyTitle><EmptyDescription>{t("chartEmptyDescription", { date: originSession })}</EmptyDescription></EmptyHeader></Empty>;
   }
-  return <figure className="track-return-chart" aria-label={t("chartTitle") }>
-    <figcaption><span>{t("netReturnSince", { date: originSession })}</span><span>{t("observations", { count: observation.returns.length })}</span></figcaption>
-    <div ref={containerRef} />
-    <div className="track-chart-footer"><span>{selected ? `${formatSessionDate(selected.session)}  ${formatReturn(selected.net_return)}` : t("chartHint")}</span>
-      <a href="https://www.tradingview.com/" target="_blank" rel="noreferrer">TradingView Lightweight Charts™</a></div>
+  return <figure className="m-0 min-w-0 overflow-hidden rounded-lg border border-border bg-card p-4" aria-label={t("chartTitle") }>
+    <figcaption className="mb-4 flex flex-wrap justify-between gap-2 text-xs text-muted-foreground"><span>{t("netReturnSince", { date: originSession })}</span><span>{t("observations", { count: observation.returns.length })}</span></figcaption>
+    <div ref={containerRef} className="min-h-[280px] min-w-0" />
+    <div aria-live="polite" className="mt-3 flex flex-wrap justify-between gap-2 text-xs text-muted-foreground"><span>{selected ? `${formatSessionDate(selected.session)}  ${formatReturn(selected.net_return)}` : t("chartHint")}</span>
+      <Button variant="link" nativeButton={false} role="link" render={<a href="https://www.tradingview.com/" target="_blank" rel="noreferrer" />} className="h-auto min-h-11 whitespace-normal p-0 text-xs">TradingView Lightweight Charts™</Button></div>
   </figure>;
 }

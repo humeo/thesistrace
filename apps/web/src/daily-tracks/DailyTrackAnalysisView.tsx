@@ -1,3 +1,4 @@
+import { Metric, MetricGroup } from "../components/product/MetricGroup";
 import { useTranslation } from "react-i18next";
 import { formatPercent, formatDecimal, formatCurrency } from "../i18n/format";
 import { catalogLabel } from "../i18n/catalog";
@@ -40,13 +41,13 @@ export function DailyTrackAnalysisView({ analysis }: { analysis: DailyTrackAnaly
   const { t } = useTranslation("daily");
   const metrics = analysis.strategy.summary.metrics;
   return (
-    <div className="research-result">
-      <section className="research-result-section">
+    <div className="flex min-w-0 flex-col gap-6">
+      <section className="flex min-w-0 flex-col gap-4">
         <StrategyComparisonPanel comparison={analysis.strategy.comparison} />
-        <div className="section-heading">
-          <h2>{t("summary")} </h2>
+        <div>
+          <h2 className="m-0 text-base font-semibold">{t("summary")}</h2>
         </div>
-        <div className="strategy-metrics">
+        <MetricGroup label={t("summary")} className="sm:grid-cols-3">
           <Metric label={t("netCumulative") } value={formatPercent(metrics.net_cumulative_return)} />
           <Metric
             label={t("benchmarkCumulative", { benchmark: catalogLabel("benchmarks", "csi300-price-index-open") })}
@@ -65,17 +66,8 @@ export function DailyTrackAnalysisView({ analysis }: { analysis: DailyTrackAnaly
             label={t("transactionCosts") }
             value={formatCurrency(metrics.transaction_costs.cumulative_amount, 0)}
           />
-        </div>
+        </MetricGroup>
       </section>
-    </div>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="result-metric">
-      <span>{label}</span>
-      <strong>{value}</strong>
     </div>
   );
 }
