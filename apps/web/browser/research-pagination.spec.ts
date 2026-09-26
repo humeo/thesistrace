@@ -1,37 +1,17 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { expect, test } from "@playwright/test";
-import { build } from "vite";
+import { expect, test, type Page } from "@playwright/test";
+import { buildProductFixture } from "./build-product-fixture";
 
-const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+let styles: string;
 let timelineScript: string;
-
 test.beforeAll(async () => {
-  // Bundle the actual component, not a copy of its markup or resizing logic.
-  // This browser test needs no server, Auth, Agent, or database.
-  const result = await build({
-    configFile: false,
-    logLevel: "silent",
-    esbuild: { jsx: "automatic" },
-    define: { "process.env.NODE_ENV": JSON.stringify("production") },
-    build: {
-      write: false,
-      minify: false,
-      lib: {
-        entry: fileURLToPath(new URL("./fixtures/research-pagination.tsx", import.meta.url)),
-        formats: ["iife"],
-        name: "ChatTimelineFixture",
-      },
-    },
-  });
-  if ("on" in result) throw new Error("Timeline fixture must be a one-off build");
-  const chunk = (Array.isArray(result) ? result : [result])
-    .flatMap((bundle) => bundle.output)
-    .find((output) => output.type === "chunk" && output.isEntry);
-  if (chunk?.type !== "chunk") throw new Error("Timeline fixture entry is missing");
-  timelineScript = chunk.code;
+  ({ script: timelineScript, styles } = await buildProductFixture(new URL("./fixtures/research-pagination.tsx", import.meta.url), "ResearchPaginationFixture"));
 });
 
+const optionLabels: Record<string, string> = { factor_evaluation: "Factor Evaluation", strategy_backtest: "Strategy Backtest", annualized_excess_return: "Annualized excess", maximum_drawdown: "Max drawdown", one_session_rank_ic: "1-session Rank IC", five_session_rank_ic: "5-session Rank IC", twenty_session_rank_ic: "20-session Rank IC", gt: ">", gte: "≥", lt: "<", lte: "≤" };
+async function choose(page: Page, name: string, value: string) {
+  await page.getByRole("combobox", { name, exact: true }).click();
+  await page.getByRole("option", { name: optionLabels[value] ?? value, exact: true }).click();
+}
 
 for (const width of [1080, 390]) {
   test(`pagination totals, filters and last page at ${width}px`, async ({ page }) => {
@@ -58,9 +38,10 @@ for (const width of [1080, 390]) {
     await expect(nav).toContainText("Page 2 / 2");
     await expect(nav.getByRole("button", { name: "Next" })).toBeDisabled();
     await expect(page.getByText("Research 2-0", { exact: true })).toBeVisible();
+    if (width < 768) expect(await page.getByRole("link", { name: "Research 2-0", exact: true }).evaluate(element => element.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
     await nav.getByRole("button", { name: "Previous" }).click();
     await expect(nav).toContainText("Page 1 / 2");
-    await page.getByLabel("Filter by Type", { exact: true }).selectOption("factor_evaluation");
+    await choose(page, "Filter by Type", "factor_evaluation");
     await expect(nav).toContainText("0 total · 20 per page");
     await expect(nav).toContainText("Page 0 / 0");
     await expect(nav.getByRole("button", { name: "Next" })).toBeDisabled();
@@ -92,7 +73,7 @@ test("sorts all Research on the server before paging and keeps sorting across pa
   await page.goto("http://research.test/");
   await page.addStyleTag({ content: styles });
   await page.addScriptTag({ content: timelineScript });
-  await page.getByLabel("Filter by Type", { exact: true }).selectOption("strategy_backtest");
+  await choose(page, "Filter by Type", "strategy_backtest");
   const nav = page.getByRole("navigation", { name: "Research Runs pages" });
   await expect(page.getByText("Recent research 0", { exact: true })).toBeVisible();
   await expect(page.getByText("Older highest return", { exact: true })).toHaveCount(0);
@@ -124,12 +105,12 @@ test("applies percentage and factor conditions globally and clears them on Type 
   await page.goto("http://research.test/");
   await page.addStyleTag({ content: styles });
   await page.addScriptTag({ content: timelineScript });
-  await page.getByLabel("Filter by Type", { exact: true }).selectOption("strategy_backtest");
+  await choose(page, "Filter by Type", "strategy_backtest");
   await page.getByRole("button", { name: "Add condition", exact: true }).click();
   await page.getByLabel("Threshold 1", { exact: true }).fill("10");
   await page.getByRole("button", { name: "Add condition", exact: true }).click();
-  await page.getByLabel("Metric 2", { exact: true }).selectOption("maximum_drawdown");
-  await page.getByLabel("Comparison 2", { exact: true }).selectOption("lt");
+  await choose(page, "Metric 2", "maximum_drawdown");
+  await choose(page, "Comparison 2", "lt");
   await page.getByLabel("Threshold 2", { exact: true }).fill("20");
   await expect(page.getByText("Changes not applied.")).toBeVisible();
   await page.getByRole("button", { name: "Apply filters", exact: true }).click();
@@ -142,22 +123,24 @@ test("applies percentage and factor conditions globally and clears them on Type 
   const form = page.getByRole("form", { name: "Metric filters" });
   expect(await form.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
   await page.screenshot({ path: "../../.scratch/research-global-sort/metric-filters-mobile.png", fullPage: true });
-  await expect(page.getByLabel("Metric 2", { exact: true }).locator("option")).toHaveCount(3);
-  await expect(page.getByLabel("Metric 2", { exact: true }).locator('option[value="one_session_rank_ic"]')).toHaveCount(0);
-  await page.getByLabel("Filter by Type", { exact: true }).selectOption("factor_evaluation");
+  await page.getByRole("combobox", { name: "Metric 2", exact: true }).click();
+  await expect(page.getByRole("option")).toHaveCount(3);
+  await expect(page.getByRole("option", { name: "1-session Rank IC", exact: true })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await choose(page, "Filter by Type", "factor_evaluation");
   await expect.poll(() => requests.at(-1)?.has("metric_filters")).toBe(false);
   await expect(page.getByLabel("Threshold 1", { exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "Add condition", exact: true }).click();
   for (const metric of ["one_session_rank_ic", "five_session_rank_ic", "twenty_session_rank_ic"]) {
-    await page.getByLabel("Metric 1", { exact: true }).selectOption(metric);
+    await choose(page, "Metric 1", metric);
     await page.getByLabel("Threshold 1", { exact: true }).fill("0.05");
     await page.getByRole("button", { name: "Apply filters", exact: true }).click();
     await expect.poll(() => requests.at(-1)?.get("metric_filters")).toBe(JSON.stringify([
       { metric, operator: "gt", value: 0.05 },
     ]));
   }
-  await page.getByLabel("Metric 1", { exact: true }).selectOption("five_session_rank_ic");
-  await page.getByLabel("Comparison 1", { exact: true }).selectOption("gte");
+  await choose(page, "Metric 1", "five_session_rank_ic");
+  await choose(page, "Comparison 1", "gte");
   await page.getByLabel("Threshold 1", { exact: true }).fill("0.05");
   await page.getByRole("button", { name: "Apply filters", exact: true }).click();
   await expect.poll(() => requests.at(-1)?.get("metric_filters")).toBe(JSON.stringify([
@@ -165,4 +148,97 @@ test("applies percentage and factor conditions globally and clears them on Type 
   ]));
   await page.getByRole("button", { name: "Clear filters", exact: true }).click();
   await expect.poll(() => requests.at(-1)?.has("metric_filters")).toBe(false);
+});
+
+const folderList = { items: [{ id: "folder_default", name: "Default", is_default: true }], next_cursor: null };
+const sampleRun = {
+  id: "run_context", name: "Long research name 中文 " + "Context".repeat(16), status: "failed", failure_reason: "Execution unavailable",
+  folder_id: "folder_default", created_at: "2026-09-08T00:00:00Z", start_date: "2026-08-01", end_date: "2026-08-05",
+  formula_summary: "close", research_kind: "strategy_backtest",
+};
+
+test("returning from a Run keeps applied filters and page across language and width changes", async ({ page }) => {
+  const requests: URLSearchParams[] = [];
+  await page.route("http://research.test/**", route => {
+    const url = new URL(route.request().url());
+    if (url.pathname === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    if (url.pathname === "/api/research-folders") return route.fulfill({ json: folderList });
+    if (url.pathname === "/api/research-runs/run_context") return route.fulfill({ json: sampleRun });
+    requests.push(url.searchParams);
+    return route.fulfill({ json: { items: [sampleRun], total_count: 21 } });
+  });
+  await page.goto("http://research.test/");
+  await page.addStyleTag({ content: styles });
+  await page.addScriptTag({ content: timelineScript });
+  await choose(page, "Filter by Type", "strategy_backtest");
+  await page.getByRole("button", { name: "Add condition", exact: true }).click();
+  await page.getByLabel("Threshold 1", { exact: true }).fill("29");
+  await page.getByRole("button", { name: "Apply filters", exact: true }).click();
+  const pagination = page.getByRole("navigation", { name: "Research Runs pages", exact: true });
+  await pagination.getByRole("button", { name: "Next", exact: true }).click();
+  await expect(pagination).toContainText("Page 2 / 2");
+  await page.getByRole("link", { name: sampleRun.name, exact: true }).click();
+  await expect(page).toHaveURL(/\/research-runs\/run_context$/);
+  await page.getByRole("link", { name: "Back to Research Runs", exact: true }).click();
+  await expect(pagination).toContainText("Page 2 / 2");
+  await expect(page.getByLabel("Threshold 1", { exact: true })).toHaveValue("29");
+  expect(requests.at(-1)?.get("metric_filters")).toBe(JSON.stringify([{ metric: "annualized_excess_return", operator: "gt", value: 0.29 }]));
+  await page.getByRole("button", { name: "简体中文", exact: true }).click();
+  await page.setViewportSize({ width: 320, height: 844 });
+  await expect(page.getByRole("link", { name: sampleRun.name, exact: true })).toHaveAttribute("href", "/research-runs/run_context");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  const scroller = page.locator('[data-slot="table-container"]');
+  expect(await scroller.evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true);
+  await scroller.focus();
+  await scroller.press("ArrowRight");
+  await expect.poll(() => scroller.evaluate(element => element.scrollLeft)).toBeGreaterThan(0);
+});
+
+test("failed filter requests retain editable conditions and retry the same query", async ({ page }) => {
+  let reject = false;
+  const requests: URLSearchParams[] = [];
+  await page.route("http://research.test/**", route => {
+    const url = new URL(route.request().url());
+    if (url.pathname === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    if (url.pathname === "/api/research-folders") return route.fulfill({ json: folderList });
+    requests.push(url.searchParams);
+    return reject ? route.fulfill({ status: 503, json: { error: "unavailable" } }) : route.fulfill({ json: { items: [sampleRun], total_count: 1 } });
+  });
+  await page.goto("http://research.test/");
+  await page.addStyleTag({ content: styles });
+  await page.addScriptTag({ content: timelineScript });
+  await choose(page, "Filter by Type", "strategy_backtest");
+  await page.getByRole("button", { name: "Add condition", exact: true }).click();
+  await page.getByLabel("Threshold 1", { exact: true }).fill("10");
+  reject = true;
+  await page.getByRole("button", { name: "Apply filters", exact: true }).click();
+  await expect(page.getByRole("alert")).toBeVisible();
+  await expect(page.getByLabel("Threshold 1", { exact: true })).toHaveValue("10");
+  const failedQuery = requests.at(-1)?.toString();
+  reject = false;
+  await page.getByRole("button", { name: "Retry", exact: true }).click();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(page.getByRole("link", { name: sampleRun.name, exact: true })).toBeVisible();
+  expect(requests.at(-1)?.toString()).toBe(failedQuery);
+});
+
+test("an old response cannot replace a newer Type selection", async ({ page }) => {
+  let release: (() => void) | undefined;
+  await page.route("http://research.test/**", async route => {
+    const url = new URL(route.request().url());
+    if (url.pathname === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    if (url.pathname === "/api/research-folders") return route.fulfill({ json: folderList });
+    const kind = url.searchParams.get("research_kind");
+    if (kind === "strategy_backtest") await new Promise<void>(resolve => { release = resolve; });
+    return route.fulfill({ json: { items: [{ ...sampleRun, name: kind === "strategy_backtest" ? "Stale strategy" : "Current factor", research_kind: kind || "factor_evaluation" }], total_count: 1 } });
+  });
+  await page.goto("http://research.test/");
+  await page.addStyleTag({ content: styles });
+  await page.addScriptTag({ content: timelineScript });
+  await choose(page, "Filter by Type", "strategy_backtest");
+  await expect.poll(() => Boolean(release)).toBe(true);
+  await choose(page, "Filter by Type", "factor_evaluation");
+  await expect(page.getByRole("link", { name: "Current factor", exact: true })).toBeVisible();
+  release!();
+  await expect(page.getByRole("link", { name: "Stale strategy", exact: true })).toHaveCount(0);
 });

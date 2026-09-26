@@ -1,12 +1,14 @@
+import { ResearchFolderLoadFailure } from "./ResearchFolderLoadFailure";
+import { ResearchRunList } from "./ResearchRunList";
+import { useResearchRunListController } from "./useResearchRunListController";
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
 import { Progress } from "../components/ui/progress";
 import { StrategyResultView } from "./StrategyResultView";
-import type { ParseKeys } from "i18next";
 import { Trans } from "react-i18next";
 import { catalogLabel } from "../i18n/catalog";
-import { formatDecimal, formatDuration, formatNumber, formatPercent, formatUtcTimestamp } from "../i18n/format";
+import { formatDuration, formatNumber, formatUtcTimestamp } from "../i18n/format";
 import { folderDisplayName } from "../research/folders";
-import { formatRunError, formatExecutionFailure, readOrganizationError, type OrganizationError, type RunError, type HttpActionError } from "./errors";
+import { formatRunError, formatExecutionFailure, readOrganizationError, type OrganizationError, type HttpActionError } from "./errors";
 export { formatDuration } from "../i18n/format";
 import { i18n, useTranslation } from "../i18n";
 import { CurrentDataRerunOrigin, type RerunOrigin } from "../analysis/CurrentDataRerun";
@@ -17,12 +19,9 @@ import { FrozenFrameworkModules, FrozenPythonProgram, FrozenSimulationCosts } fr
 import {
   CaretDown,
   CaretLeft,
-  CaretRight,
-  CaretUp,
-  CaretUpDown,
   CheckCircle,
 } from "@phosphor-icons/react";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 
 import { FactorEvidence } from "../analysis/FactorEvidence";
 import { CommonInputObservations } from "../analysis/CommonInputObservations";
@@ -34,7 +33,6 @@ import {
 } from "../research/draft";
 import { followCoreLink } from "../shell/navigation";
 import { ResearchBatchCancelButton } from "./ResearchBatchesPage";
-import { ResearchRunsNavigation } from "./ResearchRunsNavigation";
 import { useResearchRunDetailController } from "./useResearchRunDetailController";
 import { Page, PageContent, PageHeader, Section } from "../components/layout/Page";
 import { Button } from "../components/ui/button";
@@ -224,16 +222,11 @@ type StrategyBacktestKeyMetrics = {
   maximum_drawdown: number;
 };
 
-type ResearchRunList = { items: ResearchRun[]; total_count: number };
 export type ResearchFolderOption = {
   id: string;
   name: string;
   is_default: boolean;
 };
-type ResearchFolderList = { items: ResearchFolderOption[]; next_cursor: null };
-type LoadState = "loading" | "refreshing" | null;
-const RESEARCH_RUN_PAGE_SIZE = 20;
-type ResearchKindFilter = "" | ResearchRun["research_kind"];
 
 export function ResearchRunsPage({ researcherId, runId }: {
   researcherId: string;
@@ -242,220 +235,16 @@ export function ResearchRunsPage({ researcherId, runId }: {
   const { t } = useTranslation("runs");
   const detail = useResearchRunDetailController(runId);
   const { run } = detail;
-  const [items, setItems] = useState<ResearchRun[] | null>(null);
-  const [folders, setFolders] = useState<ResearchFolderOption[]>([]);
-  const [folderFilter, setFolderFilter] = useState("");
-  const [researchKindFilter, setResearchKindFilter] = useState<ResearchKindFilter>("");
-  const [pageIndex, setPageIndex] = useState(0);
-  const [sort, setSort] = useState<ResearchRunSort>(DEFAULT_RESEARCH_RUN_SORT);
-  const [metricFilters, setMetricFilters] = useState<ResearchMetricFilter[]>([]);
-  const [totalCount, setTotalCount] = useState<number | null>(null);
-  const [folderError, setFolderError] = useState<"folderError" | null>(null);
-  const [error, setError] = useState<RunError | null>(null);
-  const [loadState, setLoadState] = useState<LoadState>("loading");
-  const [refreshGeneration, setRefreshGeneration] = useState(0);
-  const [folderRefreshGeneration, setFolderRefreshGeneration] = useState(0);
-  const loadGeneration = useRef(0);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    setFolderError(null);
-    void coreFetch("/api/research-folders", { signal: controller.signal })
-      .then(async (response) => {
-        if (!response.ok) throw new Error("Research Folders unavailable");
-        const payload = (await response.json()) as ResearchFolderList;
-        setFolders(payload.items);
-      })
-      .catch((reason: unknown) => {
-        if (reason instanceof DOMException && reason.name === "AbortError") return;
-        setFolderError("folderError");
-      });
-    return () => controller.abort();
-  }, [folderRefreshGeneration]);
-
-  useEffect(() => {
-    if (runId !== undefined) return;
-    const controller = new AbortController();
-    const generation = ++loadGeneration.current;
-    let timeout: number | undefined;
-    setError(null);
-    setLoadState(items === null ? "loading" : "refreshing");
-    const path = researchRunListPath({
-      page: pageIndex + 1,
-      sort,
-      metricFilters,
-      folderId: folderFilter,
-      researchKind: researchKindFilter,
-    });
-
-    async function load(polling = false) {
-      try {
-        const response = await coreFetch(path, { signal: controller.signal });
-        if (!response.ok) throw new Error("ResearchRun unavailable");
-        if (generation !== loadGeneration.current) return;
-        const payload = (await response.json()) as ResearchRunList;
-        const nextItems = payload.items;
-        if (generation !== loadGeneration.current) return;
-        setItems(nextItems);
-        setTotalCount(payload.total_count);
-        const lastPageIndex = Math.max(0, Math.ceil(payload.total_count / RESEARCH_RUN_PAGE_SIZE) - 1);
-        if (pageIndex > lastPageIndex) setPageIndex(lastPageIndex);
-        if (nextItems.some((item) => ["queued", "running", "cancelling"].includes(item.status))) {
-          timeout = window.setTimeout(() => void load(true), 500);
-        }
-        if (!polling) setLoadState(null);
-      } catch (reason: unknown) {
-        if (reason instanceof DOMException && reason.name === "AbortError") return;
-        if (generation !== loadGeneration.current) return;
-        setLoadState(null);
-        setError({ code: "loadError" });
-      }
-    }
-
-    void load();
-    return () => {
-      if (generation === loadGeneration.current) loadGeneration.current += 1;
-      if (timeout !== undefined) window.clearTimeout(timeout);
-      controller.abort();
-    };
-  }, [pageIndex, folderFilter, refreshGeneration, researchKindFilter, runId, sort, metricFilters]);
-
-  function refresh() {
-    setRefreshGeneration((generation) => generation + 1);
-  }
-
-  function refreshFolders() {
-    setFolderRefreshGeneration((generation) => generation + 1);
-  }
-
-  function resetListPage(): void {
-    setItems([]);
-    setLoadState("refreshing");
-    setPageIndex(0);
-    setTotalCount(null);
-  }
-
-  function changeSort(value: ResearchRunSort): void {
-    setSort(value);
-    resetListPage();
-  }
-
-  function changeFolderFilter(value: string): void {
-    setFolderFilter(value);
-    resetListPage();
-  }
-
-  function changeResearchKindFilter(value: ResearchKindFilter): void {
-    setResearchKindFilter(value);
-    setMetricFilters([]);
-    setSort(DEFAULT_RESEARCH_RUN_SORT);
-    resetListPage();
-  }
-
-  function showPreviousPage(): void {
-    if (pageIndex === 0) return;
-    setItems([]);
-    setLoadState("refreshing");
-    setPageIndex((current) => current - 1);
-  }
-
-  function showNextPage(): void {
-    if (totalCount === null || (pageIndex + 1) * RESEARCH_RUN_PAGE_SIZE >= totalCount) return;
-    setItems([]);
-    setLoadState("refreshing");
-    setPageIndex((current) => current + 1);
-  }
-
-  const visibleError = runId === undefined ? error : detail.error;
-  if (visibleError) {
-    return (
-      <section aria-label={t("title")} className="state-section">
-        <h1>{t("run")}</h1>
-        <p role="alert">{formatRunError(visibleError)}</p>
-        <div className="flex flex-wrap gap-2">
-          {runId !== undefined ? <ResearchRunBackLink /> : null}
-          <Button variant="outline" onClick={runId === undefined ? refresh : detail.refresh}>{t("retry")}</Button>
-        </div>
-      </section>
-    );
-  }
-  if (runId && run?.id !== runId) {
-    return <section aria-label={t("title")} className="state-section"><p>{t("loadingRun")}</p></section>;
-  }
-  if (!runId && items === null) {
-    return <section aria-label={t("title")} className="state-section"><p>{t("loadingRuns")}</p></section>;
-  }
-  if (runId && run?.id === runId) {
-    return <ResearchRunDetail key={run.id}
-      detail={detail} folderError={folderError} folders={folders}
-      onRefreshFolders={refreshFolders} researcherId={researcherId} run={run}
-    />;
-  }
-  return (
-    <section aria-label={t("title")} className="research-runs-list-page">
-      <header className="page-header">
-        <h1>{t("title")}</h1>
-      </header>
-      <ResearchRunsNavigation active="runs" />
-      <div className="research-run-list-toolbar">
-        <div className="research-run-filters">
-          {folderError !== null ? (
-            <ResearchFolderLoadFailure error={folderError} onRetry={refreshFolders} />
-          ) : folders.length === 0 ? (
-            <p role="status">{t("loadingFolders")}</p>
-          ) : (
-            <label>{t("folder")}<select
-                aria-label={t("filterFolder")}
-                onChange={(event) => changeFolderFilter(event.target.value)}
-                value={folderFilter}
-              >
-                <option value="">{t("allFolders")}</option>
-                {folders.map((folder) => (
-                  <option key={folder.id} value={folder.id}>{folderDisplayName(folder)}</option>
-                ))}
-              </select>
-            </label>
-          )}
-          <label>{t("type")}<select
-              aria-label={t("filterType")}
-              onChange={(event) => changeResearchKindFilter(
-                event.target.value as ResearchKindFilter,
-              )}
-              value={researchKindFilter}
-            >
-              <option value="">{t("allTypes")}</option>
-              <option value="factor_evaluation">{i18n.t("research:factor_evaluation")}</option>
-              <option value="strategy_backtest">{i18n.t("research:strategy_backtest")}</option>
-            </select>
-          </label>
-        </div>
-      </div>
-      {researchKindFilter !== "" && (
-        <ResearchMetricFilters key={`metric-filters-${researchKindFilter}`} researchKind={researchKindFilter}
-          onApply={(filters) => { setMetricFilters(filters); resetListPage(); }} />
-      )}
-      {loadState === "refreshing" ? (
-        <p className="research-run-list-status" role="status">{t("loadingRuns")}</p>
-      ) : null}
-      {loadState === null && items?.length === 0 ? (
-        <p className="research-run-list-empty">{t("empty")}</p>
-      ) : null}
-      <ResearchRunHistory
-        items={items ?? []}
-        key={researchKindFilter || "all"}
-        researchKind={researchKindFilter}
-        sort={sort}
-        onSortChange={changeSort}
-      />
-      <ResearchRunPagination
-        totalCount={totalCount}
-        loading={loadState !== null || error !== null}
-        onNextPage={showNextPage}
-        onPreviousPage={showPreviousPage}
-        pageIndex={pageIndex}
-      />
-    </section>
-  );
+  const list = useResearchRunListController(runId);
+  const { folders, folderError, refreshFolders } = list;
+  if (runId && detail.error) return <Page className="px-4 py-6 sm:px-6 lg:px-8"><PageContent>
+    <PageHeader title={t("run")} />
+    <Alert variant="destructive"><AlertDescription>{formatRunError(detail.error)}</AlertDescription></Alert>
+    <div className="mt-4 flex flex-wrap gap-2"><ResearchRunBackLink /><Button variant="outline" onClick={detail.refresh}>{t("retry")}</Button></div>
+  </PageContent></Page>;
+  if (runId && run?.id !== runId) return <Page className="p-6"><p role="status">{t("loadingRun")}</p></Page>;
+  if (runId && run?.id === runId) return <ResearchRunDetail key={run.id} detail={detail} folderError={folderError} folders={folders} onRefreshFolders={refreshFolders} researcherId={researcherId} run={run} />;
+  return <ResearchRunList list={list} />;
 }
 
 function ResearchRunDetail({ detail, folderError, folders, onRefreshFolders, researcherId, run }: {
@@ -559,8 +348,7 @@ function ResearchRunDetail({ detail, folderError, folders, onRefreshFolders, res
 export function ResearchRunBackLink() {
   const { t } = useTranslation("runs");
   return (
-    <a className="button button-quiet" href="/research-runs" onClick={followCoreLink}>
-      <CaretLeft aria-hidden="true" size={13} weight="bold" />{t("back")}</a>
+    <Button variant="outline" nativeButton={false} render={<a href="/research-runs" onClick={followCoreLink} />}><CaretLeft aria-hidden="true" data-icon="inline-start" />{t("back")}</Button>
   );
 }
 
@@ -599,54 +387,6 @@ export function ResearchDeleteDialog({
       </AlertDialogFooter>
     </AlertDialogContent>
   </AlertDialog>;
-}
-
-export function researchRunListPath({
-  page,
-  metricFilters = [],
-  sort,
-  folderId,
-  researchKind,
-}: {
-  page: number;
-  metricFilters?: ResearchMetricFilter[];
-  sort: ResearchRunSort;
-  folderId: string;
-  researchKind: ResearchKindFilter;
-}): string {
-  const parameters = new URLSearchParams({ page: String(page), page_size: String(RESEARCH_RUN_PAGE_SIZE), sort_by: sort.key, sort_direction: sort.direction });
-  if (metricFilters.length) parameters.set("metric_filters", JSON.stringify(metricFilters));
-  if (folderId !== "") parameters.set("folder_id", folderId);
-  if (researchKind !== "") parameters.set("research_kind", researchKind);
-  return `/api/research-runs?${parameters.toString()}`;
-}
-
-export function ResearchRunPagination({
-  totalCount,
-  loading,
-  onNextPage,
-  onPreviousPage,
-  pageIndex,
-}: {
-  totalCount: number | null;
-  loading: boolean;
-  onNextPage: () => void;
-  onPreviousPage: () => void;
-  pageIndex: number;
-}) {
-  const { t } = useTranslation("runs");
-  return (
-    <nav aria-label={t("pages")} className="research-run-pagination">
-      <button disabled={loading || pageIndex === 0} onClick={onPreviousPage} type="button">
-        <CaretLeft aria-hidden="true" size={13} weight="bold" />{t("previous")}</button>
-      <span className="research-run-pagination-summary" aria-live="polite">
-        <span>{totalCount === null ? t("loading") : t("total", { total: formatNumber(totalCount), size: formatNumber(RESEARCH_RUN_PAGE_SIZE) })}</span>
-        {totalCount !== null && <span>{t("page", { page: formatNumber(totalCount === 0 ? 0 : pageIndex + 1), pages: formatNumber(Math.ceil(totalCount / RESEARCH_RUN_PAGE_SIZE)) })}</span>}
-      </span>
-      <button disabled={loading || totalCount === null || (pageIndex + 1) * RESEARCH_RUN_PAGE_SIZE >= totalCount} onClick={onNextPage} type="button">{t("next")}<CaretRight aria-hidden="true" size={13} weight="bold" />
-      </button>
-    </nav>
-  );
 }
 
 export function ResearchRunProgressView({
@@ -871,22 +611,6 @@ export function UseAsDraftPanel({
   );
 }
 
-export function ResearchFolderLoadFailure({
-  error,
-  onRetry,
-}: {
-  error: "folderError";
-  onRetry: () => void;
-}) {
-  const { t } = useTranslation("runs");
-  return (
-    <section aria-label={t("folderAvailability")}>
-      <p role="alert">{t(error)}</p>
-      <Button variant="outline" onClick={onRetry}>{t("retryFolders")}</Button>
-    </section>
-  );
-}
-
 export function ResearchOrganizationPanel({
   run,
   folders,
@@ -965,324 +689,8 @@ function ResearchFolderSelect({ id, label, folders, value, onChange, disabled }:
   </Field>;
 }
 
-export type ResearchRunSortKey =
-  | "created_at"
-  | "annualized_excess_return"
-  | "sharpe"
-  | "maximum_drawdown"
-  | "one_session_rank_ic"
-  | "five_session_rank_ic"
-  | "twenty_session_rank_ic";
-type ResearchRunSortDirection = "ascending" | "descending";
-type ResearchRunSort = {
-  key: ResearchRunSortKey;
-  direction: ResearchRunSortDirection;
-};
-type ResearchRunMetricColumn = {
-  key: Exclude<ResearchRunSortKey, "created_at">;
-  label: ParseKeys<"runs">;
-  shortLabel: ParseKeys<"runs">;
-};
-
-const DEFAULT_RESEARCH_RUN_SORT: ResearchRunSort = {
-  key: "created_at",
-  direction: "descending",
-};
-
-const FACTOR_RESEARCH_RUN_METRICS: ResearchRunMetricColumn[] = [
-  { key: "one_session_rank_ic", label: "metrics.one_session_rank_ic", shortLabel: "shortMetrics.one_session_rank_ic" },
-  { key: "five_session_rank_ic", label: "metrics.five_session_rank_ic", shortLabel: "shortMetrics.five_session_rank_ic" },
-  { key: "twenty_session_rank_ic", label: "metrics.twenty_session_rank_ic", shortLabel: "shortMetrics.twenty_session_rank_ic" },
-];
-
-const STRATEGY_RESEARCH_RUN_METRICS: ResearchRunMetricColumn[] = [
-  {
-    key: "annualized_excess_return",
-    label: "metrics.annualized_excess_return",
-    shortLabel: "shortMetrics.annualized_excess_return",
-  },
-  { key: "sharpe", label: "metrics.sharpe", shortLabel: "shortMetrics.sharpe" },
-  { key: "maximum_drawdown", label: "metrics.maximum_drawdown", shortLabel: "shortMetrics.maximum_drawdown" },
-];
-
-export type ResearchMetricFilter = {
-  metric: Exclude<ResearchRunSortKey, "created_at">;
-  operator: "gt" | "gte" | "lt" | "lte";
-  value: number;
-};
-
-type MetricFilterDraft = Omit<ResearchMetricFilter, "value"> & { id: number; value: string };
-
-export function ResearchMetricFilters({ researchKind, onApply }: {
-  researchKind: Exclude<ResearchKindFilter, "">;
-  onApply: (filters: ResearchMetricFilter[]) => void;
-}) {
-  const { t } = useTranslation("runs");
-  const columns = researchKind === "strategy_backtest"
-    ? STRATEGY_RESEARCH_RUN_METRICS
-    : FACTOR_RESEARCH_RUN_METRICS;
-  const [rows, setRows] = useState<MetricFilterDraft[]>([]);
-  const [applied, setApplied] = useState("[]");
-  const nextId = useRef(0);
-  const dirty = JSON.stringify(rows) !== applied;
-  function update(id: number, values: Partial<MetricFilterDraft>) {
-    setRows(current => current.map(row => row.id === id ? { ...row, ...values } : row));
-  }
-  return (
-    <form className="research-metric-filters" aria-label={t("filters.title")} onSubmit={event => {
-      event.preventDefault();
-      onApply(rows.map(row => ({ metric: row.metric, operator: row.operator,
-        value: Number(row.value) / (isPercentMetric(row.metric) ? 100 : 1) })));
-      setApplied(JSON.stringify(rows));
-    }}>
-      <div className="research-metric-filter-actions">
-        <span>{t("filters.title")}</span>
-        <button type="button" disabled={rows.length >= 12} onClick={() => {
-          const id = nextId.current++;
-          setRows(current => [...current, { id, metric: columns[0].key, operator: "gt", value: "" }]);
-        }}>{t("filters.add")}</button>
-        {(rows.length > 0 || applied !== "[]") && <>
-          <button type="submit" disabled={!dirty}>{t("filters.apply")}</button>
-          <button type="button" onClick={() => { setRows([]); setApplied("[]"); onApply([]); }}>{t("filters.clear")}</button>
-        </>}
-      </div>
-      {rows.length > 0 && <p>{t("filters.allMatch")}{researchKind === "strategy_backtest" && t("filters.percent")}</p>}
-      {rows.map((row, index) => (
-        <div className="research-metric-filter-row" key={row.id}>
-          <label>{t("filters.metric")}<select aria-label={t("filters.metricAt", { index: formatNumber(index + 1) })} value={row.metric}
-              onChange={event => update(row.id, { metric: event.target.value as ResearchMetricFilter["metric"], value: "" })}>
-              {columns.map(column => <option key={column.key} value={column.key}>{t(column.label)}</option>)}
-            </select>
-          </label>
-          <label>{t("filters.comparison")}<select aria-label={t("filters.comparisonAt", { index: formatNumber(index + 1) })} value={row.operator}
-              onChange={event => update(row.id, { operator: event.target.value as ResearchMetricFilter["operator"] })}>
-              <option value="gt">&gt;</option><option value="gte">≥</option>
-              <option value="lt">&lt;</option><option value="lte">≤</option>
-            </select>
-          </label>
-          <label>{t(isPercentMetric(row.metric) ? "filters.valuePercent" : "filters.value")}
-            <input aria-label={t("filters.thresholdAt", { index: formatNumber(index + 1) })} type="number" step="any" required value={row.value}
-              onChange={event => update(row.id, { value: event.target.value })} />
-          </label>
-          <button type="button" aria-label={t("filters.removeAt", { index: formatNumber(index + 1) })}
-            onClick={() => setRows(current => current.filter(item => item.id !== row.id))}>{t("filters.remove")}</button>
-        </div>
-      ))}
-      {dirty && <p role="status">{t("filters.notApplied")}</p>}
-    </form>
-  );
-}
-
-function isPercentMetric(metric: ResearchMetricFilter["metric"]): boolean {
-  return metric === "annualized_excess_return" || metric === "maximum_drawdown";
-}
-
-export function ResearchRunHistory({
-  items,
-  researchKind = "",
-  sort,
-  onSortChange,
-}: {
-  items: ResearchRun[];
-  researchKind?: ResearchKindFilter;
-  sort: ResearchRunSort;
-  onSortChange: (sort: ResearchRunSort) => void;
-}) {
-  const { t } = useTranslation("runs");
-  const metricColumns = researchRunMetricColumns(researchKind);
-
-  function changeSort(key: ResearchRunSortKey) {
-    onSortChange({ key, direction: sort.key === key
-      ? (sort.direction === "ascending" ? "descending" : "ascending")
-      : defaultResearchRunSortDirection(key) });
-  }
-
-  function selectSort(key: ResearchRunSortKey) {
-    onSortChange({ key, direction: defaultResearchRunSortDirection(key) });
-  }
-
-  function toggleSortDirection() {
-    onSortChange({ ...sort, direction: sort.direction === "ascending" ? "descending" : "ascending" });
-  }
-
-  const MobileSortIcon = sort.direction === "ascending" ? CaretUp : CaretDown;
-
-  return (
-    <div className="research-run-history-container">
-      <div className="research-run-mobile-sort">
-        <label>{t("sortBy")}<select
-            aria-label={t("sortByAria")}
-            onChange={(event) => selectSort(event.target.value as ResearchRunSortKey)}
-            value={sort.key}
-          >
-            <option value="created_at">{t("created")}</option>
-            {metricColumns.map((column) => (
-              <option key={column.key} value={column.key}>{t(column.label)}</option>
-            ))}
-          </select>
-        </label>
-        <button
-          aria-label={t(sort.direction === "ascending" ? "sortAscending" : "sortDescending")}
-          onClick={toggleSortDirection}
-          type="button"
-        >
-          <MobileSortIcon aria-hidden="true" size={14} weight="bold" />
-          {t(sort.direction === "ascending" ? "ascending" : "descending")}
-        </button>
-      </div>
-      <div className="research-run-history-scroll">
-      <table aria-label={t("title")} className="research-run-history">
-        <colgroup>
-          <col className="research-run-col-name" />
-          <col className="research-run-col-type" />
-          <col className="research-run-col-created" />
-          <col className="research-run-col-status" />
-          {metricColumns.length === 0 ? (
-            <col className="research-run-col-summary" />
-          ) : metricColumns.map((column) => (
-            <col className="research-run-col-metric" key={column.key} />
-          ))}
-        </colgroup>
-        <thead>
-          <tr>
-            <th scope="col">{i18n.t("research:title")}</th>
-            <th scope="col">{t("type")}</th>
-            <SortableResearchRunHeading
-              direction={sort.direction}
-              isActive={sort.key === "created_at"}
-              label={t("createdUtc")}
-              onSort={() => changeSort("created_at")}
-            />
-            <th scope="col">{t("status")}</th>
-            {metricColumns.length === 0 ? (
-              <th className="research-run-metric-heading" scope="col">{t("resultSummary")}</th>
-            ) : metricColumns.map((column) => (
-              <SortableResearchRunHeading
-                direction={sort.direction}
-                isActive={sort.key === column.key}
-                key={column.key}
-                label={t(column.label)}
-                onSort={() => changeSort(column.key)}
-              />
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {items.map((item) => (
-            <tr key={item.id}>
-              <th scope="row">
-                <a href={`/research-runs/${item.id}`} onClick={followCoreLink}>{item.name}</a>
-              </th>
-              <td data-label={t("type")}>{researchKindLabel(item.research_kind)}</td>
-              <td data-label={t("createdUtc")}>
-                <time dateTime={item.created_at}>{formatResearchRunCreatedAt(item.created_at)}</time>
-              </td>
-              <td data-label={t("status")}><span className={`run-status run-status-${item.status}`}>{t(`statuses.${item.status}`)}</span></td>
-              {metricColumns.length === 0 ? (
-                <ResearchRunResultSummary item={item} />
-              ) : metricColumns.map((column) => (
-                <td className="research-run-metric" data-label={t(column.label)} key={column.key}>
-                  {formatResearchRunMetric(item, column.key)}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      </div>
-    </div>
-  );
-}
-
-function ResearchRunResultSummary({ item }: { item: ResearchRun }) {
-  const { t } = useTranslation("runs");
-  const columns = item.research_kind === "factor_evaluation"
-    ? FACTOR_RESEARCH_RUN_METRICS
-    : STRATEGY_RESEARCH_RUN_METRICS;
-  return (
-    <td className="research-run-result-summary" data-label={t("resultSummary")}>
-      <div>
-        {columns.map((column) => (
-          <span key={column.key}>
-            <small>{t(column.shortLabel)}</small>
-            <strong>{formatResearchRunMetric(item, column.key)}</strong>
-          </span>
-        ))}
-      </div>
-    </td>
-  );
-}
-
-function researchRunMetricColumns(
-  researchKind: ResearchKindFilter,
-): ResearchRunMetricColumn[] {
-  if (researchKind === "factor_evaluation") return FACTOR_RESEARCH_RUN_METRICS;
-  if (researchKind === "strategy_backtest") return STRATEGY_RESEARCH_RUN_METRICS;
-  return [];
-}
-
-function defaultResearchRunSortDirection(
-  key: ResearchRunSortKey,
-): ResearchRunSortDirection {
-  return key === "maximum_drawdown" ? "ascending" : "descending";
-}
-
-function SortableResearchRunHeading({
-  direction,
-  isActive,
-  label,
-  onSort,
-}: {
-  direction: ResearchRunSortDirection;
-  isActive: boolean;
-  label: string;
-  onSort: () => void;
-}) {
-  const Icon = isActive
-    ? direction === "ascending" ? CaretUp : CaretDown
-    : CaretUpDown;
-  return (
-    <th aria-sort={isActive ? direction : "none"} scope="col">
-      <button className="research-run-sort" onClick={onSort} type="button">
-        {label}
-        <Icon aria-hidden="true" size={12} weight="bold" />
-      </button>
-    </th>
-  );
-}
-
-export function formatResearchRunCreatedAt(value: string): string {
-  return formatUtcTimestamp(value);
-}
-
-function researchRunSortValue(item: ResearchRun, key: ResearchRunSortKey): number | null {
-  if (key === "created_at") {
-    const value = new Date(item.created_at).getTime();
-    return Number.isFinite(value) ? value : null;
-  }
-  const metrics = item.key_metrics;
-  if (key === "annualized_excess_return" || key === "sharpe" || key === "maximum_drawdown") {
-    return metrics?.research_kind === "strategy_backtest" ? metrics[key] : null;
-  }
-  return metrics?.research_kind === "factor_evaluation" ? metrics[key] : null;
-}
-
-function formatResearchRunMetric(
-  item: ResearchRun,
-  key: Exclude<ResearchRunSortKey, "created_at">,
-): string {
-  const value = researchRunSortValue(item, key);
-  if (key === "annualized_excess_return") return formatSignedPercent(value);
-  if (key === "maximum_drawdown") return formatPercent(value);
-  return formatDecimal(value);
-}
-
 export function ResearchResultView({ result }: { result: ResearchResult }) {
   return "factor" in result ? <FactorResultView result={result} /> : <StrategyResultView result={result} />;
-}
-
-function formatSignedPercent(value: number | null) {
-  return formatPercent(value, { signed: true });
 }
 
 function researchKindLabel(value: ResearchRun["research_kind"]): string {

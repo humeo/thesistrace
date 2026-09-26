@@ -1,6 +1,3 @@
-.research-history-navigation { display: flex; gap: 24px; border-bottom: 1px solid var(--line); margin-bottom: 24px; }
-.research-history-navigation a { padding: 12px 0; color: var(--ink-soft); text-decoration: none; border-bottom: 2px solid transparent; }
-.research-history-navigation a[aria-current="page"] { color: var(--ink); border-color: var(--primary); }
 .research-batches-page { min-width: 0; }
 .batch-page-header, .batch-detail-heading, .batch-detail-actions, .batch-list-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .batch-detail-heading { padding: 24px 0; align-items: flex-start; border-bottom: 1px solid var(--line); }

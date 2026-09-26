@@ -578,16 +578,17 @@ test("ResearchRun return keeps the selected Type without a document reload", asy
   });
 
   await page.goto("/research-runs");
-  await page.getByLabel("Filter by Type").selectOption("factor_evaluation");
+  await page.getByRole("combobox", { name: "Filter by Type", exact: true }).click();
+  await page.getByRole("option", { name: "Factor Evaluation", exact: true }).click();
   await page.getByRole("link", { name: "Filtered Factor", exact: true }).click();
   await expect(page).toHaveURL(/\/research-runs\/run_feedface1234abcd9876$/);
-  await expect(page.getByRole("heading", { name: "ResearchRun", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Filtered Factor", exact: true })).toBeVisible();
   documentRequests.length = 0;
 
   await page.getByRole("link", { name: "Back to Research Runs", exact: true }).click();
 
   await expect(page).toHaveURL(/\/research-runs$/);
-  await expect(page.getByLabel("Filter by Type")).toHaveValue("factor_evaluation");
+  await expect(page.getByRole("combobox", { name: "Filter by Type", exact: true })).toContainText("Factor Evaluation");
   expect(documentRequests).toEqual([]);
 });
 
