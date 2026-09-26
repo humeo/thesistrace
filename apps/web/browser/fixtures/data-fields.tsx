@@ -1,3 +1,5 @@
+import "../../src/styles.css";
+import { Toaster } from "../../src/components/ui/toast";
 import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { AlphaCatalog } from "../../src/alphaCatalog";
@@ -16,8 +18,8 @@ function DataFieldsFixture() {
       <button type="button" onClick={() => changeInterfaceLanguage("en")}>English</button>
       <button type="button" onClick={() => changeInterfaceLanguage("zh-CN")}>简体中文</button>
     </nav>
-    <DataPage />
-    <section style={{ height: 200 }} aria-labelledby="alpha-formula-title">
+    <DataPage /><Toaster />
+    <section style={{ display: "grid", gap: 16, padding: 16, minWidth: 0 }} aria-labelledby="alpha-formula-title">
       <h2 id="alpha-formula-title">Alpha formula</h2>
       <button type="button" onClick={() => {
         setFormula("ts_mean(close, 0)");
@@ -35,7 +37,7 @@ function DataFieldsFixture() {
           range: { start: { offset: 0, line: 1, column: 1 }, end: { offset: 1, line: 1, column: 2 } },
         }]);
       }}>Show Unicode diagnostic</button>
-      <AlphaFormulaEditor catalog={catalog as AlphaCatalog} diagnostics={diagnostics}
+      <AlphaFormulaEditor className="h-[280px] min-w-0 overflow-hidden" catalog={catalog as AlphaCatalog} diagnostics={diagnostics}
         formula={formula} selection={selection} onChange={(value, nextSelection) => {
           setFormula(value);
           setSelection(nextSelection);

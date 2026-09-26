@@ -832,3 +832,31 @@ for (const width of [1280, 390]) {
     } } });
   });
 }
+
+test("Direct field catalog uses its narrow container and restores nested detail focus on desktop", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await page.route("https://exposure.test/**", route => route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' }));
+  await page.goto("https://exposure.test/");
+  await page.addStyleTag({ content: styles });
+  await page.addScriptTag({ content: script });
+  await select(page, page.getByLabel("Strategy mode", { exact: true }), "direct");
+  const trigger = page.getByRole("button", { name: "Browse fields", exact: true });
+  await trigger.click();
+  const catalog = page.getByRole("dialog", { name: "Field browser", exact: true });
+  await expect(catalog.getByRole("searchbox", { name: "Search fields", exact: true })).toBeFocused();
+  const list = catalog.getByRole("region", { name: "Research fields", exact: true });
+  expect((await list.boundingBox())?.width).toBeGreaterThan(280);
+  await expect(catalog.getByRole("complementary", { name: "Field details", exact: true })).toHaveCount(0);
+  const field = catalog.getByRole("button", { name: "Adjusted close", exact: true });
+  await field.click();
+  const detail = page.getByRole("dialog", { name: "Field details", exact: true });
+  await expect(detail).toBeVisible();
+  await expect(detail.getByRole("heading", { level: 3 })).toHaveText("Adjusted close");
+  await page.keyboard.press("Escape");
+  await expect(detail).toHaveCount(0);
+  await expect(field).toBeFocused();
+  await expect(catalog).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(catalog).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+});

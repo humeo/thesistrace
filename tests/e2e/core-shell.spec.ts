@@ -804,8 +804,8 @@ test("Default Folder retains one local Research Draft with authoritative Formula
   try {
     await page.goto("/data");
     await expect(page.getByRole("heading", { name: "Data", exact: true })).toBeVisible();
-    await expect(page.locator(".data-coverage-row").filter({ has: page.getByRole("heading", { name: "Market data", exact: true }) }).getByText("Available", { exact: true })).toBeVisible();
-    await expect(page.locator(".data-coverage-row").filter({ has: page.getByRole("heading", { name: "Financial data", exact: true }) }).getByText("Available", { exact: true })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Data coverage", exact: true }).locator("tbody tr").filter({ has: page.getByRole("heading", { name: "Market data", exact: true }) }).getByText("Available", { exact: true })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Data coverage", exact: true }).locator("tbody tr").filter({ has: page.getByRole("heading", { name: "Financial data", exact: true }) }).getByText("Available", { exact: true })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Research fields" })).toBeVisible();
     await expect(page.getByText("Coverage describes the dataset")).toHaveCount(0);
     await expectRemovedAuthoringControlsToBeAbsent(page);
@@ -1072,12 +1072,12 @@ test("Complete field catalog composes one Formula and starts its DailyTrack", { 
     expect(fields.filter((field) => field.report_period_selection === "latest_visible_ttm")).toHaveLength(19);
     await expect(page.getByRole("heading", { name: "Research fields" })).toBeVisible();
     await expect(page.getByText("226 fields", { exact: true })).toBeVisible();
-    await expect(page.locator(".data-coverage-row")).toHaveCount(4);
+    await expect(page.getByRole("region", { name: "Data coverage", exact: true }).locator("tbody tr")).toHaveCount(4);
     const categories = page.getByRole("group", { name: "Field category" });
     await expect(categories.getByRole("button", { name: /^Market/ })).toContainText("22");
     await expect(categories.getByRole("button", { name: /^Financial/ })).toContainText("204");
     const rows = page.getByRole("region", { name: "Research fields" })
-      .locator(".data-field-table tbody tr");
+      .locator("tbody tr");
     const pages = page.getByRole("navigation", { name: "Field pages" });
     await expect(rows).toHaveCount(25);
     await pages.getByRole("button", { name: "Next", exact: true }).click();
@@ -1090,16 +1090,18 @@ test("Complete field catalog composes one Formula and starts its DailyTrack", { 
     await expect(rows).toHaveCount(1);
     await expect(rows).toContainText("Unadjusted close");
     await search.fill("");
-    await page.getByRole("combobox", { name: "Research purpose" }).selectOption("盈利");
+    await page.getByRole("combobox", { name: "Research purpose" }).click();
+    await page.getByRole("option", { name: "Earnings", exact: true }).click();
     await expect(rows).toHaveCount(12);
-    await page.getByRole("combobox", { name: "Research purpose" }).selectOption("");
+    await page.getByRole("combobox", { name: "Research purpose" }).click();
+    await page.getByRole("option", { name: "All purposes", exact: true }).click();
     await search.fill("单季净资产收益率");
     await expect(rows).toHaveCount(1);
     await expect(rows).toContainText("q_roe");
     await search.fill("revenue");
     await rows.filter({ has: page.getByText("revenue", { exact: true }) })
       .getByRole("button").click();
-    await expect(page.getByRole("complementary", { name: "Field details" }))
+    await expect(page.getByRole("complementary", { name: "Field details" }).or(page.getByRole("dialog", { name: "Field details", exact: true })))
       .toContainText("Latest full year visible on each Research Session");
     await page.goto("/research?new");
     await fillCompleteDraft(page, {

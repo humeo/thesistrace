@@ -19,7 +19,7 @@ export const dataEn = {
   purpose: "Research purpose", allPurposes: "All purposes", field: "Field", formulaName: "Formula name", unit: "Unit",
   pages: "Field pages", showing: "Showing {{start}}–{{end}} of {{total}}", previous: "Previous", next: "Next",
   noMatches: "No fields match these filters.", noFields: "No fields are currently available for research.",
-  details: "Field details", copyFormula: "Copy formula name", copied: "Copied", copyUnavailable: "Copy unavailable. Select and copy the text.",
+  details: "Field details", closeDetails: "Close field details", copyFormula: "Copy formula name", copied: "Copied", copyUnavailable: "Copy unavailable. Select and copy the text.",
   period: "Period", availableAt: "Available at", appliesTo: "Applies to", companyTypes: "Company types {{types}}", allInstruments: "All supported instruments",
   example: "Example", copyExample: "Copy example", unavailable: "Data unavailable", retry: "Retry", loading: "Loading Data…",
 } as const;
@@ -45,7 +45,7 @@ export const dataZh = {
   purpose: "研究用途", allPurposes: "全部用途", field: "字段", formulaName: "公式名称", unit: "单位",
   pages: "字段分页", showing: "显示第 {{start}}–{{end}} 项，共 {{total}} 项", previous: "上一页", next: "下一页",
   noMatches: "没有符合这些筛选条件的字段。", noFields: "当前没有可用于研究的字段。",
-  details: "字段详情", copyFormula: "复制公式名称", copied: "已复制", copyUnavailable: "无法复制，请选中文本手动复制。",
+  details: "字段详情", closeDetails: "关闭字段详情", copyFormula: "复制公式名称", copied: "已复制", copyUnavailable: "无法复制，请选中文本手动复制。",
   period: "期间", availableAt: "可用时间", appliesTo: "适用范围", companyTypes: "公司类型 {{types}}", allInstruments: "所有支持的标的",
   example: "示例", copyExample: "复制示例", unavailable: "数据暂不可用", retry: "重试", loading: "正在加载数据…",
 } satisfies Record<keyof typeof dataEn, string>;

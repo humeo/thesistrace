@@ -13,7 +13,6 @@ import { useCallback, useEffect, useRef, useState, type ReactNode, type Ref } fr
 
 import { Trans } from "react-i18next";
 import { cn } from "cn";
-import catalogStyles from "./ResearchFieldCatalogSheet.module.css";
 import type { AlphaCatalog } from "../alphaCatalog";
 import { coreFetch } from "../auth/coreFetch";
 import type { BrowserLocation } from "../auth/routing";
@@ -785,7 +784,7 @@ export function ResearchDraftWorkspace({
             <SheetTitle className="text-base">{t("fieldBrowser")}</SheetTitle>
             <Button variant="ghost" size="icon-sm" className="max-[767px]:size-11" aria-label={t("closeFields")} onClick={closeFields}><X aria-hidden="true" /></Button>
           </SheetHeader>
-          <section id="research-fields-panel" ref={fieldsPanel} className={cn("min-w-0", fieldBrowserMode === "catalog" && catalogStyles.catalog)}>
+          <section id="research-fields-panel" ref={fieldsPanel} className="min-w-0">
             {fieldsOpen && fieldBrowserMode === "formula" ? <ResearchFieldBrowser catalog={catalog} onInsert={(identifier) => {
               alphaEditor.current?.insertAtSelection(identifier);
               restoreEditorFocus.current = true;

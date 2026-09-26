@@ -1,9 +1,0 @@
-.catalog :global(.data-explorer-layout) { display: flex; flex-direction: column; }
-.catalog :global(.data-field-results), .catalog :global(.data-field-detail) { width: 100%; }
-.catalog :global(.data-field-detail) { position: static; }
-.catalog :global(.data-field-table-scroll) { max-height: clamp(420px, 60dvh, 720px); }
-.catalog :global(.data-field-filters) { flex-wrap: wrap; }
-.catalog :global(.data-pagination) { flex-wrap: wrap; gap: 8px; }
-.catalog :global(.data-categories) { flex-wrap: wrap; }
-.catalog :global(.data-field-table) { min-width: 0; }
-.catalog :global(.data-explorer-table) th, .catalog :global(.data-explorer-table) td { padding: 10px 8px; overflow-wrap: anywhere; }

@@ -168,7 +168,7 @@ describe("DataOverviewView", () => {
     }));
 
     expect(markup.match(/No published coverage/g)).toHaveLength(4);
-    expect(markup.match(/health-dot health-dot-warning/g)).toHaveLength(4);
+    expect(markup.match(/Not available/g)).toHaveLength(4);
     expect(markup).not.toContain("2026-08-07");
   });
 
@@ -234,7 +234,7 @@ describe("DataOverviewView", () => {
       onRefresh: vi.fn(),
     }));
     expect(stale).toContain("Limited coverage");
-    expect(stale).toContain("health-dot health-dot-warning");
+    expect(stale).toContain("Limited coverage");
     expect(stale).not.toContain("Last refresh failed");
 
     const failed = renderToStaticMarkup(createElement(DataOverviewView, {
