@@ -209,9 +209,9 @@ test("Direct Python authoring executes, reuses frozen source and explicitly adva
   await page.getByRole("option", { name: "Top 300", exact: true }).click();
   await page.getByRole("combobox", { name: "Strategy mode", exact: true }).click();
   await page.getByRole("option", { name: "Direct · Python", exact: true }).click();
-  await page.getByLabel("History (trading sessions)").fill("1");
+  await page.getByRole("spinbutton", { name: "History (trading sessions)", exact: true }).fill("1");
   await page.getByRole("textbox", { name: "Declared fields", exact: true }).fill("price.close.adjusted");
-  await page.getByLabel("Parameters (JSON)").fill('{"label": "visible_candidate"}');
+  await page.getByRole("textbox", { name: "Parameters (JSON)", exact: true }).fill('{"label": "visible_candidate"}');
   const source = [
     "def decide(context, state, parameters):",
     "    state['count'] = state.get('count', 0) + 1",
