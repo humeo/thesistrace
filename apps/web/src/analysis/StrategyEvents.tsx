@@ -1,9 +1,17 @@
-import { useTranslation } from "../i18n";
+import { i18n, useTranslation } from "../i18n";
 import { formatNumber } from "../i18n/format";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { coreFetch } from "../auth/coreFetch";
 import { StrategyEventTable, eventSections as sections, instrumentLabel, eventSectionLabel, eventScopeLabel, type EventScope, type EventRow, type EventSection as Section } from "./StrategyEventDetails";
-import "./strategy-events.css";
+import { Button } from "../components/ui/button";
+import { Alert, AlertDescription } from "../components/ui/alert";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../components/ui/collapsible";
+import { Empty, EmptyDescription } from "../components/ui/empty";
+import { Field, FieldGroup, FieldLabel } from "../components/ui/field";
+import { Input } from "../components/ui/input";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
+import { ResearchDateInput } from "../research/ResearchDateInput";
+import { isResearchIsoDate } from "../research/dateRange";
 
 type Page = { section: Section; status: "recorded" | "not_recorded" | "expired" | "partially_expired"; expires_at: string | null; rows: EventRow[]; next_cursor: string | null };
 type Filter = { start_session?: string; end_session?: string; instrument_id?: string; target_id?: string; order_id?: string; child_order_id?: string };
@@ -13,9 +21,11 @@ function stockFilter(value: string) {
   return /^\d{6}\.(SH|SZ)$/i.test(trimmed) ? "equity:" + trimmed.toUpperCase() : trimmed || undefined;
 }
 
-export function StrategyEvents({ endpoint }: { endpoint: string }) {
+export function StrategyEvents({ endpoint, embedded = false }: { endpoint: string; embedded?: boolean }) {
   const { t } = useTranslation("analysis");
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(embedded);
+  const id = useId();
+  const [fieldErrors, setFieldErrors] = useState<Partial<Record<"start_session" | "end_session", "invalidDate" | "invalidRange">>>({});
   const [section, setSection] = useState<Section>("strategy_orders");
   const [filters, setFilters] = useState<Filter>({});
   const [draft, setDraft] = useState({ start_session: "", end_session: "", instrument_id: "" });
@@ -32,6 +42,7 @@ export function StrategyEvents({ endpoint }: { endpoint: string }) {
   function navigate(next: Section, relation: Filter = {}, context: EventScope | null = null) {
     setHistory(context ? [...history, { section, filters, cursors, scope }] : []);
     setScope(context);
+    setFieldErrors({});
     setPage(null); setSection(next); setFilters(relation); setCursors([null]);
     setDraft({ start_session: "", end_session: "", instrument_id: "" });
     focusAfterNavigation.current = true;
@@ -65,57 +76,78 @@ export function StrategyEvents({ endpoint }: { endpoint: string }) {
     });
     return () => controller.abort();
   }, [open, endpoint, section, filters, cursor, revision]);
-  return <details className="strategy-events" onToggle={event => {
-    if (event.target === event.currentTarget) setOpen(event.currentTarget.open);
-  }}>
-    <summary><span>{t("events.title")}</span></summary>
-    {open && <div className="strategy-events-content">
-      <header className="strategy-events-heading">
-        <h3 ref={heading} tabIndex={-1}>{eventSectionLabel(section)}</h3>
+  const content = <div className="flex min-w-0 flex-col gap-4">
+      <header className="flex flex-col gap-2 [&_p]:m-0 [&_p]:text-muted-foreground">
+        <h3 className="m-0 text-base font-semibold" ref={heading} tabIndex={-1}>{eventSectionLabel(section)}</h3>
         <p>{t(`events.descriptions.${section}`)}</p>
         <p>{t("events.retention")}</p>
       </header>
-      <form className="strategy-event-filters" onSubmit={event => {
-        event.preventDefault(); setPage(null); setCursors([null]);
+      <form onSubmit={event => {
+        event.preventDefault();
+        const invalid: typeof fieldErrors = {};
+        for (const key of ["start_session", "end_session"] as const) {
+          if (draft[key] && !isResearchIsoDate(draft[key])) invalid[key] = "invalidDate";
+        }
+        if (!Object.keys(invalid).length && draft.start_session && draft.end_session && draft.start_session > draft.end_session) invalid.end_session = "invalidRange";
+        setFieldErrors(invalid);
+        if (Object.keys(invalid).length) return;
+        setPage(null); setCursors([null]);
         setFilters({ ...filters, start_session: draft.start_session || undefined, end_session: draft.end_session || undefined, instrument_id: stockFilter(draft.instrument_id) });
         focusAfterNavigation.current = true;
       }}>
-        <label>{t("events.type")}<select value={section} onChange={event => navigate(event.target.value as Section)}>
-          {sections.map(value => <option key={value} value={value}>{eventSectionLabel(value)}</option>)}
-        </select></label>
-        <label>{t("events.from")}<input type="date" value={draft.start_session} max={draft.end_session || undefined} onChange={event => setDraft({ ...draft, start_session: event.target.value })} /></label>
-        <label>{t("events.through")}<input type="date" value={draft.end_session} min={draft.start_session || undefined} onChange={event => setDraft({ ...draft, end_session: event.target.value })} /></label>
-        <label>{t("events.instrument")}<input value={draft.instrument_id} placeholder="600000.SH" onChange={event => setDraft({ ...draft, instrument_id: event.target.value })} /></label>
-        <button type="submit">{t("events.query")}</button>
-        <button type="button" disabled={!filtered && !draft.start_session && !draft.end_session && !draft.instrument_id} onClick={() => navigate(section)}>{t("events.reset")}</button>
+        <FieldGroup className="grid items-end gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <Field>
+            <FieldLabel htmlFor={`${id}-section`}>{t("events.type")}</FieldLabel>
+            <Select value={section} onValueChange={value => { if (value) navigate(value); }} items={sections.map(value => ({ value, label: eventSectionLabel(value) }))}>
+              <SelectTrigger id={`${id}-section`} className="w-full"><SelectValue /></SelectTrigger>
+              <SelectContent><SelectGroup>{sections.map(value => <SelectItem key={value} value={value}>{eventSectionLabel(value)}</SelectItem>)}</SelectGroup></SelectContent>
+            </Select>
+          </Field>
+          {(["start_session", "end_session"] as const).map(key => <ResearchDateInput key={key}
+            id={`${id}-${key}`} label={t(key === "start_session" ? "events.from" : "events.through")}
+            openLabel={i18n.t(key === "start_session" ? "research:openStartCalendar" : "research:openEndCalendar")}
+            value={draft[key]} onChange={value => setDraft({ ...draft, [key]: value })}
+            minimum={key === "end_session" ? draft.start_session || null : null}
+            maximum={key === "start_session" ? draft.end_session || null : null}
+            error={fieldErrors[key] ? t(`holdings.${fieldErrors[key]}`) : undefined} errorId={`${id}-${key}-error`} />)}
+          <Field><FieldLabel htmlFor={`${id}-instrument`}>{t("events.instrument")}</FieldLabel><Input id={`${id}-instrument`} value={draft.instrument_id} placeholder="600000.SH" onChange={event => setDraft({ ...draft, instrument_id: event.target.value })} /></Field>
+        </FieldGroup>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button type="submit">{t("events.query")}</Button>
+          <Button variant="outline" type="button" disabled={!filtered && !draft.start_session && !draft.end_session && !draft.instrument_id} onClick={() => navigate(section)}>{t("events.reset")}</Button>
+        </div>
       </form>
-      {scope && <div className="strategy-event-scope" role="region" aria-label={t("events.scope")}>
+      {scope && <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted p-4" role="region" aria-label={t("events.scope")}>
         <span>{t("events.relatedOnly", { relatedContext: eventScopeLabel(scope) })}</span>
-        <div className="strategy-event-links">
-          {history.length > 0 && <button type="button" onClick={goBack}>{t("events.back", { section: eventSectionLabel(history.at(-1)!.section) })}</button>}
-          <button type="button" onClick={() => navigate(section)}>{t("events.viewAll", { section: eventSectionLabel(section) })}</button>
+        <div className="flex flex-wrap gap-2">
+          {history.length > 0 && <Button variant="outline" type="button" onClick={goBack}>{t("events.back", { section: eventSectionLabel(history.at(-1)!.section) })}</Button>}
+          <Button variant="outline" type="button" onClick={() => navigate(section)}>{t("events.viewAll", { section: eventSectionLabel(section) })}</Button>
         </div>
       </div>}
-      <div className="strategy-events-status">
+      <div className="flex flex-wrap justify-between gap-2 text-muted-foreground">
         <span>{filters.start_session || filters.end_session ? t("events.dateRange", { start: filters.start_session ?? t("events.earliest"), end: filters.end_session ?? t("events.latest") }) : t("events.allDates")} · {filters.instrument_id ? instrumentLabel(filters.instrument_id) : t("events.allStocks")}</span>
         <span>{section === "strategy_targets" || section === "strategy_framework" ? t("events.decisionDate") : section === "strategy_adjustments" ? t("events.adjustmentDate") : t("events.executionDate")} · {t("events.pageSize")}</span>
       </div>
       {page?.status === "partially_expired" && <p role="status">{t("events.partialExpiry")}</p>}
-      {error ? <p role="alert">{t(`events.${error}`)}</p> : page === null ? <p role="status">{t("events.loading")}</p>
+      {error ? <Alert variant="destructive"><AlertDescription>{t(`events.${error}`)}</AlertDescription></Alert> : page === null ? <p role="status">{t("events.loading")}</p>
         : page.status === "expired" ? <p role="status">{t("events.expired")}</p>
         : page.status === "not_recorded" ? <p>{section === "strategy_execution_constraints"
           ? t("events.constraintsNotRecorded")
           : t("events.notRecorded")}</p>
-        : page.rows.length === 0 ? <p>{t("events.empty", { section: eventSectionLabel(section) })}</p>
+        : page.rows.length === 0 ? <Empty><EmptyDescription>{t("events.empty", { section: eventSectionLabel(section) })}</EmptyDescription></Empty>
         : <StrategyEventTable key={section + ":" + JSON.stringify(filters) + ":" + cursor}
             section={section} rows={page.rows} navigate={navigate} />}
-      <nav aria-label={t("events.pages")}>
-        <span className="strategy-event-page-count" role="status">{(page?.status === "recorded" || page?.status === "partially_expired") && !error && <>{t("events.count", { count: page.rows.length })}{!page.next_cursor && <span>{filtered ? t("events.filterEnd") : t("events.end")}</span>}</>}</span>
-        <button type="button" onClick={() => { setPage(null); setCursors([null]); setRevision(value => value + 1); focusAfterNavigation.current = true; }}>{t("reloadFirst")}</button>
-        <button type="button" disabled={cursors.length === 1 || !page} onClick={() => { setPage(null); setCursors(values => values.slice(0, -1)); focusAfterNavigation.current = true; }}>{t("previous")}</button>
+      <nav className="flex flex-wrap items-center gap-3" aria-label={t("events.pages")}>
+        <span className="flex flex-wrap gap-2" role="status">{(page?.status === "recorded" || page?.status === "partially_expired") && !error && <>{t("events.count", { count: page.rows.length })}{!page.next_cursor && <span>{filtered ? t("events.filterEnd") : t("events.end")}</span>}</>}</span>
+        <Button variant="outline" type="button" onClick={() => { setPage(null); setCursors([null]); setRevision(value => value + 1); focusAfterNavigation.current = true; }}>{t("reloadFirst")}</Button>
+        <Button variant="outline" type="button" disabled={cursors.length === 1 || !page} onClick={() => { setPage(null); setCursors(values => values.slice(0, -1)); focusAfterNavigation.current = true; }}>{t("previous")}</Button>
         <span>{t("page", { page: formatNumber(cursors.length) })}</span>
-        <button type="button" disabled={!page?.next_cursor} onClick={() => { if (page?.next_cursor) { setCursors(values => [...values, page.next_cursor]); setPage(null); focusAfterNavigation.current = true; } }}>{t("next")}</button>
+        <Button variant="outline" type="button" disabled={!page?.next_cursor} onClick={() => { if (page?.next_cursor) { setCursors(values => [...values, page.next_cursor]); setPage(null); focusAfterNavigation.current = true; } }}>{t("next")}</Button>
       </nav>
-    </div>}
-  </details>;
+    </div>;
+  if (embedded) return <section aria-label={t("events.title")} className="min-w-0">{content}</section>;
+  return <Collapsible open={open} onOpenChange={setOpen} className="min-w-0">
+    <CollapsibleTrigger render={<Button variant="outline" />}>{t("events.title")}</CollapsibleTrigger>
+    <CollapsibleContent keepMounted className="pt-4">{content}</CollapsibleContent>
+  </Collapsible>;
 }

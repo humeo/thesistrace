@@ -53,16 +53,16 @@ test("ResearchRun updates preserve one working events and holdings section", asy
   // Opening and dismissing the confirmation only updates the actual parent page;
   // it must not replace these independent sections or leave orphaned DOM nodes.
   for (let i = 0; i < 3; i++) {
-    await page.locator(".research-run-header").getByRole("button", { name: "Delete Research", exact: true }).click();
+    await page.getByRole("banner").getByRole("button", { name: "Delete Research", exact: true }).click();
     await expect(page.getByRole("alertdialog")).toContainText("DailyTracks will remain.");
     await expect(page.getByRole("alertdialog")).toContainText("Evidence <br/> & regression");
     await expect(page.getByRole("alertdialog").locator("br")).toHaveCount(0);
     await page.getByRole("button", { name: "Keep Research", exact: true }).click();
     await expect(page.getByRole("alertdialog")).not.toBeVisible();
     await expect(page.getByText("Trading events", { exact: true })).toHaveCount(1);
-    await expect(page.getByRole("button", { name: "Daily holdings", exact: true })).toHaveCount(1);
+    await expect(page.getByRole("tab", { name: "Daily holdings", exact: true })).toHaveCount(1);
     await expect(page.getByText("No matching Orders records.")).toBeVisible();
   }
-  await page.getByRole("button", { name: "Daily holdings", exact: true }).click();
+  await page.getByRole("tab", { name: "Daily holdings", exact: true }).click();
   await expect(page.getByText("Daily holdings were not recorded for this result.")).toBeVisible();
 });

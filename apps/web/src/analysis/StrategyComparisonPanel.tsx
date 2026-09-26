@@ -1,3 +1,4 @@
+import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
 import { useTranslation } from "../i18n";
 import { catalogLabel } from "../i18n/catalog";
 import { StrategyPerformanceChart } from "./StrategyPerformanceChart";
@@ -12,18 +13,17 @@ export function StrategyComparisonPanel({
   const benchmark = catalogLabel("benchmarks", "csi300-price-index-open");
   if (comparison.status === "unavailable") {
     return (
-      <section
+      <Alert
         aria-label={t("chart.comparison", { benchmark })}
-        className="strategy-comparison-unavailable"
         role="status"
       >
-        <strong>{t("chart.unavailable", { benchmark })}</strong>
-        <p>
+        <AlertTitle>{t("chart.unavailable", { benchmark })}</AlertTitle>
+        <AlertDescription>
           {comparison.reason === "no_entry_open"
             ? t("chart.noEntry")
             : t("chart.noBenchmark")}
-        </p>
-      </section>
+        </AlertDescription>
+      </Alert>
     );
   }
 

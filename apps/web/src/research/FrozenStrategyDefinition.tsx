@@ -1,3 +1,4 @@
+import { Disclosure } from "../components/layout/Disclosure";
 import Decimal from "decimal.js";
 import { takeProfitDraft } from "./takeProfit";
 import { frameworkStages, frozenStopLossPercentage, type FrameworkModules } from "./frameworkModules";
@@ -7,29 +8,27 @@ import { useTranslation } from "../i18n";
 
 export function FrozenSimulationCosts({ costs }: { costs: SimulationCosts }) {
   const { t } = useTranslation("strategy");
-  return <details className="research-run-fact-program">
-    <summary>{t("frozen.fees")}</summary>
+  return <Disclosure title={<>{t("frozen.fees")}</>}>
     {costFields.map(({ key }) => <p key={key}><strong>{t(`cost.labels.${key}`)}</strong> {costs[key]}</p>)}
     <p>{t("frozen.feesHelp")}</p>
-  </details>;
+  </Disclosure>;
 }
 
 export function FrozenPythonProgram({ program, title }: {
   program: PythonProgram; title?: string;
 }) {
   const { t } = useTranslation("strategy");
-  return <details className="research-run-fact-program">
-    <summary>{title ?? t("frozen.python")}</summary>
+  return <Disclosure title={<>{title ?? t("frozen.python")}</>}>
     <p><strong>{t("frozen.history")}</strong> {t("frozen.sessions", { count: program.data_requirements.history_sessions })}</p>
     <p><strong>{t("frozen.fields")}</strong> <code>{program.data_requirements.field_ids.join(", ") || t("frozen.none")}</code></p>
-    <pre><code>{program.source}</code></pre>
-    <strong>{t("frozen.parameters")}</strong><pre><code>{JSON.stringify(program.parameters, null, 2)}</code></pre>
-  </details>;
+    <pre className="max-h-96 min-w-0 overflow-auto rounded-md bg-muted p-4 font-mono text-sm" tabIndex={0}><code>{program.source}</code></pre>
+    <strong>{t("frozen.parameters")}</strong><pre className="max-h-96 min-w-0 overflow-auto rounded-md bg-muted p-4 font-mono text-sm" tabIndex={0}><code>{JSON.stringify(program.parameters, null, 2)}</code></pre>
+  </Disclosure>;
 }
 
 export function FrozenFrameworkModules({ modules }: { modules: FrameworkModules }) {
   const { t } = useTranslation("strategy");
-  return <div className="research-run-fact-program" aria-label={t("frozen.modules")}>
+  return <div className="col-span-full grid min-w-0 gap-4" aria-label={t("frozen.modules")}>
     {frameworkStages.map(stage => {
       const module = modules[stage];
       return typeof module === "string" ? <p key={stage}><strong>{t(`stages.${stage}`)}</strong> <code>{module}</code></p>

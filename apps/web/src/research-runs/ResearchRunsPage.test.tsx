@@ -218,8 +218,8 @@ describe("ResearchRunProgressView", () => {
       />,
     );
     expect(markup).toContain("Execution progress");
-    expect(markup).toContain("value=\"378\"");
-    expect(markup).toContain("max=\"4286\"");
+    expect(markup).toContain('aria-valuenow="378"');
+    expect(markup).toContain('aria-valuemax="4286"');
     expect(markup).toContain("9%");
     expect(markup).not.toContain("252 / 252");
     expect(markup).not.toContain("Warm-up");

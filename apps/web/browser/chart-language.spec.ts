@@ -32,6 +32,11 @@ test("chart language updates keep manually zoomed and panned observations", asyn
   await page.mouse.move(box.x + 600, box.y + 150, { steps: 15 });
   await page.mouse.up();
   const before = [await observation(200), await observation(400), await observation(600)];
+  await page.getByRole("tab", { name: "Configuration", exact: true }).click();
+  await expect(chart).not.toBeVisible();
+  await page.getByRole("tab", { name: "Performance", exact: true }).click();
+  await expect(chart).toBeVisible();
+  expect([await observation(200), await observation(400), await observation(600)]).toEqual(before);
   await page.getByRole("button", { name: "简体中文", exact: true }).click();
   await expect(page.getByRole("figure", { name: "净策略与沪深300表现图" })).toBeVisible();
   expect([await observation(200), await observation(400), await observation(600)]).toEqual(before);
@@ -53,8 +58,8 @@ test("an open metric explanation updates without losing its panel or keyboard fo
   await expect(panel).toContainText("after trading costs");
   const close = panel.getByRole("button", { name: "Close explanation", exact: true });
   await close.focus();
-  // Invoke the same fixture control without pointer light-dismiss of the native popover.
-  await page.getByRole("button", { name: "简体中文", exact: true }).evaluate(element => (element as HTMLButtonElement).click());
+  // Change the shared locale owner without an outside click that dismisses Base UI Popover.
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent("fixture-language", { detail: "zh-CN" })));
   await expect(panel).toContainText("已扣除交易费用");
   await expect(panel.getByRole("button", { name: "关闭说明", exact: true })).toBeFocused();
   await page.keyboard.press("Escape");

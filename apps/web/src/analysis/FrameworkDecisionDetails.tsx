@@ -1,3 +1,4 @@
+import { Disclosure } from "../components/layout/Disclosure";
 import { PortfolioDrawdownFacts, type PortfolioDrawdownObservation } from "./PortfolioDrawdownFacts";
 import { TakeProfitFacts, type TakeProfitObservation } from "./TakeProfitFacts";
 import Decimal from "decimal.js";
@@ -47,11 +48,11 @@ function Portfolio({ value }: { value: Proposal }) {
     <p>{t("decision.reason", { reason: value.reason })}</p>
     {value.allocation && <>
       <p>{t(`decision.${value.allocation.mode}`)} · {t("decision.targetExposure", { percent: (value.allocation.exposure * 100).toFixed(2) })}</p>
-      <details><summary>{t("decision.weights", { count: value.allocation.instrument_ids.length })}</summary>
+      <Disclosure title={<>{t("decision.weights", { count: value.allocation.instrument_ids.length })}</>}>
         <ul>{value.allocation.instrument_ids.map(id => <li key={id}>
           {stock(id)}：{value.allocation!.relative_weights[id]}
         </li>)}</ul>
-      </details>
+      </Disclosure>
       {value.allocation.retained_instrument_ids?.length ? <p>{t("decision.retained", { stocks: value.allocation.retained_instrument_ids.map(stock).join(", ") })}</p> : null}
     </>}
     {value.maximum_stock_exposure !== undefined && <p>{t("decision.cap", { percent: new Decimal(value.maximum_stock_exposure).mul(100).toString() })}</p>}
@@ -63,21 +64,21 @@ export function FrameworkDecisionDetails({ row }: { row: FrameworkRecord }) {
   const alpha = row.alpha;
   const risk = row.risk_adjustment;
   const { t } = useTranslation("strategy");
-  return <div className="framework-decision-details">
+  return <div className="grid min-w-0 gap-4 whitespace-normal">
     <p>{t("decision.close", { session: row.decision_session })}</p>
     <section aria-label={t("decision.stages.universe_selection")}><h4>1 · {t("decision.stages.universe_selection")}</h4>
       <p>{t(row.universe.updated ? "decision.universeUpdated" : "decision.universeRetained")}
         {" · " + t("decision.instrumentCount", { count: row.universe.instrument_ids.length })}</p>
       {row.universe.reason && <p>{t("decision.reason", { reason: row.universe.reason })}</p>}
-      <details><summary>{t("decision.candidates")}</summary><p className="framework-instruments">
+      <Disclosure title={<>{t("decision.candidates")}</>}><p className="[overflow-wrap:anywhere]">
         {row.universe.instrument_ids.map(stock).join(", ") || t("decision.emptyCandidates")}
-      </p></details>
+      </p></Disclosure>
     </section>
     <section aria-label={t("decision.stages.alpha")}><h4>2 · {t(alpha.kind === "formula" ? "decision.alphaValues" : "decision.strategySignals")}</h4>
       {alpha.kind === "formula" ? <>
         <p>{t("decision.formulaValues", { count: alpha.values.length })}</p>
-        <details><summary>{t("decision.viewAlpha")}</summary><ul>{alpha.values.map(item =>
-          <li key={item.instrument_id}>{stock(item.instrument_id)}: {item.value}</li>)}</ul></details>
+        <Disclosure title={<>{t("decision.viewAlpha")}</>}><ul>{alpha.values.map(item =>
+          <li key={item.instrument_id}>{stock(item.instrument_id)}: {item.value}</li>)}</ul></Disclosure>
       </> : <>
         <p>{t(alpha.updated ? "decision.signalsUpdated" : "decision.signalsRetained")}
           {" · " + t("decision.signalCount", { count: alpha.signals.length })}</p>
@@ -85,8 +86,8 @@ export function FrameworkDecisionDetails({ row }: { row: FrameworkRecord }) {
         {alpha.expired_signals.length > 0 && <p>{t("decision.expired", { stocks: alpha.expired_signals.map(stock).join(", ") })}</p>}
         {alpha.removed_signals.length > 0 && <p>{t("decision.removed", { stocks: alpha.removed_signals.map(stock).join(", ") })}</p>}
         <p>{t("decision.signalsHelp")}</p>
-        {alpha.signals.length > 0 && <details><summary>{t("decision.signalValidity")}</summary><ul>{alpha.signals.map(item =>
-          <li key={item.instrument_id}>{t("decision.signalRow", { stock: stock(item.instrument_id), value: item.value, session: item.created_session, count: item.valid_for_sessions })}</li>)}</ul></details>}
+        {alpha.signals.length > 0 && <Disclosure title={<>{t("decision.signalValidity")}</>}><ul>{alpha.signals.map(item =>
+          <li key={item.instrument_id}>{t("decision.signalRow", { stock: stock(item.instrument_id), value: item.value, session: item.created_session, count: item.valid_for_sessions })}</li>)}</ul></Disclosure>}
       </>}
     </section>
     <section aria-label={t("decision.stages.portfolio_construction")}><h4>3 · {t("decision.stages.portfolio_construction")}</h4>
@@ -117,7 +118,7 @@ export function FrameworkDecisionDetails({ row }: { row: FrameworkRecord }) {
       </>}
     </section>
     <p>{t(row.target_id ? "decision.targetFormed" : "decision.noTarget")}</p>
-    <details><summary>{t("decision.identities")}</summary><dl>{Object.entries(row.modules).map(([stage, identity]) =>
-      <div key={stage}><dt>{t(`decision.stages.${stage as FrameworkStage}`)}</dt><dd>{identity}</dd></div>)}</dl></details>
+    <Disclosure title={<>{t("decision.identities")}</>}><dl className="grid gap-3 sm:grid-cols-2 [&_dd]:m-0 [&_dd]:font-mono [&_dt]:text-muted-foreground">{Object.entries(row.modules).map(([stage, identity]) =>
+      <div key={stage}><dt>{t(`decision.stages.${stage as FrameworkStage}`)}</dt><dd>{identity}</dd></div>)}</dl></Disclosure>
   </div>;
 }

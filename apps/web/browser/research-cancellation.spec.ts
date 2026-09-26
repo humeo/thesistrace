@@ -216,7 +216,7 @@ test("rejected batch cancellation explains the restriction and keeps live resear
   await expect(page.getByRole("alert")).toContainText("Cancel the research batch");
   await expect(page.getByRole("group", { name: "Research execution conditions" })).toContainText("Top 1000");
   completedSessions = 2;
-  await expect(page.getByRole("progressbar", { name: "Research execution progress" })).toHaveAttribute("value", "2");
+  await expect(page.getByRole("progressbar", { name: "Research execution progress" })).toHaveAttribute("aria-valuenow", "2");
   await expect(page.getByRole("link", { name: "Back to Research Runs" })).toBeVisible();
 });
 

@@ -1,3 +1,6 @@
+import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
+import { Progress } from "../components/ui/progress";
+import { StrategyResultView } from "./StrategyResultView";
 import type { ParseKeys } from "i18next";
 import { Trans } from "react-i18next";
 import { catalogLabel } from "../i18n/catalog";
@@ -6,13 +9,10 @@ import { folderDisplayName } from "../research/folders";
 import { formatRunError, formatExecutionFailure, readOrganizationError, type OrganizationError, type RunError, type HttpActionError } from "./errors";
 export { formatDuration } from "../i18n/format";
 import { i18n, useTranslation } from "../i18n";
-import { CloseRiskFacts } from "../analysis/CloseRiskFacts";
 import { CurrentDataRerunOrigin, type RerunOrigin } from "../analysis/CurrentDataRerun";
 import { DailyHoldings } from "../analysis/DailyHoldings";
 import { StrategyEvents } from "../analysis/StrategyEvents";
-import { SelectionEligibilityView } from "../research/SelectionEligibility";
-import { isBuiltinFrameworkState, strategySelection, type StrategyDecisionState } from "../research/strategyDecisionState";
-import { FrameworkStateView } from "../research/FrameworkStateView";
+import { type StrategyDecisionState } from "../research/strategyDecisionState";
 import { FrozenFrameworkModules, FrozenPythonProgram, FrozenSimulationCosts } from "../research/FrozenStrategyDefinition";
 import {
   CaretDown,
@@ -27,15 +27,12 @@ import { useEffect, useRef, useState } from "react";
 import { FactorEvidence } from "../analysis/FactorEvidence";
 import { CommonInputObservations } from "../analysis/CommonInputObservations";
 import { coreFetch } from "../auth/coreFetch";
-import { StrategyComparisonPanel } from "../analysis/StrategyComparisonPanel";
-import { MetricHelp, type MetricHelpContent } from "../analysis/MetricHelp";
 import type { StrategyComparison } from "../analysis/strategyComparison";
 import {
   useResearchAsDraft,
   type FrozenResearchAuthorableInput,
 } from "../research/draft";
 import { followCoreLink } from "../shell/navigation";
-import { strategyMetricHelp } from "./metricHelp";
 import { ResearchBatchCancelButton } from "./ResearchBatchesPage";
 import { ResearchRunsNavigation } from "./ResearchRunsNavigation";
 import { useResearchRunDetailController } from "./useResearchRunDetailController";
@@ -152,7 +149,7 @@ export type FactorEvaluationResearchResult = {
   };
 };
 
-type StrategyBacktestResearchResult = {
+export type StrategyBacktestResearchResult = {
   strategy: {
     summary: {
       alpha_checksum: string | null;
@@ -244,11 +241,7 @@ export function ResearchRunsPage({ researcherId, runId }: {
 }) {
   const { t } = useTranslation("runs");
   const detail = useResearchRunDetailController(runId);
-  const {
-    run, setRun, canceling, cancelError, startingTracking, deleting,
-    deleteDialogOpen, deleteError, deleteTrigger, cancel, startTracking,
-    openDeleteDialog, closeDeleteDialog, performResearchDeletion,
-  } = detail;
+  const { run } = detail;
   const [items, setItems] = useState<ResearchRun[] | null>(null);
   const [folders, setFolders] = useState<ResearchFolderOption[]>([]);
   const [folderFilter, setFolderFilter] = useState("");
@@ -393,117 +386,10 @@ export function ResearchRunsPage({ researcherId, runId }: {
     return <section aria-label={t("title")} className="state-section"><p>{t("loadingRuns")}</p></section>;
   }
   if (runId && run?.id === runId) {
-    if (run.research_kind === "factor_evaluation") {
-      return <FactorRunDetail
-        detail={detail}
-        folderError={folderError}
-        folders={folders}
-        onRefreshFolders={refreshFolders}
-        researcherId={researcherId}
-        run={run}
-      />;
-    }
-    const terminal = isTerminalResearch(run.status);
-    const progressView = run.progress ? (
-      <ResearchRunProgressView
-        progress={run.progress}
-        status={run.status}
-        timing={run.execution_timing}
-      />
-    ) : null;
-    return (
-      <section aria-label={t("title")} className="research-run-page">
-        <header className="research-run-header">
-          <div>
-            <h1>{t("run")}</h1>
-          </div>
-          <div>
-            <ResearchRunBackLink />
-            {run.batch_id ? <a className="button button-quiet" href={`/research-runs/batches/${encodeURIComponent(run.batch_id)}`} onClick={followCoreLink}>{t("viewBatch")}</a> : null}
-            {run.batch_id && ["queued", "running", "cancelling"].includes(run.status) ? (
-              <ResearchBatchCancelButton key={run.batch_id} batchId={run.batch_id} status={run.status} />
-            ) : null}
-            {!run.batch_id && (run.status === "queued" || run.status === "running") ? (
-              <button disabled={canceling} onClick={() => void cancel()}>
-                {t(canceling ? "cancelling" : "cancel")}
-              </button>
-            ) : null}
-            {run.status === "succeeded" && run.research_kind === "strategy_backtest" ? (
-              <button
-                disabled={startingTracking || deleting}
-                onClick={() => void startTracking()}
-              >
-                {t(startingTracking ? "startingTracking" : "startTracking")}
-              </button>
-            ) : null}
-            {isTerminalResearch(run.status) ? (
-              <button
-                aria-controls="research-delete-dialog"
-                aria-expanded={deleteDialogOpen}
-                aria-haspopup="dialog"
-                disabled={deleting || startingTracking}
-                onClick={openDeleteDialog}
-                ref={deleteTrigger}
-              >
-                {t(deleting ? "deleting" : "delete")}
-              </button>
-            ) : null}
-          </div>
-        </header>
-        {cancelError !== null ? (
-          <p className="inline-status inline-status-error" role="alert">{t(cancelError)}</p>
-        ) : null}
-        <ResearchDeleteDialog
-          deleting={deleting}
-          error={deleteError}
-          name={run.name}
-          onConfirm={() => void performResearchDeletion()}
-          onDismiss={closeDeleteDialog}
-          open={deleteDialogOpen}
-        />
-        {detail.loadState === "refreshing" ? (
-          <p role="status">{t("refreshingRun")}</p>
-        ) : null}
-        <ResearchRunFacts run={run} />
-        {run.rerun_origin && <CurrentDataRerunOrigin origin={run.rerun_origin} />}
-        {!terminal ? progressView : null}
-        {deleting ? null : folderError !== null ? (
-          <ResearchFolderLoadFailure error={folderError} onRetry={refreshFolders} />
-        ) : folders.length === 0 ? (
-          <p role="status">{t("loadingFolders")}</p>
-        ) : (
-          <ResearchOrganizationPanel
-            folders={folders}
-            key={`${run.id}:${run.name}:${run.folder_id}`}
-            onOrganized={(organized) => setRun((current) => current === null
-              ? organized
-              : { ...current, ...organized })}
-            run={run}
-          />
-        )}
-        {run.status === "failed" && run.failure_reason ? (
-          <p role="alert"><strong>{t("failure")}</strong> {formatExecutionFailure(run.failure_reason)}</p>
-        ) : null}
-        {run.status === "succeeded" && run.result ? (
-          <>
-            <ResearchResultView result={run.result} />
-            {"factor" in run.result ? <FactorEvidence key={`factor:${run.id}`} runId={run.id} /> : null}
-            {"strategy" in run.result && <DailyHoldings key={`holdings:${run.id}`} rerun={{ folderId: run.folder_id, source: { kind: "research_run", run_id: run.id } }} endpoint={`/api/research-runs/${encodeURIComponent(run.id)}/holdings/query`} />}
-            {"strategy" in run.result && <StrategyEvents key={`events:${run.id}`} endpoint={`/api/research-runs/${encodeURIComponent(run.id)}/events/query`} />}
-            <CommonInputObservations key={`inputs:${run.id}`} endpoint={`/api/research-runs/${encodeURIComponent(run.id)}/common-input-observations`} />
-          </>
-        ) : null}
-        {terminal ? progressView : null}
-        {!deleting && folders.length > 0 && run.input !== undefined ? (
-          <UseAsDraftPanel
-            folders={folders}
-            input={run.input}
-            researcherId={researcherId}
-            sourceFolderId={run.folder_id}
-          />
-        ) : null}
-      </section>
-    );
+    return <ResearchRunDetail key={run.id}
+      detail={detail} folderError={folderError} folders={folders}
+      onRefreshFolders={refreshFolders} researcherId={researcherId} run={run}
+    />;
   }
   return (
     <section aria-label={t("title")} className="research-runs-list-page">
@@ -572,7 +458,7 @@ export function ResearchRunsPage({ researcherId, runId }: {
   );
 }
 
-function FactorRunDetail({ detail, folderError, folders, onRefreshFolders, researcherId, run }: {
+function ResearchRunDetail({ detail, folderError, folders, onRefreshFolders, researcherId, run }: {
   detail: ReturnType<typeof useResearchRunDetailController>;
   folderError: "folderError" | null;
   folders: ResearchFolderOption[];
@@ -584,7 +470,7 @@ function FactorRunDetail({ detail, folderError, folders, onRefreshFolders, resea
   const [tab, setTab] = useState("overview");
   const [visited, setVisited] = useState<string[]>(["overview"]);
   const terminal = isTerminalResearch(run.status);
-  const result = run.result && "factor" in run.result ? run.result : null;
+  const result = run.status === "succeeded" ? run.result : null;
   const folderContent = detail.deleting ? null : folderError ? (
     <ResearchFolderLoadFailure error={folderError} onRetry={onRefreshFolders} />
   ) : folders.length === 0 ? (
@@ -609,37 +495,49 @@ function FactorRunDetail({ detail, folderError, folders, onRefreshFolders, resea
           {run.batch_id ? <Button variant="outline" render={<a href={`/research-runs/batches/${encodeURIComponent(run.batch_id)}`} onClick={followCoreLink} />}>{t("viewBatch")}</Button> : null}
           {run.batch_id && ["queued", "running", "cancelling"].includes(run.status) ? <ResearchBatchCancelButton key={run.batch_id} batchId={run.batch_id} status={run.status} /> : null}
           {!run.batch_id && (run.status === "queued" || run.status === "running") ? <Button variant="outline" disabled={detail.canceling} onClick={() => void detail.cancel()}>{t(detail.canceling ? "cancelling" : "cancel")}</Button> : null}
-          {terminal ? <Button variant="destructive" disabled={detail.deleting} onClick={detail.openDeleteDialog} ref={detail.deleteTrigger}>{t(detail.deleting ? "deleting" : "delete")}</Button> : null}
+          {run.status === "succeeded" && run.research_kind === "strategy_backtest" ? <Button disabled={detail.startingTracking || detail.deleting} onClick={() => void detail.startTracking()}>{t(detail.startingTracking ? "startingTracking" : "startTracking")}</Button> : null}
+          {terminal ? <Button variant="destructive" disabled={detail.deleting || detail.startingTracking} onClick={detail.openDeleteDialog} ref={detail.deleteTrigger}>{t(detail.deleting ? "deleting" : "delete")}</Button> : null}
         </>}
       />
-      {detail.cancelError ? <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{t(detail.cancelError)}</p> : null}
+      {detail.cancelError ? <Alert variant="destructive"><AlertDescription>{t(detail.cancelError)}</AlertDescription></Alert> : null}
+      {detail.trackingError ? <Alert variant="destructive"><AlertDescription>{formatRunError(detail.trackingError)}</AlertDescription></Alert> : null}
       {detail.loadState === "refreshing" ? <p role="status" className="text-xs text-muted-foreground">{t("refreshingRun")}</p> : null}
       {run.rerun_origin ? <CurrentDataRerunOrigin origin={run.rerun_origin} /> : null}
-      {run.status === "failed" ? <section aria-label={t("failure")} className="rounded-lg border border-destructive/30 bg-destructive/10 p-5" role="alert">
-        <h2 className="m-0 text-base font-semibold text-destructive">{t("failure")}</h2>
-        <p className="mb-0 mt-2 text-sm">{formatExecutionFailure(run.failure_reason ?? "")}</p>
-      </section> : null}
+      {run.status === "failed" ? <Alert variant="destructive" aria-label={t("failure")}>
+        <AlertTitle>{t("failure")}</AlertTitle>
+        <AlertDescription>{formatExecutionFailure(run.failure_reason ?? "")}</AlertDescription>
+      </Alert> : null}
       {!terminal && run.progress ? <ResearchRunProgressView progress={run.progress} status={run.status} timing={run.execution_timing} /> : null}
       {result ? <Tabs value={tab} onValueChange={(value) => {
         setTab(value);
         setVisited((current) => current.includes(value) ? current : [...current, value]);
       }} className="gap-6">
         <TabsList aria-label={t("result.views")} variant="line" className="h-auto w-full justify-start gap-4 overflow-x-auto border-b border-border p-0">
-          <TabsTrigger className="min-h-11 flex-none px-2 text-sm" value="overview">{t("result.overview")}</TabsTrigger>
-          <TabsTrigger className="min-h-11 flex-none px-2 text-sm" value="evidence">{t("result.evidence")}</TabsTrigger>
-          <TabsTrigger className="min-h-11 flex-none px-2 text-sm" value="inputs">{t("result.inputs")}</TabsTrigger>
-          <TabsTrigger className="min-h-11 flex-none px-2 text-sm" value="configuration">{t("result.configuration")}</TabsTrigger>
+          <TabsTrigger className="min-h-11 flex-none px-2" value="overview">{t("result.overview")}</TabsTrigger>
+          {"factor" in result ? <TabsTrigger className="min-h-11 flex-none px-2" value="evidence">{t("result.evidence")}</TabsTrigger> : <>
+            <TabsTrigger className="min-h-11 flex-none px-2" value="holdings">{i18n.t("analysis:holdings.title")}</TabsTrigger>
+            <TabsTrigger className="min-h-11 flex-none px-2" value="events">{i18n.t("analysis:events.title")}</TabsTrigger>
+          </>}
+          <TabsTrigger className="min-h-11 flex-none px-2" value="inputs">{t("result.inputs")}</TabsTrigger>
+          <TabsTrigger className="min-h-11 flex-none px-2" value="configuration">{t("result.configuration")}</TabsTrigger>
         </TabsList>
-        <TabsContent keepMounted value="overview" className="flex flex-col gap-6 text-sm">
-          <FactorResultView result={result} />
+        <TabsContent keepMounted value="overview" className="flex flex-col gap-6">
+          <ResearchResultView result={result} />
         </TabsContent>
-        <TabsContent keepMounted value="evidence" className="text-sm">
-          {visited.includes("evidence") ? <FactorEvidence key={run.id} runId={run.id} embedded /> : null}
-        </TabsContent>
+        {"factor" in result ? <TabsContent keepMounted value="evidence">
+          {visited.includes("evidence") ? <FactorEvidence runId={run.id} embedded /> : null}
+        </TabsContent> : <>
+          <TabsContent keepMounted value="holdings">
+            {visited.includes("holdings") ? <DailyHoldings embedded endpoint={`/api/research-runs/${encodeURIComponent(run.id)}/holdings/query`} rerun={{ folderId: run.folder_id, source: { kind: "research_run", run_id: run.id } }} /> : null}
+          </TabsContent>
+          <TabsContent keepMounted value="events">
+            {visited.includes("events") ? <StrategyEvents embedded endpoint={`/api/research-runs/${encodeURIComponent(run.id)}/events/query`} /> : null}
+          </TabsContent>
+        </>}
         <TabsContent keepMounted value="inputs" className="text-sm">
           {visited.includes("inputs") ? <CommonInputObservations key={run.id} endpoint={`/api/research-runs/${encodeURIComponent(run.id)}/common-input-observations`} embedded /> : null}
         </TabsContent>
-        <TabsContent keepMounted value="configuration" className="flex flex-col gap-6 text-sm">
+        <TabsContent keepMounted value="configuration" className="flex flex-col gap-6">
           {visited.includes("configuration") ? <>
             <ResearchRunFacts run={run} />
             {run.progress ? <ResearchRunProgressView progress={run.progress} status={run.status} timing={run.execution_timing} /> : null}
@@ -768,7 +666,7 @@ export function ResearchRunProgressView({
   const active = status === "running" || status === "cancelling";
   const progressPercentage = total === 0 ? 0 : Math.round((completed / total) * 100);
   const executionTiming = (
-    <dl className="research-run-timing">
+    <dl className="m-0 grid min-w-0 gap-4 sm:grid-cols-2 [&_dt]:text-muted-foreground [&_dd]:m-0 [&_dd]:font-mono [&_dd]:break-words">
       <div>
         <dt>{t("started")}</dt>
         <dd><ExecutionTimestamp value={timing?.started_at ?? null} /></dd>
@@ -781,51 +679,49 @@ export function ResearchRunProgressView({
   );
   if (status === "succeeded") {
     return (
-      <section aria-label={t("progress")} className="research-run-progress research-run-progress-complete">
-        <Collapsible open={timingOpen} onOpenChange={setTimingOpen} className="research-run-completion-details">
-          <CollapsibleTrigger render={<Button variant="ghost" className="w-full justify-start whitespace-normal text-left" />}>
-            <span className="research-run-completion-label">
+      <section aria-label={t("progress")} className="min-w-0 rounded-lg border border-border bg-card p-4">
+        <Collapsible open={timingOpen} onOpenChange={setTimingOpen} className="min-w-0">
+          <CollapsibleTrigger render={<Button variant="ghost" className="h-auto min-h-11 w-full flex-wrap justify-start gap-4 whitespace-normal text-left" />}>
+            <span className="flex items-center gap-2">
               <CheckCircle aria-hidden="true" size={18} weight="fill" />{t("executionComplete")}</span>
-            <span className="research-run-completion-metric">
+            <span className="flex flex-wrap items-center gap-2">
               <strong>{formatNumber(progress.completed_research_sessions)} / {formatNumber(progress.total_research_sessions)}</strong> {t("sessions")}
             </span>
-            <span className="research-run-completion-metric">
+            <span className="flex flex-wrap items-center gap-2">
               <span>{t("executionTime")}</span> <strong>{formatDuration(timing?.elapsed_seconds ?? null)}</strong>
             </span>
-            <span className="research-run-completion-toggle">{t("timingDetails")}<CaretDown aria-hidden="true" size={14} className={timingOpen ? "rotate-180" : undefined} />
+            <span className="flex items-center gap-2">{t("timingDetails")}<CaretDown aria-hidden="true" size={14} className={timingOpen ? "rotate-180" : undefined} />
             </span>
           </CollapsibleTrigger>
-          <CollapsibleContent>{executionTiming}</CollapsibleContent>
+          <CollapsibleContent className="pt-4">{executionTiming}</CollapsibleContent>
         </Collapsible>
       </section>
     );
   }
   return (
-    <section aria-label={t("progress")} className="research-run-progress">
-      <header className="research-run-progress-heading">
-        <div className="research-run-progress-title">
+    <section aria-label={t("progress")} className="flex min-w-0 flex-col gap-4 rounded-lg border border-border bg-card p-4">
+      <header className="flex flex-wrap items-center justify-between gap-4">
+        <div className="flex flex-wrap items-center gap-3">
           <h2>{t("executionProgress")}</h2>
-          <span className="research-run-progress-state" data-status={status}>
-            {progressLabel(status, progress.phase)}
-          </span>
+          <Badge variant={status === "failed" || status === "cancelled" ? "destructive" : "outline"}>{progressLabel(status, progress.phase)}</Badge>
         </div>
-        <span className="research-run-progress-percentage">{formatNumber(progressPercentage)}%</span>
-        <dl className="research-run-duration">
+        <span className="ml-auto font-mono">{formatNumber(progressPercentage)}%</span>
+        <dl className="m-0 [&_dt]:text-muted-foreground [&_dd]:m-0 [&_dd]:font-mono">
           <div>
             <dt>{t(timing?.is_final ? "executionTime" : "elapsed")}</dt>
             <dd>{formatDuration(timing?.elapsed_seconds ?? null)}</dd>
           </div>
         </dl>
       </header>
-      <div className="research-run-progress-track">
-        <progress
+      <div className="w-full">
+        <Progress
           aria-label={t("progressAria")}
           max={Math.max(total, 1)}
           value={completed}
         />
       </div>
-      <div className="research-run-progress-ledger">
-        <dl className="research-run-progress-stats">
+      <div className="grid min-w-0 gap-4 lg:grid-cols-2">
+        <dl className="m-0 [&_dt]:text-muted-foreground [&_dd]:m-0 [&_dd]:font-mono">
           <div>
             <dt>{progress.phase === "shared_alpha_factor"
               ? t("sharedSessions") : t("researchSessions")}</dt>
@@ -835,7 +731,7 @@ export function ResearchRunProgressView({
         {executionTiming}
       </div>
       {active && estimate !== null ? (
-        <p className="research-run-progress-note">
+        <p className="m-0 text-muted-foreground">
           {t("remaining", { duration: formatDuration(estimate) })}
           {progress.duration_is_estimate ? t("estimate") : ""}
         </p>
@@ -847,31 +743,27 @@ export function ResearchRunProgressView({
 export function ResearchRunFacts({ run }: { run: ResearchRun }) {
   const { t } = useTranslation("runs");
   const input = run.input;
-  const direct = input?.research_kind === "strategy_backtest" && input.strategy_mode === "direct";
-  const factorConditionClass = input?.research_kind === "factor_evaluation"
-    ? "research-run-fact-half"
-    : undefined;
   return (
     <div
       aria-label={t("conditions")}
-      className="research-run-facts research-run-execution-facts"
+      className="grid min-w-0 gap-4 text-sm sm:grid-cols-2 xl:grid-cols-3 [&_p]:m-0 [&_strong]:block [&_strong]:font-medium [&_strong]:text-muted-foreground"
       role="group"
     >
       <p><strong>{t("status")}</strong> {t(`statuses.${run.status}`)}</p>
       <p><strong>{i18n.t("research:kind")}</strong> {researchKindLabel(run.research_kind)}</p>
-      <p className="research-run-fact-name"><strong>{t("name")}</strong> {run.name}</p>
-      {(input === undefined || "formula" in input) && <p className="research-run-fact-formula">
+      <p className="[overflow-wrap:anywhere]"><strong>{t("name")}</strong> {run.name}</p>
+      {(input === undefined || "formula" in input) && <p className="col-span-full [overflow-wrap:anywhere]">
         <strong>{t("formula")}</strong> <code>{input?.formula ?? run.formula_summary}</code>
       </p>}
-      <p className="research-run-fact-period">
+      <p className="min-w-0">
         <strong>{t("period")}</strong> {t("dateRange", { start: run.start_date, end: run.end_date })}
       </p>
       {input !== undefined ? (
         <>
-          <p className={factorConditionClass}>
+          <p >
             <strong>{i18n.t("research:universe")}</strong> {universeLabel(input.universe)}
           </p>
-          {"neutralization" in input && input.neutralization !== undefined && <p className={factorConditionClass}>
+          {"neutralization" in input && input.neutralization !== undefined && <p >
             <strong>{i18n.t("research:neutralization")}</strong> {neutralizationLabel(input.neutralization)}
           </p>}
           {input.research_kind === "strategy_backtest" ? (
@@ -1386,92 +1278,7 @@ function formatResearchRunMetric(
 }
 
 export function ResearchResultView({ result }: { result: ResearchResult }) {
-  const { t } = useTranslation("runs");
-  const strategyHelp = strategyMetricHelp();
-  const strategyResult = "strategy" in result ? result : null;
-  const factorResult = "factor" in result ? result : null;
-  const selection = strategyResult ? strategySelection(strategyResult.terminal_strategy_state.decision_state) : null;
-  return (
-    <div className="research-result">
-      {factorResult !== null ? <FactorResultView result={factorResult} /> : null}
-
-      {strategyResult !== null ? <section className="research-result-section">
-        <div className="section-heading strategy-summary-heading">
-          <h2>{t("result.strategy")}</h2>
-          <p>{t("result.accountThrough")} <time>{strategyResult.terminal_strategy_state.session}</time></p>
-        </div>
-        <div className="strategy-metrics">
-          <Metric label={t("result.netCumulative")} help={strategyHelp.netCumulative} value={formatPercent(strategyResult.strategy.summary.metrics.net_cumulative_return)} />
-          <Metric
-            label={t("result.benchmarkCumulative", { benchmark: catalogLabel("benchmarks", "csi300-price-index-open") })}
-            help={strategyHelp.benchmarkCumulative}
-            value={formatPercent(strategyResult.strategy.summary.metrics.benchmark_cumulative_return)}
-          />
-          <Metric
-            label={t("result.annualizedExcess")}
-            help={strategyHelp.annualizedExcess}
-            value={formatPercent(strategyResult.strategy.summary.metrics.annualized_excess_return)}
-          />
-          <Metric
-            label={t("result.maximumDrawdown")}
-            help={strategyHelp.maximumDrawdown}
-            value={formatPercent(strategyResult.strategy.summary.metrics.maximum_drawdown.value)}
-          />
-          <Metric label={t("result.sharpe")} help={strategyHelp.sharpe} value={formatDecimal(strategyResult.strategy.summary.metrics.sharpe)} />
-          <Metric
-            label={t("result.costRatio")}
-            help={strategyHelp.cumulativeCostRatio}
-            value={formatPercent(strategyResult.strategy.summary.metrics.transaction_costs.ratio)}
-          />
-        </div>
-        <div className="strategy-execution-context">
-          <div className="strategy-context-row">
-            <h3>{t("result.exposure")}</h3>
-            <dl className="strategy-exposure-values">
-              <div><dt>{t("result.lastCloseTarget")}</dt><dd>{formatPercent(isBuiltinFrameworkState(strategyResult.terminal_strategy_state.decision_state)
-                ? strategyResult.terminal_strategy_state.decision_state.exposure
-                : strategyResult.terminal_strategy_state.pending_target?.allocation?.exposure ?? null)}</dd></div>
-              <div><dt>{t("result.actualOpenAllocation")}</dt><dd>{formatPercent(1 - Number(strategyResult.terminal_strategy_state.net_cash) / Number(strategyResult.terminal_strategy_state.net_nav))}</dd></div>
-            </dl>
-          </div>
-          {selection !== null ? <div className="strategy-context-row">
-            <h3>{t("result.selection")}</h3>
-            <SelectionEligibilityView selection={selection} />
-          </div> : null}
-          <CloseRiskFacts session={strategyResult.terminal_strategy_state.session}
-            nav={strategyResult.terminal_strategy_state.close_risk_nav_cny}
-            positions={strategyResult.terminal_strategy_state.positions} />
-          <FrameworkStateView state={strategyResult.terminal_strategy_state.decision_state} />
-          <details className="strategy-execution-notes">
-            <summary>{t("result.conventions")}<CaretDown aria-hidden="true" size={14} /></summary>
-            <ul>
-              <li>{t("result.nextOpen")}</li>
-              <li>{t("result.allocation")}</li>
-            </ul>
-          </details>
-        </div>
-        <StrategyComparisonPanel comparison={strategyResult.strategy.comparison} />
-      </section> : null}
-
-    </div>
-  );
-}
-
-function Metric({ label, value, help, context }: {
-  label: string;
-  value: string;
-  help: MetricHelpContent;
-  context?: string;
-}) {
-  return (
-    <div className="result-metric">
-      <div className="result-metric-heading">
-        <span>{label}</span>
-        <MetricHelp label={context === undefined ? label : `${context} ${label}`} content={help} />
-      </div>
-      <strong>{value}</strong>
-    </div>
-  );
+  return "factor" in result ? <FactorResultView result={result} /> : <StrategyResultView result={result} />;
 }
 
 function formatSignedPercent(value: number | null) {

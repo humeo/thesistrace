@@ -1,3 +1,5 @@
+import { Button } from "../components/ui/button";
+import { Alert, AlertDescription } from "../components/ui/alert";
 import { useRef, useState } from "react";
 import { coreFetch } from "../auth/coreFetch";
 import { useTranslation } from "../i18n";
@@ -40,11 +42,11 @@ export function CurrentDataRerun({ source, folderId, navigate = path => window.l
       inFlight.current = false; setBusy(false);
     }
   }
-  return <div className="daily-holdings-rerun">
+  return <div className="flex flex-col items-start gap-3">
     <p>{t("rerun.explanation")}
       {source.kind === "daily_track" && <> {t("rerun.period", { date: source.through_session })}</>}</p>
-    <button type="button" disabled={busy} onClick={() => void submit()}>{t(busy ? "rerun.submitting" : "rerun.submit")}</button>
-    {error && <p role="alert">{error === "unavailable" ? t("rerun.error") : error.map(issue => `${researchIssueField(issue.field)}: ${formatResearchIssue(issue)}`).join("; ")}</p>}
+    <Button type="button" disabled={busy} onClick={() => void submit()}>{t(busy ? "rerun.submitting" : "rerun.submit")}</Button>
+    {error && <Alert variant="destructive"><AlertDescription>{error === "unavailable" ? t("rerun.error") : error.map(issue => `${researchIssueField(issue.field)}: ${formatResearchIssue(issue)}`).join("; ")}</AlertDescription></Alert>}
   </div>;
 }
 

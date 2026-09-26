@@ -17,6 +17,7 @@ import { synchronizeEntryLanguage, useTranslation } from "./i18n";
 import { Button } from "./components/ui/button";
 import { Alert, AlertDescription } from "./components/ui/alert";
 import { Spinner } from "./components/ui/spinner";
+import { Toaster } from "./components/ui/toast";
 import "./styles.css";
 
 const LandingPage = lazy(() => import('./landing/LandingPage'));
@@ -185,7 +186,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     {window.location.pathname === "/" ? (
       <Suspense fallback={null}><LandingPage /></Suspense>
     ) : (
-      <AuthProvider><BrowserRoutedApp /></AuthProvider>
+      <AuthProvider><BrowserRoutedApp /><Toaster /></AuthProvider>
     )}
   </React.StrictMode>,
 );

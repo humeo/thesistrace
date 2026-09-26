@@ -137,11 +137,12 @@ test("Framework modules author, execute, reuse frozen programs and refresh Daily
     await page.getByRole("button", { name: "Retry", exact: true }).click();
   }
   await expect(page.getByRole("heading", { name: "Strategy Summary" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".framework-state")).toContainText("active signals");
+  await page.getByRole("tab", { name: "Configuration", exact: true }).click();
   const facts = page.getByRole("group", { name: "Research execution conditions" });
   await expect(facts).not.toContainText("Holdings count");
   await page.getByText("Risk Management · Frozen Python source and parameters", { exact: true }).click();
   await expect(facts).toContainText("original_frozen_risk");
-  await expect(page.locator(".framework-state")).toContainText("active signals");
   const accepted = await (await page.request.get(`/api/research-runs/${runId}`)).json();
   for (const program of programs) {
     expect(accepted.input.modules[program.stage].program.source).toBe(program.source);
@@ -198,7 +199,9 @@ test("Classic Factor authoring submits one ResearchRun", { tag: "@isolated" }, a
 });
 
 test("Direct Python authoring executes, reuses frozen source and explicitly advances DailyTrack", { tag: "@isolated" }, async ({ page }) => {
-  test.setTimeout(360_000);
+  // This includes cold guest startup and explicit Track Advances, as in the
+  // Framework journey. Each guest retains its own product execution deadline.
+  test.setTimeout(600_000);
   publishFinancialTrackHead("lagged");
   await page.goto("/research?new");
   await page.getByRole("radio", { name: /Strategy Backtest/ }).check();
@@ -229,9 +232,11 @@ test("Direct Python authoring executes, reuses frozen source and explicitly adva
   await expect(page.getByLabel("Configuration issues")).toContainText("line 1", { timeout: 60_000 });
   await page.getByRole("textbox", { name: "Python source", exact: true }).fill(source);
   await page.getByRole("button", { name: "Check configuration" }).click();
-  await expect(page.getByText("Configuration is valid.", { exact: false })).toBeVisible();
+  // Valid source also starts a guest invocation; allow the same cold validation
+  // boundary as the Framework journey, independent of the UI assertion default.
+  await expect(page.getByText("Configuration is valid.", { exact: false })).toBeVisible({ timeout: 60_000 });
   await page.getByRole("button", { name: "Run backtest", exact: true }).click();
-  await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
+  await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/, { timeout: 60_000 });
   const runUrl = page.url();
   const runId = runUrl.split("/").at(-1)!;
   let runOutcome = { status: "", failure_reason: "" };
@@ -240,15 +245,15 @@ test("Direct Python authoring executes, reuses frozen source and explicitly adva
     if (!response.ok()) return false;
     runOutcome = await response.json();
     return ["succeeded", "failed", "cancelled"].includes(runOutcome.status);
-  }, { timeout: 90_000 }).toBe(true);
+  }, { timeout: 240_000 }).toBe(true);
   expect(runOutcome.status, runOutcome.failure_reason).toBe("succeeded");
-  await expect(page.locator(".research-run-facts").getByText(/Status\s+succeeded/)).toBeVisible({ timeout: 90_000 });
+  await expect(page.getByRole("heading", { name: "Strategy Summary" })).toBeVisible({ timeout: 90_000 });
+  await page.getByRole("tab", { name: "Configuration", exact: true }).click();
   const facts = page.getByRole("group", { name: "Research execution conditions" });
   await expect(facts).toContainText("Direct · Python");
   await expect(facts).not.toContainText("Holdings count");
   await page.getByText("Frozen Python source and parameters", { exact: true }).click();
   await expect(facts.locator("pre").first()).toHaveText(source);
-  await expect(page.getByRole("heading", { name: "Strategy Summary" })).toBeVisible();
   const accepted = await (await page.request.get(`/api/research-runs/${runId}`)).json();
   expect(accepted.result.terminal_strategy_state.decision_state.state).toEqual({ count: 2 });
   await page.getByRole("button", { name: "Create draft", exact: true }).click();
@@ -282,7 +287,8 @@ test("Custom fees and slippage survive Run reuse and DailyTrack refresh", { tag:
   await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
   const runUrl = page.url();
   const runId = runUrl.split("/").at(-1)!;
-  await expect(page.locator(".research-run-facts").getByText(/Status\s+succeeded/)).toBeVisible({ timeout: 90_000 });
+  await expect(page.getByRole("heading", { name: "Strategy Summary" })).toBeVisible({ timeout: 90_000 });
+  await page.getByRole("tab", { name: "Configuration", exact: true }).click();
   const costs = { commission_rate_all_in: "0.0003", commission_min_cny: "2",
     stamp_duty_sell_rate: "0.0005", transfer_fee_rate: "0.00001", slippage_bps: "15" };
   const accepted = await page.request.get(`/api/research-runs/${runId}`);
@@ -372,7 +378,8 @@ test(`${policyName} survives Run reuse and DailyTrack refresh`, { tag: "@isolate
   await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
   const runUrl = page.url();
   const runId = runUrl.split("/").at(-1)!;
-  await expect(page.locator(".research-run-facts").getByText(/Status\s+succeeded/)).toBeVisible({ timeout: 90_000 });
+  await expect(page.getByRole("heading", { name: "Strategy Summary" })).toBeVisible({ timeout: 90_000 });
+  await page.getByRole("tab", { name: "Configuration", exact: true }).click();
   const accepted = await page.request.get(`/api/research-runs/${runId}`);
   expect(accepted.ok()).toBe(true);
   const policy = drawdown ? { kind: "builtin_risk/v1", ...(combined ? {
@@ -1626,7 +1633,8 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
     const defaultRunId = page.url().split("/").at(-1);
     expect(defaultRunId).toMatch(/^run_[a-f0-9]+$/);
-    await expect(page.locator(".research-run-facts").getByText(/Status\s+succeeded/)).toBeVisible({ timeout: 90_000 });
+    await expect(page.getByRole("heading", { name: "Strategy Summary" })).toBeVisible({ timeout: 90_000 });
+  await page.getByRole("tab", { name: "Configuration", exact: true }).click();
     const completedProgress = page.getByRole("region", { name: "ResearchRun progress" });
     await expect(completedProgress.getByText("Execution complete", { exact: true })).toBeVisible();
     await expect(completedProgress).toContainText("2 / 2 sessions");
@@ -1750,7 +1758,8 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     const convertedRunId = page.url().split("/").at(-1);
     expect(convertedRunId).not.toBe(customRunId);
     if (convertedRunId === undefined) throw new Error("Converted Research route is missing run id");
-    await expect(page.locator(".research-run-facts").getByText(/Status\s+succeeded/)).toBeVisible({ timeout: 90_000 });
+    await expect(page.getByRole("heading", { name: "Strategy Summary" })).toBeVisible({ timeout: 90_000 });
+  await page.getByRole("tab", { name: "Configuration", exact: true }).click();
     await expect(page.locator(".research-run-facts")).toContainText("Research type Strategy Backtest");
     await expect(page.getByRole("heading", { name: "Strategy Summary" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Factor Summary" })).toHaveCount(0);
@@ -1884,7 +1893,8 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
     const reusedRunId = page.url().split("/").at(-1);
     expect(reusedRunId).not.toBe(defaultRunId);
-    await expect(page.locator(".research-run-facts").getByText(/Status\s+succeeded/)).toBeVisible({ timeout: 90_000 });
+    await expect(page.getByRole("heading", { name: "Strategy Summary" })).toBeVisible({ timeout: 90_000 });
+  await page.getByRole("tab", { name: "Configuration", exact: true }).click();
     const reusedDetail = await page.request.get(`/api/research-runs/${reusedRunId}`);
     expect(await reusedDetail.json()).toMatchObject({
       id: reusedRunId,
@@ -1996,7 +2006,8 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
     const diagnosticRunId = new URL(page.url()).pathname.split("/").at(-1);
     expect(diagnosticRunId).not.toBe(reusedRunId);
-    await expect(page.locator(".research-run-facts").getByText(/Status\s+succeeded/)).toBeVisible({ timeout: 90_000 });
+    await expect(page.getByRole("heading", { name: "Strategy Summary" })).toBeVisible({ timeout: 90_000 });
+  await page.getByRole("tab", { name: "Configuration", exact: true }).click();
     await expect(page.getByRole("link", { name: "Source Daily Track" })).toHaveAttribute("href", `/daily-tracks/${trackId}`);
     const diagnosticDetail = await (await page.request.get(`/api/research-runs/${diagnosticRunId}`)).json();
     expect(diagnosticDetail.rerun_origin).toMatchObject({ source_track_id: trackId, source_run_id: reusedRunId });

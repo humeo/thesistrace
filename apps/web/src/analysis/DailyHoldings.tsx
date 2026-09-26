@@ -1,10 +1,18 @@
-import { useTranslation } from "../i18n";
+import { i18n, useTranslation } from "../i18n";
 import { formatNumber, formatPercent, formatTimestamp } from "../i18n/format";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { CurrentDataRerun, type RerunSource } from "./CurrentDataRerun";
 import { coreFetch } from "../auth/coreFetch";
-import "./strategy-events.css";
-import "./daily-holdings.css";
+import { Button } from "../components/ui/button";
+import { Alert, AlertDescription } from "../components/ui/alert";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../components/ui/collapsible";
+import { Empty, EmptyDescription } from "../components/ui/empty";
+import { Field, FieldError, FieldGroup, FieldLabel } from "../components/ui/field";
+import { Input } from "../components/ui/input";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
+import { ResearchDateInput } from "../research/ResearchDateInput";
+import { isResearchIsoDate } from "../research/dateRange";
 
 type Unit = { unit_id: string; source_kind: string; first_session: string; last_session: string; expires_at: string; status: "available" | "expired" };
 type StatusPage = { status: "recorded" | "not_recorded"; units: Unit[]; next_cursor: string | null };
@@ -13,12 +21,14 @@ type Details = { status: "available" | "expired" | "not_recorded"; unit: Unit | 
 type FieldError = "invalidRange" | "invalidValue" | "invalidDate" | "invalidInstrument";
 type Filters = { start_session?: string; end_session?: string; instrument_id?: string };
 
-export function DailyHoldings({ endpoint, rerun }: {
+export function DailyHoldings({ endpoint, rerun, embedded = false }: {
   endpoint: string;
+  embedded?: boolean;
   rerun?: { folderId: string; source: RerunSource };
 }) {
   const { t } = useTranslation("analysis");
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(embedded);
+  const id = useId();
   const [status, setStatus] = useState<StatusPage | null>(null);
   const [unitId, setUnitId] = useState("");
   const [details, setDetails] = useState<Details | null>(null);
@@ -75,56 +85,81 @@ export function DailyHoldings({ endpoint, rerun }: {
       setDetails(value as Details);
     });
   }
+  useEffect(() => { if (embedded) loadPeriods(); }, [embedded, endpoint]);
   const selectedUnit = details?.unit ?? status?.units.find(unit => unit.unit_id === unitId);
-  return <section className="strategy-events daily-holdings">
-    <button type="button" className="strategy-events-toggle" aria-label={t("holdings.title")} aria-expanded={open} onClick={() => {
-      setOpen(!open);
-      if (!open && !status) loadPeriods();
-    }}><span>{t("holdings.title")}</span></button>
-    {open && <div className="daily-holdings-content">
-      <p>{t("holdings.explanation")}</p>
-      <button type="button" disabled={busy} onClick={() => loadPeriods()}>{t("holdings.check")}</button>
-      {status?.status === "not_recorded" && <p>{t("holdings.notRecordedResult")}</p>}
-      {status && status.units.length > 0 && <>
-        <label>{t("holdings.period")}<select value={unitId} disabled={busy} onChange={event => {
-          setUnitId(event.target.value); setDetails(null);
-        }}>{status.units.map(unit => <option key={unit.unit_id} value={unit.unit_id}>
-          {unit.first_session} – {unit.last_session} · {unit.source_kind === "research_run" ? t("holdings.backtest") : t("holdings.tracking")}{unit.status === "expired" ? ` · ${t("holdings.expired")}` : ""}
-        </option>)}</select></label>
-        {status.next_cursor && <button type="button" disabled={busy} onClick={() => loadPeriods(status.next_cursor)}>{t("holdings.more")}</button>}
-        {selectedUnit && <p>{selectedUnit.status === "expired" ? t("holdings.expired") : t("holdings.until")}: <time>{formatTimestamp(selectedUnit.expires_at, { year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" })}</time></p>}
-        <form className="strategy-event-filters" onSubmit={event => {
-          event.preventDefault();
-          if (draft.start_session && draft.end_session && draft.start_session > draft.end_session) {
-            setFieldErrors({ end_session: "invalidRange" });
-            return;
-          }
-          const next = Object.fromEntries(Object.entries(draft).filter(([, value]) => value !== "")) as Filters;
-          setFilters(next); loadDetails(null, next);
-        }}>
-          <label>{t("holdings.from")}<input type="date" value={draft.start_session} onChange={event => setDraft({ ...draft, start_session: event.target.value })} aria-invalid={!!fieldErrors.start_session} />{fieldErrors.start_session && <span className="daily-holdings-validation" role="alert">{t(`holdings.${fieldErrors.start_session}`)}</span>}</label>
-          <label>{t("holdings.through")}<input type="date" value={draft.end_session} onChange={event => setDraft({ ...draft, end_session: event.target.value })} aria-invalid={!!fieldErrors.end_session} />{fieldErrors.end_session && <span className="daily-holdings-validation" role="alert">{t(`holdings.${fieldErrors.end_session}`)}</span>}</label>
-          <label>{t("holdings.instrument")}<input value={draft.instrument_id} placeholder="equity:600001.SH" onChange={event => setDraft({ ...draft, instrument_id: event.target.value })} aria-invalid={!!fieldErrors.instrument_id} />{fieldErrors.instrument_id && <span className="daily-holdings-validation" role="alert">{t(`holdings.${fieldErrors.instrument_id}`)}</span>}</label>
-          <button type="submit" disabled={busy || !unitId}>{t("holdings.load")}</button>
-        </form>
-      </>}
-      {busy && <p role="status">{t("loading")}</p>}
-      {error && <p role="alert">{t(`holdings.${error}`)}</p>}
-      {details?.status === "expired" && <p>{t("holdings.expiredDetails")}</p>}
-      {rerun && selectedUnit?.status === "expired" && <CurrentDataRerun
-        key={`${unitId}:${JSON.stringify(rerun.source)}`} folderId={rerun.folderId}
-        source={rerun.source.kind === "daily_track"
-          ? { ...rerun.source, through_session: selectedUnit.last_session } : rerun.source} />}
-      {details?.status === "not_recorded" && <p>{t("holdings.notRecordedPeriod")}</p>}
-      {details?.status === "available" && <>
-        <p>{t("holdings.coverage", { count: details.coverage?.session_count ?? 0 })}</p>
-        {details.rows.length === 0 ? <p>{details.next_cursor ? t("holdings.emptyMore") : t("holdings.empty")}</p> : <div className="daily-holdings-table" role="region" aria-label={t("holdings.rows")} tabIndex={0}>
-          <table><thead><tr><th>{t("holdings.session")}</th><th>{t("holdings.instrument")}</th><th>{t("holdings.shares")}</th><th>{t("holdings.units")}</th><th>{t("holdings.mark")}</th><th>{t("holdings.value")}</th><th>{t("holdings.weight")}</th></tr></thead>
-            <tbody>{details.rows.map(row => <tr key={`${row.session}:${row.instrument_id}`}><td>{row.session}</td><td>{row.instrument_id}</td><td>{formatNumber(row.execution_shares)}</td><td>{row.adjusted_units}</td><td>{row.adjusted_mark}</td><td>{row.market_value_cny}</td><td>{formatPercent(row.weight)}</td></tr>)}</tbody>
-          </table>
-        </div>}
-        {details.next_cursor && <button type="button" disabled={busy} onClick={() => loadDetails(details.next_cursor, filters)}>{t("holdings.next")}</button>}
-      </>}
-    </div>}
-  </section>;
+  const content = <div className="flex min-w-0 flex-col gap-4">
+    <p className="m-0 text-muted-foreground">{t("holdings.explanation")}</p>
+    <Button variant="outline" className="self-start" disabled={busy} onClick={() => loadPeriods()}>{t("holdings.check")}</Button>
+    {status?.status === "not_recorded" && <Empty><EmptyDescription>{t("holdings.notRecordedResult")}</EmptyDescription></Empty>}
+    {status && status.units.length > 0 && <>
+      <Field className="max-w-xl">
+        <FieldLabel htmlFor={`${id}-period`}>{t("holdings.period")}</FieldLabel>
+        <Select value={unitId} disabled={busy} onValueChange={value => {
+          if (value === null) return;
+          setUnitId(value); setDetails(null);
+        }} items={status.units.map(unit => ({ value: unit.unit_id, label: `${unit.first_session} – ${unit.last_session} · ${unit.source_kind === "research_run" ? t("holdings.backtest") : t("holdings.tracking")}${unit.status === "expired" ? ` · ${t("holdings.expired")}` : ""}` }))}>
+          <SelectTrigger id={`${id}-period`} className="w-full"><SelectValue /></SelectTrigger>
+          <SelectContent><SelectGroup>{status.units.map(unit => <SelectItem key={unit.unit_id} value={unit.unit_id}>
+            {unit.first_session} – {unit.last_session} · {unit.source_kind === "research_run" ? t("holdings.backtest") : t("holdings.tracking")}{unit.status === "expired" ? ` · ${t("holdings.expired")}` : ""}
+          </SelectItem>)}</SelectGroup></SelectContent>
+        </Select>
+      </Field>
+      {status.next_cursor && <Button variant="outline" className="self-start" disabled={busy} onClick={() => loadPeriods(status.next_cursor)}>{t("holdings.more")}</Button>}
+      {selectedUnit && <p className="m-0 text-muted-foreground">{selectedUnit.status === "expired" ? t("holdings.expired") : t("holdings.until")}: <time>{formatTimestamp(selectedUnit.expires_at, { year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" })}</time></p>}
+      <form onSubmit={event => {
+        event.preventDefault();
+        const errors: Record<string, FieldError> = {};
+        for (const key of ["start_session", "end_session"] as const) {
+          if (draft[key] && !isResearchIsoDate(draft[key])) errors[key] = "invalidDate";
+        }
+        if (!Object.keys(errors).length && draft.start_session && draft.end_session && draft.start_session > draft.end_session) errors.end_session = "invalidRange";
+        setFieldErrors(errors);
+        if (Object.keys(errors).length) return;
+        const next = Object.fromEntries(Object.entries(draft).filter(([, value]) => value !== "")) as Filters;
+        setFilters(next); loadDetails(null, next);
+      }}>
+        <FieldGroup className="grid items-end gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          {(["start_session", "end_session"] as const).map(key => <ResearchDateInput key={key}
+            id={`${id}-${key}`} label={t(key === "start_session" ? "holdings.from" : "holdings.through")}
+            openLabel={i18n.t(key === "start_session" ? "research:openStartCalendar" : "research:openEndCalendar")}
+            value={draft[key]} onChange={value => setDraft({ ...draft, [key]: value })}
+            minimum={key === "end_session" ? draft.start_session || null : null}
+            maximum={key === "start_session" ? draft.end_session || null : null}
+            error={fieldErrors[key] ? t(`holdings.${fieldErrors[key]}`) : undefined} errorId={`${id}-${key}-error`} />)}
+          <Field data-invalid={!!fieldErrors.instrument_id}>
+            <FieldLabel htmlFor={`${id}-instrument`}>{t("holdings.instrument")}</FieldLabel>
+            <Input id={`${id}-instrument`} value={draft.instrument_id} placeholder="equity:600001.SH" onChange={event => setDraft({ ...draft, instrument_id: event.target.value })} aria-invalid={!!fieldErrors.instrument_id} aria-describedby={fieldErrors.instrument_id ? `${id}-instrument-error` : undefined} />
+            {fieldErrors.instrument_id && <FieldError id={`${id}-instrument-error`}>{t(`holdings.${fieldErrors.instrument_id}`)}</FieldError>}
+          </Field>
+          <Button type="submit" disabled={busy || !unitId}>{t("holdings.load")}</Button>
+        </FieldGroup>
+      </form>
+    </>}
+    {busy && <p role="status">{t("loading")}</p>}
+    {error && <Alert variant="destructive"><AlertDescription>{t(`holdings.${error}`)}</AlertDescription></Alert>}
+    {details?.status === "expired" && <Alert role="status"><AlertDescription>{t("holdings.expiredDetails")}</AlertDescription></Alert>}
+    {rerun && selectedUnit?.status === "expired" && <CurrentDataRerun
+      key={`${unitId}:${JSON.stringify(rerun.source)}`} folderId={rerun.folderId}
+      source={rerun.source.kind === "daily_track" ? { ...rerun.source, through_session: selectedUnit.last_session } : rerun.source} />}
+    {details?.status === "not_recorded" && <Empty><EmptyDescription>{t("holdings.notRecordedPeriod")}</EmptyDescription></Empty>}
+    {details?.status === "available" && <>
+      <p>{t("holdings.coverage", { count: details.coverage?.session_count ?? 0 })}</p>
+      {details.rows.length === 0 ? <Empty><EmptyDescription>{details.next_cursor ? t("holdings.emptyMore") : t("holdings.empty")}</EmptyDescription></Empty> : <div className="min-w-0">
+        <Table scrollLabel={t("holdings.rows")} className="tabular-nums [&_th:nth-child(n+3)]:text-right [&_td:nth-child(n+3)]:text-right"><TableHeader><TableRow>
+          {(["session", "instrument", "shares", "units", "mark", "value", "weight"] as const).map(key => <TableHead key={key}>{t(`holdings.${key}`)}</TableHead>)}
+        </TableRow></TableHeader><TableBody>{details.rows.map(row => <TableRow key={`${row.session}:${row.instrument_id}`}>
+          <TableCell>{row.session}</TableCell><TableCell>{row.instrument_id}</TableCell><TableCell>{formatNumber(row.execution_shares)}</TableCell><TableCell>{row.adjusted_units}</TableCell><TableCell>{row.adjusted_mark}</TableCell><TableCell>{row.market_value_cny}</TableCell><TableCell>{formatPercent(row.weight)}</TableCell>
+        </TableRow>)}</TableBody></Table>
+      </div>}
+      {details.next_cursor && <Button variant="outline" className="self-start" disabled={busy} onClick={() => loadDetails(details.next_cursor, filters)}>{t("holdings.next")}</Button>}
+    </>}
+  </div>;
+  if (embedded) return <section aria-label={t("holdings.title")} className="min-w-0">{content}</section>;
+  return <Collapsible open={open} onOpenChange={next => {
+    setOpen(next);
+    if (next && !status) loadPeriods();
+  }} className="min-w-0">
+    <CollapsibleTrigger render={<Button variant="outline" />}>{t("holdings.title")}</CollapsibleTrigger>
+    <CollapsibleContent keepMounted className="pt-4">{content}</CollapsibleContent>
+  </Collapsible>;
 }

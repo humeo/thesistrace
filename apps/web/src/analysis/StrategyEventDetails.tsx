@@ -1,3 +1,9 @@
+import { toast } from "../components/ui/toast";
+import { cn } from "cn";
+import { CaretDown, CaretRight } from "@phosphor-icons/react";
+import { Button } from "../components/ui/button";
+import { Alert, AlertDescription } from "../components/ui/alert";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import type { ParseKeys } from "i18next";
 import { i18n, useTranslation } from "../i18n";
 import { formatNumber, formatPercent } from "../i18n/format";
@@ -95,9 +101,13 @@ function cellValue(path: string, row: EventRow) {
   return String(value);
 }
 
+function CopyConfirmation() {
+  const { t } = useTranslation("analysis");
+  return <>{t("events.copied")}</>;
+}
+
 function EventRecord({ row, section, navigate }: { row: EventRow; section: EventSection; navigate: Navigate }) {
   const { t } = useTranslation("analysis");
-  const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
   const json = JSON.stringify(row, null, 2);
   const targetId = row.target_id == null ? undefined : String(row.target_id);
@@ -107,7 +117,7 @@ function EventRecord({ row, section, navigate }: { row: EventRow; section: Event
     ...(row.instrument_id == null ? {} : { instrument: instrumentLabel(String(row.instrument_id)) }) };
   const linkedFills = section === "strategy_targets" ? { target_id: targetId }
     : section === "strategy_child_orders" ? { child_order_id: childId } : { order_id: orderId };
-  return <div className="strategy-event-record">
+  return <div className="flex min-w-0 flex-col gap-4 whitespace-normal p-4">
     {section === "strategy_framework" && <FrameworkDecisionDetails row={row as FrameworkRecord} />}
     {section === "strategy_fills" && <section aria-label={t("events.fillDetails.title")}>
       <p>{t("events.fillDetails.explanation")}</p>
@@ -118,27 +128,27 @@ function EventRecord({ row, section, navigate }: { row: EventRow; section: Event
         ["transfer_fee_cny", "transferFee"], ["cost", "cost"],
         ["cash_rounding_delta", "cashRounding"],
       ] as const).map(([key, label]) => <div key={key}><dt>{t(`events.fillDetails.${label}`)}</dt>
-        <dd>{new Decimal(String(row[key])).toString()}</dd></div>)}</dl>
+        <dd>{row[key] == null ? "—" : new Decimal(String(row[key])).toString()}</dd></div>)}</dl>
     </section>}
-    <div className="strategy-event-record-toolbar"><span>{t("events.raw")}</span>
-      <button type="button" onClick={async () => {
+    <div className="flex flex-wrap items-center justify-between gap-2"><span>{t("events.raw")}</span>
+      <Button variant="outline" type="button" onClick={async () => {
         setCopyError(false);
-        try { await navigator.clipboard.writeText(json); setCopied(true); }
-        catch { setCopied(false); setCopyError(true); }
-      }}>{copied ? t("events.copied") : t("events.copy")}</button>
+        try { await navigator.clipboard.writeText(json); toast.add({ title: <CopyConfirmation />, type: "success" }); }
+        catch { setCopyError(true); }
+      }}>{t("events.copy")}</Button>
     </div>
-    {copyError && <p role="alert">{t("events.copyError")}</p>}
-    <pre tabIndex={0} aria-label={t("events.rawJson")}>{json}</pre>
-    <div className="strategy-event-links" aria-label={t("events.related")}>
-      {targetId && section !== "strategy_targets" && <button type="button" onClick={() => navigate("strategy_targets", { target_id: targetId }, context)}>{t("events.viewTargets")}</button>}
-      {section === "strategy_targets" && <button type="button" onClick={() => navigate("strategy_orders", { target_id: targetId }, context)}>{t("events.viewOrders")}</button>}
-      {orderId && section !== "strategy_orders" && <button type="button" onClick={() => navigate("strategy_orders", { order_id: orderId }, context)}>{t("events.viewOrders")}</button>}
-      {section === "strategy_orders" && <button type="button" onClick={() => navigate("strategy_child_orders", { order_id: orderId }, context)}>{t("events.viewChildren")}</button>}
+    {copyError && <Alert variant="destructive"><AlertDescription>{t("events.copyError")}</AlertDescription></Alert>}
+    <pre className="m-0 max-h-80 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-4 font-mono text-sm [overflow-wrap:anywhere]" tabIndex={0} aria-label={t("events.rawJson")}>{json}</pre>
+    <div className="flex flex-wrap gap-2" aria-label={t("events.related")}>
+      {targetId && section !== "strategy_targets" && <Button variant="outline" type="button" onClick={() => navigate("strategy_targets", { target_id: targetId }, context)}>{t("events.viewTargets")}</Button>}
+      {section === "strategy_targets" && <Button variant="outline" type="button" onClick={() => navigate("strategy_orders", { target_id: targetId }, context)}>{t("events.viewOrders")}</Button>}
+      {orderId && section !== "strategy_orders" && <Button variant="outline" type="button" onClick={() => navigate("strategy_orders", { order_id: orderId }, context)}>{t("events.viewOrders")}</Button>}
+      {section === "strategy_orders" && <Button variant="outline" type="button" onClick={() => navigate("strategy_child_orders", { order_id: orderId }, context)}>{t("events.viewChildren")}</Button>}
       {["strategy_targets", "strategy_orders", "strategy_child_orders", "strategy_execution_constraints"].includes(section)
-        && Object.values(linkedFills).some(Boolean) && <button type="button" onClick={() => navigate("strategy_fills", linkedFills, context)}>{t("events.viewFills")}</button>}
-      {(section === "strategy_targets" || section === "strategy_orders") && <button type="button" onClick={() => navigate(
+        && Object.values(linkedFills).some(Boolean) && <Button variant="outline" type="button" onClick={() => navigate("strategy_fills", linkedFills, context)}>{t("events.viewFills")}</Button>}
+      {(section === "strategy_targets" || section === "strategy_orders") && <Button variant="outline" type="button" onClick={() => navigate(
         "strategy_execution_constraints", section === "strategy_targets" ? { target_id: targetId } : { order_id: orderId }, context,
-      )}>{t("events.viewConstraints")}</button>}
+      )}>{t("events.viewConstraints")}</Button>}
     </div>
   </div>;
 }
@@ -150,34 +160,34 @@ export function StrategyEventTable({ rows, section, navigate }: {
   const [expanded, setExpanded] = useState<string | null>(null);
   const prefix = useId();
   const selectedColumns = columns[section];
-  return <div className="strategy-events-table-scroll" role="region" aria-label={t("events.records", { section: eventSectionLabel(section) })} tabIndex={0}>
-    <table className="strategy-events-table" aria-label={eventSectionLabel(section)}>
-      <thead><tr>{selectedColumns.map(column => <th key={column.key} scope="col" className={column.numeric ? "numeric" : undefined}>{t(column.label)}</th>)}
-        <th scope="col"><span className="strategy-events-sr-only">{t("events.raw")}</span></th>
-      </tr></thead>
-      <tbody>{rows.map(row => {
+  return <div className="min-w-0 max-w-full">
+    <Table scrollLabel={t("events.records", { section: eventSectionLabel(section) })} className="tabular-nums" aria-label={eventSectionLabel(section)}>
+      <TableHeader><TableRow>{selectedColumns.map(column => <TableHead key={column.key} scope="col" className={column.numeric ? "text-right font-mono" : undefined}>{t(column.label)}</TableHead>)}
+        <TableHead scope="col"><span className="sr-only">{t("events.raw")}</span></TableHead>
+      </TableRow></TableHeader>
+      <TableBody>{rows.map(row => {
         const id = String(row[idFields[section]]);
         const open = expanded === id;
         const toggle = () => setExpanded(open ? null : id);
         const label = String(row.session ?? row.decision_session) + (row.instrument_id ? " " + instrumentLabel(String(row.instrument_id)) : "");
         const detailId = prefix + "-" + id;
         return <Fragment key={id}>
-          <tr className={"strategy-event-row" + (open ? " is-expanded" : "")} onClick={toggle}>
-            {selectedColumns.map(column => <td key={column.key} className={[
-              column.numeric ? "numeric" : "",
-              column.key.endsWith("session") || column.key === "instrument_id" ? "mono" : "",
-              column.key === "rejection_reason" && row[column.key] ? "strategy-event-rejected" : "",
-            ].filter(Boolean).join(" ")}>{cellValue(column.key, row)}</td>)}
-            <td className="strategy-event-expand"><button type="button" aria-label={t("events.viewRaw", { label })}
+          <TableRow data-state={open ? "selected" : undefined} className="cursor-pointer" onClick={toggle}>
+            {selectedColumns.map(column => <TableCell key={column.key} className={cn(
+              column.numeric && "text-right font-mono",
+              (column.key.endsWith("session") || column.key === "instrument_id") && "font-mono",
+              column.key === "rejection_reason" && row[column.key] && "text-warning-foreground",
+            )}>{cellValue(column.key, row)}</TableCell>)}
+            <TableCell className="w-12 p-1"><Button variant="ghost" size="icon" type="button" aria-label={t("events.viewRaw", { label })}
               aria-expanded={open} aria-controls={open ? detailId : undefined} onClick={event => { event.stopPropagation(); toggle(); }}>
-              <span aria-hidden="true" className={open ? "is-open" : undefined}>›</span>
-            </button></td>
-          </tr>
-          {open && <tr id={detailId} className="strategy-event-detail-row"><td colSpan={selectedColumns.length + 1}>
+              {open ? <CaretDown aria-hidden="true" /> : <CaretRight aria-hidden="true" />}
+            </Button></TableCell>
+          </TableRow>
+          {open && <TableRow id={detailId} ><TableCell className="p-0" colSpan={selectedColumns.length + 1}>
             <EventRecord row={row} section={section} navigate={navigate} />
-          </td></tr>}
+          </TableCell></TableRow>}
         </Fragment>;
-      })}</tbody>
-    </table>
+      })}</TableBody>
+    </Table>
   </div>;
 }

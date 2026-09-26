@@ -22,7 +22,7 @@ test("rejects native disclosure controls in migrated code", () => {
   assert.equal(isMigratedUiFile("analysis/FactorEvidence.tsx"), true);
   assert.equal(isMigratedUiFile("research-runs/FactorResultView.tsx"), true);
   assert.equal(isMigratedUiFile("research-runs/ResearchRunsPage.tsx"), false);
-  const runs = `function FactorRunDetail() { return <button>Run</button>; }
+  const runs = `function ResearchRunDetail() { return <button>Run</button>; }
     function ResearchRunHistory() { return <button>Legacy list</button>; }`;
   assert.equal(uiOwnershipViolations("research-runs/ResearchRunsPage.tsx", runs, false).length, 1);
   assert.match(uiOwnershipViolations("research-runs/ResearchRunsPage.tsx", runs, false)[0], /replace native <button>/);

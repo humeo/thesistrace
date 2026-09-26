@@ -1,20 +1,20 @@
 import ts from "typescript";
 
 const basicControls = new Set(["button", "input", "select", "textarea", "dialog", "table", "details", "summary"]);
-// The Runs file still hosts legacy list and strategy views until tickets 07–08.
-// Enforce the migrated factor detail and its shared controls without exempting them.
+// The Runs file still hosts legacy list controls until ticket 08.
+// Enforce the migrated run detail and its shared controls without exempting them.
 const migratedRunsFunctions = new Set([
-  "FactorRunDetail", "ResearchDeleteDialog", "ResearchRunProgressView", "UseAsDraftPanel",
+  "ResearchRunDetail", "ResearchDeleteDialog", "ResearchRunProgressView", "UseAsDraftPanel",
   "ResearchOrganizationPanel", "ResearchFolderSelect",
 ]);
 
 export function isMigratedUiFile(relativePath) {
   return relativePath === "main.tsx" || relativePath === "shell/AppShell.tsx" ||
     relativePath === "chat/SessionHistoryList.tsx" || relativePath.startsWith("auth/") ||
-    (relativePath.startsWith("research/") && !["research/FrameworkStateView.tsx", "research/FrozenStrategyDefinition.tsx"].includes(relativePath)) ||
-    relativePath === "research-runs/FactorResultView.tsx" ||
+    relativePath.startsWith("research/") ||
+    ["research-runs/FactorResultView.tsx", "research-runs/StrategyResultView.tsx", "components/layout/Disclosure.tsx"].includes(relativePath) ||
     relativePath === "components/product/MetricGroup.tsx" ||
-    ["FactorEvidence", "CommonInputObservations", "MetricHelp", "StrategyPerformanceChart"].some(
+    ["FactorEvidence", "CommonInputObservations", "MetricHelp", "StrategyPerformanceChart", "StrategyComparisonPanel", "DailyHoldings", "StrategyEvents", "StrategyEventDetails", "FrameworkDecisionDetails", "CloseRiskFacts", "CurrentDataRerun"].some(
       (name) => relativePath === `analysis/${name}.tsx`,
     );
 }

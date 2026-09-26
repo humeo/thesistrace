@@ -1,3 +1,4 @@
+import "../../src/styles.css";
 import { LanguageControls } from "./language-controls";
 import { createRoot } from "react-dom/client";
 import { DailyHoldings } from "../../src/analysis/DailyHoldings";

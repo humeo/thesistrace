@@ -1,30 +1,12 @@
 import { fontStylesheet, serveBrandAssets } from "./brand-assets";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
-import { build } from "vite";
+import { buildProductFixture } from "./build-product-fixture";
 
 test.beforeEach(async ({ page }) => { await serveBrandAssets(page); });
-
 let script: string;
-const styles = readFileSync(new URL("../src/analysis/strategy-events.css", import.meta.url), "utf8")
-  + readFileSync(new URL("../src/styles.css", import.meta.url), "utf8")
-  + readFileSync(new URL("../src/analysis/daily-holdings.css", import.meta.url), "utf8");
-
+let styles: string;
 test.beforeAll(async () => {
-  const result = await build({
-    configFile: false, logLevel: "silent", esbuild: { jsx: "automatic" },
-    define: { "process.env.NODE_ENV": JSON.stringify("production") },
-    build: { write: false, minify: false, lib: {
-      entry: fileURLToPath(new URL("./fixtures/daily-holdings.tsx", import.meta.url)),
-      formats: ["iife"], name: "DailyHoldingsFixture",
-    } },
-  });
-  if ("on" in result) throw new Error("Expected a one-off build");
-  const chunk = (Array.isArray(result) ? result : [result]).flatMap(bundle => bundle.output)
-    .find(output => output.type === "chunk" && output.isEntry);
-  if (chunk?.type !== "chunk") throw new Error("Missing component bundle");
-  script = chunk.code;
+  ({ script, styles } = await buildProductFixture(new URL("./fixtures/daily-holdings.tsx", import.meta.url), "DailyHoldingsFixture"));
 });
 
 const unit = { unit_id: "unit_a", source_kind: "research_run", first_session: "2026-08-03", last_session: "2026-08-04", expires_at: "2026-08-11T00:00:00Z", status: "available" };
@@ -63,7 +45,7 @@ test("holdings require explicit detail reads and preserve applied filters when p
   await page.getByRole("button", { name: "English", exact: true }).click();
 
   expect(reads).toHaveLength(2);
-  await page.locator('input[type="date"]').nth(1).fill("");
+  await page.getByRole("textbox", { name: "Through", exact: true }).fill("");
   await page.getByLabel("From", { exact: true }).fill("2026-08-03");
   await page.getByRole("button", { name: "Load holdings", exact: true }).click();
   await expect(page.getByText("70.00%", { exact: true })).toBeVisible();
@@ -79,6 +61,10 @@ test("holdings require explicit detail reads and preserve applied filters when p
   await expect(page.getByText("70.00%", { exact: true })).toBeVisible();
   expect(reads).toHaveLength(count);
   await page.setViewportSize({ width: 390, height: 844 });
+  const records = page.getByRole("region", { name: "Daily holdings rows", exact: true });
+  await records.focus();
+  await records.press("ArrowRight");
+  await expect.poll(() => records.evaluate(element => element.scrollLeft)).toBeGreaterThan(0);
   await page.screenshot({ path: "../../.local/browser-tests/daily-holdings.png", fullPage: true });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });

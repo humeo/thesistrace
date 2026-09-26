@@ -14,12 +14,12 @@ export function PageHeader({
   className?: string;
 }) {
   return (
-    <header className={cn("mb-8 flex flex-col items-start justify-between gap-6 max-[768px]:mb-6 min-[769px]:flex-row", className)}>
-      <div className="grid min-w-0 gap-2">
+    <header className={cn("mb-8 flex flex-col items-start justify-between gap-6 max-[768px]:mb-6 min-[769px]:flex-row min-[769px]:flex-wrap", className)}>
+      <div className="grid w-full min-w-0 flex-1 gap-2 min-[769px]:flex-[1_1_20rem]">
         <h1 className="m-0 text-2xl leading-8 font-semibold tracking-normal [overflow-wrap:anywhere]">{title}</h1>
         {description ? <p className="m-0 text-sm leading-[22px] text-muted-foreground">{description}</p> : null}
       </div>
-      {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
+      {actions ? <div className="flex max-w-full shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
     </header>
   );
 }

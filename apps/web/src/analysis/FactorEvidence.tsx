@@ -132,7 +132,7 @@ function EvidencePage({ runId, filters }: { runId: string; filters: Filters }) {
     {error ? <div role="alert"><p>{t(error === "cursor" ? "factor.cursorError" : "factor.loadError")}</p><Button variant="outline" onClick={() => { setCursors([null]); setRetry(value => value + 1); }}>{t("reloadFirst")}</Button></div>
       : page === null ? <p role="status">{t("factor.loading")}</p>
       : page.items.length === 0 ? <p>{t("factor.empty")}</p>
-      : <div className="factor-evidence-table"><Table>
+      : <div className="factor-evidence-table"><Table scrollLabel={page.section === "factor_observations" ? t("factor.dailyCaption") : t("factor.periodCaption")}>
         <TableCaption>{page.section === "factor_observations" ? t("factor.dailyCaption") : t("factor.periodCaption")}</TableCaption>
         <TableHeader><TableRow><TableHead>{page.section === "factor_observations" ? t("factor.signalDate") : t("factor.period")}</TableHead><TableHead>IC</TableHead><TableHead>Rank IC</TableHead>
           {page.section === "factor_periods" && <><TableHead>ICIR</TableHead><TableHead>Rank ICIR</TableHead></>}

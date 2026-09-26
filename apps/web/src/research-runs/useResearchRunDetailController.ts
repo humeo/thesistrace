@@ -15,6 +15,7 @@ export function useResearchRunDetailController(runId: string | undefined) {
   const [canceling, setCanceling] = useState(false);
   const [cancelError, setCancelError] = useState<CancelError | null>(null);
   const [startingTracking, setStartingTracking] = useState(false);
+  const [trackingError, setTrackingError] = useState<RunError | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deleteError, setDeleteError] = useState<HttpActionError | null>(null);
@@ -78,6 +79,8 @@ export function useResearchRunDetailController(runId: string | undefined) {
   useEffect(() => {
     setCancelError(null);
     setCanceling(false);
+    setStartingTracking(false);
+    setTrackingError(null);
     return () => {
       cancelGeneration.current += 1;
       cancelController.current?.abort();
@@ -139,16 +142,15 @@ export function useResearchRunDetailController(runId: string | undefined) {
   }
 
   async function startTracking(): Promise<void> {
-    if (run === null || run.status !== "succeeded" || deleting) return;
+    if (run === null || run.research_kind !== "strategy_backtest" || run.status !== "succeeded" || deleting || trackingController.current || deleteController.current) return;
     const targetRun = run;
     const generation = ++trackingGeneration.current;
     loadGeneration.current += 1;
     setLoadState(null);
-    trackingController.current?.abort();
     const controller = new AbortController();
     trackingController.current = controller;
     setStartingTracking(true);
-    setError(null);
+    setTrackingError(null);
     const pending = trackingRequest.current;
     const requestId = pending?.runId === targetRun.id ? pending.requestId : `track_${crypto.randomUUID()}`;
     trackingRequest.current = { runId: targetRun.id, requestId };
@@ -159,7 +161,7 @@ export function useResearchRunDetailController(runId: string | undefined) {
       });
       if (!response.ok) {
         const failure = await readTrackingError(response);
-        if (generation === trackingGeneration.current) setError(failure);
+        if (generation === trackingGeneration.current) setTrackingError(failure);
         return;
       }
       const track = (await response.json()) as { id: string };
@@ -169,7 +171,7 @@ export function useResearchRunDetailController(runId: string | undefined) {
     } catch (reason: unknown) {
       if (reason instanceof DOMException && reason.name === "AbortError") return;
       if (generation !== trackingGeneration.current) return;
-      setError({ code: "trackingError" });
+      setTrackingError({ code: "trackingError" });
     } finally {
       if (generation === trackingGeneration.current) {
         trackingController.current = null;
@@ -191,9 +193,8 @@ export function useResearchRunDetailController(runId: string | undefined) {
   }
 
   async function performResearchDeletion(): Promise<void> {
-    if (run === null || !isTerminal(run.status) || deleting || startingTracking) return;
+    if (run === null || !isTerminal(run.status) || deleting || startingTracking || trackingController.current || deleteController.current) return;
     const generation = ++deleteGeneration.current;
-    deleteController.current?.abort();
     const controller = new AbortController();
     deleteController.current = controller;
     setDeleting(true);
@@ -219,7 +220,7 @@ export function useResearchRunDetailController(runId: string | undefined) {
   }
 
   return {
-    run, setRun, error, loadState, canceling, cancelError, startingTracking, deleting,
+    run, setRun, error, loadState, canceling, cancelError, startingTracking, trackingError, deleting,
     deleteDialogOpen, deleteError, deleteTrigger, refresh, cancel, startTracking,
     openDeleteDialog, closeDeleteDialog, performResearchDeletion,
   };

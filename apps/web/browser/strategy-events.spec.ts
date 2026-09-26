@@ -1,29 +1,12 @@
 import { fontStylesheet, serveBrandAssets } from "./brand-assets";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
-import { build } from "vite";
+import { buildProductFixture } from "./build-product-fixture";
 
 test.beforeEach(async ({ page }) => { await serveBrandAssets(page); });
-
 let script: string;
-const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8")
-  + readFileSync(new URL("../src/analysis/strategy-events.css", import.meta.url), "utf8");
-
+let styles: string;
 test.beforeAll(async () => {
-  const result = await build({
-    configFile: false, logLevel: "silent", esbuild: { jsx: "automatic" },
-    define: { "process.env.NODE_ENV": JSON.stringify("production") },
-    build: { write: false, minify: false, lib: {
-      entry: fileURLToPath(new URL("./fixtures/strategy-events.tsx", import.meta.url)),
-      formats: ["iife"], name: "StrategyEventsFixture",
-    } },
-  });
-  if ("on" in result) throw new Error("Expected a one-off build");
-  const chunk = (Array.isArray(result) ? result : [result]).flatMap(bundle => bundle.output)
-    .find(output => output.type === "chunk" && output.isEntry);
-  if (chunk?.type !== "chunk") throw new Error("Missing component bundle");
-  script = chunk.code;
+  ({ script, styles } = await buildProductFixture(new URL("./fixtures/strategy-events.tsx", import.meta.url), "StrategyEventsFixture"));
 });
 
 const target = {
@@ -60,7 +43,7 @@ test("troubleshooting table preserves unknown quantities and copies the exact re
   await table.getByRole("button", { name: /View raw record/ }).first().click();
   expect(JSON.parse(await page.locator("pre").innerText())).toEqual(recorded);
   await page.getByRole("button", { name: "Copy JSON", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Copied", exact: true })).toBeVisible();
+  await expect(page.locator('[data-slot="toast-title"]').getByText("Copied", { exact: true })).toBeVisible();
   expect(JSON.parse(await page.evaluate(() => navigator.clipboard.readText()))).toEqual(recorded);
   await page.getByText("Trading events", { exact: true }).click();
   await expect(table).not.toBeVisible();
@@ -82,7 +65,8 @@ test("long rational weights remain exact in optional raw records without widenin
   await page.addStyleTag({ content: styles });
   await page.addScriptTag({ content: script });
   await page.getByText("Trading events", { exact: true }).click();
-  await page.getByLabel("Event type").selectOption("strategy_targets");
+  await page.getByRole("combobox", { name: "Event type" }).click();
+  await page.getByRole("option", { name: "Rebalance targets", exact: true }).click();
   const table = page.getByRole("table", { name: "Rebalance targets" });
   await expect(table.getByRole("cell", { name: "2", exact: true })).toBeVisible();
   await expect(table.getByRole("cell", { name: "70.00%", exact: true })).toBeVisible();
@@ -111,7 +95,8 @@ test("trading evidence pages and follows target, order, child and fill relations
   await page.addScriptTag({ content: script });
   expect(reads).toHaveLength(0);
   await page.getByText("Trading events", { exact: true }).click();
-  await page.getByLabel("Event type").selectOption("strategy_targets");
+  await page.getByRole("combobox", { name: "Event type" }).click();
+  await page.getByRole("option", { name: "Rebalance targets", exact: true }).click();
   await expect(page.getByText("70.00%", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Next", exact: true }).click();
   await expect(page.getByRole("button", { name: "Next", exact: true })).toBeDisabled();
@@ -124,12 +109,12 @@ test("trading evidence pages and follows target, order, child and fill relations
   await expect.poll(() => reads.at(-1)?.end_session).toBe("2026-08-03");
   await page.getByRole("button", { name: /View raw record/ }).click();
   await page.getByRole("button", { name: "View orders", exact: true }).click();
-  await expect(page.getByLabel("Event type")).toHaveValue("strategy_orders");
+  await expect(page.getByRole("combobox", { name: "Event type" }).locator('[data-slot="select-value"]')).toHaveText("Orders");
   await expect(page.getByRole("region", { name: "Current related scope" })).toContainText("Rebalance targets for 2026-08-03");
   const beforeLanguageReads = reads.length;
   await page.getByRole("button", { name: "简体中文", exact: true }).click();
   await expect(page.getByRole("region", { name: "当前关联范围" })).toContainText("2026-08-03 的调仓目标");
-  await expect(page.getByLabel("事件类型")).toHaveValue("strategy_orders");
+  await expect(page.getByRole("combobox", { name: "事件类型" }).locator('[data-slot="select-value"]')).toHaveText("委托");
   expect(reads).toHaveLength(beforeLanguageReads);
   await page.getByRole("button", { name: "English", exact: true }).click();
 
@@ -139,12 +124,12 @@ test("trading evidence pages and follows target, order, child and fill relations
   expect(reads.at(-1)?.cursor).toBeNull();
   await page.getByRole("button", { name: /View raw record/ }).click();
   await page.getByRole("button", { name: "View child orders" }).click();
-  await expect(page.getByLabel("Event type")).toHaveValue("strategy_child_orders");
+  await expect(page.getByRole("combobox", { name: "Event type" }).locator('[data-slot="select-value"]')).toHaveText("Child orders");
   await page.getByRole("button", { name: /View raw record/ }).click();
   await expect(page.getByRole("button", { name: "View fills" })).toBeVisible();
   expect(reads.at(-1)?.order_id).toBe("order_a");
   await page.getByRole("button", { name: "View fills" }).click();
-  await expect(page.getByLabel("Event type")).toHaveValue("strategy_fills");
+  await expect(page.getByRole("combobox", { name: "Event type" }).locator('[data-slot="select-value"]')).toHaveText("Fills");
   await expect(page.getByRole("heading", { name: "Fills", exact: true })).toBeFocused();
   await expect(page.getByRole("cell", { name: "5.00", exact: true })).toBeVisible();
   await page.getByRole("button", { name: /View raw record/ }).click();
@@ -154,10 +139,10 @@ test("trading evidence pages and follows target, order, child and fill relations
   expect(reads.at(-1)?.child_order_id).toBe("child_a");
   await expect(page.getByText("End of filtered results", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Back to Child orders", exact: true }).click();
-  await expect(page.getByLabel("Event type")).toHaveValue("strategy_child_orders");
+  await expect(page.getByRole("combobox", { name: "Event type" }).locator('[data-slot="select-value"]')).toHaveText("Child orders");
   await expect.poll(() => reads.at(-1)?.order_id).toBe("order_a");
   await page.getByRole("button", { name: "Back to Orders", exact: true }).click();
-  await expect(page.getByLabel("Event type")).toHaveValue("strategy_orders");
+  await expect(page.getByRole("combobox", { name: "Event type" }).locator('[data-slot="select-value"]')).toHaveText("Orders");
   await page.getByRole("button", { name: "Back to Rebalance targets", exact: true }).click();
   await expect(page.getByLabel("From date", { exact: true })).toHaveValue("2026-08-03");
   await expect(page.getByRole("region", { name: "Current related scope" })).toHaveCount(0);
@@ -192,7 +177,8 @@ test("execution constraints distinguish skipped, reduced and unrecorded trades",
   await page.addStyleTag({ content: styles });
   await page.addScriptTag({ content: script });
   await page.getByText("Trading events", { exact: true }).click();
-  await page.getByLabel("Event type").selectOption("strategy_execution_constraints");
+  await page.getByRole("combobox", { name: "Event type" }).click();
+  await page.getByRole("option", { name: "Execution constraints", exact: true }).click();
   const table = page.getByRole("table", { name: "Execution constraints", exact: true });
   await expect(table.getByRole("row").filter({ hasText: "600000.SH" })).toContainText("1,0001,000900Insufficient cash");
   await expect(page.getByRole("alert")).toHaveCount(0);
@@ -271,11 +257,12 @@ test("Framework evidence separates signal expiry, proposal, cancellation and fin
   await page.addScriptTag({ content: script });
   await page.getByText("Trading events", { exact: true }).click();
   await page.getByRole("button", { name: "简体中文", exact: true }).click();
-  await page.getByLabel("事件类型").selectOption("strategy_framework");
+  await page.getByRole("combobox", { name: "事件类型" }).click();
+  await page.getByRole("option", { name: "Framework 决策", exact: true }).click();
   const table = page.getByRole("table", { name: "Framework 决策" });
   await table.getByRole("button", { name: /查看原始记录/ }).first().click();
   await expect(page.getByRole("region", { name: "候选选择", exact: true })).toContainText("保留仍可用");
-  for (const summary of await page.locator(".framework-decision-details summary").all()) {
+  for (const summary of await page.getByRole("table").locator('[data-slot="collapsible-trigger"]').all()) {
     const bounds = await summary.boundingBox();
     expect(bounds!.height).toBeGreaterThanOrEqual(44);
     expect(bounds!.width).toBeGreaterThanOrEqual(44);

@@ -15,7 +15,8 @@ import { catalogLabel } from "../i18n/catalog";
 import { formatNumber, formatPercent, formatSessionDate } from "../i18n/format";
 import type { StrategyComparisonCurvePoint } from "./strategyComparison";
 import { chartTheme } from "./chartTheme";
-import { Button } from "../components/ui/button";
+import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group";
+import { Empty, EmptyDescription } from "../components/ui/empty";
 
 // TradingView Lightweight Charts™
 // Copyright (с) 2025 TradingView, Inc. https://www.tradingview.com/
@@ -69,7 +70,7 @@ export function StrategyPerformanceChart({
         background: { type: ColorType.Solid, color: theme.background },
         textColor: theme.text,
         fontFamily: "Inter, Noto Sans SC, -apple-system, BlinkMacSystemFont, sans-serif",
-        fontSize: 11,
+        fontSize: 12,
         attributionLogo: false,
       },
       grid: {
@@ -141,7 +142,7 @@ export function StrategyPerformanceChart({
     };
     chart.subscribeCrosshairMove(onCrosshairMove);
     const observer = new ResizeObserver(([entry]) => {
-      if (entry === undefined) return;
+      if (entry === undefined || entry.contentRect.width <= 0) return;
       chart.applyOptions({
         width: Math.floor(entry.contentRect.width),
         height: entry.contentRect.width <= 768 ? 240 : 320,
@@ -180,34 +181,23 @@ export function StrategyPerformanceChart({
   }
 
   if (points.length === 0) {
-    return <p className="strategy-chart-empty">{t("chart.empty")}</p>;
+    return <Empty><EmptyDescription>{t("chart.empty")}</EmptyDescription></Empty>;
   }
   return (
     <figure
-      className="strategy-chart"
+      className="strategy-chart m-0 flex min-w-0 flex-col gap-3 rounded-lg border border-border bg-card p-4"
       aria-label={t("chart.label", { benchmark })}
     >
-      <figcaption>
-        <span><i className="strategy-swatch" /> {t("chart.strategy")}</span>
-        <span><i className="benchmark-swatch" /> {benchmark}</span>
-        <span className="strategy-chart-session-count">{t("chart.sessions", { total: formatNumber(points.length) })}</span>
+      <figcaption className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
+        <span><i aria-hidden="true" className="mr-1 inline-block h-0.5 w-4 align-middle bg-chart-1" /> {t("chart.strategy")}</span>
+        <span><i aria-hidden="true" className="mr-1 inline-block h-0.5 w-4 align-middle bg-chart-4" /> {benchmark}</span>
+        <span className="ml-auto">{t("chart.sessions", { total: formatNumber(points.length) })}</span>
       </figcaption>
-      <div className="strategy-chart-toolbar" aria-label={t("chart.range")}>
-        {(["1Y", "3Y", "5Y", "All"] as const).map((range) => (
-          <Button
-            variant="ghost"
-            size="sm"
-            aria-pressed={visibleRange === range}
-            key={range}
-            onClick={() => selectRange(range)}
-            type="button"
-          >
-            {t(`chart.ranges.${range}`)}
-          </Button>
-        ))}
-      </div>
-      <div className="strategy-chart-canvas" ref={containerRef} />
-      <div className="strategy-chart-readout" aria-live="polite">
+      <ToggleGroup value={[visibleRange]} onValueChange={values => { if (values[0]) selectRange(values[0] as VisibleRange); }} aria-label={t("chart.range")} className="ml-auto" variant="outline">
+        {(["1Y", "3Y", "5Y", "All"] as const).map(range => <ToggleGroupItem key={range} value={range}>{t(`chart.ranges.${range}`)}</ToggleGroupItem>)}
+      </ToggleGroup>
+      <div className="strategy-chart-canvas relative min-h-60 w-full min-w-0" ref={containerRef} />
+      <div className="strategy-chart-readout flex min-h-11 flex-wrap items-center gap-x-4 gap-y-2 border-t border-border pt-3 font-mono text-xs text-muted-foreground" aria-live="polite">
         {tooltip === null ? (
           <span>{t("chart.inspect")}</span>
         ) : (
@@ -218,9 +208,9 @@ export function StrategyPerformanceChart({
           </>
         )}
       </div>
-      <div className="strategy-chart-legal">
+      <div className="flex justify-end">
         <a
-          className="strategy-chart-attribution"
+          className="text-xs text-muted-foreground underline-offset-4 hover:underline"
           href="https://www.tradingview.com/"
           rel="noreferrer"
           target="_blank"

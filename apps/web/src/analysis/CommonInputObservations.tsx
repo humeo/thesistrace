@@ -5,7 +5,6 @@ import { coreFetch } from "../auth/coreFetch";
 import { Button } from "../components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../components/ui/collapsible";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
-import "./strategy-events.css";
 import "./common-input-observations.css";
 
 type Observation = {
@@ -51,7 +50,7 @@ export function CommonInputObservations({ endpoint, embedded = false }: { endpoi
         setCursors([null]); setRetry(value => value + 1);
       }}>{t("reloadFirst")}</Button></div> : page === null ? <p role="status">{t("commonInputs.loading")}</p>
         : page.items.length === 0 ? <p>{t("commonInputs.empty")}</p>
-        : <div className="common-input-table"><Table>
+        : <div className="common-input-table"><Table scrollLabel={t("commonInputs.title")}>
           <TableHeader><TableRow><TableHead>{t("commonInputs.date")}</TableHead><TableHead>{t("commonInputs.metric")}</TableHead><TableHead>{t("commonInputs.scope")}</TableHead><TableHead>{t("commonInputs.value")}</TableHead><TableHead>{t("commonInputs.valid")}</TableHead><TableHead>{t("commonInputs.excluded")}</TableHead></TableRow></TableHeader>
           <TableBody>{page.items.map(item => <TableRow key={`${item.session}:${item.identifier}:${item.industry_code ?? ""}`}>
             <TableCell>{item.session}</TableCell><TableCell>{item.identifier.endsWith("advancing_fraction") ? t("commonInputs.advancing") : t("commonInputs.equalWeight")}</TableCell>
