@@ -98,7 +98,7 @@ export function CoreApp({ location, navigate, isOperator, researcherId }: {
           <ResearchRunsPage researcherId={researcherId} runId={researchRunMatch?.[1]} />
         ) : null}
         {currentPath === "/research-runs/batches" || researchBatchMatch ? (
-          <ResearchBatchesPage key={researchBatchMatch?.[1] ?? "list"} batchId={researchBatchMatch?.[1]} />
+          <ResearchBatchesPage batchId={researchBatchMatch?.[1]} />
         ) : null}
         {currentPath === "/daily-tracks" || dailyTrackMatch ? (
           <DailyTracksPage trackId={dailyTrackMatch?.[1]} />

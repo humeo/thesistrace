@@ -5,7 +5,7 @@ export function isMigratedUiFile(relativePath) {
   return relativePath === "main.tsx" || relativePath === "shell/AppShell.tsx" ||
     relativePath === "chat/SessionHistoryList.tsx" || relativePath.startsWith("auth/") ||
     relativePath.startsWith("research/") ||
-    ["research-runs/ResearchFolderLoadFailure.tsx", "research-runs/ResearchRunsPage.tsx", "research-runs/ResearchRunList.tsx", "research-runs/ResearchRunsNavigation.tsx", "components/layout/PageNavigation.tsx", "research-runs/FactorResultView.tsx", "research-runs/StrategyResultView.tsx", "components/layout/Disclosure.tsx"].includes(relativePath) ||
+    ["research-runs/ResearchBatchesPage.tsx", "research-runs/ResearchFolderLoadFailure.tsx", "research-runs/ResearchRunsPage.tsx", "research-runs/ResearchRunList.tsx", "research-runs/ResearchRunsNavigation.tsx", "components/layout/PageNavigation.tsx", "research-runs/FactorResultView.tsx", "research-runs/StrategyResultView.tsx", "components/layout/Disclosure.tsx"].includes(relativePath) ||
     relativePath === "components/product/MetricGroup.tsx" ||
     ["FactorEvidence", "CommonInputObservations", "MetricHelp", "StrategyPerformanceChart", "StrategyComparisonPanel", "DailyHoldings", "StrategyEvents", "StrategyEventDetails", "FrameworkDecisionDetails", "CloseRiskFacts", "CurrentDataRerun"].some(
       (name) => relativePath === `analysis/${name}.tsx`,

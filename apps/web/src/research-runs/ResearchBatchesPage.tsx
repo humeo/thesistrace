@@ -2,11 +2,20 @@ import { readBatchCancelError, type BatchCancelError } from "./errors";
 import { useTranslation } from "react-i18next";
 import { i18n } from "../i18n";
 import { formatNumber, formatUtcTimestamp } from "../i18n/format";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { coreFetch } from "../auth/coreFetch";
 import { followCoreLink, navigateCorePath } from "../shell/navigation";
 import { ResearchRunsNavigation } from "./ResearchRunsNavigation";
-import "./researchBatches.css";
+import { Page, PageContent, PageHeader, Section } from "../components/layout/Page";
+import { PageNavigation } from "../components/layout/PageNavigation";
+import { Button } from "../components/ui/button";
+import { Badge } from "../components/ui/badge";
+import { Alert, AlertDescription } from "../components/ui/alert";
+import { Empty, EmptyHeader, EmptyTitle } from "../components/ui/empty";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
+import { Progress, ProgressLabel } from "../components/ui/progress";
+import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group";
+import { AlertDialog, AlertDialogTrigger, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "../components/ui/alert-dialog";
 
 type BatchStatus = "queued" | "running" | "cancelling" | "succeeded" | "completed_with_failures" | "failed" | "cancelled";
 export type ResearchBatch = {
@@ -45,7 +54,7 @@ function taskCounts(batch: ResearchBatch) {
 function statusLabel(status: BatchStatus) { return i18n.t(`batches:statuses.${status}`); }
 function BatchStatusLabel({ status }: { status: BatchStatus }) {
   useTranslation("batches");
-  return <span className={`batch-status batch-status-${status}`}>{statusLabel(status)}</span>;
+  return <Badge variant={status === "failed" || status === "completed_with_failures" ? "destructive" : status === "succeeded" ? "default" : "outline"}>{statusLabel(status)}</Badge>;
 }
 
 export function ResearchBatchesPage({ batchId }: { batchId?: string }) {
@@ -101,75 +110,78 @@ export function ResearchBatchesPage({ batchId }: { batchId?: string }) {
     if (!batchId) navigateCorePath(batchPath(detail.id));
   }
 
-  return (
-    <section aria-label={t("title") } className="research-batches-page">
-      <header className="page-header batch-page-header">
-        <h1>{batchId ? t("batch") : i18n.t("runs:title")}</h1>
-        {batchId ? <a href="/research-runs/batches" onClick={followCoreLink}>{t("back")} </a> : null}
-      </header>
-      {!batchId ? <ResearchRunsNavigation active="batches" /> : null}
-      {error ? <div className="batch-load-error" role="alert">{t(error)}<button onClick={() => setRefresh(value => value + 1)}>{t("reload")} </button></div> : null}
-      {batchId ? batch?.id === batchId ? (
-        <>
-          <header className="batch-detail-heading">
-            <div><h2>{kindLabel(batch)}</h2><p>{createdLabel(batch)}</p><code>{batch.id}</code></div>
-            <div className="batch-detail-actions">
-              <BatchStatusLabel status={batch.status} />
-              {active(batch.status) ? <ResearchBatchCancelButton batchId={batch.id} status={batch.status} onAccepted={accepted} /> : null}
-            </div>
-          </header>
-          <dl className="batch-scope">
-            <div><dt>{t("period")} </dt><dd>{batch.scope.start_date} — {batch.scope.end_date}</dd></div>
-            <div><dt>{t("universe")} </dt><dd>{i18n.t("research:top", { count: Number(batch.scope.universe.slice(3)) })}</dd></div>
-            <div><dt>{t("neutralization")} </dt><dd>{i18n.t(batch.scope.neutralization === "industry" ? "research:industry" : "research:none")}</dd></div>
-            <div><dt>{t("completedResearch")} </dt><dd>{formatNumber(taskCounts(batch).completed)} / {formatNumber(taskCounts(batch).total)}</dd></div>
+  return <Page aria-label={t("title")} className="px-4 py-6 sm:px-6 lg:px-8">
+    <PageContent className="flex flex-col gap-6">
+      <PageHeader title={batchId ? t("batch") : i18n.t("runs:title")} actions={batchId
+        ? <Button variant="outline" nativeButton={false} role="link" render={<a href="/research-runs/batches" onClick={followCoreLink} />}>{t("back")}</Button> : undefined} />
+      {!batchId && <ResearchRunsNavigation active="batches" />}
+      {error && <Alert variant="destructive"><AlertDescription>{t(error)}<Button variant="outline" onClick={() => setRefresh(value => value + 1)}>{t("reload")}</Button></AlertDescription></Alert>}
+      {batchId ? batch?.id === batchId ? <>
+        <Section title={kindLabel(batch)} actions={<>
+          <BatchStatusLabel status={batch.status} />
+          {active(batch.status) && <ResearchBatchCancelButton key={batch.id} batchId={batch.id} status={batch.status} onAccepted={accepted} />}
+        </>}>
+          <p className="m-0 text-sm text-muted-foreground">{createdLabel(batch)}</p>
+          <code className="text-xs [overflow-wrap:anywhere]">{batch.id}</code>
+          <BatchProgress batch={batch} />
+          <dl className="m-0 grid gap-4 border-y border-border py-4 sm:grid-cols-3">
+            <div><dt className="text-xs text-muted-foreground">{t("period")}</dt><dd className="m-0 text-sm">{batch.scope.start_date} — {batch.scope.end_date}</dd></div>
+            <div><dt className="text-xs text-muted-foreground">{t("universe")}</dt><dd className="m-0 text-sm">{i18n.t("research:top", { count: Number(batch.scope.universe.slice(3)) })}</dd></div>
+            <div><dt className="text-xs text-muted-foreground">{t("neutralization")}</dt><dd className="m-0 text-sm">{i18n.t(batch.scope.neutralization === "industry" ? "research:industry" : "research:none")}</dd></div>
           </dl>
-          {batch.status === "cancelling" ? <p role="status">{t("cancellationRequested")} </p> : null}
-          {batch.status === "cancelled" ? <p role="status">{t("cancelledRetained")} </p> : null}
-          <section aria-label={t("research") } className="batch-items-section">
-            <h2>{t("research")} <span>{formatNumber(batch.items.length)}</span></h2>
-            <BatchItems items={batch.items} />
-          </section>
-        </>
-      ) : loading ? <p role="status">{t("loadingBatch")} </p> : null : (
-        <>
-          <div className="batch-list-toolbar">
-            <div aria-label={t("filter") } className="batch-filter-buttons">
-              {([true, false] as const).map(value => <button key={String(value)} aria-pressed={activeOnly === value} onClick={() => {
-                if (value === activeOnly) return;
-                setActiveOnly(value); setCursors([null]); setItems(null); setNextCursor(null);
-              }}>{t(value ? "active" : "all")}</button>)}
-            </div>
-            <button onClick={() => setRefresh(value => value + 1)} disabled={loading}>{t("reload")} </button>
-          </div>
-          {items === null && loading ? <p role="status">{t("loadingBatches")} </p> : null}
-          {items?.length === 0 ? <p className="batch-empty">{t(activeOnly ? "emptyActive" : "empty")}</p> : null}
-          {items && items.length > 0 ? <div className="batch-table-scroll"><table className="batch-table">
-            <thead><tr><th scope="col">{t("batchColumn")} </th><th scope="col">{t("created")} </th><th scope="col">{t("completed")} </th><th scope="col">{t("status")} </th><th scope="col" aria-label={t("actions") } /></tr></thead>
-            <tbody>{items.map(item => <tr key={item.id}>
-              <th scope="row"><a href={batchPath(item.id)} onClick={followCoreLink}>{kindLabel(item)}<code>{item.id}</code></a></th>
-              <td data-label={t("created") }><time dateTime={item.created_at}>{createdLabel(item)}</time></td>
-              <td data-label={t("completed") }>{formatNumber(taskCounts(item).completed)} / {formatNumber(taskCounts(item).total)}</td>
-              <td data-label={t("status") }><BatchStatusLabel status={item.status} /></td>
-              <td>{active(item.status) ? <ResearchBatchCancelButton batchId={item.id} status={item.status} onAccepted={accepted} /> : null}</td>
-            </tr>)}</tbody>
-          </table></div> : null}
-          <nav aria-label={t("pages") } className="batch-pagination">
-            <span>{t("page", { page: formatNumber(cursors.length) })}</span>
-            <button disabled={cursors.length === 1 || loading} onClick={() => { setCursors(values => values.slice(0, -1)); setItems(null); }}>{t("previous")} </button>
-            <button disabled={!nextCursor || loading} onClick={() => { if (nextCursor) { setCursors(values => [...values, nextCursor]); setItems(null); } }}>{t("next")} </button>
-          </nav>
-        </>
-      )}
-    </section>
-  );
+        </Section>
+        {batch.status === "cancelling" && <p role="status">{t("cancellationRequested")}</p>}
+        {batch.status === "cancelled" && <p role="status">{t("cancelledRetained")}</p>}
+        <Section title={<>{t("research")} · {formatNumber(batch.items.length)}</>}><BatchItems items={batch.items} /></Section>
+      </> : loading ? <p role="status">{t("loadingBatch")}</p> : null : <>
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <ToggleGroup aria-label={t("filter")} value={[activeOnly ? "active" : "all"]} onValueChange={values => {
+            if (!values.length) return;
+            const value = values[0] === "active";
+            if (value === activeOnly) return;
+            setActiveOnly(value); setCursors([null]); setItems(null); setNextCursor(null);
+          }} variant="outline">
+            <ToggleGroupItem value="active">{t("active")}</ToggleGroupItem>
+            <ToggleGroupItem value="all">{t("all")}</ToggleGroupItem>
+          </ToggleGroup>
+          <Button variant="outline" onClick={() => setRefresh(value => value + 1)} disabled={loading}>{t("reload")}</Button>
+        </div>
+        {items === null && loading && <p role="status">{t("loadingBatches")}</p>}
+        {items?.length === 0 && !error && <Empty><EmptyHeader><EmptyTitle>{t(activeOnly ? "emptyActive" : "empty")}</EmptyTitle></EmptyHeader></Empty>}
+        {items && items.length > 0 && <Table scrollLabel={t("title")} className="min-w-[720px]">
+          <TableHeader><TableRow><TableHead scope="col">{t("batchColumn")}</TableHead><TableHead scope="col">{t("created")}</TableHead><TableHead scope="col">{t("completed")}</TableHead><TableHead scope="col">{t("status")}</TableHead><TableHead scope="col" aria-label={t("actions")} /></TableRow></TableHeader>
+          <TableBody>{items.map(item => <TableRow key={item.id}>
+            <TableCell className="min-w-48 max-w-72 whitespace-normal [overflow-wrap:anywhere]"><a className="block min-h-11 content-center text-primary underline-offset-4 hover:underline md:min-h-0" href={batchPath(item.id)} onClick={followCoreLink}>{kindLabel(item)}<code className="block text-xs">{item.id}</code></a></TableCell>
+            <TableCell><time dateTime={item.created_at}>{createdLabel(item)}</time></TableCell>
+            <TableCell>{formatNumber(taskCounts(item).completed)} / {formatNumber(taskCounts(item).total)}</TableCell>
+            <TableCell><BatchStatusLabel status={item.status} /></TableCell>
+            <TableCell>{active(item.status) && <ResearchBatchCancelButton batchId={item.id} status={item.status} onAccepted={accepted} />}</TableCell>
+          </TableRow>)}</TableBody>
+        </Table>}
+        <PageNavigation label={t("pages")} previousLabel={t("previous")} nextLabel={t("next")}
+          previousDisabled={cursors.length === 1 || loading} nextDisabled={!nextCursor || loading}
+          onPrevious={() => { setCursors(values => values.slice(0, -1)); setItems(null); }}
+          onNext={() => { if (nextCursor) { setCursors(values => [...values, nextCursor]); setItems(null); } }}>
+          {t("page", { page: formatNumber(cursors.length) })}
+        </PageNavigation>
+      </>}
+    </PageContent>
+  </Page>;
+}
+
+function BatchProgress({ batch }: { batch: ResearchBatch }) {
+  const { t } = useTranslation("batches");
+  const { completed, total } = taskCounts(batch);
+  return <Progress value={total > 0 ? completed / total * 100 : null}>
+    <ProgressLabel>{t("completedResearch")}: {formatNumber(completed)} / {formatNumber(total)}</ProgressLabel>
+  </Progress>;
 }
 
 function BatchItems({ items, links = true }: { items: BatchItem[]; links?: boolean }) {
   const { t } = useTranslation("batches");
-  return <ul className="batch-items">{items.map(item => <li key={item.research_run_id}>
-    {links && item.run_availability === "available" ? <a href={`/research-runs/${encodeURIComponent(item.research_run_id)}`} onClick={followCoreLink}>{item.item_key}</a>
-      : <span>{item.item_key}{item.run_availability === "deleted" ? t("deleted") : ""}</span>}
+  return <ul className="m-0 flex list-none flex-col p-0">{items.map(item => <li key={item.research_run_id} className="flex min-w-0 items-start justify-between gap-4 border-b border-border py-3 text-sm">
+    {links && item.run_availability === "available" ? <a className="block min-h-11 min-w-0 flex-1 content-center text-primary [overflow-wrap:anywhere] hover:underline md:min-h-0" href={`/research-runs/${encodeURIComponent(item.research_run_id)}`} onClick={followCoreLink}>{item.item_key}</a>
+      : <span className="min-w-0 [overflow-wrap:anywhere]">{item.item_key}{item.run_availability === "deleted" ? t("deleted") : ""}</span>}
     <BatchStatusLabel status={item.status} />
   </li>)}</ul>;
 }
@@ -185,17 +197,15 @@ export function ResearchBatchCancelButton({ batchId, status, onAccepted }: {
   const [error, setError] = useState<"cancelLoadError" | BatchCancelError | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [reload, setReload] = useState(0);
-  const dialog = useRef<HTMLDialogElement>(null);
+  const submittingRef = useRef(false);
+  const keepButton = useRef<HTMLButtonElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const controller = useRef<AbortController | null>(null);
   const requestId = useRef<string | null>(null);
-  const titleId = useId();
-  const descriptionId = useId();
+  useEffect(() => { requestId.current = null; }, [batchId]);
 
   useEffect(() => {
     if (!open) return;
-    const element = dialog.current!;
-    element.showModal();
     const request = new AbortController();
     controller.current = request;
     setBatch(null);
@@ -206,19 +216,13 @@ export function ResearchBatchCancelButton({ batchId, status, onAccepted }: {
         const detail = await response.json() as ResearchBatchDetail;
         if (!request.signal.aborted) setBatch(detail);
       }).catch(() => { if (!request.signal.aborted) setError("cancelLoadError"); });
-    return () => { request.abort(); if (element.open) element.close(); };
+    return () => request.abort();
   }, [batchId, open, reload]);
   useEffect(() => () => { controller.current?.abort(); }, []);
 
-  function dismiss() {
-    if (submitting) return;
-    dialog.current?.close();
-    setOpen(false);
-    trigger.current?.focus();
-  }
-
   async function confirm() {
-    if (!batch || !cancellable(batch.status) || submitting) return;
+    if (!batch || !cancellable(batch.status) || submittingRef.current) return;
+    submittingRef.current = true;
     setSubmitting(true);
     setError(null);
     const request = new AbortController();
@@ -237,40 +241,44 @@ export function ResearchBatchCancelButton({ batchId, status, onAccepted }: {
       }
       const updated = await response.json() as ResearchBatchDetail;
       if (request.signal.aborted) return;
-      dialog.current?.close();
       setOpen(false);
       onAccepted?.(updated);
       if (window.location.pathname !== batchPath(batchId)) navigateCorePath(batchPath(batchId));
-      else trigger.current?.focus();
+
     } catch {
       if (!request.signal.aborted) setError(failureMessage);
     } finally {
+      submittingRef.current = false;
       if (!request.signal.aborted) setSubmitting(false);
     }
   }
 
   const unfinished = batch?.items.filter(item => active(item.status)) ?? [];
-  return <>
-    <button ref={trigger} type="button" disabled={status === "cancelling"} aria-haspopup="dialog" onClick={() => setOpen(true)}>
+  return <AlertDialog open={open} onOpenChange={(next, event) => {
+    if (submittingRef.current) { event.cancel(); return; }
+    setOpen(next);
+  }}>
+    <AlertDialogTrigger ref={trigger} render={<Button variant="outline" />} disabled={status === "cancelling"}>
       {t(status === "cancelling" ? "cancelling" : "cancel")}
-    </button>
-    {open ? <dialog ref={dialog} className="batch-cancel-dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={descriptionId}
-      onCancel={event => { event.preventDefault(); dismiss(); }}>
-      <h2 id={titleId}>{t("cancelTitle")} </h2>
-      <div id={descriptionId}>{batch ? <>
-        <p>{kindLabel(batch)} · {createdLabel(batch)}</p>
-        <code>{batch.id}</code>
-        <p>{cancellable(batch.status) ? t("unfinished", { count: unfinished.length })
-          : t("currentStatus", { status: statusLabel(batch.status).toLowerCase() })}</p>
-      </> : !error ? <p role="status">{t("loadingAffected")} </p> : null}</div>
-      {batch ? <BatchItems items={batch.items} links={false} /> : null}
-      {error ? <div role="alert" className="inline-status-error"><p>{t(error)}</p><button disabled={submitting} onClick={() => setReload(value => value + 1)}>{t("reloadBatch")} </button></div> : null}
-      <footer>
-        <button autoFocus disabled={submitting} onClick={dismiss}>{t("keep")} </button>
-        <button className="button-danger" disabled={!batch || !cancellable(batch.status) || submitting} onClick={() => void confirm()}>
+    </AlertDialogTrigger>
+    <AlertDialogContent className="w-[calc(100%-2rem)] max-w-[560px] max-h-[calc(100dvh-3rem)] overflow-y-auto p-6 sm:max-w-[560px]" initialFocus={keepButton} finalFocus={trigger}>
+      <AlertDialogHeader><AlertDialogTitle>{t("cancelTitle")}</AlertDialogTitle>
+        <AlertDialogDescription render={<div />}>
+          {batch ? <>
+            <p>{kindLabel(batch)} · {createdLabel(batch)}</p>
+            <code className="[overflow-wrap:anywhere]">{batch.id}</code>
+            <p>{cancellable(batch.status) ? t("unfinished", { count: unfinished.length }) : t("currentStatus", { status: statusLabel(batch.status).toLowerCase() })}</p>
+          </> : !error ? <p role="status">{t("loadingAffected")}</p> : null}
+        </AlertDialogDescription>
+      </AlertDialogHeader>
+      {batch && <div className="max-h-64 overflow-y-auto" tabIndex={0} role="region" aria-label={t("research")}><BatchItems items={batch.items} links={false} /></div>}
+      {error && <Alert variant="destructive"><AlertDescription>{t(error)}<Button variant="outline" disabled={submitting} onClick={() => setReload(value => value + 1)}>{t("reloadBatch")}</Button></AlertDescription></Alert>}
+      <AlertDialogFooter>
+        <AlertDialogCancel ref={keepButton} disabled={submitting}>{t("keep")}</AlertDialogCancel>
+        <AlertDialogAction variant="destructive" disabled={!batch || !cancellable(batch.status) || submitting} onClick={() => void confirm()}>
           {t(submitting ? "cancelling" : "cancel")}
-        </button>
-      </footer>
-    </dialog> : null}
-  </>;
+        </AlertDialogAction>
+      </AlertDialogFooter>
+    </AlertDialogContent>
+  </AlertDialog>;
 }
