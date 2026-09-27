@@ -174,7 +174,7 @@ describe("Operator Dataset status", () => {
     expect(markup).toContain("Published");
     expect(markup).toContain("No change");
     expect(markup).toContain("Published · incomplete coverage");
-    expect(markup).toContain('operator-operation-state-degraded');
+    expect(markup).toContain('data-slot="badge"');
     expect(markup).toContain("Failed");
     expect(markup).toContain("Cancelled");
     expect(markup).toContain(">Reload<");
@@ -221,8 +221,8 @@ describe("Operator Dataset status", () => {
     expect(markup).toContain("Page 3");
   });
 
-  it("renders only bounded safe receipt facts in the labelled detail drawer", () => {
-    const markup = renderToStaticMarkup(
+  it("renders only bounded safe receipt facts in the labelled detail drawer", async () => {
+    const markup = await renderPortalMarkup(
       <OperatorDataStatusDrawer
         onDismiss={() => undefined}
         onAction={() => undefined}
@@ -240,6 +240,7 @@ describe("Operator Dataset status", () => {
           status: "succeeded",
         })}
       />,
+      "dialog",
     );
 
     expect(markup).toContain('aria-labelledby="operator-data-operation-drawer-title"');
@@ -310,13 +311,13 @@ describe("Operator Dataset status", () => {
     expect(markup).not.toContain("cannot start");
   });
 
-  it("shows exact Cancel facts and effect without an email code", () => {
+  it("shows exact Cancel facts and effect without an email code", async () => {
     const target = operation({
       idempotencyKey: "market-cancel-source",
       kind: "market",
       status: "accepted",
     });
-    const markup = renderToStaticMarkup(
+    const markup = await renderPortalMarkup(
       <OperatorDataRefreshActionDialog
         action={{ action: "cancel", operation: target }}
         onAccessNotFound={() => undefined}
@@ -336,7 +337,7 @@ describe("Operator Dataset status", () => {
     expect(markup).not.toContain("New idempotency key");
   });
 
-  it("makes Retry generate a new key automatically and preserves immutable source copy", () => {
+  it("makes Retry generate a new key automatically and preserves immutable source copy", async () => {
     const source = operation({
       idempotencyKey: "industry-failed-source",
       kind: "industry",
@@ -347,7 +348,7 @@ describe("Operator Dataset status", () => {
     expect(
       suggestDataRefreshRetryKey(source.kind, new Date("2026-08-30T05:06:07.987Z")),
     ).toEqual(expect.stringMatching(/^industry-retry-20260830T050607Z-[0-9a-f-]{36}$/));
-    const markup = renderToStaticMarkup(
+    const markup = await renderPortalMarkup(
       <OperatorDataRefreshActionDialog
         action={{ action: "retry", operation: source }}
         now={() => now}
@@ -470,4 +471,19 @@ function operation(
     updatedAt: running ? "2026-08-30T08:01:00Z" : "2026-08-30T08:02:00Z",
     ...overrides,
   };
+}
+
+async function renderPortalMarkup(element: React.ReactElement, role = "alertdialog"): Promise<string> {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(element));
+    return document.querySelector(`[role="${role}"]`)?.outerHTML ?? "";
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+    vi.unstubAllGlobals();
+  }
 }

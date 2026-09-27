@@ -10,8 +10,8 @@ import { Empty, EmptyDescription } from "../components/ui/empty";
 import { Field, FieldGroup, FieldLabel } from "../components/ui/field";
 import { Input } from "../components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
-import { ResearchDateInput } from "../research/ResearchDateInput";
-import { isResearchIsoDate } from "../research/dateRange";
+import { CalendarDateField } from "../components/layout/CalendarDateField";
+import { isIsoCalendarDate } from "../components/layout/calendarDate";
 
 type Page = { section: Section; status: "recorded" | "not_recorded" | "expired" | "partially_expired"; expires_at: string | null; rows: EventRow[]; next_cursor: string | null };
 type Filter = { start_session?: string; end_session?: string; instrument_id?: string; target_id?: string; order_id?: string; child_order_id?: string };
@@ -86,7 +86,7 @@ export function StrategyEvents({ endpoint, embedded = false }: { endpoint: strin
         event.preventDefault();
         const invalid: typeof fieldErrors = {};
         for (const key of ["start_session", "end_session"] as const) {
-          if (draft[key] && !isResearchIsoDate(draft[key])) invalid[key] = "invalidDate";
+          if (draft[key] && !isIsoCalendarDate(draft[key])) invalid[key] = "invalidDate";
         }
         if (!Object.keys(invalid).length && draft.start_session && draft.end_session && draft.start_session > draft.end_session) invalid.end_session = "invalidRange";
         setFieldErrors(invalid);
@@ -103,7 +103,7 @@ export function StrategyEvents({ endpoint, embedded = false }: { endpoint: strin
               <SelectContent><SelectGroup>{sections.map(value => <SelectItem key={value} value={value}>{eventSectionLabel(value)}</SelectItem>)}</SelectGroup></SelectContent>
             </Select>
           </Field>
-          {(["start_session", "end_session"] as const).map(key => <ResearchDateInput key={key}
+          {(["start_session", "end_session"] as const).map(key => <CalendarDateField key={key}
             id={`${id}-${key}`} label={t(key === "start_session" ? "events.from" : "events.through")}
             openLabel={i18n.t(key === "start_session" ? "research:openStartCalendar" : "research:openEndCalendar")}
             value={draft[key]} onChange={value => setDraft({ ...draft, [key]: value })}

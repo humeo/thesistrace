@@ -4,7 +4,10 @@ import type { ParseKeys } from "i18next";
 
 import type { DataRefreshOperationalStatus } from "./operatorDataStatusClient";
 import { OperatorPageNotFoundError } from "./operatorDirectoryClient";
-import { containDialogKeyboardFocus } from "./operatorDialog";
+import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter } from "../components/ui/alert-dialog";
+import { Button } from "../components/ui/button";
+import { Alert, AlertDescription } from "../components/ui/alert";
+import { operatorDataClasses as styles } from "./operatorDataClasses";
 import {
   confirmDataRefreshActionProof,
   type DataRefreshActionReceipt,
@@ -35,7 +38,7 @@ export function OperatorDataRefreshActionDialog({
   onSucceeded: (receipt: DataRefreshActionReceipt) => void;
 }>) {
   const { t } = useTranslation("operator");
-  const dialog = useRef<HTMLDialogElement | null>(null);
+  const initialFocus = useRef<HTMLButtonElement | null>(null);
   const request = useRef<AbortController | null>(null);
   const [newKey] = useState(() => (
     action.action === "retry"
@@ -48,13 +51,9 @@ export function OperatorDataRefreshActionDialog({
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    const element = dialog.current;
-    if (element === null) return;
-    element.showModal();
     return () => {
       request.current?.abort();
       request.current = null;
-      if (element.open) element.close();
     };
   }, []);
 
@@ -138,79 +137,43 @@ export function OperatorDataRefreshActionDialog({
 
   const operation = action.operation;
   const retry = action.action === "retry";
-  const descriptionId = "operator-data-refresh-action-description";
-  const titleId = "operator-data-refresh-action-title";
   return (
-    <dialog
-      aria-describedby={descriptionId}
-      aria-labelledby={titleId}
-      aria-modal="true"
-      className="operator-confirmation-dialog"
-      onCancel={(event) => {
-        event.preventDefault();
-        if (!submitting) onDismiss();
-      }}
-      onKeyDown={(event) => containDialogKeyboardFocus(event, dialog.current)}
-      ref={dialog}
-    >
-      <form
-        className="operator-confirmation-content"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void submit();
-        }}
-      >
-        <header>
-          <p className={retry ? "eyebrow" : "eyebrow operator-danger-eyebrow"}>
-            {retry ? t("data.action.retryEyebrow") : t("data.action.cancelEyebrow")}
-          </p>
-          <h2 id={titleId}>
-            {retry
-              ? t("data.action.retryTitle", { state: operation.status === "failed" ? t("data.action.failedState") : t("data.action.cancelledState") })
-              : t("data.action.cancelTitle")}
-          </h2>
-        </header>
-        <p id={descriptionId}>
-          {t("data.action.description")}
-        </p>
-        <dl className="operator-confirmation-target">
-          <div><dt>{t("data.common.kind")}</dt><dd><strong>{kindText(operation.kind)}</strong></dd></div>
-          <div><dt>{t("data.common.target")}</dt><dd><code>{operationTarget(operation)}</code></dd></div>
-          <div>
-            <dt>{t("data.action.sourceKey")}</dt>
-            <dd><code>{operation.idempotencyKey}</code></dd>
-          </div>
-        </dl>
-        <div className={`operator-confirmation-effect${retry ? "" : " operator-confirmation-effect-danger"}`}>
-          <span>{t("data.common.effect")}</span>
-          <p>
-            {retry
+    <AlertDialog open onOpenChange={(open) => { if (!open && !submitting) onDismiss(); }}>
+      <AlertDialogContent finalFocus={false} initialFocus={initialFocus} className="max-h-[calc(100dvh-32px)] max-w-[calc(100%-2rem)] overflow-y-auto sm:max-w-lg">
+        <form className={styles.confirmationForm} onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+          <AlertDialogHeader>
+            <p className={retry ? styles.eyebrow : styles.dangerEyebrow}>{retry ? t("data.action.retryEyebrow") : t("data.action.cancelEyebrow")}</p>
+            <AlertDialogTitle id="operator-data-refresh-action-title">
+              {retry
+                ? t("data.action.retryTitle", { state: operation.status === "failed" ? t("data.action.failedState") : t("data.action.cancelledState") })
+                : t("data.action.cancelTitle")}
+            </AlertDialogTitle>
+          </AlertDialogHeader>
+          <AlertDialogDescription id="operator-data-refresh-action-description">{t("data.action.description")}</AlertDialogDescription>
+          <dl className={styles.target}>
+            <div><dt>{t("data.common.kind")}</dt><dd><strong>{kindText(operation.kind)}</strong></dd></div>
+            <div><dt>{t("data.common.target")}</dt><dd><code>{operationTarget(operation)}</code></dd></div>
+            <div><dt>{t("data.action.sourceKey")}</dt><dd><code>{operation.idempotencyKey}</code></dd></div>
+          </dl>
+          <Alert variant={retry ? "default" : "destructive"} role="note"><AlertDescription>
+            <strong>{t("data.common.effect")}</strong>
+            <p>{retry
               ? t("data.action.retryEffect", { status: operation.status === "failed" ? t("data.action.failedState") : t("data.action.cancelledState") })
-              : t("data.action.cancelEffect")}
-          </p>
-        </div>
-        {keyError === null ? null : <p role="alert">{t(`data.action.${keyError}`)}</p>}
-        {error === null ? null : (
-          <p className="inline-status inline-status-error" role="alert">{t(error)}</p>
-        )}
-        <footer className="operator-confirmation-actions">
-          <button disabled={submitting} onClick={onDismiss} type="button">
-            {stale ? t("data.action.close") : t("data.action.back")}
-          </button>
-          {stale ? null : (
-            <button
-              className={retry ? "button-primary" : "button-danger"}
-              disabled={submitting}
-              type="submit"
-            >
+              : t("data.action.cancelEffect")}</p>
+          </AlertDescription></Alert>
+          {keyError === null ? null : <Alert variant="destructive" role="alert"><AlertDescription>{t(`data.action.${keyError}`)}</AlertDescription></Alert>}
+          {error === null ? null : <Alert variant="destructive" role="alert"><AlertDescription>{t(error)}</AlertDescription></Alert>}
+          <AlertDialogFooter>
+            <Button variant="outline" disabled={submitting} onClick={onDismiss} ref={initialFocus} type="button">{stale ? t("data.action.close") : t("data.action.back")}</Button>
+            {stale ? null : <Button variant={retry ? "default" : "destructive"} disabled={submitting} type="submit">
               {submitting
                 ? retry ? t("data.action.retrying") : t("data.action.cancelling")
                 : retry ? t("data.action.createRetry") : t("data.action.cancelQueued")}
-            </button>
-          )}
-        </footer>
-      </form>
-    </dialog>
+            </Button>}
+          </AlertDialogFooter>
+        </form>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 

@@ -2,7 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "../i18n";
 
 import { OperatorPageNotFoundError } from "./operatorDirectoryClient";
-import { containDialogKeyboardFocus } from "./operatorDialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "../components/ui/dialog";
+import { Button } from "../components/ui/button";
+import { Alert, AlertDescription } from "../components/ui/alert";
+import { operatorDataClasses as styles } from "./operatorDataClasses";
 import {
   confirmMarketRefreshProof,
   type MarketRefreshOperation,
@@ -27,7 +30,7 @@ export function OperatorMarketRefreshDialog({
   request: MarketRefreshRequest;
 }>) {
   const { t } = useTranslation("operator");
-  const dialog = useRef<HTMLDialogElement | null>(null);
+  const initialFocus = useRef<HTMLButtonElement | null>(null);
   const dismissed = useRef(false);
   const mounted = useRef(true);
   const phase = useRef<"idle" | "proof" | "submission">("idle");
@@ -36,17 +39,13 @@ export function OperatorMarketRefreshDialog({
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    const element = dialog.current;
-    if (element === null) return;
     mounted.current = true;
-    element.showModal();
     return () => {
       mounted.current = false;
       if (!dismissed.current || phase.current !== "submission") {
         request.current?.abort();
       }
       request.current = null;
-      if (element.open) element.close();
     };
   }, []);
 
@@ -128,63 +127,28 @@ export function OperatorMarketRefreshDialog({
   }
 
   return (
-    <dialog
-      aria-describedby="operator-market-refresh-description"
-      aria-labelledby="operator-market-refresh-title"
-      aria-modal="true"
-      className="operator-confirmation-dialog"
-      onCancel={(event) => {
-        event.preventDefault();
-        dismiss();
-      }}
-      onKeyDown={(event) => containDialogKeyboardFocus(event, dialog.current)}
-      ref={dialog}
-    >
-      <form
-        className="operator-confirmation-content"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void submit();
-        }}
-      >
-        <header>
-          <p className="eyebrow">{t("data.common.confirmUpdate")}</p>
-          <h2 id="operator-market-refresh-title">{t("data.market.submitTitle")}</h2>
-        </header>
-        <p id="operator-market-refresh-description">
-          {t("data.market.submitDescription")}
-        </p>
-        <dl className="operator-confirmation-target">
-          <div>
-            <dt>{t("data.common.kind")}</dt>
-            <dd><strong>{t("data.market.kind")}</strong></dd>
-          </div>
-          <div>
-            <dt>{t("data.common.asOf")}</dt>
-            <dd><code>{refreshRequest.asOf}</code></dd>
-          </div>
-          <div>
-            <dt>{t("data.common.idempotencyKey")}</dt>
-            <dd><code>{refreshRequest.idempotencyKey}</code></dd>
-          </div>
-        </dl>
-        <div className="operator-confirmation-effect">
-          <span>{t("data.common.effect")}</span>
-          <p>{t("data.market.effect")}</p>
-        </div>
-        {error === null ? null : (
-          <p className="inline-status inline-status-error" role="alert">{t(error)}</p>
-        )}
-        <footer className="operator-confirmation-actions">
-          <button onClick={dismiss} type="button">
-            {t("data.common.cancel")}
-          </button>
-          <button className="button-primary" disabled={submitting} type="submit">
-            {submitting ? t("data.common.submitting") : t("data.common.submitRefresh")}
-          </button>
-        </footer>
-      </form>
-    </dialog>
+    <Dialog open onOpenChange={(open) => { if (!open) dismiss(); }}>
+      <DialogContent finalFocus={false} initialFocus={initialFocus} showCloseButton={false} className="max-h-[calc(100dvh-32px)] overflow-y-auto sm:max-w-lg">
+        <form className={styles.confirmationForm} onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+          <DialogHeader>
+            <p className={styles.eyebrow}>{t("data.common.confirmUpdate")}</p>
+            <DialogTitle id="operator-market-refresh-title">{t("data.market.submitTitle")}</DialogTitle>
+          </DialogHeader>
+          <DialogDescription id="operator-market-refresh-description">{t("data.market.submitDescription")}</DialogDescription>
+          <dl className={styles.target}>
+            <div><dt>{t("data.common.kind")}</dt><dd><strong>{t("data.market.kind")}</strong></dd></div>
+            <div><dt>{t("data.common.asOf")}</dt><dd><code>{refreshRequest.asOf}</code></dd></div>
+            <div><dt>{t("data.common.idempotencyKey")}</dt><dd><code>{refreshRequest.idempotencyKey}</code></dd></div>
+          </dl>
+          <Alert role="note"><AlertDescription><strong>{t("data.common.effect")}</strong><p>{t("data.market.effect")}</p></AlertDescription></Alert>
+          {error === null ? null : <Alert variant="destructive" role="alert"><AlertDescription>{t(error)}</AlertDescription></Alert>}
+          <DialogFooter>
+            <Button variant="outline" onClick={dismiss} ref={initialFocus} type="button">{t("data.common.cancel")}</Button>
+            <Button disabled={submitting} type="submit">{submitting ? t("data.common.submitting") : t("data.common.submitRefresh")}</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 

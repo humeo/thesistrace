@@ -34,14 +34,14 @@ test.each(["accepted", "reconciled"])("restores Market focus after the %s receip
     input.dispatchEvent(new Event(event, { bubbles: true }));
   });
   const send = async (selector: string) => act(async () => {
-    host.querySelector(selector)!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    (host.querySelector(selector) ?? document.querySelector(selector))!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
   });
   try {
     await act(async () => root.render(<OperatorDataPage />));
-    await fill('input[type="date"]', "2026-08-14", "change");
+    await fill('#operator-market-as-of', "2026-08-14", "change");
     await send("form");
     expect(host.querySelector('input[autocomplete="one-time-code"]')).toBeNull();
-    await send("dialog form");
+    await send('[role="dialog"] form');
     if (path === "reconciled") {
       expect(host.textContent).toContain("Confirming submission");
       await act(async () => { await vi.advanceTimersByTimeAsync(5000); });

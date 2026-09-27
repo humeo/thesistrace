@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { i18n, useTranslation } from "../i18n";
 import { formatNumber } from "../i18n/format";
+import { CalendarDateField } from "../components/layout/CalendarDateField";
+import { Page, PageContent, PageHeader } from "../components/layout/Page";
+import { Button } from "../components/ui/button";
+import { Badge } from "../components/ui/badge";
+import { Alert, AlertDescription } from "../components/ui/alert";
+import { operatorDataClasses as styles } from "./operatorDataClasses";
 
 import { OperatorConsoleNavigation } from "./OperatorConsoleNavigation";
 import { OperatorDatasetStatus } from "./OperatorDatasetStatus";
@@ -277,12 +283,8 @@ export function OperatorDataPage() {
 
   return (
     <>
-      <section aria-label={t("data.common.pageLabel")} className="page-section operator-page">
-        <header className="page-hero">
-          <div>
-            <h1>{t("data.common.title")}</h1>
-          </div>
-        </header>
+      <PageContent><Page role="region" aria-label={t("data.common.pageLabel")} className={styles.page}>
+        <PageHeader title={t("data.common.title")} className="mb-0 max-[768px]:mb-0" />
 
         <OperatorConsoleNavigation current="data" />
 
@@ -291,61 +293,43 @@ export function OperatorDataPage() {
           reloadGeneration={datasetStatusReloadGeneration}
         />
 
-        <section aria-labelledby="operator-market-refresh-heading" className="operator-section">
-          <header className="operator-section-header">
+        <section aria-labelledby="operator-market-refresh-heading" className={styles.section}>
+          <header className={styles.sectionHeader}>
             <div>
               <h2 id="operator-market-refresh-heading">{t("data.market.title")}</h2>
             </div>
           </header>
           <form
-            className="operator-refresh-form"
+            className={styles.marketForm}
             onSubmit={(event) => {
               event.preventDefault();
               reviewRefresh();
             }}
           >
-            <div className="operator-refresh-field">
-              <label htmlFor="operator-market-as-of">{t("data.common.asOf")}</label>
-              <input
-                aria-describedby={fieldErrors.asOf === null
-                  ? "operator-market-as-of-help"
-                  : "operator-market-as-of-help operator-market-as-of-error"}
-                aria-invalid={fieldErrors.asOf === null ? undefined : true}
-                autoComplete="off"
-                disabled={confirmation !== null || pendingSubmission !== null}
-                id="operator-market-as-of"
-                onChange={(event) => {
-                  setAsOf(event.target.value);
-                  setFieldErrors((current) => ({ ...current, asOf: null }));
-                }}
-                required
-                ref={asOfInput}
-                type="date"
-                value={asOf}
-              />
-              <small id="operator-market-as-of-help">
-                {t("data.market.asOfHelp")}
-              </small>
-              {fieldErrors.asOf === null ? null : (
-                <small className="operator-field-error" id="operator-market-as-of-error" role="alert">
-                  {fieldErrors.asOf === "selectedAsOfInvalid" ? t("data.market.selectedAsOfInvalid") : t("data.market.asOfInvalid")}
-                </small>
-              )}
-            </div>
+            <CalendarDateField
+              id="operator-market-as-of"
+              label={t("data.common.asOf")}
+              openLabel={t("data.market.openAsOfCalendar")}
+              value={asOf}
+              minimum={null}
+              maximum={null}
+              error={fieldErrors.asOf === null ? undefined : fieldErrors.asOf === "selectedAsOfInvalid" ? t("data.market.selectedAsOfInvalid") : t("data.market.asOfInvalid")}
+              errorId="operator-market-as-of-error"
+              help={t("data.market.asOfHelp")}
+              helpId="operator-market-as-of-help"
+              disabled={confirmation !== null || pendingSubmission !== null}
+              inputRef={asOfInput}
+              required
+              onChange={(value) => {
+                setAsOf(value);
+                setFieldErrors((current) => ({ ...current, asOf: null }));
+              }}
+            />
             {submissionError === null ? null : (
-              <p className="inline-status inline-status-error operator-refresh-form-error" role="alert">
-                {t(`data.common.${submissionError}`)}
-              </p>
+              <Alert variant="destructive" role="alert"><AlertDescription>{t(`data.common.${submissionError}`)}</AlertDescription></Alert>
             )}
             <footer>
-              <button
-                className="button-primary"
-                disabled={confirmation !== null || pendingSubmission !== null}
-                ref={trigger}
-                type="submit"
-              >
-                {t("data.common.reviewRefresh")}
-              </button>
+              <Button disabled={confirmation !== null || pendingSubmission !== null} ref={trigger} type="submit">{t("data.common.reviewRefresh")}</Button>
             </footer>
           </form>
         </section>
@@ -383,7 +367,7 @@ export function OperatorDataPage() {
           onAccessNotFound={showNotFound}
           onOperationAccepted={notifyOperationAccepted}
         />
-      </section>
+      </Page></PageContent>
       {confirmation === null ? null : (
         <OperatorMarketRefreshDialog
           onDismiss={() => dismissConfirmation(confirmation.generation)}
@@ -423,14 +407,14 @@ function MarketRefreshReconciliation({
   return (
     <section
       aria-labelledby="operator-market-refresh-reconciliation"
-      className="operator-refresh-receipt operator-refresh-running"
+      className={styles.receipt} data-tone="running"
     >
       <header aria-atomic="true" aria-live="polite" role="status">
         <div>
-          <p className="eyebrow">{t("data.market.latest")}</p>
+          <p className={styles.eyebrow}>{t("data.market.latest")}</p>
           <h2 id="operator-market-refresh-reconciliation">{t("data.common.confirming")}</h2>
         </div>
-        <span className="operator-state">{t("data.common.checking")}</span>
+        <Badge variant="secondary">{t("data.common.checking")}</Badge>
       </header>
       <p>
         {t("data.common.pendingDescription")}
@@ -440,15 +424,11 @@ function MarketRefreshReconciliation({
         <div><dt>{t("data.market.requestedAsOf")}</dt><dd><time>{request.asOf}</time></dd></div>
       </dl>
       {pollError ? (
-        <p className="inline-status inline-status-error" role="alert">
-          {t("data.common.receiptUnavailable")}
-        </p>
+        <Alert variant="destructive" role="alert"><AlertDescription>{t("data.common.receiptUnavailable")}</AlertDescription></Alert>
       ) : null}
-      <footer className="operator-confirmation-actions">
-        <button onClick={onStop} type="button">{t("data.common.stopChecking")}</button>
-        <button className="button-primary" onClick={onRetry} type="button">
-          {t("data.common.retryExact")}
-        </button>
+      <footer className={styles.receiptActions}>
+        <Button variant="outline" onClick={onStop} type="button">{t("data.common.stopChecking")}</Button>
+        <Button onClick={onRetry} type="button">{t("data.common.retryExact")}</Button>
       </footer>
     </section>
   );
@@ -466,14 +446,14 @@ export function MarketRefreshReceipt({
   return (
     <section
       aria-labelledby="operator-market-refresh-status"
-      className={`operator-refresh-receipt operator-refresh-${presentation.tone}`}
+      className={styles.receipt} data-tone={presentation.tone}
     >
       <header aria-atomic="true" aria-live="polite" role="status">
         <div>
-          <p className="eyebrow">{t("data.market.latest")}</p>
+          <p className={styles.eyebrow}>{t("data.market.latest")}</p>
           <h2 id="operator-market-refresh-status">{presentation.title}</h2>
         </div>
-        <span className="operator-state">{presentation.label}</span>
+        <Badge variant={presentation.tone === "failed" ? "destructive" : presentation.tone === "published" ? "default" : "secondary"}>{presentation.label}</Badge>
       </header>
       <p>{presentation.description}</p>
       <dl>
@@ -494,9 +474,7 @@ export function MarketRefreshReceipt({
         </div>
       </dl>
       {pollError ? (
-        <p className="inline-status inline-status-error" role="alert">
-          {t("data.common.statusUnavailable")}
-        </p>
+        <Alert variant="destructive" role="alert"><AlertDescription>{t("data.common.statusUnavailable")}</AlertDescription></Alert>
       ) : null}
     </section>
   );

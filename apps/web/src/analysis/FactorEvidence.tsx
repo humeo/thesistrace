@@ -7,8 +7,8 @@ import { Field, FieldGroup, FieldLabel } from "../components/ui/field";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../components/ui/collapsible";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
-import { ResearchDateInput } from "../research/ResearchDateInput";
-import { isResearchIsoDate } from "../research/dateRange";
+import { CalendarDateField } from "../components/layout/CalendarDateField";
+import { isIsoCalendarDate } from "../components/layout/calendarDate";
 import "./factor-evidence.css";
 
 type Groups = Record<"q1" | "q2" | "q3" | "q4" | "q5", number | null>;
@@ -57,8 +57,8 @@ export function FactorEvidence({ runId, embedded = false }: { runId: string; emb
   const [open, setOpen] = useState(false);
   const [filters, setFilters] = useState<Filters>({ horizon: "5", view: "month", start: "", end: "" });
   const id = useId();
-  const invalidStart = filters.view === "daily" && filters.start !== "" && !isResearchIsoDate(filters.start);
-  const invalidEnd = filters.view === "daily" && filters.end !== "" && !isResearchIsoDate(filters.end);
+  const invalidStart = filters.view === "daily" && filters.start !== "" && !isIsoCalendarDate(filters.start);
+  const invalidEnd = filters.view === "daily" && filters.end !== "" && !isIsoCalendarDate(filters.end);
   const invalidRange = filters.view === "daily" && !invalidStart && !invalidEnd && filters.start !== "" && filters.end !== "" && filters.start > filters.end;
   const content = <div className="factor-evidence-content">
       <p>{t("factor.explanation")}</p>
@@ -79,10 +79,10 @@ export function FactorEvidence({ runId, embedded = false }: { runId: string; emb
           </Select>
         </Field>
         {filters.view === "daily" && <>
-          <ResearchDateInput id={`${id}-start`} label={t("factor.from")} openLabel={t("factor.openFromCalendar")} value={filters.start}
+          <CalendarDateField id={`${id}-start`} label={t("factor.from")} openLabel={t("factor.openFromCalendar")} value={filters.start}
             minimum={null} maximum={filters.end || null} error={invalidStart ? t("factor.invalidDate") : undefined} errorId={`${id}-start-error`}
             onChange={value => setFilters({ ...filters, start: value })} />
-          <ResearchDateInput id={`${id}-end`} label={t("factor.through")} openLabel={t("factor.openThroughCalendar")} value={filters.end}
+          <CalendarDateField id={`${id}-end`} label={t("factor.through")} openLabel={t("factor.openThroughCalendar")} value={filters.end}
             minimum={filters.start || null} maximum={null} error={invalidEnd ? t("factor.invalidDate") : invalidRange ? t("factor.invalidRange") : undefined} errorId={`${id}-end-error`}
             onChange={value => setFilters({ ...filters, end: value })} />
         </>}
@@ -105,7 +105,7 @@ function EvidencePage({ runId, filters }: { runId: string; filters: Filters }) {
   const [retry, setRetry] = useState(0);
   const cursor = cursors[cursors.length - 1];
   const invalidRange = filters.view === "daily" && filters.start !== "" && filters.end !== "" && filters.start > filters.end;
-  const invalidDate = filters.view === "daily" && [filters.start, filters.end].some(value => value !== "" && !isResearchIsoDate(value));
+  const invalidDate = filters.view === "daily" && [filters.start, filters.end].some(value => value !== "" && !isIsoCalendarDate(value));
   useEffect(() => {
     if (invalidRange || invalidDate) return;
     const controller = new AbortController();

@@ -9,7 +9,7 @@ import {
   builtinModulesDraft, frameworkDraft, frameworkSpec, frameworkStages, frozenStopLossPercentage, stopLossInputError, frozenMaximumHoldingSessions, frozenMinimumHoldingSessions, holdingSessionsInputError,
   type FrameworkModules, type FrameworkModulesDraft, type FrameworkStage,
 } from "./frameworkModules";
-import { isResearchIsoDate } from "./dateRange";
+import { isIsoCalendarDate } from "../components/layout/calendarDate";
 
 export type PortfolioWeighting = "equal_weight" | "rank_weight" | "inverse_volatility";
 
@@ -339,10 +339,10 @@ export function researchInputIssues(inputs: ResearchInputs): ResearchInputIssue[
   const direct = inputs.researchKind === "strategy_backtest" && inputs.strategyMode === "direct";
   if (usesBuiltinAlpha(inputs) && !inputs.formula.trim()) issues.push({ field: "formula", code: "formulaRequired" });
   if (inputs.startDate === "") issues.push({ field: "startDate", code: "startRequired" });
-  else if (!isResearchIsoDate(inputs.startDate)) issues.push({ field: "startDate", code: "startInvalid" });
+  else if (!isIsoCalendarDate(inputs.startDate)) issues.push({ field: "startDate", code: "startInvalid" });
   if (inputs.endDate === "") issues.push({ field: "endDate", code: "endRequired" });
-  else if (!isResearchIsoDate(inputs.endDate)) issues.push({ field: "endDate", code: "endInvalid" });
-  if (isResearchIsoDate(inputs.startDate) && isResearchIsoDate(inputs.endDate) && inputs.startDate > inputs.endDate) {
+  else if (!isIsoCalendarDate(inputs.endDate)) issues.push({ field: "endDate", code: "endInvalid" });
+  if (isIsoCalendarDate(inputs.startDate) && isIsoCalendarDate(inputs.endDate) && inputs.startDate > inputs.endDate) {
     issues.push({ field: "endDate", code: "dateOrder" });
   }
   if (!["top300", "top1000", "top2000", "top3000"].includes(inputs.universe)) issues.push({ field: "universe", code: "universeRequired" });

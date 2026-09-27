@@ -11,8 +11,8 @@ import { Field, FieldError, FieldGroup, FieldLabel } from "../components/ui/fiel
 import { Input } from "../components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
-import { ResearchDateInput } from "../research/ResearchDateInput";
-import { isResearchIsoDate } from "../research/dateRange";
+import { CalendarDateField } from "../components/layout/CalendarDateField";
+import { isIsoCalendarDate } from "../components/layout/calendarDate";
 
 type Unit = { unit_id: string; source_kind: string; first_session: string; last_session: string; expires_at: string; status: "available" | "expired" };
 type StatusPage = { status: "recorded" | "not_recorded"; units: Unit[]; next_cursor: string | null };
@@ -110,7 +110,7 @@ export function DailyHoldings({ endpoint, rerun, embedded = false }: {
         event.preventDefault();
         const errors: Record<string, FieldError> = {};
         for (const key of ["start_session", "end_session"] as const) {
-          if (draft[key] && !isResearchIsoDate(draft[key])) errors[key] = "invalidDate";
+          if (draft[key] && !isIsoCalendarDate(draft[key])) errors[key] = "invalidDate";
         }
         if (!Object.keys(errors).length && draft.start_session && draft.end_session && draft.start_session > draft.end_session) errors.end_session = "invalidRange";
         setFieldErrors(errors);
@@ -119,7 +119,7 @@ export function DailyHoldings({ endpoint, rerun, embedded = false }: {
         setFilters(next); loadDetails(null, next);
       }}>
         <FieldGroup className="grid items-end gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          {(["start_session", "end_session"] as const).map(key => <ResearchDateInput key={key}
+          {(["start_session", "end_session"] as const).map(key => <CalendarDateField key={key}
             id={`${id}-${key}`} label={t(key === "start_session" ? "holdings.from" : "holdings.through")}
             openLabel={i18n.t(key === "start_session" ? "research:openStartCalendar" : "research:openEndCalendar")}
             value={draft[key]} onChange={value => setDraft({ ...draft, [key]: value })}

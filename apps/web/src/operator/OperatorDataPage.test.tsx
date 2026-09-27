@@ -19,8 +19,8 @@ test("renders the focused forms without redundant Operator copy", () => {
   expect(markup).toContain("Industry Refresh");
   expect(markup).toContain(">As-of<");
   expect(markup).toContain("Observation-through Research Session");
-  expect(markup).not.toContain('type="text"');
-  expect(markup).toContain('type="date"');
+  expect(markup).toContain('id="operator-market-as-of"');
+  expect(markup).toContain('aria-label="Open As-of calendar"');
   expect(markup).not.toContain('type="datetime-local"');
   expect(markup).toContain('id="operator-market-as-of"');
   expect(markup).toContain("Submitted at 18:00 Asia/Shanghai (+08:00)");

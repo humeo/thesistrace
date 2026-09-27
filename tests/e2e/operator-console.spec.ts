@@ -704,7 +704,7 @@ test("Operator Market submission and response recovery", { tag: "@isolated" }, a
   const marketAsOfDate = "2026-08-14";
   const marketAsOf = `${marketAsOfDate}T18:00:00+08:00`;
   const marketAsOfInput = marketRefreshSection.getByLabel("As-of", { exact: true });
-  await expect(marketAsOfInput).toHaveAttribute("type", "date");
+  await expect(marketAsOfInput).toHaveAttribute("placeholder", "YYYY-MM-DD");
   await marketAsOfInput.fill(marketAsOfDate);
   await expect(marketAsOfInput).toHaveValue(marketAsOfDate);
   await expect(marketRefreshSection.getByLabel("Idempotency key")).toHaveCount(0);
@@ -1835,24 +1835,23 @@ test("Operator Dataset operations and Worker recovery", { tag: "@isolated" }, as
   await expect(operationDrawer.getByRole("button", { name: "Close operation details" }))
     .toBeFocused();
   await page.keyboard.press("Tab");
-  expect(await operationDrawer.evaluate((element) => element.contains(document.activeElement)))
-    .toBe(true);
+  await expect(operationDrawer.getByRole("button", { name: "Close operation details" }))
+    .toBeFocused();
   await page.keyboard.press("Shift+Tab");
-  expect(await operationDrawer.evaluate((element) => element.contains(document.activeElement)))
-    .toBe(true);
+  await expect(operationDrawer.getByRole("button", { name: "Close operation details" }))
+    .toBeFocused();
   await page.keyboard.press("Escape");
   await expect(operationDrawer).toHaveCount(0);
   await expect(marketDetails).toBeFocused();
 
   const originalViewport = page.viewportSize();
   await page.setViewportSize({ width: 640, height: 900 });
-  expect(await operationHistory.evaluate((element) => getComputedStyle(element).display))
-    .toBe("block");
-  expect(await marketHistoryRow.evaluate((element) => getComputedStyle(element).display))
-    .toBe("grid");
-  expect(await marketHistoryRow.locator('[data-label="State"]').evaluate(
-    (element) => getComputedStyle(element, "::before").content,
-  )).toBe('"State"');
+  expect(await operationHistory.evaluate((element) => getComputedStyle(element).display)).toBe("table");
+  expect(await operationHistory.evaluate((element) => {
+    const region = element.closest('[data-slot="table-container"]')!;
+    return region.scrollWidth > region.clientWidth;
+  })).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   if (originalViewport !== null) await page.setViewportSize(originalViewport);
 
   const terminalStatusResponse = await page.request.get("/api/operator/data/status");
@@ -2004,7 +2003,7 @@ test("Operator Dataset operations and Worker recovery", { tag: "@isolated" }, as
   await cancelSourceRow.getByRole("button", {
     name: `Cancel operation ${cancelSourceKey}`,
   }).click();
-  const cancelDialog = page.getByRole("dialog", { name: "Cancel queued Refresh?" });
+  const cancelDialog = page.getByRole("alertdialog", { name: "Cancel queued Refresh?" });
   await expect(cancelDialog).toContainText("Market Refresh");
   await expect(cancelDialog).toContainText(cancelSourceTarget);
   await expect(cancelDialog).toContainText(cancelSourceKey);
@@ -2031,7 +2030,7 @@ test("Operator Dataset operations and Worker recovery", { tag: "@isolated" }, as
   await cancelledDrawer.getByRole("button", {
     name: `Retry operation ${cancelSourceKey}`,
   }).click();
-  const retryDialog = page.getByRole("dialog", { name: "Retry cancelled Refresh?" });
+  const retryDialog = page.getByRole("alertdialog", { name: "Retry cancelled Refresh?" });
   await expect(retryDialog).toContainText(
     "The original cancelled receipt remains unchanged and inspectable",
   );
@@ -2069,7 +2068,7 @@ test("Operator Dataset operations and Worker recovery", { tag: "@isolated" }, as
   await claimedSourceRow.getByRole("button", {
     name: `Cancel operation ${claimedSourceKey}`,
   }).click();
-  const rejectedCancel = page.getByRole("dialog", { name: "Cancel queued Refresh?" });
+  const rejectedCancel = page.getByRole("alertdialog", { name: "Cancel queued Refresh?" });
   markDataRefreshRunning(claimedSourceKey);
   await expect(rejectedCancel.getByLabel("Verification code")).toHaveCount(0);
   await rejectedCancel.getByRole("button", { name: "Cancel queued operation" }).click();
@@ -2077,11 +2076,11 @@ test("Operator Dataset operations and Worker recovery", { tag: "@isolated" }, as
     "The Worker claimed this operation before Cancel won",
   );
   await expect(rejectedCancel.getByRole("button", { name: "Close" })).toBeVisible();
+  await rejectedCancel.getByRole("button", { name: "Close" }).click();
   await expect(claimedSourceRow.getByText("Running · Claim", { exact: true })).toBeVisible();
   await expect(claimedSourceRow.getByRole("button", {
     name: `Cancel operation ${claimedSourceKey}`,
   })).toHaveCount(0);
-  await rejectedCancel.getByRole("button", { name: "Close" }).click();
 
   const actionProofRequests = operatorMutationRequests.filter((request) => {
     if (request.path !== "/api/auth/operator/proofs") return false;

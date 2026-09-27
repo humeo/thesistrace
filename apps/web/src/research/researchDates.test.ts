@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { calendarDateFromIso, isoFromCalendarDate, isResearchIsoDate } from "./dateRange";
+import { calendarDateFromIso, isoFromCalendarDate, isIsoCalendarDate } from "../components/layout/calendarDate";
 import { emptyResearchDraft, loadResearchDraftState, researchDraftKey, researchInputIssues } from "./draft";
 
 describe("research dates", () => {
@@ -26,8 +26,8 @@ describe("research dates", () => {
   });
 
   it("round-trips local calendar days without UTC conversion", () => {
-    expect(isResearchIsoDate("2024-02-29")).toBe(true);
-    expect(isResearchIsoDate("2025-02-29")).toBe(false);
+    expect(isIsoCalendarDate("2024-02-29")).toBe(true);
+    expect(isIsoCalendarDate("2025-02-29")).toBe(false);
     expect(calendarDateFromIso("2025-02-29")).toBeUndefined();
     const day = calendarDateFromIso("2024-02-29");
     expect(day).toBeInstanceOf(Date);

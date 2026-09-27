@@ -16,7 +16,13 @@ import {
   type DatasetOperationalStatus,
   loadDatasetOperationalStatus,
 } from "./operatorDataStatusClient";
-import { containDialogKeyboardFocus } from "./operatorDialog";
+import { Alert, AlertDescription } from "../components/ui/alert";
+import { Badge } from "../components/ui/badge";
+import { Button } from "../components/ui/button";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
+import { PageNavigation } from "../components/layout/PageNavigation";
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter } from "../components/ui/sheet";
+import { operatorDataClasses as styles } from "./operatorDataClasses";
 
 const pollIntervalMilliseconds = 5_000;
 const refreshKinds = ["market", "financial", "industry"] as const;
@@ -227,32 +233,30 @@ export function OperatorDatasetStatusView({
     <section
       aria-busy={loading || undefined}
       aria-labelledby="operator-dataset-status-heading"
-      className="operator-section operator-dataset-status"
+      className={styles.datasetStatus}
     >
-      <header className="operator-section-header operator-dataset-status-header">
+      <header className={styles.sectionHeader}>
         <div>
           <h2 id="operator-dataset-status-heading">{t("data.status.heading")}</h2>
         </div>
-        <button onClick={onReload} type="button">{t("data.status.reload")}</button>
+        <Button variant="outline" onClick={onReload} type="button">{t("data.status.reload")}</Button>
       </header>
 
       {data === null ? (
-        <div className={error ? "operator-load-state operator-load-error" : "operator-load-state"}>
+        <div className={styles.loadState}>
           <p role={error ? "alert" : "status"}>
             {error
               ? t("data.status.unavailable")
               : t("data.status.loading")}
           </p>
-          {error ? <button onClick={onReload} type="button">{t("data.status.tryAgain")}</button> : null}
+          {error ? <Button variant="outline" onClick={onReload} type="button">{t("data.status.tryAgain")}</Button> : null}
         </div>
       ) : (
         <>
           <DatasetHeadSummary data={data} />
           <WorkerAvailability data={data} />
           {error ? (
-            <p className="inline-status inline-status-error" role="alert">
-              {t("data.status.stale")}
-            </p>
+            <Alert variant="destructive" role="alert"><AlertDescription>{t("data.status.stale")}</AlertDescription></Alert>
           ) : null}
           <LatestRefreshTable operations={data.latestByKind} />
           <OperationHistoryTable
@@ -274,7 +278,7 @@ function DatasetHeadSummary({ data }: Readonly<{ data: DatasetOperationalStatus 
   const { t } = useTranslation("operator");
   const head = data.head;
   return (
-    <div className="operator-dataset-head">
+    <div className={styles.datasetHead}>
       <dl>
         <div>
           <dt>{t("data.status.identity")}</dt>
@@ -310,12 +314,12 @@ function DatasetHeadSummary({ data }: Readonly<{ data: DatasetOperationalStatus 
         <DatasetFamilyStatus
           name={t("data.status.financial")}
           status={(
-            <span className={`operator-state ${head.financialResearchReadiness === "ready"
-              ? "operator-state-active"
-              : head.financialResearchReadiness === "not_ready" ? "" : "operator-state-warning"}`}
+            <Badge
+              variant={head.financialResearchReadiness === "ready" ? "default" : "secondary"}
+              className={`h-auto min-h-5 whitespace-normal text-left ${head.financialResearchReadiness === "ready_with_pending" || head.financialResearchReadiness === "ready_with_gaps" ? "text-[var(--warning)]" : ""}`}
             >
               {financialReadinessText(head.financialResearchReadiness)}
-            </span>
+            </Badge>
           )}
         >
           <DatasetFact label={t("data.status.coverageStart")} value={head.financialCoverageStart} />
@@ -350,7 +354,7 @@ function DatasetFamilyStatus({ name, status, note, children }: Readonly<{
 }>) {
   const { t } = useTranslation("operator");
   return (
-    <section aria-label={t("data.status.familyLabel", { name })} className="operator-data-family">
+    <section aria-label={t("data.status.familyLabel", { name })} className={styles.datasetFamily}>
       <header>
         <h3>{name}</h3>
         {status}
@@ -363,7 +367,7 @@ function DatasetFamilyStatus({ name, status, note, children }: Readonly<{
 
 function DatasetFact({ label, value }: Readonly<{ label: string; value: ReactNode }>) {
   const { t } = useTranslation("operator");
-  return <div><dt>{label}</dt><dd>{value == null ? <span className="operator-muted">{t("data.status.notAvailable")}</span> : typeof value === "number" ? formatNumber(value) : value}</dd></div>;
+  return <div><dt>{label}</dt><dd>{value == null ? <span className="text-muted-foreground">{t("data.status.notAvailable")}</span> : typeof value === "number" ? formatNumber(value) : value}</dd></div>;
 }
 
 function datasetTimestamp(value: string | null): ReactNode {
@@ -381,10 +385,8 @@ function WorkerAvailability({ data }: Readonly<{ data: DatasetOperationalStatus 
   const accepted = visibleOperations.some((operation) => operation.status === "accepted");
   const running = visibleOperations.some((operation) => operation.status === "running");
   return (
-    <div
-      className={`inline-status operator-worker-status${worker.available ? "" : " inline-status-error"}`}
-      role={worker.available ? "status" : "alert"}
-    >
+    <Alert variant={worker.available ? "default" : "destructive"} role={worker.available ? "status" : "alert"}>
+      <AlertDescription className={styles.workerStatus}>
       <strong>
         {worker.available ? t("data.status.workerAvailable") : t("data.status.workerUnavailable")}
       </strong>
@@ -398,16 +400,17 @@ function WorkerAvailability({ data }: Readonly<{ data: DatasetOperationalStatus 
         </span>
       )}
       <small>{t("data.status.lastHeartbeatLabel")} {timestamp(worker.lastHeartbeatAt)}</small>
-    </div>
+      </AlertDescription>
+    </Alert>
   );
 }
 
 function ReadinessStatus({ label, ready }: Readonly<{ label: string; ready: boolean }>) {
   const { t } = useTranslation("operator");
   return (
-    <span className={`operator-state ${ready ? "operator-state-active" : ""}`}>
+    <Badge variant={ready ? "default" : "secondary"} className="h-auto min-h-5 whitespace-normal text-left">
       {t(ready ? "data.status.ready" : "data.status.notReady", { name: label })}
-    </span>
+    </Badge>
   );
 }
 
@@ -416,39 +419,34 @@ function LatestRefreshTable({
 }: Readonly<{ operations: readonly DataRefreshOperationalStatus[] }>) {
   const { t } = useTranslation("operator");
   return (
-    <section aria-labelledby="operator-latest-refreshes-heading" className="operator-dataset-subsection">
+    <section aria-labelledby="operator-latest-refreshes-heading" className={styles.datasetSubsection}>
       <header>
         <h3 id="operator-latest-refreshes-heading">{t("data.status.latestHeading")}</h3>
       </header>
-      <div className="operator-table-scroll">
-        <table
-          aria-label={t("data.status.latestTable")}
-          className="operator-table operator-latest-refresh-table"
-        >
-          <thead><tr><th>{t("data.status.kind")}</th><th>{t("data.status.state")}</th><th>{t("data.status.target")}</th><th>{t("data.status.updated")}</th></tr></thead>
-          <tbody>
+      <Table aria-label={t("data.status.latestTable")} scrollLabel={t("data.status.latestTable")} className={styles.latestTable}>
+          <TableHeader><TableRow><TableHead>{t("data.status.kind")}</TableHead><TableHead>{t("data.status.state")}</TableHead><TableHead>{t("data.status.target")}</TableHead><TableHead>{t("data.status.updated")}</TableHead></TableRow></TableHeader>
+          <TableBody>
             {refreshKinds.map((kind) => {
               const operation = operations.find((item) => item.kind === kind);
               return (
-                <tr key={kind}>
-                  <th data-label={t("data.status.kind")} scope="row">{kindText(kind)}</th>
-                  <td data-label={t("data.status.state")}>
+                <TableRow key={kind}>
+                  <TableHead data-label={t("data.status.kind")} scope="row">{kindText(kind)}</TableHead>
+                  <TableCell data-label={t("data.status.state")}>
                     {operation === undefined
-                      ? <span className="operator-muted">{t("data.status.noOperation")}</span>
+                      ? <span className="text-muted-foreground">{t("data.status.noOperation")}</span>
                       : <OperationState operation={operation} />}
-                  </td>
-                  <td data-label={t("data.status.target")}>
+                  </TableCell>
+                  <TableCell data-label={t("data.status.target")}>
                     {operation === undefined ? "—" : operationTarget(operation)}
-                  </td>
-                  <td data-label={t("data.status.updated")}>
+                  </TableCell>
+                  <TableCell data-label={t("data.status.updated")}>
                     {operation === undefined ? "—" : timestamp(operation.updatedAt)}
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               );
             })}
-          </tbody>
-        </table>
-      </div>
+          </TableBody>
+        </Table>
     </section>
   );
 }
@@ -472,67 +470,53 @@ function OperationHistoryTable({
 }>) {
   const { t } = useTranslation("operator");
   return (
-    <section aria-labelledby="operator-operation-history-heading" className="operator-dataset-subsection">
+    <section aria-labelledby="operator-operation-history-heading" className={styles.datasetSubsection}>
       <header>
         <h3 id="operator-operation-history-heading">{t("data.status.historyHeading")}</h3>
       </header>
       {operations.length === 0 ? (
-        <p className="operator-empty">
+        <p className="m-0 py-6 text-sm text-muted-foreground">
           {cursorDepth === 0
             ? t("data.status.noHistory")
             : t("data.status.noOlder")}
         </p>
       ) : (
-        <div className="operator-table-scroll">
-          <table
-            aria-label={t("data.status.historyTable")}
-            className="operator-table operator-data-operation-table"
-          >
-            <thead>
-              <tr>
-                <th>{t("data.status.operation")}</th><th>{t("data.status.kind")}</th><th>{t("data.status.state")}</th><th>{t("data.status.target")}</th>
-                <th>{t("data.status.attemptPhase")}</th><th>{t("data.status.heartbeat")}</th><th>{t("data.status.created")}</th><th>{t("data.status.actions")}</th>
-              </tr>
-            </thead>
-            <tbody>
+        <Table aria-label={t("data.status.historyTable")} scrollLabel={t("data.status.historyTable")} className={styles.historyTable}>
+            <TableHeader>
+              <TableRow>
+                <TableHead>{t("data.status.operation")}</TableHead><TableHead>{t("data.status.kind")}</TableHead><TableHead>{t("data.status.state")}</TableHead><TableHead>{t("data.status.target")}</TableHead>
+                <TableHead>{t("data.status.attemptPhase")}</TableHead><TableHead>{t("data.status.heartbeat")}</TableHead><TableHead>{t("data.status.created")}</TableHead><TableHead>{t("data.status.actions")}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {operations.map((operation) => (
-                <tr key={operation.idempotencyKey}>
-                  <th data-label={t("data.status.operation")} scope="row"><code>{operation.idempotencyKey}</code></th>
-                  <td data-label={t("data.status.kind")}>{kindText(operation.kind)}</td>
-                  <td data-label={t("data.status.state")}><OperationState operation={operation} /></td>
-                  <td data-label={t("data.status.target")}><code>{operationTarget(operation)}</code></td>
-                  <td data-label={t("data.status.attemptPhase")}>
-                    <span className="operator-operation-phase">
+                <TableRow key={operation.idempotencyKey}>
+                  <TableHead data-label={t("data.status.operation")} scope="row"><code>{operation.idempotencyKey}</code></TableHead>
+                  <TableCell data-label={t("data.status.kind")}>{kindText(operation.kind)}</TableCell>
+                  <TableCell data-label={t("data.status.state")}><OperationState operation={operation} /></TableCell>
+                  <TableCell data-label={t("data.status.target")}><code>{operationTarget(operation)}</code></TableCell>
+                  <TableCell data-label={t("data.status.attemptPhase")}>
+                    <span className={styles.operationPhase}>
                       <strong>{formatNumber(operation.attemptCount)}</strong>
                       <small>{operation.phase === null ? t("data.status.notStarted") : phaseText(operation.phase)}</small>
                     </span>
-                  </td>
-                  <td data-label={t("data.status.heartbeat")}>{timestamp(operation.lastHeartbeatAt)}</td>
-                  <td data-label={t("data.status.created")}>{timestamp(operation.createdAt)}</td>
-                  <td data-label={t("data.status.actions")}>
-                    <div className="operator-row-actions">
+                  </TableCell>
+                  <TableCell data-label={t("data.status.heartbeat")}>{timestamp(operation.lastHeartbeatAt)}</TableCell>
+                  <TableCell data-label={t("data.status.created")}>{timestamp(operation.createdAt)}</TableCell>
+                  <TableCell data-label={t("data.status.actions")}>
+                    <div className={styles.rowActions}>
                       <OperationActionButton onAction={onAction} operation={operation} />
-                      <button
-                        aria-label={t("data.status.detailsAria", { key: operation.idempotencyKey })}
-                        className="operator-row-action"
-                        onClick={(event) => onDetails(operation, event.currentTarget)}
-                        type="button"
-                      >
-                        {t("data.status.details")}
-                      </button>
+                      <Button variant="outline" aria-label={t("data.status.detailsAria", { key: operation.idempotencyKey })} onClick={(event) => onDetails(operation, event.currentTarget)} type="button">{t("data.status.details")}</Button>
                     </div>
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
-        </div>
+            </TableBody>
+          </Table>
       )}
-      <nav aria-label={t("data.status.pages")} className="operator-pagination">
-        <button disabled={cursorDepth === 0} onClick={onPrevious} type="button">{t("data.status.newer")}</button>
-        <span>{t("data.status.page", { page: formatNumber(cursorDepth + 1) })}</span>
-        <button disabled={nextCursor === null} onClick={onNext} type="button">{t("data.status.older")}</button>
-      </nav>
+      <PageNavigation label={t("data.status.pages")} previousLabel={t("data.status.newer")} nextLabel={t("data.status.older")} previousDisabled={cursorDepth === 0} nextDisabled={nextCursor === null} onPrevious={onPrevious} onNext={onNext}>
+        {t("data.status.page", { page: formatNumber(cursorDepth + 1) })}
+      </PageNavigation>
     </section>
   );
 }
@@ -540,7 +524,7 @@ function OperationHistoryTable({
 function OperationState({ operation }: Readonly<{ operation: DataRefreshOperationalStatus }>) {
   const state = operationStateText(operation);
   const tone = operation.outcome === "degraded" ? "degraded" : operation.status;
-  return <span className={`operator-state operator-operation-state-${tone}`}>{state}</span>;
+  return <Badge variant={tone === "failed" ? "destructive" : tone === "succeeded" ? "default" : "secondary"} className="h-auto min-h-5 whitespace-normal text-left">{state}</Badge>;
 }
 
 export function OperatorDataStatusDrawer({
@@ -553,36 +537,19 @@ export function OperatorDataStatusDrawer({
   operation: DataRefreshOperationalStatus;
 }>) {
   const { t } = useTranslation("operator");
-  const dialog = useRef<HTMLDialogElement | null>(null);
-  useEffect(() => {
-    const element = dialog.current;
-    if (element === null) return;
-    element.showModal();
-    return () => {
-      if (element.open) element.close();
-    };
-  }, []);
+  const initialFocus = useRef<HTMLButtonElement | null>(null);
   return (
-    <dialog
-      aria-labelledby="operator-data-operation-drawer-title"
-      className="operator-data-operation-drawer"
-      onCancel={(event) => {
-        event.preventDefault();
-        onDismiss();
-      }}
-      onKeyDown={(event) => containDialogKeyboardFocus(event, dialog.current)}
-      ref={dialog}
-    >
-      <article>
-        <header>
+    <Sheet open onOpenChange={(open) => { if (!open) onDismiss(); }}>
+      <SheetContent finalFocus={false} initialFocus={initialFocus} showCloseButton={false} side="right" className="w-full max-w-full overflow-y-auto sm:max-w-[540px]">
+        <SheetHeader className="sticky top-0 z-10 flex-row items-center justify-between gap-4 border-b border-border bg-popover">
           <div>
-            <p className="eyebrow">{kindText(operation.kind)}</p>
-            <h2 id="operator-data-operation-drawer-title">{t("data.status.detailsTitle")}</h2>
+            <p className={styles.eyebrow}>{kindText(operation.kind)}</p>
+            <SheetTitle id="operator-data-operation-drawer-title" className="text-xl leading-7 font-semibold">{t("data.status.detailsTitle")}</SheetTitle>
           </div>
-          <button aria-label={t("data.status.closeDetails")} onClick={onDismiss} type="button">{t("data.status.close")}</button>
-        </header>
-        <FinancialRefreshTelemetry progress={operation.financialProgress} />
-        <dl className="operator-operation-details">
+          <Button variant="outline" aria-label={t("data.status.closeDetails")} onClick={onDismiss} ref={initialFocus} type="button">{t("data.status.close")}</Button>
+        </SheetHeader>
+        <div className={styles.telemetry}><FinancialRefreshTelemetry progress={operation.financialProgress} /></div>
+        <dl className={styles.details}>
           <Detail label={t("data.status.state")} value={operationStateText(operation)} />
           <Detail label={t("data.status.target")} code value={operationTarget(operation)} />
           <Detail label={t("data.common.idempotencyKey")} code value={operation.idempotencyKey} />
@@ -608,11 +575,9 @@ export function OperatorDataStatusDrawer({
           <Detail label={t("data.status.failureCode")} code value={operation.failureCode ?? t("data.status.none")} />
           <Detail label={t("data.status.previousFailure")} code value={operation.lastFailureCode ?? t("data.status.none")} />
         </dl>
-        <footer className="operator-operation-drawer-actions">
-          <OperationActionButton onAction={onAction} operation={operation} />
-        </footer>
-      </article>
-    </dialog>
+        <SheetFooter className="flex-row justify-end"><OperationActionButton onAction={onAction} operation={operation} /></SheetFooter>
+      </SheetContent>
+    </Sheet>
   );
 }
 
@@ -632,14 +597,14 @@ function OperationActionButton({
   if (action === null) return null;
   const label = t(action === "cancel" ? "data.status.cancel" : "data.status.retry");
   return (
-    <button
+    <Button
+      variant={action === "cancel" ? "destructive" : "outline"}
       aria-label={t("data.status.operationAria", { action: label, key: operation.idempotencyKey })}
-      className={`operator-row-action${action === "cancel" ? " operator-row-action-danger" : ""}`}
       onClick={(event) => onAction({ action, operation }, event.currentTarget)}
       type="button"
     >
       {label}
-    </button>
+    </Button>
   );
 }
 
@@ -718,7 +683,7 @@ function outcomeText(outcome: NonNullable<DataRefreshOperationalStatus["outcome"
 
 function timestamp(value: string | null): React.ReactNode {
   return value === null
-    ? <span className="operator-muted">{i18n.t("operator:data.status.notAvailable")}</span>
+    ? <span className="text-muted-foreground">{i18n.t("operator:data.status.notAvailable")}</span>
     : <time dateTime={value}>{value}</time>;
 }
 

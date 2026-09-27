@@ -37,6 +37,18 @@ export default defineConfig({
       input: {
         product: fileURLToPath(new URL("./index.html", import.meta.url)),
       },
+      output: {
+        // Coalesce tiny icon chunks without pulling route-specific UI into every page.
+        manualChunks(id) {
+          if (
+            id.includes("/@phosphor-icons/react/dist/csr/CaretLeft.es.js")
+            || id.includes("/@phosphor-icons/react/dist/csr/CaretDown.es.js")
+            || id.includes("/@phosphor-icons/react/dist/csr/MagnifyingGlass.es.js")
+            || id.includes("/@phosphor-icons/react/dist/csr/Copy.es.js")
+          ) return "icons-ui";
+          return undefined;
+        },
+      },
     },
   },
   server: {

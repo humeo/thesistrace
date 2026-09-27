@@ -27,8 +27,9 @@ import { SimulationCostSettings } from "./SimulationCostSettings";
 import type { CostField } from "./simulationCosts";
 import { frameworkStages, type FrameworkStage } from "./frameworkModules";
 import { programInputFields, type ProgramInputField } from "./pythonStrategy";
-import { buildResearchDatePresets, isResearchIsoDate } from "./dateRange";
-import { ResearchDateInput } from "./ResearchDateInput";
+import { buildResearchDatePresets } from "./dateRange";
+import { isIsoCalendarDate } from "../components/layout/calendarDate";
+import { CalendarDateField } from "../components/layout/CalendarDateField";
 import { ResearchFieldBrowser } from "./ResearchFieldBrowser";
 import { useResearchDraftController } from "./useResearchDraftController";
 import { Alert, AlertTitle, AlertDescription } from "../components/ui/alert";
@@ -835,14 +836,14 @@ export function ResearchDateFields({
   return (
     <div aria-label={t("dates")} className="grid min-w-0 gap-4" role="group">
       <div className={compact ? "grid gap-4" : "grid grid-cols-1 gap-4 sm:grid-cols-2"}>
-        <ResearchDateInput id="research-start-date" label={t("startDateInput")}
+        <CalendarDateField id="research-start-date" label={t("startDateInput")}
           openLabel={t("openStartCalendar")} value={startDate} minimum={coverageStart}
-          maximum={isResearchIsoDate(endDate) ? endDate : coverageEnd}
+          maximum={isIsoCalendarDate(endDate) ? endDate : coverageEnd}
           error={startError} errorId="start-date-error"
           onChange={startDate => onChange({ startDate, endDate })} />
-        <ResearchDateInput id="research-end-date" label={t("endDateInput")}
+        <CalendarDateField id="research-end-date" label={t("endDateInput")}
           openLabel={t("openEndCalendar")} value={endDate}
-          minimum={isResearchIsoDate(startDate) ? startDate : coverageStart}
+          minimum={isIsoCalendarDate(startDate) ? startDate : coverageStart}
           maximum={coverageEnd} error={endError} errorId="end-date-error"
           onChange={endDate => onChange({ startDate, endDate })} />
       </div>

@@ -1,16 +1,16 @@
 import { CalendarBlank } from "@phosphor-icons/react";
 import { enUS, zhCN } from "date-fns/locale";
-import { useState } from "react";
+import { useState, type Ref } from "react";
 
-import { Button } from "../components/ui/button";
-import { Calendar } from "../components/ui/calendar";
-import { Field, FieldError, FieldLabel } from "../components/ui/field";
-import { InputGroup, InputGroupAddon, InputGroupInput } from "../components/ui/input-group";
-import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "../components/ui/popover";
-import { interfaceLocale } from "../i18n";
-import { calendarDateFromIso, isoFromCalendarDate } from "./dateRange";
+import { Button } from "../ui/button";
+import { Calendar } from "../ui/calendar";
+import { Field, FieldDescription, FieldError, FieldLabel } from "../ui/field";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "../ui/input-group";
+import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "../ui/popover";
+import { interfaceLocale } from "../../i18n";
+import { calendarDateFromIso, isoFromCalendarDate } from "./calendarDate";
 
-export function ResearchDateInput({
+export function CalendarDateField({
   id,
   label,
   openLabel,
@@ -20,6 +20,11 @@ export function ResearchDateInput({
   error,
   errorId,
   onChange,
+  disabled = false,
+  inputRef,
+  help,
+  helpId,
+  required = false,
 }: {
   id: string;
   label: string;
@@ -30,6 +35,11 @@ export function ResearchDateInput({
   error?: string;
   errorId: string;
   onChange: (value: string) => void;
+  disabled?: boolean;
+  inputRef?: Ref<HTMLInputElement>;
+  help?: string;
+  helpId?: string;
+  required?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [month, setMonth] = useState<Date | undefined>();
@@ -45,8 +55,11 @@ export function ResearchDateInput({
           id={id}
           aria-label={label}
           aria-invalid={Boolean(error)}
-          aria-describedby={error ? errorId : undefined}
+          aria-describedby={[helpId, error ? errorId : undefined].filter(Boolean).join(" ") || undefined}
           autoComplete="off"
+          disabled={disabled}
+          required={required}
+          ref={inputRef}
           inputMode="numeric"
           onChange={(event) => onChange(event.target.value)}
           placeholder="YYYY-MM-DD"
@@ -57,7 +70,7 @@ export function ResearchDateInput({
             if (next) setMonth(selected ?? end ?? start);
             setOpen(next);
           }}>
-            <PopoverTrigger render={<Button variant="ghost" size="icon-sm" className="max-[767px]:size-11" aria-label={openLabel} />}>
+            <PopoverTrigger render={<Button variant="ghost" size="icon-sm" className="max-[767px]:size-11" aria-label={openLabel} disabled={disabled} />}>
               <CalendarBlank aria-hidden="true" />
             </PopoverTrigger>
             <PopoverContent align="end" className="w-auto p-0">
@@ -86,6 +99,7 @@ export function ResearchDateInput({
           </Popover>
         </InputGroupAddon>
       </InputGroup>
+      {help && <FieldDescription id={helpId}>{help}</FieldDescription>}
       {error && <FieldError id={errorId}>{error}</FieldError>}
     </Field>
   );

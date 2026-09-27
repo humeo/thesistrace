@@ -17,7 +17,7 @@ export const operatorDataEn = {
     queueEffect: "The operation enters the shared durable FIFO. Collection and publication happen later in the Data Operator Worker.",
   },
   market: {
-    title: "Market Refresh", kind: "Market", asOfHelp: "Submitted at 18:00 Asia/Shanghai (+08:00); the exact timestamp is shown before submission.",
+    title: "Market Refresh", kind: "Market", openAsOfCalendar: "Open As-of calendar", asOfHelp: "Submitted at 18:00 Asia/Shanghai (+08:00); the exact timestamp is shown before submission.",
     asOfInvalid: "Choose a valid As-of date.", keyInvalid: "Use 1–512 characters with no boundary whitespace, NUL, or unpaired surrogate.",
     selectedAsOfInvalid: "The selected As-of date is not valid for Market Refresh.",
     submitTitle: "Submit Market Refresh?", submitDescription: "Review the update date before submitting.",
@@ -122,7 +122,7 @@ export const operatorDataZh = {
     queueEffect: "操作将进入共享的持久化 FIFO 队列。数据采集和发布由 Data Operator Worker 后续执行。",
   },
   market: {
-    title: "市场数据刷新", kind: "市场", asOfHelp: "请求的截至时间为所选日期的 Asia/Shanghai (+08:00) 18:00；提交前会显示准确时间戳。",
+    title: "市场数据刷新", kind: "市场", openAsOfCalendar: "打开截至日期日历", asOfHelp: "请求的截至时间为所选日期的 Asia/Shanghai (+08:00) 18:00；提交前会显示准确时间戳。",
     asOfInvalid: "请选择有效的截至日期。", keyInvalid: "请输入 1–512 个字符，首尾不能有空白，也不能包含 NUL 或未配对代理字符。",
     selectedAsOfInvalid: "所选截至日期不适用于市场数据刷新。",
     submitTitle: "提交市场数据刷新？", submitDescription: "提交前请检查更新日期。",
