@@ -1,5 +1,5 @@
 import { cn } from "cn";
-import styles from "./ChatLayout.module.css";
+import { chatLayout } from "./chatLayout";
 import { Button } from "../components/ui/button";
 import { Textarea } from "../components/ui/textarea";
 import { HttpAgent } from "@ag-ui/client";
@@ -98,8 +98,8 @@ function AuthoritativeConversation({
 
   if (newChat) {
     return (
-      <main className={cn("chat-main chat-main-new", styles.main, styles.newMain)}>
-        <div className={cn("chat-new-chat-start", styles.start)}>
+      <main className={cn("chat-main chat-main-new", chatLayout.main, chatLayout.newMain)}>
+        <div className={cn("chat-new-chat-start", chatLayout.start)}>
           <ChatIntroduction />
           <ChatComposer announcement={announcement === null ? "" : t(announcement)} controller={controller} modelControls={props.modelControls} />
         </div>
@@ -108,11 +108,11 @@ function AuthoritativeConversation({
   }
   return (
     <main
-      className={cn("chat-main", styles.main, styles.conversationMain)}
+      className={cn("chat-main", chatLayout.main, chatLayout.conversationMain)}
       data-agent-run-id={controller.currentTurnId ?? controller.latestTurnId ?? undefined}
       data-current-turn-id={controller.currentTurnId ?? undefined}
     >
-      <header className={styles.header}>
+      <header className={chatLayout.header}>
         <h1 className="min-w-0 truncate text-base leading-6 font-semibold" title={props.initialSession?.title}>{props.initialSession?.title && props.initialSession.title !== "Untitled" ? props.initialSession.title : t("session")}</h1>
       </header>
       <ChatTimeline controller={controller} onAnnounce={announce} />
@@ -132,10 +132,10 @@ export function StaticChatMain({
 }) {
   const { t } = useTranslation("chat");
   return (
-    <main className={cn("chat-main chat-main-new", styles.main, styles.newMain)}>
-      <div className={cn("chat-new-chat-start", styles.start)}>
+    <main className={cn("chat-main chat-main-new", chatLayout.main, chatLayout.newMain)}>
+      <div className={cn("chat-new-chat-start", chatLayout.start)}>
         <ChatIntroduction opening={opening} />
-        <div className={cn("chat-composer-dock", styles.dock)}>
+        <div className={cn("chat-composer-dock", chatLayout.dock)}>
           {error === undefined ? null : (
             <div className="mb-3 flex items-center gap-3 rounded-lg border border-destructive p-3 text-sm text-destructive" role="alert">
               <WarningCircle aria-hidden="true" size={15} />
@@ -143,8 +143,8 @@ export function StaticChatMain({
               <Button variant="ghost" onClick={() => window.location.reload()} type="button">{t("reconnect")}</Button>
             </div>
           )}
-          <div className={cn(styles.surface, "opacity-60")}>
-            <Textarea className={styles.input} aria-label={t("message")} disabled placeholder={t("newPlaceholder")} rows={2} />
+          <div className={cn(chatLayout.surface, "opacity-60")}>
+            <Textarea className={chatLayout.input} aria-label={t("message")} disabled placeholder={t("newPlaceholder")} rows={2} />
             <div className="flex min-h-12 items-center justify-between gap-3 px-3 pb-2">
               <div className="ml-auto flex min-w-0 items-center gap-2">
                 {modelControls}

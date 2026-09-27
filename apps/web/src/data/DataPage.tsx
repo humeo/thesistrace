@@ -136,7 +136,7 @@ export function DataOverviewView({
       coverage: overview.benchmark_coverage,
       state: overview.benchmark_research_readiness ? "ready" : "not_ready", families: [] },
   ];
-  return <Page aria-label={t("title")} className="px-4 py-6 sm:px-6 lg:px-8"><PageContent className="flex flex-col gap-6">
+  return <Page aria-label={t("title")}><PageContent className="flex flex-col gap-6">
     <PageHeader title={t("title")} description={t("introduction")} actions={<Button variant="outline" onClick={onRefresh} disabled={refreshing}><ArrowClockwise aria-hidden="true" data-icon="inline-start" />{t("reload")}</Button>} />
     {error && <Alert variant="destructive"><AlertDescription>{t(error)}</AlertDescription></Alert>}
     <Section title={t("coverage")}>
@@ -331,7 +331,7 @@ export function DataPage() {
     void refresh();
   }, [refresh]);
 
-  if (!resources) return <Page className="px-4 py-6 sm:px-6 lg:px-8" aria-label={t("title")}><PageContent>
+  if (!resources) return <Page aria-label={t("title")}><PageContent>
     <PageHeader title={t("title")} />
     {error ? <Alert variant="destructive"><AlertDescription>{t(error)}<Button variant="outline" disabled={refreshing} onClick={() => void refresh()}>{t("retry")}</Button></AlertDescription></Alert> : <p role="status">{t("loading")}</p>}
   </PageContent></Page>;

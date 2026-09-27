@@ -1,5 +1,6 @@
 import { cn } from "cn";
-import styles from "./ChatLayout.module.css";
+import { chatLayout } from "./chatLayout";
+import styles from "./ChatContent.module.css";
 import { toast } from "../components/ui/toast";
 import { Button } from "../components/ui/button";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "../components/ui/collapsible";
@@ -241,11 +242,11 @@ export function ChatTimeline({
   }
 
   return (
-    <div className={cn("chat-timeline-shell", styles.timelineShell)}>
+    <div className={cn("chat-timeline-shell", chatLayout.timelineShell)}>
       <div
         aria-label={t("timeline")}
         aria-live="off"
-        className={cn("chat-timeline", styles.timeline, empty && "grid place-items-center")}
+        className={cn("chat-timeline", chatLayout.timeline, empty && "grid place-items-center")}
         onKeyDown={handleKeyDown}
         onScroll={updateFollowing}
         onTouchMove={(event) => {
@@ -263,7 +264,7 @@ export function ChatTimeline({
         tabIndex={0}
       >
         {empty ? <ChatIntroduction opening={controller.phase === "opening"} /> : (
-          <div className={cn("chat-timeline-content", styles.content)}>
+          <div className={cn("chat-timeline-content", chatLayout.content)}>
             <div aria-hidden="true" className="h-px shrink-0" ref={topSentinelRef} />
             {controller.loadingOlder ? (
               <CircleNotch aria-label={t("loadingEarlier")} className="chat-timeline-loading animate-spin motion-reduce:animate-none text-muted-foreground" size={15} />
@@ -362,7 +363,7 @@ function TimelineTurnView({
       {leading.map((entry) => (
         <TimelineItem controller={controller} entry={entry} key={entry.entry_id} onAnnounce={onAnnounce} />
       ))}
-      <div className={cn("chat-turn-response grid min-w-0 gap-3", styles.response)}>
+      <div className={cn("chat-turn-response grid min-w-0 gap-3")}>
         {!showAssistantSection ? null : (
           <div className="chat-turn-assistant-meta chat-work-meta min-w-0 text-xs text-muted-foreground">
             {processEntries.length > 0 ? (

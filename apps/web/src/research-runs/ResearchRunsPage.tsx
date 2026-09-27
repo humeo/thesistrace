@@ -237,12 +237,12 @@ export function ResearchRunsPage({ researcherId, runId }: {
   const { run } = detail;
   const list = useResearchRunListController(runId);
   const { folders, folderError, refreshFolders } = list;
-  if (runId && detail.error) return <Page className="px-4 py-6 sm:px-6 lg:px-8"><PageContent>
+  if (runId && detail.error) return <Page><PageContent>
     <PageHeader title={t("run")} />
     <Alert variant="destructive"><AlertDescription>{formatRunError(detail.error)}</AlertDescription></Alert>
     <div className="mt-4 flex flex-wrap gap-2"><ResearchRunBackLink /><Button variant="outline" onClick={detail.refresh}>{t("retry")}</Button></div>
   </PageContent></Page>;
-  if (runId && run?.id !== runId) return <Page className="p-6"><p role="status">{t("loadingRun")}</p></Page>;
+  if (runId && run?.id !== runId) return <Page><p role="status">{t("loadingRun")}</p></Page>;
   if (runId && run?.id === runId) return <ResearchRunDetail key={run.id} detail={detail} folderError={folderError} folders={folders} onRefreshFolders={refreshFolders} researcherId={researcherId} run={run} />;
   return <ResearchRunList list={list} />;
 }
@@ -271,7 +271,7 @@ function ResearchRunDetail({ detail, folderError, folders, onRefreshFolders, res
     run={run}
   />;
 
-  return <Page aria-label={t("title")} className="research-run-page px-4 py-6 sm:px-6 lg:px-8">
+  return <Page aria-label={t("title")} className="research-run-page">
     <PageContent className="flex flex-col gap-6">
       <PageHeader
         title={run.name}
@@ -280,8 +280,8 @@ function ResearchRunDetail({ detail, folderError, folders, onRefreshFolders, res
           <Badge variant={run.status === "failed" ? "destructive" : run.status === "succeeded" ? "default" : "outline"} className="rounded-md">{t(`statuses.${run.status}`)}</Badge>
         </span>}
         actions={<>
-          <Button variant="outline" render={<a href="/research-runs" onClick={followCoreLink} />}><CaretLeft aria-hidden="true" />{t("back")}</Button>
-          {run.batch_id ? <Button variant="outline" render={<a href={`/research-runs/batches/${encodeURIComponent(run.batch_id)}`} onClick={followCoreLink} />}>{t("viewBatch")}</Button> : null}
+          <Button variant="outline" nativeButton={false} role="link" render={<a href="/research-runs" onClick={followCoreLink} />}><CaretLeft aria-hidden="true" />{t("back")}</Button>
+          {run.batch_id ? <Button variant="outline" nativeButton={false} role="link" render={<a href={`/research-runs/batches/${encodeURIComponent(run.batch_id)}`} onClick={followCoreLink} />}>{t("viewBatch")}</Button> : null}
           {run.batch_id && ["queued", "running", "cancelling"].includes(run.status) ? <ResearchBatchCancelButton key={run.batch_id} batchId={run.batch_id} status={run.status} /> : null}
           {!run.batch_id && (run.status === "queued" || run.status === "running") ? <Button variant="outline" disabled={detail.canceling} onClick={() => void detail.cancel()}>{t(detail.canceling ? "cancelling" : "cancel")}</Button> : null}
           {run.status === "succeeded" && run.research_kind === "strategy_backtest" ? <Button disabled={detail.startingTracking || detail.deleting} onClick={() => void detail.startTracking()}>{t(detail.startingTracking ? "startingTracking" : "startTracking")}</Button> : null}
@@ -348,7 +348,7 @@ function ResearchRunDetail({ detail, folderError, folders, onRefreshFolders, res
 export function ResearchRunBackLink() {
   const { t } = useTranslation("runs");
   return (
-    <Button variant="outline" nativeButton={false} render={<a href="/research-runs" onClick={followCoreLink} />}><CaretLeft aria-hidden="true" data-icon="inline-start" />{t("back")}</Button>
+    <Button variant="outline" nativeButton={false} role="link" render={<a href="/research-runs" onClick={followCoreLink} />}><CaretLeft aria-hidden="true" data-icon="inline-start" />{t("back")}</Button>
   );
 }
 

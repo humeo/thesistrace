@@ -16,6 +16,29 @@ function recordDocumentRequests(page: Page): string[] {
   return documentRequests;
 }
 
+function researchRunHeader(page: Page): Locator {
+  return page.getByRole("main").locator("header").first();
+}
+
+function lastObservation(page: Page): Locator {
+  return page.getByRole("main").locator("dt").filter({ hasText: /^Last observation$/ })
+    .locator("xpath=following-sibling::dd");
+}
+
+async function waitForStrategySummary(page: Page, timeout = 90_000): Promise<void> {
+  const unavailable = page.getByRole("main").getByRole("alert").filter({ hasText: "ResearchRun unavailable" });
+  const outcome = await Promise.race([
+    page.getByRole("heading", { name: "Strategy Summary" }).waitFor({ state: "visible", timeout }).then(() => "ready"),
+    unavailable.waitFor({ state: "visible", timeout }).then(() => "unavailable"),
+  ]);
+  if (outcome === "unavailable") throw new Error(`ResearchRun detail failed: ${await unavailable.innerText()}`);
+}
+
+async function selectTradingEvent(page: Page, name: "Fills" | "Framework decisions"): Promise<void> {
+  await page.getByRole("combobox", { name: "Event type" }).click();
+  await page.getByRole("option", { name, exact: true }).click();
+}
+
 async function refreshPythonTrackThroughFixtureEnd(page: Page, trackId: string): Promise<void> {
   let session = "";
   let unavailableReads = 0;
@@ -44,7 +67,7 @@ async function refreshPythonTrackThroughFixtureEnd(page: Page, trackId: string):
     await reload.click();
     await expect(reload).toBeEnabled();
     await expect(page.getByRole("alert")).toHaveCount(0);
-    await expect(page.locator("dl > div").filter({ has: page.locator("dt", { hasText: "Last observation" }) }).getByText(session, { exact: true })).toBeVisible();
+    await expect(lastObservation(page)).toHaveText(session);
   }
   expect(session).toBe("2026-08-11");
   if (unavailableReads) test.info().annotations.push({ type: "dependency-recovery",
@@ -247,7 +270,7 @@ test("Direct Python authoring executes, reuses frozen source and explicitly adva
     return ["succeeded", "failed", "cancelled"].includes(runOutcome.status);
   }, { timeout: 240_000 }).toBe(true);
   expect(runOutcome.status, runOutcome.failure_reason).toBe("succeeded");
-  await expect(page.getByRole("heading", { name: "Strategy Summary" })).toBeVisible({ timeout: 90_000 });
+  await waitForStrategySummary(page);
   await page.getByRole("tab", { name: "Configuration", exact: true }).click();
   const facts = page.getByRole("group", { name: "Research execution conditions" });
   await expect(facts).toContainText("Direct · Python");
@@ -287,7 +310,7 @@ test("Custom fees and slippage survive Run reuse and DailyTrack refresh", { tag:
   await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
   const runUrl = page.url();
   const runId = runUrl.split("/").at(-1)!;
-  await expect(page.getByRole("heading", { name: "Strategy Summary" })).toBeVisible({ timeout: 90_000 });
+  await waitForStrategySummary(page);
   await page.getByRole("tab", { name: "Configuration", exact: true }).click();
   const costs = { commission_rate_all_in: "0.0003", commission_min_cny: "2",
     stamp_duty_sell_rate: "0.0005", transfer_fee_rate: "0.00001", slippage_bps: "15" };
@@ -297,11 +320,11 @@ test("Custom fees and slippage survive Run reuse and DailyTrack refresh", { tag:
   await page.getByText("Frozen fees and slippage", { exact: true }).click();
   await expect(page.getByRole("group", { name: "Research execution conditions" })).toContainText("Price slippage (basis points) 15");
   await page.getByText("Trading events", { exact: true }).click();
-  await page.getByLabel("事件类型").selectOption("strategy_fills");
-  const table = page.getByRole("table", { name: "成交", exact: true });
-  await expect(table.getByRole("columnheader", { name: "模拟成交价（元）" })).toBeVisible();
-  await table.getByRole("button", { name: /查看原始记录/ }).first().click();
-  await expect(page.getByRole("region", { name: "成交价格与费用明细" })).toContainText("每股滑点价差");
+  await selectTradingEvent(page, "Fills");
+  const table = page.getByRole("table", { name: "Fills", exact: true });
+  await expect(table.getByRole("columnheader", { name: "Simulated execution price (CNY)" })).toBeVisible();
+  await table.getByRole("button", { name: /View raw record/ }).first().click();
+  await expect(page.getByRole("region", { name: "Fill price and cost details" })).toContainText("Per-share slippage");
   const fills = await page.request.post(`/api/research-runs/${runId}/events/query`, {
     headers: sameOriginHeaders(), data: { section: "strategy_fills", limit: 50 },
   });
@@ -315,6 +338,7 @@ test("Custom fees and slippage survive Run reuse and DailyTrack refresh", { tag:
     expect(fill).toHaveProperty("transfer_fee_cny");
   }
   await page.screenshot({ path: testInfo.outputPath("custom-costs-fill.png"), fullPage: true });
+  await page.getByRole("tab", { name: "Configuration", exact: true }).click();
   await page.getByRole("button", { name: "Create draft", exact: true }).click();
   await expect(page).toHaveURL(/\/research$/);
   await page.getByRole("button", { name: "Fees and slippage", exact: true }).click();
@@ -367,7 +391,9 @@ test(`${policyName} survives Run reuse and DailyTrack refresh`, { tag: "@isolate
     await page.getByLabel("Maximum holding (trading sessions)", { exact: true }).fill("2");
   } else await page.getByLabel("Stop loss (%)", { exact: true }).fill("1");
 
+  await page.getByRole("button", { name: "Fees and slippage", exact: true }).click();
   await page.getByLabel("Price slippage (basis points)", { exact: true }).fill(holdingPeriods || takeProfit ? "0" : "1000");
+  await page.getByRole("button", { name: "Fees and slippage", exact: true }).click();
   if (holdingPeriods) {
     await page.getByLabel("Holdings count").fill("1");
     await page.getByLabel("Selection interval (trading days)").fill("1");
@@ -378,7 +404,7 @@ test(`${policyName} survives Run reuse and DailyTrack refresh`, { tag: "@isolate
   await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
   const runUrl = page.url();
   const runId = runUrl.split("/").at(-1)!;
-  await expect(page.getByRole("heading", { name: "Strategy Summary" })).toBeVisible({ timeout: 90_000 });
+  await waitForStrategySummary(page);
   await page.getByRole("tab", { name: "Configuration", exact: true }).click();
   const accepted = await page.request.get(`/api/research-runs/${runId}`);
   expect(accepted.ok()).toBe(true);
@@ -392,7 +418,8 @@ test(`${policyName} survives Run reuse and DailyTrack refresh`, { tag: "@isolate
   ] } : holdingPeriods ? { kind: "builtin_risk/v1", maximum_holding_sessions: 2 }
     : { kind: "builtin_risk/v1", stop_loss_threshold: 0.01 };
   expect((await accepted.json()).input.modules.risk_management).toEqual(policy);
-  await page.getByText("Close risk and holdings", { exact: true }).click();
+  await page.getByRole("tab", { name: "Overview", exact: true }).click();
+  await page.getByRole("button", { name: "Close risk and holdings", exact: true }).click();
   await expect(page.getByText(/Close Risk NAV \(CNY\):/)).toBeVisible();
   const events = await page.request.post(`/api/research-runs/${runId}/events/query`, {
     headers: sameOriginHeaders(), data: { section: "strategy_framework", limit: 50 },
@@ -404,24 +431,24 @@ test(`${policyName} survives Run reuse and DailyTrack refresh`, { tag: "@isolate
       row.risk_adjustment?.observations?.some(item => item.reason === "portfolio_drawdown" && item.status === "threshold_reached"));
     expect(trigger).toBeTruthy();
     await page.getByText("Trading events", { exact: true }).click();
-    await page.getByLabel("事件类型").selectOption("strategy_framework");
-    await page.getByRole("button", { name: `查看原始记录：${trigger.decision_session}`, exact: true }).click();
-    await expect(page.getByLabel("风险判断依据", { exact: true })).toContainText("股票目标上限 30%");
-    await expect(page.getByLabel("风险判断依据", { exact: true })).toContainText("历史最大回撤不重置");
+    await selectTradingEvent(page, "Framework decisions");
+    await page.getByRole("button", { name: `View raw record: ${trigger.decision_session}`, exact: true }).click();
+    await expect(page.getByRole("list", { name: "Risk decision reasons" })).toContainText("Stock target cap 30%");
+    await expect(page.getByRole("list", { name: "Risk decision reasons" })).toContainText("historical maximum drawdown is not reset");
     if (combined) {
       expect(trigger.risk_adjustment.observations.some((item: { reason: string }) => item.reason === "stop_loss")).toBe(true);
-      await expect(page.getByLabel("风险判断依据", { exact: true })).toContainText("止损");
-      await expect(page.getByLabel("组合建议", { exact: true })).toContainText("NoUpdate");
-      await page.getByRole("button", { name: `查看原始记录：${rows[0].decision_session}`, exact: true }).click();
-      await expect(page.getByLabel("组合建议", { exact: true })).toContainText("目标仓位 100.00%");
-      await page.getByRole("button", { name: `查看原始记录：${trigger.decision_session}`, exact: true }).click();
-      await page.getByRole("button", { name: "查看目标", exact: true }).click();
-      await page.getByRole("button", { name: `查看原始记录：${trigger.decision_session}`, exact: true }).click();
-      const target = JSON.parse(await page.getByLabel("原始 JSON", { exact: true }).innerText());
+      await expect(page.getByRole("list", { name: "Risk decision reasons" })).toContainText("stop-loss threshold");
+      await expect(page.getByRole("region", { name: "Portfolio proposal" })).toContainText("NoUpdate");
+      await page.getByRole("button", { name: `View raw record: ${rows[0].decision_session}`, exact: true }).click();
+      await expect(page.getByRole("region", { name: "Portfolio proposal" })).toContainText("Target exposure 100.00%");
+      await page.getByRole("button", { name: `View raw record: ${trigger.decision_session}`, exact: true }).click();
+      await page.getByRole("button", { name: "View targets", exact: true }).click();
+      await page.getByRole("button", { name: `View raw record: ${trigger.decision_session}`, exact: true }).click();
+      const target = JSON.parse(await page.getByLabel("Raw JSON", { exact: true }).innerText());
       expect(target.target_id).toBe(trigger.target_id);
       expect(target.maximum_stock_exposure).toBe(0.3);
       expect(Object.values(target.position_limits).every(value => value === 0)).toBe(true);
-      await expect(page.getByRole("table", { name: "调仓目标", exact: true })).toContainText("≤ 0");
+      await expect(page.getByRole("table", { name: "Rebalance targets", exact: true })).toContainText("≤ 0");
       const fills = await page.request.post(`/api/research-runs/${runId}/events/query`, {
         headers: sameOriginHeaders(), data: { section: "strategy_fills", limit: 50 },
       });
@@ -435,18 +462,19 @@ test(`${policyName} survives Run reuse and DailyTrack refresh`, { tag: "@isolate
       row.risk_adjustment?.observations?.some(item => item.reason === "take_profit"));
     expect(trigger).toBeTruthy();
     await page.getByText("Trading events", { exact: true }).click();
-    await page.getByLabel("事件类型").selectOption("strategy_framework");
-    await page.getByRole("button", { name: `查看原始记录：${trigger.decision_session}`, exact: true }).click();
-    await expect(page.getByLabel("风险判断依据", { exact: true })).toContainText("累计减仓 30%");
-    await expect(page.getByLabel("风险判断依据", { exact: true })).toContainText("禁止普通补仓");
+    await selectTradingEvent(page, "Framework decisions");
+    await page.getByRole("button", { name: `View raw record: ${trigger.decision_session}`, exact: true }).click();
+    await expect(page.getByRole("list", { name: "Risk decision reasons" })).toContainText("cumulative reduction 30%");
+    await expect(page.getByRole("list", { name: "Risk decision reasons" })).toContainText("ordinary additions are forbidden");
   } else if (holdingPeriods) {
     expect(rows[1].portfolio_retentions[0].holding_age).toBe(1);
     await page.getByText("Trading events", { exact: true }).click();
-    await page.getByLabel("事件类型").selectOption("strategy_framework");
-    await page.getByRole("button", { name: "查看原始记录：2026-08-05", exact: true }).click();
-    await expect(page.getByLabel("最短持仓保留依据", { exact: true })).toContainText("未满最短 2 日");
+    await selectTradingEvent(page, "Framework decisions");
+    await page.getByRole("button", { name: "View raw record: 2026-08-05", exact: true }).click();
+    await expect(page.getByRole("list", { name: "Minimum-holding retention reasons" })).toContainText("below minimum 2");
   } else expect(rows.some((row: { risk_adjustment: { mode: string } | null }) => row.risk_adjustment?.mode === "builtin_risk")).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("close-stop-loss-result.png"), fullPage: true });
+  await page.getByRole("tab", { name: "Configuration", exact: true }).click();
   await page.getByRole("button", { name: "Create draft", exact: true }).click();
   if (drawdown) {
     await expect(page.getByLabel("Drawdown threshold (%)", { exact: true })).toHaveValue("1");
@@ -485,12 +513,12 @@ test(`${policyName} survives Run reuse and DailyTrack refresh`, { tag: "@isolate
     expect(sale).toBeTruthy();
     await page.getByRole("tab", { name: /^Holdings/ }).click();
     await page.getByText("Trading events", { exact: true }).click();
-    await page.getByLabel("事件类型").selectOption("strategy_fills");
-    await page.getByRole("button", { name: `查看原始记录：${sale.session} ${sale.instrument_id.replace(/^equity:/, "")}`, exact: true }).click();
-    const renderedFill = JSON.parse(await page.getByLabel("原始 JSON", { exact: true }).innerText());
+    await selectTradingEvent(page, "Fills");
+    await page.getByRole("button", { name: `View raw record: ${sale.session} ${sale.instrument_id.replace(/^equity:/, "")}`, exact: true }).click();
+    const renderedFill = JSON.parse(await page.getByLabel("Raw JSON", { exact: true }).innerText());
     expect(renderedFill).toMatchObject({ side: "sell", quantity: sale.quantity, session: sale.session, execution_price: sale.execution_price });
-    await expect(page.getByLabel("成交价格与费用明细", { exact: true })).toContainText("原始 Open");
-    await expect(page.getByLabel("成交价格与费用明细", { exact: true })).toContainText("模拟成交价");
+    await expect(page.getByRole("region", { name: "Fill price and cost details" })).toContainText("Raw Open");
+    await expect(page.getByRole("region", { name: "Fill price and cost details" })).toContainText("Simulated execution price");
     await page.screenshot({ path: testInfo.outputPath("combined-next-open-fill.png"), fullPage: true });
   }
   if (drawdown) expect(trackRows.some((row: { risk_adjustment: { observations?: { reason: string; completed_cooldown_sessions?: number }[] } | null }) =>
@@ -500,8 +528,9 @@ test(`${policyName} survives Run reuse and DailyTrack refresh`, { tag: "@isolate
   if (holdingPeriods) expect(trackRows.some((row: { risk_adjustment: { observations: { reason: string; holding_age: number }[] } | null }) =>
     row.risk_adjustment?.observations.some(observation => observation.reason === "maximum_holding_period" && observation.holding_age === 2))).toBe(true);
   await page.getByRole("tab", { name: /^Holdings/ }).click();
-  await page.getByText("Close risk and holdings", { exact: true }).click();
-  const riskFacts = page.locator("details").filter({ has: page.getByText("Close risk and holdings", { exact: true }) });
+  const closeRiskDisclosure = page.getByRole("button", { name: "Close risk and holdings" });
+  await closeRiskDisclosure.click();
+  const riskFacts = closeRiskDisclosure.locator("..");
   await expect(riskFacts).toContainText("2026-08-11");
   await expect(riskFacts).toContainText("Close Risk NAV (CNY)");
   await page.screenshot({ path: testInfo.outputPath("close-stop-loss-current-track.png"), fullPage: true });
@@ -518,11 +547,11 @@ test(`${policyName} survives Run reuse and DailyTrack refresh`, { tag: "@isolate
        WHERE manifest_sha256 = (SELECT result_manifest_sha256 FROM research_runs.runs WHERE id = '${runId}')`,
     ], { stdio: ["ignore", "pipe", "pipe"] });
     await page.goto(runUrl);
-    await expect(page.locator(".research-run-facts").getByText(/Status\s+succeeded/)).toBeVisible();
+    await expect(researchRunHeader(page)).toContainText("succeeded");
     await page.getByText("Trading events", { exact: true }).click();
-    await page.getByLabel("事件类型").selectOption("strategy_fills");
-    await expect(page.getByRole("status").filter({ hasText: "交易明细已过期" })).toBeVisible();
-    await expect(page.getByText("本次查询没有匹配的记录。", { exact: true })).toHaveCount(0);
+    await selectTradingEvent(page, "Fills");
+    await expect(page.getByRole("status").filter({ hasText: "Trading details have expired" })).toBeVisible();
+    await expect(page.getByText("No matching Fills records.", { exact: true })).toHaveCount(0);
     await page.screenshot({ path: testInfo.outputPath("combined-expired-events.png"), fullPage: true });
   }
 });
@@ -747,7 +776,7 @@ test("Alpha formula editor keeps line numbers on the Classic workbench surface",
   );
 });
 
-test("date inputs retain a browser-populated value when focus leaves the field", async ({ page }) => {
+test("date inputs retain manually entered values when focus leaves the field", async ({ page }) => {
   await page.route("**/api/data", async (route) => {
     const response = await route.fetch();
     const data = await response.json();
@@ -773,10 +802,7 @@ test("date inputs retain a browser-populated value when focus leaves the field",
     ["Research end date", "2026-08-13"],
   ] as const) {
     const input = page.getByLabel(label);
-    await input.focus();
-    await input.evaluate((element, populatedValue) => {
-      (element as HTMLInputElement).value = populatedValue;
-    }, value);
+    await input.fill(value);
     await page.keyboard.press("Tab");
   }
 
@@ -837,13 +863,12 @@ test("Default Folder retains one local Research Draft with authoritative Formula
 
     const startDate = page.getByLabel("Research start date");
     const endDate = page.getByLabel("Research end date");
-    const coverageStart = await startDate.getAttribute("min");
-    const coverageEnd = await endDate.getAttribute("max");
-    expect(coverageStart).not.toBeNull();
-    expect(coverageEnd).not.toBeNull();
+    const coverageResponse = await page.request.get("/api/data");
+    expect(coverageResponse.ok()).toBe(true);
+    const coverage = (await coverageResponse.json() as { market_coverage: { start: string; end: string } }).market_coverage;
     await maxDateRange.click();
-    await expect(startDate).toHaveValue(coverageStart!);
-    await expect(endDate).toHaveValue(coverageEnd!);
+    await expect(startDate).toHaveValue(coverage.start);
+    await expect(endDate).toHaveValue(coverage.end);
 
     await factorEvaluation.focus();
     await page.keyboard.press("ArrowRight");
@@ -1118,11 +1143,11 @@ test("Complete field catalog composes one Formula and starts its DailyTrack", { 
     await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
     runId = new URL(page.url()).pathname.split("/").at(-1);
     if (runId === undefined) throw new Error("ResearchRun route has no identity");
-    await expect(page.locator(".research-run-facts").getByText(/Status\s+queued/)).toBeVisible();
+    await expect(researchRunHeader(page)).toContainText("queued");
     const barrier = startControlledResearchRun(runId);
     controlledWorker = barrier.process;
     await barrier.claimed;
-    await expect(page.locator(".research-run-facts").getByText(/Status\s+running/)).toBeVisible();
+    await expect(researchRunHeader(page)).toContainText("running");
     await expect(page.getByRole("heading", { name: "Execution progress" })).toBeVisible();
     await expect(
       page.locator("[aria-label='ResearchRun progress']").getByText("Starting execution", { exact: true }),
@@ -1136,7 +1161,7 @@ test("Complete field catalog composes one Formula and starts its DailyTrack", { 
     controlledWorker.stdin?.end("1");
     await controlledWorkerExit(controlledWorker);
     controlledWorker = undefined;
-    await expect(page.locator(".research-run-facts").getByText(/Status\s+succeeded/)).toBeVisible({
+    await expect(researchRunHeader(page)).toContainText("succeeded", {
       timeout: 90_000,
     });
     const comparisonChartLabel = "Net Strategy and CSI 300 performance chart";
@@ -1156,10 +1181,12 @@ test("Complete field catalog composes one Formula and starts its DailyTrack", { 
       "true",
     );
     await performanceChart.getByRole("button", { name: "All" }).click();
-    const canvasBounds = await performanceChart.locator(".strategy-chart-canvas").boundingBox();
+    const chartCanvas = performanceChart.locator(".strategy-chart-canvas");
+    await chartCanvas.scrollIntoViewIfNeeded();
+    const canvasBounds = await chartCanvas.boundingBox();
     if (canvasBounds === null) throw new Error("Strategy chart has no browser bounds");
     await page.mouse.move(
-      canvasBounds.x + (canvasBounds.width * 0.6),
+      canvasBounds.x + (canvasBounds.width * 0.9),
       canvasBounds.y + (canvasBounds.height * 0.5),
     );
     const performanceReadout = performanceChart.locator(".strategy-chart-readout");
@@ -1322,7 +1349,7 @@ test("Complete field catalog composes one Formula and starts its DailyTrack", { 
     }, { timeout: 90_000 }).toBe("2026-08-11");
     await page.getByRole("button", { name: "Reload status" }).click();
     await expect(page.getByRole("heading", { level: 1 }).locator("[data-slot=badge]")).toHaveText("Up to date");
-    await expect(page.locator("dl > div").filter({ has: page.locator("dt", { hasText: "Last observation" }) }).getByText("2026-08-11", { exact: true })).toBeVisible();
+    await expect(lastObservation(page)).toHaveText("2026-08-11");
     const finalObservation = (await (await page.request.get(`/api/daily-tracks/${trackId}`)).json()).observation;
     expect(finalObservation.session).toBe("2026-08-11");
     expect(finalObservation.session_count).toBeGreaterThan(0);
@@ -1421,17 +1448,17 @@ test("running Research cancellation stays visible until the child exits", async 
     const barrier = startControlledResearchRun(runId);
     controlledWorker = barrier.process;
     await barrier.claimed;
-    await expect(page.locator(".research-run-facts").getByText(/Status\s+running/)).toBeVisible();
+    await expect(researchRunHeader(page)).toContainText("running");
 
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
-    await expect(page.locator(".research-run-facts").getByText(/Status\s+cancelling/)).toBeVisible();
+    await expect(researchRunHeader(page)).toContainText("cancelling");
     await expect(page.getByRole("button", { name: "Cancel", exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Create draft" })).toBeVisible();
 
     controlledWorker.stdin?.end("1");
     await controlledWorkerExit(controlledWorker);
     controlledWorker = undefined;
-    await expect(page.locator(".research-run-facts").getByText(/Status\s+cancelled/)).toBeVisible({
+    await expect(researchRunHeader(page)).toContainText("cancelled", {
       timeout: 20_000,
     });
     await expect(page.getByRole("button", { name: "Create draft" })).toBeVisible();
@@ -1496,7 +1523,8 @@ test("Batch children keep ordinary Research organization, reuse, tracking, and d
   await expect(page.getByRole("link", { name: "Browser Batch Broad" })).toBeVisible();
   await page.getByRole("link", { name: "Browser Batch Focused" }).click();
   await expect(page).toHaveURL(new RegExp(`/research-runs/${firstRunId}$`));
-  await expect(page.locator(".research-run-facts")).toContainText("Status succeeded");
+  await expect(researchRunHeader(page)).toContainText("succeeded");
+  await page.getByRole("tab", { name: "Configuration", exact: true }).click();
   await expect(page.getByRole("button", { name: "Create draft" })).toBeVisible();
   await expect(page.getByRole("button", { name: /Batch/, exact: true })).toHaveCount(0);
 
@@ -1507,11 +1535,12 @@ test("Batch children keep ordinary Research organization, reuse, tracking, and d
   expect(folderResponse.status()).toBe(201);
   const folderId = ((await folderResponse.json()) as { id: string }).id;
   await page.reload();
+  await page.getByRole("tab", { name: "Configuration", exact: true }).click();
   await page.getByLabel("Research name", { exact: true }).fill("Reviewed Batch Child");
   await page.getByRole("combobox", { name: "Folder", exact: true }).click();
   await page.getByRole("option", { name: "Browser Batch Review" }).click();
   await page.getByRole("button", { name: "Save changes" }).click();
-  await expect(page.locator(".research-run-facts")).toContainText("Reviewed Batch Child");
+  await expect(researchRunHeader(page).getByRole("heading", { level: 1 })).toHaveText("Reviewed Batch Child");
 
   const organizedBatch = await page.request.get(`/api/research-batches/${admittedBatch.id}`);
   expect(((await organizedBatch.json()) as {
@@ -1615,7 +1644,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     });
 
     await page.getByRole("button", { name: /^Run (backtest|evaluation)$/, exact: true }).click();
-    await expect(page.getByRole("list", { name: "Run issues" })).toContainText("RUN_UNAVAILABLE");
+    await expect(page.getByRole("list", { name: "Run issues" })).toContainText("Research Run request failed. Please try again.");
     await page.getByRole("button", { name: /^Run (backtest|evaluation)$/, exact: true }).click();
     const heldRoute = await secondRequest;
     expect(commands).toHaveLength(2);
@@ -1638,18 +1667,17 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
     const defaultRunId = page.url().split("/").at(-1);
     expect(defaultRunId).toMatch(/^run_[a-f0-9]+$/);
-    await expect(page.getByRole("heading", { name: "Strategy Summary" })).toBeVisible({ timeout: 90_000 });
-  await page.getByRole("tab", { name: "Configuration", exact: true }).click();
+    await waitForStrategySummary(page);
+    await page.getByRole("tab", { name: "Configuration", exact: true }).click();
     const completedProgress = page.getByRole("region", { name: "ResearchRun progress" });
     await expect(completedProgress.getByText("Execution complete", { exact: true })).toBeVisible();
     await expect(completedProgress).toContainText("2 / 2 sessions");
     await expect(page.locator("body")).not.toContainText(/checkpoint|staged payload/i);
-    await expect(page.getByRole("heading", { name: "Strategy Summary" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Factor Summary" })).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Final Portfolio" })).toHaveCount(0);
     await expect(page.getByText("Retained account at the Research Period boundary", { exact: true })).toHaveCount(0);
     await expect(page.getByText("No pending signal at this boundary.", { exact: true })).toHaveCount(0);
-    await expect(page.locator(".research-run-facts")).toContainText("Research type Strategy Backtest");
+    await expect(researchRunHeader(page)).toContainText("Strategy Backtest");
     const strategyConditions = page.getByRole("group", { name: "Research execution conditions" });
     await expect(strategyConditions).toContainText("Universe Top 300");
     await expect(strategyConditions).toContainText("Neutralization None");
@@ -1703,8 +1731,8 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await expect(page.getByRole("tab", { name: "Overview" })).toHaveAttribute("data-active", "", { timeout: 90_000 });
     await expect(page.getByRole("heading", { name: "Factor Summary" })).toBeVisible();
     await page.getByRole("tab", { name: "Configuration" }).click();
-    await expect(page.locator(".research-run-facts")).toContainText("Status succeeded");
-    await expect(page.locator(".research-run-facts")).toContainText("Research type Factor Evaluation");
+    await expect(researchRunHeader(page)).toContainText("succeeded");
+    await expect(researchRunHeader(page)).toContainText("Factor Evaluation");
     const factorConditions = page.getByRole("group", { name: "Research execution conditions" });
     await expect(factorConditions).toContainText("Universe Top 300");
     await expect(factorConditions).toContainText("Neutralization None");
@@ -1763,10 +1791,9 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     const convertedRunId = page.url().split("/").at(-1);
     expect(convertedRunId).not.toBe(customRunId);
     if (convertedRunId === undefined) throw new Error("Converted Research route is missing run id");
-    await expect(page.getByRole("heading", { name: "Strategy Summary" })).toBeVisible({ timeout: 90_000 });
-  await page.getByRole("tab", { name: "Configuration", exact: true }).click();
-    await expect(page.locator(".research-run-facts")).toContainText("Research type Strategy Backtest");
-    await expect(page.getByRole("heading", { name: "Strategy Summary" })).toBeVisible();
+    await waitForStrategySummary(page);
+    await page.getByRole("tab", { name: "Configuration", exact: true }).click();
+    await expect(researchRunHeader(page)).toContainText("Strategy Backtest");
     await expect(page.getByRole("heading", { name: "Factor Summary" })).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Daily Observations" })).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Final Portfolio" })).toHaveCount(0);
@@ -1803,12 +1830,12 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await expect(page.getByLabel("Folder", { exact: true })).toBeDisabled();
     await heldOrganizationRoute.continue();
     await page.unroute(`**/api/research-runs/${customRunId}`);
-    await expect(page.locator(".research-run-facts")).toContainText("Renamed Research");
+    await expect(researchRunHeader(page).getByRole("heading", { level: 1 })).toHaveText("Renamed Research");
     await page.getByLabel("Research name", { exact: true }).fill("Duplicate Name");
     await page.getByRole("combobox", { name: "Folder", exact: true }).click();
     await page.getByRole("option", { name: "Default" }).click();
     await page.getByRole("button", { name: "Save changes" }).click();
-    await expect(page.locator(".research-run-facts")).toContainText("Duplicate Name");
+    await expect(researchRunHeader(page).getByRole("heading", { level: 1 })).toHaveText("Duplicate Name");
     const organizedDetail = await page.request.get(`/api/research-runs/${customRunId}`);
     expect(await organizedDetail.json()).toMatchObject({
       id: customRunId,
@@ -1835,19 +1862,24 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await expect(page.getByText("Excess", { exact: true })).toHaveCount(2);
     await expect(researchRunsTable.getByText("Factor Evaluation", { exact: true })).toHaveCount(1);
     await expect(researchRunsTable.getByText("Strategy Backtest", { exact: true })).toHaveCount(2);
-    await expect(page.getByLabel("Filter by Type")).toHaveValue("");
+    await expect(page.getByRole("combobox", { name: "Filter by Type" })).toHaveText("All Types");
     await expect(page.getByRole("navigation", { name: "Research Runs pages" })).toContainText("Page 1");
-    await page.getByLabel("Filter by Type").selectOption("factor_evaluation");
+    await page.getByRole("combobox", { name: "Filter by Type" }).click();
+    await page.getByRole("option", { name: "Factor Evaluation", exact: true }).click();
     await expect(researchRunsTable.getByText("Factor Evaluation", { exact: true })).toHaveCount(1);
     await expect(researchRunsTable.getByText("Strategy Backtest", { exact: true })).toHaveCount(0);
     await expect(page.getByRole("columnheader", { name: "1-session Rank IC" })).toBeVisible();
-    await page.getByLabel("Filter by Type").selectOption("strategy_backtest");
+    await page.getByRole("combobox", { name: "Filter by Type" }).click();
+    await page.getByRole("option", { name: "Strategy Backtest", exact: true }).click();
     await expect(researchRunsTable.getByText("Strategy Backtest", { exact: true })).toHaveCount(2);
     await expect(page.getByRole("columnheader", { name: "Annualized excess" })).toBeVisible();
-    await page.getByLabel("Filter by Type").selectOption("");
-    await page.getByLabel("Filter by Folder").selectOption(customFolderId);
+    await page.getByRole("combobox", { name: "Filter by Type" }).click();
+    await page.getByRole("option", { name: "All Types", exact: true }).click();
+    await page.getByRole("combobox", { name: "Filter by Folder" }).click();
+    await page.getByRole("option", { name: "Signals", exact: true }).click();
     await expect(page.getByText("No Research Runs match these filters.")).toBeVisible();
-    await page.getByLabel("Filter by Folder").selectOption("folder_default");
+    await page.getByRole("combobox", { name: "Filter by Folder" }).click();
+    await page.getByRole("option", { name: "Default", exact: true }).click();
     await expect(page.getByRole("link", { name: "Duplicate Name" })).toHaveCount(2);
 
     let folderRequestCount = 0;
@@ -1871,6 +1903,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await expect(page.getByRole("textbox", { name: "Alpha formula", exact: true })).toHaveText("close");
     await page.getByLabel("Research name").fill("Target Local Name");
     await page.goto(`/research-runs/${defaultRunId}`);
+    await page.getByRole("tab", { name: "Configuration", exact: true }).click();
     await expect(page.getByRole("button", { name: "Create draft" })).toBeVisible();
     const sourceBeforeReuseResponse = await page.request.get(`/api/research-runs/${defaultRunId}`);
     const sourceBeforeReuse = await sourceBeforeReuseResponse.json();
@@ -1898,8 +1931,8 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
     const reusedRunId = page.url().split("/").at(-1);
     expect(reusedRunId).not.toBe(defaultRunId);
-    await expect(page.getByRole("heading", { name: "Strategy Summary" })).toBeVisible({ timeout: 90_000 });
-  await page.getByRole("tab", { name: "Configuration", exact: true }).click();
+    await waitForStrategySummary(page);
+    await page.getByRole("tab", { name: "Configuration", exact: true }).click();
     const reusedDetail = await page.request.get(`/api/research-runs/${reusedRunId}`);
     expect(await reusedDetail.json()).toMatchObject({
       id: reusedRunId,
@@ -1979,7 +2012,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await expectRemovedAuthoringControlsToBeAbsent(page);
     await expect(page.getByText(`${reusedRunId} (deleted)`, { exact: true })).toBeVisible();
     await expect(page.getByRole("link", { name: reusedRunId, exact: true })).toHaveCount(0);
-    await expect(page.locator("dl > div").filter({ has: page.locator("dt", { hasText: "Last observation" }) }).getByText("2026-08-11", { exact: true })).toBeVisible();
+    await expect(lastObservation(page)).toHaveText("2026-08-11");
     await expect(page.getByRole("button", { name: "Delete DailyTrack" })).toHaveCount(0);
 
     // Expire only this test's published Track diagnostics; permanent history must survive.
@@ -1994,11 +2027,10 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     const preservedTrack = await (await page.request.get(`/api/daily-tracks/${trackId}`)).json();
     const historyBeforeExpiryRead = await (await page.request.get("/api/research-runs")).json();
     await page.getByRole("button", { name: "Daily holdings", exact: false }).click();
-    const expiredPeriod = page.getByLabel("Recorded period").locator("option").filter({ hasText: /Tracking · Expired/ }).first();
+    await page.getByRole("combobox", { name: "Recorded period" }).click();
+    const expiredPeriod = page.getByRole("option", { name: /Tracking · Expired/ });
     await expect(expiredPeriod).toHaveCount(1);
-    const expiredUnitId = await expiredPeriod.getAttribute("value");
-    if (!expiredUnitId) throw new Error("Expired Track period is unavailable");
-    await page.getByLabel("Recorded period").selectOption(expiredUnitId);
+    await expiredPeriod.click();
     await expect(page.getByRole("button", { name: "Rerun to generate holdings" })).toBeVisible();
     expect(await (await page.request.get("/api/research-runs")).json()).toEqual(historyBeforeExpiryRead);
     await page.screenshot({ path: testInfo.outputPath("expired-track-holdings.png"), fullPage: true });
@@ -2011,8 +2043,8 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
     const diagnosticRunId = new URL(page.url()).pathname.split("/").at(-1);
     expect(diagnosticRunId).not.toBe(reusedRunId);
-    await expect(page.getByRole("heading", { name: "Strategy Summary" })).toBeVisible({ timeout: 90_000 });
-  await page.getByRole("tab", { name: "Configuration", exact: true }).click();
+    await waitForStrategySummary(page);
+    await page.getByRole("tab", { name: "Configuration", exact: true }).click();
     await expect(page.getByRole("link", { name: "Source Daily Track" })).toHaveAttribute("href", `/daily-tracks/${trackId}`);
     const diagnosticDetail = await (await page.request.get(`/api/research-runs/${diagnosticRunId}`)).json();
     expect(diagnosticDetail.rerun_origin).toMatchObject({ source_track_id: trackId, source_run_id: reusedRunId });

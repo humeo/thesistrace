@@ -14,7 +14,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "../components/ui/card"
 import { Empty, EmptyHeader, EmptyTitle, EmptyDescription } from "../components/ui/empty";
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter } from "../components/ui/alert-dialog";
 import { Page, PageContent, PageHeader } from "../components/layout/Page";
-import styles from "./McpLayout.module.css";
+import { mcpLayout } from "./mcpLayout";
 
 export function McpPage() {
   const { t } = useTranslation("mcp");
@@ -59,31 +59,31 @@ export function McpPage() {
     } catch { setRevokeError(true); }
     finally { setRevoking(false); }
   }
-  return <Page aria-label="MCP"><PageContent className={styles.page}>
+  return <Page aria-label="MCP"><PageContent className={mcpLayout.page}>
     <PageHeader title="MCP" description={t("subtitle")} />
-    <Card role="region" aria-label="Quantgrove MCP"><CardHeader className={styles.row}>
-      <div className={styles.row}><BrandMark size={36} /><CardTitle role="heading" aria-level={2}>Quantgrove MCP</CardTitle></div>
-      <div role="status" className={styles.stack}><Badge variant={status === "available" ? "default" : status === "unavailable" ? "destructive" : "secondary"}>{t(status)}</Badge><small>{checkedAt ? t("checked", { time: formatTimestamp(checkedAt, { hour: "numeric", minute: "2-digit", second: "2-digit" }) }) : t("notChecked")}</small></div>
+    <Card role="region" aria-label="Quantgrove MCP"><CardHeader className={mcpLayout.row}>
+      <div className={mcpLayout.row}><BrandMark size={36} /><CardTitle role="heading" aria-level={2}>Quantgrove MCP</CardTitle></div>
+      <div role="status" className={mcpLayout.stack}><Badge variant={status === "available" ? "default" : status === "unavailable" ? "destructive" : "secondary"}>{t(status)}</Badge><small>{checkedAt ? t("checked", { time: formatTimestamp(checkedAt, { hour: "numeric", minute: "2-digit", second: "2-digit" }) }) : t("notChecked")}</small></div>
       <Button variant="outline" disabled={status === "checking"} onClick={() => void check()}><ArrowClockwise data-icon="inline-start" />{status === "checking" ? t("checking") : t("checkService")}</Button>
     </CardHeader>
-    {status === "unavailable" || catalogError ? <CardContent className={styles.stack}>
+    {status === "unavailable" || catalogError ? <CardContent className={mcpLayout.stack}>
       {status === "unavailable" ? <Alert role="status"><AlertDescription>{t("serviceError")}</AlertDescription></Alert> : null}
       {catalogError ? <Alert variant="destructive"><AlertDescription>{t("catalogError")}</AlertDescription><Button variant="outline" onClick={() => void load()}>{t("retry")}</Button></Alert> : null}
     </CardContent> : null}</Card>
     {catalog ? <McpSetup endpoint={catalog.server_url} /> : null}
-    <div className={styles.library}>
+    <div className={mcpLayout.library}>
       <McpTools tools={connection?.tools ?? null} checking={status === "checking"} />
-      <section className={styles.stack} aria-labelledby="mcp-apps-heading">
-        <div className={styles.row}><h2 ref={appsHeading} tabIndex={-1} id="mcp-apps-heading">{t("authorizedApps")}</h2>{catalog && !catalogError ? <Badge variant="secondary">{formatNumber(catalog.apps.length)}</Badge> : null}</div>
+      <section className={mcpLayout.stack} aria-labelledby="mcp-apps-heading">
+        <div className={mcpLayout.row}><h2 ref={appsHeading} tabIndex={-1} id="mcp-apps-heading">{t("authorizedApps")}</h2>{catalog && !catalogError ? <Badge variant="secondary">{formatNumber(catalog.apps.length)}</Badge> : null}</div>
         <p>{t("appDescription")}</p><div role="status">{notice ? t("revoked", notice) : null}</div>
         {!catalog || catalogError ? <p>{catalogError ? t("appUnverified") : t("loadingApps")}</p> : catalog.apps.length === 0 ? <Empty><ShieldCheck aria-hidden="true" /><EmptyHeader><EmptyTitle>{t("noApps")}</EmptyTitle><EmptyDescription>{t("noAppsDescription")}</EmptyDescription></EmptyHeader></Empty> : catalog.apps.map(app => <article aria-label={app.name || app.client_id} key={app.id}>
-          <Card><CardHeader><CardTitle>{app.name || app.client_id}</CardTitle><Badge variant="secondary">{t("authorized")}</Badge></CardHeader><CardContent className={styles.stack}>
+          <Card><CardHeader><CardTitle>{app.name || app.client_id}</CardTitle><Badge variant="secondary">{t("authorized")}</Badge></CardHeader><CardContent className={mcpLayout.stack}>
             <ul>{app.scopes.map(scope => <li key={scope}>{scopeLabel(scope)}</li>)}</ul>
             <p>{t("authorizedAt", { time: formatTimestamp(app.authorized_at, { dateStyle: "medium", timeStyle: "short" }) })}</p>
             <Button variant="destructive" onClick={event => { revokeTrigger.current = event.currentTarget; setRevokeError(false); setSelected(app); }}>{t("revoke")}<span className="sr-only">{t("revokeFor", { name: app.name || app.client_id })}</span></Button>
           </CardContent></Card>
         </article>)}
-        <p className={styles.row}><Info aria-hidden="true" />{t("appNote")}</p>
+        <p className={mcpLayout.row}><Info aria-hidden="true" />{t("appNote")}</p>
       </section>
     </div>
     <AlertDialog open={selected !== null} onOpenChange={open => { if (!open && !revoking) setSelected(null); }}>

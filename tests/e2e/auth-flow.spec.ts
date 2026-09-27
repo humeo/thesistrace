@@ -190,7 +190,7 @@ test.describe("tablet touch presentation", () => {
     await expect(page).toHaveURL(/\/data$/, { timeout: 15_000 });
     await expect(page.getByRole("heading", { name: "Data", exact: true })).toBeVisible();
     await openAccountMenu(page);
-    const accountMenu = page.getByLabel("Account menu");
+    const accountMenu = page.getByRole("button", { name: "Account menu" });
     const logOut = page.getByRole("button", { name: "Log out" });
     await expectTouchTargets(accountMenu, logOut);
     await expect(page.getByRole("button", {name:"Change password"})).toHaveCount(0);

@@ -9,7 +9,6 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { CalendarDateField } from "../components/layout/CalendarDateField";
 import { isIsoCalendarDate } from "../components/layout/calendarDate";
-import "./factor-evidence.css";
 
 type Groups = Record<"q1" | "q2" | "q3" | "q4" | "q5", number | null>;
 type Coverage = {
@@ -44,7 +43,7 @@ const percent = (value: number | null) => formatPercent(value, { missing: "dash"
 function Exclusions({ values }: { values: Record<string, number> }) {
   useTranslation("analysis");
   return <>{Object.entries(values).map(([reason, count]) =>
-    <span className="factor-exclusion" key={reason}>{reasonLabel(reason)}: {formatNumber(count)}</span>)}</>;
+    <span className="mt-1 block text-muted-foreground" key={reason}>{reasonLabel(reason)}: {formatNumber(count)}</span>)}</>;
 }
 function SampleCoverage({ value }: { value: Coverage }) {
   const { t } = useTranslation("analysis");
@@ -60,9 +59,9 @@ export function FactorEvidence({ runId, embedded = false }: { runId: string; emb
   const invalidStart = filters.view === "daily" && filters.start !== "" && !isIsoCalendarDate(filters.start);
   const invalidEnd = filters.view === "daily" && filters.end !== "" && !isIsoCalendarDate(filters.end);
   const invalidRange = filters.view === "daily" && !invalidStart && !invalidEnd && filters.start !== "" && filters.end !== "" && filters.start > filters.end;
-  const content = <div className="factor-evidence-content">
+  const content = <div className="[&>p]:max-w-[90ch] [&>p]:text-[13px] [&>p]:leading-[1.6] [&>p]:text-muted-foreground">
       <p>{t("factor.explanation")}</p>
-      <FieldGroup className="factor-evidence-controls">
+      <FieldGroup className="my-5 grid grid-cols-[repeat(auto-fit,minmax(min(100%,180px),1fr))] gap-4">
         <Field><FieldLabel htmlFor={`${id}-horizon`}>{t("factor.horizon")}</FieldLabel>
           <Select value={filters.horizon} onValueChange={value => setFilters({ ...filters, horizon: value ?? "5" })}>
             <SelectTrigger id={`${id}-horizon`} aria-label={t("factor.horizon")}><SelectValue>{t("factor.sessions", { count: Number(filters.horizon) })}</SelectValue></SelectTrigger>
@@ -90,8 +89,8 @@ export function FactorEvidence({ runId, embedded = false }: { runId: string; emb
       {filters.view !== "daily" && <p>{t("factor.grouping")}</p>}
       <EvidencePage key={`${runId}:${JSON.stringify(filters)}`} runId={runId} filters={filters} />
     </div>;
-  return embedded ? <section aria-label={t("factor.title")} className="factor-evidence">{content}</section>
-    : <Collapsible open={open} onOpenChange={setOpen} className="factor-evidence">
+  return embedded ? <section aria-label={t("factor.title")} className="min-w-0 data-[slot=collapsible]:border-t data-[slot=collapsible]:border-border">{content}</section>
+    : <Collapsible open={open} onOpenChange={setOpen} className="min-w-0 data-[slot=collapsible]:border-t data-[slot=collapsible]:border-border">
       <CollapsibleTrigger render={<Button variant="ghost" className="min-h-11" />}>{t("factor.title")}</CollapsibleTrigger>
       <CollapsibleContent>{open ? content : null}</CollapsibleContent>
     </Collapsible>;
@@ -132,7 +131,7 @@ function EvidencePage({ runId, filters }: { runId: string; filters: Filters }) {
     {error ? <div role="alert"><p>{t(error === "cursor" ? "factor.cursorError" : "factor.loadError")}</p><Button variant="outline" onClick={() => { setCursors([null]); setRetry(value => value + 1); }}>{t("reloadFirst")}</Button></div>
       : page === null ? <p role="status">{t("factor.loading")}</p>
       : page.items.length === 0 ? <p>{t("factor.empty")}</p>
-      : <div className="factor-evidence-table"><Table scrollLabel={page.section === "factor_observations" ? t("factor.dailyCaption") : t("factor.periodCaption")}>
+      : <div className="max-w-full [&_[data-slot=table]]:tabular-nums [&_[data-slot=table-head]]:p-3 [&_[data-slot=table-cell]]:p-3 [&_[data-slot=table-head]]:text-right [&_[data-slot=table-cell]]:text-right [&_[data-slot=table-head]:first-child]:text-left [&_[data-slot=table-cell]:first-child]:text-left [&_[data-slot=table-head]:last-child]:text-left [&_[data-slot=table-cell]:last-child]:min-w-[220px] [&_[data-slot=table-cell]:last-child]:max-w-[320px] [&_[data-slot=table-cell]:last-child]:whitespace-normal [&_[data-slot=table-cell]:last-child]:text-left [&_small]:mt-1 [&_small]:block [&_small]:text-muted-foreground [&_[data-slot=collapsible-content]_p]:my-2"><Table scrollLabel={page.section === "factor_observations" ? t("factor.dailyCaption") : t("factor.periodCaption")}>
         <TableCaption>{page.section === "factor_observations" ? t("factor.dailyCaption") : t("factor.periodCaption")}</TableCaption>
         <TableHeader><TableRow><TableHead>{page.section === "factor_observations" ? t("factor.signalDate") : t("factor.period")}</TableHead><TableHead>IC</TableHead><TableHead>Rank IC</TableHead>
           {page.section === "factor_periods" && <><TableHead>ICIR</TableHead><TableHead>Rank ICIR</TableHead></>}
@@ -156,7 +155,7 @@ function EvidencePage({ runId, filters }: { runId: string; filters: Filters }) {
             <SampleCoverage value={row.coverage} />
           </CollapsibleContent></Collapsible></TableCell></TableRow>)}</TableBody>
       </Table></div>}
-    <nav aria-label={t("factor.pages")}><Button variant="outline" disabled={cursors.length === 1 || page === null || error !== null}
+    <nav aria-label={t("factor.pages")} className="flex flex-wrap items-center justify-end gap-3 py-4 text-xs text-muted-foreground"><Button variant="outline" disabled={cursors.length === 1 || page === null || error !== null}
       onClick={() => setCursors(values => values.slice(0, -1))}>{t("previous")}</Button>
       <span>{t("page", { page: formatNumber(cursors.length) })}</span><Button variant="outline" disabled={!page?.next_cursor || error !== null}
         onClick={() => { if (page?.next_cursor) setCursors(values => [...values, page.next_cursor]); }}>{t("next")}</Button></nav>

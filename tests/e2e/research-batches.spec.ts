@@ -60,14 +60,14 @@ test("Research Batches lists active work and cancels only the confirmed batch", 
     await page.goto(`/research-runs/${childId}`);
     await expect(page.getByRole("link", { name: "View batch", exact: true })).toHaveAttribute("href", `/research-runs/batches/${target.id}`);
     await expect(page.getByRole("button", { name: "Cancel", exact: true })).toHaveCount(0);
-    await page.getByRole("button", { name: "Cancel batch", exact: true }).click();
+    await page.getByRole("main").getByRole("button", { name: "Cancel batch", exact: true }).click();
     const confirmation = page.getByRole("alertdialog", { name: "Cancel batch?" });
     await expect(confirmation).toContainText("2 unfinished research runs will be cancelled");
     await expect(confirmation).toContainText("target-1");
     await expect(confirmation).toContainText("target-2");
     await confirmation.getByRole("button", { name: "Keep batch" }).click();
     expect((await get(target.id)).status).toBe("queued");
-    await page.getByRole("button", { name: "Cancel batch", exact: true }).click();
+    await page.getByRole("main").getByRole("button", { name: "Cancel batch", exact: true }).click();
     await confirmation.getByRole("button", { name: "Cancel batch", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/research-runs/batches/${target.id}$`));
     await expect(page.getByRole("status")).toHaveText("Batch cancelled. Completed results are retained.");

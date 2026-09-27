@@ -26,7 +26,7 @@ export function ResearchRunList({ list }: { list: ReturnType<typeof useResearchR
   const { t } = useTranslation("runs");
   const { items, folders, folderFilter, researchKindFilter, pageIndex, sort, metricFilters, totalCount, folderError, error, loadState, refresh, refreshFolders, changeSort, changeFolderFilter, changeResearchKindFilter, showPreviousPage, showNextPage, applyMetricFilters } = list;
   const selectedFolder = folders.find(folder => folder.id === folderFilter);
-  return <Page aria-label={t("title")} className="px-4 py-6 sm:px-6 lg:px-8">
+  return <Page aria-label={t("title")}>
     <PageContent className="flex flex-col gap-6">
       <PageHeader title={t("title")} />
       <ResearchRunsNavigation active="runs" />
@@ -151,14 +151,14 @@ export function ResearchMetricFilters({ researchKind, filters, onApply }: {
             <FieldLabel htmlFor={"metric-" + row.id}>{t("filters.metric")}</FieldLabel>
             <Select value={row.metric} onValueChange={value => { if (value) update(row.id, { metric: value as ResearchMetricFilter["metric"], value: "" }); }}>
               <SelectTrigger id={"metric-" + row.id} aria-label={t("filters.metricAt", { index: formatNumber(index + 1) })} className="w-full"><SelectValue>{t(columns.find(column => column.key === row.metric)!.label)}</SelectValue></SelectTrigger>
-              <SelectContent><SelectGroup>{columns.map(column => <SelectItem key={column.key} value={column.key}>{t(column.label)}</SelectItem>)}</SelectGroup></SelectContent>
+              <SelectContent alignItemWithTrigger={false}><SelectGroup>{columns.map(column => <SelectItem key={column.key} value={column.key}>{t(column.label)}</SelectItem>)}</SelectGroup></SelectContent>
             </Select>
           </Field>
           <Field>
             <FieldLabel htmlFor={"comparison-" + row.id}>{t("filters.comparison")}</FieldLabel>
             <Select value={row.operator} onValueChange={value => { if (value) update(row.id, { operator: value as ResearchMetricFilter["operator"] }); }}>
               <SelectTrigger id={"comparison-" + row.id} aria-label={t("filters.comparisonAt", { index: formatNumber(index + 1) })} className="w-full"><SelectValue>{{ gt: ">", gte: "≥", lt: "<", lte: "≤" }[row.operator]}</SelectValue></SelectTrigger>
-              <SelectContent><SelectGroup><SelectItem value="gt">&gt;</SelectItem><SelectItem value="gte">≥</SelectItem><SelectItem value="lt">&lt;</SelectItem><SelectItem value="lte">≤</SelectItem></SelectGroup></SelectContent>
+              <SelectContent alignItemWithTrigger={false}><SelectGroup><SelectItem value="gt">&gt;</SelectItem><SelectItem value="gte">≥</SelectItem><SelectItem value="lt">&lt;</SelectItem><SelectItem value="lte">≤</SelectItem></SelectGroup></SelectContent>
             </Select>
           </Field>
           <Field>

@@ -10,7 +10,7 @@ for (const width of [320, 390, 768, 1280, 1440]) {
     await page.route("http://mcp.test/**", route => {
       const path = new URL(route.request().url()).pathname;
       if (path === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
-      if (path.endsWith("/connections")) return route.fulfill({ json: { server_url: "https://quantgrove.example.test/mcp", apps: [{ id: "00000000-0000-4000-8000-000000000001", client_id: "client-1", name: "Research assistant", scopes: ["research:read"], authorized_at: "2026-09-26T00:00:00Z" }] } });
+      if (path.endsWith("/connections")) return route.fulfill({ json: { server_url: `https://quantgrove.example.test/${"research".repeat(32)}/mcp`, apps: [{ id: "00000000-0000-4000-8000-000000000001", client_id: "client-1", name: "Research assistant", scopes: ["research:read"], authorized_at: "2026-09-26T00:00:00Z" }] } });
       if (path.endsWith("/connection")) return route.fulfill({ json: { checked_at: "2026-09-26T00:00:00Z", tools: [{ name: "get_research_context", description: "Live tool" }] } });
       if (!path.endsWith("/revoke")) return route.fulfill({ status: 404 });
       revokeCalls += 1;
@@ -24,6 +24,8 @@ for (const width of [320, 390, 768, 1280, 1440]) {
     await page.getByRole("button", { name: "Copy setup prompt" }).click();
     await expect(page.locator('[data-slot="toast-title"]')).toContainText("Copy failed");
     await page.locator('[data-slot="toast-close"]').click();
+    await page.getByRole("button", { name: "View setup prompt" }).click();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     const group = page.getByRole("button", { name: "Research preparation 1 tool" });
     await group.click();
     const tool = page.getByRole("button", { name: /Check research readiness/ });

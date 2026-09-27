@@ -6,7 +6,7 @@ import { scopeLabel } from "./setup";
 import { AuthSurface } from "../auth/AuthPages";
 import { Button } from "../components/ui/button";
 import { Alert } from "../components/ui/alert";
-import styles from "./McpLayout.module.css";
+import { mcpLayout } from "./mcpLayout";
 export function McpAuthorizePage({ search }: { search: string }) {
   const { t } = useTranslation("mcp");
   const { state } = useAuth();
@@ -38,10 +38,10 @@ export function McpAuthorizePage({ search }: { search: string }) {
       window.location.assign(data.url);
     } catch { setError("authorizationFailed"); setBusy(false); }
   }
-  return <AuthSurface as="section" eyebrow="MCP" title={request ? t("allowTitle", { name: request.name }) : t("authorizeAssistant")}><div className={styles.stack}>
+  return <AuthSurface as="section" eyebrow="MCP" title={request ? t("allowTitle", { name: request.name }) : t("authorizeAssistant")}><div className={mcpLayout.stack}>
     <p>{t("signedInAs")} <strong>{state.session?.email}</strong></p>
     {request ? <><h2>{t("canDo")}</h2><ul>{request.scopes.map(scope => <li key={scope}>{scopeLabel(scope)}</li>)}</ul><p>{t("revokeAnytime")}</p></> : !error ? <p role="status">{t("checkingRequest")}</p> : null}
     {error ? <Alert variant="destructive">{t(error)}</Alert> : null}
-    {request ? <footer className={styles.row}><Button variant="outline" disabled={busy} onClick={() => void consent(false)}>{t("cancel")}</Button><Button disabled={busy} onClick={() => void consent(true)}>{busy ? t("continuing") : t("allowAccess")}</Button></footer> : null}
+    {request ? <footer className={mcpLayout.row}><Button variant="outline" disabled={busy} onClick={() => void consent(false)}>{t("cancel")}</Button><Button disabled={busy} onClick={() => void consent(true)}>{busy ? t("continuing") : t("allowAccess")}</Button></footer> : null}
   </div></AuthSurface>;
 }

@@ -1,5 +1,5 @@
 import { cn } from "cn";
-import styles from "./ChatLayout.module.css";
+import { chatLayout } from "./chatLayout";
 import { Button } from "../components/ui/button";
 import { Textarea } from "../components/ui/textarea";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "../components/ui/collapsible";
@@ -64,7 +64,7 @@ export function ChatComposer({
   }
 
   return (
-    <form className={cn("chat-composer-dock", styles.dock)} onSubmit={submit}>
+    <form className={cn("chat-composer-dock", chatLayout.dock)} onSubmit={submit}>
       {controller.queue.length === 0 ? null : (
         <StagedQueue
           controller={controller}
@@ -86,8 +86,8 @@ export function ChatComposer({
       {question !== null ? (
         <QuestionComposer controller={controller} question={question} locked={interactionLocked}
           tooLarge={tooLarge} onKeyDown={keyDown} />
-      ) : <div className={cn("chat-composer-surface", styles.surface, interactionLocked && "opacity-60")}>
-        <Textarea className={styles.input}
+      ) : <div className={cn("chat-composer-surface", chatLayout.surface, interactionLocked && "opacity-60")}>
+        <Textarea className={chatLayout.input}
           aria-describedby={tooLarge ? "chat-composer-guidance chat-composer-validation" : "chat-composer-guidance"}
           aria-invalid={tooLarge || undefined}
           aria-label={t("message")}

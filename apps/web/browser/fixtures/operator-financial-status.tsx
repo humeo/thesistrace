@@ -1,9 +1,10 @@
+import "../../src/styles.css";
 import { createRoot } from "react-dom/client";
 import { OperatorDatasetStatus } from "../../src/operator/OperatorDatasetStatus";
 import { changeInterfaceLanguage } from "../../src/i18n";
 
 createRoot(document.getElementById("root")!).render(
-  <main className="operator-page">
+  <main className="mx-auto grid max-w-[1440px] gap-8 p-4">
     <nav aria-label="Fixture language">
       <button onClick={() => changeInterfaceLanguage("en")}>English</button>
       <button onClick={() => changeInterfaceLanguage("zh-CN")}>简体中文</button>

@@ -1,5 +1,5 @@
 import "../../src/styles.css";
-import styles from "../../src/chat/ChatLayout.module.css";
+import { chatLayout } from "../../src/chat/chatLayout";
 import { ModelPicker } from "../../src/chat/ModelPicker";
 import { resolveModelSelection } from "../../src/chat/chatState";
 import type { AgentModelCatalog } from "../../src/chat/modelCatalog";
@@ -77,8 +77,8 @@ function ComposerFixture() {
   return (
     <>
     <div style={{ position: "absolute", right: 0, top: 0, zIndex: 10 }}><LanguageControls /></div>
-    <main className={styles.main}>
-      <div className={styles.timelineShell}>
+    <main className={chatLayout.main}>
+      <div className={chatLayout.timelineShell}>
         <label>Test question mode <select aria-label="Test question mode" value={mode}
           onChange={(event) => { setMode(event.target.value); setDraft(""); setSelections([]); }}>
           {["normal", "single_select", "multi_select", "free_text", "long"].map((value) => <option key={value}>{value}</option>)}

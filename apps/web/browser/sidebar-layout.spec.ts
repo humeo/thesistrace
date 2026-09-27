@@ -9,6 +9,17 @@ test.beforeAll(async () => {
    [{ name: 'fixture-account', enforce: 'pre', resolveId(source) { if (source === '../auth/AccountMenu') return fileURLToPath(new URL('./fixtures/sidebar-account.tsx', import.meta.url)); } }]));
 });
 test.beforeEach(async ({page}) => { page.on('pageerror', error => { throw error; }); await page.setViewportSize({width:1200,height:850}); await page.emulateMedia({reducedMotion:'reduce'}); await page.route("http://shell.fixture/**", route => route.fulfill({contentType:"text/html",body:`${fontStylesheet}<style>${styles}</style><div id="root"></div>`})); await serveBrandAssets(page); await page.goto("http://shell.fixture/"); await page.addScriptTag({content:script}); await page.evaluate(() => document.fonts.ready); });
+for (const [width, inset] of [[320, 16], [390, 16], [768, 16], [1280, 32], [1440, 32]] as const) {
+ test(`Page content uses one workspace inset at ${width}px`, async ({page}) => {
+  await page.setViewportSize({width,height:850});
+  const main=await page.locator('.main-content').boundingBox();
+  const content=await page.getByTestId('workspace-content').boundingBox();
+  expect(main).not.toBeNull(); expect(content).not.toBeNull();
+  expect(content!.x-main!.x).toBeCloseTo(inset,0);
+  expect(main!.width-(content!.x-main!.x)-content!.width).toBeCloseTo(inset,0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+ });
+}
 test('account popup aligns with its trigger and keeps Discord in keyboard order', async ({page}, testInfo) => {
  const account=page.getByRole('button',{name:'Account menu'}); await account.click();
  await expect(account.locator('.account-avatar')).toBeVisible();

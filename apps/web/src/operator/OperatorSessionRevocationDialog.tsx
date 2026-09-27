@@ -8,7 +8,7 @@ import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, A
 import { Button } from "../components/ui/button";
 import { Alert, AlertDescription } from "../components/ui/alert";
 import { FieldGroup } from "../components/ui/field";
-import styles from "./OperatorAccess.module.css";
+import { operatorAccessLayout } from "./operatorAccessLayout";
 import {
   confirmSessionRevocationProof,
   OperatorMutationError,
@@ -80,7 +80,7 @@ export function OperatorSessionRevocationDialog({
     <AlertDialog open onOpenChange={open => { if (!open && !submitting) onDismiss(); }}>
       <AlertDialogContent finalFocus={false} initialFocus={initialInput}  className="max-h-[calc(100dvh-32px)] overflow-y-auto sm:max-w-lg">
       <form
-        className={styles.form}
+        className={operatorAccessLayout.form}
         onSubmit={(event) => {
           event.preventDefault();
           void submit();
@@ -88,13 +88,13 @@ export function OperatorSessionRevocationDialog({
       >
         <FieldGroup>
         <AlertDialogHeader>
-          <p className={styles.eyebrow}>{t("researchers.session.eyebrow")}</p>
+          <p className={operatorAccessLayout.eyebrow}>{t("researchers.session.eyebrow")}</p>
           <AlertDialogTitle id="operator-session-revocation-title">{t("researchers.session.title")}</AlertDialogTitle>
         </AlertDialogHeader>
         <AlertDialogDescription id="operator-session-revocation-description">
           {t("researchers.session.description")}
         </AlertDialogDescription>
-        <dl className={styles.target}>
+        <dl className={operatorAccessLayout.target}>
           <div>
             <dt>{t("researchers.session.researcher")}</dt>
             <dd><strong>{target.displayLabel}</strong><span>{target.email}</span></dd>

@@ -145,6 +145,7 @@ export function SessionHistoryList({
                     )}
                   </a>
                   <DropdownMenu
+                    modal={false}
                     open={openMenu === session.id && navigationInteractive}
                     onOpenChange={(next) => setOpenMenu(next ? session.id : null)}
                   >

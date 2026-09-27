@@ -8,6 +8,7 @@ export const suites = {
   'auth-unit': ['apps/auth/src/**/*.test.ts'],
   'auth-integration': ['apps/auth/src/**/*.integration.test.ts'],
   'web-unit': ['apps/web/src/**/*.test.{ts,tsx}'],
+  'web-ui-ownership': ['apps/web/scripts/ui-ownership.test.mjs'],
   'web-e2e': ['tests/e2e/**/*.spec.ts'],
   'web-browser': ['apps/web/browser/**/*.spec.ts'],
   'test-tooling': ['tooling/**/*.test.mjs', 'tooling/test/tests/test_*.py'],

@@ -372,9 +372,9 @@ function ResearchNumberStepper({
 
   return <Field data-invalid={Boolean(error)}>
     <FieldLabel htmlFor={id}>{label}</FieldLabel>
-    <InputGroup>
-      <InputGroupAddon>
-        <InputGroupButton variant="ghost" size="icon-sm" aria-controls={id} aria-label={t("decrease", { label: actionLabel })}
+    <InputGroup className="h-11">
+      <InputGroupAddon className="py-0">
+        <InputGroupButton variant="ghost" size="icon-sm" className="size-11" aria-controls={id} aria-label={t("decrease", { label: actionLabel })}
           disabled={!canDecrease} onClick={() => onChange(nextBoundedInteger(value, minimum, maximum, -1))}>
           <Minus aria-hidden="true" />
         </InputGroupButton>
@@ -382,8 +382,8 @@ function ResearchNumberStepper({
       <InputGroupInput id={id} aria-invalid={Boolean(error)} aria-describedby={error ? `${id}-error` : undefined}
         inputMode="numeric" type="number" min={minimum} max={maximum} required step={1} value={value}
         onChange={event => onChange(event.target.value)} />
-      <InputGroupAddon align="inline-end">
-        <InputGroupButton variant="ghost" size="icon-sm" aria-controls={id} aria-label={t("increase", { label: actionLabel })}
+      <InputGroupAddon align="inline-end" className="py-0">
+        <InputGroupButton variant="ghost" size="icon-sm" className="size-11" aria-controls={id} aria-label={t("increase", { label: actionLabel })}
           disabled={!canIncrease} onClick={() => onChange(nextBoundedInteger(value, minimum, maximum, 1))}>
           <Plus aria-hidden="true" />
         </InputGroupButton>
@@ -672,7 +672,7 @@ export function ResearchDraftWorkspace({
             <FieldGroup className="rounded-lg border border-border bg-card p-4">
               <Field>
                 <FieldLabel htmlFor="research-notes">{t("notes")}</FieldLabel>
-                <Textarea id="research-notes" rows={3} aria-describedby="research-notes-limit"
+                <Textarea id="research-notes" rows={3} className="min-h-22" aria-describedby="research-notes-limit"
                   aria-invalid={Array.from(draft.hypothesis).length > MAX_HYPOTHESIS_LENGTH}
                   placeholder={t("notesPlaceholder")} value={draft.hypothesis}
                   onChange={(event) => updateDraft((current) => ({ ...current, hypothesis: event.target.value }))} />

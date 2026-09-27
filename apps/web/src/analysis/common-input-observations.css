@@ -1,9 +1,0 @@
-.common-input-observations { min-width: 0; }
-.common-input-observations[data-slot="collapsible"] { border-top: 1px solid var(--border); }
-.common-input-content > p { max-width: 90ch; color: var(--muted-foreground); font-size: 13px; line-height: 1.6; }
-.common-input-table { max-width: 100%; }
-.common-input-table [data-slot="table-head"], .common-input-table [data-slot="table-cell"] { padding: 10px 12px; vertical-align: top; }
-.common-input-table [data-slot="table-cell"]:first-child, .common-input-table [data-slot="table-cell"]:nth-child(4),
-.common-input-table [data-slot="table-cell"]:nth-child(5) { font-variant-numeric: tabular-nums; }
-.common-input-table [data-slot="table-cell"]:last-child { min-width: 180px; white-space: normal; }
-.common-input-content nav { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 12px; padding: 16px 0; color: var(--muted-foreground); font-size: 12px; }

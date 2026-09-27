@@ -110,7 +110,7 @@ export function ResearchBatchesPage({ batchId }: { batchId?: string }) {
     if (!batchId) navigateCorePath(batchPath(detail.id));
   }
 
-  return <Page aria-label={t("title")} className="px-4 py-6 sm:px-6 lg:px-8">
+  return <Page aria-label={t("title")}>
     <PageContent className="flex flex-col gap-6">
       <PageHeader title={batchId ? t("batch") : i18n.t("runs:title")} actions={batchId
         ? <Button variant="outline" nativeButton={false} role="link" render={<a href="/research-runs/batches" onClick={followCoreLink} />}>{t("back")}</Button> : undefined} />

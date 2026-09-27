@@ -92,6 +92,7 @@ def test_web_shell_declares_only_the_four_product_resources() -> None:
         assert inactive not in main
     assert set(package["scripts"]) == {
         "build",
+        "check:ui-ownership",
         "dev",
         "test:browser",
         "test:shell",

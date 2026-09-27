@@ -1,3 +1,4 @@
+import "../../src/styles.css";
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { AlphaFormulaEditor } from "../../src/research/AlphaFormulaEditor";

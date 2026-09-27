@@ -8,7 +8,7 @@ import { Button } from "../components/ui/button";
 import { Alert, AlertDescription } from "../components/ui/alert";
 import { Field, FieldLabel, FieldGroup } from "../components/ui/field";
 import { Input } from "../components/ui/input";
-import styles from "./OperatorAccess.module.css";
+import { operatorAccessLayout } from "./operatorAccessLayout";
 import {
   confirmOperatorProof,
   type InvitationMutationOperation,
@@ -81,7 +81,7 @@ export function OperatorInvitationDialog({
     <Dialog open onOpenChange={open => { if (!open && !submitting) onDismiss(); }}>
       <DialogContent finalFocus={false} initialFocus={initialInput} showCloseButton={false} className="max-h-[calc(100dvh-32px)] overflow-y-auto sm:max-w-lg">
       <form
-        className={styles.form}
+        className={operatorAccessLayout.form}
         onSubmit={(event) => {
           event.preventDefault();
           void submit();
@@ -89,7 +89,7 @@ export function OperatorInvitationDialog({
       >
         <FieldGroup>
         <DialogHeader>
-          <p className={styles.eyebrow}>{t("researchers.common.emailConfirmation")}</p>
+          <p className={operatorAccessLayout.eyebrow}>{t("researchers.common.emailConfirmation")}</p>
           <DialogTitle id="operator-invitation-title">
             {reissue ? t("researchers.invitation.reissueTitle") : t("researchers.invitation.issueTitle")}
           </DialogTitle>
@@ -102,7 +102,7 @@ export function OperatorInvitationDialog({
         <Field>
           <FieldLabel htmlFor={reissue ? undefined : "operator-invitation-email"}>{t("researchers.common.targetEmail")}</FieldLabel>
           {reissue ? (
-            <strong className={styles.emailTarget}>{canonicalTarget}</strong>
+            <strong className={operatorAccessLayout.emailTarget}>{canonicalTarget}</strong>
           ) : (
             <Input
               id="operator-invitation-email"

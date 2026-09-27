@@ -204,7 +204,9 @@ for (const mobile of [false, true]) {
     const sessionId = new URL(sessionUrl).searchParams.get("session")!;
     const sidebar = page.locator("#primary-navigation");
     const sessionLink = sidebar.locator(`a[href="/chat?session=${sessionId}"]`);
+    if (mobile) await page.getByRole("button", { name: "Open navigation" }).click();
     await expect(sessionLink).toHaveCount(1);
+    if (mobile) await sidebar.getByRole("button", { name: "Close navigation" }).click();
     const documentRequests: string[] = [];
     page.on("request", (request) => {
       if (request.resourceType() === "document") documentRequests.push(request.url());
@@ -419,13 +421,14 @@ test("first Chat turn streams through Caddy and reload replays without another r
     "The Chat could not be deleted.",
   );
   await page.unroute("**/api/agent/sessions/*", failedDelete);
-  await failedDeleteDialog.getByRole("button", { name: "Close dialog" }).click();
+  await failedDeleteDialog.getByRole("button", { name: "Cancel" }).click();
   await expect(failedDeleteDialog).toHaveCount(0);
   const recoveredTitle = "Recovered Chat title";
   const transitioningActions = page.getByRole("button", { name: "Actions for Untitled" });
   await transitioningActions.click();
   const transitioningDelete = page.getByRole("menuitem", { name: "Delete Chat" });
-  await page.keyboard.press("Tab");
+  await expect(page.getByRole("menuitem", { name: "Rename Chat" })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
   await expect(transitioningDelete).toBeFocused();
   setAgentSessionActiveRun(durableSession, true);
   try {

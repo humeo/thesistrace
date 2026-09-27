@@ -28,7 +28,7 @@ import { Alert, AlertDescription } from "../components/ui/alert";
 import { PageHeader } from "../components/layout/Page";
 import { PageNavigation } from "../components/layout/PageNavigation";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell, TableCaption } from "../components/ui/table";
-import styles from "./OperatorAccess.module.css";
+import { operatorAccessLayout } from "./operatorAccessLayout";
 
 type InvitationAction = Readonly<{
   email: string;
@@ -308,7 +308,7 @@ export function OperatorResearchersView({
     <section
       aria-busy={busy}
       aria-label={t("researchers.directory.pageLabel")}
-      className={styles.page}
+      className={operatorAccessLayout.page}
       id={operatorPageFallbackId}
       tabIndex={-1}
     >
@@ -325,14 +325,14 @@ export function OperatorResearchersView({
       <section
         aria-busy={busy}
         aria-labelledby="operator-researchers-title"
-        className={styles.section}
+        className={operatorAccessLayout.section}
       >
-        <header className={styles.header}>
+        <header className={operatorAccessLayout.header}>
           <div>
             <h2 id="operator-researchers-title">{t("researchers.directory.researchers")}</h2>
           </div>
           <form
-            className={styles.search}
+            className={operatorAccessLayout.search}
             onSubmit={(event) => {
               event.preventDefault();
               onSearch(draft);
@@ -381,9 +381,9 @@ export function OperatorResearchersView({
       <section
         aria-busy={busy}
         aria-labelledby="operator-invitations-title"
-        className={styles.section}
+        className={operatorAccessLayout.section}
       >
-        <header className={styles.header}>
+        <header className={operatorAccessLayout.header}>
           <div>
             <h2 id="operator-invitations-title">{t("researchers.directory.invitations")}</h2>
           </div>
@@ -502,7 +502,7 @@ function ResearcherTable({
           {items.map((researcher) => (
             <TableRow key={researcher.researcher_id}>
               <TableHead data-label={t("researchers.directory.researcher")} scope="row">
-                <div className={styles.identity}><strong>{researcher.display_label}</strong><small>{researcher.email}</small></div>
+                <div className={operatorAccessLayout.identity}><strong>{researcher.display_label}</strong><small>{researcher.email}</small></div>
               </TableHead>
               <TableCell data-label={t("researchers.directory.researcherId")}><code>{researcher.researcher_id}</code></TableCell>
               <TableCell data-label={t("researchers.directory.access")}>
@@ -523,7 +523,7 @@ function ResearcherTable({
                 {researcher.effective_invitation === null ? (
                   <span className="text-muted-foreground">{t("researchers.directory.none")}</span>
                 ) : (
-                  <span className={styles.identity}>
+                  <span className={operatorAccessLayout.identity}>
                     <strong>{statusLabel(researcher.effective_invitation.status)}</strong>
                     <small>{t("researchers.directory.expiresAt", { time: formatTimestamp(researcher.effective_invitation.expires_at) })}</small>
                   </span>
@@ -596,7 +596,7 @@ function InvitationTable({ disabled, items, onReissue, state }: Readonly<{
           {items.map((invitation) => (
             <TableRow key={invitation.invitation_id}>
               <TableHead data-label={t("researchers.directory.email")} scope="row">
-                <div className={styles.identity}><strong>{invitation.email}</strong><small><code>{invitation.invitation_id}</code></small></div>
+                <div className={operatorAccessLayout.identity}><strong>{invitation.email}</strong><small><code>{invitation.invitation_id}</code></small></div>
               </TableHead>
               <TableCell data-label={t("researchers.directory.state")}>
                 <Badge variant={invitation.effective ? "default" : "secondary"}>

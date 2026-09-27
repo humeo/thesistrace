@@ -39,7 +39,7 @@ export function DailyTrackWorkspace({ track, actions, notices }: {
   const [view, setView] = useState<View>("performance");
   const [period, setPeriod] = useState<"tracking" | "full">("tracking");
   return (
-    <Page className="px-4 py-6 sm:px-6 lg:px-8" aria-label={t("title")}><PageContent className="flex flex-col gap-6">
+    <Page aria-label={t("title")}><PageContent className="flex flex-col gap-6">
       <Button variant="link" nativeButton={false} role="link" render={<a href="/daily-tracks" />} className="self-start"><ArrowLeftIcon aria-hidden="true" />{t("allTracks")}</Button>
       <PageHeader title={<span className="flex flex-wrap items-center gap-3">{t("trackHeading")}<Badge variant={track.status === "blocked" ? "destructive" : "secondary"}>{trackStatusLabel(track)}</Badge></span>}
         description={<>{t("strategyObservation")} <code className="[overflow-wrap:anywhere]">{track.id}</code></>} actions={actions} />

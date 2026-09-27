@@ -293,7 +293,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
 
   const submitting = advanceState === "submitting" || retryState === "submitting" || stopState === "submitting" || deleting;
   if (error && track === null && items === null) {
-    return <Page className="px-4 py-6 sm:px-6 lg:px-8" aria-label={t("title")}><PageContent><PageHeader title={t("title")} />
+    return <Page aria-label={t("title")}><PageContent><PageHeader title={t("title")} />
       <Alert variant="destructive"><AlertDescription>{t("unavailable")}<Button variant="outline" onClick={reloadStatus}>{t("retry")}</Button></AlertDescription></Alert>
     </PageContent></Page>;
   }
@@ -329,7 +329,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
         onCancel={() => setConfirmDelete(false)} onConfirm={() => void deleteTrack()} finalFocus={() => stopState === "accepted" || manageTrigger.current?.disabled ? reloadTrigger.current : manageTrigger.current} />
     </>;
   }
-  return <Page aria-label={t("title")} className="px-4 py-6 sm:px-6 lg:px-8"><PageContent className="flex flex-col gap-6">
+  return <Page aria-label={t("title")}><PageContent className="flex flex-col gap-6">
     <PageHeader title={t("title")} description={t("description")} actions={<Button variant="outline" disabled={loadState !== null} onClick={reloadStatus}>{t("reloadStatus")}</Button>} />
     {error ? <Alert variant="destructive"><AlertDescription>{t("listReloadFailed")}</AlertDescription></Alert> : null}
     {items?.length === 0 ? <Empty><EmptyHeader><EmptyTitle role="heading" aria-level={2}>{t("emptyTitle")}</EmptyTitle><EmptyDescription>{t("emptyDescription")}</EmptyDescription></EmptyHeader>
@@ -347,7 +347,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
 
 function TrackLoading({ detail }: { detail: boolean }) {
   const { t } = useTranslation("daily");
-  return <Page className="px-4 py-6 sm:px-6 lg:px-8" aria-label={t("title")} aria-busy="true"><PageContent><p role="status">{t(detail ? "loading" : "loadingList")}</p></PageContent></Page>;
+  return <Page aria-label={t("title")} aria-busy="true"><PageContent><p role="status">{t(detail ? "loading" : "loadingList")}</p></PageContent></Page>;
 }
 
 function TrackActionDialog({ open, submitting, title, description, cancelLabel, confirmLabel, error, onCancel, onConfirm, finalFocus }: {

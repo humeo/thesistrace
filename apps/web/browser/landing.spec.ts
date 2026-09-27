@@ -17,6 +17,7 @@ for (const width of [1220, 390, 320]) {
       await route.fulfill({ contentType: 'application/json', body: 'null' });
     });
     await page.setViewportSize({ width, height: 964 });
+    await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.goto(origin);
     await expect(page.getByRole('heading', { name: 'Ideas grow through evidence.' })).toBeVisible();
     expect(authRequests).toEqual([]);

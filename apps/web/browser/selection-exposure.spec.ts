@@ -604,7 +604,7 @@ for (const width of [1280, 390, 320]) {
       const exampleHelp = page.getByRole("button", { name, exact: true });
       await exampleHelp.evaluate((element) => element.scrollIntoView({ block: "center" }));
       await exampleHelp.click();
-      const tooltip = page.getByRole("dialog");
+      const tooltip = page.getByRole("dialog", { name });
       await expect(tooltip).toContainText("50,000 CNY");
       const bounds = await tooltip.boundingBox();
       expect(bounds).not.toBeNull();

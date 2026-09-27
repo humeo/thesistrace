@@ -1,34 +1,8 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
-import { build } from "vite";
+import { buildProductFixture } from "./build-product-fixture";
 
-const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
-let script: string;
-
-test.beforeAll(async () => {
-  const result = await build({
-    configFile: false,
-    logLevel: "silent",
-    esbuild: { jsx: "automatic" },
-    define: { "process.env.NODE_ENV": JSON.stringify("production") },
-    build: {
-      write: false,
-      minify: false,
-      lib: {
-        entry: fileURLToPath(new URL("./fixtures/operator-financial-status.tsx", import.meta.url)),
-        formats: ["iife"],
-        name: "OperatorFinancialStatusFixture",
-      },
-    },
-  });
-  if ("on" in result) throw new Error("Expected a one-off component build");
-  const chunk = (Array.isArray(result) ? result : [result])
-    .flatMap((bundle) => bundle.output)
-    .find((output) => output.type === "chunk" && output.isEntry);
-  if (chunk?.type !== "chunk") throw new Error("Missing component bundle");
-  script = chunk.code;
-});
+let fixture: Awaited<ReturnType<typeof buildProductFixture>>;
+test.beforeAll(async () => { fixture = await buildProductFixture(new URL("./fixtures/operator-financial-status.tsx", import.meta.url), "OperatorFinancialStatusFixture"); });
 
 for (const width of [1280, 390, 320]) {
   test(`Financial pending indicators remain visible when statements are complete at ${width}px`, async ({ page }, testInfo) => {
@@ -66,8 +40,8 @@ for (const width of [1280, 390, 320]) {
       } });
     });
     await page.goto("http://operator.test/");
-    await page.addStyleTag({ content: styles });
-    await page.addScriptTag({ content: script });
+    await page.addStyleTag({ content: fixture.styles });
+    await page.addScriptTag({ content: fixture.script });
     const financial = page.getByRole("region", { name: "Financial data status", exact: true });
     const fact = (label: string) => financial.locator("dl > div").filter({ has: page.getByText(label, { exact: true }) });
     await expect(financial).toContainText("Financial ready with pending");
