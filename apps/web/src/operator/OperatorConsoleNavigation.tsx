@@ -1,5 +1,7 @@
 import { useTranslation } from "../i18n";
 
+import { Button } from "../components/ui/button";
+
 export function OperatorConsoleNavigation({
   current,
 }: Readonly<{
@@ -7,19 +9,13 @@ export function OperatorConsoleNavigation({
 }>) {
   const { t } = useTranslation("operator");
   return (
-    <nav aria-label={t("researchers.navigation.sections")} className="operator-subnav">
-      <a
-        aria-current={current === "researchers" ? "page" : undefined}
-        href="/operator/researchers"
-      >
+    <nav aria-label={t("researchers.navigation.sections")} className="flex flex-wrap gap-2">
+      <Button variant={current === "researchers" ? "secondary" : "ghost"} nativeButton={false} role="link" render={<a aria-current={current === "researchers" ? "page" : undefined} href="/operator/researchers" />} >
         {t("researchers.navigation.researchers")}
-      </a>
-      <a
-        aria-current={current === "data" ? "page" : undefined}
-        href="/operator/data"
-      >
+      </Button>
+      <Button variant={current === "data" ? "secondary" : "ghost"} nativeButton={false} role="link" render={<a aria-current={current === "data" ? "page" : undefined} href="/operator/data" />} >
         {t("researchers.navigation.data")}
-      </a>
+      </Button>
     </nav>
   );
 }

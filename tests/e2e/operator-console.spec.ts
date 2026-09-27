@@ -33,7 +33,7 @@ test("Operator confirms session revocation with an emailed code", {tag:"@isolate
   await page.goto("/operator/researchers");
   const row = page.getByRole("row").filter({hasText:ordinary.email});
   await row.getByRole("button",{name:`Revoke 1 Login Sessions for ${ordinary.email}`}).click();
-  const dialog = page.getByRole("dialog",{name:"Revoke Login Sessions?"});
+  const dialog = page.getByRole("alertdialog",{name:"Revoke Login Sessions?"});
   await expect(dialog.getByLabel("Verification code")).toBeFocused();
   await dialog.getByRole("button",{name:"Send confirmation code"}).click();
   await expect(dialog.getByRole("status")).toContainText("A code was sent");
@@ -485,7 +485,7 @@ test("Operator researchers and invitations", { tag: "@isolated" }, async ({ page
   });
   await revokeSessions.focus();
   await revokeSessions.press("Enter");
-  let revocationDialog = page.getByRole("dialog", {
+  let revocationDialog = page.getByRole("alertdialog", {
     name: "Revoke Login Sessions?",
   });
   await expect(revocationDialog).toBeVisible();
@@ -508,7 +508,7 @@ test("Operator researchers and invitations", { tag: "@isolated" }, async ({ page
   await expect(revokeSessions).toBeFocused();
 
   await revokeSessions.press("Enter");
-  revocationDialog = page.getByRole("dialog", {
+  revocationDialog = page.getByRole("alertdialog", {
     name: "Revoke Login Sessions?",
   });
   await expect(revocationDialog.getByLabel("Verification code")).toHaveValue("");
@@ -518,7 +518,7 @@ test("Operator researchers and invitations", { tag: "@isolated" }, async ({ page
   await expect(revokeSessions).toBeFocused();
 
   await revokeSessions.press("Enter");
-  revocationDialog = page.getByRole("dialog", {
+  revocationDialog = page.getByRole("alertdialog", {
     name: "Revoke Login Sessions?",
   });
   await expect(revocationDialog.getByLabel("Verification code")).toHaveValue("");

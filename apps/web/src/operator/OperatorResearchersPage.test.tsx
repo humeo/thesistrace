@@ -131,6 +131,6 @@ describe("Operator Researcher view", () => {
     expect(markup).toContain("Refreshing Operator Console…");
     expect(markup).toContain("Research Lead");
     expect(markup).toContain("researcher@example.com");
-    expect(markup.match(/disabled=""/g)).toHaveLength(7);
+    expect(markup.match(/<(?:button|input)\b[^>]*\sdisabled=""/g)).toHaveLength(7);
   });
 });

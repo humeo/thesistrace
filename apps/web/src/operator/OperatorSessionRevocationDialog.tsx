@@ -4,7 +4,11 @@ import { useTranslation } from "../i18n";
 import { formatNumber } from "../i18n/format";
 
 import { OperatorPageNotFoundError } from "./operatorDirectoryClient";
-import { containDialogKeyboardFocus } from "./operatorDialog";
+import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter } from "../components/ui/alert-dialog";
+import { Button } from "../components/ui/button";
+import { Alert, AlertDescription } from "../components/ui/alert";
+import { FieldGroup } from "../components/ui/field";
+import styles from "./OperatorAccess.module.css";
 import {
   confirmSessionRevocationProof,
   OperatorMutationError,
@@ -31,21 +35,15 @@ export function OperatorSessionRevocationDialog({
   target: SessionRevocationTarget;
 }>) {
   const { t } = useTranslation("operator");
-  const dialog = useRef<HTMLDialogElement | null>(null);
+  const initialInput = useRef<HTMLInputElement>(null);
   const request = useRef<AbortController | null>(null);
   const [otp, setOtp] = useState("");
   const [error, setError] = useState<ReturnType<typeof sessionRevocationMessage> | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  useEffect(() => {
-    const element = dialog.current;
-    if (element === null) return;
-    element.showModal();
-    return () => {
-      request.current?.abort();
-      request.current = null;
-      if (element.open) element.close();
-    };
+  useEffect(() => () => {
+    request.current?.abort();
+    request.current = null;
   }, []);
 
   async function submit(): Promise<void> {
@@ -79,33 +77,24 @@ export function OperatorSessionRevocationDialog({
   }
 
   return (
-    <dialog
-      aria-describedby="operator-session-revocation-description"
-      aria-labelledby="operator-session-revocation-title"
-      aria-modal="true"
-      className="operator-confirmation-dialog"
-      onCancel={(event) => {
-        event.preventDefault();
-        if (!submitting) onDismiss();
-      }}
-      onKeyDown={(event) => containDialogKeyboardFocus(event, dialog.current)}
-      ref={dialog}
-    >
+    <AlertDialog open onOpenChange={open => { if (!open && !submitting) onDismiss(); }}>
+      <AlertDialogContent finalFocus={false} initialFocus={initialInput}  className="max-h-[calc(100dvh-32px)] overflow-y-auto sm:max-w-lg">
       <form
-        className="operator-confirmation-content"
+        className={styles.form}
         onSubmit={(event) => {
           event.preventDefault();
           void submit();
         }}
       >
-        <header>
-          <p className="eyebrow operator-danger-eyebrow">{t("researchers.session.eyebrow")}</p>
-          <h2 id="operator-session-revocation-title">{t("researchers.session.title")}</h2>
-        </header>
-        <p id="operator-session-revocation-description">
+        <FieldGroup>
+        <AlertDialogHeader>
+          <p className={styles.eyebrow}>{t("researchers.session.eyebrow")}</p>
+          <AlertDialogTitle id="operator-session-revocation-title">{t("researchers.session.title")}</AlertDialogTitle>
+        </AlertDialogHeader>
+        <AlertDialogDescription id="operator-session-revocation-description">
           {t("researchers.session.description")}
-        </p>
-        <dl className="operator-confirmation-target">
+        </AlertDialogDescription>
+        <dl className={styles.target}>
           <div>
             <dt>{t("researchers.session.researcher")}</dt>
             <dd><strong>{target.displayLabel}</strong><span>{target.email}</span></dd>
@@ -119,28 +108,29 @@ export function OperatorSessionRevocationDialog({
             <dd><strong>{formatNumber(target.currentSessionCount)}</strong></dd>
           </div>
         </dl>
-        <div className="operator-confirmation-effect operator-confirmation-effect-danger">
+        <Alert variant="destructive" role="note">
           <span>{t("researchers.common.effect")}</span>
           <p>{t("researchers.session.effect")}</p>
-        </div>
-        <OperatorCodeField value={otp} onChange={setOtp} disabled={submitting} />
+        </Alert>
+        <OperatorCodeField inputRef={initialInput} autoFocus={false} value={otp} onChange={setOtp} disabled={submitting} />
         {error === null ? null : (
-          <p className="inline-status inline-status-error" role="alert">{t(error)}</p>
+          <Alert variant="destructive"><AlertDescription>{t(error)}</AlertDescription></Alert>
         )}
-        <footer className="operator-confirmation-actions">
-          <button
+        <AlertDialogFooter>
+          <Button variant="outline"
             disabled={submitting}
             onClick={() => onDismiss()}
             type="button"
           >
             {t("researchers.common.cancel")}
-          </button>
-          <button className="button-danger" disabled={submitting} type="submit">
+          </Button>
+          <Button variant="destructive" disabled={submitting} type="submit">
             {submitting ? t("researchers.session.revoking") : t("researchers.session.revoke")}
-          </button>
-        </footer>
+          </Button>
+        </AlertDialogFooter>
+        </FieldGroup>
       </form>
-    </dialog>
+    </AlertDialogContent></AlertDialog>
   );
 }
 

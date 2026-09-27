@@ -20,6 +20,16 @@ import {
   type SessionRevocationTarget,
 } from "./OperatorSessionRevocationDialog";
 
+import { Button } from "../components/ui/button";
+import { Badge } from "../components/ui/badge";
+import { InputGroup, InputGroupInput, InputGroupAddon } from "../components/ui/input-group";
+import { Field, FieldLabel } from "../components/ui/field";
+import { Alert, AlertDescription } from "../components/ui/alert";
+import { PageHeader } from "../components/layout/Page";
+import { PageNavigation } from "../components/layout/PageNavigation";
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell, TableCaption } from "../components/ui/table";
+import styles from "./OperatorAccess.module.css";
+
 type InvitationAction = Readonly<{
   email: string;
   operation: InvitationMutationOperation;
@@ -298,15 +308,11 @@ export function OperatorResearchersView({
     <section
       aria-busy={busy}
       aria-label={t("researchers.directory.pageLabel")}
-      className="page-section operator-page"
+      className={styles.page}
       id={operatorPageFallbackId}
       tabIndex={-1}
     >
-      <header className="page-hero">
-        <div>
-          <h1>{t("researchers.directory.title")}</h1>
-        </div>
-      </header>
+      <PageHeader title={t("researchers.directory.title")} className="mb-0 max-[768px]:mb-0" />
 
       <OperatorConsoleNavigation current="researchers" />
 
@@ -319,23 +325,23 @@ export function OperatorResearchersView({
       <section
         aria-busy={busy}
         aria-labelledby="operator-researchers-title"
-        className="operator-section"
+        className={styles.section}
       >
-        <header className="operator-section-header">
+        <header className={styles.header}>
           <div>
             <h2 id="operator-researchers-title">{t("researchers.directory.researchers")}</h2>
           </div>
           <form
-            className="operator-search"
+            className={styles.search}
             onSubmit={(event) => {
               event.preventDefault();
               onSearch(draft);
             }}
           >
-            <label htmlFor="operator-researcher-search">{t("researchers.directory.searchResearchers")}</label>
-            <div>
-              <MagnifyingGlass aria-hidden="true" size={16} />
-              <input
+            <Field><FieldLabel htmlFor="operator-researcher-search">{t("researchers.directory.searchResearchers")}</FieldLabel>
+            <InputGroup>
+              <InputGroupAddon><MagnifyingGlass aria-hidden="true" /></InputGroupAddon>
+              <InputGroupInput
                 aria-label={t("researchers.directory.searchResearchers")}
                 disabled={state !== "ready"}
                 id="operator-researcher-search"
@@ -344,8 +350,8 @@ export function OperatorResearchersView({
                 type="search"
                 value={draft}
               />
-              <button disabled={state !== "ready"} type="submit">{t("researchers.directory.search")}</button>
-            </div>
+              <InputGroupAddon align="inline-end"><Button variant="ghost" disabled={state !== "ready"} type="submit">{t("researchers.directory.search")}</Button></InputGroupAddon>
+            </InputGroup></Field>
           </form>
         </header>
         {sessionMutationNotice === null || sessionMutationNotice === undefined
@@ -375,15 +381,15 @@ export function OperatorResearchersView({
       <section
         aria-busy={busy}
         aria-labelledby="operator-invitations-title"
-        className="operator-section"
+        className={styles.section}
       >
-        <header className="operator-section-header">
+        <header className={styles.header}>
           <div>
             <h2 id="operator-invitations-title">{t("researchers.directory.invitations")}</h2>
           </div>
           {onInvitationAction === undefined ? null : (
-            <button
-              className="button-primary"
+            <Button
+
               disabled={state !== "ready"}
               id={inviteResearcherButtonId}
               onClick={(event) => onInvitationAction(event.currentTarget, {
@@ -393,7 +399,7 @@ export function OperatorResearchersView({
               type="button"
             >
               {t("researchers.directory.inviteResearcher")}
-            </button>
+            </Button>
           )}
         </header>
         {mutationNotice === null || mutationNotice === undefined ? null : (
@@ -434,20 +440,20 @@ function OperatorLoadState({ hasData, onRetry, state }: Readonly<{
   if (state === "ready") return null;
   if (state === "loading") {
     return (
-      <p aria-live="polite" className="operator-load-state" role="status">
+      <p aria-live="polite" className="m-0 text-sm text-muted-foreground" role="status">
         {hasData ? t("researchers.directory.refreshing") : t("researchers.directory.loading")}
       </p>
     );
   }
   return (
-    <div className="operator-load-state operator-load-error">
-      <p role="alert">
+    <Alert variant="destructive">
+      <AlertDescription>
         {t("researchers.directory.unavailable")}{hasData ? t("researchers.directory.stale") : ""}
-      </p>
+      </AlertDescription>
       {onRetry === undefined ? null : (
-        <button id={operatorRetryButtonId} onClick={onRetry} type="button">{t("researchers.directory.retry")}</button>
+        <Button variant="outline" id={operatorRetryButtonId} onClick={onRetry} type="button">{t("researchers.directory.retry")}</Button>
       )}
-    </div>
+    </Alert>
   );
 }
 
@@ -470,70 +476,69 @@ function ResearcherTable({
   const { t } = useTranslation("operator");
   if (items === null) {
     return (
-      <p className="operator-empty">
+      <p className="m-0 py-4 text-sm text-muted-foreground">
         {state === "unavailable" ? t("researchers.directory.researchersUnavailable") : t("researchers.directory.researchersLoading")}
       </p>
     );
   }
-  if (items.length === 0) return <p className="operator-empty">{t("researchers.directory.noResearchers")}</p>;
+  if (items.length === 0) return <p className="m-0 py-4 text-sm text-muted-foreground">{t("researchers.directory.noResearchers")}</p>;
   return (
-    <div className="operator-table-scroll">
-      <table className="operator-table operator-researcher-table">
-        <caption className="visually-hidden">{t("researchers.directory.researchers")}</caption>
-        <thead>
-          <tr>
-            <th scope="col">{t("researchers.directory.researcher")}</th>
-            <th scope="col">{t("researchers.directory.researcherId")}</th>
-            <th scope="col">{t("researchers.directory.access")}</th>
-            <th scope="col">{t("researchers.directory.created")}</th>
-            <th scope="col">{t("researchers.directory.latestLogin")}</th>
-            <th scope="col">{t("researchers.directory.currentSessions")}</th>
-            <th scope="col">{t("researchers.directory.effectiveInvitation")}</th>
-            {onRevoke === undefined ? null : <th scope="col">{t("researchers.directory.sessionAction")}</th>}
-          </tr>
-        </thead>
-        <tbody>
+    <div className="min-w-0">
+      <Table scrollLabel={t("researchers.directory.researchers")}>
+        <TableCaption className="sr-only">{t("researchers.directory.researchers")}</TableCaption>
+        <TableHeader>
+          <TableRow>
+            <TableHead scope="col">{t("researchers.directory.researcher")}</TableHead>
+            <TableHead scope="col">{t("researchers.directory.researcherId")}</TableHead>
+            <TableHead scope="col">{t("researchers.directory.access")}</TableHead>
+            <TableHead scope="col">{t("researchers.directory.created")}</TableHead>
+            <TableHead scope="col">{t("researchers.directory.latestLogin")}</TableHead>
+            <TableHead scope="col">{t("researchers.directory.currentSessions")}</TableHead>
+            <TableHead scope="col">{t("researchers.directory.effectiveInvitation")}</TableHead>
+            {onRevoke === undefined ? null : <TableHead scope="col">{t("researchers.directory.sessionAction")}</TableHead>}
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {items.map((researcher) => (
-            <tr key={researcher.researcher_id}>
-              <th data-label={t("researchers.directory.researcher")} scope="row">
-                <strong>{researcher.display_label}</strong>
-                <small>{researcher.email}</small>
-              </th>
-              <td data-label={t("researchers.directory.researcherId")}><code>{researcher.researcher_id}</code></td>
-              <td data-label={t("researchers.directory.access")}>
-                <span className={`operator-state operator-state-${researcher.active ? "active" : "inactive"}`}>
+            <TableRow key={researcher.researcher_id}>
+              <TableHead data-label={t("researchers.directory.researcher")} scope="row">
+                <div className={styles.identity}><strong>{researcher.display_label}</strong><small>{researcher.email}</small></div>
+              </TableHead>
+              <TableCell data-label={t("researchers.directory.researcherId")}><code>{researcher.researcher_id}</code></TableCell>
+              <TableCell data-label={t("researchers.directory.access")}>
+                <Badge variant={researcher.active ? "default" : "secondary"}>
                   {researcher.active ? t("researchers.directory.active") : t("researchers.directory.inactive")}
-                </span>
-              </td>
-              <td data-label={t("researchers.directory.created")}><Timestamp value={researcher.created_at} /></td>
-              <td data-label={t("researchers.directory.latestLogin")}>
+                </Badge>
+              </TableCell>
+              <TableCell data-label={t("researchers.directory.created")}><Timestamp value={researcher.created_at} /></TableCell>
+              <TableCell data-label={t("researchers.directory.latestLogin")}>
                 {researcher.latest_successful_login_at === null
                   ? t("researchers.directory.never")
                   : <Timestamp value={researcher.latest_successful_login_at} />}
-              </td>
-              <td data-label={t("researchers.directory.currentSessions")} className="operator-number">
+              </TableCell>
+              <TableCell data-label={t("researchers.directory.currentSessions")} className="text-right font-mono tabular-nums">
                 {formatNumber(researcher.current_session_count)}
-              </td>
-              <td data-label={t("researchers.directory.effectiveInvitation")}>
+              </TableCell>
+              <TableCell data-label={t("researchers.directory.effectiveInvitation")}>
                 {researcher.effective_invitation === null ? (
-                  <span className="operator-muted">{t("researchers.directory.none")}</span>
+                  <span className="text-muted-foreground">{t("researchers.directory.none")}</span>
                 ) : (
-                  <span className="operator-invitation-summary">
+                  <span className={styles.identity}>
                     <strong>{statusLabel(researcher.effective_invitation.status)}</strong>
                     <small>{t("researchers.directory.expiresAt", { time: formatTimestamp(researcher.effective_invitation.expires_at) })}</small>
                   </span>
                 )}
-              </td>
+              </TableCell>
               {onRevoke === undefined ? null : (
-                <td data-label={t("researchers.directory.sessionAction")}>
+                <TableCell data-label={t("researchers.directory.sessionAction")}>
                   {researcher.researcher_id === operatorResearcherId ? (
-                    <span className="operator-muted">{t("researchers.directory.currentOperator")}</span>
+                    <span className="text-muted-foreground">{t("researchers.directory.currentOperator")}</span>
                   ) : researcher.current_session_count === 0 ? (
-                    <span className="operator-muted">{t("researchers.directory.noActiveSessions")}</span>
+                    <span className="text-muted-foreground">{t("researchers.directory.noActiveSessions")}</span>
                   ) : (
-                    <button
+                    <Button variant="outline"
                       aria-label={t("researchers.directory.revokeSessionsAria", { count: researcher.current_session_count, email: researcher.email })}
-                      className="button-quiet operator-row-action"
+
                       disabled={disabled}
                       id={`operator-session-revoke-${researcher.researcher_id}`}
                       onClick={(event) => onRevoke(event.currentTarget, {
@@ -545,14 +550,14 @@ function ResearcherTable({
                       type="button"
                     >
                       {t("researchers.directory.revokeSessions")}
-                    </button>
+                    </Button>
                   )}
-                </td>
+                </TableCell>
               )}
-            </tr>
+            </TableRow>
           ))}
-        </tbody>
-      </table>
+        </TableBody>
+      </Table>
     </div>
   );
 }
@@ -566,56 +571,54 @@ function InvitationTable({ disabled, items, onReissue, state }: Readonly<{
   const { t } = useTranslation("operator");
   if (items === null) {
     return (
-      <p className="operator-empty">
+      <p className="m-0 py-4 text-sm text-muted-foreground">
         {state === "unavailable" ? t("researchers.directory.invitationsUnavailable") : t("researchers.directory.invitationsLoading")}
       </p>
     );
   }
-  if (items.length === 0) return <p className="operator-empty">{t("researchers.directory.noInvitations")}</p>;
+  if (items.length === 0) return <p className="m-0 py-4 text-sm text-muted-foreground">{t("researchers.directory.noInvitations")}</p>;
   return (
-    <div className="operator-table-scroll">
-      <table className="operator-table operator-invitation-table">
-        <caption className="visually-hidden">{t("researchers.directory.invitations")}</caption>
-        <thead>
-          <tr>
-            <th scope="col">{t("researchers.directory.email")}</th>
-            <th scope="col">{t("researchers.directory.state")}</th>
-            <th scope="col">{t("researchers.directory.researcherId")}</th>
-            <th scope="col">{t("researchers.directory.created")}</th>
-            <th scope="col">{t("researchers.directory.expires")}</th>
-            <th scope="col">{t("researchers.directory.terminal")}</th>
-            {onReissue === undefined ? null : <th scope="col">{t("researchers.directory.action")}</th>}
-          </tr>
-        </thead>
-        <tbody>
+    <div className="min-w-0">
+      <Table scrollLabel={t("researchers.directory.invitations")}>
+        <TableCaption className="sr-only">{t("researchers.directory.invitations")}</TableCaption>
+        <TableHeader>
+          <TableRow>
+            <TableHead scope="col">{t("researchers.directory.email")}</TableHead>
+            <TableHead scope="col">{t("researchers.directory.state")}</TableHead>
+            <TableHead scope="col">{t("researchers.directory.researcherId")}</TableHead>
+            <TableHead scope="col">{t("researchers.directory.created")}</TableHead>
+            <TableHead scope="col">{t("researchers.directory.expires")}</TableHead>
+            <TableHead scope="col">{t("researchers.directory.terminal")}</TableHead>
+            {onReissue === undefined ? null : <TableHead scope="col">{t("researchers.directory.action")}</TableHead>}
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {items.map((invitation) => (
-            <tr key={invitation.invitation_id}>
-              <th data-label={t("researchers.directory.email")} scope="row">
-                <strong>{invitation.email}</strong>
-                <small><code>{invitation.invitation_id}</code></small>
-              </th>
-              <td data-label={t("researchers.directory.state")}>
-                <span className={`operator-state operator-state-${invitation.effective ? "effective" : "terminal"}`}>
+            <TableRow key={invitation.invitation_id}>
+              <TableHead data-label={t("researchers.directory.email")} scope="row">
+                <div className={styles.identity}><strong>{invitation.email}</strong><small><code>{invitation.invitation_id}</code></small></div>
+              </TableHead>
+              <TableCell data-label={t("researchers.directory.state")}>
+                <Badge variant={invitation.effective ? "default" : "secondary"}>
                   {invitation.effective ? t("researchers.directory.effective") : t("researchers.directory.terminalState")} · {statusLabel(invitation.status)}
-                </span>
-              </td>
-              <td data-label={t("researchers.directory.researcherId")}>
+                </Badge>
+              </TableCell>
+              <TableCell data-label={t("researchers.directory.researcherId")}>
                 {invitation.researcher_id === null
-                  ? <span className="operator-muted">{t("researchers.directory.notCreated")}</span>
+                  ? <span className="text-muted-foreground">{t("researchers.directory.notCreated")}</span>
                   : <code>{invitation.researcher_id}</code>}
-              </td>
-              <td data-label={t("researchers.directory.created")}><Timestamp value={invitation.created_at} /></td>
-              <td data-label={t("researchers.directory.expires")}><Timestamp value={invitation.expires_at} /></td>
-              <td data-label={t("researchers.directory.terminal")}>
+              </TableCell>
+              <TableCell data-label={t("researchers.directory.created")}><Timestamp value={invitation.created_at} /></TableCell>
+              <TableCell data-label={t("researchers.directory.expires")}><Timestamp value={invitation.expires_at} /></TableCell>
+              <TableCell data-label={t("researchers.directory.terminal")}>
                 {invitation.terminal_at === null
-                  ? <span className="operator-muted">—</span>
+                  ? <span className="text-muted-foreground">—</span>
                   : <Timestamp value={invitation.terminal_at} />}
-              </td>
+              </TableCell>
               {onReissue === undefined ? null : (
-                <td data-label={t("researchers.directory.action")}>
-                  <button
+                <TableCell data-label={t("researchers.directory.action")}>
+                  <Button variant="outline"
                     aria-label={t("researchers.directory.reissueAria", { email: invitation.email })}
-                    className="button-quiet operator-row-action"
                     disabled={disabled}
                     id={`operator-invitation-reissue-${invitation.invitation_id}`}
                     onClick={(event) => onReissue(
@@ -625,13 +628,13 @@ function InvitationTable({ disabled, items, onReissue, state }: Readonly<{
                     type="button"
                   >
                     {t("researchers.directory.reissue")}
-                  </button>
-                </td>
+                  </Button>
+                </TableCell>
               )}
-            </tr>
+            </TableRow>
           ))}
-        </tbody>
-      </table>
+        </TableBody>
+      </Table>
     </div>
   );
 }
@@ -645,15 +648,12 @@ function Pagination({ depth, disabled, hasNext, label, onNext, onPrevious }: Rea
   onPrevious: () => void;
 }>) {
   const { t } = useTranslation("operator");
-  return (
-    <nav aria-label={t("researchers.directory.pagination", { label })} className="operator-pagination">
-      <button disabled={disabled || depth === 0} onClick={onPrevious} type="button">
-        {t("researchers.directory.previous")}
-      </button>
-      <span>{t("researchers.directory.page", { page: formatNumber(depth + 1) })}</span>
-      <button disabled={disabled || !hasNext} onClick={onNext} type="button">{t("researchers.directory.next")}</button>
-    </nav>
-  );
+  return <PageNavigation label={t("researchers.directory.pagination", { label })}
+    previousLabel={t("researchers.directory.previous")} nextLabel={t("researchers.directory.next")}
+    previousDisabled={disabled || depth === 0} nextDisabled={disabled || !hasNext}
+    onPrevious={onPrevious} onNext={onNext}>
+    {t("researchers.directory.page", { page: formatNumber(depth + 1) })}
+  </PageNavigation>;
 }
 
 function Timestamp({ value }: { value: string }) {

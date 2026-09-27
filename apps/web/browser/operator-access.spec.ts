@@ -1,0 +1,65 @@
+import { expect, test } from "@playwright/test";
+import { buildProductFixture } from "./build-product-fixture";
+let fixture: Awaited<ReturnType<typeof buildProductFixture>>;
+test.beforeAll(async () => { fixture = await buildProductFixture(new URL("./fixtures/operator-access.tsx", import.meta.url), "OperatorAccessFixture"); });
+for (const width of [320, 390, 768, 1280, 1440]) {
+  test(`Operator invitation preserves target, error and keyboard state at ${width}px`, async ({ page }) => {
+    const longEmail = `${"a".repeat(64)}@example.test`;
+    await page.setViewportSize({ width, height: 900 });
+    await page.route("http://operator.test/**", route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+      if (path.endsWith("/researchers")) return route.fulfill({ json: { items: [{ active: true, created_at: "2026-09-26T00:00:00.000Z", current_session_count: 2, display_label: "Researcher".repeat(20), effective_invitation: null, email: "target@example.test", latest_successful_login_at: null, researcher_id: "00000000-0000-4000-8000-000000000002" }], next_cursor: null } });
+      if (path.endsWith("/invitations")) return route.fulfill({ json: { items: [{ created_at: "2026-09-26T00:00:00.000Z", delivered_at: "2026-09-26T00:00:00.000Z", effective: true, email: longEmail, expires_at: "2026-09-28T00:00:00.000Z", invitation_id: "00000000-0000-4000-8000-000000000003", researcher_id: null, status: "delivered", terminal_at: null }], next_cursor: null } });
+      if (path.endsWith("/proofs")) return route.fulfill({ status: 400, json: { code: "OPERATOR_CODE_INVALID" } });
+      return route.fulfill({ status: 404 });
+    });
+    await page.goto("http://operator.test/");
+    await page.addStyleTag({ content: fixture.styles });
+    await page.addScriptTag({ content: fixture.script });
+    const invite = page.getByRole("button", { name: "Invite Researcher", exact: true });
+    await expect(invite).toBeEnabled();
+    const table = page.getByRole("table", { name: "Researchers", exact: true });
+    await expect(table.getByRole("row")).toHaveCount(2);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await invite.click();
+    const dialog = page.getByRole("dialog");
+    const email = dialog.getByLabel("Target email", { exact: true });
+    const code = dialog.getByLabel("Verification code", { exact: true });
+    await expect(email).toBeFocused();
+    await email.fill("draft@example.test");
+    await code.fill("123456");
+    await page.keyboard.press("Control+Shift+L");
+    await expect(dialog.locator('input[type="email"]')).toHaveValue("draft@example.test");
+    await expect(dialog.locator('input[autocomplete="one-time-code"]')).toHaveValue("123456");
+    await page.keyboard.press("Control+Shift+L");
+    await code.press("Enter");
+    await expect(dialog.getByRole("alert")).toContainText("incorrect or has expired");
+    await expect(email).toHaveValue("draft@example.test");
+    await expect(code).toHaveValue("");
+    await code.fill("123456");
+    await code.press("Shift+Tab");
+    expect(await dialog.evaluate(el => el.contains(document.activeElement))).toBe(true);
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(invite).toBeFocused();
+    const revoke = page.getByRole("button", { name: /Revoke 2 Login Sessions for/ });
+    await revoke.click();
+    const confirmation = page.getByRole("alertdialog");
+    await expect(confirmation.getByLabel("Verification code")).toBeFocused();
+    await expect(confirmation).toContainText("target@example.test");
+    await confirmation.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(revoke).toBeFocused();
+    await page.getByRole("button", { name: `Reissue Invitation for ${longEmail}` }).click();
+    const reissueDialog = page.getByRole("dialog");
+    const target = reissueDialog.getByText(longEmail, { exact: true });
+    await expect(target).toBeVisible();
+    expect(await target.evaluate(element => {
+      const content = document.createRange();
+      content.selectNodeContents(element);
+      const fragments = [...content.getClientRects()];
+      const dialog = element.closest('[role="dialog"]')!.getBoundingClientRect();
+      return dialog.left >= 0 && dialog.right <= innerWidth && fragments.every(fragment => fragment.left >= dialog.left && fragment.right <= dialog.right);
+    })).toBe(true);
+  });
+}

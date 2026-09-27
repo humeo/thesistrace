@@ -1,0 +1,16 @@
+.page { display: flex; flex-direction: column; gap: 24px; min-width: 0; }
+.section { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px; }
+.header h2 { margin: 0; font-size: 16px; line-height: 24px; font-weight: 600; }
+.search { width: min(520px, 100%); }
+.identity { display: flex; flex-direction: column; gap: 4px; min-width: 180px; max-width: 320px; white-space: normal; overflow-wrap: anywhere; }
+.identity small { color: var(--muted-foreground); font-size: 12px; line-height: 18px; }
+.form { min-width: 0; }
+.emailTarget { min-width: 0; overflow-wrap: anywhere; }
+.eyebrow { margin: 0; color: var(--muted-foreground); font-size: 12px; line-height: 18px; }
+.target { display: grid; gap: 12px; margin: 0; }
+.target > div { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(0, 2fr); gap: 12px; }
+.target dt { color: var(--muted-foreground); font-size: 12px; line-height: 18px; }
+.target dd { display: flex; flex-direction: column; gap: 4px; min-width: 0; margin: 0; font-size: 14px; line-height: 22px; overflow-wrap: anywhere; }
+.target code { font-family: var(--mono); }
+@media (max-width: 480px) { .target > div { grid-template-columns: minmax(0, 1fr); gap: 4px; } }

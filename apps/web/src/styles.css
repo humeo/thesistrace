@@ -595,23 +595,6 @@ select { color-scheme: light; }
 /* Operator Console */
 .operator-page { display: grid; gap: 36px; }
 .operator-page > .page-hero { margin-bottom: 0; }
-.operator-subnav {
-  display: flex;
-  gap: 4px;
-  margin-top: -22px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--line);
-}
-.operator-subnav a {
-  min-height: 36px;
-  padding: 8px 10px;
-  color: var(--ink-soft);
-  border-radius: 6px;
-  font-size: 12px;
-  text-decoration: none;
-}
-.operator-subnav a:hover,
-.operator-subnav a[aria-current="page"] { color: var(--ink); background: var(--surface-2); }
 .operator-load-state {
   display: flex;
   min-height: 36px;
@@ -635,20 +618,8 @@ select { color-scheme: light; }
 }
 .operator-section-header > div { display: grid; gap: 5px; }
 .operator-section-header span { color: var(--ink-soft); font-size: 13px; }
-.operator-search { display: grid; width: min(520px, 100%); gap: 7px; }
-.operator-search > div { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
-.operator-search svg {
-  position: absolute;
-  top: 12px;
-  left: 11px;
-  color: var(--ink-faint);
-  pointer-events: none;
-}
-.operator-search input { padding-left: 34px; }
 .operator-table-scroll { width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; }
 .operator-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-.operator-researcher-table { min-width: 1260px; }
-.operator-invitation-table { min-width: 1060px; }
 .operator-table th,
 .operator-table td {
   padding: 13px 11px;
@@ -661,10 +632,8 @@ select { color-scheme: light; }
 .operator-table tbody tr:hover { background: var(--surface-1); }
 .operator-table tbody th { color: var(--ink); font-size: 13px; font-weight: 500; }
 .operator-table tbody td { color: var(--ink-muted); font-size: 13px; }
-.operator-table tbody th strong,
-.operator-invitation-summary { display: grid; gap: 3px; }
-.operator-table tbody th small,
-.operator-invitation-summary small { color: var(--ink-soft); font-size: 12px; font-weight: 400; }
+.operator-table tbody th strong { display: grid; gap: 3px; }
+.operator-table tbody th small { color: var(--ink-soft); font-size: 12px; font-weight: 400; }
 .operator-table code { font-family: var(--mono); font-size: 13px; overflow-wrap: anywhere; }
 .operator-table time { font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
 .operator-number { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right !important; }
@@ -1239,13 +1208,11 @@ select { color-scheme: light; }
   .account-action,
   .account-language-options > button,
   .operator-confirmation-field input,
-  .operator-subnav a,
   .operator-load-error button,
   .operator-refresh-form input,
   .operator-refresh-form footer button,
   .operator-row-action,
   .operator-section-header > button,
-  .operator-search button,
   .operator-pagination button,
   .mobile-navigation-toggle,
   .mobile-navigation-close,
@@ -1389,7 +1356,6 @@ select { color-scheme: light; }
   .operator-data-family { grid-template-columns: 1fr; gap: 12px; }
   .operator-data-family > dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .operator-dataset-subsection > header { align-items: flex-start; flex-direction: column; gap: 4px; }
-  .operator-search { width: 100%; }
   .operator-table-scroll { overflow: visible; }
   .operator-table { display: block; min-width: 0; }
   .operator-table thead { display: none; }

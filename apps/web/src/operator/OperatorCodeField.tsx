@@ -1,9 +1,14 @@
-import { useState } from "react";
+import { useId, useState, type Ref } from "react";
 import { useTranslation } from "../i18n";
 
-export function OperatorCodeField({value, onChange, disabled, autoFocus = true}: Readonly<{
-  autoFocus?: boolean; value: string; onChange: (value: string) => void; disabled: boolean;
+import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
+import { Field, FieldLabel } from "../components/ui/field";
+
+export function OperatorCodeField({value, onChange, disabled, autoFocus = true, inputRef}: Readonly<{
+  inputRef?: Ref<HTMLInputElement>; autoFocus?: boolean; value: string; onChange: (value: string) => void; disabled: boolean;
 }>) {
+  const id = useId();
   const { t } = useTranslation("operator");
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
@@ -21,9 +26,10 @@ export function OperatorCodeField({value, onChange, disabled, autoFocus = true}:
     } catch { setMessage("failed"); }
     finally { setSending(false); }
   }
-  return <div className="operator-confirmation-field">
-    <label><span>{t("researchers.code.label")}</span><input autoFocus={autoFocus} autoComplete="one-time-code" inputMode="numeric" pattern="[0-9]{6}" minLength={6} maxLength={6} required disabled={disabled || sending} value={value} onChange={event => onChange(event.target.value)} /></label>
-    <button type="button" disabled={disabled || sending} onClick={() => void send()}>{sending ? t("researchers.code.sending") : sent ? t("researchers.code.resend") : t("researchers.code.send")}</button>
-    {message ? <p role="status">{t(`researchers.code.${message}`)}</p> : null}
-  </div>;
+  return <Field>
+    <FieldLabel htmlFor={id}>{t("researchers.code.label")}</FieldLabel>
+    <Input id={id} ref={inputRef} autoFocus={autoFocus} autoComplete="one-time-code" inputMode="numeric" pattern="[0-9]{6}" minLength={6} maxLength={6} required disabled={disabled || sending} value={value} onChange={event => onChange(event.target.value)} />
+    <Button variant="outline" type="button" disabled={disabled || sending} onClick={() => void send()}>{sending ? t("researchers.code.sending") : sent ? t("researchers.code.resend") : t("researchers.code.send")}</Button>
+    {message ? <p role="status" className="m-0 text-sm leading-[22px] text-muted-foreground">{t(`researchers.code.${message}`)}</p> : null}
+  </Field>;
 }

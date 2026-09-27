@@ -3,7 +3,12 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "../i18n";
 
 import { OperatorPageNotFoundError } from "./operatorDirectoryClient";
-import { containDialogKeyboardFocus } from "./operatorDialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "../components/ui/dialog";
+import { Button } from "../components/ui/button";
+import { Alert, AlertDescription } from "../components/ui/alert";
+import { Field, FieldLabel, FieldGroup } from "../components/ui/field";
+import { Input } from "../components/ui/input";
+import styles from "./OperatorAccess.module.css";
 import {
   confirmOperatorProof,
   type InvitationMutationOperation,
@@ -26,7 +31,7 @@ export function OperatorInvitationDialog({
   operation: InvitationMutationOperation;
 }>) {
   const { t } = useTranslation("operator");
-  const dialog = useRef<HTMLDialogElement | null>(null);
+  const initialInput = useRef<HTMLInputElement>(null);
   const request = useRef<AbortController | null>(null);
   const [email, setEmail] = useState(initialEmail);
   const [otp, setOtp] = useState("");
@@ -35,15 +40,9 @@ export function OperatorInvitationDialog({
   const canonicalTarget = email.trim().toLowerCase();
   const reissue = operation === "reissue";
 
-  useEffect(() => {
-    const element = dialog.current;
-    if (element === null) return;
-    element.showModal();
-    return () => {
-      request.current?.abort();
-      request.current = null;
-      if (element.open) element.close();
-    };
+  useEffect(() => () => {
+    request.current?.abort();
+    request.current = null;
   }, []);
 
   async function submit(): Promise<void> {
@@ -79,42 +78,35 @@ export function OperatorInvitationDialog({
   }
 
   return (
-    <dialog
-      aria-describedby="operator-invitation-description"
-      aria-labelledby="operator-invitation-title"
-      aria-modal="true"
-      className="operator-confirmation-dialog"
-      onCancel={(event) => {
-        event.preventDefault();
-        if (!submitting) onDismiss();
-      }}
-      onKeyDown={(event) => containDialogKeyboardFocus(event, dialog.current)}
-      ref={dialog}
-    >
+    <Dialog open onOpenChange={open => { if (!open && !submitting) onDismiss(); }}>
+      <DialogContent finalFocus={false} initialFocus={initialInput} showCloseButton={false} className="max-h-[calc(100dvh-32px)] overflow-y-auto sm:max-w-lg">
       <form
-        className="operator-confirmation-content"
+        className={styles.form}
         onSubmit={(event) => {
           event.preventDefault();
           void submit();
         }}
       >
-        <header>
-          <p className="eyebrow">{t("researchers.common.emailConfirmation")}</p>
-          <h2 id="operator-invitation-title">
+        <FieldGroup>
+        <DialogHeader>
+          <p className={styles.eyebrow}>{t("researchers.common.emailConfirmation")}</p>
+          <DialogTitle id="operator-invitation-title">
             {reissue ? t("researchers.invitation.reissueTitle") : t("researchers.invitation.issueTitle")}
-          </h2>
-        </header>
-        <p id="operator-invitation-description">
+          </DialogTitle>
+        </DialogHeader>
+        <DialogDescription id="operator-invitation-description">
           {reissue
             ? t("researchers.invitation.reissueDescription")
             : t("researchers.invitation.issueDescription")}
-        </p>
-        <label className="operator-confirmation-field">
-          <span>{t("researchers.common.targetEmail")}</span>
+        </DialogDescription>
+        <Field>
+          <FieldLabel htmlFor={reissue ? undefined : "operator-invitation-email"}>{t("researchers.common.targetEmail")}</FieldLabel>
           {reissue ? (
-            <strong>{canonicalTarget}</strong>
+            <strong className={styles.emailTarget}>{canonicalTarget}</strong>
           ) : (
-            <input
+            <Input
+              id="operator-invitation-email"
+              ref={initialInput}
               autoComplete="email"
               disabled={submitting}
               onChange={(event) => setEmail(event.target.value)}
@@ -123,35 +115,36 @@ export function OperatorInvitationDialog({
               value={email}
             />
           )}
-        </label>
-        <div className="operator-confirmation-effect">
+        </Field>
+        <Alert role="note">
           <span>{t("researchers.common.effect")}</span>
           <p>
             {reissue
               ? t("researchers.invitation.reissueEffect")
               : t("researchers.invitation.issueEffect")}
           </p>
-        </div>
-        <OperatorCodeField autoFocus={false} value={otp} onChange={setOtp} disabled={submitting} />
+        </Alert>
+        <OperatorCodeField inputRef={reissue ? initialInput : undefined} autoFocus={false} value={otp} onChange={setOtp} disabled={submitting} />
         {error === null ? null : (
-          <p className="inline-status inline-status-error" role="alert">{t(error)}</p>
+          <Alert variant="destructive"><AlertDescription>{t(error)}</AlertDescription></Alert>
         )}
-        <footer className="operator-confirmation-actions">
-          <button
+        <DialogFooter>
+          <Button variant="outline"
             disabled={submitting}
             onClick={() => onDismiss()}
             type="button"
           >
             {t("researchers.common.cancel")}
-          </button>
-          <button className="button-primary" disabled={submitting} type="submit">
+          </Button>
+          <Button disabled={submitting} type="submit">
             {submitting
               ? reissue ? t("researchers.invitation.reissuing") : t("researchers.invitation.sending")
               : reissue ? t("researchers.invitation.reissue") : t("researchers.invitation.send")}
-          </button>
-        </footer>
+          </Button>
+        </DialogFooter>
+        </FieldGroup>
       </form>
-    </dialog>
+    </DialogContent></Dialog>
   );
 }
 
