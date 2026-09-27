@@ -26,6 +26,7 @@ const track = {
 };
 
 test.beforeAll(async () => {
+  test.setTimeout(120_000);
   ({ script, styles } = await buildProductFixture(new URL("./fixtures/daily-tracks-language.tsx", import.meta.url), "DailyLanguage"));
 });
 

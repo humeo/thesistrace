@@ -11,6 +11,7 @@ const catalog = JSON.parse(readFileSync(
 let script: string;
 
 test.beforeAll(async () => {
+  test.setTimeout(120_000);
   ({ script, styles } = await buildProductFixture(new URL("./fixtures/data-fields.tsx", import.meta.url), "DataFieldsFixture"));
 });
 

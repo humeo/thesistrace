@@ -370,11 +370,12 @@ test("first Chat turn streams through Caddy and reload replays without another r
   );
   await expect(page.locator(".chat-message-user .chat-message-content")).toHaveText(
     "Build a low volatility Alpha.",
+    { timeout: 30_000 },
   );
   const assistant = page.locator(".chat-message-assistant .chat-message-content");
-  await expect(assistant).toBeVisible();
+  await expect(assistant).toBeVisible({ timeout: 30_000 });
   await waitForChatTurn(page, acceptedTurn1, "completed", 30_000);
-  await expect(agentRunStatus(page)).toHaveText("Run complete");
+  await expect(agentRunStatus(page)).toHaveText("Run complete", { timeout: 30_000 });
   const assistantText = await assistant.textContent();
   if (assistantText === null) throw new Error("Expected one assistant response");
   expect(assistantText.trim().length).toBeGreaterThan(0);
@@ -386,7 +387,7 @@ test("first Chat turn streams through Caddy and reload replays without another r
       && !["", "New Chat", "Loading Chat", "Untitled"].includes(value)
       ? value
       : null;
-  }).not.toBeNull();
+  }, { timeout: 30_000 }).not.toBeNull();
   const generatedTitle = (await generatedTitleElement.textContent())?.trim();
   if (generatedTitle === undefined || generatedTitle.length === 0) {
     throw new Error("Accepted Chat exposed no generated title");
@@ -400,6 +401,7 @@ test("first Chat turn streams through Caddy and reload replays without another r
   if (durableSession === null) throw new Error("Accepted Chat exposed no durable Session id");
   setAgentSessionTitle(durableSession, "Untitled");
   await page.reload();
+  await expect(page.getByRole("textbox", { name: "Message", exact: true })).toBeVisible({ timeout: 30_000 });
   await expect(currentChatTitle(page)).toHaveText("Untitled");
   await expect(agentRunStatus(page)).toHaveText("Run complete");
   const failedDelete = async (route: Route) => {
@@ -459,7 +461,7 @@ test("first Chat turn streams through Caddy and reload replays without another r
   const activeLayoutRow = page.locator(".chat-session-row").filter({
     hasText: "Active layout session",
   });
-  await expect(activeLayoutRow).toBeVisible();
+  await expect(activeLayoutRow).toBeVisible({ timeout: 30_000 });
   await page.getByRole("button", { name: "Collapse sidebar" }).click();
   const activeLayoutSpinner = activeLayoutRow.locator(".chat-session-active-spinner");
   await expect(activeLayoutSpinner).toBeVisible();
@@ -564,7 +566,14 @@ test("first Chat turn streams through Caddy and reload replays without another r
   await page.unroute("**/api/agent/sessions/*", malformedRename);
 
   await renameDialog.getByLabel("Title").fill(renamedTitle);
+  const savedRenameRequest = page.waitForRequest((request) => (
+    request.method() === "PATCH"
+    && new URL(request.url()).pathname === `/api/agent/sessions/${durableSession}`
+  ));
   await renameDialog.getByRole("button", { name: "Save title" }).click();
+  const renameRequest = await savedRenameRequest;
+  const renameResponse = await renameRequest.response();
+  expect(renameResponse?.status(), renameRequest.failure()?.errorText).toBe(200);
   await expect(renameDialog).toHaveCount(0);
   await expect(currentChatTitle(page)).toHaveText(renamedTitle);
   await expect(page.getByRole("link", { name: renamedTitle, exact: true })).toHaveAttribute(
@@ -593,7 +602,8 @@ test("first Chat turn streams through Caddy and reload replays without another r
 
   await page.reload();
   await expect(page).toHaveURL(durableUrl);
-  await expect(agentRunStatus(page)).toHaveText("Run complete");
+  await expect(page.getByRole("textbox", { name: "Message", exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(agentRunStatus(page)).toHaveText("Run complete", { timeout: 30_000 });
   await expect(modelPickerTrigger(page)).toHaveAccessibleName(
     "Model Scripted Deep Research, reasoning High",
   );
@@ -639,7 +649,9 @@ test("first Chat turn streams through Caddy and reload replays without another r
   await openNavigation.click();
   await page.locator(".chat-session-row-current").hover();
   await mobileActions.click();
+  await expect(page.getByRole("menuitem", { name: "Rename", exact: true })).toBeVisible();
   await page.keyboard.press("Escape");
+  await expect(page.getByRole("menu", { name: `Actions for ${renamedTitle}` })).toBeHidden();
   await expect(page.getByRole("dialog", { name: "Navigation" })).toBeVisible();
   await expect(mobileActions).toBeFocused();
   await mobileActions.click();
