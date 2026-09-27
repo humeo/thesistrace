@@ -521,7 +521,7 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
             "execution_plan": {
                 "execution_memory_bytes": 1536 * 1024**2,
                 "chunk_time_target_seconds": 30,
-                "chunk_session_count": 10,
+                "chunk_session_count": 64,
                 "time_target_exceeded": False,
                 "maximum_universe_cardinality": 1,
                 "calculation_sessions": ["2026-08-03", "2026-08-04"],

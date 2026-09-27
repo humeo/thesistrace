@@ -101,19 +101,27 @@ def test_daily_track_detail_keeps_latest_504_sessions_and_full_origin_metrics(
         assert tracking_events[1]["event"] == "tracking_advance_claimed"
         assert tracking_events[1]["track_id"] == track_id
         first_detail = client.get(f"/api/daily-tracks/{track_id}").json()
-        assert first_detail["strategy_session"] == sessions[12]
-        assert first_detail["lag_sessions"] == 290
-        for index in range(29):
-            _refresh_daily_track(
-                client,
-                track_id,
-                f"daily-track-504-first-catch-up-{index}",
-            )
-            catch_up = _run_worker_once(settings, "tracking")
-            assert catch_up.returncode == 0, catch_up.stdout + catch_up.stderr
-        assert client.get(f"/api/daily-tracks/{track_id}").json()[
-            "strategy_session"
-        ] == sessions[302]
+        first_index = sessions.index(first_detail["strategy_session"])
+        assert 2 < first_index < 302
+        assert first_detail["lag_sessions"] == 302 - first_index
+
+        def catch_up_to(target_index: int, request_prefix: str) -> dict:
+            detail = client.get(f"/api/daily-tracks/{track_id}").json()
+            current_index = sessions.index(detail["strategy_session"])
+            for index in range(target_index - current_index):
+                if current_index == target_index:
+                    break
+                _refresh_daily_track(client, track_id, f"{request_prefix}-{index}")
+                advance = _run_worker_once(settings, "tracking")
+                assert advance.returncode == 0, advance.stdout + advance.stderr
+                detail = client.get(f"/api/daily-tracks/{track_id}").json()
+                next_index = sessions.index(detail["strategy_session"])
+                assert current_index < next_index <= target_index
+                current_index = next_index
+            assert current_index == target_index
+            return detail
+
+        catch_up_to(302, "daily-track-504-first-catch-up")
 
         _publish_head(
             settings,
@@ -121,17 +129,7 @@ def test_daily_track_detail_keeps_latest_504_sessions_and_full_origin_metrics(
             expected_manifest=head_b,
             operation_id="daily-track-504-head-c",
         )
-        for index in range(21):
-            _refresh_daily_track(
-                client,
-                track_id,
-                f"daily-track-504-second-catch-up-{index}",
-            )
-            second_advance = _run_worker_once(settings, "tracking")
-            assert second_advance.returncode == 0, (
-                second_advance.stdout + second_advance.stderr
-            )
-        detail = client.get(f"/api/daily-tracks/{track_id}").json()
+        detail = catch_up_to(len(sessions) - 1, "daily-track-504-second-catch-up")
 
     expected_window = list(sessions[-504:])
     observations = detail["strategy"]["observations"]

@@ -259,8 +259,8 @@ def test_worker_loss_retry_resumes_committed_chunks_on_the_frozen_generation(
             assert _checkpoint_ordinals(settings, run_id) == [1, 2]
             committed = first_process.get(f"/api/research-runs/{run_id}").json()
             assert committed["progress"]["committed_chunk_count"] == 2
-            assert committed["progress"]["completed_research_sessions"] == (
-                20 if research_kind == "strategy_backtest" else 128
+            assert committed["progress"]["completed_research_sessions"] == sum(
+                chunk["research_session_count"] for chunk in frozen_plan["chunks"][:2]
             )
             assert committed["progress"]["phase"] == "research"
             if research_kind == "factor_evaluation":
