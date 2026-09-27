@@ -2,9 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import type { ParseKeys } from "i18next";
 import { i18n, useTranslation } from "../i18n";
 import { formatNumber } from "../i18n/format";
+import { CalendarDateField } from "../components/layout/CalendarDateField";
+import { Alert, AlertDescription } from "../components/ui/alert";
+import { Badge } from "../components/ui/badge";
+import { Button } from "../components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog";
 
 import { OperatorPageNotFoundError } from "./operatorDirectoryClient";
-import { containDialogKeyboardFocus } from "./operatorDialog";
+import { operatorDataClasses as styles } from "./operatorDataClasses";
 import {
   confirmIndustryRefreshProof,
   type IndustryRefreshOperation,
@@ -215,63 +220,46 @@ export function OperatorIndustryRefreshPanel({
 
   return (
     <>
-      <section aria-labelledby="operator-industry-refresh-heading" className="operator-section">
-        <header className="operator-section-header">
+      <section aria-labelledby="operator-industry-refresh-heading" className={styles.section}>
+        <header className={styles.sectionHeader}>
           <div>
             <h2 id="operator-industry-refresh-heading">{t("data.industry.title")}</h2>
           </div>
         </header>
         <form
-          className="operator-refresh-form"
+          className={styles.marketForm}
           onSubmit={(event) => {
             event.preventDefault();
             review();
           }}
         >
-          <div className="operator-refresh-field">
-            <label htmlFor="operator-industry-target">
-              {t("data.financial.targetLabel")}
-            </label>
-            <input
-              aria-describedby={targetError === null
-                ? "operator-industry-target-help"
-                : "operator-industry-target-help operator-industry-target-error"}
-              aria-invalid={targetError === null ? undefined : true}
-              autoComplete="off"
-              disabled={confirmation !== null || pending !== null}
-              id="operator-industry-target"
-              onChange={(event) => {
-                setTarget(event.target.value);
-                setTargetError(null);
-              }}
-              ref={targetInput}
-              required
-              type="date"
-              value={target}
-            />
-            <small id="operator-industry-target-help">
-              {t("data.financial.targetHelp")}
-            </small>
-            {targetError === null ? null : (
-              <small className="operator-field-error" id="operator-industry-target-error" role="alert">
-                {t(targetError)}
-              </small>
-            )}
-          </div>
+          <CalendarDateField
+            id="operator-industry-target"
+            label={t("data.financial.targetLabel")}
+            openLabel={t("data.common.openTargetCalendar")}
+            value={target}
+            minimum={null}
+            maximum={null}
+            error={targetError === null ? undefined : t(targetError)}
+            errorId="operator-industry-target-error"
+            help={t("data.financial.targetHelp")}
+            helpId="operator-industry-target-help"
+            disabled={confirmation !== null || pending !== null}
+            inputRef={targetInput}
+            required
+            onChange={(value) => { setTarget(value); setTargetError(null); }}
+          />
           {submissionError === null ? null : (
-            <p className="inline-status inline-status-error operator-refresh-form-error" role="alert">
-              {t(submissionError)}
-            </p>
+            <Alert variant="destructive" role="alert"><AlertDescription>{t(submissionError)}</AlertDescription></Alert>
           )}
           <footer>
-            <button
-              className="button-primary"
+            <Button
               disabled={confirmation !== null || pending !== null}
               ref={trigger}
               type="submit"
             >
               {t("data.common.reviewRefresh")}
-            </button>
+            </Button>
           </footer>
         </form>
       </section>
@@ -352,14 +340,14 @@ export function IndustryRefreshReconciliation({
   return (
     <section
       aria-labelledby="operator-industry-refresh-reconciliation"
-      className="operator-refresh-receipt operator-refresh-running"
+      className={styles.receipt} data-tone="running"
     >
       <header aria-atomic="true" aria-live="polite" role="status">
         <div>
-          <p className="eyebrow">{t("data.industry.latest")}</p>
+          <p className={styles.eyebrow}>{t("data.industry.latest")}</p>
           <h2 id="operator-industry-refresh-reconciliation">{t("data.common.confirming")}</h2>
         </div>
-        <span className="operator-state">{t("data.common.checking")}</span>
+        <Badge variant="secondary">{t("data.common.checking")}</Badge>
       </header>
       <p>
         {t("data.common.pendingDescription")}
@@ -369,15 +357,13 @@ export function IndustryRefreshReconciliation({
         <div><dt>{t("data.common.observationThrough")}</dt><dd>{request.observationThroughSession}</dd></div>
       </dl>
       {pollError ? (
-        <p className="inline-status inline-status-error" role="alert">
-          {t("data.industry.receiptUnavailable")}
-        </p>
+        <Alert variant="destructive" role="alert"><AlertDescription>{t("data.industry.receiptUnavailable")}</AlertDescription></Alert>
       ) : null}
-      <footer className="operator-confirmation-actions">
-        <button onClick={onStop} type="button">{t("data.common.stopChecking")}</button>
-        <button className="button-primary" onClick={onRetry} type="button">
+      <footer className={styles.receiptActions}>
+        <Button variant="outline" onClick={onStop} type="button">{t("data.common.stopChecking")}</Button>
+        <Button onClick={onRetry} type="button">
           {t("data.common.retryExact")}
-        </button>
+        </Button>
       </footer>
     </section>
   );
@@ -390,10 +376,10 @@ export function IndustryRefreshReceipt({
   const { t } = useTranslation("operator");
   const presentation = industryPresentation(operation);
   return (
-    <section className={`operator-refresh-receipt operator-refresh-${presentation.tone}`}>
+    <section className={styles.receipt} data-tone={presentation.tone}>
       <header aria-atomic="true" aria-live="polite" role="status">
-        <div><p className="eyebrow">{t("data.industry.latest")}</p><h2>{presentation.title}</h2></div>
-        <span className="operator-state">{presentation.label}</span>
+        <div><p className={styles.eyebrow}>{t("data.industry.latest")}</p><h2>{presentation.title}</h2></div>
+        <Badge variant={presentation.tone === "failed" ? "destructive" : presentation.tone === "published" ? "default" : "secondary"} className={presentation.tone === "warning" ? "text-[var(--warning)]" : undefined}>{presentation.label}</Badge>
       </header>
       <p>{presentation.description}</p>
       <dl>
@@ -404,9 +390,7 @@ export function IndustryRefreshReceipt({
         <div><dt>{t("data.common.failure")}</dt><dd><code>{operation.failureCode ?? operation.lastFailureCode ?? t("data.common.none")}</code></dd></div>
       </dl>
       {pollError ? (
-        <p className="inline-status inline-status-error" role="alert">
-          {t("data.common.statusUnavailable")}
-        </p>
+        <Alert variant="destructive" role="alert"><AlertDescription>{t("data.common.statusUnavailable")}</AlertDescription></Alert>
       ) : null}
     </section>
   );
@@ -428,7 +412,7 @@ function IndustryRefreshDialog({
   request: IndustryRefreshRequest;
 }>) {
   const { t } = useTranslation("operator");
-  const dialog = useRef<HTMLDialogElement | null>(null);
+  const initialFocus = useRef<HTMLButtonElement | null>(null);
   const dismissed = useRef(false);
   const mounted = useRef(true);
   const phase = useRef<"idle" | "proof" | "submission">("idle");
@@ -437,15 +421,11 @@ function IndustryRefreshDialog({
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    const element = dialog.current;
-    if (element === null) return;
     mounted.current = true;
-    element.showModal();
     return () => {
       mounted.current = false;
       if (!dismissed.current || phase.current !== "submission") activeRequest.current?.abort();
       activeRequest.current = null;
-      if (element.open) element.close();
     };
   }, []);
 
@@ -515,40 +495,28 @@ function IndustryRefreshDialog({
   }
 
   return (
-    <dialog
-      aria-describedby="operator-industry-refresh-description"
-      aria-labelledby="operator-industry-refresh-title"
-      aria-modal="true"
-      className="operator-confirmation-dialog"
-      onCancel={(event) => {
-        event.preventDefault();
-        dismiss();
-      }}
-      onKeyDown={(event) => containDialogKeyboardFocus(event, dialog.current)}
-      ref={dialog}
-    >
-      <form className="operator-confirmation-content" onSubmit={(event) => {
-        event.preventDefault();
-        void submit();
-      }}>
-        <header><p className="eyebrow">{t("data.common.confirmUpdate")}</p><h2 id="operator-industry-refresh-title">{t("data.industry.submitTitle")}</h2></header>
-        <p id="operator-industry-refresh-description">{t("data.industry.submitDescription")}</p>
-        <dl className="operator-confirmation-target">
-          <div><dt>{t("data.common.kind")}</dt><dd><strong>{t("data.industry.kind")}</strong></dd></div>
-          <div><dt>{t("data.common.observationThrough")}</dt><dd><code>{refreshRequest.observationThroughSession}</code></dd></div>
-          <div><dt>{t("data.common.idempotencyKey")}</dt><dd><code>{refreshRequest.idempotencyKey}</code></dd></div>
-        </dl>
-        <div className="operator-confirmation-effect">
-          <span>{t("data.common.effect")}</span>
-          <p>{t("data.common.queueEffect")}</p>
-        </div>
-        {error === null ? null : <p className="inline-status inline-status-error" role="alert">{t(error)}</p>}
-        <footer className="operator-confirmation-actions">
-          <button onClick={dismiss} type="button">{t("data.common.cancel")}</button>
-          <button className="button-primary" disabled={submitting} type="submit">{submitting ? t("data.common.submitting") : t("data.common.submitRefresh")}</button>
-        </footer>
-      </form>
-    </dialog>
+    <Dialog open onOpenChange={(open) => { if (!open) dismiss(); }}>
+      <DialogContent finalFocus={false} initialFocus={initialFocus} showCloseButton={false} className="max-h-[calc(100dvh-32px)] overflow-y-auto sm:max-w-lg">
+        <form className={styles.confirmationForm} onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+          <DialogHeader>
+            <p className={styles.eyebrow}>{t("data.common.confirmUpdate")}</p>
+            <DialogTitle id="operator-industry-refresh-title">{t("data.industry.submitTitle")}</DialogTitle>
+          </DialogHeader>
+          <DialogDescription id="operator-industry-refresh-description">{t("data.industry.submitDescription")}</DialogDescription>
+          <dl className={styles.target}>
+            <div><dt>{t("data.common.kind")}</dt><dd><strong>{t("data.industry.kind")}</strong></dd></div>
+            <div><dt>{t("data.common.observationThrough")}</dt><dd><code>{refreshRequest.observationThroughSession}</code></dd></div>
+            <div><dt>{t("data.common.idempotencyKey")}</dt><dd><code>{refreshRequest.idempotencyKey}</code></dd></div>
+          </dl>
+          <Alert role="note"><AlertDescription><strong>{t("data.common.effect")}</strong><p>{t("data.common.queueEffect")}</p></AlertDescription></Alert>
+          {error === null ? null : <Alert variant="destructive" role="alert"><AlertDescription>{t(error)}</AlertDescription></Alert>}
+          <DialogFooter>
+            <Button variant="outline" onClick={dismiss} ref={initialFocus} type="button">{t("data.common.cancel")}</Button>
+            <Button disabled={submitting} type="submit">{submitting ? t("data.common.submitting") : t("data.common.submitRefresh")}</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 

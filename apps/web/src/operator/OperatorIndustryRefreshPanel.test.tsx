@@ -18,7 +18,7 @@ test("renders focused Industry target without a key field", () => {
   expect(markup).toContain("Observation-through Research Session");
   expect(markup).toContain('for="operator-industry-target"');
   expect(markup).toContain('id="operator-industry-target"');
-  expect(markup).toContain('type="date"');
+  expect(markup).toContain('placeholder="YYYY-MM-DD"');
   expect(markup).not.toContain("Idempotency key");
   expect(markup).toContain("Select the observation-through Research Session.");
   expect(markup).not.toContain("exactly as accepted by the CLI");

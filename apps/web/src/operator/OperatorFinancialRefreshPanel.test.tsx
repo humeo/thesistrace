@@ -53,7 +53,7 @@ test("polls company checkpoints, preserves stale counts, and stops at a terminal
     await fill("#operator-financial-target", "2026-08-14", "change");
     await act(async () => {host.querySelector("form")!.dispatchEvent(new Event("submit", {bubbles: true, cancelable: true}));});
     expect(host.querySelector('input[autocomplete="one-time-code"]')).toBeNull();
-    await act(async () => {host.querySelector("dialog form")!.dispatchEvent(new Event("submit", {bubbles: true, cancelable: true}));});
+    await act(async () => {document.querySelector('[role="dialog"] form')!.dispatchEvent(new Event("submit", {bubbles: true, cancelable: true}));});
     expect(host.textContent).toContain("Collecting company statements");
     await tick();
     expect(host.textContent).toContain("Companies processed2");
@@ -86,7 +86,7 @@ test("renders focused Financial target without a key field", () => {
   expect(markup).toContain("Observation-through Research Session");
   expect(markup).toContain('for="operator-financial-target"');
   expect(markup).toContain('id="operator-financial-target"');
-  expect(markup).toContain('type="date"');
+  expect(markup).toContain('placeholder="YYYY-MM-DD"');
   expect(markup).not.toContain("Idempotency key");
   expect(markup).toContain("Select the observation-through Research Session.");
   expect(markup).not.toContain("exactly as accepted by the CLI");
@@ -160,7 +160,7 @@ test("shows discovery gaps and their complete-through consequence", () => {
   );
 
   expect(markup).toContain("Published · incomplete coverage");
-  expect(markup).toContain("operator-refresh-warning");
+  expect(markup).toContain('data-tone="warning"');
   expect(markup).toContain("discovery gaps remain");
   expect(markup).toContain("complete-through may lag");
   expect(markup).toContain("<dt>Discovery gaps</dt><dd>1</dd>");
@@ -302,7 +302,7 @@ test("keeps the submission key and visible confirmation error across a language 
   document.body.append(host);
   const root = createRoot(host);
   const send = async (selector: string) => act(async () => {
-    host.querySelector(selector)!.dispatchEvent(new Event("submit", {bubbles: true, cancelable: true}));
+    (host.querySelector(selector) ?? document.querySelector(selector))!.dispatchEvent(new Event("submit", {bubbles: true, cancelable: true}));
   });
   const fill = async (selector: string, value: string, event: string) => act(async () => {
     const input = host.querySelector<HTMLInputElement>(selector)!;
@@ -311,25 +311,25 @@ test("keeps the submission key and visible confirmation error across a language 
   });
   try {
     await act(async () => root.render(<OperatorFinancialRefreshPanel onAccessNotFound={() => undefined} />));
-    expect(host.querySelector('input[type="text"]')).toBeNull();
-    await fill('input[type="date"]', "2026-08-14", "change");
+    expect(host.querySelector('#operator-financial-target')?.getAttribute('placeholder')).toBe('YYYY-MM-DD');
+    await fill('#operator-financial-target', "2026-08-14", "change");
     await send("form");
     expect(host.querySelector('input[autocomplete="one-time-code"]')).toBeNull();
-    await send("dialog form");
-    const confirmation = host.querySelector("dialog");
+    await send('[role="dialog"] form');
+    const confirmation = document.querySelector('[role="dialog"]');
     expect(confirmation?.textContent).toContain("Financial Refresh could not be submitted");
     await act(async () => { await i18n.changeLanguage("zh-CN"); });
-    expect(host.querySelector("dialog")).toBe(confirmation);
+    expect(document.querySelector('[role="dialog"]')).toBe(confirmation);
     expect(confirmation?.textContent).toContain("无法提交财务数据刷新");
-    expect(host.querySelector<HTMLInputElement>('input[type="date"]')?.value).toBe("2026-08-14");
+    expect(host.querySelector<HTMLInputElement>('#operator-financial-target')?.value).toBe("2026-08-14");
     expect(proof).toHaveBeenCalledTimes(1);
     expect(submit).not.toHaveBeenCalled();
-    await send("dialog form");
+    await send('[role="dialog"] form');
     expect(proof.mock.calls[0]![0].idempotencyKey).toBe(proof.mock.calls[1]![0].idempotencyKey);
     const firstKey = submit.mock.calls[0]![0].idempotencyKey;
     await send("form");
     expect(host.querySelector('input[autocomplete="one-time-code"]')).toBeNull();
-    await send("dialog form");
+    await send('[role="dialog"] form');
     expect(submit.mock.calls[1]![0].idempotencyKey).not.toBe(firstKey);
   } finally {
     await act(async () => root.unmount());

@@ -592,186 +592,6 @@ select { color-scheme: light; }
 }
 .state-section p { margin: 0; }
 
-/* Operator Console */
-.operator-section { min-width: 0; }
-.operator-section + .operator-section { padding-top: 32px; border-top: 1px solid var(--line); }
-.operator-section-header {
-  display: flex;
-  align-items: end;
-  justify-content: space-between;
-  gap: 24px;
-  padding-bottom: 16px;
-}
-.operator-section-header > div { display: grid; gap: 5px; }
-.operator-section-header span { color: var(--ink-soft); font-size: 13px; }
-.operator-state { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-muted); white-space: nowrap; }
-.operator-state::before {
-  width: 6px;
-  height: 6px;
-  flex: 0 0 auto;
-  background: var(--ink-faint);
-  border-radius: 50%;
-  content: "";
-}
-.operator-state-active::before,
-.operator-state-effective::before { background: var(--success); }
-.operator-state-inactive::before,
-.operator-state-terminal::before { background: var(--ink-faint); }
-.operator-confirmation-dialog {
-  width: min(520px, calc(100vw - 32px));
-  max-width: none;
-  margin: auto;
-  padding: 0;
-  color: var(--ink-muted);
-  background: var(--surface-1);
-  border: 1px solid var(--line-strong);
-  border-radius: 12px;
-}
-.operator-confirmation-dialog::backdrop { background: rgb(0 0 0 / 72%); }
-.operator-confirmation-content { display: grid; gap: 18px; padding: 24px; }
-.operator-confirmation-content header { display: grid; gap: 3px; }
-.operator-confirmation-content p { margin: 0; }
-.operator-confirmation-content > p {
-  color: var(--ink-soft);
-  font-size: 13px;
-  line-height: 1.55;
-}
-.operator-confirmation-field { display: grid; gap: 7px; }
-.operator-confirmation-field > strong {
-  min-height: 40px;
-  padding: 10px 11px;
-  color: var(--ink);
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  font-family: var(--mono);
-  font-size: 13px;
-  font-weight: 500;
-  overflow-wrap: anywhere;
-}
-.operator-confirmation-field .operator-field-error {
-  color: var(--danger);
-  font-size: 12px;
-  line-height: 1.45;
-}
-.operator-confirmation-target {
-  display: grid;
-  gap: 0;
-  margin: 0;
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-}
-.operator-confirmation-target > div {
-  display: grid;
-  grid-template-columns: 150px minmax(0, 1fr);
-  gap: 12px;
-  padding: 10px 12px;
-}
-.operator-confirmation-target > div + div { border-top: 1px solid var(--line); }
-.operator-confirmation-target dt { color: var(--ink-soft); font-size: 12px; }
-.operator-confirmation-target dd { min-width: 0; margin: 0; color: var(--ink); font-size: 13px; }
-.operator-confirmation-target dd strong,
-.operator-confirmation-target dd span { display: block; }
-.operator-confirmation-target dd span { margin-top: 2px; color: var(--ink-soft); }
-.operator-confirmation-target code { font-family: var(--mono); overflow-wrap: anywhere; }
-.operator-confirmation-effect {
-  display: grid;
-  gap: 6px;
-  padding: 12px 14px;
-  background: var(--surface-2);
-  border-left: 2px solid var(--primary);
-}
-.operator-confirmation-effect-danger { border-left-color: var(--danger); }
-.operator-confirmation-effect > span { color: var(--ink-soft); font-size: 12px; font-weight: 500; }
-.operator-confirmation-effect p { color: var(--ink-muted); font-size: 13px; line-height: 1.5; }
-.operator-confirmation-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  padding-top: 2px;
-}
-.operator-confirmation-actions button { min-height: 44px; }
-.operator-refresh-form {
-  display: grid;
-  width: min(760px, 100%);
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 16px;
-  padding: 20px;
-  background: var(--surface-1);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-}
-.operator-refresh-form > label,
-.operator-refresh-field { display: grid; align-content: start; gap: 7px; }
-.operator-refresh-form input { font-family: var(--mono); font-size: 13px; }
-.operator-refresh-form small { color: var(--ink-soft); font-size: 12px; font-weight: 400; line-height: 1.45; }
-.operator-refresh-form input[aria-invalid="true"] { border-color: var(--danger); }
-.operator-refresh-form .operator-field-error { color: var(--danger); }
-.operator-refresh-form-error { grid-column: 1 / -1; margin: 0; }
-.operator-refresh-form footer {
-  display: flex;
-  grid-column: 1 / -1;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 16px;
-  padding-top: 4px;
-}
-.operator-refresh-form footer p { margin: 0; color: var(--ink-soft); font-size: 12px; }
-.operator-refresh-receipt {
-  display: grid;
-  gap: 16px;
-  padding: 20px;
-  background: var(--surface-1);
-  border: 1px solid var(--line);
-  border-left: 3px solid var(--primary);
-  border-radius: 10px;
-}
-.operator-refresh-receipt > header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-.operator-refresh-receipt > header .eyebrow { margin-bottom: 4px; }
-.operator-refresh-receipt > p { margin: 0; color: var(--ink-muted); font-size: 13px; }
-.operator-refresh-receipt > dl {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  margin: 0;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-}
-.operator-refresh-receipt > dl > div { min-width: 0; padding: 12px; }
-.operator-refresh-receipt > dl > div:nth-child(n + 4) { border-top: 1px solid var(--line); }
-.operator-refresh-receipt > dl > div:not(:nth-child(3n + 1)) { border-left: 1px solid var(--line); }
-.operator-refresh-receipt dt { color: var(--ink-soft); font-size: 12px; }
-.operator-refresh-receipt dd { margin: 5px 0 0; color: var(--ink); font-size: 13px; overflow-wrap: anywhere; }
-.operator-refresh-receipt code,
-.operator-refresh-receipt time { font-family: var(--mono); }
-
-.operator-financial-telemetry { display: grid; gap: 12px; min-width: 0; }
-.operator-financial-telemetry > header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; font-size: 13px; }
-.operator-financial-telemetry > header span { color: var(--ink-soft); font-family: var(--mono); }
-.operator-financial-telemetry dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
-.operator-financial-telemetry dl > div { padding: 12px; min-width: 0; }
-.operator-financial-telemetry dl > div:nth-child(n + 4) { border-top: 1px solid var(--line); }
-.operator-financial-telemetry dt { font-size: 12px; color: var(--ink-soft); }
-.operator-financial-telemetry dd { margin: 5px 0 0; font-size: 13px; color: var(--ink); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
-.operator-financial-telemetry p { margin: 0; font-size: 12px; color: var(--ink-soft); }
-.operator-financial-gaps { display: grid; gap: 8px; padding-left: 12px; border-left: 2px solid var(--warning); font-size: 13px; }
-.operator-financial-gaps ul { display: grid; gap: 12px; list-style: none; padding: 0; margin: 0; }
-.operator-financial-gaps li { display: grid; gap: 4px; overflow-wrap: anywhere; }
-.operator-financial-gaps code { font-size: 11px; color: var(--ink-soft); }
-@media (max-width: 640px) {
-  .operator-financial-telemetry dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .operator-financial-telemetry dl > div:nth-child(n + 3) { border-top: 1px solid var(--line); }
-}
-.operator-refresh-published { border-left-color: var(--success); }
-.operator-refresh-warning { border-left-color: var(--warning); }
-.operator-refresh-warning .operator-state::before { background: var(--warning); }
-.operator-refresh-failed { border-left-color: var(--danger); }
-
 /* Authentication and account access */
 .auth-page {
   display: grid;
@@ -1035,10 +855,6 @@ select { color-scheme: light; }
   .account-trigger,
   .account-action,
   .account-language-options > button,
-  .operator-confirmation-field input,
-  .operator-refresh-form input,
-  .operator-refresh-form footer button,
-  .operator-section-header > button,
   .mobile-navigation-toggle,
   .mobile-navigation-close,
   .resource-nav a,
@@ -1168,13 +984,6 @@ select { color-scheme: light; }
   .auth-brand { margin-bottom: 28px; }
   .page-hero, .page-header, .research-run-header { align-items: flex-start; flex-direction: column; gap: 16px; }
   .hero-actions, .page-header-actions, .research-run-header > div:last-child { justify-content: flex-start; }
-  .operator-section-header { align-items: stretch; flex-direction: column; }
-  .operator-refresh-form { grid-template-columns: 1fr; }
-  .operator-refresh-form footer { grid-column: 1; align-items: stretch; flex-direction: column; }
-  .operator-refresh-form footer button { min-height: 44px; }
-  .operator-refresh-receipt > dl { grid-template-columns: 1fr; }
-  .operator-refresh-receipt > dl > div:nth-child(n) { border-top: 1px solid var(--line); border-left: 0; }
-  .operator-refresh-receipt > dl > div:first-child { border-top: 0; }
   .alpha-formula-editor { height: clamp(280px, 38svh, 340px); }
   .research-run-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .research-run-facts p:nth-child(odd) { border-left: 0; }
@@ -1189,7 +998,6 @@ select { color-scheme: light; }
 @media (max-width: 480px) {
   .main-content { padding-inline: 12px; }
   h1 { font-size: 24px; }
-  .operator-confirmation-target > div { grid-template-columns: 1fr; gap: 4px; }
   .research-run-facts { grid-template-columns: 1fr; }
   .research-run-facts p + p { border-top: 1px solid var(--line); border-left: 0; }
   .track-history dl { grid-template-columns: 1fr; }

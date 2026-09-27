@@ -1,7 +1,7 @@
 export const operatorDataEn = {
   common: {
     notFound: "Not found", notFoundDescription: "The requested resource is not available.", pageLabel: "Operator Data", title: "Data operations",
-    kind: "Kind", target: "Target", asOf: "As-of", observationThrough: "Observation through", idempotencyKey: "Idempotency key",
+    kind: "Kind", target: "Target", asOf: "As-of", observationThrough: "Observation through", openTargetCalendar: "Open observation-through calendar", idempotencyKey: "Idempotency key",
     effect: "Effect", cancel: "Cancel", confirmUpdate: "Confirm update", submitRefresh: "Submit Refresh", submitting: "Submitting…",
     reviewRefresh: "Review Refresh", confirming: "Confirming submission", checking: "Checking", latestOperation: "Latest submitted operation",
     pendingDescription: "Core submission had already started, but its response could not be confirmed. Checking the exact idempotency key until its durable receipt is available.",
@@ -106,7 +106,7 @@ export const operatorDataEn = {
 export const operatorDataZh = {
   common: {
     notFound: "未找到", notFoundDescription: "请求的资源不可用。", pageLabel: "Operator 数据", title: "数据运维",
-    kind: "类型", target: "目标", asOf: "截至日期", observationThrough: "观测截至", idempotencyKey: "幂等键",
+    kind: "类型", target: "目标", asOf: "截至日期", observationThrough: "观测截至", openTargetCalendar: "打开观测截至日历", idempotencyKey: "幂等键",
     effect: "操作影响", cancel: "取消", confirmUpdate: "确认更新", submitRefresh: "提交刷新", submitting: "提交中…",
     reviewRefresh: "检查刷新请求", confirming: "正在确认提交", checking: "检查中", latestOperation: "最近提交的操作",
     pendingDescription: "Core 已开始处理提交，但其响应尚无法确认。系统会按原幂等键检查，直到取得持久化回执。",

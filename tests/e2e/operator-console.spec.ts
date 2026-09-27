@@ -1271,7 +1271,7 @@ test("Operator Financial and Industry refresh and response recovery", { tag: "@i
   const financialReview = financialRefreshSection.getByRole("button", {
     name: "Review Refresh",
   });
-  await expect(financialTarget).toHaveAttribute("type", "date");
+  await expect(financialTarget).toHaveAttribute("placeholder", "YYYY-MM-DD");
   await expect(financialTarget).toHaveAttribute("required", "");
   await expect(financialRefreshSection.getByLabel("Idempotency key")).toHaveCount(0);
   const financialTargetSession = "2026-08-14";
@@ -1299,7 +1299,7 @@ test("Operator Financial and Industry refresh and response recovery", { tag: "@i
   await expect(financialConfirmation).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Financial Refresh accepted" }))
     .toBeVisible({ timeout: 10_000 });
-  const financialReceipt = page.locator("section.operator-refresh-receipt").filter({
+  const financialReceipt = page.locator("section[data-tone]").filter({
     hasText: financialKey,
   });
   await expect(financialReceipt.getByText(financialTargetSession, { exact: true }))
@@ -1348,7 +1348,7 @@ test("Operator Financial and Industry refresh and response recovery", { tag: "@i
   const industryReview = industryRefreshSection.getByRole("button", {
     name: "Review Refresh",
   });
-  await expect(industryTarget).toHaveAttribute("type", "date");
+  await expect(industryTarget).toHaveAttribute("placeholder", "YYYY-MM-DD");
   await expect(industryTarget).toHaveAttribute("required", "");
   await expect(industryRefreshSection.getByLabel("Idempotency key")).toHaveCount(0);
   const industryTargetSession = "2026-08-14";
@@ -1376,7 +1376,7 @@ test("Operator Financial and Industry refresh and response recovery", { tag: "@i
   await expect(industryConfirmation).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Industry Refresh accepted" }))
     .toBeVisible({ timeout: 10_000 });
-  const industryReceipt = page.locator("section.operator-refresh-receipt").filter({
+  const industryReceipt = page.locator("section[data-tone]").filter({
     hasText: industryKey,
   });
   await expect(page.getByRole("heading", { name: "Industry data published" }))
@@ -1421,7 +1421,7 @@ test("Operator Financial and Industry refresh and response recovery", { tag: "@i
   await expect(industryConfirmation.getByLabel("Verification code")).toHaveCount(0);
   await industryConfirmation.getByRole("button", { name: "Submit Refresh" }).click();
   await expect(industryConfirmation).toHaveCount(0);
-  const industryNoChangeReceipt = page.locator("section.operator-refresh-receipt").filter({
+  const industryNoChangeReceipt = page.locator("section[data-tone]").filter({
     hasText: industryNoChangeKey,
   });
   await expect(page.getByRole("heading", { name: "Industry Refresh completed" }))
@@ -1470,7 +1470,7 @@ test("Operator Financial and Industry refresh and response recovery", { tag: "@i
   await expect(industryConfirmation.getByLabel("Verification code")).toHaveCount(0);
   await industryConfirmation.getByRole("button", { name: "Submit Refresh" }).click();
   await expect(industryConfirmation).toHaveCount(0);
-  const industryRejectedReceipt = page.locator("section.operator-refresh-receipt").filter({
+  const industryRejectedReceipt = page.locator("section[data-tone]").filter({
     hasText: industryRejectedKey,
   });
   await expect(page.getByRole("heading", { name: "Industry Refresh rejected" }))
@@ -1523,7 +1523,7 @@ test("Operator Financial and Industry refresh and response recovery", { tag: "@i
     "**/api/operator/data/refreshes/financial**",
     droppedFinancialResponseHandler,
   );
-  const recoveredFinancialReceipt = page.locator("section.operator-refresh-receipt").filter({
+  const recoveredFinancialReceipt = page.locator("section[data-tone]").filter({
     hasText: droppedFinancialKey,
   });
   await expect(page.getByRole("heading", {
