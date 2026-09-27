@@ -32,6 +32,7 @@ async def _exercise_bounded_stdio_reader() -> None:
         await anext(reader)
 
 
+@pytest.mark.bounded_process
 def test_stdio_claim_diverts_handler_and_child_stdin_then_restores_wire() -> None:
     script = """
 import json
@@ -153,6 +154,7 @@ def test_stdio_requires_one_explicit_researcher_identity(
     )
 
 
+@pytest.mark.bounded_process
 def test_packaged_stdio_entrypoint_fails_cleanly_without_core_context() -> None:
     executable = Path(os.sys.executable).with_name("thesistrace-research-agent-mcp")
     environment = {
@@ -182,6 +184,7 @@ def test_packaged_stdio_entrypoint_fails_cleanly_without_core_context() -> None:
     assert "Traceback" not in completed.stderr
 
 
+@pytest.mark.bounded_process
 def test_packaged_stdio_entrypoint_sanitizes_unavailable_core_context(
     tmp_path: Path,
 ) -> None:

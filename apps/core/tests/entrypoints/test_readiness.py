@@ -7,6 +7,7 @@ from threading import Event
 from time import monotonic
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from thesistrace.benchmark import (
@@ -155,6 +156,7 @@ def test_internal_strategy_metric_endpoint_rejects_invalid_domain_facts() -> Non
     assert response.json() == {"detail": "Strategy comparison facts are invalid"}
 
 
+@pytest.mark.bounded_process
 def test_readiness_has_one_end_to_end_deadline_for_blocked_probes(
     tmp_path: Path,
 ) -> None:
