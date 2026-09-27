@@ -123,6 +123,15 @@ test('Chat actions remain usable while independent research content scrolls', as
  await actions.click();
  const menu = page.getByRole('menu', { name: 'Actions for Quality Alpha' });
  await expect(menu).toBeVisible();
+ await page.keyboard.press('Escape');
+ await expect(menu).toBeHidden();
+ await actions.press('ArrowDown');
+ await expect(menu).toBeVisible();
+ await expect(menu.getByRole('menuitem', { name: 'Rename', exact: true })).toBeFocused();
+ await page.keyboard.press('Home');
+ await expect(menu.getByRole('menuitem', { name: 'Rename', exact: true })).toBeFocused();
+ await page.keyboard.press('ArrowDown');
+ await expect(menu.getByRole('menuitem', { name: 'Delete Chat' })).toBeFocused();
  await page.getByLabel('Research content').evaluate(element => { element.scrollTop = 100; });
  await expect.poll(() => page.getByLabel('Research content').evaluate(element => element.scrollTop)).toBe(100);
  await expect(menu).toBeVisible();
@@ -131,6 +140,7 @@ test('Chat actions remain usable while independent research content scrolls', as
  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
  await expect(actions).toBeFocused();
  await actions.click();
+ await expect(menu).toBeVisible();
  await page.getByRole('region', { name: 'Chats', exact: true }).dispatchEvent('scroll');
  await expect(menu).toBeHidden();
  await expect(actions).toBeFocused();

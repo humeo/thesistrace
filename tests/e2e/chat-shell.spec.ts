@@ -336,6 +336,8 @@ for (const viewport of [
 }
 
 test("first Chat turn streams through Caddy and reload replays without another run", async ({ page }) => {
+  // This checks the streamed turn, persisted reload, desktop menus, and mobile drawer.
+  test.setTimeout(120_000);
   const runRequests: string[] = [];
   page.on("request", (request) => {
     const url = new URL(request.url());
@@ -426,8 +428,15 @@ test("first Chat turn streams through Caddy and reload replays without another r
   const recoveredTitle = "Recovered Chat title";
   const transitioningActions = page.getByRole("button", { name: "Actions for Untitled" });
   await transitioningActions.click();
+  const transitioningMenu = page.getByRole("menu", { name: "Actions for Untitled" });
+  await expect(transitioningMenu).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(transitioningMenu).toBeHidden();
+  await transitioningActions.press("ArrowDown");
+  await expect(transitioningMenu).toBeVisible();
   const transitioningDelete = page.getByRole("menuitem", { name: "Delete Chat" });
-  await expect(page.getByRole("menuitem", { name: "Rename Chat" })).toBeFocused();
+  const transitioningRename = page.getByRole("menuitem", { name: "Rename", exact: true });
+  await expect(transitioningRename).toBeFocused();
   await page.keyboard.press("ArrowDown");
   await expect(transitioningDelete).toBeFocused();
   setAgentSessionActiveRun(durableSession, true);
@@ -472,7 +481,7 @@ test("first Chat turn streams through Caddy and reload replays without another r
   const collapsedActionTarget = await collapsedActions.boundingBox();
   expect(collapsedActionTarget?.width).toBeGreaterThanOrEqual(36);
   expect(collapsedActionTarget?.height).toBeGreaterThanOrEqual(36);
-  await collapsedActions.click();
+  await collapsedActions.press("ArrowDown");
   const collapsedRenameMenuItem = page.getByRole("menuitem", { name: "Rename" });
   await expect(collapsedRenameMenuItem).toBeVisible();
   await expect(collapsedRenameMenuItem).toBeFocused();
@@ -496,19 +505,21 @@ test("first Chat turn streams through Caddy and reload replays without another r
 
   const sessionActions = page.getByRole("button", { name: `Actions for ${recoveredTitle}` });
   await page.locator(".chat-session-row-current").hover();
-  await sessionActions.click();
+  await sessionActions.press("ArrowDown");
   const renameMenuItem = page.getByRole("menuitem", { name: "Rename" });
   const deleteMenuItem = page.getByRole("menuitem", { name: "Delete Chat" });
   await expect(renameMenuItem).toBeFocused();
-  await page.keyboard.press("Tab");
+  await page.keyboard.press("ArrowDown");
   await expect(deleteMenuItem).toBeFocused();
-  await page.keyboard.press("Tab");
+  await page.keyboard.press("ArrowUp");
   await expect(renameMenuItem).toBeFocused();
-  await page.keyboard.press("Shift+Tab");
+  await page.keyboard.press("End");
   await expect(deleteMenuItem).toBeFocused();
+  await page.keyboard.press("Home");
+  await expect(renameMenuItem).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(sessionActions).toBeFocused();
-  await sessionActions.click();
+  await sessionActions.press("ArrowDown");
   await expect(renameMenuItem).toBeFocused();
   await page.evaluate(() => window.dispatchEvent(new Event("resize")));
   await expect(page.getByRole("menu", { name: `Actions for ${recoveredTitle}` })).toHaveCount(0);

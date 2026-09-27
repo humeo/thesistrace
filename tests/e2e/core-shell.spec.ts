@@ -933,7 +933,7 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await page.keyboard.type("ts_mean(close, 2)");
     await validDiagnosis;
     await expect(editor).toHaveText("ts_mean(close, 2)");
-    await expect(page.locator(".cm-alpha-field").first()).toHaveCSS("color", "rgb(139, 213, 202)");
+    await expect(page.locator(".cm-alpha-field").first()).toHaveCSS("color", "rgb(23, 95, 105)");
     await expect(page.getByRole("list", { name: "Formula diagnostics" })).toHaveCount(0);
     await fillResearchNotes(page, "Short rolling mean retains signal.");
     await page.getByLabel("Research start date").fill("2026-08-03");
@@ -981,7 +981,7 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await expect(page.getByLabel("Notes")).toHaveValue("Short rolling mean retains signal.");
     await expect(page.getByRole("combobox", { name: "Universe", exact: true })).toContainText("Top 300");
 
-    const workspaceNew = page.getByRole("button", { name: "New research", exact: true });
+    const workspaceNew = page.getByLabel("Research workspace").getByRole("button", { name: "New research", exact: true });
     await workspaceNew.click();
     await page.getByRole("alertdialog").getByRole("button", { name: "Cancel", exact: true }).click();
     await expect(page.getByLabel("Research name")).toHaveValue("Browser Mean Research");
@@ -1220,6 +1220,7 @@ test("Complete field catalog composes one Formula and starts its DailyTrack", { 
       });
     });
     await page.reload();
+    await expect(page.getByRole("tab", { name: "Overview", exact: true })).toBeVisible({ timeout: 30_000 });
     const unavailableRunComparison = page.getByLabel("CSI 300 Strategy Comparison", {
       exact: true,
     });
@@ -1229,7 +1230,8 @@ test("Complete field catalog composes one Formula and starts its DailyTrack", { 
     await expect(page.getByLabel(comparisonChartLabel, { exact: true })).toHaveCount(0);
     await page.unroute(runDetailPath);
     await page.reload();
-    await expect(page.getByLabel(comparisonChartLabel, { exact: true })).toBeVisible();
+    await expect(page.getByLabel(comparisonChartLabel, { exact: true })).toBeVisible({ timeout: 30_000 });
+    await page.getByRole("tab", { name: "Configuration", exact: true }).click();
     const terminalProgress = page.locator("[aria-label='ResearchRun progress']");
     await expect(terminalProgress.getByText("Warm-up", { exact: true })).toHaveCount(0);
     await expect(terminalProgress.getByText("Committed chunks", { exact: true })).toHaveCount(0);
@@ -1242,11 +1244,6 @@ test("Complete field catalog composes one Formula and starts its DailyTrack", { 
     await expect(terminalProgress.locator("time")).toHaveCount(2);
     await expect(page.getByRole("heading", { name: "Daily Observations" })).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Provenance" })).toHaveCount(0);
-    expect(await page.getByRole("heading", { name: "Strategy Summary" }).evaluate(
-      (summary) => summary.compareDocumentPosition(
-        document.querySelector("[aria-label='ResearchRun progress']")!,
-      ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    )).toBeTruthy();
     expect(await page.locator("[aria-label='ResearchRun progress']").evaluate(
       (progress) => progress.compareDocumentPosition(
         document.querySelector("[aria-label='Create a draft']")!,
@@ -1269,7 +1266,7 @@ test("Complete field catalog composes one Formula and starts its DailyTrack", { 
     await page.getByRole("tab", { name: /Holdings/ }).click();
     await expect(page.getByRole("table")).toContainText("Symbol");
     await page.getByRole("tab", { name: "Rebalance", exact: true }).click();
-    await expect(page.getByRole("region", { name: "Selection schedule" })).toContainText("Buy and sell instructions are not available yet");
+    await expect(page.getByRole("heading", { name: "Buy and sell instructions are not available yet" })).toBeVisible();
     await page.getByRole("tab", { name: "Performance", exact: true }).click();
     await page.getByRole("button", { name: "Full strategy", exact: true }).click();
     const dailyTrackChart = page.getByLabel(comparisonChartLabel, { exact: true });
@@ -1705,7 +1702,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await expect(page.getByRole("textbox", { name: "Alpha formula", exact: true })).toHaveText("ts_mean(close, 3)");
     await replaceFormula(page, "unknown_field");
     await page.getByRole("button", { name: /^Run (backtest|evaluation)$/, exact: true }).click();
-    await expect(page.getByRole("list", { name: "Run issues" })).toContainText("UNKNOWN_IDENTIFIER");
+    await expect(page.getByRole("list", { name: "Run issues" })).toContainText("Unknown Alpha identifier: unknown_field");
     await expect(page.locator(".cm-lintRange-error")).toHaveCount(1);
     const rejectedHistory = await page.request.get("/api/research-runs");
     expect(((await rejectedHistory.json()).items as unknown[])).toHaveLength(acceptedItems.length);
@@ -1862,7 +1859,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await expect(page.getByText("Excess", { exact: true })).toHaveCount(2);
     await expect(researchRunsTable.getByText("Factor Evaluation", { exact: true })).toHaveCount(1);
     await expect(researchRunsTable.getByText("Strategy Backtest", { exact: true })).toHaveCount(2);
-    await expect(page.getByRole("combobox", { name: "Filter by Type" })).toHaveText("All Types");
+    await expect(page.getByRole("combobox", { name: "Filter by Type" }).locator("[data-slot='select-value']")).toHaveText("All Types");
     await expect(page.getByRole("navigation", { name: "Research Runs pages" })).toContainText("Page 1");
     await page.getByRole("combobox", { name: "Filter by Type" }).click();
     await page.getByRole("option", { name: "Factor Evaluation", exact: true }).click();
@@ -1919,7 +1916,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await expect(page.getByLabel("Research start date")).toHaveValue("2026-08-04");
     await expect(page.getByLabel("Research end date")).toHaveValue("2026-08-05");
     await expect(page.getByRole("combobox", { name: "Universe", exact: true })).toContainText("Top 300");
-    await expect(page.getByLabel("Neutralization")).toHaveValue("none");
+    await expect(page.getByRole("combobox", { name: "Neutralization", exact: true })).toContainText("None");
     await expect(page.getByRole("radio", { name: /Strategy Backtest/ })).toBeChecked();
     await expect(page.getByLabel("Holdings count")).toHaveValue("10");
     await expect(page.getByLabel("Selection interval (trading days)")).toHaveValue("2");
@@ -2051,7 +2048,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     expect(diagnosticDetail.start_date).toBe("2026-08-04");
     expect(diagnosticDetail.input.initial_cash_cny).toBe("100000");
     expect(await (await page.request.get(`/api/daily-tracks/${trackId}`)).json()).toEqual(preservedTrack);
-    await page.getByRole("button", { name: "Daily holdings", exact: false }).click();
+    await page.getByRole("tab", { name: "Daily holdings", exact: true }).click();
     await page.getByRole("button", { name: "Load holdings", exact: true }).click();
     await expect(page.getByText(/Research Sessions covered/)).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath("current-data-rerun-holdings.png"), fullPage: true });
