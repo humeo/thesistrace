@@ -104,6 +104,42 @@ test('mobile Sheet keeps keyboard focus within its navigation', async ({ page })
  await expect(close).toBeVisible();
 });
 
+test('mobile Sheet closes on Escape from the focused New Chat link', async ({ page }) => {
+ await page.setViewportSize({ width: 390, height: 844 });
+ const trigger = page.getByRole('button', { name: 'Open navigation' });
+ await trigger.click();
+ const sheet = page.getByRole('dialog', { name: 'Navigation' });
+ const newChat = sheet.getByRole('link', { name: 'New Chat', exact: true });
+ await newChat.focus();
+ await expect(newChat).toBeFocused();
+ await page.keyboard.press('Escape');
+ await expect(sheet).toBeHidden();
+ await expect(trigger).toBeFocused();
+});
+
+test('Escape closes a Chat actions menu while retaining the mobile Sheet', async ({ page }) => {
+ await page.setViewportSize({ width: 390, height: 844 });
+ await page.getByRole('button', { name: 'Open navigation' }).click();
+ const sheet = page.getByRole('dialog', { name: 'Navigation' });
+ const actions = sheet.getByRole('button', { name: 'Actions for Quality Alpha' });
+ await actions.locator('..').hover();
+ await actions.click();
+ await expect(page.getByRole('menu', { name: 'Actions for Quality Alpha' })).toBeVisible();
+ const backdrop = page.locator('[data-slot="sheet-overlay"]');
+ const bounds = await backdrop.boundingBox();
+ if (bounds === null) throw new Error('Mobile navigation exposed no backdrop');
+ await backdrop.click({ position: { x: bounds.width - 8, y: bounds.height / 2 } });
+ await expect(sheet).toBeHidden();
+ await page.getByRole('button', { name: 'Open navigation' }).click();
+ await actions.locator('..').hover();
+ await actions.click();
+ await expect(page.getByRole('menu', { name: 'Actions for Quality Alpha' })).toBeVisible();
+ await page.keyboard.press('Escape');
+ await expect(page.getByRole('menu', { name: 'Actions for Quality Alpha' })).toBeHidden();
+ await expect(sheet).toBeVisible();
+ await expect(actions).toBeFocused();
+});
+
 test('selecting the current interface language saves an entry query preference', async ({ page }) => {
  await page.evaluate(() => localStorage.removeItem('quantgrove.interface-language'));
  await page.goto('http://shell.fixture/?lang=zh');

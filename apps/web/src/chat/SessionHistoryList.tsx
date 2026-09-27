@@ -18,6 +18,7 @@ import {
 } from "../components/ui/dropdown-menu";
 import { Field, FieldLabel } from "../components/ui/field";
 import { Input } from "../components/ui/input";
+import { useIsMobile } from "../hooks/use-mobile";
 import { i18n } from "../i18n";
 import type { ChatErrorKey } from "../i18n/messages/chat";
 import { handleWorkspaceNavigation } from "../shell/navigation";
@@ -42,6 +43,7 @@ export function SessionHistoryList({
   onDecision: (dialog: SessionDialog) => void;
 }) {
   const { t } = useTranslation("chat");
+  const isMobile = useIsMobile();
   const displayTitle = (title: string) => title === "Untitled" ? t("untitled") : title;
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const menuButtons = useRef(new Map<string, HTMLButtonElement>());
@@ -145,7 +147,7 @@ export function SessionHistoryList({
                     )}
                   </a>
                   <DropdownMenu
-                    modal={false}
+                    modal={isMobile}
                     open={openMenu === session.id && navigationInteractive}
                     onOpenChange={(next) => setOpenMenu(next ? session.id : null)}
                   >
