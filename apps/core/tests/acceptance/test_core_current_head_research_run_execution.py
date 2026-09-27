@@ -687,8 +687,14 @@ def test_worker_loss_exhaustion_emits_terminal_events_after_commit(tmp_path: Pat
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_phase_completion_is_emitted_once_for_a_multi_chunk_phase(tmp_path: Path) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+@pytest.mark.parametrize("max_chunk_sessions", [64, 128])
+def test_phase_completion_is_emitted_once_for_a_multi_chunk_phase(
+    tmp_path: Path, max_chunk_sessions: int,
+) -> None:
+    settings = replace(
+        CoreSettings.from_environment(), data_mount=tmp_path,
+        research_max_chunk_sessions=max_chunk_sessions,
+    )
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
     sessions = _weekday_sessions_between(date(2025, 1, 2), date(2025, 8, 13))[:140]
@@ -709,7 +715,17 @@ def test_phase_completion_is_emitted_once_for_a_multi_chunk_phase(tmp_path: Path
         run_id = str(accepted.json()["id"])
         events: list[dict[str, object]] = []
 
-        assert runtime.research_runs.process_next(on_execution_event=events.append) is True
+        # A replacement Worker's configuration must not replan an admitted Run.
+        processor = ResearchRunService(
+            runtime.database,
+            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            generation_store=MountedGenerationStore(settings.data_mount),
+            publication=runtime.publication,
+            execution=SupervisedResearchExecutor(settings.data_mount),
+            max_chunk_sessions=1,
+            annualized_excess_calculator=runtime.annualized_excess_calculator,
+        )
+        assert processor.process_next(on_execution_event=events.append) is True
 
         detail = client.get(f"/api/research-runs/{run_id}").json()
         checkpoint_events = [
@@ -718,7 +734,10 @@ def test_phase_completion_is_emitted_once_for_a_multi_chunk_phase(tmp_path: Path
         phase_events = [
             event for event in events if event["event"] == "research_run_phase_completed"
         ]
-        assert detail["progress"]["committed_chunk_count"] >= 3
+        assert detail["status"] == "succeeded"
+        assert detail["progress"]["committed_chunk_count"] == (
+            len(sessions) + max_chunk_sessions - 1
+        ) // max_chunk_sessions
         assert len(checkpoint_events) == detail["progress"]["committed_chunk_count"]
         assert [event["phase"] for event in phase_events] == ["research"]
         assert len(phase_events) < len(checkpoint_events)
@@ -942,7 +961,7 @@ def test_2010_to_latest_market_financial_and_composite_runs_commit_multiple_chun
                     assert committed["progress"]["completed_research_sessions"] < len(sessions)
                     assert committed["progress"]["remaining_duration_estimate_seconds"] >= 1
                     release_execution.set()
-                    # Seventeen years now require hundreds of bounded event segments.
+                    # Include calculation and durable publication across the full history.
                     worker.join(timeout=900)
                     assert not worker.is_alive()
                 finally:
@@ -1218,7 +1237,7 @@ def test_tracking_advance_freezes_and_publishes_only_the_oldest_bounded_chunk(
             f"/api/research-runs/{run_id}/daily-tracks",
             json={"request_id": "tracking-target-bounded-activation"},
         ).json()["id"]
-        backlog = _weekday_sessions_after(date.fromisoformat(seed_sessions[-1]), count=16)
+        backlog = _weekday_sessions_after(date.fromisoformat(seed_sessions[-1]), count=70)
         _publish_head(
             settings,
             sessions=(*seed_sessions, *backlog),
@@ -1246,7 +1265,7 @@ def test_tracking_advance_freezes_and_publishes_only_the_oldest_bounded_chunk(
         )
 
         detail = client.get(f"/api/daily-tracks/{track_id}").json()
-        assert detail["strategy_session"] == backlog[9]
+        assert detail["strategy_session"] == backlog[63]
         assert detail["lag_sessions"] == 6
         with runtime.database.transaction() as transaction:
             progression = transaction.execute(
@@ -1266,7 +1285,7 @@ def test_tracking_advance_freezes_and_publishes_only_the_oldest_bounded_chunk(
                 (track_id,),
             ).fetchone()
         assert progression is not None
-        assert [item.isoformat() for item in progression["target_sessions"]] == list(backlog[:10])
+        assert [item.isoformat() for item in progression["target_sessions"]] == list(backlog[:64])
         assert progression["status"] == "succeeded"
         assert attempt_count == {"count": 1}
         assert [event["event"] for event in execution_events] == [
@@ -1284,7 +1303,7 @@ def test_tracking_advance_freezes_and_publishes_only_the_oldest_bounded_chunk(
             "tracking_checkpoint_published",
             "tracking_head_advanced",
         ]
-        assert head_at_publication == [backlog[9]]
+        assert head_at_publication == [backlog[63]]
         assert all(event["track_id"] == track_id for event in execution_events)
         assert all(event["attempt_id"].startswith("track_attempt_") for event in execution_events)
         assert all(event["worker_role"] == "tracking" for event in execution_events)
@@ -1601,7 +1620,7 @@ def test_tracking_transient_cycle_persists_backoff_rotates_and_requires_retry(
                 )
             )
         retry_track, control_track = track_ids
-        backlog = _weekday_sessions_after(date.fromisoformat(seed_sessions[-1]), count=16)
+        backlog = _weekday_sessions_after(date.fromisoformat(seed_sessions[-1]), count=70)
         backlog_head = _publish_head(
             settings,
             sessions=(*seed_sessions, *backlog),
@@ -1757,7 +1776,7 @@ def test_tracking_transient_cycle_persists_backoff_rotates_and_requires_retry(
         assert recovered["attempt_generations"][3] != backlog_head
         assert (
             client.get(f"/api/daily-tracks/{retry_track}").json()["strategy_session"]
-            == backlog[9]
+            == backlog[63]
         )
 
 

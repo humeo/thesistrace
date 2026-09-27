@@ -330,6 +330,14 @@ def test_runtime_requires_independent_batch_attempt_control_directory(
     assert settings.batch_attempt_control_directory == attempt_control_directory
     assert not settings.batch_attempt_control_directory.is_relative_to(settings.data_mount)
 
+    assert settings.research_max_chunk_sessions == 64
+    monkeypatch.setenv("THESISTRACE_RESEARCH_WORKER_MAX_CHUNK_SESSIONS", "128")
+    assert CoreSettings.from_environment().research_max_chunk_sessions == 128
+    monkeypatch.setenv("THESISTRACE_RESEARCH_WORKER_MAX_CHUNK_SESSIONS", "0")
+    with pytest.raises(RuntimeError, match="maximum.*positive"):
+        CoreSettings.from_environment()
+    monkeypatch.delenv("THESISTRACE_RESEARCH_WORKER_MAX_CHUNK_SESSIONS")
+
     independent_mount = tmp_path / "independent-store" / "benchmark"
     monkeypatch.setenv("THESISTRACE_BENCHMARK_MOUNT", str(independent_mount))
     assert CoreSettings.from_environment().benchmark_mount == independent_mount

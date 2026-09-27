@@ -186,6 +186,7 @@ from thesistrace.research_run.models import (
     research_run_retry_after_seconds,
 )
 from thesistrace.research_run.planning import (
+    DEFAULT_MAX_CHUNK_SESSIONS,
     DEFAULT_RESEARCH_EXECUTION_MEMORY_BYTES,
     ResearchChunkCapacityError,
     plan_research_chunks,
@@ -440,6 +441,7 @@ class ResearchRunService:
         project_batch_run_execution: ProjectBatchRunExecution | None = None,
         execution: SupervisedResearchExecutor | None = None,
         execution_memory_bytes: int = DEFAULT_RESEARCH_EXECUTION_MEMORY_BYTES,
+        max_chunk_sessions: int = DEFAULT_MAX_CHUNK_SESSIONS,
         lifecycle_event: ExecutionEvent | None = None,
         annualized_excess_calculator: AnnualizedExcessCalculator | None = None,
         strategy_comparison: StrategyComparisonService | None = None,
@@ -463,6 +465,9 @@ class ResearchRunService:
         self._project_batch_run_execution = project_batch_run_execution
         self._execution = execution
         self._execution_memory_bytes = execution_memory_bytes
+        if type(max_chunk_sessions) is not int or max_chunk_sessions < 1:
+            raise ValueError("Research Chunk maximum must be a positive integer")
+        self._max_chunk_sessions = max_chunk_sessions
         self._annualized_excess_calculator = annualized_excess_calculator
         self._strategy_comparison = strategy_comparison
         self._lifecycle_event = non_blocking_operational_event_sink(
@@ -1066,6 +1071,7 @@ class ResearchRunService:
             compiled,
             dataset,
             execution_memory_bytes=self._execution_memory_bytes,
+            max_chunk_sessions=self._max_chunk_sessions,
         )
 
     def prepare_child_admission(
@@ -3825,7 +3831,7 @@ class ResearchRunService:
         expected_holding_sessions = list(_checkpoint_research_sessions(
             claim.immutable_input, ordinal,
         )) if collect_events else []
-        if holding_sessions != expected_holding_sessions or not isinstance(holding_rows, list):
+        if holding_sessions != expected_holding_sessions or not isinstance(holding_rows, Sequence):
             raise ResearchResultError("Research Chunk holding coverage is invalid")
         if not collect_events and holding_rows:
             raise ResearchResultError("Non-Strategy Chunk cannot contain holdings")
@@ -4529,6 +4535,7 @@ def _admitted_input(
     snapshot: DatasetAdmissionSnapshot | None,
     *,
     execution_memory_bytes: int,
+    max_chunk_sessions: int = DEFAULT_MAX_CHUNK_SESSIONS,
 ) -> ImmutableRunInput:
     exposure = None
     if isinstance(command, StrategyBacktestSpec) and command.has_builtin_portfolio:
@@ -4719,6 +4726,7 @@ def _admitted_input(
             maximum_universe_cardinality=universe_instrument_count,
             effective_lookback=requirements.effective_lookback,
             execution_memory_bytes=execution_memory_bytes,
+            max_chunk_sessions=max_chunk_sessions,
             decision_mode=("direct" if direct else "framework" if isinstance(
                 command, StrategyBacktestSpec,
             ) else "factor_evaluation"),

@@ -83,8 +83,8 @@ from thesistrace.daily_track.observation_state import (
     initial_tracking_observation_state,
 )
 from thesistrace.daily_track.planning import (
+    DEFAULT_MAX_CHUNK_SESSIONS,
     DEFAULT_TRACKING_EXECUTION_MEMORY_BYTES,
-    MAX_CHUNK_SESSION_COUNT,
     plan_tracking_advance,
 )
 from thesistrace.daily_track.session_persistence import SessionCoordinateRepository
@@ -2729,7 +2729,7 @@ class DailyTrackService:
                     family_coverage, calendar=calendar, sessions=target_sessions, lookback=lookback,
                     available_field_ids=frozenset(generation.field_availability),
                 )
-                planning_candidates = target_sessions[:MAX_CHUNK_SESSION_COUNT]
+                planning_candidates = target_sessions[:DEFAULT_MAX_CHUNK_SESSIONS]
                 planning = _origin_planning_facts(origin)
                 decision_mode, python_program_count = _origin_decision_capacity(origin)
                 maximum_universe_cardinality = self._generation_store.maximum_universe_cardinality(

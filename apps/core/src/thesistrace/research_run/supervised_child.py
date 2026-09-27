@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
 
-from thesistrace.strategy_event_wire import EventMessageAssembler
+from thesistrace.strategy_event_wire import EventByteBudgetExceeded, EventMessageAssembler
 
 MAX_PROTOCOL_LINE_BYTES = 16 * 1024 * 1024
 CANCEL_COOPERATIVE_GRACE_SECONDS = 1.0
@@ -33,6 +33,10 @@ class ChildTransportCancelled(ChildTransportError):
 
 
 class ChildTransportCgroupOom(ChildTransportError):
+    pass
+
+
+class ChildTransportEventBudgetExceeded(ChildTransportError):
     pass
 
 
@@ -65,18 +69,21 @@ class SupervisedChildTransport:
 
     def read(
         self, *,
+        max_event_bytes: int,
         cancel_requested: Callable[[], bool] | None = None,
         on_cancel: Callable[[], None] | None = None,
         on_termination: Callable[[], None] | None = None,
     ) -> dict[str, object]:
-        assembler = EventMessageAssembler()
+        assembler = EventMessageAssembler(max_event_bytes=max_event_bytes)
         while True:
             try:
                 message = assembler.accept(self._read_frame(
                     cancel_requested=cancel_requested, on_cancel=on_cancel,
                     on_termination=on_termination,
                 ))
-            except ValueError as error:
+            except EventByteBudgetExceeded as error:
+                raise ChildTransportEventBudgetExceeded(str(error)) from error
+            except (ValueError, OSError) as error:
                 raise ChildTransportError(str(error)) from error
             if message is not None:
                 return message
@@ -214,6 +221,7 @@ def confirmed_cgroup_oom(
 __all__ = (
     "ChildTransportCancelled",
     "ChildTransportCgroupOom",
+    "ChildTransportEventBudgetExceeded",
     "ChildTransportError",
     "SupervisedChildTransport",
     "enforce_cancellation_deadline",

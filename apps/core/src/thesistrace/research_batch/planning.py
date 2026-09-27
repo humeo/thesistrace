@@ -7,7 +7,6 @@ from thesistrace.research_batch.models import ResearchBatchKind
 from thesistrace.research_kernel.capacity import (
     CHUNK_TIME_TARGET_WORK,
     SessionCapacityPlan,
-    decision_segment_session_limit,
     estimate_python_program_work,
     estimate_session_peak_bytes,
     estimate_session_work,
@@ -89,11 +88,6 @@ def validate_research_batch_capacity(
         raise ValueError("Research Batch child scope is inconsistent")
     field_ids = {field_id for value in inputs for field_id in value.field_bindings}
     maximum_chunk_session_count = min(value.execution_plan.chunk_session_count for value in inputs)
-    if batch_kind == "strategy_sweep":
-        maximum_chunk_session_count = min(
-            maximum_chunk_session_count,
-            *(decision_segment_session_limit(value.strategy["kind"]) for value in inputs),
-        )
     if not research_calendar or research_calendar != tuple(sorted(set(research_calendar))):
         raise ValueError("Research Batch calendar is invalid")
     research_sessions = tuple(

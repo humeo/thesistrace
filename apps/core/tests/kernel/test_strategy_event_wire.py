@@ -5,11 +5,42 @@ import pytest
 from thesistrace.strategy_event_wire import EventMessageAssembler, strategy_event_messages
 
 
+def test_large_chunk_crosses_64_mib_without_changing_its_commit_boundary():
+    from thesistrace.research_kernel.strategy_event_limits import MAX_FRAMEWORK_RECORD_BYTES
+
+    row = {"evidence": "x" * (MAX_FRAMEWORK_RECORD_BYTES - 100)}
+    events = {"strategy_framework": [row] * 18}
+    message = {"status": "chunk_succeeded", "chunk": {"ordinal": 1, "strategy_events": events}}
+    assembler = EventMessageAssembler(max_event_bytes=128 * 1024**2)
+    for frame in strategy_event_messages(message):
+        result = assembler.accept(frame)
+        if frame["status"] == "strategy_event_frame":
+            assert result is None
+    assert result["chunk"]["ordinal"] == 1
+    rows = result["chunk"]["strategy_events"]["strategy_framework"]
+    assert len(rows) == 18
+    assert rows[0] == rows[-1] == row
+
+
+def test_event_budget_is_per_chunk_and_incomplete_or_oversize_data_is_not_returned():
+    message = {"strategy_events": {"strategy_orders": [{"order_id": "one"}]}}
+    frames = list(strategy_event_messages(message))
+    assembler = EventMessageAssembler(max_event_bytes=20)
+    completed = []
+    for _ in range(2):
+        assert assembler.accept(frames[0]) is None
+        completed.append(assembler.accept(frames[-1]))
+    assert completed == [message, message]
+    assert EventMessageAssembler(max_event_bytes=18).accept(frames[0]) is None
+    with pytest.raises(ValueError, match="budget"):
+        EventMessageAssembler(max_event_bytes=17).accept(frames[0])
+
+
 def test_event_transport_keeps_large_segments_in_bounded_frames():
     # A complete segment can exceed the old 16 MiB single-line contract.
     events = {"strategy_fills": [{"fill_id": str(i), "evidence": "x" * 1024} for i in range(17000)]}
     message = {"status": "chunk_succeeded", "chunk": {"ordinal": 1, "strategy_events": events}}
-    assembler = EventMessageAssembler()
+    assembler = EventMessageAssembler(max_event_bytes=128 * 1024**2)
     largest_frame = 0
     result = None
     for frame in strategy_event_messages(message):
@@ -31,12 +62,12 @@ def test_event_transport_requires_order_and_complete_counts():
             }
         )
     )
-    assembler = EventMessageAssembler()
+    assembler = EventMessageAssembler(max_event_bytes=128 * 1024**2)
     assert assembler.accept(frames[0]) is None
     with pytest.raises(ValueError, match="order"):
         assembler.accept(frames[0])
     with pytest.raises(ValueError, match="count"):
-        EventMessageAssembler().accept(frames[-1])
+        EventMessageAssembler(max_event_bytes=128 * 1024**2).accept(frames[-1])
     with pytest.raises(ValueError, match="incomplete"):
         assembler.accept({"status": "failed"})
 
@@ -47,7 +78,7 @@ def test_event_transport_preserves_empty_and_non_event_messages():
         {"strategy_events": {}},
         {"strategy_events": {"strategy_targets": []}},
     ):
-        assembler = EventMessageAssembler()
+        assembler = EventMessageAssembler(max_event_bytes=128 * 1024**2)
         result = None
         for frame in strategy_event_messages(message):
             result = assembler.accept(frame)
@@ -80,7 +111,9 @@ print_strategy_event_message(
     transport = SupervisedChildTransport(child, None)
     deadline = monotonic() + 10
     try:
-        message = transport.read(cancel_requested=lambda: monotonic() > deadline)
+        message = transport.read(
+            max_event_bytes=128 * 1024**2, cancel_requested=lambda: monotonic() > deadline,
+        )
         assert child.wait(timeout=5) == 0
         rows = message["strategy_events"]["strategy_fills"]
         assert len(rows) == 17000
@@ -127,6 +160,7 @@ def test_tracking_reader_consumes_coalesced_progress_and_result_without_waiting_
             authority_lost=Event(),
             stop_requested=lambda: monotonic() > deadline,
             acknowledge_event_frame=lambda: None,
+            execution_memory_bytes=128 * 1024**2,
         )
         assert result == {"status": "succeeded", "strategy_events": {}}
     finally:
@@ -186,6 +220,7 @@ tracking_child.main()
             authority_lost=authority_lost,
             stop_requested=lambda: monotonic() > deadline,
             acknowledge_event_frame=heartbeat.acknowledge_event_frame,
+            execution_memory_bytes=128 * 1024**2,
         )
         assert len(result["strategy_events"]["strategy_orders"]) == 513
         heartbeat.acknowledge()
@@ -217,7 +252,7 @@ def test_holding_rows_are_framed_separately_from_permanent_events():
     assert len(frames) == 4
     assert all(frame["section"] == "holding_observations" for frame in frames[:-1])
     assert "holding_observations" not in frames[-1]["chunk"]
-    assembler = EventMessageAssembler()
+    assembler = EventMessageAssembler(max_event_bytes=128 * 1024**2)
     for frame in frames[:-1]:
         assert assembler.accept(frame) is None
     assert assembler.accept(frames[-1]) == message
@@ -233,7 +268,7 @@ def test_large_target_frames_are_byte_bounded_and_ordinary_records_remain_small(
     target = {"allocation": "x" * (MAX_TARGET_RECORD_BYTES - len('{"allocation":""}'))}
     frames = list(strategy_event_messages({"strategy_events": {"strategy_targets": [target] * 5}}))
     assert [len(frame["rows"]) for frame in frames[:-1]] == [4, 1]
-    assembler = EventMessageAssembler()
+    assembler = EventMessageAssembler(max_event_bytes=128 * 1024**2)
     with pytest.raises(ValueError, match="frame exceeds"):
         assembler.accept({
             "status": "strategy_event_frame", "section": "strategy_targets", "offset": 0,

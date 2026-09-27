@@ -5,7 +5,7 @@ import os
 import selectors
 import subprocess
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event, Lock, RLock, Thread
@@ -60,8 +60,8 @@ class TrackingExecutionRequest:
 @dataclass(frozen=True)
 class TrackingExecutionResult:
     holding_sessions: list[str]
-    holding_observations: list[dict[str, object]]
-    strategy_events: dict[str, list[dict[str, object]]]
+    holding_observations: Sequence[dict[str, object]]
+    strategy_events: dict[str, Sequence[dict[str, object]]]
     checkpoint: dict[str, object]
     terminal_strategy_state: dict[str, object]
     continuation: dict[str, object]
@@ -348,6 +348,7 @@ class SupervisedTrackingExecutor:
                 authority_lost=authority_lost,
                 stop_requested=stop_requested,
                 acknowledge_event_frame=heartbeat.acknowledge_event_frame,
+                execution_memory_bytes=self._execution_memory_bytes,
             )
             result = _result_from_response(response)
             if result.child_peak_rss_bytes > self._execution_memory_bytes:
@@ -435,12 +436,13 @@ def _read_message(
     authority_lost: Event,
     stop_requested: Callable[[], bool],
     acknowledge_event_frame: Callable[[], None],
+    execution_memory_bytes: int,
 ) -> dict[str, object]:
     if process.stdout is None:
         raise TrackingExecutionError("Tracking execution child has no output pipe")
     selector = selectors.DefaultSelector()
     selector.register(process.stdout, selectors.EVENT_READ)
-    assembler = EventMessageAssembler()
+    assembler = EventMessageAssembler(max_event_bytes=execution_memory_bytes)
     pending = b""
     try:
         while True:
@@ -466,7 +468,7 @@ def _read_message(
                     raise TrackingExecutionError("Tracking execution response is invalid")
                 try:
                     value = assembler.accept(value)
-                except ValueError as error:
+                except (ValueError, OSError) as error:
                     raise TrackingExecutionError(str(error)) from error
                 if value is None:
                     acknowledge_event_frame()
@@ -561,7 +563,7 @@ def _result_from_response(value: Mapping[str, object]) -> TrackingExecutionResul
         raise TrackingExecutionError("Tracking execution event evidence is invalid")
     holding_sessions = value.get("holding_sessions")
     holding_observations = value.get("holding_observations")
-    if not isinstance(holding_sessions, list) or not isinstance(holding_observations, list):
+    if not isinstance(holding_sessions, list) or not isinstance(holding_observations, Sequence):
         raise TrackingExecutionError("Tracking holding observations are invalid")
     checkpoint = value.get("checkpoint")
     terminal = value.get("terminal_strategy_state")

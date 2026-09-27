@@ -60,7 +60,7 @@ class HoldingEvidencePublication:
         self._payloads: dict[str, ParquetRowsPayload | StagedPayload] = {}
 
     def add_segment(
-        self, sessions: list[str], rows: list[dict], *,
+        self, sessions: list[str], rows: Sequence[dict], *,
         stage: Callable[[ParquetRowsPayload], StagedPayload] | None = None,
     ) -> None:
         if not sessions or sessions != sorted(set(sessions)):

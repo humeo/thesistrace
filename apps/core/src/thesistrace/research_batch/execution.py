@@ -55,6 +55,7 @@ from thesistrace.research_run.result import (
 from thesistrace.research_run.supervised_child import (
     ChildTransportCgroupOom,
     ChildTransportError,
+    ChildTransportEventBudgetExceeded,
     SupervisedChildTransport,
 )
 from thesistrace.research_series import ColumnarResearchSeries
@@ -1531,11 +1532,15 @@ def _read_message(
     cancel_requested: CancellationCheck,
 ) -> dict[str, object]:
     try:
-        message = transport.read(cancel_requested=cancel_requested)
+        message = transport.read(
+            max_event_bytes=execution_memory_bytes, cancel_requested=cancel_requested,
+        )
     except ChildTransportCgroupOom as error:
         raise ResearchExecutionResourceExhausted(
             "Research Batch child exceeded its cgroup memory limit"
         ) from error
+    except ChildTransportEventBudgetExceeded as error:
+        raise ResearchExecutionResourceExhausted(str(error)) from error
     except ChildTransportError as error:
         detail = _child_stderr_detail(transport.process)
         raise ResearchBatchChildLost(f"{error}{detail}") from error

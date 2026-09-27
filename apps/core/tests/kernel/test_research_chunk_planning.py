@@ -36,6 +36,44 @@ def test_planner_selects_the_largest_fixed_chunk_and_only_shortens_the_final_chu
     assert plan.time_target_exceeded is False
 
 
+@pytest.mark.parametrize("maximum", [10, 64, 128])
+@pytest.mark.parametrize("decision_mode", ["factor_evaluation", "framework"])
+def test_configured_maximum_chunks_preserve_every_session(
+    maximum: int, decision_mode: str,
+) -> None:
+    sessions = _sessions(300)
+    plan = plan_research_chunks(
+        calculation_sessions=sessions,
+        research_session_offset=0,
+        formula_work=1,
+        node_count=1,
+        field_count=1,
+        maximum_universe_cardinality=300,
+        effective_lookback=0,
+        execution_memory_bytes=1536 * 1024**2,
+        max_chunk_sessions=maximum,
+        decision_mode=decision_mode,
+    )
+
+    assert plan.chunk_session_count == maximum
+    assert sum(chunk.session_count for chunk in plan.chunks) == len(sessions)
+    assert plan.chunks[0].first_session == sessions[0]
+    assert plan.chunks[-1].last_session == sessions[-1]
+    assert all(chunk.session_count == maximum for chunk in plan.chunks[:-1])
+
+
+@pytest.mark.parametrize("maximum", [0, -1, True, 1.5])
+def test_chunk_maximum_requires_a_positive_integer(maximum: object) -> None:
+    with pytest.raises(ValueError, match="maximum.*positive integer"):
+        plan_research_chunks(
+            calculation_sessions=_sessions(2), research_session_offset=0,
+            formula_work=1, node_count=1, field_count=1,
+            maximum_universe_cardinality=300, effective_lookback=0,
+            execution_memory_bytes=1536 * 1024**2,
+            max_chunk_sessions=maximum,
+        )
+
+
 def test_one_session_that_fits_memory_remains_admissible_when_time_target_is_exceeded() -> None:
     plan = plan_research_chunks(
         calculation_sessions=_sessions(3),
