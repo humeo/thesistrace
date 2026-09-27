@@ -323,10 +323,12 @@ async function openAccountMenu(page: Page): Promise<void> {
 async function expectTouchTargets(...targets: Locator[]): Promise<void> {
   for (const target of targets) {
     await expect(target).toBeVisible();
-    const box = await target.boundingBox();
-    expect(box, "touch target should have a rendered bounding box").not.toBeNull();
-    expect(box?.height, "touch target height").toBeGreaterThanOrEqual(44);
-    expect(box?.width, "touch target width").toBeGreaterThanOrEqual(44);
+    await expect.poll(async () => (await target.boundingBox())?.height ?? 0, {
+      message: "touch target height after entry animation",
+    }).toBeGreaterThanOrEqual(44);
+    await expect.poll(async () => (await target.boundingBox())?.width ?? 0, {
+      message: "touch target width after entry animation",
+    }).toBeGreaterThanOrEqual(44);
   }
 }
 

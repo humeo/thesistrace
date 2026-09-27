@@ -349,13 +349,9 @@ test("Operator researchers and invitations", { tag: "@isolated" }, async ({ page
   const issuePassword = confirmation.getByLabel("Verification code");
   await expect(issueEmail).toBeFocused();
   await issueEmail.press("Shift+Tab");
-  expect(await confirmation.evaluate((element) =>
-    element.contains(document.activeElement)
-  )).toBe(true);
+  await expect(confirmation.getByRole("button", { name: "Send Invitation" })).toBeFocused();
   await page.keyboard.press("Tab");
-  expect(await confirmation.evaluate((element) =>
-    element.contains(document.activeElement)
-  )).toBe(true);
+  await expect(issueEmail).toBeFocused();
   await issueEmail.fill(consoleInvitationEmail);
   await issuePassword.fill("123456");
   await page.keyboard.press("Escape");
