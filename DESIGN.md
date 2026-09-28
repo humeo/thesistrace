@@ -30,6 +30,8 @@ The [Quantgrove brand board](docs/design/quantgrove-brand-reference.png) defines
 
 The first implementation slice is the Research editor and its sidebar. Other pages retain their current visual treatment until this preview is reviewed. The target rules below describe the eventual shared system; `status: implementing` records that the migration is in progress.
 
+The Research preview uses weight 500 for its 24/32 page title, with regular-weight body copy, to soften the Chinese heading. Its research type and strategy authoring choices stay visible together in a quiet, grouped control area above the editor.
+
 **Warm, reading-first research（温和、克制、以阅读和证据为中心的研究空间）**
 
 | Surface | Required treatment |

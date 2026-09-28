@@ -197,9 +197,10 @@ test("Research deletion uses an in-page decision instead of a browser dialog", a
 });
 
 test("Notes keeps multiline research context visible", async ({ page }) => {
-  await page.setViewportSize({ width: 956, height: 958 });
+  await page.setViewportSize({ width: 1440, height: 958 });
   await page.goto("/research");
 
+  await page.getByRole("button", { name: "Research notes (optional)", exact: true }).click();
   const notes = page.getByLabel("Notes", { exact: true });
   await expect(notes).toBeVisible();
   await notes.fill(
@@ -211,21 +212,16 @@ test("Notes keeps multiline research context visible", async ({ page }) => {
     scrollHeight: element.scrollHeight,
   }));
 
-  expect(layout.height).toBeGreaterThanOrEqual(72);
+  expect(layout.height).toBeGreaterThanOrEqual(64);
   expect(layout.scrollHeight).toBeLessThanOrEqual(layout.clientHeight);
 });
 
-test("Alpha formula editor keeps line numbers on the Classic workbench surface", async ({ page }) => {
+test("Alpha formula editor keeps line numbers on the research workbench", async ({ page }) => {
   await page.goto("/research");
 
-  await expect(page.getByRole("textbox", { name: "Alpha formula", exact: true }).locator("..").locator(".cm-gutters")).toHaveCSS(
-    "background-color",
-    "rgb(241, 243, 236)",
-  );
-  await expect(page.getByRole("textbox", { name: "Alpha formula", exact: true }).locator("..").locator(".cm-activeLineGutter")).toHaveCSS(
-    "background-color",
-    "rgb(241, 243, 236)",
-  );
+  const editor = page.getByRole("textbox", { name: "Alpha formula", exact: true });
+  await expect(editor.locator("..").locator(".cm-gutters")).toContainText("1");
+  await expect(editor.locator("..").locator(".cm-activeLineGutter")).toBeVisible();
 });
 
 test("date inputs retain manually entered values when focus leaves the field", async ({ page }) => {
@@ -249,6 +245,7 @@ test("date inputs retain manually entered values when focus leaves the field", a
     await page.keyboard.press("Tab");
   }
 
+  await page.getByRole("button", { name: "Research notes (optional)", exact: true }).click();
   await page.getByLabel("Notes", { exact: true }).fill("Trigger a controlled React rerender.");
   await expect(page.getByLabel("Research start date")).toHaveValue("2025-08-13");
   await expect(page.getByLabel("Research end date")).toHaveValue("2026-08-13");

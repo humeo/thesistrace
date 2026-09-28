@@ -5,7 +5,7 @@ import { buildProductFixture } from "./build-product-fixture";
 let script: string;
 let styles: string;
 const optionNames = {
-  direct: "Complete Python strategy", framework: "Configure trading rules", python: "Python module",
+  python: "Python module",
   equal_weight: "Equal weight", rank_weight: "Rank weight", inverse_volatility: "Inverse volatility",
 } as const;
 async function select(page: Page, control: Locator, value: keyof typeof optionNames) {
@@ -52,7 +52,7 @@ for (const width of [1280, 1440]) {
     await slippage.fill("15");
     await page.getByLabel("Minimum commission per child order (CNY)", { exact: true }).fill("2");
     await mount();
-    await select(page, page.getByLabel("Strategy authoring", { exact: true }), "direct");
+    await page.getByRole("radio", { name: "Complete Python strategy", exact: true }).check();
     await page.getByRole("button", { name: "Fees and slippage", exact: true }).click();
     await expect(slippage).toHaveValue("15");
     await expect(page.getByLabel("Minimum commission per child order (CNY)", { exact: true })).toHaveValue("2");
@@ -123,11 +123,13 @@ for (const width of [1280, 1440]) {
       await page.addScriptTag({ content: script });
     };
     await mount();
+    await page.getByRole("tab", { name: /Signals/ }).click();
     await page.getByRole("button", { name: "Customize Alpha / Signals with Python", exact: true }).click();
+    await page.getByRole("tab", { name: /Portfolio/ }).click();
     await page.getByRole("button", { name: "Customize Portfolio Construction with Python", exact: true }).click();
-    const alpha = page.getByRole("region", { name: "How are stocks selected?", exact: true });
-    const portfolio = page.getByRole("region", { name: "How much to buy and when to rebalance?", exact: true });
-    await expect(alpha.getByRole("textbox", { name: "Python source", exact: true })).toContainText("momentum_signals");
+    const alpha = page.locator("#research-stage-panel-alpha");
+    const portfolio = page.locator("#research-stage-panel-portfolio_construction");
+    await expect(alpha.locator("#alpha-python-source")).toContainText("momentum_signals");
     await expect(portfolio.getByRole("textbox", { name: "Python source", exact: true })).toContainText("better_signal_candidate");
     await expect(page.getByLabel("Alpha formula", { exact: true })).not.toBeVisible();
     await expect(page.getByLabel("Holdings count", { exact: true })).not.toBeVisible();
@@ -142,7 +144,7 @@ for (const width of [1280, 1440]) {
     await portfolio.getByRole("textbox", { name: "Parameters (JSON)", exact: true }).fill('{"improvement": 0.04}');
     await page.getByRole("button", { name: "Check configuration" }).click();
     await expect(portfolio.locator("#portfolio_construction-python-source-error")).toContainText("line 1");
-    await expect(alpha.getByRole("textbox", { name: "Python source", exact: true })).not.toHaveAttribute("aria-invalid", "true");
+    await expect(alpha.locator("#alpha-python-source")).not.toHaveAttribute("aria-invalid", "true");
     await portfolio.getByRole("textbox", { name: "Python source", exact: true }).fill("def decide(context, state, parameters):\n    return {'output': None, 'state': state}\n");
     await page.getByRole("button", { name: "Check configuration" }).click();
     await expect(page.getByText("Configuration is valid.", { exact: false })).toBeVisible();
@@ -194,7 +196,7 @@ for (const width of [1280, 1440]) {
       await page.addScriptTag({ content: script });
     };
     await mount();
-    await select(page, page.getByLabel("Strategy authoring", { exact: true }), "direct");
+    await page.getByRole("radio", { name: "Complete Python strategy", exact: true }).check();
     await expect(page.getByRole("textbox", { name: "Python source", exact: true })).toContainText("def decide");
     await expect(page.getByLabel("Alpha formula", { exact: true })).not.toBeVisible();
     await expect(page.getByLabel("Holdings count", { exact: true })).not.toBeVisible();
@@ -241,17 +243,17 @@ test("switching back to built-in Framework retains the inactive Python draft", a
   await page.goto("https://exposure.test/");
   await page.addStyleTag({ content: styles });
   await page.addScriptTag({ content: script });
-  const mode = page.getByLabel("Strategy authoring", { exact: true });
-  await select(page, mode, "direct");
+  await page.getByRole("radio", { name: "Complete Python strategy", exact: true }).check();
   await page.getByRole("textbox", { name: "Python source", exact: true }).fill("private draft");
-  await select(page, mode, "framework");
+  await page.getByRole("radio", { name: "Configure trading rules", exact: true }).check();
   await expect(page.getByRole("textbox", { name: "Python source", exact: true })).toHaveCount(0);
+  await page.getByRole("tab", { name: /Signals/ }).click();
   await expect(page.getByLabel("Alpha formula", { exact: true })).toBeVisible();
   const draft = await page.evaluate(() => JSON.parse(localStorage.getItem("thesistrace.research-draft.exposure-test.folder_default")!));
   expect(draft.programSource).toBe("private draft");
   expect(JSON.parse(draft.programParameters)).toEqual({ improvement: 0.02 });
   expect(draft.programFields).toBe("price.close.adjusted");
-  await select(page, mode, "direct");
+  await page.getByRole("radio", { name: "Complete Python strategy", exact: true }).check();
   await expect(page.getByRole("textbox", { name: "Python source", exact: true })).toHaveText("private draft");
 });
 test("Python editors keep completion, selection and undo across module, language and width changes", async ({ page }) => {
@@ -262,6 +264,7 @@ test("Python editors keep completion, selection and undo across module, language
   await page.goto("https://exposure.test/");
   await page.addStyleTag({ content: styles });
   await page.addScriptTag({ content: script });
+  await page.getByRole("tab", { name: /Signals/ }).click();
   const module = page.getByRole("button", { name: "Customize Alpha / Signals with Python", exact: true });
   await module.click();
   const source = page.locator("#alpha-python-source");
@@ -410,7 +413,11 @@ test(`Exposure, ${weighting}, retained draft and submission share one source`, a
     await page.evaluate(() => document.fonts.ready);
   };
   await mount();
-  await expect(page.getByText(/Decide after the Close and simulate trades/)).toBeVisible();
+  await expect(page.getByText("Decide at Close, simulate at the next Open")).toBeVisible();
+  const executionHelp = page.getByRole("button", { name: "About Execution timing" });
+  await executionHelp.click();
+  await expect(page.getByRole("dialog", { name: "Execution timing" })).toContainText("Trading restrictions can prevent fills");
+  await executionHelp.press("Escape");
 
   await expect(page.getByRole("combobox", { name: "Portfolio weighting" })).toContainText("Equal weight");
   await select(page, page.getByLabel("Portfolio weighting", { exact: false }), weighting);
@@ -528,6 +535,7 @@ test("Exposure completion excludes stock scope and keeps daily expression in the
 
   await expect(page.getByLabel("Exposure expression", { exact: true })).toHaveText(expression);
 
+  await page.getByRole("tab", { name: /Signals/ }).click();
   const signal = page.getByLabel("Alpha formula", { exact: true });
   await signal.fill("");
   await signal.press("Control+Space");
@@ -622,6 +630,7 @@ for (const width of [1280, 1440]) {
 
     await page.getByLabel("Initial cash (CNY)", { exact: false }).fill("250000");
     await expect(page.getByLabel("Initial cash (CNY)", { exact: false })).toHaveValue("250000");
+    await page.getByRole("tab", { name: /Signals/ }).click();
     await expect(page.getByRole("textbox", { name: "Alpha formula", exact: true })).toBeVisible();
     await page.getByRole("radio", { name: "Factor Evaluation" }).check();
     await expect(page.getByRole("button", { name: "Run evaluation" })).toBeVisible();
@@ -683,6 +692,7 @@ test("switching during configuration validation preserves inputs and translates 
   await page.goto("https://exposure.test/");
   await page.addStyleTag({ content: styles });
   await page.addScriptTag({ content: script });
+  await page.getByRole("tab", { name: /Signals/ }).click();
   await page.getByLabel("Alpha formula", { exact: true }).fill("ts_mean(close, 253)");
 
   const cash = page.locator("#initial-cash");
@@ -741,6 +751,7 @@ for (const width of [1280, 1440]) {
     const expression = "if_else(universe_return() > 0, 1, 0.3)";
     await page.getByLabel("Exposure expression", { exact: true }).fill(expression);
 
+    await page.getByRole("tab", { name: /Signals/ }).click();
     await page.getByLabel("Alpha formula", { exact: true }).fill("");
     await page.getByRole("button", { name: "Run backtest", exact: true }).click();
     await expect(page.getByLabel("Alpha formula", { exact: true })).toBeFocused();
@@ -770,10 +781,13 @@ for (const width of [1280, 1440]) {
       await page.addScriptTag({ content: script });
     };
     await mount();
+    await page.getByRole("tab", { name: /Risk/ }).click();
     await page.getByRole("button", { name: "Stop loss and holding limits", exact: true }).click();
-    const threshold = page.getByLabel("Stop loss (%)", { exact: true });
+    const threshold = page.getByRole("textbox", { name: "Stop loss (%)", exact: true });
     await expect(threshold).toHaveValue("");
-    await expect(page.locator("#stop-loss-threshold-help")).toContainText("next Open");
+    await page.getByRole("button", { name: "About Stop loss (%)" }).hover();
+    await expect(page.getByRole("dialog", { name: "Stop loss (%)" })).toContainText("next Open");
+    await page.getByRole("button", { name: "About Stop loss (%)" }).press("Escape");
     await threshold.fill("100");
     await page.getByRole("button", { name: "Run backtest", exact: true }).click();
     await expect(threshold).toBeFocused();
@@ -781,6 +795,7 @@ for (const width of [1280, 1440]) {
     expect(submissions).toHaveLength(0);
     await threshold.fill("10");
     await mount();
+    await page.getByRole("tab", { name: /Risk/ }).click();
     await expect(threshold).toHaveValue("10");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await page.screenshot({ path: `../../.local/browser-tests/stop-loss-${width}.png`, fullPage: true });
@@ -811,6 +826,7 @@ for (const width of [1280, 1440]) {
       await page.addScriptTag({ content: script });
     };
     await mount();
+    await page.getByRole("tab", { name: /Risk/ }).click();
     await page.getByRole("button", { name: "Limit portfolio drawdown", exact: true }).click();
     const threshold = page.getByLabel("Drawdown threshold (%)", { exact: true });
     const cap = page.getByLabel("Maximum stock exposure (%)", { exact: true });
@@ -845,7 +861,7 @@ test("Direct field catalog uses its narrow container and restores nested detail 
   await page.goto("https://exposure.test/");
   await page.addStyleTag({ content: styles });
   await page.addScriptTag({ content: script });
-  await select(page, page.getByLabel("Strategy authoring", { exact: true }), "direct");
+  await page.getByRole("radio", { name: "Complete Python strategy", exact: true }).check();
   const trigger = page.getByRole("button", { name: "Browse fields", exact: true });
   await trigger.click();
   const catalog = page.getByRole("dialog", { name: "Field browser", exact: true });
@@ -890,6 +906,7 @@ test("rule configuration creates an exact strategy without requiring code", asyn
   await page.getByRole("button", { name: "Run backtest", exact: true }).click();
   await expect(page.getByRole("combobox", { name: "How should stocks be ranked?", exact: true })).toBeFocused();
   expect(submissions).toHaveLength(0);
+  await page.getByRole("tab", { name: /Signals/ }).click();
   await page.getByRole("combobox", { name: "How should stocks be ranked?", exact: true }).click();
   await page.getByRole("option", { name: "Strongest recent returns", exact: true }).click();
   const window = page.getByLabel("Measure over trading days", { exact: true });
@@ -898,6 +915,7 @@ test("rule configuration creates an exact strategy without requiring code", asyn
   await expect(window).toBeFocused();
   expect(submissions).toHaveLength(0);
   await window.fill("20");
+  await page.getByRole("tab", { name: /Portfolio/ }).click();
   const allocation = page.getByLabel("Stock allocation (%)", { exact: true });
   await allocation.fill("150");
   await expect(allocation).toHaveValue("150");
@@ -905,18 +923,23 @@ test("rule configuration creates an exact strategy without requiring code", asyn
   await expect(allocation).toBeFocused();
   expect(submissions).toHaveLength(0);
   await allocation.fill("60");
+  await page.getByRole("tab", { name: /Risk/ }).click();
   await page.getByRole("button", { name: "Stop loss and holding limits", exact: true }).click();
   await page.getByLabel("Stop loss (%)", { exact: true }).fill("10");
-  const summary = page.getByRole("region", { name: "What this strategy will do", exact: true });
+  await page.getByRole("button", { name: "Strategy summary", exact: true }).click();
+  const summary = page.getByRole("region", { name: "Strategy summary", exact: true });
   await expect(summary).toContainText("Highest 20-day returns first");
   await expect(summary).toContainText("60%");
   await expect(summary).toContainText("Stop loss 10%");
   await mount();
+  await page.getByRole("tab", { name: /Signals/ }).click();
   await expect(window).toHaveValue("20");
+  await page.getByRole("tab", { name: /Portfolio/ }).click();
   await expect(allocation).toHaveValue("60");
+  await page.getByRole("tab", { name: /Risk/ }).click();
   await expect(page.getByLabel("Stop loss (%)", { exact: true })).toHaveValue("10");
   await page.getByRole("button", { name: "简体中文", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "策略回测", exact: true })).toBeVisible();
+  await expect(page.getByRole("radio", { name: "策略回测", exact: true })).toBeVisible();
   await page.screenshot({ path: test.info().outputPath("strategy-rules-zh.png"), fullPage: true });
   await page.getByRole("button", { name: "运行回测", exact: true }).click();
   await expect.poll(() => submissions.length).toBe(1);

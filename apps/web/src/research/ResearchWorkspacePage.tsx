@@ -47,6 +47,8 @@ import { RadioGroup, RadioGroupItem } from "../components/ui/radio-group";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "../components/ui/sheet";
 import { PageContent, PageHeader } from "../components/layout/Page";
 import { ResearchParameterHelp } from "./ResearchParameterHelp";
+import { ResearchInfotip } from "./ResearchInfotip";
+import { readScoringRule } from "./strategyRules";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "../components/ui/popover";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -418,12 +420,20 @@ export function ResearchDraftWorkspace({
   const [costsOpen, setCostsOpen] = useState(false);
   const [discardDialogOpen, setDiscardDialogOpen] = useState(false);
   const [editorGeneration, setEditorGeneration] = useState(0);
+  const [activeStage, setActiveStage] = useState<FrameworkStage>("portfolio_construction");
   const workspace = useRef<HTMLElement>(null);
   const alphaEditor = useRef<AlphaFormulaEditorHandle>(null);
   const exposureEditor = useRef<AlphaFormulaEditorHandle>(null);
   const [pendingInput, setPendingInput] = useState<ResearchInputField | null>(null);
   function focusInput(field: ResearchInputField) {
     if (field.startsWith("costs.")) setCostsOpen(true);
+    if (field.startsWith("modules.")) {
+      const stage = field.split(".")[1];
+      if (frameworkStages.includes(stage as FrameworkStage)) setActiveStage(stage as FrameworkStage);
+    } else if (field === "universe") setActiveStage("universe_selection");
+    else if (field === "formula" || field === "neutralization") setActiveStage("alpha");
+    else if (field === "holdingsCount" || field === "selectionEverySessions" || field === "volatilityWindow" || field === "exposureExpression" || field === "minimumHoldingSessions") setActiveStage("portfolio_construction");
+    else if (drawdownFields.includes(field as DrawdownField) || field.startsWith("takeProfitTiers.") || field === "stopLossThreshold" || field === "maximumHoldingSessions") setActiveStage("risk_management");
     setPendingInput(field);
   }
   const {
@@ -442,6 +452,7 @@ export function ResearchDraftWorkspace({
   const direct = draft.researchKind === "strategy_backtest" && draft.strategyMode === "direct";
   const factor = draft.researchKind === "factor_evaluation";
   const builtinAlpha = usesBuiltinAlpha(draft);
+  const scoringRule = readScoringRule(draft.formula);
   useEffect(() => {
     if (pendingInput === null) return;
     if (pendingInput === "formula") {
@@ -459,7 +470,7 @@ export function ResearchDraftWorkspace({
       input?.focus();
     }
     setPendingInput(null);
-  }, [pendingInput, costsOpen]);
+  }, [pendingInput, costsOpen, activeStage]);
   const [fieldsOpen, setFieldsOpen] = useState(false);
   const [fieldBrowserMode, setFieldBrowserMode] = useState<"formula" | "catalog">("formula");
   const fieldsTrigger = useRef<HTMLButtonElement>(null);
@@ -542,7 +553,7 @@ export function ResearchDraftWorkspace({
             selection={draft.editor}
           />
           <footer className="flex flex-wrap justify-between gap-2 border-t border-border px-4 py-2 text-xs text-muted-foreground">
-            <span>{t("autocomplete")}</span><span>{coverage ? t("marketThrough", { date: coverage.end }) : t("marketNotReady")}</span>
+            <span>{t("autocomplete")}</span>
           </footer>
         </div>
         {diagnosticState.kind === "complete" && diagnosticState.result.diagnostics.length > 0 ? (
@@ -610,7 +621,7 @@ export function ResearchDraftWorkspace({
   </FieldGroup>;
   const universeSettings = <FieldGroup className="gap-2">
               <Field>
-                <FieldLabel htmlFor="research-universe">{t("universe")}</FieldLabel>
+                <div className="flex items-center gap-1"><FieldLabel htmlFor="research-universe">{t("universe")}</FieldLabel><ResearchParameterHelp helpId="universe" text={t("universeHelp")} /></div>
                 <Select value={draft.universe || null} onValueChange={(value) => updateDraft((current) => ({ ...current, universe: value ?? "" }))}>
                   <SelectTrigger id="research-universe" aria-invalid={Boolean(inputError("universe"))}
                     aria-describedby={inputError("universe") ? "universe-error" : undefined} className="w-full">
@@ -624,10 +635,9 @@ export function ResearchDraftWorkspace({
                 </Select>
                 {inputError("universe") && <small id="universe-error" className="text-destructive">{inputError("universe")}</small>}
               </Field>
-    <FieldDescription>{t("universeHelp")}</FieldDescription>
   </FieldGroup>;
   const neutralizationSettings = <Field hidden={!builtinAlpha} className={cn(!builtinAlpha && "hidden")}>
-                <FieldLabel htmlFor="research-neutralization">{t("neutralization")}</FieldLabel>
+                <div className="flex items-center gap-1"><FieldLabel htmlFor="research-neutralization">{t("neutralization")}</FieldLabel><ResearchInfotip label={i18n.t("strategy:workbench.advancedSelection")}>{i18n.t("strategy:workbench.advancedSelectionHelp")}</ResearchInfotip></div>
                 <Select value={draft.neutralization || null}
                   onValueChange={(value) => updateDraft((current) => ({ ...current, neutralization: value ?? "" }))}>
                   <SelectTrigger id="research-neutralization" aria-invalid={Boolean(inputError("neutralization"))}
@@ -646,6 +656,14 @@ export function ResearchDraftWorkspace({
   const authoring = <div key={editorGeneration} className="min-w-0">
     <div hidden={direct} className={cn("min-w-0", direct && "hidden")}>
       <FrameworkAuthoring factor={factor} drawdown={draft}
+        activeStage={activeStage} onStageChange={setActiveStage}
+        stageSummaries={{
+          universe_selection: draft.universe ? t("top", { count: Number(draft.universe.slice(3)) }) : t("notSelected"),
+          alpha: draft.frameworkModules.alpha.kind === "python" ? i18n.t("strategy:workbench.python") : scoringRule
+            ? i18n.t(`strategy:workbench.scoring.${scoringRule.kind}`) : draft.formula.trim() ? i18n.t("strategy:workbench.summaryCustomFormula") : t("notSelected"),
+          portfolio_construction: draft.frameworkModules.portfolio_construction.kind === "python" ? i18n.t("strategy:workbench.python") : i18n.t("strategy:workbench.stagePortfolioSummary", { holdings: draft.holdingsCount || "—", weighting: i18n.t(`strategy:workbench.weighting.${draft.weighting}`) }),
+          risk_management: draft.frameworkModules.risk_management.kind === "python" ? i18n.t("strategy:workbench.python") : draft.stopLossThreshold || draft.maximumHoldingSessions || draft.takeProfitTiers.length || draft.drawdownThreshold ? i18n.t("strategy:workbench.stageRiskConfigured") : i18n.t("strategy:workbench.stageRiskEmpty"),
+        }}
         updateDrawdown={changes => updateDraft(current => ({ ...current, ...changes }))}
         takeProfitTiers={draft.takeProfitTiers} updateTakeProfitTiers={takeProfitTiers => updateDraft(current => ({ ...current, takeProfitTiers }))}
         stopLossThreshold={draft.stopLossThreshold} updateStopLoss={stopLossThreshold => updateDraft(current => ({ ...current, stopLossThreshold }))}
@@ -655,7 +673,7 @@ export function ResearchDraftWorkspace({
         fieldsButton={() => fieldsButton("catalog")}
         universeSettings={!factor && !direct ? universeSettings : null}
         neutralizationSettings={!factor && !direct ? <RuleDisclosure title={i18n.t("strategy:workbench.advancedSelection")}
-          description={i18n.t("strategy:workbench.advancedSelectionHelp")} configured={draft.neutralization === "industry"}
+          configured={draft.neutralization === "industry"}
           invalid={Boolean(inputError("neutralization"))}>{neutralizationSettings}</RuleDisclosure> : null}
         alphaEditor={<StrategyScoringRule enabled={!factor} formula={draft.formula} catalog={catalog}
           error={inputError("formula")} onChange={formula => updateDraft(current => ({ ...current, formula, editor: { anchor: 0, head: 0 } }))}>
@@ -674,46 +692,54 @@ export function ResearchDraftWorkspace({
     <section ref={workspace} aria-label={t("title")} className="research-reading-workspace @container min-w-0">
       <PageContent width="wide" className="research-page-content">
         <PageHeader className="research-page-header"
-          title={t(factor ? "factor_evaluation" : "strategy_backtest")}
-          description={i18n.t(factor ? "strategy:workbench.factorIntro" : "strategy:workbench.intro")}
-          actions={<>{folderNavigation}<Button variant="outline" className="max-[767px]:min-h-11" disabled={submitting} onClick={() => startNewResearch()}>
-            <Plus aria-hidden="true" />{t("newResearch")}</Button></>}
+          title={draft.name.trim() || t("untitled")}
+          actions={<>{folderNavigation}<Button variant="outline" disabled={submitting} onClick={() => startNewResearch()}>
+            <Plus aria-hidden="true" />{t("newResearch")}</Button>
+            <Button variant="outline" type="button" disabled={submitting || (specFeedback?.key === specKey && specFeedback.checking)}
+              onClick={() => void checkConfiguration()}>{t("check")}</Button>
+            <Button type="button" disabled={submitting} onClick={() => void runResearch()}>
+              <Play aria-hidden="true" weight="fill" />{t(submitting ? "running" : factor ? "runEvaluation" : "runBacktest")}
+            </Button></>}
         />
-        <fieldset className="research-mode-switch mb-6 min-w-0 border-0 p-0">
-          <legend className="sr-only">{t("kind")}</legend>
-          <RadioGroup className="flex flex-wrap gap-2" value={draft.researchKind}
-            onValueChange={(value) => {
-              if (value === "factor_evaluation" || value === "strategy_backtest") {
-                updateDraft((current) => selectResearchKind(current, value));
-              }
-            }}>
-            <label className="research-mode-option flex min-h-10 cursor-pointer items-center gap-2 rounded-md border border-border bg-card px-3 text-sm font-medium has-[[data-checked]]:border-primary has-[[data-checked]]:bg-secondary max-[767px]:min-h-11">
-              <RadioGroupItem value="factor_evaluation" />{t("factor_evaluation")}
-            </label>
-            <label className="research-mode-option flex min-h-10 cursor-pointer items-center gap-2 rounded-md border border-border bg-card px-3 text-sm font-medium has-[[data-checked]]:border-primary has-[[data-checked]]:bg-secondary max-[767px]:min-h-11">
-              <RadioGroupItem value="strategy_backtest" />{t("strategy_backtest")}
-            </label>
-          </RadioGroup>
-        </fieldset>
+        <div className="research-authoring-options">
+          <div className="flex flex-wrap items-end gap-x-6 gap-y-4">
+            <fieldset className="research-mode-switch m-0 min-w-0 border-0 p-0">
+              <legend className="mb-2 p-0 text-sm font-medium leading-[22px]">{t("kind")}</legend>
+              <ResearchInfotip label={t(factor ? "factor_evaluation" : "strategy_backtest")}>{i18n.t(factor ? "strategy:workbench.factorIntro" : "strategy:workbench.intro")}</ResearchInfotip>
+              <RadioGroup className="flex flex-wrap gap-2" value={draft.researchKind}
+                onValueChange={(value) => {
+                  if (value === "factor_evaluation" || value === "strategy_backtest") {
+                    updateDraft((current) => selectResearchKind(current, value));
+                  }
+                }}>
+                <label className="research-mode-option flex min-h-10 cursor-pointer items-center gap-2 rounded-md border border-border bg-card px-3 text-sm font-medium has-[[data-checked]]:border-primary has-[[data-checked]]:bg-secondary max-[767px]:min-h-11">
+                  <RadioGroupItem value="factor_evaluation" />{t("factor_evaluation")}
+                </label>
+                <label className="research-mode-option flex min-h-10 cursor-pointer items-center gap-2 rounded-md border border-border bg-card px-3 text-sm font-medium has-[[data-checked]]:border-primary has-[[data-checked]]:bg-secondary max-[767px]:min-h-11">
+                  <RadioGroupItem value="strategy_backtest" />{t("strategy_backtest")}
+                </label>
+              </RadioGroup>
+            </fieldset>
 
-        {!factor && <FieldGroup className="mb-6 max-w-sm">
-          <Field>
-            <FieldLabel htmlFor="strategy-mode">{t("strategyMode")}</FieldLabel>
-            <Select value={draft.strategyMode} onValueChange={mode => {
-              if (mode === "framework" || mode === "direct") updateDraft(current => selectStrategyMode(current, mode));
-            }}>
-              <SelectTrigger id="strategy-mode" className="w-full"><SelectValue>{t(direct ? "directMode" : "frameworkMode")}</SelectValue></SelectTrigger>
-              <SelectContent><SelectGroup>
-                <SelectItem value="framework">{t("frameworkMode")}</SelectItem>
-                <SelectItem value="direct">{t("directMode")}</SelectItem>
-              </SelectGroup></SelectContent>
-            </Select>
-          </Field>
-          <FieldDescription>{i18n.t(direct ? "strategy:workbench.directHelp" : "strategy:workbench.ruleModeHelp")}</FieldDescription>
-        </FieldGroup>}
+            {!factor && <fieldset className="m-0 min-w-0 border-0 p-0">
+              <legend id="strategy-mode-label" className="mb-2 p-0 text-sm font-medium leading-[22px]">{t("strategyMode")}</legend>
+              <ResearchInfotip label={t(direct ? "directMode" : "frameworkMode")}>{i18n.t(direct ? "strategy:workbench.directHelp" : "strategy:workbench.ruleModeHelp")}</ResearchInfotip>
+              <RadioGroup aria-labelledby="strategy-mode-label" className="flex flex-wrap gap-2" value={draft.strategyMode} onValueChange={mode => {
+                if (mode === "framework" || mode === "direct") updateDraft(current => selectStrategyMode(current, mode));
+              }}>
+                <label className="research-mode-option flex min-h-10 cursor-pointer items-center gap-2 rounded-md border border-border px-3 text-sm font-medium">
+                  <RadioGroupItem value="framework" />{t("frameworkMode")}
+                </label>
+                <label className="research-mode-option flex min-h-10 cursor-pointer items-center gap-2 rounded-md border border-border px-3 text-sm font-medium">
+                  <RadioGroupItem value="direct" />{t("directMode")}
+                </label>
+              </RadioGroup>
+            </fieldset>}
+          </div>
+        </div>
 
         <div className={cn("grid min-w-0 gap-5 pb-6", factor ? "@min-[840px]:grid-cols-[minmax(0,1fr)_300px] @min-[840px]:items-start" : "@min-[960px]:grid-cols-[minmax(0,1fr)_320px] @min-[960px]:items-start")}>
-          <section aria-label={t(direct ? "pythonAuthoring" : factor ? "authoring" : "frameworkAuthoring")} className={cn("grid min-w-0 content-start gap-5", !factor && "rounded-lg border border-border bg-card p-6")}>
+          <section aria-label={t(direct ? "pythonAuthoring" : factor ? "authoring" : "frameworkAuthoring")} className="grid min-w-0 content-start gap-5">
             {authoring}
             {visibleIssues.length > 0 ? (
               <ul aria-label={t("runIssues")} className="m-0 grid gap-2 rounded-lg border border-destructive p-4 text-sm text-destructive">
@@ -733,10 +759,10 @@ export function ResearchDraftWorkspace({
                 </span>
               </Field>
             </FieldGroup></RuleDisclosure>
+            {!factor && <StrategyRuleSummary inputs={draft} />}
           </section>
 
           <aside aria-label={t("settings")} className="grid min-w-0 gap-6">
-            {!factor && <StrategyRuleSummary inputs={draft} />}
             <section className="research-settings-panel grid min-w-0 gap-5 rounded-lg border border-border bg-card p-4">
             <h2 className="m-0 text-base font-semibold">{factor ? t("settings") : i18n.t("strategy:workbench.conditionsTitle")}</h2>
             <Field>
@@ -770,7 +796,10 @@ export function ResearchDraftWorkspace({
                 <SimulationCostSettings costs={draft.costs} onChange={costs => updateDraft(current => ({ ...current, costs }))} error={costError} />
               </CollapsibleContent>
             </Collapsible>}
-            {!factor && <p className="m-0 text-sm text-muted-foreground">{i18n.t("strategy:workbench.resultsHelp")}</p>}
+            {!factor && <div className="flex items-center gap-1 border-t border-border pt-3 text-sm text-muted-foreground">
+              <span>{i18n.t("strategy:workbench.executionShort")}</span>
+              <ResearchInfotip label={i18n.t("strategy:workbench.executionLabel")}>{i18n.t("strategy:workbench.execution")}</ResearchInfotip>
+            </div>}
             </section>
           </aside>
         </div>
@@ -792,13 +821,9 @@ export function ResearchDraftWorkspace({
             </Button>
           </li>)}</ul></AlertDescription>
         </Alert> : null}
-        <footer className="research-submit-bar sticky bottom-0 z-10 flex flex-wrap items-center justify-end gap-3 border-t border-border bg-background/95 py-4 backdrop-blur-sm max-[767px]:static">
-          <span className="mr-auto text-xs text-muted-foreground">{storageError === null ? t(hasStoredDraft ? "draftSavedLocal" : "draftNew") : t(`storage.${storageError}`)}</span>
-          <Button variant="outline" type="button" className="max-[767px]:min-h-11" disabled={submitting || (specFeedback?.key === specKey && specFeedback.checking)}
-            onClick={() => void checkConfiguration()}>{t("check")}</Button>
-          <Button type="button" className="max-[767px]:min-h-11" disabled={submitting} onClick={() => void runResearch()}>
-            <Play aria-hidden="true" weight="fill" />{t(submitting ? "running" : factor ? "runEvaluation" : "runBacktest")}
-          </Button>
+        <footer className="research-submit-bar flex flex-wrap items-center justify-between gap-3 border-t border-border py-4">
+          <span className="text-xs text-muted-foreground">{storageError === null ? t(hasStoredDraft ? "draftSavedLocal" : "draftNew") : t(`storage.${storageError}`)}</span>
+          <span className="text-xs text-muted-foreground">{coverage ? t("marketThrough", { date: coverage.end }) : t("marketNotReady")}</span>
         </footer>
       </PageContent>
 
