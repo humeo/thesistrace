@@ -44,6 +44,7 @@ export const researchEn = {
   "noFieldsFound": "No matching fields",
   "fieldDetails": "Field details",
   "insertField": "Insert into formula",
+  "insertPythonField": "Insert data call",
   "closeFields": "Close field browser",
   "pythonAuthoring": "Python authoring",
   "frameworkAuthoring": "Trading rules",
@@ -186,9 +187,6 @@ export const researchEn = {
     "holdingSessions": "Enter a positive whole number of trading sessions, or leave blank to disable.",
     "holdingOrder": "Maximum holding sessions must be at least minimum.",
     "programSource": "Enter Python source within 64 KiB.",
-    "programParameters": "Enter a parameters JSON object within 64 KiB.",
-    "programFields": "Declare up to 32 unique canonical field IDs.",
-    "programHistory": "History must be a whole number from 1 to 253 sessions, including the decision day.",
     "notesLength": "Keep notes within 1,024 characters."
   },
   "exclusions": {
@@ -324,6 +322,7 @@ export const researchZh = {
   "noFieldsFound": "没有匹配的字段",
   "fieldDetails": "字段详情",
   "insertField": "插入公式",
+  "insertPythonField": "插入数据读取调用",
   "closeFields": "关闭字段浏览器",
   "pythonAuthoring": "Python 编写",
   "frameworkAuthoring": "交易规则",
@@ -466,9 +465,6 @@ export const researchZh = {
     "holdingSessions": "请输入正整数个交易日，或留空关闭。",
     "holdingOrder": "最长持有交易日不能少于最短持有交易日。",
     "programSource": "请输入不超过 64 KiB 的 Python 源码。",
-    "programParameters": "请输入不超过 64 KiB 的参数 JSON 对象。",
-    "programFields": "最多声明 32 个不重复的正式字段 ID。",
-    "programHistory": "历史窗口须为 1 至 253 个交易日的整数，包含决策当日。",
     "notesLength": "备注不能超过 1,024 个字符。"
   },
   "exclusions": {

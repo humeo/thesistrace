@@ -1,168 +1,187 @@
-# Python program execution contract
+# Python strategy SDK
 
-The Strategy runtime calls `decide(context, state, parameters)` in a fresh
-CPython guest for every decision. The callback returns exactly
-`{"output": ..., "state": {...}}`. The strategy adapter validates `output`
-before the shared account can execute it. Only the returned JSON state survives
-the invocation; globals, imported modules, closures and Python objects do not.
+The platform supplies data and the actual simulated account. Your class decides
+what should change. The platform then applies trading rules, costs and fills at
+the next research trading session's Open. A returned target is not a guaranteed
+fill. Rule configuration remains the default; Python implements custom logic.
 
-`context` and `parameters` are recursively read-only. `state` is a mutable copy
-of the last accepted explicit state. Programs cannot change the platform's
-account or order ledger. Invalid output, an exception or a resource limit fails
-the invocation; it never substitutes an empty state or another strategy.
-Diagnostics include the source SHA-256, decision session and source line when
-available. Source, parameters, state and diagnostics are private research content.
-
-## Direct Strategy authoring
-
-Select **Strategy Backtest → Complete Python strategy** in Research.
-Rule configuration is the default strategy authoring flow: choose candidates,
-rank stocks with a common rule or a formula, set allocation and rebalancing,
-and optionally configure exits. Each step can use a Python module.
-Data declarations, external parameters and the Python reference expand on demand. The active definition
-contains source, a JSON parameter object, declared canonical field IDs and a
-history length of 1–253 trading sessions (including the decision session), with
-at most 32 unique fields. Switching mode preserves inactive browser drafts. Only the active definition
-is submitted.
-Check configuration and submission use the same admission contract. HTTP and
-MCP accept `strategy_mode: "direct"` with `program` and `initial_cash_cny`; Alpha,
-neutralization, Top-N and selection-interval fields are not accepted in Direct.
-
-The accepted Run freezes the source digest, parameters, data declaration and
-runtime identity. Its result exposes that frozen definition for inspection and
-reuse as a new Draft. DailyTrack inherits it; editing a Draft never changes a
-Run or Track. A Strategy Sweep contains only Direct items or only Framework
-items. Direct items have independent programs, state, accounts and results;
-there is no shared Python or Alpha calculation.
-
-At each research session's Close, the callback receives:
-
-- `session` and `completed_sessions`: the current date and the number of
-  decisions since the original research start. No future calendar is supplied.
-- `history`: declared `fields` as row-by-column numeric arrays, with row order
-  in `instruments` and column order in `sessions`. The view contains current
-  candidates and actual holdings, ends at the current Close, and includes
-  declared warmup. Financial fields retain the Dataset's disclosure visibility
-  rule. Missing values are `None`.
-- `candidates`: current instrument IDs and board metadata; `industry` is the
-  current prepared industry value or `None` when unavailable. Future listing
-  termination and future universe members are not exposed.
-- `account`: authoritative cash, post-Open net NAV and actual positions;
-  `fills` and `rejections`: this session's completed execution evidence.
-
-Return `{"output": None, "state": state}` for NoUpdate. It does not rebalance
-drift, spend leftover cash or replay a previous target. Otherwise `output` has
-exactly `reason`, `allocation` and `position_limits`. Allocation specifies
-`mode` (`rebalance`, `reduce` or `increase`), `instrument_ids`,
-`relative_weights` (exact ratio strings) and `exposure` in [0, 1]. Use a null
-allocation for local position reductions; `position_limits` maps held IDs to
-maximum remaining integer shares. At least one action must be present. IDs must
-be visible candidates or actual holdings; local limits cannot increase holdings.
-The platform supplies the decision date, next-Open execution coordinate and
-contract identity, then uses the same execution/account as Framework.
-
-Weights use reduced positive integer ratios such as `"1/2"` or `"1"`, with
-at most 128 decimal digits in each numerator and denominator. Their combined
-denominator is limited to 4,096 bits. Decimal/exponent strings are rejected
-before numeric parsing, so output validation also has bounded host cost.
-
-The initial UI example replaces a holding only when a candidate's five-session
-momentum improves enough. This minimal example instead enters the first visible
-candidate once and keeps its actual holdings thereafter:
+## Write one strategy class
 
 ```python
-def decide(context, state, parameters):
-    output = None
-    if not context["account"]["positions"] and context["candidates"]:
-        selected = context["candidates"][0]["instrument_id"]
-        output = {
-            "reason": "enter_visible_candidate",
-            "allocation": {
-                "mode": "rebalance", "instrument_ids": [selected],
-                "relative_weights": {selected: "1"}, "exposure": 1.0,
-            },
-            "position_limits": {},
+from quantgrove import Strategy
+
+class Momentum(Strategy):
+    def on_close(self, data, account):
+        lookback = 10
+        improvement = 0.01
+        prices = data.close_prices(lookback)
+        if len(prices.sessions) < lookback:
+            return None
+        scores = {
+            stock: closes[-1] / closes[0] - 1
+            for stock, closes in prices.items()
+            if closes[0] is not None and closes[-1] is not None and closes[0] > 0
         }
-    state["decisions"] = state.get("decisions", 0) + 1
-    return {"output": output, "state": state}
+        eligible = [stock for stock in data.candidates if stock in scores]
+        if not eligible:
+            return None
+        best = max(eligible, key=lambda stock: (scores[stock], stock))
+        held = [position["instrument_id"] for position in account.positions]
+        held_score = max((scores.get(stock, -1) for stock in held), default=-1)
+        if best not in held and (not held or scores[best] > held_score + improvement):
+            return self.target_weights({best: 1.0})
+        return None
 ```
 
-Declarations whose history cannot fit even its minimum JSON encoding are
-rejected before host materialization. Exact input size is checked before guest
-execution. A size failure includes the program and decision date and does not
-publish partial state or orders. Declare only the fields/history the program
-uses; narrower declarations reduce input and calculation cost.
+`10` and `0.01` are ordinary strategy constants. Change them or calculate them
+using ordinary Python. They are not required platform parameters. Ten observations
+cover nine adjacent trading-session intervals. This example is a template, not
+a recommendation or a platform rule.
 
-## Framework modules
+Define exactly one locally defined subclass of the required base, with a
+zero-argument constructor and `on_close(self, data, account)`. Helpers and ordinary
+imports are allowed within the installed environment. Class loading, top-level
+code and construction all execute in the isolated guest, including during Check
+configuration. Checking verifies syntax, the class and callback signature; it
+does not execute every branch or certify future data requests. Runtime failures
+include the source digest, decision date and author source line when available.
 
-HTTP and MCP accept `strategy_mode: "framework"` and a `modules` object with
-exactly these four slots, evaluated in this fixed order at each Close:
+## System input
 
-| Slot | Built-in identity | Python output |
+### Data
+
+| Access | Meaning |
+| --- | --- |
+| `data.session` | Current Close decision date, ISO string |
+| `data.completed_sessions` | Decision number since the original research start |
+| `data.candidates` | Current permitted candidate instrument IDs |
+| `data.candidate_details` | Read-only rows with instrument ID, board and industry |
+| `data.close_prices(days, instruments=None)` | Causally adjusted Close history |
+| `data.history(field_id, days, instruments=None)` | Numeric research field history |
+
+Pass `instruments` by keyword to either history method. With no instrument
+argument the scope is current candidates plus actual holdings. An explicit list
+must contain unique IDs within that scope. Field IDs come from Browse fields,
+which inserts a `data.history("price.close.adjusted", 10)` call at the editor's
+selection. No separate declaration or history-window form exists.
+
+Reads are real guest-to-host requests. `days` may be a variable or expression.
+Each read uses the Run's pinned data generation and host-owned decision date;
+the program cannot supply another as-of date or dataset. Financial values retain
+the field's disclosure-time visibility. Current and earlier published research
+sessions are available, including history before the research start or execution
+chunk. No future calendar or future universe members are supplied.
+
+The returned `History` has `sessions` (oldest to newest), `values` (instrument to
+tuple), `history[stock]` and `history.items()`. Missing observations are `None`.
+If the generation starts too recently, fewer than `days` sessions are returned;
+the strategy decides whether to wait or use them. Reading does not shift the
+research start or create additional decisions. Unknown/unavailable fields and
+out-of-scope stocks raise a source-located error rather than receiving substitute
+data. Empty stock lists return no instrument values.
+
+### Account
+
+`account` is recursively read-only. It exposes `cash_cny`, `positions`,
+`post_open_net_nav_cny`, `close_risk_nav_cny`, `fills` and `rejections`.
+Positions are actual holdings, including their `instrument_id`, execution shares,
+adjusted units and holding-cycle facts. Fills and rejections concern the current
+session. Money and exact accounting quantities retain the platform's decimal
+string representation; use `Decimal` for arithmetic. Mutating a local variable
+or constructing a decision cannot alter these authoritative account facts.
+
+## Strategy output
+
+| Return | Meaning |
+| --- | --- |
+| `None` or bare `return` | No update; do not replay the last target |
+| `self.target_weights({stock: 0.8})` | Complete new portfolio: 80% stock, 20% cash; omitted holdings exit |
+| `self.target_weights({})` | Explicit liquidation target |
+| `self.increase_to_weights(weights)` | Only buy toward target weights; do not sell other holdings |
+| `self.reduce_exposure(0.5)` | Proportionally reduce actual holdings toward an exposure ceiling; never buy |
+| `self.limit_positions({stock: 100})` | Cap remaining execution shares of the named actual holding; leave others alone |
+| `self.limit_exposure(0.5)` | Apply a portfolio exposure cap without a new allocation |
+| `self.with_limits(decision, maximum_shares=..., maximum_exposure=...)` | Intersect caps with a decision; existing tighter caps remain |
+
+Helpers construct a decision. **Only the decision returned by `on_close` is
+submitted.** Calling two helpers does not submit two orders. Portfolio weights
+must be positive and total at most one; omit zero-weight entries. Local share
+caps cannot increase a holding. Optional `reason="..."` labels the decision.
+The host validates all outputs and visible IDs independently of the SDK and
+supplies execution coordinates. Exact internal ratio strings are not an authoring
+requirement. Board lots, tradability, costs and cash can prevent full execution.
+
+## Optional cross-session memory
+
+Use `self.state`, a bounded JSON object, when a strategy needs memory:
+
+```python
+self.state["decisions"] = self.state.get("decisions", 0) + 1
+```
+
+The class is recreated in every isolated invocation. State is restored after
+construction and before `on_close`; other instance attributes, globals and
+objects do not survive. Do not rely on `self.state` inside the constructor.
+State is separate from the account, and need not be returned explicitly.
+An exception, invalid target or resource failure commits neither new state nor
+the new decision. Each Run, Batch item and Framework module has independent
+state; DailyTrack resumes the same frozen program and accepted state.
+
+## Framework Python modules
+
+Each stage uses `on_close(data, account)` and its own base class:
+
+| Stage | Import / inherit | Return helper |
 | --- | --- | --- |
-| `universe_selection` | `dataset_universe/v1` | `None`, or `{reason, instrument_ids}` |
-| `alpha` | `alpha_formula/v1` | `None`, or `{reason, signals}` |
-| `portfolio_construction` | `periodic_top_n/v1` | `None`, or the Direct target shape |
-| `risk_management` | `no_risk/v1` | `None`, or an explicit Risk Adjustment |
+| Candidate selection | `UniverseSelection` | `self.select(instruments)` |
+| Scoring | `Alpha` | `self.signals({stock: score}, valid_for_sessions=1)` |
+| Portfolio construction | `PortfolioConstruction` | Portfolio helpers above |
+| Risk management | `RiskManagement` | `self.limit_positions(caps)` or `self.replace(decision)` |
 
-Replace a slot's built-in string with `{"kind": "python", "program": {...}}`.
-Each program has the same source, parameters and data declaration contract as
-Direct, its own explicit state, and its own isolated invocation. All four
-slots are frozen with the Run. Omitting `modules` selects all four built-ins.
+`data.framework` is a read-only view of the selected universe, active signals,
+universe/signal change facts, expired/removed signals, this Close's proposal and
+the retained prior proposal. The retained proposal is a reference; it is never
+implicitly replayed. Downstream candidate and history scopes follow Universe
+Selection; actual holdings stay visible.
 
-The Research workbench exposes the four stages in the same order. Each stage
-can use its built-in implementation or a Python module with independent source,
-parameters and data declarations. Switching a stage clears its inactive settings.
-The initial Python examples select available candidates, publish momentum signals,
-replace a holding when another signal exceeds the improvement threshold, and exit
-explicitly listed holdings. They are editable examples, not additional platform
-rules. Run details retain every frozen module; Create draft copies those definitions
-without changing an existing Run or DailyTrack.
+Universe `None` retains still-available selected candidates (initially empty).
+Alpha outputs replace the signal snapshot; signal lifetime is 1–252 sessions.
+Alpha `None` keeps unexpired signals. Expiry or removal does not itself sell.
+Portfolio `None` creates no new proposal. Risk runs even without a new proposal:
+`None` leaves it alone, `replace(None)` cancels it, and local caps intersect it.
+For a full risk replacement use e.g.
+`return self.replace(self.target_weights({}))`. The host rejects a helper result
+that does not belong to its stage. Only the composed decision reaches execution.
 
-Only built-in Alpha accepts `formula` and `neutralization`. Only built-in
-Portfolio accepts `holdings_count`, `selection_every_sessions`,
-`exposure_expression`, `weighting` and `volatility_window`. Inactive settings
-must be omitted. The shared data preparation uses the union of declarations;
-each program still sees only its own declared fields and history.
+## Submit, inspect and reuse
 
-Every module receives the ordinary daily context plus `context.framework`:
-`universe`, active `signals`, `universe_changed`, `signals_updated`,
-`expired_signals`, `removed_signals`, the current `proposal`, and the
-`retained_proposal` from the last Portfolio update. The last value is a
-reference, never an instruction to replay old weights. Downstream candidate
-lists are restricted by Universe Selection; actual holdings remain visible.
+Web, HTTP and MCP submit `program: {"source": "..."}` plus simulation conditions.
+Framework slots use `{"kind": "python", "program": {"source": "..."}}`.
+There are no `parameters` or `data_requirements` properties. The current contract
+is `python-strategy/v3`; the old function ABI is not an execution fallback.
 
-Universe output replaces the selected list with up to 3,000 unique current
-Dataset candidates. `None` retains previously selected candidates that remain
-available; it starts empty. Built-in Alpha retains the Research Universe's
-original rank and neutralization population, then Universe Selection filters
-strategy candidates. A Python Alpha may compute on its selected candidates.
+Dates, universe, initial capital, fees and slippage remain backtest conditions.
+The Run freezes source, execution identity and data generation. Results expose
+that source for inspection and copying to a new draft. Copying or editing never
+changes an existing Run or DailyTrack. Batch items retain separate states and
+accounts, even when they share prepared market data.
 
-Each Python signal contains `instrument_id`, a finite numeric `value`, and
-`valid_for_sessions` from 1 to 252. Output replaces the active snapshot with at
-most one signal per selected instrument. The host stamps `created_session`
-and `created_session_number`; a lifetime of one expires before the next Close
-decision. `None` retains unexpired signals. Expiry and Universe removal are
-inputs to Portfolio Construction; neither creates a sale by itself. Built-in
-Portfolio keeps its every-N-session selection policy even when signals change
-daily. Python Portfolio can instead react to opportunity changes.
+Trading details → **Python data reads** records successful reads from accepted
+decisions: module, field, requested/returned sessions, stock count, actual date
+range and response bytes. It follows the same retention and ownership rules as
+other event evidence and is not continuation state. A failed invocation does not
+publish partial read records. No static data-use summary is inferred from Python.
 
-Risk runs every Close, including when Portfolio returns NoUpdate. Its output
-must state the intended composition:
+## Dynamic read limits
 
-- `{"mode": "limit_positions", "reason": "...", "position_limits": {...}}`
-  caps actual remaining shares. These caps intersect any Portfolio share caps;
-  they cannot increase a holding. With no new Portfolio proposal, reducing A
-  leaves B/C shares and the released cash unchanged.
-- `{"mode": "replace", "reason": "...", "target": ...}` explicitly replaces
-  the entire proposal with a Direct target shape; a null target cancels it.
-- `None` leaves this Close's new proposal unchanged. It never restores the
-  retained proposal or buys back a previous reduction.
-
-The composed target alone reaches the shared execution account. A Framework
-Strategy Sweep requires either built-in Alpha for every item (one shared
-formula and neutralization) or Python Alpha for every item (no shared formula).
-Python modules, active signals and accounts remain independent between items.
+Each invocation allows at most 64 requests, 253 sessions per request, 262,144
+requested stock/session cells per request, and 1,048,576 cumulatively. The request
+message is at most 64 KiB; each encoded response is at most 4 MiB and cumulative
+responses at most 16 MiB. Requests cannot overlap unread responses. The host
+checks scope and cell budgets before loading data and encoded size before giving
+it to the guest. Reads share the invocation's wall-time budget. The supervised
+worker remains responsible for bounding host work; guest fuel alone does not
+bound storage access. Capacity planning reserves guest, host read and event buffers.
 
 ## Frozen environment
 
@@ -193,14 +212,14 @@ Python's lower-level modules. The only environment variables are fixed
 
 Wall-clock APIs return 15:00 UTC+08:00 on the decision session; monotonic and CPU
 clocks return zero. Random bytes, including `SystemRandom`, derive from the
-canonical invocation. Identical source, context, state and parameters therefore
+canonical invocation. Identical source, context and state therefore
 receive identical random input. Sleeping and blocking are unavailable.
 
 ## Invocation limits
 
 | Resource | Limit |
 | --- | --- |
-| Source / parameters / diagnostics | 65,536 UTF-8 bytes each |
+| Source / diagnostics | 65,536 UTF-8 bytes each |
 | Complete input | 4 MiB |
 | Complete output, including raw stdout and stderr | 1 MiB |
 | Explicit state | 256 KiB |
@@ -232,7 +251,7 @@ records or 8 MiB of record bytes, within the existing 64 MiB acknowledged
 segment limit. DailyTrack origin pages reserve the full current decision
 state (3 MiB for Framework modules or 256 KiB for Direct) and a 2 MiB pending
 target in addition to the ordinary 32 KiB page budget. These transport bounds
-do not increase the program's source, parameter, state or execution limits.
+do not increase the program's source, state or execution limits.
 
 Verification selection and commands are maintained only in
 [AGENTS.md](../AGENTS.md#testing).

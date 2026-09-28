@@ -9,7 +9,7 @@ import type { ResearchInputField } from "./draft";
 import { frameworkStages, type FrameworkModulesDraft, type FrameworkStage } from "./frameworkModules";
 import { PortfolioDrawdownAuthoring } from "./PortfolioDrawdownAuthoring";
 import { drawdownFields, type DrawdownInputs } from "./portfolioDrawdown";
-import { PythonStrategyAuthoring } from "./PythonStrategyAuthoring";
+import { PythonStrategyAuthoring, type PythonFieldsButton } from "./PythonStrategyAuthoring";
 import type { ProgramInputs } from "./pythonStrategy";
 import { TakeProfitAuthoring } from "./TakeProfitAuthoring";
 import type { TakeProfitTierDraft } from "./takeProfit";
@@ -31,7 +31,7 @@ export function FrameworkAuthoring({ factor = false, drawdown, updateDrawdown, m
   updateProgram: (stage: FrameworkStage, changes: Partial<ProgramInputs>) => void;
   error: (field: ResearchInputField) => string | undefined;
   errorLine?: (stage: FrameworkStage) => number | null;
-  fieldsButton: () => ReactNode;
+  fieldsButton: PythonFieldsButton;
   alphaEditor: ReactNode; portfolioSettings?: ReactNode; universeSettings?: ReactNode; neutralizationSettings?: ReactNode;
 }) {
   const { t } = useTranslation("strategy");
@@ -56,7 +56,7 @@ export function FrameworkAuthoring({ factor = false, drawdown, updateDrawdown, m
         <div hidden={!python} className={cn("min-w-0", !python && "hidden")}>
           <PythonStrategyAuthoring stage={stage} inputs={modules[stage].program}
             onChange={changes => updateProgram(stage, changes)} error={field => error(`${stage}.${field}`)}
-            errorLine={errorLine?.(stage)} fieldsButton={fieldsButton()} />
+            errorLine={errorLine?.(stage)} fieldsButton={fieldsButton} />
         </div>
         <div hidden={python} className={cn("min-w-0", python && "hidden")}>
           {stage === "alpha" ? <div className="grid min-w-0 gap-4">{alphaEditor}{!factor && neutralizationSettings}</div>

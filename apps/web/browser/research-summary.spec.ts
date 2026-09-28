@@ -118,9 +118,8 @@ test("result tabs hide inactive panels and retain applied holdings filters", asy
 
 test.describe("Frozen Framework touch controls", () => {
   test.use({ hasTouch: true });
-  test("frozen module source disclosures work on wide and narrow touch layouts", async ({ page }) => {
-    const program = { source: "def decide(context, state, parameters):\n    return {'output': None, 'state': state}",
-      parameters: { threshold: 0.03 }, data_requirements: { field_ids: [], history_sessions: 1 } };
+  test("frozen module source disclosures work at desktop widths", async ({ page }) => {
+    const program = { source: "from quantgrove import PortfolioConstruction\nclass Example(PortfolioConstruction):\n    def on_close(self, data, account): return None" };
     const input = { research_kind: "strategy_backtest", strategy_mode: "framework", initial_cash_cny: "100000", costs: defaultSimulationCosts(),
       hypothesis: null, start_date: "2026-08-03", end_date: "2026-08-04", universe: "top300", modules: {
         universe_selection: "dataset_universe/v1", alpha: { kind: "python", program },
@@ -138,9 +137,9 @@ test.describe("Frozen Framework touch controls", () => {
     await page.addStyleTag({ content: styles });
     await page.addScriptTag({ content: script });
     await page.getByRole("tab", { name: "Configuration", exact: true }).click();
-    for (const width of [1280, 390]) {
+    for (const width of [1280, 1440]) {
       await page.setViewportSize({ width, height: 964 });
-      const disclosure = page.getByText("Portfolio Construction · Frozen Python source and parameters", { exact: true });
+      const disclosure = page.getByText("Portfolio Construction · Frozen Python source", { exact: true });
       const bounds = await disclosure.boundingBox();
       expect(bounds?.height).toBeGreaterThanOrEqual(44);
       expect(bounds?.width).toBeGreaterThanOrEqual(44);

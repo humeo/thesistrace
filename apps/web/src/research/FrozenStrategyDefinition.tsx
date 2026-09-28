@@ -19,10 +19,7 @@ export function FrozenPythonProgram({ program, title }: {
 }) {
   const { t } = useTranslation("strategy");
   return <Disclosure title={<>{title ?? t("frozen.python")}</>}>
-    <p><strong>{t("frozen.history")}</strong> {t("frozen.sessions", { count: program.data_requirements.history_sessions })}</p>
-    <p><strong>{t("frozen.fields")}</strong> <code>{program.data_requirements.field_ids.join(", ") || t("frozen.none")}</code></p>
     <pre className="max-h-96 min-w-0 overflow-auto rounded-md bg-muted p-4 font-mono text-sm" tabIndex={0}><code>{program.source}</code></pre>
-    <strong>{t("frozen.parameters")}</strong><pre className="max-h-96 min-w-0 overflow-auto rounded-md bg-muted p-4 font-mono text-sm" tabIndex={0}><code>{JSON.stringify(program.parameters, null, 2)}</code></pre>
   </Disclosure>;
 }
 

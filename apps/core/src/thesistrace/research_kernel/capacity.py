@@ -10,6 +10,8 @@ from thesistrace.research_kernel.strategy_event_limits import (
 )
 from thesistrace.research_kernel.strategy_program_runtime import (
     BOOTSTRAP_WALL_SECONDS,
+    HISTORY_CELLS,
+    HISTORY_REQUESTS,
     INPUT_BYTES,
     MEMORY_BYTES,
     OUTPUT_BYTES,
@@ -71,7 +73,7 @@ def plan_session_capacity(
     )
     fixed_bytes = (_FIXED_EXECUTION_OVERHEAD_BYTES + continuation_bytes
                    + _decision_fixed_bytes(decision_mode, python_program_count))
-    per_session_bytes += _decision_session_bytes(decision_mode)
+    per_session_bytes += _decision_session_bytes(decision_mode, python_program_count)
     if fixed_bytes + per_session_bytes > execution_memory_bytes:
         raise SessionCapacityError(
             "Worker capacity cannot fit one complete full-Universe Research Session"
@@ -129,7 +131,8 @@ def estimate_session_peak_bytes(
     return (
         _FIXED_EXECUTION_OVERHEAD_BYTES + continuation_bytes
         + _decision_fixed_bytes(decision_mode, python_program_count)
-        + (per_session_bytes + _decision_session_bytes(decision_mode)) * session_count
+        + (per_session_bytes + _decision_session_bytes(decision_mode, python_program_count))
+        * session_count
     )
 
 
@@ -166,18 +169,22 @@ def _decision_fixed_bytes(mode: DecisionMode, programs: int) -> int:
     state = FRAMEWORK_STATE_BYTES if mode == "framework" else STATE_BYTES
     # Only one guest runs at a time; its input/output buffers overlap the host
     # continuation and the frozen next-Open target.
-    guest = MEMORY_BYTES + INPUT_BYTES + OUTPUT_BYTES if programs else 0
+    # One bounded read may overlap Arrow buffers, Python numeric rows and its
+    # encoded response. Programs execute sequentially, so reserve this once.
+    guest = (MEMORY_BYTES + 2 * INPUT_BYTES + OUTPUT_BYTES
+             + HISTORY_CELLS * 128) if programs else 0
     return state + MAX_TARGET_RECORD_BYTES + guest
 
 
-def _decision_session_bytes(mode: DecisionMode) -> int:
+def _decision_session_bytes(mode: DecisionMode, programs: int) -> int:
     # Admission allowance, not measured RSS or a transport/session limit.
     # The receiver independently checks actual encoded bytes per Chunk.
     if mode == "factor_evaluation":
         return 0
     return ((MAX_FRAMEWORK_RECORD_BYTES if mode == "framework" else 0)
             + MAX_TARGET_RECORD_BYTES
-            + _OTHER_STRATEGY_RECORDS_PER_SESSION * MAX_EVENT_RECORD_BYTES)
+            + (_OTHER_STRATEGY_RECORDS_PER_SESSION
+               + HISTORY_REQUESTS * programs) * MAX_EVENT_RECORD_BYTES)
 
 
 def _session_work(formula_work: int, cardinality: int, programs: int) -> int:

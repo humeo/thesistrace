@@ -12,7 +12,7 @@ import Decimal from "decimal.js";
 import { FrameworkDecisionDetails, type FrameworkRecord } from "./FrameworkDecisionDetails";
 
 export const eventSections = [
-  "strategy_framework", "strategy_targets", "strategy_orders", "strategy_child_orders", "strategy_fills", "strategy_adjustments", "strategy_execution_constraints",
+  "strategy_history_reads", "strategy_framework", "strategy_targets", "strategy_orders", "strategy_child_orders", "strategy_fills", "strategy_adjustments", "strategy_execution_constraints",
 ] as const;
 export type EventSection = typeof eventSections[number];
 export type EventScope = { section: EventSection; session: string; instrument?: string };
@@ -29,11 +29,20 @@ export type EventRow = Record<string, EventValue>;
 export type EventRelation = { target_id?: string; order_id?: string; child_order_id?: string };
 type Navigate = (section: EventSection, relation: EventRelation, context: EventScope) => void;
 const idFields: Record<EventSection, string> = {
+  strategy_history_reads: "read_id",
   strategy_framework: "decision_id",
   strategy_targets: "target_id", strategy_orders: "order_id", strategy_child_orders: "child_order_id",
   strategy_fills: "fill_id", strategy_adjustments: "adjustment_id", strategy_execution_constraints: "constraint_id",
 };
 const columns: Record<EventSection, { key: string; label: ParseKeys<"analysis">; numeric?: boolean }[]> = {
+  strategy_history_reads: [
+    { key: "session", label: "events.decisionDate" },
+    { key: "module", label: "events.columns.readModule" },
+    { key: "field_id", label: "events.columns.readField" },
+    { key: "requested_sessions", label: "events.columns.requestedSessions", numeric: true },
+    { key: "returned_sessions", label: "events.columns.returnedSessions", numeric: true },
+    { key: "instrument_count", label: "events.columns.readInstruments", numeric: true },
+  ],
   strategy_framework: [
     { key: "decision_session", label: "events.decisionDate" },
     { key: "universe.instrument_ids", label: "events.columns.candidates", numeric: true },

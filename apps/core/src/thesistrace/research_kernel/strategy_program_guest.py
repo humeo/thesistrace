@@ -1,6 +1,7 @@
 """Trusted bootstrap whose main function executes only inside the pinned WASI guest."""
 
 import importlib
+import inspect
 import io
 import json
 import os
@@ -57,18 +58,28 @@ def main():
     os.write(BOOTSTRAP_READY_FD, BOOTSTRAP_READY)
     try:
         code = compile(request["source"], "strategy.py", "exec")
-        if request["operation"] == "validate":
-            result = {"output": None, "state": {}}
-        else:
-            module = types.ModuleType("strategy")
-            sys.modules["strategy"] = module
-            exec(code, module.__dict__)
-            callback = module.__dict__.get("decide")
-            if not callable(callback):
-                raise ValueError("Program must define decide(context, state, parameters)")
-            result = callback(
-                freeze(request["context"]), request["state"], freeze(request["parameters"]),
-            )
+        sdk = sys.modules["quantgrove"]
+        module = types.ModuleType("strategy")
+        sys.modules["strategy"] = module
+        exec(code, module.__dict__)
+        expected = getattr(sdk, request["entrypoint"])
+        classes = {value for value in module.__dict__.values()
+                   if isinstance(value, type) and value.__module__ == "strategy"
+                   and issubclass(value, expected)}
+        if len(classes) != 1:
+            raise ValueError("Define exactly one " + request["entrypoint"] + " subclass")
+        strategy = classes.pop()()
+        strategy.state = request["state"]
+        if type(strategy).on_close is sdk.Strategy.on_close:
+            raise ValueError("Implement on_close(self, data, account)")
+        data, account = sdk.Data(request["context"]), sdk.Account(request["context"])
+        inspect.signature(strategy.on_close).bind(data, account)
+        decision = None
+        if request["operation"] == "invoke":
+            decision = strategy.on_close(data, account)
+            if decision is not None and not isinstance(decision, sdk.Decision):
+                raise TypeError("Return None or a decision built by a strategy helper")
+        result = {"output": None if decision is None else decision.value, "state": strategy.state}
         encoded = json.dumps(
             {"ok": True, "result": result, "diagnostics": "".join(diagnostics.parts)},
             allow_nan=False, ensure_ascii=False, sort_keys=True, separators=(",", ":"),

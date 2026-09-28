@@ -23,7 +23,7 @@ def test_authoring_discovery_publishes_the_four_framework_module_contracts():
         ("portfolio_construction", "periodic_top_n/v1"),
         ("risk_management", "no_risk/v1"),
     ]
-    assert "instrument_ids" in framework["stages"][0]["output_contract"]
+    assert "self.select" in framework["stages"][0]["output_contract"]
     assert "valid_for_sessions" in framework["stages"][1]["output_contract"]
     assert "NoUpdate" in framework["stages"][2]["output_contract"]
     assert "limit_positions" in framework["stages"][3]["output_contract"]
@@ -40,13 +40,9 @@ def test_authoring_discovery_publishes_the_four_framework_module_contracts():
 
 def framework_spec():
     modules = dict(BUILTIN_FRAMEWORK_MODULES)
-    for stage, fields, history in (
-        ("alpha", ["price.close.adjusted"], 3),
-        ("portfolio_construction", ["price.open.adjusted"], 2),
-    ):
+    for stage, base in (("alpha", "Alpha"), ("portfolio_construction", "PortfolioConstruction")):
         modules[stage] = {"kind": "python", "program": {
-            "source": SOURCE, "parameters": {"stage": stage},
-            "data_requirements": {"field_ids": fields, "history_sessions": history},
+            "source": SOURCE.replace("Strategy", base),
         }}
     return {
         "research_kind": "strategy_backtest", "strategy_mode": "framework",
@@ -81,13 +77,14 @@ def test_framework_admission_freezes_only_active_modules_and_unions_declared_req
     assert frozen["strategy"]["modules"] == values["modules"]
     assert "holdings_count" not in frozen["strategy"]
     assert "exposure_expression" not in frozen["strategy"]
-    assert frozen["strategy"]["environment"]["contract"] == "python-strategy/v2"
-    assert admitted.expression_admission.effective_lookback == 2
+    assert frozen["strategy"]["environment"]["contract"] == "python-strategy/v3"
+    assert admitted.expression_admission.effective_lookback == 0
     assert admitted.field_bindings == {
-        "price.close.adjusted": "close", "price.open.adjusted": "open",
+        "price.close.adjusted": "close",
     }
     assert admitted.expression_trees == ()
-    command.modules.alpha.program.parameters["stage"] = "changed"
+    altered_command = command.model_copy(update={"name": "changed"})
+    assert altered_command.name == "changed"
     assert admitted.canonical_value() == frozen
     assert admitted.authorable_value() == {
         **values, "hypothesis": None,
@@ -135,15 +132,15 @@ def test_framework_diagnostics_identify_the_failing_stage(stage):
     assert caught.value.issues == diagnostic.issues
 
 
-def test_framework_unavailable_data_diagnostic_identifies_the_requiring_module():
+def test_framework_dynamic_fields_are_validated_when_read_not_guessed_at_admission():
     service, _ = service_and_snapshot()
-    spec = TypeAdapter(ResearchSpec).validate_python(framework_spec())
-    diagnostic = service.diagnose_research_spec(spec)
-    assert not diagnostic.valid
-    assert [(issue.code, issue.field) for issue in diagnostic.issues] == [
-        ("FIELD_UNAVAILABLE_IN_CURRENT_DATA",
-         "modules.portfolio_construction.program.data_requirements"),
-    ]
+    values = framework_spec()
+    values["modules"]["portfolio_construction"]["program"]["source"] = (
+        "from quantgrove import PortfolioConstruction\nclass Dynamic(PortfolioConstruction):\n"
+        "    def on_close(self, data, account):\n        data.history('unknown', 10)\n"
+    )
+    diagnostic = service.diagnose_research_spec(TypeAdapter(ResearchSpec).validate_python(values))
+    assert diagnostic.valid
 
 
 def test_framework_shared_alpha_binding_excludes_individual_module_fields():
@@ -161,7 +158,7 @@ def test_framework_shared_alpha_binding_excludes_individual_module_fields():
     ).immutable_input
     assert admitted.alpha_field_bindings == {"price.close.adjusted": "close"}
     assert admitted.field_bindings == {
-        "price.close.adjusted": "close", "price.open.adjusted": "open",
+        "price.close.adjusted": "close",
     }
 
 
@@ -171,7 +168,7 @@ def test_framework_sweep_freezes_each_items_modules_without_a_dummy_shared_formu
     values = framework_spec()
     item = {name: values[name] for name in ("strategy_mode", "initial_cash_cny", "modules")}
     second = deepcopy(item)
-    second["modules"]["alpha"]["program"]["parameters"]["threshold"] = 2
+    second["modules"]["alpha"]["program"]["source"] += "\nTHRESHOLD = 2\n"
     command = TypeAdapter(ResearchBatchAdmissionCommand).validate_python({
         "batch_kind": "strategy_sweep", "request_id": "frameworks",
         **{name: values[name] for name in ("start_date", "end_date", "universe")},
@@ -179,8 +176,8 @@ def test_framework_sweep_freezes_each_items_modules_without_a_dummy_shared_formu
     })
     assert command.alpha is None
     assert command.neutralization is None
-    assert command.strategies[0].modules.alpha.program.parameters == {"stage": "alpha"}
-    assert command.strategies[1].modules.alpha.program.parameters["threshold"] == 2
+    assert "THRESHOLD" not in command.strategies[0].modules.alpha.program.source
+    assert "THRESHOLD = 2" in command.strategies[1].modules.alpha.program.source
 
 
 @pytest.mark.parametrize("minimum", [None, 2])

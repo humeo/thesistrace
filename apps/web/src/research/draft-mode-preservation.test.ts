@@ -15,8 +15,7 @@ describe("Research mode draft preservation", () => {
     let draft = frameworkDraft();
     for (const stage of frameworkStages) {
       draft = selectFrameworkModule(draft, stage, "python");
-      draft.frameworkModules[stage].program = { programSource: `# ${stage}\ndef decide(context, state, parameters):\n    return {\"output\": None, \"state\": state}`,
-        programParameters: "invalid unfinished JSON", programFields: "price.close.adjusted", programHistorySessions: "7" };
+      draft.frameworkModules[stage].program = { programSource: `# ${stage}\nfrom quantgrove import Strategy\nclass Saved(Strategy):\n    def on_close(self, data, account): return None`, };
     }
     const programs = structuredClone(draft.frameworkModules);
     for (const stage of frameworkStages) draft = selectFrameworkModule(draft, stage, "builtin");
@@ -27,7 +26,7 @@ describe("Research mode draft preservation", () => {
       expect(draft.frameworkModules[stage]).toEqual(programs[stage]);
     }
     expect(researchInputIssues(draft).map(issue => issue.field)).toEqual(
-      frameworkStages.map(stage => `${stage}.programParameters`),
+      [],
     );
   });
 
@@ -50,12 +49,10 @@ describe("Research mode draft preservation", () => {
     draft = { ...draft, holdingsCount: "17", initialCashCny: "250000" };
     const framework = structuredClone(draft);
     draft = selectStrategyMode(draft, "direct");
-    draft = { ...draft, programSource: "# custom direct source", programParameters: '{"threshold": 3}',
-      programFields: "price.open.adjusted", programHistorySessions: "9" };
+    draft = { ...draft, programSource: "# custom direct source", };
     draft = selectResearchKind(selectResearchKind(draft, "factor_evaluation"), "strategy_backtest");
     expect(draft.strategyMode).toBe("direct");
-    expect(draft).toMatchObject({ programSource: "# custom direct source", programParameters: '{"threshold": 3}',
-      programFields: "price.open.adjusted", programHistorySessions: "9", initialCashCny: "250000" });
+    expect(draft).toMatchObject({ programSource: "# custom direct source", initialCashCny: "250000" });
     draft = selectStrategyMode(draft, "framework");
     expect(draft.formula).toBe(framework.formula);
     expect(draft.frameworkModules).toEqual(framework.frameworkModules);
@@ -81,13 +78,11 @@ describe("Research mode draft preservation", () => {
     const storage = { getItem: (key: string) => entries.get(key) ?? null,
       setItem: (key: string, value: string) => { entries.set(key, value); } };
     let draft = selectFrameworkModule(frameworkDraft(), "alpha", "python");
-    draft.frameworkModules.alpha.program = { programSource: "# retained source", programParameters: "{",
-      programFields: "", programHistorySessions: "" };
+    draft.frameworkModules.alpha.program = { programSource: "# retained source", };
     draft = selectFrameworkModule(draft, "alpha", "builtin");
     persistResearchDraft(storage, "researcher", "folder", draft);
     const restored = selectFrameworkModule(loadResearchDraft(storage, "researcher", "folder"), "alpha", "python");
-    expect(restored.frameworkModules.alpha.program).toEqual({ programSource: "# retained source",
-      programParameters: "{", programFields: "", programHistorySessions: "" });
+    expect(restored.frameworkModules.alpha.program).toEqual({ programSource: "# retained source", });
     expect([...entries.keys()]).toEqual(["thesistrace.research-draft.researcher.folder"]);
   });
 });

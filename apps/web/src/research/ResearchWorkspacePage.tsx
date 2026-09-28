@@ -16,7 +16,8 @@ import type { AlphaCatalog } from "../alphaCatalog";
 import { coreFetch } from "../auth/coreFetch";
 import type { BrowserLocation } from "../auth/routing";
 import { i18n, interfaceLocale, useTranslation } from "../i18n";
-import { ResearchFieldCatalog, type DataOverview } from "../data/DataPage";
+import { type DataOverview } from "../data/DataPage";
+import type { PythonSourceEditorHandle } from "./PythonSourceEditor";
 import { AlphaFormulaEditor, type AlphaFormulaEditorHandle, type EditorDiagnostic } from "./AlphaFormulaEditor";
 import { folderDisplayName, folderMutationError, type FolderError } from "./folders";
 import { formatResearchIssue, researchIssueField, type ResearchRunAdmissionIssue } from "./admission";
@@ -465,13 +466,15 @@ export function ResearchDraftWorkspace({
   const fieldsTrigger = useRef<HTMLButtonElement>(null);
   const fieldsPanel = useRef<HTMLElement>(null);
   const restoreEditorFocus = useRef(false);
+  const pythonEditor = useRef<PythonSourceEditorHandle | null>(null);
   function closeFields() {
     setFieldsOpen(false);
   }
-  function fieldsButton(mode: "formula" | "catalog" = "formula") {
+  function fieldsButton(mode: "formula" | "catalog" = "formula", editor?: () => PythonSourceEditorHandle | null) {
     return <Button variant="outline" size="sm" className="max-[767px]:min-h-11" type="button" aria-expanded={fieldsOpen}
       aria-controls="research-fields-panel" onClick={event => {
         fieldsTrigger.current = event.currentTarget;
+        pythonEditor.current = editor?.() ?? null;
         setFieldBrowserMode(mode);
         setFieldsOpen(open => !open);
       }}>{t("browseFields")}</Button>;
@@ -511,8 +514,7 @@ export function ResearchDraftWorkspace({
     }
     const [stage, input] = field.includes(".") ? field.split(".") : [null, field];
     const serverField = (stage ? `modules.${stage}.` : "") + {
-      programSource: "program.source", programParameters: "program.parameters",
-      programFields: "program.data_requirements", programHistorySessions: "program.data_requirements",
+      programSource: "program.source",
     }[input as ProgramInputField];
     const issues = [...visibleIssues, ...(specFeedback?.key === specKey ? specFeedback.issues : [])];
     const issue = issues.find(issue => issue.field === serverField || issue.field.startsWith(`${serverField}.`));
@@ -652,7 +654,7 @@ export function ResearchDraftWorkspace({
         maximumHoldingSessions={draft.maximumHoldingSessions} updateMaximumHoldingSessions={maximumHoldingSessions => updateDraft(current => ({ ...current, maximumHoldingSessions }))}
         minimumHoldingSessions={draft.minimumHoldingSessions} updateMinimumHoldingSessions={minimumHoldingSessions => updateDraft(current => ({ ...current, minimumHoldingSessions }))}
         modules={draft.frameworkModules} error={programError} errorLine={programErrorLine}
-        fieldsButton={() => fieldsButton("catalog")}
+        fieldsButton={editor => fieldsButton("catalog", editor)}
         universeSettings={!factor && !direct ? universeSettings : null}
         neutralizationSettings={!factor && !direct ? <RuleDisclosure title={i18n.t("strategy:workbench.advancedSelection")}
           description={i18n.t("strategy:workbench.advancedSelectionHelp")} configured={draft.neutralization === "industry"}
@@ -667,7 +669,7 @@ export function ResearchDraftWorkspace({
     </div>
     <div hidden={!direct} className={cn("min-w-0", !direct && "hidden")}>
       <PythonStrategyAuthoring inputs={draft} error={programError} errorLine={programErrorLine()}
-        onChange={changes => updateDraft(current => ({ ...current, ...changes }))} fieldsButton={fieldsButton("catalog")} />
+        onChange={changes => updateDraft(current => ({ ...current, ...changes }))} fieldsButton={editor => fieldsButton("catalog", editor)} />
     </div>
   </div>;
   return (
@@ -808,7 +810,8 @@ export function ResearchDraftWorkspace({
           finalFocus={() => {
             if (restoreEditorFocus.current) {
               restoreEditorFocus.current = false;
-              alphaEditor.current?.focus();
+              if (fieldBrowserMode === "catalog") pythonEditor.current?.focus();
+              else alphaEditor.current?.focus();
               return false;
             }
             return fieldsTrigger.current;
@@ -818,11 +821,12 @@ export function ResearchDraftWorkspace({
             <Button variant="ghost" size="icon-sm" className="max-[767px]:size-11" aria-label={t("closeFields")} onClick={closeFields}><X aria-hidden="true" /></Button>
           </SheetHeader>
           <section id="research-fields-panel" ref={fieldsPanel} className="min-w-0">
-            {fieldsOpen && fieldBrowserMode === "formula" ? <ResearchFieldBrowser catalog={catalog} onInsert={(identifier) => {
-              alphaEditor.current?.insertAtSelection(identifier);
+            {fieldsOpen ? <ResearchFieldBrowser catalog={catalog} python={fieldBrowserMode === "catalog"} onInsert={(identifier) => {
+              if (fieldBrowserMode === "catalog") pythonEditor.current?.insertAtSelection(identifier);
+              else alphaEditor.current?.insertAtSelection(identifier);
               restoreEditorFocus.current = true;
               setFieldsOpen(false);
-            }} /> : fieldsOpen ? <ResearchFieldCatalog catalog={catalog} /> : null}
+            }} /> : null}
           </section>
         </SheetContent>
       </Sheet>
@@ -915,8 +919,7 @@ const INPUT_SELECTORS: Record<Exclude<ResearchInputField, TakeProfitField | "for
   universe: "#research-universe", neutralization: "#research-neutralization", initialCashCny: "#initial-cash",
   holdingsCount: "#research-holdings-count", selectionEverySessions: "#research-selection-sessions",
   volatilityWindow: "#volatility-window", stopLossThreshold: "#stop-loss-threshold", maximumHoldingSessions: "#maximum-holding-sessions", minimumHoldingSessions: "#minimum-holding-sessions",
-  programSource: "#python-source", programParameters: "#python-parameters",
-  programFields: "#python-fields", programHistorySessions: "#python-history",
+  programSource: "#python-source",
 };
 
 function inputSelector(field: Exclude<ResearchInputField, "formula" | "exposureExpression">): string {

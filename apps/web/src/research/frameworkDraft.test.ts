@@ -7,7 +7,6 @@ import {
   type FrozenResearchAuthorableInput,
 } from "./draft";
 import { builtinFrameworkModules, frameworkStages } from "./frameworkModules";
-import { type JsonValue } from "./pythonStrategy";
 
 function draft() {
   return { ...selectResearchKind(emptyResearchDraft(), "strategy_backtest"),
@@ -20,30 +19,11 @@ function storage() {
 }
 
 describe("Framework authoring contract", () => {
-  it.each(["direct", "framework"] as const)("reuses deeply nested legal %s parameters without formatting expansion", mode => {
-    let nested: JsonValue = Array(32500).fill(0);
-    for (let index = 0; index < 30; index++) nested = { nested };
-    const parameters = { values: nested };
-    expect(new TextEncoder().encode(JSON.stringify(parameters)).byteLength).toBeLessThan(65536);
-    const program = { source: "def decide(context, state, parameters): return {'output': None, 'state': state}",
-      parameters, data_requirements: { field_ids: [], history_sessions: 1 } };
-    const common = { research_kind: "strategy_backtest" as const, hypothesis: null, start_date: "2026-08-03",
-      end_date: "2026-08-28", universe: "top300" as const, initial_cash_cny: "100000", costs: defaultSimulationCosts() };
-    const frozen: FrozenResearchAuthorableInput = mode === "direct" ? { ...common, strategy_mode: mode, program }
-      : { ...common, strategy_mode: mode, modules: { ...builtinFrameworkModules, alpha: { kind: "python", program },
-        portfolio_construction: { kind: "python", program } } };
-    const saved = storage();
-    expect(useResearchAsDraft(saved, "researcher", "folder", frozen, () => true)).toBe(true);
-    const loaded = loadResearchDraft(saved, "researcher", "folder");
-    expect(researchInputIssues(loaded)).toEqual([]);
-    expect(researchSpec(loaded)).toEqual(frozen);
-  });
-
   it("can run four large formatted modules repeatedly and retain distinct pending and accepted values", () => {
     let current = draft();
     for (const stage of frameworkStages) {
       current = selectFrameworkModule(current, stage, "python");
-      current.frameworkModules[stage].program.programParameters = JSON.stringify({ values: Array(30000).fill(0) }, null, 2);
+      current.frameworkModules[stage].program.programSource = JSON.stringify({ values: Array(8000).fill(0) }, null, 2);
     }
     expect(researchInputIssues(current)).toEqual([]);
     const saved = storage();
@@ -60,17 +40,17 @@ describe("Framework authoring contract", () => {
     const loaded = loadResearchDraft(saved, "researcher", "folder");
     expect(loaded.frameworkModules.alpha.program.programSource).toBe("new source");
     expect(loaded.pendingAdmission?.inputs.frameworkModules.alpha.program.programSource).toBe(current.frameworkModules.alpha.program.programSource);
-    expect(loaded.lastAdmittedBaseline?.frameworkModules.alpha.program.programParameters).toBe(current.frameworkModules.alpha.program.programParameters);
+    expect(loaded.lastAdmittedBaseline?.frameworkModules.alpha.program.programSource).toBe(current.frameworkModules.alpha.program.programSource);
     const completed = acceptPendingResearchRun(loaded, "second");
     expect(completed.frameworkModules.alpha.program.programSource).toBe("new source");
     expect(completed.lastAdmittedBaseline?.frameworkModules.alpha.program.programSource).toBe(current.frameworkModules.alpha.program.programSource);
   });
-  it("preserves three different large parameter snapshots without copying their formatting", () => {
-    const parameters = (value: number) => JSON.stringify({ values: Array(30000).fill(value) }, null, 2);
+  it("preserves three different large source snapshots without losing source formatting", () => {
+    const parameters = (value: number) => JSON.stringify({ values: Array(8000).fill(value) }, null, 2);
     const changeParameters = (current: ReturnType<typeof draft>, value: number) => ({ ...current,
       frameworkModules: Object.fromEntries(frameworkStages.map(stage => [stage, {
         ...current.frameworkModules[stage], program: { ...current.frameworkModules[stage].program,
-          programParameters: parameters(value) },
+          programSource: parameters(value) },
       }])) as typeof current.frameworkModules,
     });
     let current = draft();
@@ -83,9 +63,9 @@ describe("Framework authoring contract", () => {
     const loaded = loadResearchDraft(saved, "researcher", "folder");
     expect(researchInputIssues(loaded)).toEqual([]);
     for (const stage of frameworkStages) {
-      expect(loaded.frameworkModules[stage].program.programParameters).toBe(parameters(2));
-      expect(JSON.parse(loaded.lastAdmittedBaseline!.frameworkModules[stage].program.programParameters)).toEqual(JSON.parse(parameters(0)));
-      expect(JSON.parse(loaded.pendingAdmission!.inputs.frameworkModules[stage].program.programParameters)).toEqual(JSON.parse(parameters(1)));
+      expect(loaded.frameworkModules[stage].program.programSource).toBe(parameters(2));
+      expect(JSON.parse(loaded.lastAdmittedBaseline!.frameworkModules[stage].program.programSource)).toEqual(JSON.parse(parameters(0)));
+      expect(JSON.parse(loaded.pendingAdmission!.inputs.frameworkModules[stage].program.programSource)).toEqual(JSON.parse(parameters(1)));
     }
     expect(hasUnexecutedChanges(loaded)).toBe(true);
     const restoredPending = changeParameters(loaded, 1);
@@ -115,10 +95,10 @@ describe("Framework authoring contract", () => {
     let current = selectFrameworkModule(draft(), "risk_management", "python");
     current = { ...current, frameworkModules: { ...current.frameworkModules, risk_management: {
       kind: "python", program: { ...current.frameworkModules.risk_management.program,
-        programParameters: "not JSON", programHistorySessions: "0" },
+        programSource: "" },
     } } };
     expect(researchInputIssues(current).map(issue => issue.field)).toEqual([
-      "risk_management.programParameters", "risk_management.programHistorySessions",
+      "risk_management.programSource",
     ]);
     current = selectFrameworkModule(current, "risk_management", "builtin");
     expect(researchInputIssues(current)).toEqual([]);
@@ -126,7 +106,7 @@ describe("Framework authoring contract", () => {
     current = selectStrategyMode(selectFrameworkModule(current, "alpha", "python"), "direct");
     expect(researchSpec(current)).not.toHaveProperty("modules");
     expect(current.frameworkModules.alpha.kind).toBe("python");
-    expect(current.frameworkModules.risk_management.program.programParameters).toBe("not JSON");
+    expect(current.frameworkModules.risk_management.program.programSource).toBe("");
     expect(researchInputIssues(current)).toEqual([]);
   });
 

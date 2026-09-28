@@ -51,7 +51,6 @@ from thesistrace.data import (
     MountedGenerationStore,
 )
 from thesistrace.data.dependencies import resolve_data_dependencies
-from thesistrace.data.fields import alpha_field_catalog
 from thesistrace.data.lifecycle import lock_data_lifecycle
 from thesistrace.operational_events import non_blocking_operational_event_sink
 from thesistrace.publication import (
@@ -4510,18 +4509,6 @@ def _spec_data_requirements(command, compiled, exposure) -> ExpressionRequiremen
     if command.research_kind == "strategy_backtest":
         bindings["price.close.adjusted"] = "close"
     lookback = base.effective_lookback
-    programs = _spec_programs(command)
-    if programs:
-        fields = {field.field_id: field.alpha.identifier for field in alpha_field_catalog()}
-        for path, program in programs.items():
-            declared = program.data_requirements
-            if not set(declared.field_ids) <= fields.keys():
-                raise ResearchRunAdmissionRejected([ResearchRunAdmissionIssue(
-                    code="FIELD_UNAVAILABLE_IN_CURRENT_DATA", field=f"{path}.data_requirements",
-                    message="Python program declares an unknown research field",
-                )])
-            bindings.update({key: fields[key] for key in declared.field_ids})
-            lookback = max(lookback, declared.history_sessions - 1)
     return ExpressionRequirements(
         field_bindings=bindings, effective_lookback=lookback, node_count=base.node_count,
         depth=base.depth, estimated_work=base.estimated_work,
@@ -4559,7 +4546,14 @@ def _admitted_input(
         runtime = get_strategy_runtime()
         for path, program in programs.items():
             try:
-                runtime.validate(program.source)
+                entrypoint = {
+                    "program": "Strategy",
+                    "modules.universe_selection.program": "UniverseSelection",
+                    "modules.alpha.program": "Alpha",
+                    "modules.portfolio_construction.program": "PortfolioConstruction",
+                    "modules.risk_management.program": "RiskManagement",
+                }[path]
+                runtime.validate(program.source, entrypoint=entrypoint)
             except StrategyProgramError as error:
                 raise ResearchRunAdmissionRejected([ResearchRunAdmissionIssue(
                     code="STRATEGY_PROGRAM_INVALID", field=f"{path}.source", message=str(error),
@@ -4575,10 +4569,6 @@ def _admitted_input(
     }
     if command.research_kind == "strategy_backtest":
         field_owners["data"] = {"price.close.adjusted"}
-    field_owners.update({
-        f"{path}.data_requirements": set(program.data_requirements.field_ids)
-        for path, program in programs.items()
-    })
     if (isinstance(command, StrategyBacktestSpec) and command.has_builtin_portfolio
             and command.weighting == "inverse_volatility"):
         field_owners["weighting"] = {"price.close.adjusted"}

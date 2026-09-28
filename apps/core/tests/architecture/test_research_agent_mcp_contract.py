@@ -1864,9 +1864,9 @@ def test_v1_inventory_scopes_descriptions_annotations_and_schemas_are_exact() ->
     canonical = _canonical_v1_contract()
 
     assert sha256(canonical).hexdigest() == (
-        "ad589e36d3ced48b4c08a45cd335308afae4b398e1e4dc7ff9a367b57fed722a"
+        "5b7a1b5161373297b5a92394c2e10b1b56902452de539094c9dc2a2d6f8fde97"
     )
-    assert len(canonical) == 306324
+    assert len(canonical) == 309168
 
 
 def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None:
@@ -1935,7 +1935,7 @@ def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None
         "v1_contract_sha256": sha256(canonical_contract).hexdigest(),
         "v1_contract_bytes": len(canonical_contract),
         "maximum_factor_batch_call_bytes": maximum_batch_bytes,
-        "maximum_framework_batch_call_bytes": 62_887_654,
+        "maximum_framework_batch_call_bytes": 31_420_694,
     }
     assert evidence["observed"]["maximum_resident_set_bytes"] < (
         evidence["production_envelope"]["container_memory_bytes"] // 10
@@ -1947,14 +1947,12 @@ def test_wire_envelope_carries_twenty_maximum_python_programs_and_explicit_state
     from pydantic import TypeAdapter
 
     prefix = (
-        "def decide(context, state, parameters):\n"
-        "    return {'output': None, 'state': state}\n#"
+        "from quantgrove import Strategy\nclass Example(Strategy):\n"
+        "    def on_close(self, data, account): return None\n#"
     )
     source = prefix + "\x01" * (65_536 - len(prefix.encode()))
-    parameters = {"payload": "\x7f" * (65_536 - len('{"payload":""}'))}
     program = {
-        "source": source, "parameters": parameters,
-        "data_requirements": {"field_ids": ["price.close.adjusted"], "history_sessions": 1},
+        "source": source,
     }
     batch = {
         "batch_kind": "strategy_sweep", "request_id": "maximum-python-batch",
@@ -1984,13 +1982,12 @@ def test_wire_envelope_carries_twenty_frameworks_with_four_maximum_programs():
     from pydantic import TypeAdapter
 
     prefix = (
-        "def decide(context, state, parameters):\n"
-        "    return {'output': None, 'state': state}\n#"
+        "from quantgrove import Strategy\nclass Example(Strategy):\n"
+        "    def on_close(self, data, account): return None\n#"
     )
     source = prefix + "\x01" * (65_536 - len(prefix.encode()))
     program = {
-        "source": source, "parameters": {"payload": "\x7f" * (65_536 - len('{"payload":""}'))},
-        "data_requirements": {"field_ids": [], "history_sessions": 1},
+        "source": source,
     }
     modules = {stage: {"kind": "python", "program": program} for stage in (
         "universe_selection", "alpha", "portfolio_construction", "risk_management",
@@ -2007,7 +2004,7 @@ def test_wire_envelope_carries_twenty_frameworks_with_four_maximum_programs():
     size = _wire_request_bytes(CallToolRequestParams(
         name="submit_research_batch", arguments=batch,
     ))
-    assert size == 62_887_654
+    assert size == 31_420_694
     assert size <= RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES
 
 
@@ -2360,7 +2357,7 @@ async def _exercise_in_memory_protocol() -> None:
                 assert tool.annotations.read_only_hint is False
                 assert tool.annotations.idempotent_hint is False
                 assert tool.input_schema["discriminator"]["propertyName"] == "section"
-                expected_section_count = 18 if tool.name == "get_research_run_result" else 14
+                expected_section_count = 19 if tool.name == "get_research_run_result" else 15
                 assert len(tool.input_schema["oneOf"]) == expected_section_count
                 for branch in tool.input_schema["oneOf"]:
                     definition = tool.input_schema["$defs"][branch["$ref"].rsplit("/", 1)[-1]]

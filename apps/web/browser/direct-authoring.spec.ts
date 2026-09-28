@@ -4,7 +4,7 @@ import { buildProductFixture } from "./build-product-fixture";
 let script: string;
 let styles: string;
 const draftKey = "thesistrace.research-draft.exposure-test.folder_default";
-const source = "def decide(context, state, parameters):\n    return {'output': None, 'state': state}";
+const source = "from quantgrove import Strategy\nclass Example(Strategy):\n    def on_close(self, data, account):\n        return None";
 
 test.beforeAll(async () => {
   test.setTimeout(120_000);
@@ -43,8 +43,6 @@ test("Direct source survives checking and submission failures, with one pending 
   await mountDirect(page);
   const editor = page.locator("#python-source");
   await editor.fill(source);
-  await page.getByRole("button", { name: "Optional external parameters", exact: true }).click();
-  await page.getByRole("textbox", { name: "Parameters (JSON)", exact: true }).fill('{"threshold": 0.05}');
   await page.getByRole("button", { name: "Check configuration", exact: true }).click();
   await expect(page.getByText("Configuration check is unavailable. Try again.")).toBeVisible();
   await expect(editor).toHaveText(source, { useInnerText: true });
@@ -61,7 +59,6 @@ test("Direct source survives checking and submission failures, with one pending 
   await expect(editor).toHaveAttribute("aria-invalid", "true");
   await expect(editor).toHaveAccessibleDescription(/line 2/);
   expect(commands[1].request_id).toBe(commands[0].request_id);
-  await expect(page.getByRole("textbox", { name: "Parameters (JSON)", exact: true })).toHaveValue('{"threshold": 0.05}');
 
   await editor.press("ControlOrMeta+End");
   await page.keyboard.insertText("\n# revised");
@@ -94,7 +91,7 @@ test("Direct source survives checking and submission failures, with one pending 
   expect(commands).toHaveLength(3);
   expect(commands[2].request_id).not.toBe(commands[0].request_id);
   expect(commands[2]).toMatchObject({ strategy_mode: "direct", program: {
-    source: `${source}\n# revised`, parameters: { threshold: 0.05 },
+    source: `${source}\n# revised`,
   } });
   expect(commands[2]).not.toHaveProperty("modules");
 });

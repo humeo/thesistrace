@@ -26,7 +26,7 @@ async function waitForStrategySummary(page: Page, timeout = 90_000): Promise<voi
   if (outcome === "unavailable") throw new Error(`ResearchRun detail failed: ${await unavailable.innerText()}`);
 }
 
-async function selectTradingEvent(page: Page, name: "Fills" | "Framework decisions"): Promise<void> {
+async function selectTradingEvent(page: Page, name: "Fills" | "Framework decisions" | "Python data reads"): Promise<void> {
   await page.getByRole("combobox", { name: "Event type" }).click();
   await page.getByRole("option", { name, exact: true }).click();
 }
@@ -84,49 +84,44 @@ test("Framework modules author, execute, reuse frozen programs and refresh Daily
   await page.getByRole("combobox", { name: "Universe", exact: true }).click();
   await page.getByRole("option", { name: "Top 300", exact: true }).click();
   const programs = [
-    { stage: "universe_selection", label: "Universe Selection", source: [
-      'def decide(context, state, parameters):',
-      '    state["count"] = state.get("count", 0) + 1',
-      '    return {"output": {"reason": "visible_candidates", "instrument_ids": [',
-      '        row["instrument_id"] for row in context["candidates"]]}, "state": state}',
-    ].join("\n"), parameters: "{}" },
-    { stage: "alpha", label: "Alpha / Signals", source: [
-      'def decide(context, state, parameters):',
-      '    state["count"] = state.get("count", 0) + 1',
-      '    return {"output": {"reason": "opportunities", "signals": [',
-      '        {"instrument_id": row["instrument_id"], "value": 1.0, "valid_for_sessions": 2}',
-      '        for row in context["candidates"]]}, "state": state}',
-    ].join("\n"), parameters: "{}" },
-    { stage: "portfolio_construction", label: "Portfolio Construction", source: [
-      'def decide(context, state, parameters):',
-      '    state["count"] = state.get("count", 0) + 1',
-      '    signals = context["framework"]["signals"]',
-      '    output = None',
-      '    if signals and not context["account"]["positions"]:',
-      '        item = signals[0]["instrument_id"]',
-      '        output = {"reason": "new_opportunity", "allocation": {"mode": "rebalance",',
-      '                  "instrument_ids": [item], "relative_weights": {item: "1"},',
-      '                  "exposure": 1.0}, "position_limits": {}}',
-      '    return {"output": output, "state": state}',
-    ].join("\n"), parameters: "{}" },
-    { stage: "risk_management", label: "Risk Management", source: [
-      'def decide(context, state, parameters):',
-      '    state["count"] = state.get("count", 0) + 1',
-      '    state["label"] = parameters["label"]',
-      '    return {"output": None, "state": state}',
-    ].join("\n"), parameters: '{"label": "original_frozen_risk"}' },
+    { stage: "universe_selection", label: "Universe Selection", section: "Which stocks can be selected?", source: `from quantgrove import UniverseSelection
+class Candidates(UniverseSelection):
+    def on_close(self, data, account):
+        self.state["count"] = self.state.get("count", 0) + 1
+        return self.select(data.candidates)
+` },
+    { stage: "alpha", label: "Alpha / Signals", section: "How are stocks selected?", source: `from quantgrove import Alpha
+class Scores(Alpha):
+    def on_close(self, data, account):
+        self.state["count"] = self.state.get("count", 0) + 1
+        prices = data.close_prices(1)
+        return self.signals({stock: prices[stock][-1] for stock in data.candidates
+                             if prices[stock][-1] is not None}, valid_for_sessions=2)
+` },
+    { stage: "portfolio_construction", label: "Portfolio Construction", section: "How much to buy and when to rebalance?", source: `from quantgrove import PortfolioConstruction
+class Portfolio(PortfolioConstruction):
+    def on_close(self, data, account):
+        self.state["count"] = self.state.get("count", 0) + 1
+        signals = data.framework["signals"]
+        if signals and not account.positions:
+            return self.target_weights({signals[0]["instrument_id"]: 1.0})
+        return None
+` },
+    { stage: "risk_management", label: "Risk Management", section: "When should positions be reduced or sold?", source: `from quantgrove import RiskManagement
+class Risk(RiskManagement):
+    def on_close(self, data, account):
+        self.state["count"] = self.state.get("count", 0) + 1
+        self.state["label"] = "original_frozen_risk"
+        return None
+` },
   ];
   for (const program of programs) {
-    await page.getByRole("combobox", { name: `${program.label} module`, exact: true }).click();
-    await page.getByRole("option", { name: "Python module", exact: true }).click();
-    const editor = page.getByRole("region", { name: `${program.label} module`, exact: true });
+    await page.getByRole("button", { name: `Customize ${program.label} with Python`, exact: true }).click();
+    const editor = page.getByRole("region", { name: program.section, exact: true });
     await editor.getByRole("textbox", { name: "Python source", exact: true }).fill(program.source);
-    await editor.getByRole("textbox", { name: "Parameters (JSON)", exact: true }).fill(program.parameters);
-    await editor.getByRole("textbox", { name: "Declared fields", exact: true }).fill("");
-    await editor.getByRole("spinbutton", { name: "History (trading sessions)", exact: true }).fill("1");
   }
-  const riskSource = page.getByRole("region", { name: "Risk Management module", exact: true }).getByRole("textbox", { name: "Python source", exact: true });
-  await riskSource.fill("def decide(:");
+  const riskSource = page.getByRole("region", { name: "When should positions be reduced or sold?", exact: true }).getByRole("textbox", { name: "Python source", exact: true });
+  await riskSource.fill("class Broken(:");
   await page.getByRole("button", { name: "Check configuration" }).click();
   await expect(page.locator("#risk_management-python-source-error")).toContainText("line 1", { timeout: 60_000 });
   await riskSource.fill(programs[3].source);
@@ -156,7 +151,7 @@ test("Framework modules author, execute, reuse frozen programs and refresh Daily
   await page.getByRole("tab", { name: "Configuration", exact: true }).click();
   const facts = page.getByRole("group", { name: "Research execution conditions" });
   await expect(facts).not.toContainText("Holdings count");
-  await page.getByText("Risk Management · Frozen Python source and parameters", { exact: true }).click();
+  await page.getByText("Risk Management · Frozen Python source", { exact: true }).click();
   await expect(facts).toContainText("original_frozen_risk");
   const accepted = await (await page.request.get(`/api/research-runs/${runId}`)).json();
   for (const program of programs) {
@@ -169,10 +164,11 @@ test("Framework modules author, execute, reuse frozen programs and refresh Daily
   expect(evidence.status()).toBe(200);
   expect((await evidence.json()).rows).toHaveLength(2);
   await page.screenshot({ path: testInfo.outputPath("framework-result.png"), fullPage: true });
+  await page.getByRole("tab", { name: "Overview", exact: true }).click();
   await page.getByRole("button", { name: "Create draft", exact: true }).click();
   await expect(page).toHaveURL(/\/research$/);
   for (const program of programs) {
-    await expect(page.getByRole("region", { name: `${program.label} module`, exact: true })
+    await expect(page.getByRole("region", { name: program.section, exact: true })
       .getByRole("textbox", { name: "Python source", exact: true })).toHaveText(program.source, { useInnerText: true });
   }
   await riskSource.fill("a later editable risk module");
@@ -213,10 +209,11 @@ test("Classic Factor authoring submits one ResearchRun", async ({ page }) => {
   await expect(page.getByRole("group", { name: "Research execution conditions" })).toContainText("Status succeeded");
 });
 
-test("Direct Python authoring executes, reuses frozen source and explicitly advances DailyTrack", { tag: "@isolated" }, async ({ page }) => {
+test("Direct Python authoring executes, reuses frozen source and explicitly advances DailyTrack", { tag: "@isolated" }, async ({ page }, testInfo) => {
   // This includes cold guest startup and explicit Track Advances, as in the
   // Framework journey. Each guest retains its own product execution deadline.
   test.setTimeout(600_000);
+  await page.setViewportSize({ width: 1440, height: 1000 });
   publishFinancialTrackHead("lagged");
   await page.goto("/research?new");
   await page.getByRole("radio", { name: /Strategy Backtest/ }).check();
@@ -225,27 +222,24 @@ test("Direct Python authoring executes, reuses frozen source and explicitly adva
   await page.getByLabel("Research end date").fill("2026-08-05");
   await page.getByRole("combobox", { name: "Universe", exact: true }).click();
   await page.getByRole("option", { name: "Top 300", exact: true }).click();
-  await page.getByRole("combobox", { name: "Strategy mode", exact: true }).click();
-  await page.getByRole("option", { name: "Direct · Python", exact: true }).click();
-  await page.getByRole("spinbutton", { name: "History (trading sessions)", exact: true }).fill("1");
-  await page.getByRole("textbox", { name: "Declared fields", exact: true }).fill("price.close.adjusted");
-  await page.getByRole("textbox", { name: "Parameters (JSON)", exact: true }).fill('{"label": "visible_candidate"}');
-  const source = [
-    "def decide(context, state, parameters):",
-    "    state['count'] = state.get('count', 0) + 1",
-    "    output = None",
-    "    if not context['account']['positions']:",
-    "        item = context['candidates'][0]['instrument_id']",
-    "        output = {'reason': parameters['label'], 'allocation': {'mode': 'rebalance',",
-    "                  'instrument_ids': [item], 'relative_weights': {item: '1'},",
-    "                  'exposure': 1.0}, 'position_limits': {}}",
-    "    return {'output': output, 'state': state}",
-  ].join("\n");
-  await page.getByRole("textbox", { name: "Python source", exact: true }).fill("def decide(:");
+  await page.getByRole("combobox", { name: "Strategy authoring", exact: true }).click();
+  await page.getByRole("option", { name: "Complete Python strategy", exact: true }).click();
+  const source = `from quantgrove import Strategy
+class BuyAndHold(Strategy):
+    def on_close(self, data, account):
+        self.state["count"] = self.state.get("count", 0) + 1
+        lookback = 1 + self.state["count"]
+        prices = data.close_prices(lookback)
+        if not account.positions and data.candidates:
+            return self.target_weights({data.candidates[0]: 1.0}, reason="visible_candidate")
+        return None
+`;
+  await page.getByRole("textbox", { name: "Python source", exact: true }).fill("class Broken(:");
   await page.getByRole("button", { name: "Check configuration" }).click();
   // The first validation also compiles the pinned guest in a fresh API process.
   await expect(page.getByLabel("Configuration issues")).toContainText("line 1", { timeout: 60_000 });
   await page.getByRole("textbox", { name: "Python source", exact: true }).fill(source);
+  await page.screenshot({ path: testInfo.outputPath("python-sdk-authoring.png"), fullPage: true });
   await page.getByRole("button", { name: "Check configuration" }).click();
   // Valid source also starts a guest invocation; allow the same cold validation
   // boundary as the Framework journey, independent of the UI assertion default.
@@ -267,10 +261,21 @@ test("Direct Python authoring executes, reuses frozen source and explicitly adva
   const facts = page.getByRole("group", { name: "Research execution conditions" });
   await expect(facts).toContainText("Direct · Python");
   await expect(facts).not.toContainText("Holdings count");
-  await page.getByText("Frozen Python source and parameters", { exact: true }).click();
+  await page.getByText("Frozen Python source", { exact: true }).click();
   await expect(facts.locator("pre").first()).toHaveText(source);
   const accepted = await (await page.request.get(`/api/research-runs/${runId}`)).json();
   expect(accepted.result.terminal_strategy_state.decision_state.state).toEqual({ count: 2 });
+  const reads = await page.request.post(`/api/research-runs/${runId}/events/query`, {
+    headers: sameOriginHeaders(), data: { section: "strategy_history_reads", limit: 50 },
+  });
+  expect(reads.status()).toBe(200);
+  expect((await reads.json()).rows.map((row: { requested_sessions: number }) => row.requested_sessions)).toEqual([2, 3]);
+  await page.getByRole("tab", { name: "Trading events", exact: true }).click();
+  await selectTradingEvent(page, "Python data reads");
+  await expect(page.getByRole("cell", { name: "price.close.adjusted", exact: true })).toHaveCount(2);
+  await page.screenshot({ path: testInfo.outputPath("python-sdk-data-reads.png"), fullPage: true });
+
+  await page.getByRole("tab", { name: "Overview", exact: true }).click();
   await page.getByRole("button", { name: "Create draft", exact: true }).click();
   await expect(page).toHaveURL(/\/research$/);
   await expect(page.getByRole("textbox", { name: "Python source", exact: true })).toHaveText(source, { useInnerText: true });
@@ -287,6 +292,7 @@ test("Direct Python authoring executes, reuses frozen source and explicitly adva
   const latest = await (await page.request.get(`/api/daily-tracks/${trackId}`)).json();
   expect(latest.observation.decision_state.state).toEqual({ count: 6 });
   expect(latest.observation.selection_interval).toBeNull();
+  await page.screenshot({ path: testInfo.outputPath("python-sdk-track.png"), fullPage: true });
 });
 
 test("Combined risk rules survives Run reuse and DailyTrack refresh", { tag: "@isolated" }, async ({ page }, testInfo) => {

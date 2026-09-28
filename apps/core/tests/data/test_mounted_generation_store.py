@@ -942,6 +942,43 @@ def test_columnar_slice_resolves_alpha_names_to_physical_columns(tmp_path: Path)
     }
 
 
+def test_strategy_history_reads_unloaded_fields_before_slice_start_from_pinned_generation(tmp_path):
+    from thesistrace.research_kernel.direct_strategy import program_context, program_history
+
+    canonical = _canonical()
+    canonical["field_catalog"] = [
+        field for field in field_catalog(str(canonical["research_calendar"][-1]))
+        if field["alpha_authorable"]
+    ]
+    store = MountedGenerationStore(tmp_path)
+    generation = store.materialize(
+        canonical, prepared_at=datetime(2026, 8, 9, tzinfo=UTC),
+        source_name="deterministic-test", source_lineage={"snapshot": "fixed"},
+    )
+    calendar = canonical["research_calendar"]
+    day = str(calendar[-2])
+    data = store.read_columnar_slice(
+        generation.manifest_sha256, sessions=[day], universe_name="top300",
+        neutralization=None, field_bindings={"price.close.adjusted": "close"},
+        fact_instrument_ids=frozenset(),
+    )
+    assert "price.open.adjusted" not in data.fields
+    context = program_context(data, session=day, completed_sessions=1,
+                              account={"positions": []}, fills=[], rejections=[])
+    read = program_history(data.snapshot().slice_sessions((day,)), context)
+    history = read({"field_id": "price.open.adjusted", "days": 10,
+                    "instruments": ["equity:A.SH"]})
+    expected_sessions = list(calendar[max(0, len(calendar) - 11):-1])
+    assert history["sessions"] == expected_sessions
+    assert history["values"] == {"equity:A.SH": [
+        float(row["open_adj"]) for row in canonical["prices"]
+        if row["instrument_id"] == "equity:A.SH" and row["session"] in expected_sessions
+    ]}
+    assert str(calendar[-1]) not in history["sessions"]
+    with pytest.raises(ValueError, match="unavailable"):
+        read({"field_id": "unknown", "days": 1, "instruments": None})
+
+
 def test_market_slice_rejects_a_corrupt_selected_session_partition(
     tmp_path: Path,
 ) -> None:

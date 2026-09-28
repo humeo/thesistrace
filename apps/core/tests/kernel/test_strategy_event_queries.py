@@ -45,6 +45,24 @@ def test_event_filters_are_specific_to_the_section() -> None:
     assert query.filters()["target_id"] == "target_abc"
 
 
+def test_history_read_evidence_roundtrips_numeric_counts_and_empty_history():
+    from thesistrace.publication.serialization import parquet_bytes
+    from thesistrace.strategy_evidence import (
+        read_strategy_event_partition,
+        strategy_event_payload,
+    )
+    row = {
+        "read_id": "2026-08-03:direct:1", "session": "2026-08-03", "module": "direct",
+        "program_sha256": "a" * 64, "field_id": "price.close.adjusted", "request_index": 1,
+        "requested_sessions": 10, "returned_sessions": 0, "instrument_count": 0,
+        "first_session": None, "last_session": None, "response_bytes": 27,
+    }
+    payload = strategy_event_payload("strategy_history_reads", [row])
+    assert read_strategy_event_partition(
+        "strategy_history_reads", parquet_bytes(payload.rows, payload.contract),
+    ) == [row]
+
+
 def test_large_direct_target_survives_worker_wire_publication_and_complete_record_page():
     import json
 

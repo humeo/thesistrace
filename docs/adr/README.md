@@ -42,6 +42,7 @@ The current Strategy contract in [ADR-0250](0250-admit-strategy-programs-with-ex
 - [ADR-0212 — Filter Research membership by positive-turnover observations](0212-filter-research-membership-by-positive-turnover-observations.md)
 - [ADR-0231 — Use an independent append-only CSI 300 Benchmark Snapshot](0231-use-an-independent-append-only-csi-300-benchmark-snapshot.md)
 - [ADR-0250 — Admit Strategy Programs with explicit simulation coordinates](0250-admit-strategy-programs-with-explicit-simulation-coordinates.md)
+- [ADR-0252 — Author Python strategies with a bounded class SDK](0252-author-python-strategies-with-a-bounded-class-sdk.md)
 
 ## Market universe and calendar
 

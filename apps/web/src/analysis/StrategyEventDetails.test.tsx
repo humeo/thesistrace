@@ -4,6 +4,21 @@ import { createRoot } from "react-dom/client";
 import { expect, test, vi } from "vitest";
 import { i18n } from "../i18n";
 import { StrategyEventTable } from "./StrategyEventDetails";
+import { renderToStaticMarkup } from "react-dom/server";
+
+test("shows actual Python history reads separately from portfolio and execution events", () => {
+  const markup = renderToStaticMarkup(<StrategyEventTable section="strategy_history_reads"
+    navigate={() => undefined} rows={[{
+      read_id: "2026-08-04:direct:001", session: "2026-08-04", module: "direct",
+      field_id: "price.close.adjusted", requested_sessions: 10,
+      returned_sessions: 6, instrument_count: 300,
+    }]} />);
+  expect(markup).toContain("Requested sessions");
+  expect(markup).toContain("Returned sessions");
+  expect(markup).toContain("price.close.adjusted");
+  expect(markup).toMatch(/<td[^>]*>10<\/td>/);
+  expect(markup).toMatch(/<td[^>]*>6<\/td>/);
+});
 
 test("expands a fill into exact prices and separate fees without charging slippage twice", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);

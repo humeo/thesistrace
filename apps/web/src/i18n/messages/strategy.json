@@ -33,26 +33,26 @@
     },
     "python": {
       "source": "Python source",
-      "signature": "decide(context, state, parameters) → output and state",
-      "parameters": "Parameters (JSON)",
-      "fields": "Declared fields",
-      "fieldsHelp": "Canonical field IDs, separated by commas or new lines. Only declared fields are available to the program.",
-      "history": "History (trading sessions)",
-      "historyHelp": "Includes the decision day. Earlier sessions provide warmup without moving the research start date.",
-      "contract": "Python contract and example",
-      "directExample": "The initial example replaces a holding only when another visible candidate has better momentum. Parameters set the required improvement.",
-      "historyContext": "context.history contains declared fields, with rows in instruments order and columns in sessions order, through the current Close. Missing values are None.",
-      "context": "context.candidates, context.account, context.fills and context.rejections are read-only. Return {{noUpdate}} for no update from this {{unit}}. A target contains reason, allocation and position_limits; weights use exact ratio strings such as \"1/2\".",
-      "module": "module",
-      "strategy": "strategy",
-      "frameworkContext": "context.framework contains the selected universe, active signals, universe_changed, signals_updated, expired_signals, removed_signals, this Close’s proposal and the last retained_proposal. A retained proposal is a reference, not a new order.",
-      "state": "State must be a JSON object and is restored explicitly each day. Source, parameters, data requirements and the execution environment are frozen when accepted. Execution uses the next trading session’s Open.",
+      "signature": "class MyStrategy(Strategy): on_close(self, data, account)",
+      "directExample": "The example uses ordinary Python variables for the lookback and improvement threshold. Edit them directly in the source.",
+      "historyContext": "data.close_prices(days) reads adjusted closing prices. data.history(field_id, days) reads other fields. Results contain sessions (oldest first) and values keyed by instrument ID. Missing values are None; check len(result.sessions) when history is short. Each request accepts 1–253 trading sessions, including the current Close.",
+      "frameworkContext": "data.framework provides the selected universe, active signals and current proposal for this stage. retained_proposal is a reference and is never automatically replayed.",
+      "state": "Optional self.state stores JSON-compatible memory across sessions. Other instance attributes are recreated. Helpers construct decisions; only the returned decision is applied. A failed invocation commits neither its state nor its target. Data access has bounded fields, instruments, reads and execution time.",
       "framework": {
-        "universe_selection": "Return {reason, instrument_ids} to select available Dataset candidates. None retains the previous available selection, initially empty. The example includes all current candidates.",
-        "alpha": "Return {reason, signals}. Each signal has instrument_id, value and valid_for_sessions (1–252). The host stamps its creation session. None retains unexpired signals. Expiry does not itself sell a holding. The example publishes six-session momentum signals.",
-        "portfolio_construction": "Return a target or None. The example buys a better-scoring candidate only when the improvement threshold is met, using current holdings and active signals. No update leaves holdings and drift unchanged.",
-        "risk_management": "Runs every Close, even without a new proposal. Return {mode: \"limit_positions\", reason, position_limits} to cap held shares; unspecified positions keep their shares when there is no proposal. Return {mode: \"replace\", reason, target} to replace the proposal, or target: None to cancel it. None leaves the new proposal unchanged. The example exits only symbols listed in exit_instruments; an empty list makes no adjustment."
-      }
+        "universe_selection": "Subclass UniverseSelection. Return self.select(instruments) to replace the selection. None retains the previous available selection.",
+        "alpha": "Subclass Alpha. Return self.signals({stock: score}, valid_for_sessions=2). None retains unexpired signals. Signals do not submit orders.",
+        "portfolio_construction": "Subclass PortfolioConstruction. Return self.target_weights(weights) for a full portfolio target, or None for no update.",
+        "risk_management": "Subclass RiskManagement. Return self.limit_positions({stock: maximum_shares}) to cap actual holdings, or self.replace(decision) to replace the proposal. self.replace(None) cancels the proposal; None passes it through."
+      },
+      "systemInput": "System input",
+      "systemInputHelp": "data provides the decision date, candidates and history methods. account contains actual cash, positions, fills and rejections.",
+      "strategyOutput": "Strategy output",
+      "strategyOutputHelp": "Return self.target_weights({stock: 0.8}) for a full portfolio target, {} inside target_weights to exit all holdings, or None to make no update. Unlisted holdings exit; unallocated weight stays in cash.",
+      "systemExecution": "System execution",
+      "systemExecutionHelp": "Decide after Close; attempt trades at the next trading session’s Open. The platform simulates fills, costs, cash and performance. A target is not a guaranteed fill.",
+      "accountReference": "account.cash_cny is actual cash; account.positions contains instrument_id, execution_shares and holding_age. account.fills and account.rejections contain this session’s execution facts. Money is represented as decimal strings. These observations are read-only.",
+      "targetReference": "For local changes, return self.increase_to_weights(weights) to buy only, self.reduce_exposure(maximum) to reduce exposure proportionally, or self.limit_positions({stock: shares}) to cap named holdings. self.with_limits(decision, maximum_shares=..., maximum_exposure=...) adds caps without relaxing existing ones.",
+      "readLimits": "Data is pinned to this run and ends at the current Close. Each invocation allows 64 reads, up to 262,144 stock/session cells per read and 1,048,576 in total. Results → Trading details → Python data reads shows actual successful reads. Configuration checking does not verify every dynamic branch."
     },
     "cost": {
       "title": "Fees and slippage",
@@ -95,7 +95,7 @@
     "frozen": {
       "fees": "Frozen fees and slippage",
       "feesHelp": "Minimum commission applies to each filled child order. Slippage changes execution prices and is not charged again as a fee.",
-      "python": "Frozen Python source and parameters",
+      "python": "Frozen Python source",
       "history": "History",
       "sessions": "{{count}} sessions",
       "fields": "Declared fields",
@@ -111,7 +111,7 @@
       "baseline": "Baseline freezes at the first trigger. No ordinary additions until full exit.",
       "evaluated": "Evaluated at Close; the next Open determines execution.",
       "minimumHolding": "Minimum holding (trading sessions)",
-      "modulePython": "{{stage}} · Frozen Python source and parameters"
+      "modulePython": "{{stage}} · Frozen Python source"
     },
     "state": {
       "summary": "Strategy decisions · {{candidates}} candidates · {{signals}} active signals",
@@ -287,16 +287,12 @@
       "summaryDirect": "The Python program determines selection, allocation and exits.",
       "execution": "Decide after the Close and simulate trades at the next trading day's Open. Trading restrictions can prevent fills.",
       "resultsHelp": "The result shows returns, drawdown, holdings and the reasons for simulated trades.",
-      "programInputs": "Data used by this program",
-      "programParameters": "Optional external parameters",
-      "programParametersHelp": "Use {} when constants are defined in the code. These values are passed as parameters.",
       "programHelp": "Python reference",
       "notes": "Research notes (optional)",
       "advancedSelection": "Industry adjustment",
       "advancedSelectionHelp": "Optional: remove differences in average scores between industries.",
       "customizeRule": "Customize {{stage}} with Python",
-      "backToRule": "Use built-in {{stage}} rules",
-      "programDataSummary": "{{fields}} fields · latest {{days}} trading days"
+      "backToRule": "Use built-in {{stage}} rules"
     }
   },
   "zh-CN": {
@@ -333,26 +329,26 @@
     },
     "python": {
       "source": "Python 源码",
-      "signature": "decide(context, state, parameters) → 输出与状态",
-      "parameters": "参数（JSON）",
-      "fields": "声明的数据字段",
-      "fieldsHelp": "使用字段的正式 ID，以逗号或换行分隔。程序只能读取声明的字段。",
-      "history": "历史窗口（交易日）",
-      "historyHelp": "包含决策当日。更早的交易日用于预热，不改变研究起始日期。",
-      "contract": "Python 契约与示例",
-      "directExample": "初始示例仅在可见候选具有更强动量时替换持仓；所需的改善幅度由参数决定。",
-      "historyContext": "context.history 包含已声明字段；行按 instruments 顺序、列按 sessions 顺序排列，覆盖至当前收盘。缺失值为 None。",
-      "context": "context.candidates、context.account、context.fills 和 context.rejections 只读。此{{unit}}无需更新时返回 {{noUpdate}}。目标包含 reason、allocation 和 position_limits；权重使用 \"1/2\" 等精确比例字符串。",
-      "module": "模块",
-      "strategy": "策略",
-      "frameworkContext": "context.framework 包含选定的 universe、活跃 signals、universe_changed、signals_updated、expired_signals、removed_signals、本次收盘的 proposal 和上次 retained_proposal。保留的建议仅是引用，不是新委托。",
-      "state": "状态必须是 JSON 对象，每日显式恢复。源码、参数、数据需求和执行环境在接纳时冻结。执行使用下一交易日开盘。",
+      "signature": "class MyStrategy(Strategy): on_close(self, data, account)",
+      "directExample": "示例的回看周期和改善阈值都是普通 Python 变量，直接在源码中修改。",
+      "historyContext": "data.close_prices(days) 读取复权收盘价；data.history(字段 ID, days) 读取其他字段。结果的 sessions 按时间从早到晚排列，values 按股票 ID 索引，缺失值为 None。历史不足时检查 len(result.sessions)。每次可读取 1–253 个交易日，包含当前收盘。",
+      "frameworkContext": "data.framework 提供本步骤的选股结果、活跃信号和当前组合建议。retained_proposal 仅供参考，不会自动重复执行。",
+      "state": "需要跨日记忆时使用 self.state，内容必须可序列化为 JSON；其他实例属性每次重新创建。辅助方法只构造决策，最终返回的决策才会执行。调用失败时不接受新状态和新目标。字段、股票范围、累计读取量和执行时间由平台限制。",
       "framework": {
-        "universe_selection": "返回 {reason, instrument_ids} 选择可用的数据集候选。None 会保留上一次可用选择；初始为空。示例包含全部当前候选。",
-        "alpha": "返回 {reason, signals}。每条信号包含 instrument_id、value 和 valid_for_sessions（1–252）；系统记录产生日期。None 保留未到期信号；信号到期本身不会卖出持仓。示例发布六日动量信号。",
-        "portfolio_construction": "返回目标或 None。示例结合当前持仓和活跃信号，仅在评分提升达到阈值时买入更优候选。无更新时持仓和漂移保持不变。",
-        "risk_management": "每次收盘均运行，即使没有新建议。返回 {mode: \"limit_positions\", reason, position_limits} 限制持有股数；没有建议时，未列出的持仓保持股数。返回 {mode: \"replace\", reason, target} 可替换建议，target: None 可取消建议。None 不改变新建议。示例只退出 exit_instruments 所列证券；空列表不作调整。"
-      }
+        "universe_selection": "继承 UniverseSelection，返回 self.select(股票列表) 更新选股；None 保留上次仍可用的选择。",
+        "alpha": "继承 Alpha，返回 self.signals({股票: 分数}, valid_for_sessions=2) 更新信号；None 保留未过期信号。信号不会直接下单。",
+        "portfolio_construction": "继承 PortfolioConstruction，返回 self.target_weights(权重) 设置整体目标组合；None 表示不更新。",
+        "risk_management": "继承 RiskManagement，返回 self.limit_positions({股票: 最大股数}) 限制实际持仓，或 self.replace(决策) 替换组合建议。self.replace(None) 取消建议；None 让本次建议继续执行。"
+      },
+      "systemInput": "系统传入",
+      "systemInputHelp": "data 提供决策日期、候选股票和历史数据读取方法；account 提供实际现金、持仓、成交和拒单记录。",
+      "strategyOutput": "策略返回",
+      "strategyOutputHelp": "return self.target_weights({股票: 0.8}) 设置整体目标组合；传入 {} 表示清仓；return None 表示本次不更新。未列出的持仓退出，未分配的权重保留为现金。",
+      "systemExecution": "系统执行",
+      "systemExecutionHelp": "收盘后运行策略，下一交易日开盘尝试成交。平台负责交易模拟、费用、账户和收益计算；目标持仓不等于实际成交。",
+      "accountReference": "account.cash_cny 是实际现金；account.positions 包含 instrument_id（股票 ID）、execution_shares（实际股数）和 holding_age（持仓交易日数）。account.fills 和 account.rejections 是当日成交与拒单事实。金额采用十进制字符串表示。以上观察均为只读。",
+      "targetReference": "局部调整可返回 self.increase_to_weights(weights) 只加仓、self.reduce_exposure(maximum) 按比例降低总仓位，或 self.limit_positions({股票: 股数}) 限制指定持仓。self.with_limits(decision, maximum_shares=..., maximum_exposure=...) 追加限制，已有更严格的限制继续有效。",
+      "readLimits": "数据固定于本次回测版本，最晚到当前收盘。每次回调最多读取 64 次，单次最多 262,144 个“股票 × 交易日”数据格，累计最多 1,048,576 个。回测结果的“交易明细 → Python 数据读取”展示实际成功读取记录。检查配置不会验证所有动态分支。"
     },
     "cost": {
       "title": "费用与滑点",
@@ -395,7 +391,7 @@
     "frozen": {
       "fees": "冻结的费用与滑点",
       "feesHelp": "最低佣金适用于每笔已成交子委托。滑点改变成交价格，不会再作为费用重复收取。",
-      "python": "冻结的 Python 源码与参数",
+      "python": "冻结的 Python 源码",
       "history": "历史窗口",
       "sessions": "{{count}} 个交易日",
       "fields": "声明的数据字段",
@@ -411,7 +407,7 @@
       "baseline": "首次触发时冻结基准。完全退出前不得普通补仓。",
       "evaluated": "收盘时评估，下一开盘决定实际执行。",
       "minimumHolding": "最短持有（交易日）",
-      "modulePython": "{{stage}} · 冻结的 Python 源码与参数"
+      "modulePython": "{{stage}} · 冻结的 Python 源码"
     },
     "state": {
       "summary": "策略决策 · {{candidates}} 个候选 · {{signals}} 条活跃信号",
@@ -587,16 +583,12 @@
       "summaryDirect": "由 Python 程序决定选股、仓位和退出条件。",
       "execution": "收盘后判断，下一交易日开盘模拟交易。交易限制可能导致无法成交。",
       "resultsHelp": "运行后可查看收益、回撤、每日持仓，以及每次模拟交易的原因。",
-      "programInputs": "程序使用的数据",
-      "programParameters": "可选的外部参数",
-      "programParametersHelp": "常量直接写在代码里时，这里用 {} 即可。这里的值会传入 parameters。",
       "programHelp": "Python 使用说明",
       "notes": "研究备注（可选）",
       "advancedSelection": "行业调整",
       "advancedSelectionHelp": "可选：消除不同行业平均评分的差异。",
       "customizeRule": "用 Python 自定义{{stage}}",
-      "backToRule": "使用内置{{stage}}规则",
-      "programDataSummary": "{{fields}} 个字段，最近 {{days}} 个交易日"
+      "backToRule": "使用内置{{stage}}规则"
     }
   }
 }

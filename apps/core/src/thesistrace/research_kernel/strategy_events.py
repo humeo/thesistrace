@@ -34,7 +34,7 @@ RejectionReason = Literal["suspension", "data_unavailable", "upper_limit_buy", "
 StrategyEventSection = Literal[
     "strategy_targets", "strategy_orders", "strategy_child_orders", "strategy_fills",
     "strategy_adjustments", "strategy_execution_constraints",
-    "strategy_framework",
+    "strategy_framework", "strategy_history_reads",
 ]
 
 
@@ -51,6 +51,34 @@ class StrategyFrameworkEvent(FrameworkEvidence):
         if any(target is not None and target.decision_session != self.decision_session
                for target in targets):
             raise ValueError("Framework evidence contains a decision from another Session")
+        return self
+
+
+class StrategyHistoryReadEvent(TerminalStateModel):
+    read_id: StrictStr
+    session: Session
+    module: Literal["direct", "universe_selection", "alpha", "portfolio_construction",
+                    "risk_management"]
+    program_sha256: Annotated[StrictStr, Field(pattern=r"^[a-f0-9]{64}$")]
+    field_id: Annotated[StrictStr, Field(min_length=1, max_length=200)]
+    request_index: Annotated[StrictInt, Field(ge=1, le=64)]
+    requested_sessions: Annotated[StrictInt, Field(ge=1, le=253)]
+    returned_sessions: Annotated[StrictInt, Field(ge=0, le=253)]
+    instrument_count: Annotated[StrictInt, Field(ge=0, le=262144)]
+    first_session: Session | None
+    last_session: Session | None
+    response_bytes: Annotated[StrictInt, Field(ge=0, le=4 * 1024 * 1024)]
+
+    @model_validator(mode="after")
+    def bounded_history(self):
+        if self.returned_sessions > self.requested_sessions:
+            raise ValueError("History response exceeds its requested window")
+        if self.returned_sessions == 0:
+            if self.first_session is not None or self.last_session is not None:
+                raise ValueError("Empty history has no date range")
+        elif (self.first_session is None or self.last_session is None
+              or not self.first_session <= self.last_session <= self.session):
+            raise ValueError("History range exceeds the decision date")
         return self
 
 
@@ -191,6 +219,7 @@ class StrategyExecutionConstraintEvent(TerminalStateModel):
 
 
 EVENT_MODELS = {
+    "strategy_history_reads": StrategyHistoryReadEvent,
     "strategy_framework": StrategyFrameworkEvent,
     "strategy_targets": StrategyTargetEvent,
     "strategy_orders": StrategyOrderEvent,
@@ -200,6 +229,7 @@ EVENT_MODELS = {
     "strategy_execution_constraints": StrategyExecutionConstraintEvent,
 }
 EVENT_ID_FIELDS = {
+    "strategy_history_reads": "read_id",
     "strategy_framework": "decision_id",
     "strategy_targets": "target_id", "strategy_orders": "order_id",
     "strategy_child_orders": "child_order_id", "strategy_fills": "fill_id",
@@ -214,6 +244,11 @@ def strategy_event_rows(
     """Select this completed segment only; never reconstruct absent historical trades."""
     covered = set(sessions)
     candidates = {
+        "strategy_history_reads": [
+            {**{key: value for key, value in read.items() if key != "reason"},
+             "read_id": f"{read['session']}:{read['module']}:{read['request_index']}"}
+            for read in strategy["diagnostics"] if read["reason"] == "python_history"
+        ],
         "strategy_framework": strategy["framework_events"],
         "strategy_targets": strategy["target_events"],
         "strategy_orders": strategy["orders"],

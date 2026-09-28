@@ -1,12 +1,12 @@
-import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } from "@codemirror/autocomplete";
+import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap, type CompletionContext } from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
-import { python } from "@codemirror/lang-python";
+import { python, pythonLanguage } from "@codemirror/lang-python";
 import { bracketMatching, HighlightStyle, indentOnInput, indentUnit, syntaxHighlighting } from "@codemirror/language";
 import { setDiagnostics } from "@codemirror/lint";
 import { Compartment, EditorState, Transaction } from "@codemirror/state";
 import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
-import { useEffect, useRef } from "react";
+import { useEffect, useImperativeHandle, useRef, type Ref } from "react";
 
 import { i18n, interfaceLocale } from "../i18n";
 import { researchEditorTheme } from "./editorTheme";
@@ -21,7 +21,10 @@ const pythonHighlighting = syntaxHighlighting(HighlightStyle.define([
 ]));
 
 /** The owning module keeps this mounted while hidden, preserving selection and history. */
-export function PythonSourceEditor({ id, label, describedBy, source, error, errorLine, onChange }: {
+export type PythonSourceEditorHandle = { insertAtSelection: (text: string) => void; focus: () => void };
+
+export function PythonSourceEditor({ id, label, describedBy, source, error, errorLine, onChange, editorRef }: {
+  editorRef?: Ref<PythonSourceEditorHandle>;
   id: string;
   label: string;
   describedBy: string;
@@ -37,6 +40,13 @@ export function PythonSourceEditor({ id, label, describedBy, source, error, erro
   onChangeRef.current = onChange;
   const applyingExternal = useRef(false);
   const locale = interfaceLocale();
+  useImperativeHandle(editorRef, () => ({
+    insertAtSelection(text) {
+      const editor = view.current;
+      if (editor) editor.dispatch(editor.state.replaceSelection(text), { userEvent: "input" });
+    },
+    focus() { view.current?.focus(); },
+  }), []);
 
   useEffect(() => {
     if (!host.current) return;
@@ -45,7 +55,20 @@ export function PythonSourceEditor({ id, label, describedBy, source, error, erro
       state: EditorState.create({ doc: source, extensions: [
         python(), pythonHighlighting, researchEditorTheme, lineNumbers(), drawSelection(),
         highlightActiveLine(), highlightActiveLineGutter(), bracketMatching(), indentOnInput(),
-        indentUnit.of("    "), closeBrackets(), autocompletion(), history(),
+        indentUnit.of("    "), closeBrackets(), autocompletion(), pythonLanguage.data.of({ autocomplete: (context: CompletionContext) => {
+          const word = context.matchBefore(/[\w.]+/);
+          if (!word || (!context.explicit && word.from === word.to)) return null;
+          return { from: word.from, options: [
+            "Strategy", "UniverseSelection", "Alpha", "PortfolioConstruction", "RiskManagement",
+            "data.close_prices", "data.history", "data.candidates", "data.session",
+            "data.completed_sessions", "data.candidate_details", "data.framework",
+            "account.positions", "account.cash_cny", "account.fills", "account.rejections",
+            "account.post_open_net_nav_cny", "account.close_risk_nav_cny",
+            "self.target_weights", "self.limit_positions", "self.limit_exposure", "self.state",
+            "self.increase_to_weights", "self.reduce_exposure", "self.with_limits",
+            "self.select", "self.signals", "self.replace", "on_close",
+          ].map(label => ({ label, type: "property" })) };
+        } }), history(),
         keymap.of([...closeBracketsKeymap, ...completionKeymap, ...defaultKeymap, ...historyKeymap]),
         presentation.current.of([]),
         EditorView.updateListener.of(update => {

@@ -12,7 +12,8 @@ from thesistrace.research_run.service import ResearchRunAdmissionRejected, Resea
 
 pytestmark = pytest.mark.bounded_process
 
-SOURCE = "def decide(context, state, parameters):\n    return {'output': None, 'state': state}\n"
+SOURCE = ("from quantgrove import Strategy\nclass NoUpdate(Strategy):\n"
+          "    def on_close(self, data, account): return None\n")
 
 
 def direct_spec():
@@ -25,8 +26,6 @@ def direct_spec():
         "initial_cash_cny": "100000",
         "program": {
             "source": SOURCE,
-            "parameters": {"threshold": 0.1},
-            "data_requirements": {"field_ids": ["price.close.adjusted"], "history_sessions": 3},
         },
     }
 
@@ -40,7 +39,9 @@ def service_and_snapshot(*, field_ids=None):
     if field_ids is not None:
         snapshot = replace(snapshot, available_field_ids=frozenset(field_ids))
     return ResearchRunService(
-        NoPersistence(), current_dataset=lambda: snapshot, compile_formula=alpha_language.compile,
+        NoPersistence(),
+        current_dataset=lambda: snapshot,
+        compile_formula=alpha_language.compile,
     ), snapshot
 
 
@@ -48,8 +49,10 @@ def test_direct_diagnosis_and_admission_freeze_only_the_active_program():
     service, snapshot = service_and_snapshot()
     values = direct_spec()
     values["costs"] = {
-        "commission_rate_all_in": "0.0002", "commission_min_cny": "1",
-        "stamp_duty_sell_rate": "0.0004", "transfer_fee_rate": "0.00002",
+        "commission_rate_all_in": "0.0002",
+        "commission_min_cny": "1",
+        "stamp_duty_sell_rate": "0.0004",
+        "transfer_fee_rate": "0.00002",
         "slippage_bps": "10",
     }
     spec = TypeAdapter(ResearchSpec).validate_python(values)
@@ -75,10 +78,10 @@ def test_direct_diagnosis_and_admission_freeze_only_the_active_program():
     assert frozen["strategy"]["program"] == values["program"]
     assert "holdings_count" not in frozen["strategy"]
     assert "modules" not in frozen["strategy"]
-    assert frozen["strategy"]["environment"]["contract"] == "python-strategy/v2"
-    assert admitted.expression_admission.effective_lookback == 2
-    assert admitted.execution_plan.calculation_sessions[0].isoformat() == "2026-08-05"
-    command.program.parameters["threshold"] = 0.9
+    assert frozen["strategy"]["environment"]["contract"] == "python-strategy/v3"
+    assert admitted.expression_admission.effective_lookback == 0
+    assert admitted.execution_plan.calculation_sessions[0].isoformat() == "2026-08-07"
+    values["program"]["source"] = "changed outside the admitted snapshot"
     assert admitted.canonical_value() == frozen
 
 
@@ -101,12 +104,8 @@ def test_direct_rejects_inactive_framework_settings(extra):
     [
         ({"source": "def decide(:"}, "program.source"),
         (
-            {"data_requirements": {"field_ids": ["unknown.field"], "history_sessions": 1}},
-            "program.data_requirements",
-        ),
-        (
-            {"data_requirements": {"field_ids": ["price.close.adjusted"], "history_sessions": 10}},
-            "start_date",
+            {"source": "from quantgrove import Strategy\nclass Empty(Strategy): pass"},
+            "program.source",
         ),
     ],
 )
@@ -166,11 +165,11 @@ def test_authoring_discovery_publishes_program_contract_and_limits():
     value = ResearchAuthoringService().constraints().model_dump(mode="json")
     assert value["strategy_modes"] == ["framework", "direct"]
     program = value["python_program"]
-    assert program["callback"] == "decide(context, state, parameters)"
+    assert program["callback"] == "Strategy.on_close(self, data, account)"
     assert program["maximum_source_bytes"] == 65536
     assert program["maximum_state_bytes"] == 262144
     assert program["history_sessions"] == {"minimum": 1, "maximum": 253}
-    assert program["maximum_fields"] == 32
+    assert program["maximum_history_requests"] == 64
     assert program["execution_time"] == "next_session_open"
     assert "math" in program["modules"]
 
@@ -178,12 +177,17 @@ def test_authoring_discovery_publishes_program_contract_and_limits():
 def test_account_close_valuation_is_loaded_without_being_declared_by_the_program():
     service, snapshot = service_and_snapshot()
     values = direct_spec()
-    values["program"]["data_requirements"] = {"field_ids": [], "history_sessions": 1}
-    command = TypeAdapter(ResearchRunAdmissionCommand).validate_python({
-        **values, "request_id": "account-close", "folder_id": "folder_default",
-    })
+    command = TypeAdapter(ResearchRunAdmissionCommand).validate_python(
+        {
+            **values,
+            "request_id": "account-close",
+            "folder_id": "folder_default",
+        }
+    )
     admitted = service.prepare_child_admission(
-        UUID(int=1), command, dataset=snapshot,
+        UUID(int=1),
+        command,
+        dataset=snapshot,
     ).immutable_input
     assert admitted.field_bindings == {"price.close.adjusted": "close"}
-    assert admitted.canonical_value()["strategy"]["program"]["data_requirements"]["field_ids"] == []
+    assert admitted.canonical_value()["strategy"]["program"] == {"source": SOURCE}

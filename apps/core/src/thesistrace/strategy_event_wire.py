@@ -25,6 +25,7 @@ _EVENT_SECTIONS = frozenset(
         "strategy_adjustments",
         "strategy_execution_constraints",
         "strategy_framework",
+        "strategy_history_reads",
     }
 )
 

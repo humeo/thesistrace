@@ -105,6 +105,7 @@ export const analysisEn = {
   "events": {
     "title": "Trading events",
     "sections": {
+      "strategy_history_reads": "Python data reads",
       "strategy_framework": "Framework decisions",
       "strategy_targets": "Rebalance targets",
       "strategy_orders": "Orders",
@@ -114,6 +115,7 @@ export const analysisEn = {
       "strategy_execution_constraints": "Execution constraints"
     },
     "descriptions": {
+      "strategy_history_reads": "Successful data requests made during each accepted Python decision. Expand a record for the actual date range and response size.",
       "strategy_framework": "Inspect Close decisions across candidates, signals, portfolio proposals and risk adjustments. Direct strategies do not emit these intermediate records.",
       "strategy_targets": "Selection and exposure targets formed at Close, dated by decision session.",
       "strategy_orders": "Simulated buy and sell orders, including rejected orders, dated by execution session.",
@@ -205,6 +207,7 @@ export const analysisEn = {
       "sell": "Sell"
     },
     "columns": {
+      readModule: "Module", readField: "Field", requestedSessions: "Requested sessions", returnedSessions: "Returned sessions", readInstruments: "Stocks",
       "candidates": "Candidates",
       "proposal": "Portfolio proposal",
       "riskAdjustment": "Risk adjustment",
@@ -388,6 +391,7 @@ export const analysisZh = {
   "events": {
     "title": "交易事件",
     "sections": {
+      "strategy_history_reads": "Python 数据读取",
       "strategy_framework": "Framework 决策",
       "strategy_targets": "调仓目标",
       "strategy_orders": "委托",
@@ -397,6 +401,7 @@ export const analysisZh = {
       "strategy_execution_constraints": "执行约束"
     },
     "descriptions": {
+      "strategy_history_reads": "查看每次已接受的 Python 决策实际读取的数据。展开记录可查看实际日期范围和返回大小。",
       "strategy_framework": "按候选、信号、组合建议和风险调整查看收盘判断。Direct 策略不产生这些中间阶段记录。",
       "strategy_targets": "收盘时形成的选股和仓位目标，日期为决策日。",
       "strategy_orders": "回测生成的买卖委托，包括被拒绝的委托，日期为执行日。",
@@ -488,6 +493,7 @@ export const analysisZh = {
       "sell": "卖出"
     },
     "columns": {
+      readModule: "模块", readField: "字段", requestedSessions: "请求交易日数", returnedSessions: "实际交易日数", readInstruments: "股票数",
       "candidates": "候选数",
       "proposal": "组合建议",
       "riskAdjustment": "风险调整",

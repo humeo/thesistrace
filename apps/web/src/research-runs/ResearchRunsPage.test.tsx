@@ -67,8 +67,7 @@ describe("ResearchRunFacts", () => {
     expect(markup).toContain("not charged again as a fee");
   });
   it("shows each frozen Framework module without inactive Alpha or Portfolio fields", () => {
-    const program = { source: "def decide(context, state, parameters): return {'output': None, 'state': state}",
-      parameters: { improvement: 0.02 }, data_requirements: { field_ids: [], history_sessions: 1 } };
+    const program = { source: "from quantgrove import Strategy\n# improvement = 0.01" };
     const markup = renderToStaticMarkup(<ResearchRunFacts run={{ ...STRATEGY_RUN, input: {
       research_kind: "strategy_backtest", strategy_mode: "framework", initial_cash_cny: "100000", costs: defaultSimulationCosts(),
       start_date: "2026-08-01", end_date: "2026-08-05", universe: "top300", hypothesis: null,
@@ -78,27 +77,23 @@ describe("ResearchRunFacts", () => {
     expect(markup).toContain("Alpha / Signals");
     expect(markup).toContain("Portfolio Construction");
     expect(markup).toContain("improvement");
-    expect(markup).toContain("def decide");
+    expect(markup).toContain("from quantgrove import Strategy");
     expect(markup).not.toContain("Holdings count");
     expect(markup).not.toContain("Neutralization");
     expect(markup).not.toContain("Exposure expression");
   });
-  it("shows frozen Direct code and parameters without Framework settings", () => {
+  it("shows frozen Direct source without Framework settings", () => {
     const markup = renderToStaticMarkup(<ResearchRunFacts run={{
       ...STRATEGY_RUN, input: {
         research_kind: "strategy_backtest", strategy_mode: "direct",
         hypothesis: null, start_date: "2026-08-01", end_date: "2026-08-05",
         universe: "top300", initial_cash_cny: "100000", costs: defaultSimulationCosts(),
-        program: { source: "def decide(context, state, parameters): pass",
-          parameters: { improvement: 0.02 }, data_requirements: {
-            field_ids: ["price.close.adjusted"], history_sessions: 6,
-          } },
+        program: { source: "from quantgrove import Strategy\n# improvement = 0.01" },
       },
     }} />);
     expect(markup).toContain("Direct · Python");
-    expect(markup).toContain("def decide(context, state, parameters): pass");
+    expect(markup).toContain("from quantgrove import Strategy");
     expect(markup).toContain("improvement");
-    expect(markup).toContain("price.close.adjusted");
     expect(markup).not.toContain("Framework");
     expect(markup).not.toContain("<strong>Formula</strong>");
     expect(markup).not.toContain("Neutralization");

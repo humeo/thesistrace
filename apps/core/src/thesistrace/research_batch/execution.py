@@ -151,6 +151,10 @@ class _SharedFactorResearchData:
         return self._source.instruments
 
     @property
+    def strategy_history_loader(self):
+        return getattr(self._source, "strategy_history_loader", None)
+
+    @property
     def universe_members(self):
         return self._universe_members
 

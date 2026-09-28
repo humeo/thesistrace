@@ -34,7 +34,6 @@ from thesistrace.research_kernel.strategy_program_runtime import (
     INPUT_BYTES,
     MEMORY_BYTES,
     OUTPUT_BYTES,
-    PARAMETER_BYTES,
     SOURCE_BYTES,
     STATE_BYTES,
     WALL_SECONDS,
@@ -59,11 +58,11 @@ CURRENT_RESEARCH_AUTHORING_CONSTRAINTS = ResearchAuthoringConstraints(
     strategy_modes=("framework", "direct"),
     simulation_cost_defaults=default_simulation_costs(),
     python_program=PythonProgramConstraints(
-        maximum_source_bytes=SOURCE_BYTES, maximum_parameter_bytes=PARAMETER_BYTES,
+        maximum_source_bytes=SOURCE_BYTES,
         maximum_state_bytes=STATE_BYTES, maximum_input_bytes=INPUT_BYTES,
         maximum_output_bytes=OUTPUT_BYTES, maximum_memory_bytes=MEMORY_BYTES,
         maximum_wall_seconds=WALL_SECONDS,
-        maximum_bootstrap_wall_seconds=BOOTSTRAP_WALL_SECONDS, maximum_fields=32,
+        maximum_bootstrap_wall_seconds=BOOTSTRAP_WALL_SECONDS, maximum_history_requests=64,
         history_sessions=IntegerRange(minimum=1, maximum=253),
         python_version=PYTHON_VERSION, modules=AVAILABLE_MODULES,
     ),
@@ -71,23 +70,22 @@ CURRENT_RESEARCH_AUTHORING_CONSTRAINTS = ResearchAuthoringConstraints(
         stages=tuple(FrameworkStageConstraints(
             stage=stage, builtin_identity=identity, output_contract={
                 "universe_selection": (
-                    "Return {reason, instrument_ids} to replace selected candidates; "
-                    "null retains the prior selection."
+                    "Subclass UniverseSelection. Return self.select(instruments) to replace "
+                    "selected candidates; None retains the prior selection."
                 ),
                 "alpha": (
-                    "Return {reason, signals: [{instrument_id, value, valid_for_sessions}]} "
-                    "to update active signals; null retains unexpired signals. "
+                    "Subclass Alpha. Return self.signals({instrument_id: score}, "
+                    "valid_for_sessions=2) to update signals; None retains unexpired signals. "
                     "Validity is in Research Sessions."
                 ),
                 "portfolio_construction": (
-                    "Return a complete Target Decision {reason, allocation, position_limits} "
-                    "with optional "
-                    "maximum_stock_exposure in [0, 1], "
-                    "or null for NoUpdate. Signals do not execute orders."
+                    "Subclass PortfolioConstruction. Return self.target_weights(weights) "
+                    "or None for NoUpdate. Signals do not execute orders."
                 ),
                 "risk_management": (
-                    "Return null, {mode: limit_positions, reason, position_limits} for local "
-                    "caps, or {mode: replace, reason, target} to replace or cancel the proposal."
+                    "Subclass RiskManagement. Return None to pass the current proposal, "
+                    "self.limit_positions(caps) for local caps, or self.replace(decision) "
+                    "to replace the proposal; self.replace(None) cancels it."
                 ),
             }[stage],
         ) for stage, identity in BUILTIN_FRAMEWORK_MODULES.items()),

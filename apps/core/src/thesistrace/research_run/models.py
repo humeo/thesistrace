@@ -112,6 +112,8 @@ from thesistrace.strategy_evidence import (
     StrategyFillsQuery,
     StrategyFrameworkPage,
     StrategyFrameworkQuery,
+    StrategyHistoryReadsPage,
+    StrategyHistoryReadsQuery,
     StrategyOrdersPage,
     StrategyOrdersQuery,
     StrategyTargetsPage,
@@ -127,13 +129,22 @@ def _normalized_request_id(value: str) -> str:
 
 
 ResearchRunSortKey = Literal[
-    "created_at", "annualized_excess_return", "sharpe", "maximum_drawdown",
-    "one_session_rank_ic", "five_session_rank_ic", "twenty_session_rank_ic",
+    "created_at",
+    "annualized_excess_return",
+    "sharpe",
+    "maximum_drawdown",
+    "one_session_rank_ic",
+    "five_session_rank_ic",
+    "twenty_session_rank_ic",
 ]
 ResearchRunSortDirection = Literal["ascending", "descending"]
 ResearchRunMetric = Literal[
-    "annualized_excess_return", "sharpe", "maximum_drawdown",
-    "one_session_rank_ic", "five_session_rank_ic", "twenty_session_rank_ic",
+    "annualized_excess_return",
+    "sharpe",
+    "maximum_drawdown",
+    "one_session_rank_ic",
+    "five_session_rank_ic",
+    "twenty_session_rank_ic",
 ]
 
 
@@ -159,9 +170,16 @@ type ResearchRunStatus = Literal[
     "queued", "running", "cancelling", "succeeded", "failed", "cancelled"
 ]
 type ResearchRunResultSection = Literal[
-    "strategy_framework", "strategy_targets", "strategy_orders", "strategy_child_orders",
-    "strategy_fills", "strategy_adjustments", "strategy_execution_constraints",
-    "daily_holdings_status", "daily_holdings",
+    "strategy_history_reads",
+    "strategy_framework",
+    "strategy_targets",
+    "strategy_orders",
+    "strategy_child_orders",
+    "strategy_fills",
+    "strategy_adjustments",
+    "strategy_execution_constraints",
+    "daily_holdings_status",
+    "daily_holdings",
     "factor",
     "factor_observations",
     "factor_periods",
@@ -182,9 +200,16 @@ FACTOR_RESULT_SECTIONS: tuple[ResearchRunResultSection, ...] = (
     "common_input_observations",
 )
 STRATEGY_RESULT_SECTIONS: tuple[ResearchRunResultSection, ...] = (
-    "strategy_framework", "strategy_targets", "strategy_orders", "strategy_child_orders",
-    "strategy_fills", "strategy_adjustments", "strategy_execution_constraints",
-    "daily_holdings_status", "daily_holdings",
+    "strategy_history_reads",
+    "strategy_framework",
+    "strategy_targets",
+    "strategy_orders",
+    "strategy_child_orders",
+    "strategy_fills",
+    "strategy_adjustments",
+    "strategy_execution_constraints",
+    "daily_holdings_status",
+    "daily_holdings",
     "strategy_summary",
     "strategy_observations",
     "terminal_strategy_state",
@@ -207,8 +232,6 @@ def research_run_result_sections(
     if research_kind == "factor_evaluation":
         return FACTOR_RESULT_SECTIONS
     return STRATEGY_RESULT_SECTIONS
-
-
 
 
 class _ResearchRunSubmission(BaseModel):
@@ -264,7 +287,8 @@ class DailyTrackRerunSource(BaseModel):
 
 
 type CurrentDataRerunSource = Annotated[
-    ResearchRunRerunSource | DailyTrackRerunSource, Field(discriminator="kind"),
+    ResearchRunRerunSource | DailyTrackRerunSource,
+    Field(discriminator="kind"),
 ]
 
 
@@ -287,7 +311,8 @@ class CurrentDataRerunOrigin(BaseModel):
     through_session: NaturalDate
     source_track_id: str | None = Field(default=None, min_length=1, max_length=200)
     source_checkpoint_manifest_sha256: str | None = Field(
-        default=None, pattern=r"^[0-9a-f]{64}$",
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
     )
 
     @model_validator(mode="after")
@@ -310,7 +335,10 @@ class RerunSourceDetails(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     kind: Literal["rerun_source"] = "rerun_source"
     reason: Literal[
-        "unsupported_setting", "checkpoint_boundary", "research_kind", "invalid_field",
+        "unsupported_setting",
+        "checkpoint_boundary",
+        "research_kind",
+        "invalid_field",
         "invalid_source",
     ]
     expected: str | int | None = None
@@ -334,8 +362,11 @@ class ResearchRunAdmissionIssue(BaseModel):
     severity: Literal["error"] = "error"
     range: SourceRange | None = None
     details: (
-        DiagnosticDetails | ResearchAdmissionDetails | RerunSourceDetails
-        | StrategyProgramDetails | None
+        DiagnosticDetails
+        | ResearchAdmissionDetails
+        | RerunSourceDetails
+        | StrategyProgramDetails
+        | None
     ) = None
 
 
@@ -466,30 +497,42 @@ class ImmutableRunInput(BaseModel):
         if self.costs is not None:
             SimulationCosts.model_validate(self.costs)
         if self.is_direct:
-            if any(value is not None for value in (
-                self.formula_source, self.alpha_expression, self.neutralization,
-            )):
+            if any(
+                value is not None
+                for value in (
+                    self.formula_source,
+                    self.alpha_expression,
+                    self.neutralization,
+                )
+            ):
                 raise ValueError("Direct Strategy cannot contain Alpha settings")
             if set(self.strategy) != {
-                "kind", "program", "program_sha256", "environment", "initial_cash_cny", "execution",
+                "kind",
+                "program",
+                "program_sha256",
+                "environment",
+                "initial_cash_cny",
+                "execution",
             }:
                 raise ValueError("Frozen Direct input does not match the current contract")
             program = PythonProgram.model_validate(self.strategy["program"])
             if program.source_sha256 != self.strategy["program_sha256"]:
                 raise ValueError("Frozen Python program identity does not match its source")
-            if (not isinstance(self.strategy["environment"], dict)
-                    or self.field_bindings.keys() != (
-                        set(program.data_requirements.field_ids) | {"price.close.adjusted"}
-                    )
-                    or self.expression_admission.effective_lookback
-                    != program.data_requirements.history_sessions - 1):
+            if (
+                not isinstance(self.strategy["environment"], dict)
+                or set(self.field_bindings) != {"price.close.adjusted"}
+                or self.expression_admission.effective_lookback != 0
+            ):
                 raise ValueError("Frozen Python data or execution environment is invalid")
             TypeAdapter(InitialCash).validate_python(self.strategy["initial_cash_cny"])
             return self
         if self.strategy is not None and self.strategy.get("kind") != "framework":
             raise ValueError("Frozen Strategy must identify the supported Framework modules")
-        modules = (FrameworkModules.model_validate(self.strategy.get("modules"))
-                   if self.strategy is not None else None)
+        modules = (
+            FrameworkModules.model_validate(self.strategy.get("modules"))
+            if self.strategy is not None
+            else None
+        )
         requires_alpha = modules is None or modules.alpha == "alpha_formula/v1"
         alpha_values = (self.formula_source, self.alpha_expression, self.neutralization)
         if requires_alpha and any(value is None for value in alpha_values):
@@ -500,8 +543,14 @@ class ImmutableRunInput(BaseModel):
             programs = modules.programs()
             expected = {"kind", "initial_cash_cny", "execution", "modules"}
             if self.has_builtin_portfolio:
-                expected |= {"holdings_count", "selection_every_sessions", "exposure_source",
-                             "exposure_expression", "weighting", "volatility_window"}
+                expected |= {
+                    "holdings_count",
+                    "selection_every_sessions",
+                    "exposure_source",
+                    "exposure_expression",
+                    "weighting",
+                    "volatility_window",
+                }
             if programs:
                 expected.add("environment")
             if set(self.strategy) != expected:
@@ -509,12 +558,6 @@ class ImmutableRunInput(BaseModel):
             TypeAdapter(InitialCash).validate_python(self.strategy["initial_cash_cny"])
             if programs and not isinstance(self.strategy["environment"], dict):
                 raise ValueError("Framework programs require a frozen execution environment")
-            for program in programs.values():
-                declaration = program.data_requirements
-                if (not set(declaration.field_ids) <= self.field_bindings.keys()
-                        or declaration.history_sessions - 1
-                        > self.expression_admission.effective_lookback):
-                    raise ValueError("Frozen Framework program data requirements are invalid")
             if self.has_builtin_portfolio:
                 TypeAdapter(HoldingsCount).validate_python(self.strategy["holdings_count"])
                 TypeAdapter(PortfolioWeighting).validate_python(self.strategy["weighting"])
@@ -541,17 +584,23 @@ class ImmutableRunInput(BaseModel):
         if not self.has_alpha:
             return {}
         expression = validate_normalized_alpha(
-            self.alpha_expression, field_bindings=self.field_bindings,
+            self.alpha_expression,
+            field_bindings=self.field_bindings,
         )
-        return {field_id: identifier
-                for identifier, field_id in expression.field_ids_by_identifier.items()}
+        return {
+            field_id: identifier
+            for identifier, field_id in expression.field_ids_by_identifier.items()
+        }
 
     @property
     def has_builtin_portfolio(self) -> bool:
-        return (self.strategy is not None and self.strategy.get("kind") == "framework"
-                and FrameworkModules.model_validate(
-                    self.strategy["modules"],
-                ).has_builtin_portfolio)
+        return (
+            self.strategy is not None
+            and self.strategy.get("kind") == "framework"
+            and FrameworkModules.model_validate(
+                self.strategy["modules"],
+            ).has_builtin_portfolio
+        )
 
     @property
     def programs(self) -> dict[str, PythonProgram]:
@@ -559,8 +608,12 @@ class ImmutableRunInput(BaseModel):
             return {"program": PythonProgram.model_validate(self.strategy["program"])}
         if self.strategy is None:
             return {}
-        return {f"modules.{stage}.program": program for stage, program
-                in FrameworkModules.model_validate(self.strategy["modules"]).programs().items()}
+        return {
+            f"modules.{stage}.program": program
+            for stage, program in FrameworkModules.model_validate(self.strategy["modules"])
+            .programs()
+            .items()
+        }
 
     @property
     def expression_trees(self) -> tuple[dict[str, object], ...]:
@@ -621,7 +674,8 @@ class ResearchRunSummary(BaseModel):
     formula_summary: Annotated[str, Field(max_length=120)]
     research_kind: ResearchKind
     rerun_origin: CurrentDataRerunOrigin | None = Field(
-        default=None, exclude_if=lambda value: value is None,
+        default=None,
+        exclude_if=lambda value: value is None,
     )
     key_metrics: ResearchRunKeyMetrics | None = Field(
         default=None,
@@ -680,25 +734,31 @@ class ResearchRunAuthorableInput(BaseModel):
     end_date: date
     universe: ResearchUniverse
     neutralization: ResearchNeutralization | None = Field(
-        default=None, exclude_if=lambda value: value is None,
+        default=None,
+        exclude_if=lambda value: value is None,
     )
     research_kind: ResearchKind
     strategy_mode: Literal["framework", "direct"] | None = Field(
-        default=None, exclude_if=lambda value: value is None,
+        default=None,
+        exclude_if=lambda value: value is None,
     )
     initial_cash_cny: InitialCash | None = Field(
-        default=None, exclude_if=lambda value: value is None,
+        default=None,
+        exclude_if=lambda value: value is None,
     )
     costs: SimulationCosts | None = Field(default=None, exclude_if=lambda value: value is None)
     holdings_count: int | None = Field(default=None, exclude_if=lambda value: value is None)
     volatility_window: VolatilityWindow | None = Field(
-        default=None, exclude_if=lambda value: value is None,
+        default=None,
+        exclude_if=lambda value: value is None,
     )
     weighting: PortfolioWeighting | None = Field(
-        default=None, exclude_if=lambda value: value is None,
+        default=None,
+        exclude_if=lambda value: value is None,
     )
     exposure_expression: Formula | None = Field(
-        default=None, exclude_if=lambda value: value is None,
+        default=None,
+        exclude_if=lambda value: value is None,
     )
     selection_every_sessions: int | None = Field(
         default=None,
@@ -990,6 +1050,10 @@ class ProvenanceResultSectionInput(_ResearchRunResultSectionInput):
     section: Literal["provenance"]
 
 
+class RunStrategyHistoryReadsInput(_ResearchRunResultSectionInput, StrategyHistoryReadsQuery):
+    pass
+
+
 class RunStrategyFrameworkInput(_ResearchRunResultSectionInput, StrategyFrameworkQuery):
     pass
 
@@ -1015,7 +1079,8 @@ class RunStrategyAdjustmentsInput(_ResearchRunResultSectionInput, StrategyAdjust
 
 
 class RunStrategyExecutionConstraintsInput(
-    _ResearchRunResultSectionInput, StrategyExecutionConstraintsQuery,
+    _ResearchRunResultSectionInput,
+    StrategyExecutionConstraintsQuery,
 ):
     pass
 
@@ -1038,6 +1103,7 @@ type ResearchRunResultSectionInput = Annotated[
     | TerminalPositionsResultSectionInput
     | ProvenanceResultSectionInput
     | CommonInputObservationsResultSectionInput
+    | RunStrategyHistoryReadsInput
     | RunStrategyFrameworkInput
     | RunStrategyTargetsInput
     | RunStrategyOrdersInput
@@ -1209,6 +1275,7 @@ type ResearchRunResultSectionResponse = Annotated[
     | TerminalPositionsResultSection
     | ProvenanceResultSection
     | CommonInputObservationsResultSection
+    | StrategyHistoryReadsPage
     | StrategyFrameworkPage
     | StrategyTargetsPage
     | StrategyOrdersPage
@@ -1226,8 +1293,16 @@ class ResearchRunProgress(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     phase: Literal[
-        "queued", "preparing_data", "shared_alpha_factor", "waiting_for_execution",
-        "warmup", "research", "strategy", "finalizing", "recovering", "succeeded",
+        "queued",
+        "preparing_data",
+        "shared_alpha_factor",
+        "waiting_for_execution",
+        "warmup",
+        "research",
+        "strategy",
+        "finalizing",
+        "recovering",
+        "succeeded",
     ]
     completed_warmup_sessions: int
     total_warmup_sessions: int

@@ -21,10 +21,10 @@
     "cursor_characters": 1024
   },
   "deterministic_payloads": {
-    "v1_contract_sha256": "ad589e36d3ced48b4c08a45cd335308afae4b398e1e4dc7ff9a367b57fed722a",
-    "v1_contract_bytes": 306324,
+    "v1_contract_sha256": "5b7a1b5161373297b5a92394c2e10b1b56902452de539094c9dc2a2d6f8fde97",
+    "v1_contract_bytes": 309168,
     "maximum_factor_batch_call_bytes": 84536,
-    "maximum_framework_batch_call_bytes": 62887654
+    "maximum_framework_batch_call_bytes": 31420694
   },
   "observed": {
     "tests_passed": 4,
@@ -38,10 +38,10 @@
     "swaps": 0
   },
   "measurement_context": {
-    "date": "2026-09-12",
+    "date": "2026-09-29",
     "transport": "in-process deterministic MCP client",
     "network_access": false,
     "real_model": false,
-    "note": "Deterministic contract hash and size refreshed after the Quantgrove interface and Framework merge. The hash sorts semantically unordered JSON Schema anyOf alternatives so unrelated test imports cannot change it. Observed performance remains the 2026-09-07 measurement and does not qualify the increased request limit. Maximum Python request and complete 4 MiB event-page wire envelopes have separate deterministic regressions in test_research_agent_mcp_contract.py. Business-page bounds and transport bounds are verified separately."
+    "note": "Deterministic contract and payload sizes refreshed for the source-only class SDK and Python data-read events. Observed performance remains the 2026-09-07 measurement; this is not a new performance qualification. Request and complete event-page wire envelopes have independent deterministic regressions in test_research_agent_mcp_contract.py."
   }
 }

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -1499,7 +1500,57 @@ class MountedGenerationStore:
                 **market_field_column_bindings(market_bindings),
                 **{field_id: field_id for family in bindings.values() for field_id in family},
             },
+            strategy_history_loader=lambda session, field_id, days, instruments: (
+                self.read_strategy_history(
+                    manifest_sha256, session=session, field_id=field_id,
+                    days=days, instruments=instruments,
+                )
+            ),
         )
+
+    def read_strategy_history(self, manifest_sha256, *, session, field_id, days, instruments):
+        """Resolve one bounded field request against a fixed generation and Close."""
+        if type(days) is not int or not 1 <= days <= 253 or len(instruments) * days > 262144:
+            raise ValueError("History request exceeds the data budget")
+        root = self._read_family_generation_root(manifest_sha256)
+        descriptor = _family_generation_descriptor_from_root(manifest_sha256, root)
+        if field_id not in descriptor.field_availability:
+            raise ValueError("History field unavailable in the pinned data")
+        calendar = descriptor.research_sessions
+        end = calendar.index(session) + 1
+        sessions = tuple(calendar[max(0, end - days):end])
+        definition = next((item for item in field_definitions() if item.field_id == field_id), None)
+        if definition is None or definition.alpha is None:
+            raise ValueError("History requires a numeric research field")
+        binding = {field_id: definition.alpha.identifier}
+        families = _field_family_bindings(binding, None)
+        family_id = next(key for key, fields in families.items() if field_id in fields)
+        if family_id == "equity.eod_price":
+            column = market_field_column_bindings(binding)[field_id]
+            spec, reference = self._family_table_reference(root, family_id, "eod_prices")
+            table = self._open_table_sessions_columnar(
+                spec, reference, selected_sessions=set(sessions),
+                columns={"session_date", "instrument_id", column},
+                instrument_ids=frozenset(instruments),
+            )
+            session_column = "session_date"
+        else:
+            reader, manifest = self._series_family_reader(descriptor, family_id)
+            table = reader.resolve_table(
+                manifest_sha256=manifest, field_ids=(field_id,),
+                sessions=sessions, instrument_ids=tuple(sorted(instruments)),
+            )
+            column, session_column = field_id, "session"
+        positions = {date: index for index, date in enumerate(sessions)}
+        values = {item: [None] * len(sessions) for item in instruments}
+        for row in table.select([session_column, "instrument_id", column]).to_pylist():
+            value = None if row[column] is None else float(row[column])
+            if value is not None and math.isnan(value):
+                value = None
+            if value is not None and not math.isfinite(value):
+                raise ValueError("Program history contains a non-finite field value")
+            values[row["instrument_id"]][positions[str(row[session_column])]] = value
+        return {"sessions": list(sessions), "values": values}
 
     def open_admission(self, manifest_sha256: str) -> MountedGenerationAdmission:
         root = self._read_family_generation_root(manifest_sha256)

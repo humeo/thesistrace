@@ -11,21 +11,16 @@ from thesistrace.research_series import slice_research_sessions
 pytestmark = pytest.mark.bounded_process
 
 SOURCE = """
-def decide(context, state, parameters):
-    history = context['history']
-    prices = history['fields']['price.close.adjusted']
-    best = max(range(len(history['instruments'])), key=lambda i: prices[i][-1])
-    selected = history['instruments'][best]
-    held = [row['instrument_id'] for row in context['account']['positions']]
-    output = None
-    if held != [selected]:
-        output = {
-            'reason': 'better_candidate',
-            'allocation': {'mode': 'rebalance', 'instrument_ids': [selected],
-                           'relative_weights': {selected: '1'}, 'exposure': 1.0},
-            'position_limits': {},
-        }
-    return {'output': output, 'state': {'count': state.get('count', 0) + 1}}
+from quantgrove import Strategy
+class BestClose(Strategy):
+    def on_close(self, data, account):
+        prices = data.close_prices(1)
+        selected = max(prices.values, key=lambda stock: prices[stock][-1])
+        self.state['count'] = self.state.get('count', 0) + 1
+        held = [row['instrument_id'] for row in account.positions]
+        if held != [selected]:
+            return self.target_weights({selected: 1.0}, reason='better_candidate')
+        return None
 """
 
 
@@ -49,8 +44,6 @@ def inputs():
             "initial_cash_cny": "100000",
             "program": {
                 "source": SOURCE,
-                "parameters": {},
-                "data_requirements": {"field_ids": ["price.close.adjusted"], "history_sessions": 1},
             },
             "environment": PythonStrategyRuntime().identity(),
         },
@@ -91,6 +84,12 @@ def test_direct_uses_one_shared_account_for_condition_triggered_next_open_execut
     assert result["pending_target"]["decision_session"] == SESSIONS[3]
     assert result["pending_target"]["allocation"]["instrument_ids"] == [A]
     assert "target_selection" not in result
+    from thesistrace.research_kernel.strategy_events import strategy_event_rows
+    reads = strategy_event_rows(result, sessions=SESSIONS)["strategy_history_reads"]
+    assert len(reads) == 4
+    assert all(row["field_id"] == "price.close.adjusted" for row in reads)
+    assert all(row["last_session"] == row["session"] for row in reads)
+    assert {row["requested_sessions"] for row in reads} == {1}
 
 
 def test_direct_replays_exactly_from_an_explicit_midrun_boundary():
@@ -115,11 +114,11 @@ def test_direct_replays_exactly_from_an_explicit_midrun_boundary():
 def test_direct_program_observes_cost_age_and_independent_close_account():
     data, definition = inputs()
     definition["strategy"]["program"]["source"] = SOURCE.replace(
-        "{'count': state.get('count', 0) + 1}",
-        "{'observed_account': {"
-        "'close_risk_nav_cny': context['account']['close_risk_nav_cny'],"
-        "'post_open_net_nav_cny': context['account']['post_open_net_nav_cny'],"
-        "'positions': [dict(p) for p in context['account']['positions']]}}",
+        "self.state['count'] = self.state.get('count', 0) + 1",
+        "self.state['observed_account'] = {"
+        "'close_risk_nav_cny': account.close_risk_nav_cny,"
+        "'post_open_net_nav_cny': account.post_open_net_nav_cny,"
+        "'positions': [dict(p) for p in account.positions]}",
     )
     result = transition_strategy(data, None, definition, origin_session=SESSIONS[0]).finalized
     observed = result["decision_state"]["state"]["observed_account"]
@@ -252,29 +251,34 @@ def test_python_strategy_columnar_chunks_match_the_public_run_without_alpha_comp
     common = {"initial_cash_cny": "100000", **definition["costs"]}
     strategy = DirectStrategyRunInput(
         program_json=canonical_json_bytes(definition["strategy"]["program"]),
-        environment_json=environment, **common,
+        environment_json=environment,
+        **common,
     )
     if mode == "framework":
         modules = dict(BUILTIN_FRAMEWORK_MODULES)
         modules["portfolio_construction"] = {
-            "kind": "python", "program": definition["strategy"]["program"],
+            "kind": "python",
+            "program": {"source": SOURCE.replace("Strategy", "PortfolioConstruction")},
         }
-        modules["alpha"] = {"kind": "python", "program": {
-            "source": """
-def decide(context, state, parameters):
-    output = None
-    if context['completed_sessions'] == 1:
-        output = {'reason': 'two_day_signal', 'signals': [{
-            'instrument_id': context['candidates'][0]['instrument_id'],
-            'value': 1.0, 'valid_for_sessions': 2}]}
-    return {'output': output, 'state': {}}
+        modules["alpha"] = {
+            "kind": "python",
+            "program": {
+                "source": """
+from quantgrove import Alpha
+class TwoDaySignal(Alpha):
+    def on_close(self, data, account):
+        if data.completed_sessions == 1:
+            return self.signals({data.candidates[0]: 1.0}, valid_for_sessions=2)
+        return None
 """,
-            "parameters": {}, "data_requirements": {"field_ids": [], "history_sessions": 1},
-        }}
+            },
+        }
         strategy = StrategyRunInput(
-            holdings_count=None, selection_interval=None,
+            holdings_count=None,
+            selection_interval=None,
             modules_json=canonical_json_bytes(modules),
-            environment_json=environment, **common,
+            environment_json=environment,
+            **common,
         )
     columnar = _ColumnarFixture(
         sessions=data.sessions,

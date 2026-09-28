@@ -22,7 +22,11 @@ from thesistrace.research_kernel.builtin_framework import (
     alpha_values_by_session,
 )
 from thesistrace.research_kernel.builtin_risk import BuiltinRiskModule
-from thesistrace.research_kernel.direct_strategy import PythonProgram, program_context
+from thesistrace.research_kernel.direct_strategy import (
+    PythonProgram,
+    program_context,
+    program_history,
+)
 from thesistrace.research_kernel.framework_evidence import (
     BuiltinRiskEvidence,
     FormulaEvidence,
@@ -195,7 +199,7 @@ class FrameworkStrategy:
     def _invoke(self, stage, view, daily, module_states, diagnostics):
         program = self._programs[stage]
         try:
-            context = program_context(self._data, program.data_requirements, **daily)
+            context = program_context(self._data, **daily)
             if stage != "universe_selection":
                 selected = set(view["universe"])
                 context["candidates"] = [row for row in context["candidates"]
@@ -203,11 +207,18 @@ class FrameworkStrategy:
             context["framework"] = view
             result = self._runtime.invoke(
                 program.source, context=context, state=module_states[stage],
-                parameters=program.parameters,
+                entrypoint={"universe_selection": "UniverseSelection", "alpha": "Alpha",
+                            "portfolio_construction": "PortfolioConstruction",
+                            "risk_management": "RiskManagement"}[stage],
+                read_history=program_history(self._data, context),
             )
         except ValueError as error:
             self._fail(stage, daily["session"], error)
         module_states[stage] = result.state
+        diagnostics.extend({
+            "session": daily["session"], "reason": "python_history", "module": stage,
+            "program_sha256": program.source_sha256, "request_index": index, **read,
+        } for index, read in enumerate(result.history_reads, 1))
         if result.diagnostics:
             diagnostics.append({
                 "session": daily["session"], "reason": "python_diagnostics", "module": stage,

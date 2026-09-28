@@ -110,7 +110,7 @@ export function StrategyEvents({ endpoint, embedded = false }: { endpoint: strin
             minimum={key === "end_session" ? draft.start_session || null : null}
             maximum={key === "start_session" ? draft.end_session || null : null}
             error={fieldErrors[key] ? t(`holdings.${fieldErrors[key]}`) : undefined} errorId={`${id}-${key}-error`} />)}
-          <Field><FieldLabel htmlFor={`${id}-instrument`}>{t("events.instrument")}</FieldLabel><Input id={`${id}-instrument`} value={draft.instrument_id} placeholder="600000.SH" onChange={event => setDraft({ ...draft, instrument_id: event.target.value })} /></Field>
+          <Field><FieldLabel htmlFor={`${id}-instrument`}>{t("events.instrument")}</FieldLabel><Input id={`${id}-instrument`} disabled={section === "strategy_history_reads"} value={draft.instrument_id} placeholder="600000.SH" onChange={event => setDraft({ ...draft, instrument_id: event.target.value })} /></Field>
         </FieldGroup>
         <div className="mt-4 flex flex-wrap gap-2">
           <Button type="submit">{t("events.query")}</Button>
@@ -126,7 +126,7 @@ export function StrategyEvents({ endpoint, embedded = false }: { endpoint: strin
       </div>}
       <div className="flex flex-wrap justify-between gap-2 text-muted-foreground">
         <span>{filters.start_session || filters.end_session ? t("events.dateRange", { start: filters.start_session ?? t("events.earliest"), end: filters.end_session ?? t("events.latest") }) : t("events.allDates")} · {filters.instrument_id ? instrumentLabel(filters.instrument_id) : t("events.allStocks")}</span>
-        <span>{section === "strategy_targets" || section === "strategy_framework" ? t("events.decisionDate") : section === "strategy_adjustments" ? t("events.adjustmentDate") : t("events.executionDate")} · {t("events.pageSize")}</span>
+        <span>{section === "strategy_targets" || section === "strategy_framework" || section === "strategy_history_reads" ? t("events.decisionDate") : section === "strategy_adjustments" ? t("events.adjustmentDate") : t("events.executionDate")} · {t("events.pageSize")}</span>
       </div>
       {page?.status === "partially_expired" && <p role="status">{t("events.partialExpiry")}</p>}
       {error ? <Alert variant="destructive"><AlertDescription>{t(`events.${error}`)}</AlertDescription></Alert> : page === null ? <p role="status">{t("events.loading")}</p>

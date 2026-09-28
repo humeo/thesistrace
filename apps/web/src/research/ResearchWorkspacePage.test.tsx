@@ -26,16 +26,7 @@ import {
   ResearchFolderNavigation,
 } from "./ResearchWorkspacePage";
 import { buildResearchDatePresets } from "./dateRange";
-import { parseProgramParameters } from "./pythonStrategy";
 import { builtinFrameworkModules } from "./frameworkModules";
-
-describe("Python parameter JSON", () => {
-  it.each(['{"threshold": 1e999}', '{"x": 9007199254740992}', '{"x": "\\ud800"}',
-    '{"x": ' + '['.repeat(33) + '0' + ']'.repeat(33) + '}'])
-  ("rejects %s before serialization can change its meaning", source => {
-    expect(() => parseProgramParameters(source)).toThrow();
-  });
-});
 
 class MemoryStorage implements Storage {
   private readonly values = new Map<string, string>();
@@ -502,7 +493,6 @@ describe("browser Research Draft", () => {
   it("renders the DSL as the only Alpha surface without server-edit controls", () => {
     const markup = renderToStaticMarkup(<ResearchDraftWorkspace catalog={catalog} data={data} folder={folder} researcherId={researcherId} storage={new MemoryStorage()} />);
     expect(markup).toContain("Alpha formula editor");
-    expect(markup).toContain('class="h-[280px] min-w-0 overflow-hidden bg-card"');
     expect(markup).toContain('id="alpha-formula-title"');
     expect(markup).toContain('>Alpha formula</h2>');
     expect(markup).toContain('aria-label="Research name"');
@@ -696,27 +686,18 @@ it("restores a frozen Exposure source exactly when reusing a Run as a draft", ()
 
 
 describe("Direct Python authoring", () => {
-  it("reuses and reloads legal parameters whose formatted text exceeds 64 KiB", () => {
-    const parameters = Object.fromEntries(Array.from({ length: 3500 }, (_, i) =>
-      [`key${String(i).padStart(4, "0")}`, "value"]));
-    expect(JSON.stringify(parameters).length).toBeLessThan(65536);
-    const formatted = JSON.stringify(parameters, null, 2);
-    expect(formatted.length).toBeGreaterThan(65536);
+  it("preserves source formatting and constants through storage and reuse", () => {
     const draft = { ...selectStrategyMode(selectResearchKind(emptyResearchDraft(), "strategy_backtest"), "direct"),
-      startDate: "2026-08-03", endDate: "2026-08-05", universe: "top300", programParameters: formatted };
-    expect(isCompleteResearchInputs(draft)).toBe(true);
+      startDate: "2026-08-03", endDate: "2026-08-05", universe: "top300" };
+    draft.programSource += "\n# 作者自选周期\nLOOKBACK = 10\nTHRESHOLD = 0.01\n";
     const storage = new MemoryStorage();
     persistResearchDraft(storage, researcherId, folder.id, draft);
-    expect(loadResearchDraft(storage, researcherId, folder.id).programParameters).toBe(formatted);
-    const { command } = beginResearchRun(draft, folder.id, () => "large-parameters");
+    expect(loadResearchDraft(storage, researcherId, folder.id).programSource).toBe(draft.programSource);
+    const { command } = beginResearchRun(draft, folder.id, () => "source-only");
     if (command.research_kind !== "strategy_backtest" || command.strategy_mode !== "direct") throw new Error("Direct expected");
-    expect(useResearchAsDraft(storage, researcherId, folder.id, {
-      ...command, universe: "top300",
-    }, () => true)).toBe(true);
-    const restored = loadResearchDraft(storage, researcherId, folder.id);
-    expect(restored.strategyMode).toBe("direct");
-    expect(restored.programSource).toBe(draft.programSource);
-    expect(JSON.parse(restored.programParameters)).toEqual(parameters);
+    expect(command.program).toEqual({ source: draft.programSource });
+    expect(useResearchAsDraft(storage, researcherId, folder.id, { ...command, universe: "top300" }, () => true)).toBe(true);
+    expect(loadResearchDraft(storage, researcherId, folder.id).programSource).toBe(draft.programSource);
   });
 
   it("switches the active strategy, submits only Python, and restores its frozen draft", () => {
@@ -738,24 +719,24 @@ describe("Direct Python authoring", () => {
     }, () => true)).toBe(true);
     const restored = loadResearchDraft(storage, researcherId, folder.id);
     expect(restored.programSource).toBe(draft.programSource);
-    expect(JSON.parse(restored.programParameters)).toEqual(command.program.parameters);
     const switched = selectStrategyMode(restored, "framework");
     expect(switched.programSource).toBe(draft.programSource);
-    expect(switched.programParameters).toBe(restored.programParameters);
     expect(switched.holdingsCount).toBe("10");
   });
 
-  it("keeps incomplete Python parameters editable and explains the invalid field", () => {
+  it("keeps empty source editable and shows input and output guidance", () => {
     const draft = { ...selectStrategyMode(selectResearchKind(emptyResearchDraft(), "strategy_backtest"), "direct"),
-      startDate: "2026-08-03", endDate: "2026-08-05", universe: "top300", programParameters: "{" };
+      startDate: "2026-08-03", endDate: "2026-08-05", universe: "top300", programSource: "" };
     const storage = new MemoryStorage();
     persistResearchDraft(storage, researcherId, folder.id, draft);
-    expect(loadResearchDraft(storage, researcherId, folder.id).programParameters).toBe("{");
+    expect(loadResearchDraft(storage, researcherId, folder.id).programSource).toBe("");
     expect(isCompleteResearchInputs(draft)).toBe(false);
     const markup = renderToStaticMarkup(<ResearchDraftWorkspace researcherId={researcherId} folder={folder} catalog={catalog} data={data} storage={storage} />);
     expect(markup).toContain("Python source");
-    expect(markup).toContain("Parameters (JSON)");
-    expect(markup).toContain("Declared fields");
+    expect(markup).not.toContain("Parameters (JSON)");
+    expect(markup).toContain("System input");
+    expect(markup).toContain("Strategy output");
+    expect(markup).not.toContain("Declared fields");
     expect(markup).not.toContain("Framework · Built-in strategy. Decide");
   });
 });

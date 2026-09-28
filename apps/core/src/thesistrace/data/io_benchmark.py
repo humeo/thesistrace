@@ -529,7 +529,8 @@ def _validate_kind_specific_sample(sample: Mapping[str, object], research_kind: 
         "terminal_positions.part-",
     )
     event_sections = {
-        "strategy_framework", "strategy_targets", "strategy_orders", "strategy_child_orders",
+        "strategy_history_reads", "strategy_framework", "strategy_targets", "strategy_orders",
+        "strategy_child_orders",
         "strategy_fills", "strategy_adjustments", "strategy_execution_constraints",
     }
     event_partition_names = set().union(*(

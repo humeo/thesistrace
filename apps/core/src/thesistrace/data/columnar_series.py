@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from bisect import bisect_left
-from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Iterator, Mapping
+from dataclasses import dataclass, field
 from functools import cached_property
 from typing import TypeVar
 
@@ -252,6 +252,7 @@ class ColumnarResearchData:
     _industries: pa.Table
     _family_values: pa.Table | None
     _field_columns: Mapping[str, str]
+    strategy_history_loader: Callable | None = field(default=None, repr=False, compare=False)
 
     @cached_property
     def _instrument_axis(self) -> tuple[str, ...]:
@@ -466,6 +467,7 @@ class ColumnarResearchData:
             _industries=self._industries,
             _family_values=family_values,
             _field_columns=self._field_columns,
+            strategy_history_loader=self.strategy_history_loader,
         )
 
 

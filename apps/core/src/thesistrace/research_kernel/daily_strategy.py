@@ -11,6 +11,7 @@ from thesistrace.research_kernel.direct_strategy import (
     DirectStrategy,
     PythonProgram,
     program_context,
+    program_history,
 )
 from thesistrace.research_kernel.framework_evidence import (
     FormulaEvidence,
@@ -104,7 +105,7 @@ class _DirectDailyStrategy:
             state = previous["state"]
         try:
             context = program_context(
-                self._data, self._program.data_requirements, session=session,
+                self._data, session=session,
                 completed_sessions=report_index + 1, account=account,
                 fills=fills, rejections=rejections,
             )
@@ -112,11 +113,17 @@ class _DirectDailyStrategy:
             raise StrategyProgramError(
                 str(error), source=self._program.source, session=session,
             ) from error
-        result = self._direct.decide(context, previous=state)
+        result = self._direct.decide(
+            context, previous=state, read_history=program_history(self._data, context),
+        )
         diagnostics = () if not result.diagnostics else ({
             "session": session, "reason": "python_diagnostics",
             "program_sha256": self._program.source_sha256, "text": result.diagnostics,
         },)
+        diagnostics += tuple({
+            "session": session, "reason": "python_history", "module": "direct",
+            "program_sha256": self._program.source_sha256, "request_index": index, **read,
+        } for index, read in enumerate(result.history_reads, 1))
         return DailyDecision(
             state={"mode": "direct", "program_sha256": self._program.source_sha256,
                    "state": result.state},

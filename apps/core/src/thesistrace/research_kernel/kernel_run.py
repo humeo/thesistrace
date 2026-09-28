@@ -268,18 +268,11 @@ class RunInput:
         object.__setattr__(self, "_effective_lookback", effective_lookback)
         object.__setattr__(self, "strategy", strategy)
         if direct:
-            requirements = strategy.program_snapshot().data_requirements
-            required_fields = set(requirements.field_ids)
-            if effective_lookback != requirements.history_sessions - 1:
-                raise KernelRunError("Python program history and calculation lookback disagree")
+            required_fields = set()
         else:
             required_fields = (set(self.alpha_execution_plan().field_names)
                                if self.has_alpha else set())
         if isinstance(strategy, StrategyRunInput):
-            for program in strategy.modules_snapshot().programs().values():
-                required_fields.update(program.data_requirements.field_ids)
-                if effective_lookback < program.data_requirements.history_sessions - 1:
-                    raise KernelRunError("Insufficient Framework program history")
             if "portfolio_construction" not in strategy.modules_snapshot().programs():
                 required_fields.update(
                     validate_exposure(strategy.exposure_expression_snapshot()).field_ids,

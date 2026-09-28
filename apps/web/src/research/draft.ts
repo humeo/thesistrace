@@ -4,7 +4,7 @@ import { readTakeProfitDraft, takeProfitDraft, takeProfitIssues, type TakeProfit
 import { costFields, costInputError, defaultSimulationCosts, readCostInputs, type CostField, type SimulationCosts } from "./simulationCosts";
 import {
   DIRECT_EXAMPLE, programDraft, programInputFields, programInputIssues,
-  parseProgramParameters, programSpec, type ProgramInputField, type ProgramInputs, type PythonProgram,
+  programSpec, type ProgramInputField, type ProgramInputs, type PythonProgram,
 } from "./pythonStrategy";
 import {
   builtinModulesDraft, frameworkDraft, frameworkSpec, frameworkStages, frozenStopLossPercentage, stopLossInputError, frozenMaximumHoldingSessions, frozenMinimumHoldingSessions, holdingSessionsInputError,
@@ -115,8 +115,7 @@ export function emptyResearchDraft(): ResearchDraft {
     stopLossThreshold: "",
     maximumHoldingSessions: "",
     minimumHoldingSessions: "",
-    programSource: DIRECT_EXAMPLE, programParameters: '{"improvement": 0.02}',
-    programFields: "price.close.adjusted", programHistorySessions: "6",
+    programSource: DIRECT_EXAMPLE,
     frameworkModules: builtinModulesDraft(),
     name: "",
     formula: "",
@@ -332,7 +331,7 @@ export function isValidInitialCash(value: string): boolean {
 export type ResearchInputField = DrawdownField | TakeProfitField | `costs.${CostField}` | ProgramInputField | `${FrameworkStage}.${ProgramInputField}`
   | "formula" | "hypothesis" | "startDate" | "endDate" | "universe" | "neutralization" | "initialCashCny"
   | "stopLossThreshold" | "maximumHoldingSessions" | "minimumHoldingSessions" | "holdingsCount" | "selectionEverySessions" | "exposureExpression" | "volatilityWindow";
-export type ResearchInputIssueCode = "rankingWindowInvalid" | "formulaRequired" | "startRequired" | "startInvalid" | "endRequired" | "endInvalid" | "dateOrder" | "universeRequired" | "neutralizationRequired" | "holdingsRange" | "intervalRange" | "cashRange" | "volatilityRange" | "exposureRequired" | "exposureRange" | "notesLength" | "costInvalid" | "slippageRange" | "drawdownCooldown" | "drawdownThreshold" | "drawdownExposure" | "takeProfitThreshold" | "takeProfitReduction" | "takeProfitOrder" | "stopLossRange" | "holdingSessions" | "holdingOrder" | "programSource" | "programParameters" | "programFields" | "programHistory";
+export type ResearchInputIssueCode = "rankingWindowInvalid" | "formulaRequired" | "startRequired" | "startInvalid" | "endRequired" | "endInvalid" | "dateOrder" | "universeRequired" | "neutralizationRequired" | "holdingsRange" | "intervalRange" | "cashRange" | "volatilityRange" | "exposureRequired" | "exposureRange" | "notesLength" | "costInvalid" | "slippageRange" | "drawdownCooldown" | "drawdownThreshold" | "drawdownExposure" | "takeProfitThreshold" | "takeProfitReduction" | "takeProfitOrder" | "stopLossRange" | "holdingSessions" | "holdingOrder" | "programSource";
 export type ResearchInputIssue = { field: ResearchInputField; code: ResearchInputIssueCode };
 
 export function researchInputIssues(inputs: ResearchInputs): ResearchInputIssue[] {
@@ -414,11 +413,6 @@ function sameInputValue(key: string, left: unknown, right: unknown): boolean {
 }
 
 function snapshotInputValue(key: string, value: unknown): unknown {
-  if (key === "programParameters" && typeof value === "string") {
-    // Accepted/pending inputs need the parameter values, not the editor's whitespace.
-    // Incomplete JSON remains editable and is compared verbatim.
-    try { return JSON.stringify(parseProgramParameters(value)); } catch { return value; }
-  }
   if (isRecord(value)) return Object.fromEntries(Object.entries(value).map(([child, item]) => [child, snapshotInputValue(child, item)]));
   return value;
 }
@@ -483,7 +477,7 @@ function wouldOverwriteUnexecutedAuthorableValue(
     "neutralization",
     "researchKind",
     "strategyMode",
-    "programSource", "programParameters", "programFields", "programHistorySessions",
+    "programSource",
     ...drawdownFields, "frameworkModules", "costs", "takeProfitTiers", "stopLossThreshold", "maximumHoldingSessions", "minimumHoldingSessions",
     "initialCashCny",
     "holdingsCount",
@@ -559,7 +553,7 @@ function readInputs(value: unknown): ResearchInputs | null {
   const keys = [
     "researchKind",
     ...drawdownFields, "strategyMode", "stopLossThreshold", "maximumHoldingSessions", "minimumHoldingSessions",
-    "programSource", "programParameters", "programFields", "programHistorySessions",
+    "programSource",
     "name",
     "formula",
     "hypothesis",
@@ -582,8 +576,8 @@ function readInputs(value: unknown): ResearchInputs | null {
     !["equal_weight", "rank_weight", "inverse_volatility"].includes(strings.weighting) ||
     strings.formula.length > MAX_FORMULA_LENGTH ||
     strings.exposureExpression.length > MAX_FORMULA_LENGTH ||
-    keys.some((key) => key === "programSource" || key === "programParameters"
-      ? new TextEncoder().encode(strings[key]).byteLength > (key === "programSource" ? 65536 : MAX_DRAFT_BYTES)
+    keys.some((key) => key === "programSource"
+      ? new TextEncoder().encode(strings[key]).byteLength > 65536
       : strings[key].length > MAX_TEXT_LENGTH)
   ) return null;
   const takeProfitTiers = readTakeProfitDraft(value.takeProfitTiers);
@@ -599,8 +593,7 @@ function readInputs(value: unknown): ResearchInputs | null {
     const program = module.program;
     if (!isRecord(program) || programInputFields.some(field => typeof program[field] !== "string")) return null;
     const inputs = Object.fromEntries(programInputFields.map(field => [field, program[field]])) as ProgramInputs;
-    if (new TextEncoder().encode(inputs.programSource).byteLength > 65536
-      || inputs.programFields.length > MAX_TEXT_LENGTH || inputs.programHistorySessions.length > MAX_TEXT_LENGTH) return null;
+    if (new TextEncoder().encode(inputs.programSource).byteLength > 65536) return null;
     parsedModules[stage] = { kind: module.kind, program: inputs };
   }
   return { ...Object.fromEntries(keys.map((key) => [key, strings[key]])), frameworkModules: parsedModules, costs, takeProfitTiers } as ResearchInputs;

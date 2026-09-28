@@ -22,7 +22,7 @@ import datetime
 import os
 import random
 
-def decide(context, state, parameters):
+def observe(context, state, parameters):
     observed = {}
     for path in parameters['paths']:
         try:
@@ -56,10 +56,28 @@ def decide(context, state, parameters):
 """
 
 
+def program_source(parameters, base="Strategy", *, observation=False):
+    callback = (
+        "        self.state = observed['state']\n"
+        "        return Decision(observed['output'])\n" if observation else
+        "        self.state = observed['output']\n"
+        "        try:\n"
+        "            account.cash_cny = '999999'\n"
+        "            self.state['account_writable'] = True\n"
+        "        except TypeError:\n"
+        "            self.state['account_writable'] = False\n"
+        "        return None\n"
+    )
+    return (f"from quantgrove import {base}, Decision\nCONFIG = {parameters!r}\n"
+            + SOURCE + f"\nclass Probe({base}):\n"
+            "    def on_close(self, data, account):\n"
+            "        observed = observe({}, {'count': 1}, CONFIG)\n" + callback)
+
+
 def invoke(runtime, parameters):
     return runtime.invoke(
-        SOURCE, context={"session": "2026-08-03"}, state={"count": 1},
-        parameters=parameters,
+        program_source(parameters, observation=True),
+        context={"session": "2026-08-03"}, state={"count": 1},
     )
 
 
@@ -71,23 +89,15 @@ def probe_framework(parameters):
         historical_universe_members={session: ()}, industries={}, execution_prices={},
         trading_states={}, price_limits={},
     )
-    source = SOURCE.replace("def decide(", "def observe(") + """
-def decide(context, state, parameters):
-    observation = observe(context, {'count': 1}, parameters)['output']
-    try:
-        context['account']['cash_cny'] = '999999'
-        observation['account_writable'] = True
-    except TypeError:
-        observation['account_writable'] = False
-    return {'output': None, 'state': observation}
-"""
-    stages = ["universe_selection", "alpha", "portfolio_construction", "risk_management"]
+    stages = {
+        "universe_selection": "UniverseSelection", "alpha": "Alpha",
+        "portfolio_construction": "PortfolioConstruction", "risk_management": "RiskManagement",
+    }
     definition = {"strategy": {
         "mode": "framework", "environment": PythonStrategyRuntime().identity(),
         "modules": {stage: {"kind": "python", "program": {
-            "source": source, "parameters": parameters,
-            "data_requirements": {"field_ids": [], "history_sessions": 1},
-        }} for stage in stages},
+            "source": program_source(parameters, base),
+        }} for stage, base in stages.items()},
     }}
     account = {"positions": [], "cash_cny": "100000"}
 
@@ -111,7 +121,7 @@ def decide(context, state, parameters):
     assert account == {"positions": [], "cash_cny": "100000"}
     direct = {"strategy": {
         "mode": "direct", "environment": definition["strategy"]["environment"],
-        "program": deepcopy(definition["strategy"]["modules"]["portfolio_construction"]["program"]),
+        "program": {"source": program_source(parameters)},
     }}
     direct_result = decide(direct)
     for key in ("resources", "environment", "clock", "account_writable"):
@@ -120,11 +130,11 @@ def decide(context, state, parameters):
         )
     failures = {
         "loop": "while True: pass",
-        "memory": "bytearray(512 * 1024 * 1024); return {'output': None, 'state': {}}",
-        "output": "return {'output': 'x' * (2 * 1024 * 1024), 'state': {}}",
-        "state_size": "return {'output': None, 'state': {'large': 'x' * (300 * 1024)}}",
+        "memory": "bytearray(512 * 1024 * 1024)",
+        "output": "__import__('os').write(1, b'x' * (2 * 1024 * 1024))",
+        "state_size": "self.state['large'] = 'x' * (300 * 1024)",
         "exception": "raise ValueError('expected probe failure')",
-        "invalid_state": "return {'output': None, 'state': {'invalid': float('nan')}}",
+        "invalid_state": "self.state['invalid'] = float('nan')",
     }
     expected_errors = {
         "loop": ("resource or capability limits", "wall time limit"),
@@ -139,7 +149,9 @@ def decide(context, state, parameters):
             failing = deepcopy(valid)
             program = (failing["strategy"]["program"] if mode == "direct" else
                        failing["strategy"]["modules"]["universe_selection"]["program"])
-            program["source"] = "def decide(context, state, parameters):\n    " + body
+            base = "Strategy" if mode == "direct" else "UniverseSelection"
+            program["source"] = (f"from quantgrove import {base}\nclass Failure({base}):\n"
+                                 "    def on_close(self, data, account):\n        " + body)
             try:
                 decide(failing)
             except StrategyProgramError as error:
@@ -152,7 +164,7 @@ def decide(context, state, parameters):
             assert decide(direct) == direct_result
         assert decide(valid) == (direct_result if mode == "direct" else result)
     assert account == {"positions": [], "cash_cny": "100000"}
-    return {"stages": stages, "authority_unchanged": True, "bounded_failure_recovered": True,
+    return {"stages": list(stages), "authority_unchanged": True, "bounded_failure_recovered": True,
             "failure_cases": list(failures), "modes": ["direct", "framework"]}
 
 
@@ -187,11 +199,12 @@ def main():
             [sys.executable, __file__, json.dumps(parameters)], check=True,
             text=True, capture_output=True, timeout=20,
         )
-        assert json.loads(replay.stdout) == asdict(result)
+        assert json.loads(replay.stdout) == json.loads(json.dumps(asdict(result)))
         try:
             runtime.invoke(
-                "def decide(context, state, parameters):\n    while True: pass",
-                context={"session": "2026-08-03"}, state={}, parameters={},
+                "from quantgrove import Strategy\nclass Loop(Strategy):\n"
+                "    def on_close(self, data, account):\n        while True: pass",
+                context={"session": "2026-08-03"}, state={},
             )
         except StrategyProgramError:
             pass

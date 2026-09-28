@@ -60,27 +60,26 @@ class ExposureAuthoringConstraints(BaseModel):
 class PythonProgramConstraints(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    callback: str = "decide(context, state, parameters)"
+    callback: str = "Strategy.on_close(self, data, account)"
     decision_time: Literal["session_close"] = "session_close"
     execution_time: Literal["next_session_open"] = "next_session_open"
     maximum_source_bytes: int
-    maximum_parameter_bytes: int
     maximum_state_bytes: int
     maximum_input_bytes: int
     maximum_output_bytes: int
     maximum_memory_bytes: int
     maximum_bootstrap_wall_seconds: int
     maximum_wall_seconds: int
-    maximum_fields: int
+    maximum_history_requests: int
     history_sessions: IntegerRange
     python_version: str
     modules: tuple[str, ...]
     output: str = (
-        'Return {"output": null or {"reason": string, "allocation": object or null, '
-        '"position_limits": object}, "state": object}. Null output is NoUpdate. '
-        "An optional maximum_stock_exposure number in [0, 1] caps stock targets "
-        "without raising them. "
-        "Only explicit JSON state survives. No filesystem or network access."
+        "Subclass Strategy and return self.target_weights({instrument_id: portfolio_weight}) "
+        "for a complete portfolio target, self.target_weights({}) to liquidate, or None "
+        "for NoUpdate. self.limit_positions caps held shares; self.limit_exposure caps total "
+        "stock exposure. Only self.state survives. Read history dynamically through "
+        "data.close_prices(days) or data.history(field_id, days). No filesystem or network access."
     )
 
 

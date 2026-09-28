@@ -3250,7 +3250,8 @@ def _durable_result(
             ], result_object_names
             descriptor_names.update({
                 "strategy_daily_observations", "terminal_positions",
-                "strategy_framework", "strategy_targets", "strategy_orders",
+                "strategy_history_reads", "strategy_framework", "strategy_targets",
+                "strategy_orders",
                 "strategy_child_orders", "strategy_fills", "strategy_adjustments",
                 "strategy_execution_constraints",
             })

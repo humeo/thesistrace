@@ -24,20 +24,32 @@ pytestmark = pytest.mark.skipif(
 
 SESSIONS = ("2026-08-03", "2026-08-04", "2026-08-05", "2026-08-06", "2026-08-07")
 SOURCE = """
-def decide(context, state, parameters):
-    if context['session'] == parameters.get('fail_session'):
-        raise ValueError('deliberate program failure')
-    state['count'] = state.get('count', 0) + 1
-    output = None
-    if not context['account']['positions']:
-        candidate = context['candidates'][0]['instrument_id']
-        output = {
-            'reason': 'enter_visible_candidate',
-            'allocation': {'mode': 'rebalance', 'instrument_ids': [candidate],
-                           'relative_weights': {candidate: '1'}, 'exposure': 1.0},
-            'position_limits': {},
-        }
-    return {'output': output, 'state': state}
+from quantgrove import Strategy, Decision
+
+SETTINGS = {}
+
+
+class Fixture(Strategy):
+    def on_close(self, data, account):
+        if data.session == SETTINGS.get("fail_session"):
+            raise ValueError("deliberate program failure")
+        self.state["count"] = self.state.get("count", 0) + 1
+        output = None
+        if not account._values["positions"]:
+            candidate = data.candidate_details[0]["instrument_id"]
+            output = {
+                "reason": "enter_visible_candidate",
+                "allocation": {
+                    "mode": "rebalance",
+                    "instrument_ids": [candidate],
+                    "relative_weights": {candidate: "1"},
+                    "exposure": 1.0,
+                },
+                "position_limits": {},
+            }
+        self.state = self.state
+        decision = output
+        return None if decision is None else Decision(decision)
 """
 
 
@@ -53,9 +65,7 @@ def command(request_id, *, end=SESSIONS[2], parameters=None):
         "universe": "top300",
         "initial_cash_cny": "100000",
         "program": {
-            "source": SOURCE,
-            "parameters": parameters or {},
-            "data_requirements": {"field_ids": ["price.close.adjusted"], "history_sessions": 1},
+            "source": SOURCE.replace("SETTINGS = {}", f"SETTINGS = {parameters or {}!r}"),
         },
     }
 
@@ -67,16 +77,25 @@ def test_direct_track_origin_keeps_a_large_legal_explicit_state(tmp_path: Path):
     _publish_head(settings, sessions=SESSIONS[:2], price_offset=0)
     with TestClient(create_app(settings)) as client:
         submitted = command("large-direct-state", end=SESSIONS[1])
-        submitted["program"]["source"] = (
-            "def decide(context, state, parameters):\n"
-            "    return {'output': None, 'state': {'payload': 'x' * 200000}}"
-        )
+        submitted["program"]["source"] = """
+from quantgrove import Strategy, Decision
+
+SETTINGS = {}
+
+
+class Fixture(Strategy):
+    def on_close(self, data, account):
+        self.state = {"payload": "x" * 200000}
+        decision = None
+        return None if decision is None else Decision(decision)
+"""
         admitted = client.post("/api/research-runs", json=submitted)
         assert admitted.status_code == 202, admitted.text
         run_id = admitted.json()["id"]
         assert client.app.state.core_runtime.research_runs.process_next()
         tracked = client.post(
-            f"/api/research-runs/{run_id}/daily-tracks", json={"request_id": "large-state-track"},
+            f"/api/research-runs/{run_id}/daily-tracks",
+            json={"request_id": "large-state-track"},
         )
         assert tracked.status_code == 201, tracked.text
         track_id = tracked.json()["id"]
@@ -222,7 +241,7 @@ def test_direct_program_failure_does_not_publish_a_tracking_head_and_keeps_locat
         failure = client.get(f"/api/research-runs/{bad.json()['id']}").json()
         assert failure["status"] == "failed", failure
         assert "2026-08-04" in failure["failure_reason"]
-        assert "line 4" in failure["failure_reason"]
+        assert "line 10" in failure["failure_reason"]
         assert "result" not in failure
         seed = client.post(
             "/api/research-runs",
@@ -258,7 +277,7 @@ def test_direct_program_failure_does_not_publish_a_tracking_head_and_keeps_locat
         detail = client.get(f"/api/daily-tracks/{track_id}").json()
         assert detail["status"] == "blocked", detail
         assert "2026-08-06" in detail["blocked_reason"]
-        # Private source, parameters and state use the same ownership boundary.
+        # Private source and state use the same ownership boundary.
         assert runtime.research_runs.get_detail(UUID(int=1234), seed.json()["id"]) is None
         assert runtime.daily_tracks.get(UUID(int=1234), track_id) is None
         legal = client.post("/api/research-runs", json=command("after-failed-program"))
@@ -269,7 +288,7 @@ def test_direct_program_failure_does_not_publish_a_tracking_head_and_keeps_locat
         )
 
 
-def test_direct_mcp_admission_runs_declared_financial_fields_through_the_real_worker(tmp_path):
+def test_direct_mcp_admission_reads_financial_fields_through_the_real_worker(tmp_path):
     from test_core_research_agent_mcp_runs import _mcp_client
 
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
@@ -278,14 +297,25 @@ def test_direct_mcp_admission_runs_declared_financial_fields_through_the_real_wo
     _publish_composite_head(settings, sessions=("2010-01-04", "2010-04-21", *SESSIONS[:3]))
     value = command("direct-mcp")
     value["program"] = {
-        "source": "def decide(context, state, parameters):\n"
-        "    return {'output': None, 'state': {'revenue': "
-        "context['history']['fields']['financial.income.total_revenue.latest_fy']}}",
-        "parameters": {},
-        "data_requirements": {
-            "field_ids": ["financial.income.total_revenue.latest_fy"],
-            "history_sessions": 1,
-        },
+        "source": """
+from quantgrove import Strategy, Decision
+
+SETTINGS = {}
+
+
+class Fixture(Strategy):
+    def on_close(self, data, account):
+        self.state = {
+            "revenue": [
+                list(row)
+                for row in data.history(
+                    "financial.income.total_revenue.latest_fy", 1
+                ).values.values()
+            ]
+        }
+        decision = None
+        return None if decision is None else Decision(decision)
+""",
     }
 
     async def submit():

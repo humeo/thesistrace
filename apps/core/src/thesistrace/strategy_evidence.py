@@ -39,6 +39,7 @@ from thesistrace.research_kernel.strategy_events import (
     StrategyExecutionConstraintEvent,
     StrategyFillEvent,
     StrategyFrameworkEvent,
+    StrategyHistoryReadEvent,
     StrategyOrderEvent,
     StrategyTargetEvent,
 )
@@ -55,10 +56,12 @@ _INTEGER_FIELDS = frozenset(
         "quantity",
         "execution_shares_delta",
         "submitted_quantity",
+        "request_index", "requested_sessions", "returned_sessions",
+        "instrument_count", "response_bytes",
     }
 )
 _NULLABLE_FIELDS = frozenset({"unrounded_quantity", "legal_quantity", "rejection_reason",
-                              "maximum_stock_exposure"})
+                              "maximum_stock_exposure", "first_session", "last_session"})
 
 
 def _field(name: str, section: str) -> pa.Field:
@@ -312,7 +315,7 @@ def event_matches(
         if section in {"strategy_targets", "strategy_framework"}:
             if instrument not in EVENT_MODELS[section].model_validate(row).instrument_ids:
                 return False
-        elif row["instrument_id"] != instrument:
+        elif row.get("instrument_id") != instrument:
             return False
     return all(
         value is None or row.get(key) == value
@@ -542,6 +545,10 @@ class StrategyEventQuery(BaseModel):
         )
 
 
+class StrategyHistoryReadsQuery(StrategyEventQuery):
+    section: Literal["strategy_history_reads"]
+
+
 class StrategyTargetsQuery(StrategyEventQuery):
     section: Literal["strategy_targets"]
     target_id: EventFilterIdentity | None = None
@@ -718,6 +725,10 @@ class StrategyEventPage[Event](BaseModel):
         return self
 
 
+class StrategyHistoryReadsPage(StrategyEventPage[StrategyHistoryReadEvent]):
+    section: Literal["strategy_history_reads"] = "strategy_history_reads"
+
+
 class StrategyTargetsPage(StrategyEventPage[StrategyTargetEvent]):
     section: Literal["strategy_targets"] = "strategy_targets"
 
@@ -747,6 +758,7 @@ class StrategyExecutionConstraintsPage(StrategyEventPage[StrategyExecutionConstr
 
 
 EVENT_PAGE_MODELS = {
+    "strategy_history_reads": StrategyHistoryReadsPage,
     "strategy_framework": StrategyFrameworkPage,
     "strategy_targets": StrategyTargetsPage,
     "strategy_orders": StrategyOrdersPage,
@@ -791,12 +803,12 @@ def strategy_event_response(
 type StrategyEventQueryInput = Annotated[
     StrategyTargetsQuery | StrategyOrdersQuery | StrategyChildOrdersQuery
     | StrategyFillsQuery | StrategyAdjustmentsQuery | StrategyExecutionConstraintsQuery
-    | StrategyFrameworkQuery,
+    | StrategyFrameworkQuery | StrategyHistoryReadsQuery,
     Field(discriminator="section"),
 ]
 type StrategyEventPageResponse = Annotated[
     StrategyTargetsPage | StrategyOrdersPage | StrategyChildOrdersPage
     | StrategyFillsPage | StrategyAdjustmentsPage | StrategyExecutionConstraintsPage
-    | StrategyFrameworkPage,
+    | StrategyFrameworkPage | StrategyHistoryReadsPage,
     Field(discriminator="section"),
 ]

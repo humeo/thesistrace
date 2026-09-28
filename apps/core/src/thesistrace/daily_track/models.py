@@ -38,6 +38,8 @@ from thesistrace.strategy_evidence import (
     StrategyFillsQuery,
     StrategyFrameworkPage,
     StrategyFrameworkQuery,
+    StrategyHistoryReadsPage,
+    StrategyHistoryReadsQuery,
     StrategyOrdersPage,
     StrategyOrdersQuery,
     StrategyTargetsPage,
@@ -46,9 +48,16 @@ from thesistrace.strategy_evidence import (
 
 RequestId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
 type DailyTrackResultSection = Literal[
-    "strategy_framework", "strategy_targets", "strategy_orders", "strategy_child_orders",
-    "strategy_fills", "strategy_adjustments", "strategy_execution_constraints",
-    "daily_holdings_status", "daily_holdings",
+    "strategy_history_reads",
+    "strategy_framework",
+    "strategy_targets",
+    "strategy_orders",
+    "strategy_child_orders",
+    "strategy_fills",
+    "strategy_adjustments",
+    "strategy_execution_constraints",
+    "daily_holdings_status",
+    "daily_holdings",
     "strategy_summary",
     "strategy_observations",
     "origin",
@@ -56,9 +65,16 @@ type DailyTrackResultSection = Literal[
     "common_input_observations",
 ]
 DAILY_TRACK_RESULT_SECTIONS: tuple[DailyTrackResultSection, ...] = (
-    "strategy_framework", "strategy_targets", "strategy_orders", "strategy_child_orders",
-    "strategy_fills", "strategy_adjustments", "strategy_execution_constraints",
-    "daily_holdings_status", "daily_holdings",
+    "strategy_history_reads",
+    "strategy_framework",
+    "strategy_targets",
+    "strategy_orders",
+    "strategy_child_orders",
+    "strategy_fills",
+    "strategy_adjustments",
+    "strategy_execution_constraints",
+    "daily_holdings_status",
+    "daily_holdings",
     "strategy_summary",
     "strategy_observations",
     "origin",
@@ -73,8 +89,6 @@ class _DailyTrackResultSectionInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     track_id: Annotated[str, Field(strict=True, min_length=1, max_length=200)]
-
-
 
 
 class DailyTrackStrategySummaryResultSectionInput(_DailyTrackResultSectionInput):
@@ -103,6 +117,10 @@ class DailyTrackProvenanceResultSectionInput(_DailyTrackResultSectionInput):
     section: Literal["provenance"]
 
 
+class TrackStrategyHistoryReadsInput(_DailyTrackResultSectionInput, StrategyHistoryReadsQuery):
+    pass
+
+
 class TrackStrategyFrameworkInput(_DailyTrackResultSectionInput, StrategyFrameworkQuery):
     pass
 
@@ -128,7 +146,8 @@ class TrackStrategyAdjustmentsInput(_DailyTrackResultSectionInput, StrategyAdjus
 
 
 class TrackStrategyExecutionConstraintsInput(
-    _DailyTrackResultSectionInput, StrategyExecutionConstraintsQuery,
+    _DailyTrackResultSectionInput,
+    StrategyExecutionConstraintsQuery,
 ):
     pass
 
@@ -147,6 +166,7 @@ type DailyTrackResultSectionInput = Annotated[
     | DailyTrackOriginResultSectionInput
     | DailyTrackProvenanceResultSectionInput
     | DailyTrackCommonInputObservationsResultSectionInput
+    | TrackStrategyHistoryReadsInput
     | TrackStrategyFrameworkInput
     | TrackStrategyTargetsInput
     | TrackStrategyOrdersInput
@@ -224,10 +244,14 @@ class TrackingOrigin(BaseModel):
 
     @property
     def expression_trees(self) -> tuple[dict[str, object], ...]:
-        return tuple(expression for expression in (
-            self.immutable_input["alpha_expression"],
-            self.immutable_input["strategy"].get("exposure_expression"),
-        ) if expression is not None)
+        return tuple(
+            expression
+            for expression in (
+                self.immutable_input["alpha_expression"],
+                self.immutable_input["strategy"].get("exposure_expression"),
+            )
+            if expression is not None
+        )
 
 
 class DailyTrackSummary(BaseModel):
@@ -444,20 +468,8 @@ class DailyTrackOriginView(BaseModel):
     terminal_account: DailyTrackOriginAccount
 
 
-
-
 type DailyTrackStrictNumber = StrictInt | StrictFloat
 type DailyTrackOptionalNumber = DailyTrackStrictNumber | None
-
-
-
-
-
-
-
-
-
-
 
 
 class DailyTrackStrategyObservation(BaseModel):
@@ -484,15 +496,11 @@ class DailyTrackStrategyResult(BaseModel):
     comparison: StrategyComparison
 
 
-
-
 class DailyTrackMissingValueSemantics(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     unavailable_optional_metric: Literal["null"] = "null"
     observed_zero_is_missing: Literal[False] = False
-
-
 
 
 class DailyTrackStrategyMetricUnits(BaseModel):
@@ -662,7 +670,8 @@ class DailyTrackFrozenResearchInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     formula: Annotated[str, Field(max_length=4096)] | None = Field(
-        default=None, exclude_if=lambda v: v is None,
+        default=None,
+        exclude_if=lambda v: v is None,
     )
     hypothesis: Annotated[str, Field(max_length=1024)] | None
     start_date: date
@@ -685,9 +694,12 @@ class DailyTrackFrozenResearchInput(BaseModel):
 
         from thesistrace.research_definition import ResearchSpec
 
-        TypeAdapter(ResearchSpec).validate_python({
-            **self.model_dump(exclude_none=True), "research_kind": "strategy_backtest",
-        })
+        TypeAdapter(ResearchSpec).validate_python(
+            {
+                **self.model_dump(exclude_none=True),
+                "research_kind": "strategy_backtest",
+            }
+        )
         return self
 
 
@@ -714,6 +726,7 @@ type DailyTrackResultSectionResponse = Annotated[
     | DailyTrackOriginResultSection
     | DailyTrackProvenanceResultSection
     | DailyTrackCommonInputObservationsResultSection
+    | StrategyHistoryReadsPage
     | StrategyFrameworkPage
     | StrategyTargetsPage
     | StrategyOrdersPage
@@ -839,10 +852,8 @@ class KernelRunInputSnapshot(BaseModel):
         if isinstance(strategy, DirectStrategyRunInput):
             if self.alpha_expression is not None or self.neutralization is not None:
                 raise ValueError("Direct Checkpoint cannot contain Alpha settings")
-            declared = strategy.program_snapshot().data_requirements
-            if (set(self.field_bindings) != set(declared.field_ids)
-                    or self.effective_lookback != declared.history_sessions - 1):
-                raise ValueError("Direct Checkpoint data declaration differs")
+            if self.effective_lookback != 0:
+                raise ValueError("Direct Checkpoint calculation lookback must be zero")
         else:
             programs = strategy.modules_snapshot().programs()
             if "alpha" in programs:
@@ -850,18 +861,18 @@ class KernelRunInputSnapshot(BaseModel):
                     raise ValueError("Python Signal Checkpoint cannot contain Alpha settings")
             elif self.alpha_expression is None or self.neutralization not in {"none", "industry"}:
                 raise ValueError("Builtin Alpha Checkpoint requires Alpha settings")
-            for program in programs.values():
-                declared = program.data_requirements
-                if (not set(declared.field_ids) <= set(self.field_bindings)
-                        or self.effective_lookback < declared.history_sessions - 1):
-                    raise ValueError("Framework Checkpoint data declaration differs")
         return self
 
     @property
     def expression_trees(self):
-        return tuple(expression for expression in (
-            self.alpha_expression, self.strategy.get("exposure_expression"),
-        ) if expression is not None)
+        return tuple(
+            expression
+            for expression in (
+                self.alpha_expression,
+                self.strategy.get("exposure_expression"),
+            )
+            if expression is not None
+        )
 
 
 class KernelStateCheckpoint(BaseModel):
@@ -879,7 +890,6 @@ class KernelStateCheckpoint(BaseModel):
     common_input_observations: list[CommonInputObservation]
     continuation_sha256: str
     pending_alpha_sessions: int
-
 
     @model_validator(mode="after")
     def observation_boundary_matches(self) -> KernelStateCheckpoint:
