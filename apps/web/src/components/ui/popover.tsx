@@ -54,6 +54,10 @@ function PopoverHeader({ className, ...props }: React.ComponentProps<"div">) {
   )
 }
 
+function PopoverClose({ ...props }: PopoverPrimitive.Close.Props) {
+  return <PopoverPrimitive.Close data-slot="popover-close" {...props} />
+}
+
 function PopoverTitle({ className, ...props }: PopoverPrimitive.Title.Props) {
   return (
     <PopoverPrimitive.Title
@@ -80,6 +84,7 @@ function PopoverDescription({
 export {
   Popover,
   PopoverContent,
+  PopoverClose,
   PopoverDescription,
   PopoverHeader,
   PopoverTitle,

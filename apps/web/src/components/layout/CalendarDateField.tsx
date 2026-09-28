@@ -1,12 +1,12 @@
-import { CalendarBlank } from "@phosphor-icons/react";
+import { CalendarBlank, CaretDown, CaretLeft, CaretRight } from "@phosphor-icons/react";
 import { enUS, zhCN } from "date-fns/locale";
-import { useState, type Ref } from "react";
+import { useRef, useState, type Ref } from "react";
 
 import { Button } from "../ui/button";
 import { Calendar } from "../ui/calendar";
 import { Field, FieldDescription, FieldError, FieldLabel } from "../ui/field";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "../ui/input-group";
-import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "../ui/popover";
+import { Popover, PopoverClose, PopoverContent, PopoverTitle, PopoverTrigger } from "../ui/popover";
 import { interfaceLocale } from "../../i18n";
 import { calendarDateFromIso, isoFromCalendarDate } from "./calendarDate";
 
@@ -43,9 +43,18 @@ export function CalendarDateField({
 }) {
   const [open, setOpen] = useState(false);
   const [month, setMonth] = useState<Date | undefined>();
+  const [yearPickerOpen, setYearPickerOpen] = useState(false);
+  const [yearPage, setYearPage] = useState(0);
+  // Switching views unmounts the focused button, so focus the popup first.
+  const popoverContentRef = useRef<HTMLDivElement>(null);
   const selected = calendarDateFromIso(value);
   const start = minimum === null ? undefined : calendarDateFromIso(minimum);
   const end = maximum === null ? undefined : calendarDateFromIso(maximum);
+  const displayMonth = month ?? selected ?? end ?? start ?? new Date();
+  const showAllYears = start !== undefined && end !== undefined && end.getFullYear() - start.getFullYear() <= 23;
+  const firstYear = showAllYears ? start.getFullYear() : yearPage;
+  const lastYear = showAllYears ? end.getFullYear() : yearPage + 11;
+  const isChinese = interfaceLocale() === "zh-CN";
 
   return (
     <Field className="min-w-0 text-sm" data-invalid={Boolean(error)}>
@@ -66,35 +75,101 @@ export function CalendarDateField({
           value={value}
         />
         <InputGroupAddon align="inline-end">
-          <Popover open={open} onOpenChange={(next) => {
-            if (next) setMonth(selected ?? end ?? start);
+          <Popover open={open} modal="trap-focus" onOpenChange={(next) => {
+            if (next) {
+              setMonth(selected ?? end ?? start);
+              setYearPickerOpen(false);
+            }
             setOpen(next);
           }}>
             <PopoverTrigger render={<Button variant="ghost" size="icon-sm" className="max-[767px]:size-11" aria-label={openLabel} disabled={disabled} />}>
               <CalendarBlank aria-hidden="true" />
             </PopoverTrigger>
-            <PopoverContent align="end" className="w-auto p-0">
+            <PopoverContent ref={popoverContentRef} tabIndex={-1} align="end" className="w-[270px] p-0">
               <PopoverTitle className="sr-only">{openLabel}</PopoverTitle>
-              <Calendar
-                aria-label={label}
-                className="p-1 max-[359px]:p-0 [--cell-size:--spacing(11)]"
-                mode="single"
-                locale={interfaceLocale() === "zh-CN" ? zhCN : enUS}
-                selected={selected}
-                month={month ?? selected ?? end ?? start}
-                onMonthChange={setMonth}
-                startMonth={start}
-                endMonth={end}
-                disabled={[
-                  ...(start ? [{ before: start }] : []),
-                  ...(end ? [{ after: end }] : []),
-                ]}
-                onSelect={(day) => {
-                  if (day === undefined) return;
-                  onChange(isoFromCalendarDate(day));
-                  setOpen(false);
-                }}
-              />
+              <PopoverClose className="sr-only" aria-label={isChinese ? "关闭日历" : "Close calendar"} />
+              {yearPickerOpen ? (
+                <div className="p-2">
+                  <div className="mb-2 flex h-8 items-center justify-between gap-1">
+                    {showAllYears ? (
+                      <Button type="button" variant="ghost" size="sm" className="h-8 gap-1 px-1.5"
+                        onClick={() => { popoverContentRef.current?.focus(); setYearPickerOpen(false); }}>
+                        <CaretLeft aria-hidden="true" />{isChinese ? "返回日历" : "Back to calendar"}
+                      </Button>
+                    ) : (
+                      <Button type="button" variant="ghost" size="icon-sm"
+                        aria-label={isChinese ? "更早的年份" : "Earlier years"}
+                        disabled={start !== undefined && firstYear <= start.getFullYear()}
+                        onClick={() => setYearPage((current) => current - 12)}>
+                        <CaretLeft aria-hidden="true" />
+                      </Button>
+                    )}
+                    <span className="text-xs tabular-nums text-muted-foreground">{firstYear}–{lastYear}</span>
+                    {showAllYears ? <span className="size-8" aria-hidden="true" /> : (
+                      <Button type="button" variant="ghost" size="icon-sm"
+                        aria-label={isChinese ? "更晚的年份" : "Later years"}
+                        disabled={end !== undefined && lastYear >= end.getFullYear()}
+                        onClick={() => setYearPage((current) => current + 12)}>
+                        <CaretRight aria-hidden="true" />
+                      </Button>
+                    )}
+                  </div>
+                  <div role="group" aria-label={isChinese ? "选择年份" : "Choose year"} className="grid grid-cols-4 gap-1">
+                    {Array.from({ length: lastYear - firstYear + 1 }, (_, index) => firstYear + index).map((year) => (
+                      <Button key={year} type="button" size="sm"
+                        variant={year === displayMonth.getFullYear() ? "outline" : "ghost"}
+                        className="h-8 px-1 tabular-nums" aria-pressed={year === displayMonth.getFullYear()}
+                        disabled={(start !== undefined && year < start.getFullYear()) || (end !== undefined && year > end.getFullYear())}
+                        onClick={() => {
+                          popoverContentRef.current?.focus();
+                          let nextMonth = new Date(year, displayMonth.getMonth(), 1);
+                          const firstMonth = start && new Date(start.getFullYear(), start.getMonth(), 1);
+                          const lastMonth = end && new Date(end.getFullYear(), end.getMonth(), 1);
+                          if (firstMonth && nextMonth < firstMonth) nextMonth = firstMonth;
+                          if (lastMonth && nextMonth > lastMonth) nextMonth = lastMonth;
+                          setMonth(nextMonth);
+                          setYearPickerOpen(false);
+                        }}>
+                        {year}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <Calendar
+                  aria-label={label}
+                  className="p-1 max-[359px]:p-0 [--cell-size:--spacing(9)]"
+                  mode="single"
+                  locale={isChinese ? zhCN : enUS}
+                  selected={selected}
+                  month={displayMonth}
+                  onMonthChange={setMonth}
+                  startMonth={start}
+                  endMonth={end}
+                  components={{
+                    CaptionLabel: ({ children }) => (
+                      <Button type="button" variant="ghost" size="sm" className="h-8 gap-1 px-2 text-sm font-medium"
+                        aria-label={isChinese ? "选择年份" : "Choose year"}
+                        onClick={() => {
+                          popoverContentRef.current?.focus();
+                          setYearPage(Math.floor(displayMonth.getFullYear() / 12) * 12);
+                          setYearPickerOpen(true);
+                        }}>
+                        {children}<CaretDown aria-hidden="true" className="size-3" />
+                      </Button>
+                    ),
+                  }}
+                  disabled={[
+                    ...(start ? [{ before: start }] : []),
+                    ...(end ? [{ after: end }] : []),
+                  ]}
+                  onSelect={(day) => {
+                    if (day === undefined) return;
+                    onChange(isoFromCalendarDate(day));
+                    setOpen(false);
+                  }}
+                />
+              )}
             </PopoverContent>
           </Popover>
         </InputGroupAddon>
