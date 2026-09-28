@@ -438,7 +438,7 @@ describe("ResearchResultView", () => {
           created_session: "2026-08-05", created_session_number: 3, valid_for_sessions: 2 }], retained_proposal: null,
       } },
     }} />);
-    expect(modular).toContain("Framework state");
+    expect(modular).toContain("Strategy decisions");
     expect(modular).toContain("1 active signals");
     expect(modular).not.toContain("Selection check");
     expect(modular).not.toContain("NaN");
