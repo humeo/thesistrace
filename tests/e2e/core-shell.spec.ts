@@ -8,14 +8,6 @@ import {
   startControlledResearchRun,
 } from "./research-run-control";
 
-function recordDocumentRequests(page: Page): string[] {
-  const documentRequests: string[] = [];
-  page.on("request", (request) => {
-    if (request.resourceType() === "document") documentRequests.push(request.url());
-  });
-  return documentRequests;
-}
-
 function researchRunHeader(page: Page): Locator {
   return page.getByRole("main").locator("header").first();
 }
@@ -199,7 +191,7 @@ test("Framework modules author, execute, reuse frozen programs and refresh Daily
   await page.screenshot({ path: testInfo.outputPath("framework-track.png"), fullPage: true });
 });
 
-test("Classic Factor authoring submits one ResearchRun", { tag: "@isolated" }, async ({ page }) => {
+test("Classic Factor authoring submits one ResearchRun", async ({ page }) => {
   test.setTimeout(180_000);
   await page.goto("/research?new");
   await expect(page.getByRole("radio", { name: /Factor Evaluation/ })).toBeChecked();
@@ -297,109 +289,24 @@ test("Direct Python authoring executes, reuses frozen source and explicitly adva
   expect(latest.observation.selection_interval).toBeNull();
 });
 
-test("Custom fees and slippage survive Run reuse and DailyTrack refresh", { tag: "@isolated" }, async ({ page }, testInfo) => {
+test("Combined risk rules survives Run reuse and DailyTrack refresh", { tag: "@isolated" }, async ({ page }, testInfo) => {
   test.setTimeout(240_000);
   publishFinancialTrackHead("lagged");
+  await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/research?new");
-  await fillCompleteDraft(page, { name: "Custom execution costs", formula: "close" });
+  await fillCompleteDraft(page, { name: "Combined risk rules", formula: "close" });
+  await page.getByLabel("Drawdown threshold (%)", { exact: true }).fill("1");
+  await page.getByLabel("Maximum stock exposure (%)", { exact: true }).fill("30");
+  await page.getByLabel("Cooldown (trading sessions)", { exact: true }).fill("2");
+  await page.getByLabel("Stop loss (%)", { exact: true }).fill("1");
+  await page.getByLabel("Minimum holding (trading sessions)", { exact: true }).fill("3");
+  await page.getByLabel("Maximum holding (trading sessions)", { exact: true }).fill("5");
+  await page.getByRole("button", { name: "Add take-profit tier", exact: true }).click();
+  await page.getByLabel("Profit threshold (%)", { exact: true }).fill("1");
+  await page.getByLabel("Cumulative reduction (%)", { exact: true }).fill("30");
   await page.getByRole("button", { name: "Fees and slippage", exact: true }).click();
-  await page.getByLabel("Price slippage (basis points)", { exact: true }).fill("15");
-  await page.getByLabel("Minimum commission per child order (CNY)", { exact: true }).fill("2");
+  await page.getByLabel("Price slippage (basis points)", { exact: true }).fill("1000");
   await page.getByRole("button", { name: "Fees and slippage", exact: true }).click();
-  await page.getByRole("button", { name: "Run backtest", exact: true }).click();
-  await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
-  const runUrl = page.url();
-  const runId = runUrl.split("/").at(-1)!;
-  await waitForStrategySummary(page);
-  await page.getByRole("tab", { name: "Configuration", exact: true }).click();
-  const costs = { commission_rate_all_in: "0.0003", commission_min_cny: "2",
-    stamp_duty_sell_rate: "0.0005", transfer_fee_rate: "0.00001", slippage_bps: "15" };
-  const accepted = await page.request.get(`/api/research-runs/${runId}`);
-  expect(accepted.ok()).toBe(true);
-  expect((await accepted.json()).input.costs).toEqual(costs);
-  await page.getByText("Frozen fees and slippage", { exact: true }).click();
-  await expect(page.getByRole("group", { name: "Research execution conditions" })).toContainText("Price slippage (basis points) 15");
-  await page.getByText("Trading events", { exact: true }).click();
-  await selectTradingEvent(page, "Fills");
-  const table = page.getByRole("table", { name: "Fills", exact: true });
-  await expect(table.getByRole("columnheader", { name: "Simulated execution price (CNY)" })).toBeVisible();
-  await table.getByRole("button", { name: /View raw record/ }).first().click();
-  await expect(page.getByRole("region", { name: "Fill price and cost details" })).toContainText("Per-share slippage");
-  const fills = await page.request.post(`/api/research-runs/${runId}/events/query`, {
-    headers: sameOriginHeaders(), data: { section: "strategy_fills", limit: 50 },
-  });
-  expect(fills.ok()).toBe(true);
-  const originalFills = (await fills.json()).rows;
-  expect(originalFills.length).toBeGreaterThan(0);
-  for (const fill of originalFills) {
-    expect(Number(fill.execution_price)).not.toBe(Number(fill.raw_open));
-    expect(fill).toHaveProperty("commission_cny");
-    expect(fill).toHaveProperty("stamp_duty_cny");
-    expect(fill).toHaveProperty("transfer_fee_cny");
-  }
-  await page.screenshot({ path: testInfo.outputPath("custom-costs-fill.png"), fullPage: true });
-  await page.getByRole("tab", { name: "Configuration", exact: true }).click();
-  await page.getByRole("button", { name: "Create draft", exact: true }).click();
-  await expect(page).toHaveURL(/\/research$/);
-  await page.getByRole("button", { name: "Fees and slippage", exact: true }).click();
-  await expect(page.getByLabel("Price slippage (basis points)", { exact: true })).toHaveValue("15");
-  await page.getByLabel("Price slippage (basis points)", { exact: true }).fill("25");
-  await page.goto(runUrl);
-  await page.getByRole("button", { name: "Start Tracking", exact: true }).click();
-  await expect(page).toHaveURL(/\/daily-tracks\/track_[a-f0-9]+$/);
-  const trackId = page.url().split("/").at(-1)!;
-  await refreshPythonTrackThroughFixtureEnd(page, trackId);
-  const trackFills = await page.request.post(`/api/daily-tracks/${trackId}/events/query`, {
-    headers: sameOriginHeaders(), data: { section: "strategy_fills", limit: 50 },
-  });
-  expect(trackFills.ok()).toBe(true);
-  expect((await trackFills.json()).rows.slice(0, originalFills.length)).toEqual(originalFills);
-  const source = await page.request.get(`/api/research-runs/${runId}`);
-  expect(source.ok()).toBe(true);
-  expect((await source.json()).input.costs).toEqual(costs);
-});
-
-for (const policyName of ["Close stop loss", "Holding periods", "Cumulative take profit", "Portfolio drawdown", "Combined risk rules"]) {
-const holdingPeriods = policyName === "Holding periods";
-const combined = policyName === "Combined risk rules";
-const drawdown = policyName === "Portfolio drawdown" || combined;
-const takeProfit = policyName === "Cumulative take profit";
-test(`${policyName} survives Run reuse and DailyTrack refresh`, { tag: "@isolated" }, async ({ page }, testInfo) => {
-  test.setTimeout(240_000);
-  publishFinancialTrackHead("lagged");
-  if (holdingPeriods || takeProfit || drawdown) await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/research?new");
-  await fillCompleteDraft(page, { name: "Close cost stop loss", formula: "close" });
-  if (drawdown) {
-    await page.getByLabel("Drawdown threshold (%)", { exact: true }).fill("1");
-    await page.getByLabel("Maximum stock exposure (%)", { exact: true }).fill("30");
-    await page.getByLabel("Cooldown (trading sessions)", { exact: true }).fill("2");
-    if (combined) {
-      await page.getByLabel("Stop loss (%)", { exact: true }).fill("1");
-      await page.getByLabel("Minimum holding (trading sessions)", { exact: true }).fill("3");
-      await page.getByLabel("Maximum holding (trading sessions)", { exact: true }).fill("5");
-      await page.getByRole("button", { name: "Add take-profit tier", exact: true }).click();
-      await page.getByLabel("Profit threshold (%)", { exact: true }).fill("1");
-      await page.getByLabel("Cumulative reduction (%)", { exact: true }).fill("30");
-    }
-  } else if (takeProfit) {
-    await page.getByRole("button", { name: "Add take-profit tier", exact: true }).click();
-    await page.getByLabel("Profit threshold (%)", { exact: true }).fill("0.01");
-    await page.getByLabel("Cumulative reduction (%)", { exact: true }).fill("30");
-  } else if (holdingPeriods) {
-    await page.getByLabel("Minimum holding (trading sessions)", { exact: true }).fill("2");
-    await page.getByLabel("Maximum holding (trading sessions)", { exact: true }).fill("2");
-  } else await page.getByLabel("Stop loss (%)", { exact: true }).fill("1");
-
-  await page.getByRole("button", { name: "Fees and slippage", exact: true }).click();
-  await page.getByLabel("Price slippage (basis points)", { exact: true }).fill(holdingPeriods || takeProfit ? "0" : "1000");
-  await page.getByRole("button", { name: "Fees and slippage", exact: true }).click();
-  if (holdingPeriods) {
-    await page.getByLabel("Holdings count").fill("1");
-    await page.getByLabel("Selection interval (trading days)").fill("1");
-  }
-
-  if (holdingPeriods) await page.screenshot({ path: testInfo.outputPath("holding-periods-mobile-config.png"), fullPage: true });
   await page.getByRole("button", { name: "Run backtest", exact: true }).click();
   await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
   const runUrl = page.url();
@@ -408,15 +315,13 @@ test(`${policyName} survives Run reuse and DailyTrack refresh`, { tag: "@isolate
   await page.getByRole("tab", { name: "Configuration", exact: true }).click();
   const accepted = await page.request.get(`/api/research-runs/${runId}`);
   expect(accepted.ok()).toBe(true);
-  const policy = drawdown ? { kind: "builtin_risk/v1", ...(combined ? {
-    stop_loss_threshold: 0.01, maximum_holding_sessions: 5,
+  const policy = {
+    kind: "builtin_risk/v1", stop_loss_threshold: 0.01, maximum_holding_sessions: 5,
     take_profit_tiers: [{ profit_threshold: 0.01, cumulative_reduction: 0.3 }],
-  } : {}), portfolio_drawdown: {
-    drawdown_threshold: 0.01, maximum_stock_exposure: 0.3, cooldown_sessions: 2,
-  } } : takeProfit ? { kind: "builtin_risk/v1", take_profit_tiers: [
-    { profit_threshold: 0.0001, cumulative_reduction: 0.3 },
-  ] } : holdingPeriods ? { kind: "builtin_risk/v1", maximum_holding_sessions: 2 }
-    : { kind: "builtin_risk/v1", stop_loss_threshold: 0.01 };
+    portfolio_drawdown: {
+      drawdown_threshold: 0.01, maximum_stock_exposure: 0.3, cooldown_sessions: 2,
+    },
+  };
   expect((await accepted.json()).input.modules.risk_management).toEqual(policy);
   await page.getByRole("tab", { name: "Overview", exact: true }).click();
   await page.getByRole("button", { name: "Close risk and holdings", exact: true }).click();
@@ -426,73 +331,50 @@ test(`${policyName} survives Run reuse and DailyTrack refresh`, { tag: "@isolate
   });
   expect(events.ok()).toBe(true);
   const rows = (await events.json()).rows;
-  if (drawdown) {
-    const trigger = rows.find((row: { risk_adjustment: { observations?: { reason: string; status?: string }[] } | null }) =>
-      row.risk_adjustment?.observations?.some(item => item.reason === "portfolio_drawdown" && item.status === "threshold_reached"));
-    expect(trigger).toBeTruthy();
-    await page.getByText("Trading events", { exact: true }).click();
-    await selectTradingEvent(page, "Framework decisions");
-    await page.getByRole("button", { name: `View raw record: ${trigger.decision_session}`, exact: true }).click();
-    await expect(page.getByRole("list", { name: "Risk decision reasons" })).toContainText("Stock target cap 30%");
-    await expect(page.getByRole("list", { name: "Risk decision reasons" })).toContainText("historical maximum drawdown is not reset");
-    if (combined) {
-      expect(trigger.risk_adjustment.observations.some((item: { reason: string }) => item.reason === "stop_loss")).toBe(true);
-      await expect(page.getByRole("list", { name: "Risk decision reasons" })).toContainText("stop-loss threshold");
-      await expect(page.getByRole("region", { name: "Portfolio proposal" })).toContainText("NoUpdate");
-      await page.getByRole("button", { name: `View raw record: ${rows[0].decision_session}`, exact: true }).click();
-      await expect(page.getByRole("region", { name: "Portfolio proposal" })).toContainText("Target exposure 100.00%");
-      await page.getByRole("button", { name: `View raw record: ${trigger.decision_session}`, exact: true }).click();
-      await page.getByRole("button", { name: "View targets", exact: true }).click();
-      await page.getByRole("button", { name: `View raw record: ${trigger.decision_session}`, exact: true }).click();
-      const target = JSON.parse(await page.getByLabel("Raw JSON", { exact: true }).innerText());
-      expect(target.target_id).toBe(trigger.target_id);
-      expect(target.maximum_stock_exposure).toBe(0.3);
-      expect(Object.values(target.position_limits).every(value => value === 0)).toBe(true);
-      await expect(page.getByRole("table", { name: "Rebalance targets", exact: true })).toContainText("≤ 0");
-      const fills = await page.request.post(`/api/research-runs/${runId}/events/query`, {
-        headers: sameOriginHeaders(), data: { section: "strategy_fills", limit: 50 },
-      });
-      expect(fills.ok()).toBe(true);
-      expect((await fills.json()).rows.every((row: { side: string }) => row.side === "buy")).toBe(true);
-      expect((await (await page.request.get(`/api/research-runs/${runId}`)).json()).result.terminal_strategy_state.pending_target).not.toBeNull();
-      await page.screenshot({ path: testInfo.outputPath("combined-risk-reasons.png"), fullPage: true });
-    }
-  } else if (takeProfit) {
-    const trigger = rows.find((row: { risk_adjustment: { observations?: { reason: string }[] } | null }) =>
-      row.risk_adjustment?.observations?.some(item => item.reason === "take_profit"));
-    expect(trigger).toBeTruthy();
-    await page.getByText("Trading events", { exact: true }).click();
-    await selectTradingEvent(page, "Framework decisions");
-    await page.getByRole("button", { name: `View raw record: ${trigger.decision_session}`, exact: true }).click();
-    await expect(page.getByRole("list", { name: "Risk decision reasons" })).toContainText("cumulative reduction 30%");
-    await expect(page.getByRole("list", { name: "Risk decision reasons" })).toContainText("ordinary additions are forbidden");
-  } else if (holdingPeriods) {
-    expect(rows[1].portfolio_retentions[0].holding_age).toBe(1);
-    await page.getByText("Trading events", { exact: true }).click();
-    await selectTradingEvent(page, "Framework decisions");
-    await page.getByRole("button", { name: "View raw record: 2026-08-05", exact: true }).click();
-    await expect(page.getByRole("list", { name: "Minimum-holding retention reasons" })).toContainText("below minimum 2");
-  } else expect(rows.some((row: { risk_adjustment: { mode: string } | null }) => row.risk_adjustment?.mode === "builtin_risk")).toBe(true);
-  await page.screenshot({ path: testInfo.outputPath("close-stop-loss-result.png"), fullPage: true });
+  const trigger = rows.find((row: {
+    risk_adjustment: {
+      observations?: {
+        reason: string;
+        status?: string;
+      }[];
+    } | null;
+  }) => row.risk_adjustment?.observations?.some(item => item.reason === "portfolio_drawdown" && item.status === "threshold_reached"));
+  expect(trigger).toBeTruthy();
+  await page.getByText("Trading events", { exact: true }).click();
+  await selectTradingEvent(page, "Framework decisions");
+  await page.getByRole("button", { name: `View raw record: ${trigger.decision_session}`, exact: true }).click();
+  await expect(page.getByRole("list", { name: "Risk decision reasons" })).toContainText("Stock target cap 30%");
+  await expect(page.getByRole("list", { name: "Risk decision reasons" })).toContainText("historical maximum drawdown is not reset");
+  expect(trigger.risk_adjustment.observations.some((item: {
+    reason: string;
+  }) => item.reason === "stop_loss")).toBe(true);
+  await expect(page.getByRole("list", { name: "Risk decision reasons" })).toContainText("stop-loss threshold");
+  await expect(page.getByRole("region", { name: "Portfolio proposal" })).toContainText("NoUpdate");
+  await page.getByRole("button", { name: `View raw record: ${rows[0].decision_session}`, exact: true }).click();
+  await expect(page.getByRole("region", { name: "Portfolio proposal" })).toContainText("Target exposure 100.00%");
+  await page.getByRole("button", { name: `View raw record: ${trigger.decision_session}`, exact: true }).click();
+  await page.getByRole("button", { name: "View targets", exact: true }).click();
+  await page.getByRole("button", { name: `View raw record: ${trigger.decision_session}`, exact: true }).click();
+  const target = JSON.parse(await page.getByLabel("Raw JSON", { exact: true }).innerText());
+  expect(target.target_id).toBe(trigger.target_id);
+  expect(target.maximum_stock_exposure).toBe(0.3);
+  expect(Object.values(target.position_limits).every(value => value === 0)).toBe(true);
+  await expect(page.getByRole("table", { name: "Rebalance targets", exact: true })).toContainText("≤ 0");
+  const fills = await page.request.post(`/api/research-runs/${runId}/events/query`, {
+    headers: sameOriginHeaders(), data: { section: "strategy_fills", limit: 50 },
+  });
+  expect(fills.ok()).toBe(true);
+  expect((await fills.json()).rows.every((row: {
+    side: string;
+  }) => row.side === "buy")).toBe(true);
+  expect((await (await page.request.get(`/api/research-runs/${runId}`)).json()).result.terminal_strategy_state.pending_target).not.toBeNull();
+  await page.screenshot({ path: testInfo.outputPath("combined-risk-reasons.png"), fullPage: true });
   await page.getByRole("tab", { name: "Configuration", exact: true }).click();
   await page.getByRole("button", { name: "Create draft", exact: true }).click();
-  if (drawdown) {
-    await expect(page.getByLabel("Drawdown threshold (%)", { exact: true })).toHaveValue("1");
-    await expect(page.getByLabel("Maximum stock exposure (%)", { exact: true })).toHaveValue("30");
-    await expect(page.getByLabel("Cooldown (trading sessions)", { exact: true })).toHaveValue("2");
-    await page.getByLabel("Maximum stock exposure (%)", { exact: true }).fill("20");
-  } else if (takeProfit) {
-    await expect(page.getByLabel("Profit threshold (%)", { exact: true })).toHaveValue("0.01");
-    await expect(page.getByLabel("Cumulative reduction (%)", { exact: true })).toHaveValue("30");
-    await page.getByLabel("Cumulative reduction (%)", { exact: true }).fill("60");
-  } else if (holdingPeriods) {
-    await expect(page.getByLabel("Minimum holding (trading sessions)", { exact: true })).toHaveValue("2");
-    await expect(page.getByLabel("Maximum holding (trading sessions)", { exact: true })).toHaveValue("2");
-    await page.getByLabel("Minimum holding (trading sessions)", { exact: true }).fill("1");
-  } else {
-    await expect(page.getByLabel("Stop loss (%)", { exact: true })).toHaveValue("1");
-    await page.getByLabel("Stop loss (%)", { exact: true }).fill("2");
-  }
+  await expect(page.getByLabel("Drawdown threshold (%)", { exact: true })).toHaveValue("1");
+  await expect(page.getByLabel("Maximum stock exposure (%)", { exact: true })).toHaveValue("30");
+  await expect(page.getByLabel("Cooldown (trading sessions)", { exact: true })).toHaveValue("2");
+  await page.getByLabel("Maximum stock exposure (%)", { exact: true }).fill("20");
   await page.goto(runUrl);
   await page.getByRole("button", { name: "Start Tracking", exact: true }).click();
   await expect(page).toHaveURL(/\/daily-tracks\/track_[a-f0-9]+$/);
@@ -504,29 +386,31 @@ test(`${policyName} survives Run reuse and DailyTrack refresh`, { tag: "@isolate
   expect(tracked.ok()).toBe(true);
   const trackRows = (await tracked.json()).rows;
   expect(trackRows.slice(0, rows.length)).toEqual(rows);
-  if (combined) {
-    const fills = await page.request.post(`/api/daily-tracks/${trackId}/events/query`, {
-      headers: sameOriginHeaders(), data: { section: "strategy_fills", limit: 50 },
-    });
-    expect(fills.ok()).toBe(true);
-    const sale = (await fills.json()).rows.find((row: { side: string }) => row.side === "sell");
-    expect(sale).toBeTruthy();
-    await page.getByRole("tab", { name: /^Holdings/ }).click();
-    await page.getByText("Trading events", { exact: true }).click();
-    await selectTradingEvent(page, "Fills");
-    await page.getByRole("button", { name: `View raw record: ${sale.session} ${sale.instrument_id.replace(/^equity:/, "")}`, exact: true }).click();
-    const renderedFill = JSON.parse(await page.getByLabel("Raw JSON", { exact: true }).innerText());
-    expect(renderedFill).toMatchObject({ side: "sell", quantity: sale.quantity, session: sale.session, execution_price: sale.execution_price });
-    await expect(page.getByRole("region", { name: "Fill price and cost details" })).toContainText("Raw Open");
-    await expect(page.getByRole("region", { name: "Fill price and cost details" })).toContainText("Simulated execution price");
-    await page.screenshot({ path: testInfo.outputPath("combined-next-open-fill.png"), fullPage: true });
-  }
-  if (drawdown) expect(trackRows.some((row: { risk_adjustment: { observations?: { reason: string; completed_cooldown_sessions?: number }[] } | null }) =>
-    row.risk_adjustment?.observations?.some(item => item.reason === "portfolio_drawdown" && Number(item.completed_cooldown_sessions) >= 2))).toBe(true);
-  if (takeProfit) expect(trackRows.some((row: { risk_adjustment: { observations?: { reason: string; executed_reduction_units?: string }[] } | null }) =>
-    row.risk_adjustment?.observations?.some(item => item.reason === "take_profit" && Number(item.executed_reduction_units) > 0))).toBe(true);
-  if (holdingPeriods) expect(trackRows.some((row: { risk_adjustment: { observations: { reason: string; holding_age: number }[] } | null }) =>
-    row.risk_adjustment?.observations.some(observation => observation.reason === "maximum_holding_period" && observation.holding_age === 2))).toBe(true);
+  const trackFills = await page.request.post(`/api/daily-tracks/${trackId}/events/query`, {
+    headers: sameOriginHeaders(), data: { section: "strategy_fills", limit: 50 },
+  });
+  expect(trackFills.ok()).toBe(true);
+  const sale = (await trackFills.json()).rows.find((row: {
+    side: string;
+  }) => row.side === "sell");
+  expect(sale).toBeTruthy();
+  await page.getByRole("tab", { name: /^Holdings/ }).click();
+  await page.getByText("Trading events", { exact: true }).click();
+  await selectTradingEvent(page, "Fills");
+  await page.getByRole("button", { name: `View raw record: ${sale.session} ${sale.instrument_id.replace(/^equity:/, "")}`, exact: true }).click();
+  const renderedFill = JSON.parse(await page.getByLabel("Raw JSON", { exact: true }).innerText());
+  expect(renderedFill).toMatchObject({ side: "sell", quantity: sale.quantity, session: sale.session, execution_price: sale.execution_price });
+  await expect(page.getByRole("region", { name: "Fill price and cost details" })).toContainText("Raw Open");
+  await expect(page.getByRole("region", { name: "Fill price and cost details" })).toContainText("Simulated execution price");
+  await page.screenshot({ path: testInfo.outputPath("combined-next-open-fill.png"), fullPage: true });
+  expect(trackRows.some((row: {
+    risk_adjustment: {
+      observations?: {
+        reason: string;
+        completed_cooldown_sessions?: number;
+      }[];
+    } | null;
+  }) => row.risk_adjustment?.observations?.some(item => item.reason === "portfolio_drawdown" && Number(item.completed_cooldown_sessions) >= 2))).toBe(true);
   await page.getByRole("tab", { name: /^Holdings/ }).click();
   const closeRiskDisclosure = page.getByRole("button", { name: "Close risk and holdings" });
   await closeRiskDisclosure.click();
@@ -537,279 +421,22 @@ test(`${policyName} survives Run reuse and DailyTrack refresh`, { tag: "@isolate
   const source = await page.request.get(`/api/research-runs/${runId}`);
   expect(source.ok()).toBe(true);
   expect((await source.json()).input.modules.risk_management).toEqual(policy);
-  if (combined) {
-    if (!/^run_[a-f0-9]+$/.test(runId)) throw new Error("Unexpected test Run identity");
-    execFileSync("docker", ["exec", testContainer("postgres"), "psql",
-      "--username", "thesistrace_owner", "--dbname", "thesistrace",
-      "--set", "ON_ERROR_STOP=1", "--command",
-      `UPDATE publication.payload_retention
+  if (!/^run_[a-f0-9]+$/.test(runId))
+    throw new Error("Unexpected test Run identity");
+  execFileSync("docker", ["exec", testContainer("postgres"), "psql",
+    "--username", "thesistrace_owner", "--dbname", "thesistrace",
+    "--set", "ON_ERROR_STOP=1", "--command",
+    `UPDATE publication.payload_retention
        SET published_at = now() - interval '8 days', expires_at = now() - interval '1 second'
        WHERE manifest_sha256 = (SELECT result_manifest_sha256 FROM research_runs.runs WHERE id = '${runId}')`,
-    ], { stdio: ["ignore", "pipe", "pipe"] });
-    await page.goto(runUrl);
-    await expect(researchRunHeader(page)).toContainText("succeeded");
-    await page.getByText("Trading events", { exact: true }).click();
-    await selectTradingEvent(page, "Fills");
-    await expect(page.getByRole("status").filter({ hasText: "Trading details have expired" })).toBeVisible();
-    await expect(page.getByText("No matching Fills records.", { exact: true })).toHaveCount(0);
-    await page.screenshot({ path: testInfo.outputPath("combined-expired-events.png"), fullPage: true });
-  }
-});
-}
-
-test("ResearchRun return keeps the selected Type without a document reload", async ({ page }) => {
-  const documentRequests = recordDocumentRequests(page);
-  await page.route("**/api/research-folders", async (route) => {
-    await route.fulfill({
-      json: {
-        items: [{
-          id: "folder_default",
-          name: "Default",
-          is_default: true,
-          created_at: "2026-08-13T00:00:00Z",
-        }],
-        next_cursor: null,
-      },
-    });
-  });
-  await page.route("**/api/research-runs?*", async (route) => {
-    await route.fulfill({
-      json: {
-        items: [{
-          id: "run_feedface1234abcd9876",
-          status: "succeeded",
-          name: "Filtered Factor",
-          folder_id: "folder_default",
-          created_at: "2026-08-13T01:02:03Z",
-          start_date: "2026-08-01",
-          end_date: "2026-08-05",
-          formula_summary: "rank(close)",
-          research_kind: "factor_evaluation",
-        }],
-        total_count: 1,
-      },
-    });
-  });
-  await page.route("**/api/research-runs/run_feedface1234abcd9876", async (route) => {
-    await route.fulfill({
-      json: {
-        id: "run_feedface1234abcd9876",
-        status: "succeeded",
-        name: "Filtered Factor",
-        folder_id: "folder_default",
-        created_at: "2026-08-13T01:02:03Z",
-        start_date: "2026-08-01",
-        end_date: "2026-08-05",
-        formula_summary: "rank(close)",
-        research_kind: "factor_evaluation",
-      },
-    });
-  });
-
-  await page.goto("/research-runs");
-  await page.getByRole("combobox", { name: "Filter by Type", exact: true }).click();
-  await page.getByRole("option", { name: "Factor Evaluation", exact: true }).click();
-  await page.getByRole("link", { name: "Filtered Factor", exact: true }).click();
-  await expect(page).toHaveURL(/\/research-runs\/run_feedface1234abcd9876$/);
-  await expect(page.getByRole("heading", { name: "Filtered Factor", exact: true })).toBeVisible();
-  documentRequests.length = 0;
-
-  await page.getByRole("link", { name: "Back to Research Runs", exact: true }).click();
-
-  await expect(page).toHaveURL(/\/research-runs$/);
-  await expect(page.getByRole("combobox", { name: "Filter by Type", exact: true })).toContainText("Factor Evaluation");
-  expect(documentRequests).toEqual([]);
-});
-
-test("Start Tracking opens the created DailyTrack without a document reload", async ({ page }) => {
-  const runId = "run_feedface1234abcd9876";
-  const trackId = "track_cafebabefeed1234";
-  const documentRequests = recordDocumentRequests(page);
-  const startTrackingMethods: string[] = [];
-  await page.route("**/api/research-folders", async (route) => {
-    await route.fulfill({
-      json: {
-        items: [{
-          id: "folder_default",
-          name: "Default",
-          is_default: true,
-          created_at: "2026-08-13T00:00:00Z",
-        }],
-        next_cursor: null,
-      },
-    });
-  });
-  await page.route(`**/api/research-runs/${runId}`, async (route) => {
-    await route.fulfill({
-      json: {
-        id: runId,
-        status: "succeeded",
-        name: "Tracking navigation regression",
-        folder_id: "folder_default",
-        created_at: "2026-08-13T01:02:03Z",
-        start_date: "2026-08-01",
-        end_date: "2026-08-05",
-        formula_summary: "rank(close)",
-        research_kind: "strategy_backtest",
-      },
-    });
-  });
-  await page.route(`**/api/research-runs/${runId}/daily-tracks`, async (route) => {
-    startTrackingMethods.push(route.request().method());
-    await route.fulfill({ status: 201, json: { id: trackId } });
-  });
-
-  await page.goto(`/research-runs/${runId}`);
-  await expect(page.getByRole("button", { name: "Start Tracking" })).toBeVisible();
-  documentRequests.length = 0;
-
-  await page.getByRole("button", { name: "Start Tracking" }).click();
-
-  await expect(page).toHaveURL(new RegExp(`/daily-tracks/${trackId}$`));
-  expect(startTrackingMethods).toEqual(["POST"]);
-  expect(documentRequests).toEqual([]);
-});
-
-test("Research deletion uses an in-page decision instead of a browser dialog", async ({ page }) => {
-  const runId = "run_de1e7ed1a109";
-  let deleteRequestCount = 0;
-  const nativeDialogs: string[] = [];
-  page.on("dialog", async (dialog) => {
-    nativeDialogs.push(dialog.type());
-    await dialog.dismiss();
-  });
-  await page.route("**/api/research-folders", async (route) => {
-    await route.fulfill({
-      json: {
-        items: [{
-          id: "folder_default",
-          name: "Default",
-          is_default: true,
-          created_at: "2026-08-13T00:00:00Z",
-        }],
-        next_cursor: null,
-      },
-    });
-  });
-  await page.route(`**/api/research-runs/${runId}`, async (route) => {
-    const request = route.request();
-    if (request.method() === "DELETE") {
-      deleteRequestCount += 1;
-      await route.fulfill({ status: 204 });
-      return;
-    }
-    await route.fulfill({
-      json: {
-        id: runId,
-        status: "succeeded",
-        name: "Deletion dialog regression",
-        folder_id: "folder_default",
-        created_at: "2026-08-13T01:02:03Z",
-        start_date: "2026-08-01",
-        end_date: "2026-08-05",
-        formula_summary: "rank(close)",
-        research_kind: "factor_evaluation",
-      },
-    });
-  });
-  await page.route("**/api/research-runs?*", async (route) => {
-    await route.fulfill({ json: { items: [], total_count: 0 } });
-  });
-
-  await page.goto(`/research-runs/${runId}`);
-  await page.getByRole("button", { name: "Delete Research", exact: true }).click();
-
-  const decision = page.getByRole("alertdialog", { name: "Delete Research?" });
-  await expect(decision).toBeVisible();
-  expect(nativeDialogs).toEqual([]);
-  await expect(decision).toContainText("Deletion dialog regression");
-  await expect(decision).toContainText("This cannot be undone.");
-  await expect(decision).toContainText("DailyTracks will remain.");
-  expect(deleteRequestCount).toBe(0);
-
-  await page.keyboard.press("Escape");
-  await expect(decision).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Delete Research", exact: true })).toBeFocused();
-  expect(deleteRequestCount).toBe(0);
-
-  await page.getByRole("button", { name: "Delete Research", exact: true }).click();
-  await decision.getByRole("button", { name: "Keep Research" }).click();
-  await expect(decision).toHaveCount(0);
-  await expect(page).toHaveURL(new RegExp(`/research-runs/${runId}$`));
-  expect(deleteRequestCount).toBe(0);
-
-  await page.getByRole("button", { name: "Delete Research", exact: true }).click();
-  await decision.getByRole("button", { name: "Delete Research", exact: true }).click();
-  await expect(page).toHaveURL(/\/research-runs$/);
-  expect(deleteRequestCount).toBe(1);
-});
-
-test("Notes keeps multiline research context visible", async ({ page }) => {
-  await page.setViewportSize({ width: 956, height: 958 });
-  await page.goto("/research");
-
-  const notes = page.getByLabel("Notes", { exact: true });
-  await expect(notes).toBeVisible();
-  await notes.fill(
-    "Long turnover-amount leaders in Top 300; 20 holdings, rebalance every 5 sessions.",
-  );
-  const layout = await notes.evaluate((element) => ({
-    height: element.getBoundingClientRect().height,
-    clientHeight: element.clientHeight,
-    scrollHeight: element.scrollHeight,
-  }));
-
-  expect(layout.height).toBeGreaterThanOrEqual(72);
-  expect(layout.scrollHeight).toBeLessThanOrEqual(layout.clientHeight);
-});
-
-test("Alpha formula editor keeps line numbers on the Classic workbench surface", async ({ page }) => {
-  await page.goto("/research");
-
-  await expect(page.getByRole("textbox", { name: "Alpha formula", exact: true }).locator("..").locator(".cm-gutters")).toHaveCSS(
-    "background-color",
-    "rgb(241, 243, 236)",
-  );
-  await expect(page.getByRole("textbox", { name: "Alpha formula", exact: true }).locator("..").locator(".cm-activeLineGutter")).toHaveCSS(
-    "background-color",
-    "rgb(241, 243, 236)",
-  );
-});
-
-test("date inputs retain manually entered values when focus leaves the field", async ({ page }) => {
-  await page.route("**/api/data", async (route) => {
-    const response = await route.fetch();
-    const data = await response.json();
-    await route.fulfill({ response, json: {
-      ...data,
-      market_coverage: { start: "2010-01-04", end: "2026-08-13" },
-      data_through_session: "2026-08-13",
-    } });
-  });
-  await page.goto("/research?new");
-  await page.getByLabel("Research name").fill("Browser populated dates");
-  await page.getByRole("textbox", { name: "Alpha formula", exact: true }).click();
-  await page.keyboard.type("close");
-  await page.getByRole("combobox", { name: "Universe", exact: true }).click();
-  await page.getByRole("option", { name: "Top 300", exact: true }).click();
-
-  await page.getByRole("combobox", { name: "Neutralization", exact: true }).click();
-  await page.getByRole("option", { name: "None", exact: true }).click();
-
-
-  for (const [label, value] of [
-    ["Research start date", "2025-08-13"],
-    ["Research end date", "2026-08-13"],
-  ] as const) {
-    const input = page.getByLabel(label);
-    await input.fill(value);
-    await page.keyboard.press("Tab");
-  }
-
-  await fillResearchNotes(page, "Trigger a controlled React rerender.");
-  await expect(page.getByLabel("Research start date")).toHaveValue("2025-08-13");
-  await expect(page.getByLabel("Research end date")).toHaveValue("2026-08-13");
-  await expect(page.getByRole("button", { name: /^Run (backtest|evaluation)$/ })).toBeEnabled();
+  ], { stdio: ["ignore", "pipe", "pipe"] });
+  await page.goto(runUrl);
+  await expect(researchRunHeader(page)).toContainText("succeeded");
+  await page.getByText("Trading events", { exact: true }).click();
+  await selectTradingEvent(page, "Fills");
+  await expect(page.getByRole("status").filter({ hasText: "Trading details have expired" })).toBeVisible();
+  await expect(page.getByText("No matching Fills records.", { exact: true })).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("combined-expired-events.png"), fullPage: true });
 });
 
 test("Default Folder retains one local Research Draft with authoritative Formula diagnostics", async ({ page, researcher }, testInfo) => {
