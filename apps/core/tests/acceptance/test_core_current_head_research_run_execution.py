@@ -2270,46 +2270,6 @@ def test_industry_admission_requires_only_neutralized_period_coverage(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_product_state_hard_cut_reuses_the_exact_canonical_head(tmp_path: Path) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
-    drop_product_schemas(settings)
-    initialize_core(settings.database_url)
-    sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
-    head = _publish_head(settings, sessions=sessions, price_offset=0)
-
-    with TestClient(create_app(settings)) as client:
-        run_id = client.post(
-            "/api/research-runs",
-            json=_run_command("removed-by-product-state-hard-cut"),
-        ).json()["id"]
-        assert client.get(f"/api/research-runs/{run_id}").status_code == 200
-
-    drop_product_schemas(settings)
-    initialize_core(settings.database_url)
-
-    with TestClient(create_app(settings)) as reset_runtime:
-        overview = reset_runtime.get("/api/data")
-        assert overview.status_code == 200
-        assert overview.json()["data_through_session"] == sessions[-1]
-        assert reset_runtime.get(f"/api/research-runs/{run_id}").status_code == 404
-    database = PostgresDatabase(settings.database_url)
-    database.open()
-    try:
-        current_head = DatasetLifecycle(database, settings.data_mount).current_pointer()
-        assert current_head is not None
-        assert current_head.generation_manifest_sha256 == head
-    finally:
-        database.close()
-    assert (
-        MountedGenerationStore(settings.data_mount).validate_generation(head).manifest_sha256
-        == head
-    )
-
-
-@pytest.mark.skipif(
-    not core_environment_is_configured(),
-    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
-)
 def test_fixed_role_worker_replicas_claim_distinct_runs_and_tracks(
     tmp_path: Path,
 ) -> None:

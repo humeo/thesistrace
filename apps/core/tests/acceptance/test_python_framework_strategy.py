@@ -245,24 +245,6 @@ def test_framework_run_reuse_and_track_preserve_frozen_modules_and_account(
                 })
                 assert target.status_code == 200, target.text
                 assert target.json()['rows'][0]['decision_session'] == row['decision_session']
-        reused = deepcopy(detail['input'])
-        reused['costs']['slippage_bps'] = '25'
-        if holding_periods:
-            reused['modules']['portfolio_construction']['minimum_holding_sessions'] = 1
-        else:
-            reused['modules']['portfolio_construction']['program']['parameters']['edited'] = True
-        response = client.post('/api/research-runs', json={
-            **reused, 'request_id': 'reuse', 'folder_id': 'folder_default',
-        })
-        assert response.status_code == 202, response.text
-        assert runtime.research_runs.process_next()
-        reused_detail = client.get(f"/api/research-runs/{response.json()['id']}").json()
-        assert reused_detail['status'] == 'succeeded', reused_detail
-        assert reused_detail['input']['costs']['slippage_bps'] == '25'
-        assert client.get(f'/api/research-runs/{run_id}').json()['input']['costs'] == costs
-        assert client.get(f'/api/research-runs/{run_id}').json()['input']['modules'] == (
-            submitted['modules']
-        )
         tracked = client.post(
             f'/api/research-runs/{run_id}/daily-tracks', json={'request_id': 'track'},
         )
@@ -316,6 +298,30 @@ def test_framework_run_reuse_and_track_preserve_frozen_modules_and_account(
         assert track_fills.json()['rows'] == full_fills.json()['rows']
         assert runtime.research_runs.get_detail(UUID(int=1234), run_id) is None
         assert runtime.daily_tracks.get(UUID(int=1234), track_id) is None
+
+        reused = deepcopy(detail['input'])
+        reused['costs']['slippage_bps'] = '25'
+        if holding_periods:
+            reused['modules']['portfolio_construction']['minimum_holding_sessions'] = 1
+        else:
+            reused['modules']['portfolio_construction']['program']['parameters']['edited'] = True
+        response = client.post('/api/research-runs', json={
+            **reused, 'request_id': 'reuse', 'folder_id': 'folder_default',
+        })
+        assert response.status_code == 202, response.text
+        # Module/continuation combinations already execute above. Only two
+        # representative Portfolio modes need a second execution after reuse.
+        execute_reuse = holding_periods or not (builtin_alpha or builtin_risk)
+        if execute_reuse:
+            assert runtime.research_runs.process_next()
+        reused_detail = client.get(f"/api/research-runs/{response.json()['id']}").json()
+        expected_status = 'succeeded' if execute_reuse else 'queued'
+        assert reused_detail['status'] == expected_status, reused_detail
+        assert reused_detail['input']['costs']['slippage_bps'] == '25'
+        assert client.get(f'/api/research-runs/{run_id}').json()['input']['costs'] == costs
+        assert client.get(f'/api/research-runs/{run_id}').json()['input']['modules'] == (
+            submitted['modules']
+        )
 
 
 @pytest.mark.parametrize('builtin_alpha', [False, True])
