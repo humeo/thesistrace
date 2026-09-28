@@ -780,8 +780,8 @@ def _before_restart(
     )
     assert factor_tracking_error == (
         409,
-        {"detail": "Start Tracking requires a Strategy Backtest Result"},
-    )
+        {"detail": {"code": "TRACKING_STRATEGY_REQUIRED", "limit": None}},
+    ), factor_tracking_error
 
     accepted = _request_json(
         api_origin,
