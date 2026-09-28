@@ -41,7 +41,7 @@ export function FrameworkAuthoring({ factor = false, drawdown, updateDrawdown, m
   const { t } = useTranslation("strategy");
   return <div className="grid min-w-0 gap-5">
     {!factor && <div role="tablist" aria-label={t("workbench.moduleNavigation")} className="research-stage-tabs">
-      {frameworkStages.map((stage) => <button key={stage} type="button" role="tab"
+      {frameworkStages.map((stage) => <Button key={stage} variant="ghost" type="button" role="tab"
         id={`research-stage-tab-${stage}`} aria-controls={`research-stage-panel-${stage}`}
         aria-selected={activeStage === stage} tabIndex={activeStage === stage ? 0 : -1}
         onClick={() => onStageChange(stage)}
@@ -55,7 +55,7 @@ export function FrameworkAuthoring({ factor = false, drawdown, updateDrawdown, m
         }}>
         <span className="research-stage-name">{t(`workbench.stageTab.${stage}`)}</span>
         <span className="research-stage-summary">{stageSummaries[stage]}</span>
-      </button>)}
+      </Button>)}
     </div>}
     {frameworkStages.map((stage) => {
       const hidden = factor ? stage !== "alpha" : activeStage !== stage;

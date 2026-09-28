@@ -28,7 +28,7 @@ The [Quantgrove brand board](docs/design/quantgrove-brand-reference.png) defines
 
 ## Approved scope
 
-The first implementation slice is the Research editor and its sidebar. Other pages retain their current visual treatment until this preview is reviewed. The target rules below describe the eventual shared system; `status: implementing` records that the migration is in progress.
+The Research editor and its sidebar established the first implementation slice. The approved next slice covers Data, Research Runs and batches, result details, Daily Tracks, MCP, and Operator pages. Chat and its conversation list retain their current layout. The target rules below describe the shared system; `status: implementing` records that the migration is in progress.
 
 The Research preview uses weight 500 for its 24/32 page title, with regular-weight body copy, to soften the Chinese heading. Its research type and strategy authoring choices stay visible together in a quiet, grouped control area above the editor.
 

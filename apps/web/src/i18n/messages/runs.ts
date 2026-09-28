@@ -118,6 +118,7 @@ export const runsEn = {
     "description": "Copy these settings into an editable draft. Adjust them, then run again to create a new result.",
     "folder": "Target Folder",
     "create": "Create draft",
+    "open": "Show draft options",
     "keepCurrent": "Keep current draft",
     "replace": "Replace draft",
     "error": "This Research could not be copied into the browser Draft."
@@ -151,6 +152,7 @@ export const runsEn = {
     "add": "Add condition",
     "apply": "Apply filters",
     "clear": "Clear filters",
+    "clearApplied": "Clear applied filters",
     "allMatch": "All conditions must match.",
     "percent": " Percentage values: enter 10 for 10%.",
     "metric": "Metric",
@@ -334,6 +336,7 @@ export const runsZh = {
     "description": "沿用本次配置，新建可编辑草稿。调整后再次运行，生成新的结果。",
     "folder": "目标文件夹",
     "create": "创建草稿",
+    "open": "查看草稿选项",
     "keepCurrent": "保留当前草稿",
     "replace": "替换草稿",
     "error": "无法将此研究复制为浏览器草稿。"
@@ -367,6 +370,7 @@ export const runsZh = {
     "add": "添加条件",
     "apply": "应用筛选",
     "clear": "清除筛选",
+    "clearApplied": "清除已应用的筛选",
     "allMatch": "须满足全部条件。",
     "percent": " 百分比数值：输入 10 表示 10%。",
     "metric": "指标",

@@ -112,7 +112,7 @@ export function ResearchBatchesPage({ batchId }: { batchId?: string }) {
 
   return <Page aria-label={t("title")}>
     <PageContent className="flex flex-col gap-6">
-      <PageHeader title={batchId ? t("batch") : i18n.t("runs:title")} actions={batchId
+      <PageHeader className="mb-0" title={batchId ? t("batch") : i18n.t("runs:title")} actions={batchId
         ? <Button variant="outline" nativeButton={false} role="link" render={<a href="/research-runs/batches" onClick={followCoreLink} />}>{t("back")}</Button> : undefined} />
       {!batchId && <ResearchRunsNavigation active="batches" />}
       {error && <Alert variant="destructive"><AlertDescription>{t(error)}<Button variant="outline" onClick={() => setRefresh(value => value + 1)}>{t("reload")}</Button></AlertDescription></Alert>}

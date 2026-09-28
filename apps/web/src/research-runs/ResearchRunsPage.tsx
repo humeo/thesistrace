@@ -20,6 +20,7 @@ import {
   CaretDown,
   CaretLeft,
   CheckCircle,
+  Trash,
 } from "@phosphor-icons/react";
 import { useState } from "react";
 
@@ -273,19 +274,22 @@ function ResearchRunDetail({ detail, folderError, folders, onRefreshFolders, res
 
   return <Page aria-label={t("title")} className="research-run-page">
     <PageContent className="flex flex-col gap-6">
+      <div className="text-sm text-muted-foreground"><a href="/research-runs" onClick={followCoreLink} aria-label={t("back")} className="hover:underline">{t("title")}</a><span aria-hidden="true"> / </span><span className="text-foreground">{run.name}</span></div>
       <PageHeader
+        className="mb-0"
         title={run.name}
-        description={<span className="flex flex-wrap items-center gap-2">
-          <span>{researchKindLabel(run.research_kind)}</span>
+        description={<span className="flex flex-wrap items-center gap-3">
+          <Badge variant="secondary">{researchKindLabel(run.research_kind)}</Badge>
           <Badge variant={run.status === "failed" ? "destructive" : run.status === "succeeded" ? "default" : "outline"} className="rounded-md">{t(`statuses.${run.status}`)}</Badge>
+          <span>{run.start_date} — {run.end_date}</span>
         </span>}
         actions={<>
-          <Button variant="outline" nativeButton={false} role="link" render={<a href="/research-runs" onClick={followCoreLink} />}><CaretLeft aria-hidden="true" />{t("back")}</Button>
           {run.batch_id ? <Button variant="outline" nativeButton={false} role="link" render={<a href={`/research-runs/batches/${encodeURIComponent(run.batch_id)}`} onClick={followCoreLink} />}>{t("viewBatch")}</Button> : null}
           {run.batch_id && ["queued", "running", "cancelling"].includes(run.status) ? <ResearchBatchCancelButton key={run.batch_id} batchId={run.batch_id} status={run.status} /> : null}
           {!run.batch_id && (run.status === "queued" || run.status === "running") ? <Button variant="outline" disabled={detail.canceling} onClick={() => void detail.cancel()}>{t(detail.canceling ? "cancelling" : "cancel")}</Button> : null}
           {run.status === "succeeded" && run.research_kind === "strategy_backtest" ? <Button disabled={detail.startingTracking || detail.deleting} onClick={() => void detail.startTracking()}>{t(detail.startingTracking ? "startingTracking" : "startTracking")}</Button> : null}
-          {terminal ? <Button variant="destructive" disabled={detail.deleting || detail.startingTracking} onClick={detail.openDeleteDialog} ref={detail.deleteTrigger}>{t(detail.deleting ? "deleting" : "delete")}</Button> : null}
+          {terminal && run.input && folders.length > 0 ? <Button variant="outline" aria-label={t("draft.open")} onClick={() => { setTab("overview"); window.requestAnimationFrame(() => document.getElementById("research-use-as-draft")?.scrollIntoView({ behavior: "smooth", block: "center" })); }}>{t("draft.create")}</Button> : null}
+          {terminal ? <Button variant="ghost" size="icon" aria-label={t(detail.deleting ? "deleting" : "delete")} title={t(detail.deleting ? "deleting" : "delete")} disabled={detail.deleting || detail.startingTracking} onClick={detail.openDeleteDialog} ref={detail.deleteTrigger}><Trash aria-hidden="true" /></Button> : null}
         </>}
       />
       {detail.cancelError ? <Alert variant="destructive"><AlertDescription>{t(detail.cancelError)}</AlertDescription></Alert> : null}
@@ -590,7 +594,7 @@ export function UseAsDraftPanel({
   }
 
   return (
-    <section aria-label={t("draft.title")} className="grid min-w-0 gap-4 rounded-lg border border-border bg-card p-5">
+    <section id="research-use-as-draft" aria-label={t("draft.title")} className="grid min-w-0 gap-4 rounded-lg border border-border bg-card p-5">
       <div><h2 className="m-0 text-base font-semibold">{t("draft.title")}</h2>
         <p className="mb-0 mt-1 text-sm text-muted-foreground">{t("draft.description")}</p></div>
       <div className="flex min-w-0 flex-wrap items-end gap-3">

@@ -38,7 +38,7 @@ describe("Daily observation presentation", () => {
       module_states: { universe_selection: {}, alpha: {}, portfolio_construction: { decisions: 2 }, risk_management: {} },
       universe: ["000001.SZ"], signals: [], retained_proposal: null,
     } }} />);
-    expect(markup).toContain("Framework state");
+    expect(markup).toContain("Strategy decisions");
     expect(markup).toContain("0 active signals");
     expect(markup).toMatch(/<td[^>]*>100<\/td>/);
     expect(markup).not.toContain("Close target");

@@ -13,7 +13,8 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectGroup, SelectI
 import { Table, TableHeader, TableHead, TableRow, TableBody, TableCell, TableCaption } from "../components/ui/table";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetClose } from "../components/ui/sheet";
 import { toast } from "../components/ui/toast";
-import { ArrowClockwise, Copy, MagnifyingGlass, X } from "@phosphor-icons/react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../components/ui/tooltip";
+import { ArrowClockwise, Copy, Info, MagnifyingGlass, X } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { AlphaCatalog, AlphaCatalogField } from "../alphaCatalog";
@@ -123,40 +124,39 @@ export function DataOverviewView({
   const industryState = overview.industry_research_readiness ? "ready"
     : overview.industry_coverage ? "partial" : "not_ready";
   const rows = [
-    { id: "market" as const, description: t("marketDescription"), coverage: overview.market_coverage,
+    { id: "market" as const, description: t("marketDescription"), detail: null, coverage: overview.market_coverage,
       state: categoryReadiness(marketFamilies), families: marketFamilies },
     { id: "financial" as const, description: t("financialDescription"),
+      detail: null,
       coverage: financial ? { start: financial.start, end: financial.discovery_complete_through_session } : null,
       state: categoryReadiness(financialFamilies), families: financialFamilies },
     { id: "industry" as const, description: t("industryDescription"),
+      detail: overview.industry_coverage?.classification_version ?? null,
       coverage: overview.industry_coverage ? { start: overview.industry_coverage.start,
         end: overview.industry_coverage.observation_through_session } : null,
       state: industryState, families: [] },
     { id: "benchmark" as const, description: catalogLabel("benchmarks", "csi300-price-index-open"),
+      detail: catalogLabel("benchmarks", "csi300-price-index-open"),
       coverage: overview.benchmark_coverage,
       state: overview.benchmark_research_readiness ? "ready" : "not_ready", families: [] },
   ];
-  return <Page aria-label={t("title")}><PageContent className="flex flex-col gap-6">
-    <PageHeader title={t("title")} description={t("introduction")} actions={<Button variant="outline" onClick={onRefresh} disabled={refreshing}><ArrowClockwise aria-hidden="true" data-icon="inline-start" />{t("reload")}</Button>} />
+  return <Page aria-label={t("title")}><PageContent className="flex flex-col gap-8">
+    <PageHeader className="mb-0" title={t("title")} actions={<Button variant="outline" onClick={onRefresh} disabled={refreshing}><ArrowClockwise aria-hidden="true" data-icon="inline-start" />{t("reload")}</Button>} />
     {error && <Alert variant="destructive"><AlertDescription>{t(error)}</AlertDescription></Alert>}
-    <Section title={t("coverage")}>
-      <p className="m-0 text-sm text-muted-foreground">{t("coverageHint")}</p>
-      <Table scrollLabel={t("coverage")} className="min-w-[640px]">
-        <TableHeader><TableRow><TableHead>{t("dataset")}</TableHead><TableHead>{t("availableRange")}</TableHead><TableHead>{t("researchAvailability")}</TableHead></TableRow></TableHeader>
-        <TableBody>{rows.map(row => <TableRow key={row.id}>
-          <TableCell className="max-w-80 whitespace-normal"><h3 className="m-0 text-sm font-medium">{t(`${row.id}Title`)}</h3><p className="m-0 text-sm text-muted-foreground">{row.description}</p></TableCell>
-          <TableCell>{row.coverage ? `${row.coverage.start} — ${row.coverage.end}` : t("noCoverage")}</TableCell>
-          <TableCell className="max-w-80 whitespace-normal"><Badge variant={row.state === "ready" ? "default" : "outline"}>{t(row.state === "ready" ? "available" : row.state === "not_ready" ? "notAvailable" : "limitedCoverage")}</Badge>
-            {row.state !== "ready" && row.families.length > 0 && <p className="mb-0 text-xs text-muted-foreground">
-              {row.families.filter(family => family.readiness !== "ready").map(family =>
-                t("familyAvailability", { available: family.available_field_ids.length, total: family.supported_field_ids.length }) + (family.coverage_end ? t("through", { date: family.coverage_end }) : "")).join("; ")}.{" "}
-              {row.id === "financial" && financial && <>{t("financialPending", { pending: financial.pending_instrument_count, gaps: financial.discovery_gap_count })}{" "}{financial.earliest_unresolved_date && t("earliestGap", { date: financial.earliest_unresolved_date })}{" "}{t("incompleteValues")}</>}
-            </p>}
-          </TableCell>
-        </TableRow>)}</TableBody>
-      </Table>
-      <p className="m-0 text-xs text-muted-foreground">{overview.data_through_session ? t("dataThrough", { date: overview.data_through_session }) : t("noDataDate")} {t("availabilityVaries")}</p>
-    </Section>
+    <TooltipProvider><section aria-label={t("coverage")} className="grid overflow-hidden rounded-xl border border-border bg-card md:grid-cols-2 xl:grid-cols-4">
+      {rows.map(row => <div key={row.id} className="min-w-0 border-b border-border p-4 last:border-0 md:border-r xl:border-b-0">
+        <div className="flex items-center justify-between gap-2"><h2 className="m-0 text-base font-semibold">{t(`${row.id}Title`)}</h2><Badge variant={row.state === "ready" ? "default" : "outline"}>{t(row.state === "ready" ? "available" : row.state === "not_ready" ? "notAvailable" : "limitedCoverage")}</Badge></div>
+        <div className="mt-3 flex items-center gap-1 text-xs text-muted-foreground"><span>{t("availableRange")}</span><Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon-xs" aria-label={`${t(`${row.id}Title`)} · ${t("coverageHint")}`} />}><Info aria-hidden="true" /></TooltipTrigger><TooltipContent>{row.description} {t("availabilityVaries")}</TooltipContent></Tooltip></div>
+        <p className="mb-0 mt-1 text-sm tabular-nums">{row.coverage ? `${row.coverage.start} — ${row.coverage.end}` : t("noCoverage")}</p>
+        {row.detail ? <p className="mb-0 mt-1 text-xs text-muted-foreground">{row.detail}</p> : null}
+        {row.state !== "ready" && row.families.length > 0 && <p className="mb-0 mt-2 text-xs text-muted-foreground">
+          {row.families.filter(family => family.readiness !== "ready").map(family =>
+            t("familyAvailability", { available: family.available_field_ids.length, total: family.supported_field_ids.length }) + (family.coverage_end ? t("through", { date: family.coverage_end }) : "")).join("; ")}.{" "}
+          {row.id === "financial" && financial && <>{t("financialPending", { pending: financial.pending_instrument_count, gaps: financial.discovery_gap_count })}{" "}{financial.earliest_unresolved_date && t("earliestGap", { date: financial.earliest_unresolved_date })}{" "}{t("incompleteValues")}</>}
+        </p>}
+      </div>)}
+    </section></TooltipProvider>
+    <p className="m-0 -mt-6 text-xs text-muted-foreground">{overview.data_through_session ? t("dataThrough", { date: overview.data_through_session }) : t("noDataDate")}</p>
     <ResearchFieldCatalog catalog={catalog} />
     <CommonInputCatalog catalog={catalog} />
   </PageContent></Page>;
@@ -233,9 +233,9 @@ export function ResearchFieldCatalog({ catalog }: { catalog: AlphaCatalog }) {
     setDetailsOpen(true);
     setCopyErrorFor(null);
   }
-  return <div ref={catalogContainer} className="min-w-0"><Section title={<>{t("researchFields")} <span className="text-sm font-normal text-muted-foreground">{t("fieldCount", { total: catalog.fields.length })}</span></>}>
-    <FieldGroup>
-      <Field>
+  return <div ref={catalogContainer} className="min-w-0"><Section title={<>{t("researchFields")} <span className="ml-2 text-sm font-normal text-muted-foreground">{t("fieldCount", { total: catalog.fields.length })}</span></>}>
+    <div className="flex flex-wrap items-center gap-3">
+      <Field className="min-w-60 w-auto flex-[1_1_260px]">
         <FieldLabel className="sr-only" htmlFor="data-field-search">{t("searchFields")}</FieldLabel>
         <InputGroup>
           <InputGroupAddon><MagnifyingGlass aria-hidden="true" /></InputGroupAddon>
@@ -244,20 +244,20 @@ export function ResearchFieldCatalog({ catalog }: { catalog: AlphaCatalog }) {
           {search !== "" && <InputGroupAddon align="inline-end"><InputGroupButton aria-label={t("clearSearch")} size="icon-sm" onClick={() => { setSearch(""); setPage(1); searchInput.current?.focus(); }}><X aria-hidden="true" /></InputGroupButton></InputGroupAddon>}
         </InputGroup>
       </Field>
-      <Field className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+      <div className="flex min-w-0 flex-wrap items-center gap-3">
         <ToggleGroup value={[category || "all"]} onValueChange={values => { if (values.length) { setCategory(values[0] === "all" ? "" : values[0]); setPage(1); } }} variant="outline" aria-label={t("category")} className="flex-wrap">
           {[{ value: "", label: t("allFields") }, { value: "market", label: t("market") }, { value: "financial", label: t("financial") }].map(item => <ToggleGroupItem key={item.value} value={item.value || "all"}>
             {item.label}{item.value ? ` ${catalog.fields.filter(field => field.research_category === item.value).length}` : ""}
           </ToggleGroupItem>)}
         </ToggleGroup>
         <Select value={purpose} onValueChange={value => { if (value !== null) { setPurpose(value); setPage(1); } }}>
-          <SelectTrigger className="w-full lg:w-64" aria-label={t("purpose")}><SelectValue>{purpose ? catalogLabel("purposes", purpose) : t("allPurposes")}</SelectValue></SelectTrigger>
+          <SelectTrigger className="w-48" aria-label={t("purpose")}><SelectValue>{purpose ? catalogLabel("purposes", purpose) : t("allPurposes")}</SelectValue></SelectTrigger>
           <SelectContent><SelectGroup><SelectItem value="">{t("allPurposes")}</SelectItem>
             {[...new Set(catalog.fields.map(field => field.research_purpose))].sort(compareResearchPurposes).map(value => <SelectItem key={value} value={value}>{catalogLabel("purposes", value)}</SelectItem>)}
           </SelectGroup></SelectContent>
         </Select>
-      </Field>
-    </FieldGroup>
+      </div>
+    </div>
     {pageFields.length ? <div className={cn("grid min-w-0 gap-6", !narrow && "grid-cols-[minmax(0,1fr)_320px]")}>
       <div className="flex min-w-0 flex-col gap-4">
         <Table scrollLabel={t("researchFields")} className="min-w-[480px]">

@@ -5,9 +5,9 @@ import { DailyHoldings } from "../analysis/DailyHoldings";
 import { StrategyEvents } from "../analysis/StrategyEvents";
 import { CommonInputObservations } from "../analysis/CommonInputObservations";
 import { useState, type ReactNode } from "react";
-import { ArrowLeftIcon, CalendarBlankIcon, WarningCircleIcon } from "@phosphor-icons/react";
+import { CalendarBlankIcon, WarningCircleIcon } from "@phosphor-icons/react";
 
-import type { DailyTrackDetail } from "./DailyTracksPage";
+import type { DailyTrackDetail, DailyTrackSummary } from "./DailyTracksPage";
 import { TrackingOriginView, TrackingProgressView } from "./DailyTrackFacts";
 import { DailyTrackAnalysisView } from "./DailyTrackAnalysisView";
 import { CurrentHoldings, ObservationSummary, SelectionSchedule, TrackingReturnChart, formatMoney } from "./DailyTrackObservationView";
@@ -32,17 +32,44 @@ export function trackStatusLabel(track: Pick<DailyTrackDetail, "status" | "progr
   return i18n.t("daily:statusLabels.updating");
 }
 
-export function DailyTrackWorkspace({ track, actions, notices }: {
-  track: DailyTrackDetail; actions: ReactNode; notices: ReactNode;
+export function DailyTrackListPanel({ items, selectedId, loading = false, error = false, onRetry }: { items: readonly DailyTrackSummary[]; selectedId?: string; loading?: boolean; error?: boolean; onRetry?: () => void }) {
+  const { t } = useTranslation("daily");
+  return <aside role="region" aria-label={t("list")} className="min-w-0 self-start overflow-hidden rounded-xl border border-border bg-card">
+    <div className="border-b border-border px-4 py-3 text-sm font-semibold">{t("allTracks")} <span className="font-normal text-muted-foreground">{formatNumber(items.length)}</span></div>
+    {loading && !error ? <p role="status" className="m-0 px-4 py-3 text-sm text-muted-foreground">{t("loadingList")}</p> : null}
+    {error ? <div role="alert" className="grid gap-2 px-4 py-3 text-sm"><span>{t("listUnavailable")}</span>{onRetry ? <Button variant="outline" onClick={onRetry}>{t("retry")}</Button> : null}</div> : null}
+    <nav aria-label={t("list")} className="divide-y divide-border">
+      {items.map(item => <a key={item.id} href={`/daily-tracks/${encodeURIComponent(item.id)}`} aria-current={item.id === selectedId ? "page" : undefined} aria-label={item.id} title={item.id}
+        className={`block min-w-0 border-l-[3px] px-4 py-4 text-foreground no-underline hover:bg-muted ${item.id === selectedId ? "border-primary bg-muted" : "border-transparent"}`}>
+        <span className="flex items-center justify-between gap-2"><strong className="truncate text-sm">{t("trackHeading")} {item.id.slice(0, 8)}</strong><Badge variant={item.status === "blocked" ? "destructive" : "secondary"}>{t(`statuses.${item.status}`)}</Badge></span>
+        <span className="mt-1 block text-xs text-muted-foreground">{t("lastObservation")} <time>{item.strategy_session}</time></span>
+      </a>)}
+    </nav>
+  </aside>;
+}
+
+export function DailyTrackWorkspace({ track, items, listError = false, onReloadList, actions, notices }: {
+  track: DailyTrackDetail; items: readonly DailyTrackSummary[] | null; listError?: boolean; onReloadList?: () => void; actions: ReactNode; notices: ReactNode;
 }) {
   const { t } = useTranslation("daily");
   const [view, setView] = useState<View>("performance");
   const [period, setPeriod] = useState<"tracking" | "full">("tracking");
+  const selectedSummary: DailyTrackSummary = {
+    id: track.id, status: track.status, seed_run_id: track.origin.seed_run_id,
+    result_checksum_sha256: track.origin.result_checksum_sha256,
+    origin_session: track.origin.strategy_session, strategy_session: track.strategy_session,
+  };
+  const visibleItems = items === null ? [selectedSummary] : items.some(item => item.id === track.id)
+    ? items.map(item => item.id === track.id ? selectedSummary : item)
+    : [selectedSummary, ...items];
   return (
     <Page aria-label={t("title")}><PageContent className="flex flex-col gap-6">
-      <Button variant="link" nativeButton={false} role="link" render={<a href="/daily-tracks" />} className="self-start"><ArrowLeftIcon aria-hidden="true" />{t("allTracks")}</Button>
-      <PageHeader title={<span className="flex flex-wrap items-center gap-3">{t("trackHeading")}<Badge variant={track.status === "blocked" ? "destructive" : "secondary"}>{trackStatusLabel(track)}</Badge></span>}
-        description={<>{t("strategyObservation")} <code className="[overflow-wrap:anywhere]">{track.id}</code></>} actions={actions} />
+      <PageHeader title={t("title")} className="mb-0" />
+      <div className="grid min-w-0 gap-6 lg:grid-cols-[260px_minmax(0,1fr)]">
+      <DailyTrackListPanel items={visibleItems} selectedId={track.id} loading={items === null} error={listError} onRetry={onReloadList} />
+      <div className="flex min-w-0 flex-col gap-6 rounded-xl border border-border bg-card p-5">
+      <header className="flex flex-wrap items-start justify-between gap-4"><div className="min-w-0"><h2 className="m-0 flex flex-wrap items-center gap-3 text-xl font-semibold">{t("trackHeading")} {track.id.slice(0, 8)}<Badge variant={track.status === "blocked" ? "destructive" : "secondary"}>{trackStatusLabel(track)}</Badge></h2>
+        <p className="mb-0 mt-2 text-sm text-muted-foreground">{t("strategyObservation")} <code className="[overflow-wrap:anywhere]">{track.id}</code></p></div><div className="flex flex-wrap items-center gap-2">{actions}</div></header>
       <dl className="m-0 flex flex-wrap gap-x-8 gap-y-4 text-sm [&_dd]:m-0 [&_dt]:text-muted-foreground">
         <div><dt className="flex items-center gap-2"><CalendarBlankIcon aria-hidden="true" />{t("trackingFrom")}</dt><dd><time>{track.origin.strategy_session}</time></dd></div>
         <div><dt>{t("lastObservation")}</dt><dd><time>{track.strategy_session}</time></dd></div>
@@ -82,6 +109,8 @@ export function DailyTrackWorkspace({ track, actions, notices }: {
         <CommonInputObservations key={`${track.id}:${track.strategy_session}`} endpoint={`/api/daily-tracks/${encodeURIComponent(track.id)}/common-input-observations`} />
         <Disclosure title={<>{t("updateDetails")} <span>{trackStatusLabel(track)}</span></>}><TrackingProgressView progress={track.progress} /></Disclosure>
         <Disclosure title={<>{t("originDisclosure")} <span>{track.origin.strategy_session}</span></>}><TrackingOriginView origin={track.origin} /></Disclosure>
+      </div>
+      </div>
       </div>
     </PageContent></Page>
   );

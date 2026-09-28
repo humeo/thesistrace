@@ -11,13 +11,13 @@ export function McpSetup({ endpoint }: { endpoint: string }) {
   const [client, setClient] = useState<McpClient>("codex");
   const prompt = setupPrompt(client, endpoint);
   const loginCommand = `codex mcp login ${mcpServerName}`;
-  return <section className={mcpLayout.stack} aria-labelledby="mcp-setup-heading">
-    <div className={mcpLayout.row}><div><h2 id="mcp-setup-heading">{t("connect")}</h2><p className={mcpLayout.prompt}>{t("chooseClient")}</p></div>
+  return <section className={`${mcpLayout.stack} rounded-xl border border-border bg-card p-5`} aria-labelledby="mcp-setup-heading">
+    <div className={mcpLayout.row}><h2 id="mcp-setup-heading">{t("connect")}</h2>
       <ToggleGroup value={[client]} onValueChange={values => { if (values[0]) setClient(values[0] as McpClient); }} aria-label={t("client")} className="flex-wrap">
         {(Object.keys(clients) as McpClient[]).map(key => <ToggleGroupItem key={key} value={key}>{key === "other" ? t("otherClient") : clients[key]}</ToggleGroupItem>)}
       </ToggleGroup>
     </div>
-    <div className={mcpLayout.row}><div><h3><ChatCircle size={17} />{t("setUpWith", { client: client === "other" ? t("yourAssistant") : clients[client] })}</h3><p>{t("copyIntro")}</p></div>
+    <div className={`${mcpLayout.row} justify-between border-t border-border pt-4`}><div><h3><ChatCircle size={17} />{t("setUpWith", { client: client === "other" ? t("yourAssistant") : clients[client] })}</h3><p>{t("copyIntro")}</p></div>
       <CopyButton key={client} text={prompt} label={t("copyPrompt")} primary />
     </div>
     <ol className={mcpLayout.steps} aria-label={t("steps")}>

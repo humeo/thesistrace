@@ -4,18 +4,17 @@ import { useEffect, useRef, useState } from "react";
 import { coreFetch } from "../auth/coreFetch";
 import type { DailyTrackAnalysis } from "./DailyTrackAnalysisView";
 import type { DailyTrackObservation } from "./DailyTrackObservationView";
-import { DailyTrackWorkspace } from "./DailyTrackWorkspace";
+import { DailyTrackListPanel, DailyTrackWorkspace } from "./DailyTrackWorkspace";
 import type { TerminalStrategyState } from "../research-runs/ResearchRunsPage";
 import { Page, PageHeader, PageContent } from "../components/layout/Page";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { Alert, AlertDescription } from "../components/ui/alert";
 import { Empty, EmptyHeader, EmptyTitle, EmptyDescription } from "../components/ui/empty";
-import { Table, TableHeader, TableBody, TableHead, TableCell, TableRow } from "../components/ui/table";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "../components/ui/dropdown-menu";
 import { AlertDialog, AlertDialogContent, AlertDialogTitle, AlertDialogDescription, AlertDialogHeader, AlertDialogFooter } from "../components/ui/alert-dialog";
 
-type DailyTrackSummary = {
+export type DailyTrackSummary = {
   id: string;
   status: "active" | "blocked" | "stopping" | "stopped";
   seed_run_id: string;
@@ -90,6 +89,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
   const { t } = useTranslation("daily");
   const [track, setTrack] = useState<DailyTrackDetail | null>(null);
   const [items, setItems] = useState<DailyTrackSummary[] | null>(null);
+  const [listError, setListError] = useState(false);
   const [error, setError] = useState(false);
   const [actionError, setActionError] = useState<ActionError | null>(null);
   const [confirmStop, setConfirmStop] = useState(false);
@@ -119,6 +119,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
     setConfirmDelete(false);
     setTrack(null);
     setItems(null);
+    setListError(false);
     setLoadState("loading");
   }, [trackId]);
 
@@ -171,6 +172,22 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
       if (timeout !== undefined) window.clearTimeout(timeout);
       controller.abort();
     };
+  }, [refreshGeneration, trackId]);
+
+  useEffect(() => {
+    if (!trackId) return;
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const response = await coreFetch("/api/daily-tracks", { signal: controller.signal });
+        if (!response.ok) throw new Error("DailyTrack list unavailable");
+        const list = await response.json() as DailyTrackList;
+        if (!controller.signal.aborted) { setItems(list.items); setListError(false); }
+      } catch {
+        if (!controller.signal.aborted) setListError(true);
+      }
+    })();
+    return () => controller.abort();
   }, [refreshGeneration, trackId]);
 
   function reloadStatus() {
@@ -301,7 +318,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
   if (!trackId && items === null) return <TrackLoading detail={false} />;
   if (trackId && track) {
     return <>
-      <DailyTrackWorkspace key={track.id} track={track} actions={<>
+      <DailyTrackWorkspace key={track.id} track={track} items={items} listError={listError} onReloadList={reloadStatus} actions={<>
         {track.status === "active" ? <Button disabled={!dailyTrackCanRefresh(track) || advanceState !== null || submitting}
           onClick={() => void refreshToLatestData()}>{t(advanceState === "submitting" ? "queuing" : dailyTrackNeedsPolling(track) ? "updating" : "refresh")}</Button> : null}
         {track.status === "blocked" ? <Button disabled={retryState !== null || submitting} onClick={() => void retryBlockedTrack()}>{t("retryBlocked")}</Button> : null}
@@ -330,18 +347,11 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
     </>;
   }
   return <Page aria-label={t("title")}><PageContent className="flex flex-col gap-6">
-    <PageHeader title={t("title")} description={t("description")} actions={<Button variant="outline" disabled={loadState !== null} onClick={reloadStatus}>{t("reloadStatus")}</Button>} />
+    <PageHeader title={t("title")} className="mb-0" actions={<Button variant="outline" disabled={loadState !== null} onClick={reloadStatus}>{t("reloadStatus")}</Button>} />
     {error ? <Alert variant="destructive"><AlertDescription>{t("listReloadFailed")}</AlertDescription></Alert> : null}
     {items?.length === 0 ? <Empty><EmptyHeader><EmptyTitle role="heading" aria-level={2}>{t("emptyTitle")}</EmptyTitle><EmptyDescription>{t("emptyDescription")}</EmptyDescription></EmptyHeader>
       <Button nativeButton={false} role="link" render={<a href="/research-runs" />}>{t("browseRuns")}</Button>
-    </Empty> : <Table scrollLabel={t("list")} className="min-w-[640px]">
-      <TableHeader><TableRow>{(["trackColumn", "status", "trackingFrom", "lastObservation", "seed"] as const).map(label => <TableHead key={label}>{t(label)}</TableHead>)}</TableRow></TableHeader>
-      <TableBody>{items?.map(item => <TableRow key={item.id}>
-        <TableHead scope="row"><Button variant="link" nativeButton={false} role="link" render={<a href={`/daily-tracks/${item.id}`} />} className="block h-auto min-h-11 w-full whitespace-normal text-left [overflow-wrap:anywhere]">{item.id}</Button></TableHead>
-        <TableCell><Badge variant={item.status === "blocked" ? "destructive" : "secondary"}>{t(`statuses.${item.status}`)}</Badge></TableCell>
-        <TableCell><time>{item.origin_session}</time></TableCell><TableCell><time>{item.strategy_session}</time></TableCell><TableCell><code>{item.seed_run_id}</code></TableCell>
-      </TableRow>)}</TableBody>
-    </Table>}
+    </Empty> : <div className="grid min-w-0 gap-6 lg:grid-cols-[260px_minmax(0,1fr)]"><DailyTrackListPanel items={items ?? []} /><div className="flex min-h-80 items-center justify-center rounded-xl border border-border bg-card p-8 text-center text-muted-foreground">{t("selectTrack")}</div></div>}
   </PageContent></Page>;
 }
 

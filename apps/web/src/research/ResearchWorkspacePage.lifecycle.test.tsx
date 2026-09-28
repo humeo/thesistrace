@@ -13,6 +13,12 @@ test.each(["success", "failure"])("a late Folder A %s cannot replace the loaded 
   let settle!: (response: Response) => void;
   const slow = new Promise<Response>((resolve) => { settle = resolve; });
   let folderReads = 0;
+  const drafts = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => drafts.get(key) ?? null,
+    setItem: (key: string, value: string) => { drafts.set(key, value); },
+    removeItem: (key: string) => { drafts.delete(key); },
+  });
   vi.stubGlobal("fetch", vi.fn(async (input: string) => {
     if (input === "/api/research-folders") {
       if (++folderReads === 1) return slow; // Deliberately ignores cancellation.
