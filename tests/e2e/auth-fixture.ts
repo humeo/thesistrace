@@ -98,6 +98,7 @@ export const securityTest = base.extend<{ cspGuard: void }>({
 
 export const test = securityTest.extend<{ researcher: AuthenticatedResearcher }>({
   researcher: [async ({ page }, use, testInfo) => {
+    const setupStarted = performance.now();
     const suffix = createHash("sha256").update(testInfo.testId).digest("hex").slice(0, 16);
     const researcher = await createResearcher(page, `browser-core-${suffix}@example.test`);
     const bootstrap = await page.request.post("/api/researcher/bootstrap", {
@@ -107,8 +108,11 @@ export const test = securityTest.extend<{ researcher: AuthenticatedResearcher }>
     expect(bootstrap.status()).toBe(200);
     expect(await bootstrap.json()).toMatchObject({ researcher_id: researcher.id });
     await openDataOverview(page);
+    testInfo.annotations.push({ type: "researcher-setup-ms",
+      description: String(Math.round(performance.now() - setupStarted)) });
     await use(researcher);
-  }, { auto: true }],
+  // Infrastructure preparation has its own budget; interaction keeps the test timeout.
+  }, { auto: true, timeout: 60_000 }],
 });
 
 export { expect };
