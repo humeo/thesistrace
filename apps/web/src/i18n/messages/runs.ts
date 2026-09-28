@@ -115,7 +115,7 @@ export const runsEn = {
   },
   "draft": {
     "title": "Create a draft",
-    "description": "Copy this Run’s frozen inputs into a browser draft to inspect or edit.",
+    "description": "Copy these settings into an editable draft. Adjust them, then run again to create a new result.",
     "folder": "Target Folder",
     "create": "Create draft",
     "keepCurrent": "Keep current draft",
@@ -331,7 +331,7 @@ export const runsZh = {
   },
   "draft": {
     "title": "创建草稿",
-    "description": "将此运行的冻结输入复制为浏览器草稿，以供查看或编辑。",
+    "description": "沿用本次配置，新建可编辑草稿。调整后再次运行，生成新的结果。",
     "folder": "目标文件夹",
     "create": "创建草稿",
     "keepCurrent": "保留当前草稿",

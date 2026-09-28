@@ -31,7 +31,7 @@ export function FrozenFrameworkModules({ modules }: { modules: FrameworkModules 
   return <div className="col-span-full grid min-w-0 gap-4" aria-label={t("frozen.modules")}>
     {frameworkStages.map(stage => {
       const module = modules[stage];
-      return typeof module === "string" ? <p key={stage}><strong>{t(`stages.${stage}`)}</strong> <code>{module}</code></p>
+      return typeof module === "string" ? <p key={stage}><strong>{t(`workbench.section.${stage}`)}</strong> {t(`builtin.${stage}`)}</p>
         : module.kind === "builtin_risk/v1" ? <div key={stage}>
           {module.stop_loss_threshold !== undefined && <p><strong>{t("frozen.stopLoss")}</strong> {frozenStopLossPercentage(modules)}%</p>}
           {module.maximum_holding_sessions !== undefined && <p><strong>{t("frozen.maximumHolding")}</strong> {module.maximum_holding_sessions}</p>}

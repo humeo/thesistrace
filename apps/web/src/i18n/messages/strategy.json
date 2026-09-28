@@ -7,10 +7,10 @@
       "risk_management": "Risk Management"
     },
     "builtin": {
-      "universe_selection": "Dataset candidates",
-      "alpha": "Alpha formula",
-      "portfolio_construction": "Periodic Top-N",
-      "risk_management": "Risk policies"
+      "universe_selection": "Use the selected stock universe",
+      "alpha": "Rank stocks by the scoring formula",
+      "portfolio_construction": "Select and allocate at the configured interval",
+      "risk_management": "No additional exit rules"
     },
     "explanations": {
       "universe_selection": "Choose candidates from the Dataset Universe selected above.",
@@ -114,7 +114,7 @@
       "modulePython": "{{stage}} · Frozen Python source and parameters"
     },
     "state": {
-      "summary": "Framework state · {{candidates}} candidates · {{signals}} active signals",
+      "summary": "Strategy decisions · {{candidates}} candidates · {{signals}} active signals",
       "help": "Signals and module state inform later decisions. They do not represent orders or fills.",
       "signals": "Active signals",
       "module": "{{stage}} state"
@@ -203,6 +203,100 @@
       "executed": "Actually sold {{sold}} units; {{remaining}} units remain to reduce. Research holding units and execution shares are measured separately; rejected and rounded unfilled amounts do not count as complete.",
       "ended": "This holding cycle ended; a later decision may re-enter.",
       "active": "Held {{shares}} shares at decision; ordinary additions are forbidden during this take-profit cycle until full exit. A reduction is attempted at next Open; related records show actual fills and rejections."
+    },
+    "workbench": {
+      "intro": "Build the rules, then test them on historical data.",
+      "factorIntro": "Measure whether a scoring formula predicts future returns.",
+      "conditionsTitle": "Backtest conditions",
+      "ruleModeHelp": "Choose stocks, allocate capital, then add exit rules if needed.",
+      "directHelp": "This program decides the complete portfolio. Use rule configuration to combine built-in rules with custom Python.",
+      "chooseRule": "Choose a ranking rule",
+      "rankBy": "How should stocks be ranked?",
+      "lookback": "Measure over trading days",
+      "scoring": {
+        "momentum": "Strongest recent returns",
+        "reversal": "Weakest recent returns",
+        "custom": "Custom scoring formula"
+      },
+      "scoringHelp": {
+        "momentum": "Rank stocks by their return over the past {{count}} trading days, highest first.",
+        "reversal": "Rank stocks by their return over the past {{count}} trading days, lowest first."
+      },
+      "scoringStart": "Choose a common rule to start without writing a formula.",
+      "windowInvalid": "Enter 1–252 trading days.",
+      "section": {
+        "universe_selection": "Which stocks can be selected?",
+        "alpha": "How are stocks selected?",
+        "portfolio_construction": "How much to buy and when to rebalance?",
+        "risk_management": "When should positions be reduced or sold?"
+      },
+      "sectionHelp": {
+        "universe_selection": "Choose the stock universe. Add Python only if you need your own candidate filter.",
+        "alpha": "Give each stock a score. The highest scores are selected for the portfolio.",
+        "portfolio_construction": "Choose the number of stocks, selection interval and allocation.",
+        "risk_management": "Ordinary rebalancing replaces stocks. Extra exit rules are optional and checked at each Close."
+      },
+      "configure": "Configure rule",
+      "python": "Custom Python",
+      "basicRisk": "Stop loss and holding limits",
+      "basicRiskHelp": "Optional: exit a losing position or limit its holding period.",
+      "profitRisk": "Take profit in stages",
+      "profitRiskHelp": "Optional: reduce a position as its return reaches specified levels.",
+      "drawdownRisk": "Limit portfolio drawdown",
+      "drawdownRiskHelp": "Optional: lower stock exposure after a portfolio loss.",
+      "minimumHolding": "Minimum holding period",
+      "minimumHoldingHelp": "Optional: keep a position through ordinary selection changes.",
+      "fixedExposure": "Stock allocation (%)",
+      "exposureMode": "How is stock allocation set?",
+      "fixedMode": "Fixed percentage",
+      "dynamicMode": "Formula based",
+      "fixedHelp": "The remaining capital stays in cash. For example, 60 means a 60% stock allocation.",
+      "summaryTitle": "What this strategy will do",
+      "summarySelection": "Stock universe",
+      "summaryRanking": "Selection rule",
+      "summaryUniverse": "Top {{count}} stocks by liquidity",
+      "summaryUniverseMissing": "Choose a stock universe",
+      "summaryUniversePython": "Python filters the selected universe",
+      "summaryAlphaPython": "Python computes the scores",
+      "summaryScoring": {
+        "momentum": "Highest {{count}}-day returns first",
+        "reversal": "Lowest {{count}}-day returns first"
+      },
+      "summaryCustomFormula": "Rank by your custom scoring formula",
+      "summaryRankingMissing": "Choose a scoring rule",
+      "summaryPortfolio": "Portfolio and rebalancing",
+      "summaryPortfolioPython": "Python controls holdings and rebalancing",
+      "summaryHoldings": "Up to {{holdings}} stocks · select every {{sessions}} trading days · stock allocation {{exposure}}",
+      "summaryWeighting": "Allocation between stocks",
+      "weighting": {
+        "equal_weight": "Equal allocation",
+        "rank_weight": "Higher ranks receive more capital",
+        "inverse_volatility": "Lower volatility receives more capital"
+      },
+      "summaryMinHolding": "Minimum holding period",
+      "sessions": "{{count}} trading days",
+      "summaryExit": "Additional exits",
+      "summaryRiskPython": "Python applies the exit rules",
+      "summaryNoRisk": "None; positions change through the portfolio rules",
+      "summaryStop": "Stop loss {{percent}}%",
+      "summaryMaxHolding": "Hold at most {{count}} trading days",
+      "summaryProfit": "{{count}} take-profit levels",
+      "summaryDrawdown": "At {{threshold}}% drawdown, cap stocks at {{exposure}}%",
+      "listSeparator": "; ",
+      "dynamicExposureShort": "set by formula",
+      "summaryDirect": "The Python program determines selection, allocation and exits.",
+      "execution": "Decide after the Close and simulate trades at the next trading day's Open. Trading restrictions can prevent fills.",
+      "resultsHelp": "The result shows returns, drawdown, holdings and the reasons for simulated trades.",
+      "programInputs": "Data used by this program",
+      "programParameters": "Optional external parameters",
+      "programParametersHelp": "Use {} when constants are defined in the code. These values are passed as parameters.",
+      "programHelp": "Python reference",
+      "notes": "Research notes (optional)",
+      "advancedSelection": "Industry adjustment",
+      "advancedSelectionHelp": "Optional: remove differences in average scores between industries.",
+      "customizeRule": "Customize {{stage}} with Python",
+      "backToRule": "Use built-in {{stage}} rules",
+      "programDataSummary": "{{fields}} fields · latest {{days}} trading days"
     }
   },
   "zh-CN": {
@@ -213,10 +307,10 @@
       "risk_management": "风险管理"
     },
     "builtin": {
-      "universe_selection": "数据集候选",
-      "alpha": "Alpha 公式",
-      "portfolio_construction": "周期 Top-N",
-      "risk_management": "风险规则"
+      "universe_selection": "使用所选股票池",
+      "alpha": "按评分公式给股票排序",
+      "portfolio_construction": "按设定间隔选股并分配仓位",
+      "risk_management": "未设置额外退出条件"
     },
     "explanations": {
       "universe_selection": "从上方选择的数据集股票池中挑选候选。",
@@ -320,7 +414,7 @@
       "modulePython": "{{stage}} · 冻结的 Python 源码与参数"
     },
     "state": {
-      "summary": "Framework 状态 · {{candidates}} 个候选 · {{signals}} 条活跃信号",
+      "summary": "策略决策 · {{candidates}} 个候选 · {{signals}} 条活跃信号",
       "help": "信号和模块状态为后续决策提供依据，不代表委托或成交。",
       "signals": "活跃信号",
       "module": "{{stage}}状态"
@@ -409,6 +503,100 @@
       "executed": "实际卖出 {{sold}} 单位；待减 {{remaining}} 单位。研究持仓单位与执行股数分开计量，拒绝和取整未成交部分不算完成。",
       "ended": "本次持仓周期已结束；后续新决策可重新入场。",
       "active": "判断时持仓 {{shares}} 股；止盈周期内禁止普通补仓，直至完全退出。下一开盘尝试减仓，实际成交与拒绝见关联记录。"
+    },
+    "workbench": {
+      "intro": "配置选股和交易规则，用历史数据检验策略表现。",
+      "factorIntro": "检验一个评分公式能否识别未来收益更高的股票。",
+      "conditionsTitle": "回测条件",
+      "ruleModeHelp": "先确定选股和持仓规则，再按需要添加退出条件。",
+      "directHelp": "这段程序负责完整的选股、仓位和退出决策。需要组合现成规则时，可切回规则配置。",
+      "chooseRule": "选择一种选股规则",
+      "rankBy": "按什么给股票排序？",
+      "lookback": "观察最近多少个交易日",
+      "scoring": {
+        "momentum": "近期涨幅高的优先",
+        "reversal": "近期跌幅大的优先",
+        "custom": "自己编写评分公式"
+      },
+      "scoringHelp": {
+        "momentum": "比较最近 {{count}} 个交易日的涨幅，涨幅越高越优先。",
+        "reversal": "比较最近 {{count}} 个交易日的涨幅，涨幅越低越优先。"
+      },
+      "scoringStart": "选择常用规则即可开始，无需先写公式。",
+      "windowInvalid": "请输入 1–252 个交易日。",
+      "section": {
+        "universe_selection": "从哪些股票里选？",
+        "alpha": "按什么规则选股？",
+        "portfolio_construction": "买多少、什么时候换仓？",
+        "risk_management": "什么情况下减仓或卖出？"
+      },
+      "sectionHelp": {
+        "universe_selection": "先选择股票池。需要进一步筛选时，可用 Python 定义候选条件。",
+        "alpha": "给候选股票排序，评分靠前的进入组合。",
+        "portfolio_construction": "设置持仓数量、选股间隔，以及资金如何分配。",
+        "risk_management": "普通换仓会卖出被替换的股票。以下额外退出条件按需设置，每个收盘检查。"
+      },
+      "configure": "配置规则",
+      "python": "用 Python 自定义",
+      "basicRisk": "止损与最长持有期",
+      "basicRiskHelp": "可选：亏损达到阈值，或持有超过指定天数时退出。",
+      "profitRisk": "分批止盈",
+      "profitRiskHelp": "可选：收益达到指定档位时，分批卖出。",
+      "drawdownRisk": "组合回撤保护",
+      "drawdownRiskHelp": "可选：组合亏损达到阈值时，降低股票仓位。",
+      "minimumHolding": "最短持有期",
+      "minimumHoldingHelp": "可选：普通换仓时，保留尚未达到持有期限的股票。",
+      "fixedExposure": "股票仓位（%）",
+      "exposureMode": "股票仓位如何确定？",
+      "fixedMode": "固定比例",
+      "dynamicMode": "按公式动态调整",
+      "fixedHelp": "剩余资金保留为现金。例如填 60，表示目标股票仓位为 60%。",
+      "summaryTitle": "这套策略会怎样运行",
+      "summarySelection": "选股范围",
+      "summaryRanking": "选股规则",
+      "summaryUniverse": "流动性最高的 {{count}} 只股票",
+      "summaryUniverseMissing": "尚未选择股票池",
+      "summaryUniversePython": "Python 在所选股票池内筛选候选",
+      "summaryAlphaPython": "由 Python 计算选股评分",
+      "summaryScoring": {
+        "momentum": "近 {{count}} 日涨幅高的优先",
+        "reversal": "近 {{count}} 日涨幅低的优先"
+      },
+      "summaryCustomFormula": "按自定义公式的评分排序",
+      "summaryRankingMissing": "尚未选择选股规则",
+      "summaryPortfolio": "持仓与换仓",
+      "summaryPortfolioPython": "由 Python 决定持仓和换仓时机",
+      "summaryHoldings": "最多 {{holdings}} 只股票，每 {{sessions}} 个交易日选股，股票仓位 {{exposure}}",
+      "summaryWeighting": "股票之间如何分配",
+      "weighting": {
+        "equal_weight": "每只股票分配相同资金",
+        "rank_weight": "排名越靠前，分配越多",
+        "inverse_volatility": "波动越低，分配越多"
+      },
+      "summaryMinHolding": "最短持有期",
+      "sessions": "{{count}} 个交易日",
+      "summaryExit": "额外退出条件",
+      "summaryRiskPython": "由 Python 决定",
+      "summaryNoRisk": "未设置；持仓按组合规则调整",
+      "summaryStop": "亏损 {{percent}}% 止损",
+      "summaryMaxHolding": "最多持有 {{count}} 个交易日",
+      "summaryProfit": "{{count}} 档止盈",
+      "summaryDrawdown": "回撤 {{threshold}}% 时，股票仓位不超过 {{exposure}}%",
+      "listSeparator": "；",
+      "dynamicExposureShort": "由公式决定",
+      "summaryDirect": "由 Python 程序决定选股、仓位和退出条件。",
+      "execution": "收盘后判断，下一交易日开盘模拟交易。交易限制可能导致无法成交。",
+      "resultsHelp": "运行后可查看收益、回撤、每日持仓，以及每次模拟交易的原因。",
+      "programInputs": "程序使用的数据",
+      "programParameters": "可选的外部参数",
+      "programParametersHelp": "常量直接写在代码里时，这里用 {} 即可。这里的值会传入 parameters。",
+      "programHelp": "Python 使用说明",
+      "notes": "研究备注（可选）",
+      "advancedSelection": "行业调整",
+      "advancedSelectionHelp": "可选：消除不同行业平均评分的差异。",
+      "customizeRule": "用 Python 自定义{{stage}}",
+      "backToRule": "使用内置{{stage}}规则",
+      "programDataSummary": "{{fields}} 个字段，最近 {{days}} 个交易日"
     }
   }
 }

@@ -312,6 +312,7 @@ function ResearchRunDetail({ detail, folderError, folders, onRefreshFolders, res
         </TabsList>
         <TabsContent keepMounted value="overview" className="flex flex-col gap-6">
           <ResearchResultView result={result} />
+          {!("factor" in result) && !detail.deleting && folders.length > 0 && run.input ? <UseAsDraftPanel folders={folders} input={run.input} researcherId={researcherId} sourceFolderId={run.folder_id} /> : null}
         </TabsContent>
         {"factor" in result ? <TabsContent keepMounted value="evidence">
           {visited.includes("evidence") ? <FactorEvidence runId={run.id} embedded /> : null}
@@ -331,7 +332,7 @@ function ResearchRunDetail({ detail, folderError, folders, onRefreshFolders, res
             <ResearchRunFacts run={run} />
             {run.progress ? <ResearchRunProgressView progress={run.progress} status={run.status} timing={run.execution_timing} /> : null}
             {folderContent}
-            {!detail.deleting && folders.length > 0 && run.input ? <UseAsDraftPanel folders={folders} input={run.input} researcherId={researcherId} sourceFolderId={run.folder_id} /> : null}
+            {"factor" in result && !detail.deleting && folders.length > 0 && run.input ? <UseAsDraftPanel folders={folders} input={run.input} researcherId={researcherId} sourceFolderId={run.folder_id} /> : null}
           </> : null}
         </TabsContent>
       </Tabs> : <Section title={t("result.configuration")} className="border-t border-border pt-6">

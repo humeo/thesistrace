@@ -15,10 +15,15 @@ available. Source, parameters, state and diagnostics are private research conten
 
 ## Direct Strategy authoring
 
-Select **Strategy Backtest → Direct · Python** in Research. The active definition
+Select **Strategy Backtest → Complete Python strategy** in Research.
+Rule configuration is the default strategy authoring flow: choose candidates,
+rank stocks with a common rule or a formula, set allocation and rebalancing,
+and optionally configure exits. Each step can use a Python module.
+Data declarations, external parameters and the Python reference expand on demand. The active definition
 contains source, a JSON parameter object, declared canonical field IDs and a
 history length of 1–253 trading sessions (including the decision session), with
-at most 32 unique fields. Switching mode removes the inactive definition.
+at most 32 unique fields. Switching mode preserves inactive browser drafts. Only the active definition
+is submitted.
 Check configuration and submission use the same admission contract. HTTP and
 MCP accept `strategy_mode: "direct"` with `program` and `initial_cash_cny`; Alpha,
 neutralization, Top-N and selection-interval fields are not accepted in Direct.

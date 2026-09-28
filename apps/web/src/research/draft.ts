@@ -1,3 +1,4 @@
+import { readScoringRule } from "./strategyRules";
 import { drawdownDraft, drawdownFields, drawdownIssues, emptyDrawdownInputs, type DrawdownInputs, type DrawdownField } from "./portfolioDrawdown";
 import { readTakeProfitDraft, takeProfitDraft, takeProfitIssues, type TakeProfitField, type TakeProfitTierDraft } from "./takeProfit";
 import { costFields, costInputError, defaultSimulationCosts, readCostInputs, type CostField, type SimulationCosts } from "./simulationCosts";
@@ -331,13 +332,15 @@ export function isValidInitialCash(value: string): boolean {
 export type ResearchInputField = DrawdownField | TakeProfitField | `costs.${CostField}` | ProgramInputField | `${FrameworkStage}.${ProgramInputField}`
   | "formula" | "hypothesis" | "startDate" | "endDate" | "universe" | "neutralization" | "initialCashCny"
   | "stopLossThreshold" | "maximumHoldingSessions" | "minimumHoldingSessions" | "holdingsCount" | "selectionEverySessions" | "exposureExpression" | "volatilityWindow";
-export type ResearchInputIssueCode = "formulaRequired" | "startRequired" | "startInvalid" | "endRequired" | "endInvalid" | "dateOrder" | "universeRequired" | "neutralizationRequired" | "holdingsRange" | "intervalRange" | "cashRange" | "volatilityRange" | "exposureRequired" | "exposureRange" | "notesLength" | "costInvalid" | "slippageRange" | "drawdownCooldown" | "drawdownThreshold" | "drawdownExposure" | "takeProfitThreshold" | "takeProfitReduction" | "takeProfitOrder" | "stopLossRange" | "holdingSessions" | "holdingOrder" | "programSource" | "programParameters" | "programFields" | "programHistory";
+export type ResearchInputIssueCode = "rankingWindowInvalid" | "formulaRequired" | "startRequired" | "startInvalid" | "endRequired" | "endInvalid" | "dateOrder" | "universeRequired" | "neutralizationRequired" | "holdingsRange" | "intervalRange" | "cashRange" | "volatilityRange" | "exposureRequired" | "exposureRange" | "notesLength" | "costInvalid" | "slippageRange" | "drawdownCooldown" | "drawdownThreshold" | "drawdownExposure" | "takeProfitThreshold" | "takeProfitReduction" | "takeProfitOrder" | "stopLossRange" | "holdingSessions" | "holdingOrder" | "programSource" | "programParameters" | "programFields" | "programHistory";
 export type ResearchInputIssue = { field: ResearchInputField; code: ResearchInputIssueCode };
 
 export function researchInputIssues(inputs: ResearchInputs): ResearchInputIssue[] {
   const issues: ResearchInputIssue[] = [];
   const direct = inputs.researchKind === "strategy_backtest" && inputs.strategyMode === "direct";
   if (usesBuiltinAlpha(inputs) && !inputs.formula.trim()) issues.push({ field: "formula", code: "formulaRequired" });
+  const rankingRule = usesBuiltinAlpha(inputs) ? readScoringRule(inputs.formula) : null;
+  if (rankingRule && !isValidVolatilityWindow(rankingRule.sessions)) issues.push({ field: "formula", code: "rankingWindowInvalid" });
   if (inputs.startDate === "") issues.push({ field: "startDate", code: "startRequired" });
   else if (!isIsoCalendarDate(inputs.startDate)) issues.push({ field: "startDate", code: "startInvalid" });
   if (inputs.endDate === "") issues.push({ field: "endDate", code: "endRequired" });

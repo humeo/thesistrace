@@ -15,8 +15,8 @@ async function mountDirect(page: Page) {
   await page.goto("https://exposure.test/");
   await page.addStyleTag({ content: styles });
   await page.addScriptTag({ content: script });
-  await page.getByRole("combobox", { name: "Strategy mode", exact: true }).click();
-  await page.getByRole("option", { name: "Direct · Python", exact: true }).click();
+  await page.getByRole("combobox", { name: "Strategy authoring", exact: true }).click();
+  await page.getByRole("option", { name: "Complete Python strategy", exact: true }).click();
 }
 
 test("Direct source survives checking and submission failures, with one pending request and safe retry", async ({ page }) => {
@@ -43,6 +43,7 @@ test("Direct source survives checking and submission failures, with one pending 
   await mountDirect(page);
   const editor = page.locator("#python-source");
   await editor.fill(source);
+  await page.getByRole("button", { name: "Optional external parameters", exact: true }).click();
   await page.getByRole("textbox", { name: "Parameters (JSON)", exact: true }).fill('{"threshold": 0.05}');
   await page.getByRole("button", { name: "Check configuration", exact: true }).click();
   await expect(page.getByText("Configuration check is unavailable. Try again.")).toBeVisible();
@@ -67,15 +68,15 @@ test("Direct source survives checking and submission failures, with one pending 
   await editor.press("Home");
   await editor.press("Shift+End");
   await page.getByRole("button", { name: "简体中文", exact: true }).dispatchEvent("click");
-  await page.setViewportSize({ width: 320, height: 800 });
+  await page.setViewportSize({ width: 1440, height: 900 });
   await expect(editor).toBeFocused();
   await expect.poll(() => editor.evaluate(() => window.getSelection()?.toString())).toBe("# revised");
   await page.getByRole("button", { name: "English", exact: true }).dispatchEvent("click");
-  await page.getByRole("combobox", { name: "Strategy mode", exact: true }).click();
-  await page.getByRole("option", { name: "Framework · Decision modules", exact: true }).click();
+  await page.getByRole("combobox", { name: "Strategy authoring", exact: true }).click();
+  await page.getByRole("option", { name: "Configure trading rules", exact: true }).click();
   await expect(editor).not.toBeVisible();
-  await page.getByRole("combobox", { name: "Strategy mode", exact: true }).click();
-  await page.getByRole("option", { name: "Direct · Python", exact: true }).click();
+  await page.getByRole("combobox", { name: "Strategy authoring", exact: true }).click();
+  await page.getByRole("option", { name: "Complete Python strategy", exact: true }).click();
   await editor.focus();
   await expect.poll(() => editor.evaluate(() => window.getSelection()?.toString())).toBe("# revised");
   await page.keyboard.insertText("# fixed");
@@ -87,7 +88,7 @@ test("Direct source survives checking and submission failures, with one pending 
   await expect(editor).toHaveText(`${source}\n# revised`, { useInnerText: true });
   await expect(editor).toHaveAttribute("aria-invalid", "false");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  await page.screenshot({ path: test.info().outputPath("direct-recovery-320.png"), fullPage: true });
+  await page.screenshot({ path: test.info().outputPath("direct-recovery-desktop.png"), fullPage: true });
   await page.getByRole("button", { name: "Run backtest", exact: true }).click();
   await expect(page).toHaveURL("https://exposure.test/research-runs/run_direct_retry");
   expect(commands).toHaveLength(3);

@@ -6,12 +6,10 @@ import {
   Minus,
   Play,
   Plus,
-  Info,
   X,
 } from "@phosphor-icons/react";
-import { useCallback, useEffect, useRef, useState, type ReactNode, type Ref } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
-import { Trans } from "react-i18next";
 import { cn } from "cn";
 import type { AlphaCatalog } from "../alphaCatalog";
 import { coreFetch } from "../auth/coreFetch";
@@ -22,6 +20,10 @@ import { AlphaFormulaEditor, type AlphaFormulaEditorHandle, type EditorDiagnosti
 import { folderDisplayName, folderMutationError, type FolderError } from "./folders";
 import { formatResearchIssue, researchIssueField, type ResearchRunAdmissionIssue } from "./admission";
 import { PythonStrategyAuthoring } from "./PythonStrategyAuthoring";
+import { StrategyScoringRule } from "./StrategyScoringRule";
+import { StrategyRuleSummary } from "./StrategyRuleSummary";
+import { RuleDisclosure } from "./RuleDisclosure";
+import { ResearchPositionSizing } from "./ResearchPositionSizing";
 import { FrameworkAuthoring } from "./FrameworkAuthoring";
 import { SimulationCostSettings } from "./SimulationCostSettings";
 import type { CostField } from "./simulationCosts";
@@ -43,6 +45,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../componen
 import { RadioGroup, RadioGroupItem } from "../components/ui/radio-group";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "../components/ui/sheet";
 import { PageContent, PageHeader } from "../components/layout/Page";
+import { ResearchParameterHelp } from "./ResearchParameterHelp";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "../components/ui/popover";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -440,8 +443,16 @@ export function ResearchDraftWorkspace({
   const builtinAlpha = usesBuiltinAlpha(draft);
   useEffect(() => {
     if (pendingInput === null) return;
-    if (pendingInput === "formula") alphaEditor.current?.focus();
-    else if (pendingInput === "exposureExpression") exposureEditor.current?.focus();
+    if (pendingInput === "formula") {
+      const input = workspace.current?.querySelector<HTMLElement>("#scoring-window");
+      if (input && input.getClientRects().length) input.focus();
+      else if (!factor && !workspace.current?.querySelector("#scoring-custom-formula")?.getClientRects().length) workspace.current?.querySelector<HTMLElement>("#scoring-rule")?.focus();
+      else alphaEditor.current?.focus();
+    } else if (pendingInput === "exposureExpression") {
+      const input = workspace.current?.querySelector<HTMLElement>("#stock-exposure-percent");
+      if (input && input.getClientRects().length) input.focus();
+      else exposureEditor.current?.focus();
+    }
     else {
       const input = workspace.current?.querySelector<HTMLElement>(inputSelector(pendingInput));
       input?.focus();
@@ -596,6 +607,41 @@ export function ResearchDraftWorkspace({
     ) : null}
     {exposureDiagnosticState.kind === "unavailable" ? <p className="m-0 text-sm text-muted-foreground">{t("exposureUnavailable")}</p> : null}
   </FieldGroup>;
+  const universeSettings = <FieldGroup className="gap-2">
+              <Field>
+                <FieldLabel htmlFor="research-universe">{t("universe")}</FieldLabel>
+                <Select value={draft.universe || null} onValueChange={(value) => updateDraft((current) => ({ ...current, universe: value ?? "" }))}>
+                  <SelectTrigger id="research-universe" aria-invalid={Boolean(inputError("universe"))}
+                    aria-describedby={inputError("universe") ? "universe-error" : undefined} className="w-full">
+                    <SelectValue placeholder={t("notSelected")}>
+                      {draft.universe ? t("top", { count: Number(draft.universe.slice(3)) }) : undefined}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent><SelectGroup>
+                    {[300, 1000, 2000, 3000].map((count) => <SelectItem value={`top${count}`} key={count}>{t("top", { count })}</SelectItem>)}
+                  </SelectGroup></SelectContent>
+                </Select>
+                {inputError("universe") && <small id="universe-error" className="text-destructive">{inputError("universe")}</small>}
+              </Field>
+    <FieldDescription>{t("universeHelp")}</FieldDescription>
+  </FieldGroup>;
+  const neutralizationSettings = <Field hidden={!builtinAlpha} className={cn(!builtinAlpha && "hidden")}>
+                <FieldLabel htmlFor="research-neutralization">{t("neutralization")}</FieldLabel>
+                <Select value={draft.neutralization || null}
+                  onValueChange={(value) => updateDraft((current) => ({ ...current, neutralization: value ?? "" }))}>
+                  <SelectTrigger id="research-neutralization" aria-invalid={Boolean(inputError("neutralization"))}
+                    aria-describedby={inputError("neutralization") ? "neutralization-error" : undefined} className="w-full">
+                    <SelectValue placeholder={t("notSelected")}>
+                      {draft.neutralization === "none" || draft.neutralization === "industry" ? t(draft.neutralization) : undefined}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent><SelectGroup>
+                    <SelectItem value="none">{t("none")}</SelectItem>
+                    <SelectItem value="industry">{t("industry")}</SelectItem>
+                  </SelectGroup></SelectContent>
+                </Select>
+                {inputError("neutralization") && <small id="neutralization-error" className="text-destructive">{inputError("neutralization")}</small>}
+              </Field>;
   const authoring = <div key={editorGeneration} className="min-w-0">
     <div hidden={direct} className={cn("min-w-0", direct && "hidden")}>
       <FrameworkAuthoring factor={factor} drawdown={draft}
@@ -605,7 +651,14 @@ export function ResearchDraftWorkspace({
         maximumHoldingSessions={draft.maximumHoldingSessions} updateMaximumHoldingSessions={maximumHoldingSessions => updateDraft(current => ({ ...current, maximumHoldingSessions }))}
         minimumHoldingSessions={draft.minimumHoldingSessions} updateMinimumHoldingSessions={minimumHoldingSessions => updateDraft(current => ({ ...current, minimumHoldingSessions }))}
         modules={draft.frameworkModules} error={programError} errorLine={programErrorLine}
-        fieldsButton={() => fieldsButton("catalog")} alphaEditor={alphaAuthoring} portfolioSettings={portfolioSettings}
+        fieldsButton={() => fieldsButton("catalog")}
+        universeSettings={!factor && !direct ? universeSettings : null}
+        neutralizationSettings={!factor && !direct ? <RuleDisclosure title={i18n.t("strategy:workbench.advancedSelection")}
+          description={i18n.t("strategy:workbench.advancedSelectionHelp")} configured={draft.neutralization === "industry"}
+          invalid={Boolean(inputError("neutralization"))}>{neutralizationSettings}</RuleDisclosure> : null}
+        alphaEditor={<StrategyScoringRule enabled={!factor} formula={draft.formula} catalog={catalog}
+          error={inputError("formula")} onChange={formula => updateDraft(current => ({ ...current, formula, editor: { anchor: 0, head: 0 } }))}>
+          {alphaAuthoring}</StrategyScoringRule>} portfolioSettings={portfolioSettings}
         selectModule={(stage, kind) => updateDraft(current => selectFrameworkModule(current, stage, kind))}
         updateProgram={(stage, changes) => updateDraft(current => ({ ...current, frameworkModules: {
           ...current.frameworkModules, [stage]: { ...current.frameworkModules[stage], program: { ...current.frameworkModules[stage].program, ...changes } },
@@ -620,11 +673,8 @@ export function ResearchDraftWorkspace({
     <section ref={workspace} aria-label={t("title")} className="@container min-w-0">
       <PageContent width="wide">
         <PageHeader
-          title={<Input id="research-name" aria-label={t("name")} autoComplete="off" maxLength={200}
-            className="h-11 w-full max-w-[720px] border-transparent bg-transparent px-0 text-2xl font-semibold placeholder:text-foreground hover:border-border focus-visible:border-ring focus-visible:px-2"
-            onChange={(event) => updateDraft((current) => ({ ...current, name: event.target.value }))}
-            placeholder={t("untitled")} value={draft.name} />}
-          description={storageError === null ? t(hasStoredDraft ? "draftSavedLocal" : "draftNew") : t(`storage.${storageError}`)}
+          title={t(factor ? "factor_evaluation" : "strategy_backtest")}
+          description={i18n.t(factor ? "strategy:workbench.factorIntro" : "strategy:workbench.intro")}
           actions={<>{folderNavigation}<Button variant="outline" className="max-[767px]:min-h-11" disabled={submitting} onClick={() => startNewResearch()}>
             <Plus aria-hidden="true" />{t("newResearch")}</Button></>}
         />
@@ -658,18 +708,19 @@ export function ResearchDraftWorkspace({
               </SelectGroup></SelectContent>
             </Select>
           </Field>
+          <FieldDescription>{i18n.t(direct ? "strategy:workbench.directHelp" : "strategy:workbench.ruleModeHelp")}</FieldDescription>
         </FieldGroup>}
 
         <div className="grid min-w-0 gap-6 pb-8 @min-[960px]:grid-cols-[minmax(0,1fr)_320px] @min-[960px]:items-start">
-          <section aria-label={t(direct ? "pythonAuthoring" : factor ? "authoring" : "frameworkAuthoring")} className="grid min-w-0 content-start gap-6">
+          <section aria-label={t(direct ? "pythonAuthoring" : factor ? "authoring" : "frameworkAuthoring")} className="grid min-w-0 content-start gap-6 rounded-lg border border-border bg-card p-6">
             {authoring}
             {visibleIssues.length > 0 ? (
               <ul aria-label={t("runIssues")} className="m-0 grid gap-2 rounded-lg border border-destructive p-4 text-sm text-destructive">
                 {visibleIssues.map((issue, index) => <li key={`${issue.code}-${index}`}>{formatResearchIssue(issue, locale)}</li>)}
               </ul>
             ) : null}
-            {!factor && <p className="m-0 text-sm text-muted-foreground">{t(direct ? "directSummary" : "frameworkSummary")}</p>}
-            <FieldGroup className="rounded-lg border border-border bg-card p-4">
+
+            <RuleDisclosure title={i18n.t("strategy:workbench.notes")} configured={draft.hypothesis !== ""} invalid={Boolean(inputError("hypothesis"))}><FieldGroup>
               <Field>
                 <FieldLabel htmlFor="research-notes">{t("notes")}</FieldLabel>
                 <Textarea id="research-notes" rows={3} className="min-h-22" aria-describedby="research-notes-limit"
@@ -680,11 +731,18 @@ export function ResearchDraftWorkspace({
                   {t("characters", { used: Array.from(draft.hypothesis).length, maximum: MAX_HYPOTHESIS_LENGTH })}
                 </span>
               </Field>
-            </FieldGroup>
+            </FieldGroup></RuleDisclosure>
           </section>
 
-          <aside aria-label={t("settings")} className="grid min-w-0 gap-5 rounded-lg border border-border bg-card p-4">
-            <h2 className="m-0 text-base font-semibold">{t("settings")}</h2>
+          <aside aria-label={t("settings")} className="grid min-w-0 gap-6">
+            {!factor && <StrategyRuleSummary inputs={draft} />}
+            <section className="grid min-w-0 gap-5 rounded-lg border border-border bg-card p-4">
+            <h2 className="m-0 text-base font-semibold">{factor ? t("settings") : i18n.t("strategy:workbench.conditionsTitle")}</h2>
+            <Field>
+              <FieldLabel htmlFor="research-name">{t("name")}</FieldLabel>
+              <Input id="research-name" aria-label={t("name")} autoComplete="off" maxLength={200} placeholder={t("untitled")} value={draft.name}
+                onChange={event => updateDraft(current => ({ ...current, name: event.target.value }))} />
+            </Field>
             <ResearchDateFields
               compact
               startError={inputError("startDate")} endError={inputError("endDate")}
@@ -693,38 +751,8 @@ export function ResearchDraftWorkspace({
               onChange={({ startDate, endDate }) => updateDraft((current) => ({ ...current, startDate, endDate }))}
             />
             <FieldGroup className="gap-4">
-              <Field>
-                <FieldLabel htmlFor="research-universe">{t("universe")}</FieldLabel>
-                <Select value={draft.universe || null} onValueChange={(value) => updateDraft((current) => ({ ...current, universe: value ?? "" }))}>
-                  <SelectTrigger id="research-universe" aria-invalid={Boolean(inputError("universe"))}
-                    aria-describedby={inputError("universe") ? "universe-error" : undefined} className="w-full">
-                    <SelectValue placeholder={t("notSelected")}>
-                      {draft.universe ? t("top", { count: Number(draft.universe.slice(3)) }) : undefined}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent><SelectGroup>
-                    {[300, 1000, 2000, 3000].map((count) => <SelectItem value={`top${count}`} key={count}>{t("top", { count })}</SelectItem>)}
-                  </SelectGroup></SelectContent>
-                </Select>
-                {inputError("universe") && <small id="universe-error" className="text-destructive">{inputError("universe")}</small>}
-              </Field>
-              <Field hidden={!builtinAlpha} className={cn(!builtinAlpha && "hidden")}>
-                <FieldLabel htmlFor="research-neutralization">{t("neutralization")}</FieldLabel>
-                <Select value={draft.neutralization || null}
-                  onValueChange={(value) => updateDraft((current) => ({ ...current, neutralization: value ?? "" }))}>
-                  <SelectTrigger id="research-neutralization" aria-invalid={Boolean(inputError("neutralization"))}
-                    aria-describedby={inputError("neutralization") ? "neutralization-error" : undefined} className="w-full">
-                    <SelectValue placeholder={t("notSelected")}>
-                      {draft.neutralization === "none" || draft.neutralization === "industry" ? t(draft.neutralization) : undefined}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent><SelectGroup>
-                    <SelectItem value="none">{t("none")}</SelectItem>
-                    <SelectItem value="industry">{t("industry")}</SelectItem>
-                  </SelectGroup></SelectContent>
-                </Select>
-                {inputError("neutralization") && <small id="neutralization-error" className="text-destructive">{inputError("neutralization")}</small>}
-              </Field>
+              {(factor || direct) && universeSettings}
+              {factor && neutralizationSettings}
               {!factor && <Field data-invalid={(validationAttempted || draft.initialCashCny !== "") && !isValidInitialCash(draft.initialCashCny)}>
                 <div className="flex items-center gap-2"><FieldLabel htmlFor="initial-cash">{t("initialCash")}</FieldLabel><ResearchParameterHelp helpId="cash" text={t("cashHelp")} /></div>
                 <Input id="initial-cash" inputMode="decimal" placeholder="100000.00" value={draft.initialCashCny}
@@ -741,6 +769,8 @@ export function ResearchDraftWorkspace({
                 <SimulationCostSettings costs={draft.costs} onChange={costs => updateDraft(current => ({ ...current, costs }))} error={costError} />
               </CollapsibleContent>
             </Collapsible>}
+            {!factor && <p className="m-0 text-sm text-muted-foreground">{i18n.t("strategy:workbench.resultsHelp")}</p>}
+            </section>
           </aside>
         </div>
 
@@ -761,7 +791,8 @@ export function ResearchDraftWorkspace({
             </Button>
           </li>)}</ul></AlertDescription>
         </Alert> : null}
-        <footer className="sticky bottom-0 z-10 flex flex-wrap justify-end gap-3 border-t border-border bg-background/95 py-4 backdrop-blur-sm max-[767px]:static">
+        <footer className="sticky bottom-0 z-10 flex flex-wrap items-center justify-end gap-3 border-t border-border bg-background/95 py-4 backdrop-blur-sm max-[767px]:static">
+          <span className="mr-auto text-xs text-muted-foreground">{storageError === null ? t(hasStoredDraft ? "draftSavedLocal" : "draftNew") : t(`storage.${storageError}`)}</span>
           <Button variant="outline" type="button" className="max-[767px]:min-h-11" disabled={submitting || (specFeedback?.key === specKey && specFeedback.checking)}
             onClick={() => void checkConfiguration()}>{t("check")}</Button>
           <Button type="button" className="max-[767px]:min-h-11" disabled={submitting} onClick={() => void runResearch()}>
@@ -876,18 +907,6 @@ export function ResearchDateFields({
   );
 }
 
-function ResearchParameterHelp({ helpId, text }: { helpId: "cash" | "weighting" | "volatility" | "exposure" | "universe"; text: ReactNode }) {
-  const { t } = useTranslation("research");
-  return <Popover>
-    <PopoverTrigger render={<Button variant="ghost" size="icon-sm" aria-label={t(`helpLabels.${helpId}`)} />}>
-      <Info aria-hidden="true" />
-    </PopoverTrigger>
-    <PopoverContent className="w-[min(360px,calc(100vw-32px))] max-h-[min(70dvh,var(--available-height))] overflow-y-auto text-sm">
-      <PopoverTitle>{t(`helpLabels.${helpId}`)}</PopoverTitle>
-      {text}
-    </PopoverContent>
-  </Popover>;
-}
 
 const INPUT_SELECTORS: Record<Exclude<ResearchInputField, TakeProfitField | "formula" | "exposureExpression" | `${FrameworkStage}.${ProgramInputField}` | `costs.${CostField}`>, string> = {
   drawdownThreshold: "#risk-drawdownThreshold", drawdownMaximumExposure: "#risk-drawdownMaximumExposure", drawdownCooldownSessions: "#risk-drawdownCooldownSessions",
@@ -910,29 +929,4 @@ function inputSelector(field: Exclude<ResearchInputField, "formula" | "exposureE
     return `#${stage}-${INPUT_SELECTORS[input as ProgramInputField].slice(1)}`;
   }
   return INPUT_SELECTORS[field as keyof typeof INPUT_SELECTORS];
-}
-
-function ResearchPositionSizing({ ref, catalog, expression, diagnostics, onChange, error }: {
-  ref: Ref<AlphaFormulaEditorHandle>;
-  error?: string;
-  catalog: AlphaCatalog; expression: string; diagnostics: FormulaDiagnostic[]; onChange: (expression: string) => void;
-}) {
-  const { t } = useTranslation("research");
-  const [selection, setSelection] = useState({ anchor: 0, head: 0 });
-  return <Field data-invalid={Boolean(error)} className="gap-3">
-    <div className="flex items-center gap-2"><h3 className="m-0 text-sm font-medium">{t("positionSizing")}</h3>
-      <ResearchParameterHelp helpId="exposure" text={<span className="grid gap-3">
-        <span>{t("positionSizingHelp")}</span>
-        <span><strong>{t("fixedExposure")}</strong><Trans t={t} i18nKey="fixedExposureExample" components={{ code: <code /> }} /></span>
-        <span><strong>{t("marketExposure")}</strong>
-          <code className="block whitespace-pre-wrap py-2 font-mono text-xs">{"if_else(\n  universe_advancing_fraction() > 0.5,\n  1, 0.3\n)"}</code>
-          {t("marketExposureExample")}
-        </span>
-        <span>{t("exposureRules")}</span>
-      </span>} />
-    </div>
-    <AlphaFormulaEditor ref={ref} error={error} className="h-40 min-w-0 overflow-hidden rounded-md border border-input bg-card focus-within:ring-2 focus-within:ring-ring/30" catalog={catalog} context="exposure" diagnostics={diagnostics} formula={expression} selection={selection}
-      onChange={(value, nextSelection) => { setSelection(nextSelection); onChange(value); }} />
-    <FieldError id="position-sizing-error">{error}</FieldError>
-  </Field>;
 }

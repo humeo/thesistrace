@@ -11,7 +11,7 @@ const factorFixture = new URLSearchParams(window.location.search).has("factor");
 const folder = { id: "folder_default", name: "Default", is_default: true, created_at: "2026-08-01T00:00:00Z" };
 if (localStorage.getItem(researchDraftKey(researcherId, folder.id)) === null) {
   persistResearchDraft(localStorage, researcherId, folder.id, {
-    ...emptyResearchDraft(), researchKind: factorFixture ? "factor_evaluation" : "strategy_backtest", formula: "close",
+    ...emptyResearchDraft(), researchKind: factorFixture ? "factor_evaluation" : "strategy_backtest", formula: new URLSearchParams(window.location.search).has("rules") ? "" : "close",
     startDate: "2026-08-03", endDate: "2026-08-05", universe: "top300", neutralization: "none",
     initialCashCny: "100000", holdingsCount: "10", selectionEverySessions: "5",
   });
@@ -21,7 +21,7 @@ createRoot(document.getElementById("root")!).render(<>
 <ResearchDraftWorkspace
   researcherId={researcherId} folder={folder} catalog={{ ...catalog,
     fields: catalog.fields.filter(field => field.identifier === "close"),
-    builtins: catalog.builtins.filter(builtin => ["rank", "universe_return"].includes(builtin.identifier)),
+    builtins: catalog.builtins.filter(builtin => ["rank", "universe_return", "lag"].includes(builtin.identifier)),
   } as AlphaCatalog}
   data={{
     market_coverage: { start: "2025-01-01", end: "2026-08-12" }, financial_coverage: null,

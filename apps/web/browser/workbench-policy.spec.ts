@@ -21,7 +21,7 @@ type Submission = { costs: Record<string, string>; modules: Record<string, unkno
 
 for (const scenario of cases) {
   test(`${scenario.name} submits exact inputs, renders frozen evidence and restores an editable draft`, async ({ page }, testInfo) => {
-    if (!["Custom fees", "Close stop loss"].includes(scenario.name)) await page.setViewportSize({ width: 390, height: 844 });
+    await page.setViewportSize({ width: 1440, height: 960 });
     const runId = "run_cafebabefeed1234";
     const submitted: Submission[] = [];
     const observation = scenario.name in observations ? observations[scenario.name as keyof typeof observations] : null;
@@ -49,16 +49,23 @@ for (const scenario of cases) {
     await page.goto("/research?new");
     await page.getByRole("radio", { name: /Strategy Backtest/ }).check();
     await page.getByLabel("Research name").fill(scenario.name);
+    await page.getByRole("combobox", { name: "How should stocks be ranked?", exact: true }).click();
+    await page.getByRole("option", { name: "Custom scoring formula", exact: true }).click();
     await page.getByRole("textbox", { name: "Alpha formula", exact: true }).fill("close");
     await page.getByLabel("Research start date").fill("2026-08-04");
     await page.getByLabel("Research end date").fill("2026-08-05");
     await page.getByRole("combobox", { name: "Universe", exact: true }).click();
     await page.getByRole("option", { name: "Top 300", exact: true }).click();
+    await page.getByRole("button", { name: "Industry adjustment", exact: true }).click();
     await page.getByRole("combobox", { name: "Neutralization", exact: true }).click();
     await page.getByRole("option", { name: "None", exact: true }).click();
     await page.getByLabel("Initial cash (CNY)").fill("100000");
     await page.getByLabel("Holdings count").fill("1");
     await page.getByLabel("Selection interval (trading days)").fill("1");
+    if (scenario.name === "Close stop loss" || scenario.name === "Holding periods") await page.getByRole("button", { name: "Stop loss and holding limits", exact: true }).click();
+    if (scenario.name === "Holding periods") await page.getByRole("button", { name: "Minimum holding period", exact: true }).click();
+    if (scenario.name === "Portfolio drawdown") await page.getByRole("button", { name: "Limit portfolio drawdown", exact: true }).click();
+    if (scenario.name === "Cumulative take profit") await page.getByRole("button", { name: "Take profit in stages", exact: true }).click();
     if (scenario.name === "Cumulative take profit") await page.getByRole("button", { name: "Add take-profit tier", exact: true }).click();
     for (const [label, value] of scenario.fields) await page.getByLabel(label, { exact: true }).fill(value);
     await page.getByRole("button", { name: "Fees and slippage", exact: true }).click();
@@ -97,7 +104,7 @@ for (const scenario of cases) {
       await expect(page.getByRole("list", { name: "Risk decision reasons" })).toContainText("historical maximum drawdown is not reset");
     } else await expect(page.getByRole("list", { name: "Risk decision reasons" })).toContainText("stop-loss threshold");
     await page.screenshot({ path: testInfo.outputPath("frozen-policy.png"), fullPage: true });
-    await page.getByRole("tab", { name: "Configuration", exact: true }).click();
+    await page.getByRole("tab", { name: "Overview", exact: true }).click();
     await page.getByRole("button", { name: "Create draft", exact: true }).click();
     await expect(page).toHaveURL(/\/research$/);
     for (const [label, value] of scenario.fields) await expect(page.getByLabel(label, { exact: true })).toHaveValue(value);
