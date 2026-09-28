@@ -1,0 +1,242 @@
+/* Research is the first slice of the warm reading workspace. The route class
+   keeps the visual pilot independent from other, still Classic product pages. */
+body:has(.app-shell-research) {
+  --background: #fcfcf9;
+  --foreground: #27251e;
+  --card: #fdfbfa;
+  --card-foreground: #27251e;
+  --popover: #ffffff;
+  --popover-foreground: #27251e;
+  --primary: #27251e;
+  --primary-foreground: #ffffff;
+  --secondary: #f3f2ee;
+  --secondary-foreground: #27251e;
+  --muted: #f3f2ee;
+  --muted-foreground: #5b5952;
+  --accent: #efeee9;
+  --accent-foreground: #27251e;
+  --border: #deddd6;
+  --input: #8a8880;
+  --ring: #27251e;
+  --sidebar: #f5f4ef;
+  --sidebar-foreground: #27251e;
+  --sidebar-primary: #27251e;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #eae8e1;
+  --sidebar-accent-foreground: #27251e;
+  --sidebar-border: #deddd6;
+  --sidebar-ring: #27251e;
+  --canvas: #fcfcf9;
+  --surface-1: #fdfbfa;
+  --surface-2: #f3f2ee;
+  --surface-3: #ffffff;
+  --surface-4: #efeee9;
+  --ink: #27251e;
+  --ink-muted: #5b5952;
+  --ink-soft: #5b5952;
+  --ink-faint: #68665e;
+  --line: #deddd6;
+  --line-strong: #8a8880;
+  --line-tertiary: #c8c6bd;
+  --primary-hover: #403d35;
+  --primary-control-hover: #403d35;
+  --primary-focus: #27251e;
+  --syntax-function: #365f54;
+  --syntax-field: #285b68;
+  --syntax-number: #71593d;
+  --font-display: var(--font-body);
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 8%);
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  color: var(--foreground);
+  background: var(--background);
+}
+
+.app-shell-research {
+  background: var(--background);
+}
+.app-shell-research .application-sidebar {
+  background: var(--sidebar);
+  border-right-color: var(--sidebar-border);
+}
+.app-shell-research .sidebar-brand-row {
+  min-height: 64px;
+  padding-inline: 16px;
+  border-bottom-color: transparent;
+}
+.app-shell-research .quantgrove-wordmark {
+  font-family: "Source Serif 4", "Noto Serif SC", Georgia, serif;
+}
+.app-shell-research .sidebar-new-chat-menu {
+  padding: 12px 12px 8px;
+}
+.app-shell-research .sidebar-new-chat {
+  min-height: 42px;
+  background: #ffffff;
+  border-color: var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-card);
+}
+.app-shell-research .resource-nav {
+  padding: 6px 12px 16px;
+  border-bottom-color: var(--border);
+}
+.app-shell-research .resource-nav ul {
+  padding: 0;
+}
+.app-shell-research .resource-nav a {
+  min-height: 40px;
+  padding-inline: 10px;
+  color: var(--ink-muted);
+  border-color: transparent;
+  border-radius: 10px;
+  transition: color 75ms var(--ease-standard), background-color 75ms var(--ease-standard);
+}
+.app-shell-research .resource-nav a:hover,
+.app-shell-research .sidebar-new-chat:hover {
+  color: var(--ink);
+  background: #ffffff;
+}
+.app-shell-research .resource-nav a[aria-current="page"] {
+  color: var(--ink);
+  background: var(--sidebar-accent);
+  border-color: transparent;
+  font-weight: 600;
+}
+.app-shell-research .resource-nav a[aria-current="page"]::before,
+.app-shell-research .chat-session-row-current::before {
+  content: none;
+}
+.app-shell-research .chat-session-region {
+  padding: 18px 12px;
+}
+.app-shell-research .chat-session-groups {
+  gap: 24px;
+}
+.app-shell-research .chat-session-groups h3 {
+  margin-bottom: 8px;
+  color: var(--ink-muted);
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.app-shell-research .chat-session-row {
+  border-radius: 10px;
+}
+.app-shell-research .chat-session-row:hover,
+.app-shell-research .chat-session-row-current {
+  background: var(--sidebar-accent);
+  border-color: transparent;
+}
+.app-shell-research .chat-session-row > a {
+  min-height: 40px;
+  padding-left: 10px;
+}
+.app-shell-research .sidebar-account-area {
+  padding: 10px 12px;
+  border-top-color: var(--border);
+}
+.app-shell-research .account-trigger {
+  background: var(--sidebar-accent);
+  border-radius: 12px;
+}
+.app-shell-research .main-content {
+  padding-top: 32px;
+  background: var(--background);
+}
+.app-shell-research .main-content > section {
+  width: min(1160px, 100%);
+}
+
+.research-reading-workspace .research-page-content {
+  padding-bottom: 16px;
+}
+.research-reading-workspace .research-page-header {
+  margin-bottom: 24px;
+  align-items: start;
+}
+.research-reading-workspace .research-page-header h1 {
+  max-width: 100%;
+  color: var(--foreground);
+  font-size: 26px;
+  line-height: 34px;
+  font-weight: 600;
+  letter-spacing: -.02em;
+}
+html[lang="zh-CN"] .research-reading-workspace .research-page-header h1 {
+  letter-spacing: 0;
+}
+.research-reading-workspace .research-page-header p {
+  color: var(--ink-muted);
+}
+.research-reading-workspace .research-mode-switch {
+  margin-bottom: 20px;
+}
+.research-reading-workspace .research-mode-option {
+  min-height: 42px;
+  padding-inline: 16px;
+  border-radius: 9999px;
+  border-color: var(--border);
+  background: transparent;
+  transition: background-color 75ms var(--ease-standard), border-color 75ms var(--ease-standard);
+}
+.research-reading-workspace .research-mode-option:hover {
+  background: var(--secondary);
+}
+.research-reading-workspace .research-mode-option:has([data-checked]) {
+  border-color: var(--primary);
+  background: var(--secondary);
+}
+.research-reading-workspace .research-editor-panel,
+.research-reading-workspace .research-settings-panel {
+  background: var(--card);
+  border-color: var(--border);
+  border-radius: 16px;
+  box-shadow: var(--shadow-card);
+}
+.research-reading-workspace .research-editor-panel > header {
+  min-height: 52px;
+  padding-inline: 16px;
+}
+.research-reading-workspace .research-editor-panel > footer {
+  padding: 8px 16px;
+}
+.research-reading-workspace .research-editor-panel [class*="cm-editor"] {
+  background: var(--card);
+}
+.research-reading-workspace .research-settings-panel {
+  gap: 16px;
+  padding: 16px;
+}
+.research-reading-workspace .research-submit-bar {
+  position: static;
+  padding: 16px 0 0;
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+body:has(.app-shell-research) [data-slot="popover-content"],
+body:has(.app-shell-research) [data-slot="sheet-content"],
+body:has(.app-shell-research) [data-slot="alert-dialog-content"] {
+  border-radius: 16px;
+  box-shadow: var(--shadow-card);
+}
+body:has(.app-shell-research) [data-slot="button"] {
+  transition-duration: 75ms;
+}
+
+@media (max-width: 768px) {
+  .app-shell-research .main-content { padding-top: 72px; }
+  .app-shell-research .sidebar-brand-row { padding-inline: 12px; }
+  .research-reading-workspace .research-page-header h1 { min-height: 42px; font-size: 27px; line-height: 36px; }
+  .research-reading-workspace .research-page-header { margin-bottom: 24px; }
+  .research-reading-workspace .research-settings-panel { padding: 16px; }
+  .research-reading-workspace .research-submit-bar { position: static; padding: 16px 0 0; border: 0; border-top: 1px solid var(--border); border-radius: 0; box-shadow: none; background: transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell-research .resource-nav a,
+  .research-reading-workspace .research-mode-option,
+  body:has(.app-shell-research) [data-slot="button"] { transition: none; }
+}

@@ -1,3 +1,4 @@
+import "./research-perplexity.css";
 import { drawdownFields, type DrawdownField } from "./portfolioDrawdown";
 import type { TakeProfitField } from "./takeProfit";
 import {
@@ -524,7 +525,7 @@ export function ResearchDraftWorkspace({
     return inputError(path) ?? (issue ? formatResearchIssue(issue, locale) : undefined);
   }
   const alphaAuthoring = <>
-        <div className="overflow-hidden rounded-lg border border-border bg-card focus-within:ring-2 focus-within:ring-ring/30">
+        <div className="research-editor-panel overflow-hidden rounded-lg border border-border bg-card focus-within:ring-2 focus-within:ring-ring/30">
           <header className="flex min-h-12 items-center justify-between gap-3 border-b border-border px-4">
             <h2 id="alpha-formula-title" className="m-0 text-base font-semibold">{t("formula")}</h2>
             {fieldsButton()}
@@ -536,7 +537,7 @@ export function ResearchDraftWorkspace({
             diagnostics={serverDiagnostics}
             formula={draft.formula}
             error={inputError("formula")}
-            className="h-[280px] min-w-0 overflow-hidden bg-card"
+            className={cn(factor ? "h-[180px]" : "h-[280px]", "min-w-0 overflow-hidden bg-card")}
             onChange={(formula, editor) => updateDraft((current) => ({ ...current, formula, editor }))}
             selection={draft.editor}
           />
@@ -670,15 +671,15 @@ export function ResearchDraftWorkspace({
     </div>
   </div>;
   return (
-    <section ref={workspace} aria-label={t("title")} className="@container min-w-0">
-      <PageContent width="wide">
-        <PageHeader
+    <section ref={workspace} aria-label={t("title")} className="research-reading-workspace @container min-w-0">
+      <PageContent width="wide" className="research-page-content">
+        <PageHeader className="research-page-header"
           title={t(factor ? "factor_evaluation" : "strategy_backtest")}
           description={i18n.t(factor ? "strategy:workbench.factorIntro" : "strategy:workbench.intro")}
           actions={<>{folderNavigation}<Button variant="outline" className="max-[767px]:min-h-11" disabled={submitting} onClick={() => startNewResearch()}>
             <Plus aria-hidden="true" />{t("newResearch")}</Button></>}
         />
-        <fieldset className="mb-6 min-w-0 border-0 p-0">
+        <fieldset className="research-mode-switch mb-6 min-w-0 border-0 p-0">
           <legend className="sr-only">{t("kind")}</legend>
           <RadioGroup className="flex flex-wrap gap-2" value={draft.researchKind}
             onValueChange={(value) => {
@@ -686,10 +687,10 @@ export function ResearchDraftWorkspace({
                 updateDraft((current) => selectResearchKind(current, value));
               }
             }}>
-            <label className="flex min-h-10 cursor-pointer items-center gap-2 rounded-md border border-border bg-card px-3 text-sm font-medium has-[[data-checked]]:border-primary has-[[data-checked]]:bg-secondary max-[767px]:min-h-11">
+            <label className="research-mode-option flex min-h-10 cursor-pointer items-center gap-2 rounded-md border border-border bg-card px-3 text-sm font-medium has-[[data-checked]]:border-primary has-[[data-checked]]:bg-secondary max-[767px]:min-h-11">
               <RadioGroupItem value="factor_evaluation" />{t("factor_evaluation")}
             </label>
-            <label className="flex min-h-10 cursor-pointer items-center gap-2 rounded-md border border-border bg-card px-3 text-sm font-medium has-[[data-checked]]:border-primary has-[[data-checked]]:bg-secondary max-[767px]:min-h-11">
+            <label className="research-mode-option flex min-h-10 cursor-pointer items-center gap-2 rounded-md border border-border bg-card px-3 text-sm font-medium has-[[data-checked]]:border-primary has-[[data-checked]]:bg-secondary max-[767px]:min-h-11">
               <RadioGroupItem value="strategy_backtest" />{t("strategy_backtest")}
             </label>
           </RadioGroup>
@@ -711,8 +712,8 @@ export function ResearchDraftWorkspace({
           <FieldDescription>{i18n.t(direct ? "strategy:workbench.directHelp" : "strategy:workbench.ruleModeHelp")}</FieldDescription>
         </FieldGroup>}
 
-        <div className="grid min-w-0 gap-6 pb-8 @min-[960px]:grid-cols-[minmax(0,1fr)_320px] @min-[960px]:items-start">
-          <section aria-label={t(direct ? "pythonAuthoring" : factor ? "authoring" : "frameworkAuthoring")} className="grid min-w-0 content-start gap-6 rounded-lg border border-border bg-card p-6">
+        <div className={cn("grid min-w-0 gap-5 pb-6", factor ? "@min-[840px]:grid-cols-[minmax(0,1fr)_300px] @min-[840px]:items-start" : "@min-[960px]:grid-cols-[minmax(0,1fr)_320px] @min-[960px]:items-start")}>
+          <section aria-label={t(direct ? "pythonAuthoring" : factor ? "authoring" : "frameworkAuthoring")} className={cn("grid min-w-0 content-start gap-5", !factor && "rounded-lg border border-border bg-card p-6")}>
             {authoring}
             {visibleIssues.length > 0 ? (
               <ul aria-label={t("runIssues")} className="m-0 grid gap-2 rounded-lg border border-destructive p-4 text-sm text-destructive">
@@ -723,7 +724,7 @@ export function ResearchDraftWorkspace({
             <RuleDisclosure title={i18n.t("strategy:workbench.notes")} configured={draft.hypothesis !== ""} invalid={Boolean(inputError("hypothesis"))}><FieldGroup>
               <Field>
                 <FieldLabel htmlFor="research-notes">{t("notes")}</FieldLabel>
-                <Textarea id="research-notes" rows={3} className="min-h-22" aria-describedby="research-notes-limit"
+                <Textarea id="research-notes" rows={2} className="min-h-16" aria-describedby="research-notes-limit"
                   aria-invalid={Array.from(draft.hypothesis).length > MAX_HYPOTHESIS_LENGTH}
                   placeholder={t("notesPlaceholder")} value={draft.hypothesis}
                   onChange={(event) => updateDraft((current) => ({ ...current, hypothesis: event.target.value }))} />
@@ -736,7 +737,7 @@ export function ResearchDraftWorkspace({
 
           <aside aria-label={t("settings")} className="grid min-w-0 gap-6">
             {!factor && <StrategyRuleSummary inputs={draft} />}
-            <section className="grid min-w-0 gap-5 rounded-lg border border-border bg-card p-4">
+            <section className="research-settings-panel grid min-w-0 gap-5 rounded-lg border border-border bg-card p-4">
             <h2 className="m-0 text-base font-semibold">{factor ? t("settings") : i18n.t("strategy:workbench.conditionsTitle")}</h2>
             <Field>
               <FieldLabel htmlFor="research-name">{t("name")}</FieldLabel>
@@ -791,7 +792,7 @@ export function ResearchDraftWorkspace({
             </Button>
           </li>)}</ul></AlertDescription>
         </Alert> : null}
-        <footer className="sticky bottom-0 z-10 flex flex-wrap items-center justify-end gap-3 border-t border-border bg-background/95 py-4 backdrop-blur-sm max-[767px]:static">
+        <footer className="research-submit-bar sticky bottom-0 z-10 flex flex-wrap items-center justify-end gap-3 border-t border-border bg-background/95 py-4 backdrop-blur-sm max-[767px]:static">
           <span className="mr-auto text-xs text-muted-foreground">{storageError === null ? t(hasStoredDraft ? "draftSavedLocal" : "draftNew") : t(`storage.${storageError}`)}</span>
           <Button variant="outline" type="button" className="max-[767px]:min-h-11" disabled={submitting || (specFeedback?.key === specKey && specFeedback.checking)}
             onClick={() => void checkConfiguration()}>{t("check")}</Button>
