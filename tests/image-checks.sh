@@ -395,7 +395,10 @@ execution = SupervisedResearchExecution(
     SimpleNamespace(
         run_id="image-smoke-oom",
         attempt_id="attempt-1",
-        immutable_input=SimpleNamespace(research_kind="factor_evaluation"),
+        immutable_input=SimpleNamespace(
+            research_kind="factor_evaluation",
+            execution_plan=SimpleNamespace(execution_memory_bytes=1536 * 1024 * 1024),
+        ),
     ),
     {"final": False},
     events.append,
