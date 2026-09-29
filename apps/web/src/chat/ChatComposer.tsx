@@ -86,7 +86,7 @@ export function ChatComposer({
       {question !== null ? (
         <QuestionComposer controller={controller} question={question} locked={interactionLocked}
           tooLarge={tooLarge} onKeyDown={keyDown} />
-      ) : <div className={cn("chat-composer-surface", chatLayout.surface, chatLayout.compactSurface, interactionLocked && "opacity-60")}>
+      ) : <div className={cn("chat-composer-surface", chatLayout.surface, interactionLocked && "opacity-60")}>
         <Textarea className={chatLayout.input}
           aria-describedby={tooLarge ? "chat-composer-guidance chat-composer-validation" : "chat-composer-guidance"}
           aria-invalid={tooLarge || undefined}
@@ -99,7 +99,7 @@ export function ChatComposer({
           rows={1}
           value={controller.draft}
         />
-        <div className="chat-composer-toolbar flex min-h-12 items-center justify-between gap-3 px-3 pb-2 min-[769px]:min-h-9 min-[769px]:shrink-0 min-[769px]:gap-2 min-[769px]:p-0">
+        <div className="chat-composer-toolbar flex min-h-12 items-center justify-between gap-3 px-3 pb-2 min-[769px]:min-h-10">
           {controller.draftBytes < MAX_CHAT_MESSAGE_BYTES * .8 ? null : (
             <span className={cn("chat-byte-count whitespace-nowrap text-xs", tooLarge ? "text-destructive" : "text-muted-foreground")}>
               {t("byteCount", { current: formatNumber(controller.draftBytes), limit: formatNumber(MAX_CHAT_MESSAGE_BYTES) })}

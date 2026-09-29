@@ -129,8 +129,15 @@ for (const mobile of [false, true]) {
     const surfaceBox = (await page.locator(".chat-composer-surface").boundingBox())!;
     expect(dockBox.height - surfaceBox.height).toBe(16);
     await expect.poll(async () => (await toolbar.boundingBox())!.height).toBeLessThanOrEqual(mobile ? 56 : 48);
-    expect((await input.boundingBox())!.height).toBeGreaterThanOrEqual(mobile ? 80 : 36);
-    if (!mobile) expect(surfaceBox.height).toBeLessThanOrEqual(64);
+    expect((await input.boundingBox())!.height).toBeGreaterThanOrEqual(mobile ? 80 : 48);
+    if (!mobile) {
+      expect(surfaceBox.height).toBeGreaterThanOrEqual(88);
+      expect(surfaceBox.height).toBeLessThanOrEqual(96);
+      const inputBox = (await input.boundingBox())!;
+      const toolbarBox = (await toolbar.boundingBox())!;
+      expect(inputBox.width).toBeGreaterThanOrEqual(surfaceBox.width - 2);
+      expect(toolbarBox.y).toBeGreaterThanOrEqual(inputBox.y + inputBox.height);
+    }
     expect((await model.boundingBox())!.height).toBe(mobile ? 44 : 36);
     expect((await send.boundingBox())!.height).toBe(mobile ? 44 : 36);
     expect((await send.boundingBox())!.width).toBe(mobile ? 44 : 36);
@@ -160,11 +167,11 @@ for (const mobile of [false, true]) {
     const height = async () => (await input.boundingBox())!.height;
 
     await input.fill("d");
-    await expect.poll(height).toBe(mobile ? 80 : 38);
+    await expect.poll(height).toBe(mobile ? 80 : 48);
     await input.press("Shift+Enter");
     await input.pressSequentially("d");
     await expect(input).toHaveValue("d\nd");
-    await expect.poll(height).toBe(mobile ? 80 : 60);
+    await expect.poll(height).toBe(mobile ? 80 : 68);
 
     const spacedDraft = `d${"\n".repeat(15)}d`;
     await input.fill(spacedDraft);
@@ -188,10 +195,10 @@ for (const mobile of [false, true]) {
     await expect.poll(height).toBe(180);
 
     await input.fill("Short draft");
-    await expect.poll(height).toBe(mobile ? 80 : 38);
-    expect(await input.evaluate((element) => element.scrollHeight)).toBe(mobile ? 80 : 38);
+    await expect.poll(height).toBe(mobile ? 80 : 48);
+    expect(await input.evaluate((element) => element.scrollHeight)).toBe(mobile ? 80 : 48);
     await input.fill("");
-    await expect.poll(height).toBe(mobile ? 80 : 38);
+    await expect.poll(height).toBe(mobile ? 80 : 48);
     await expect(input).toHaveValue("");
     await expect(page.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
   });
@@ -246,10 +253,11 @@ for (const mode of ["single_select", "multi_select"]) {
     await expect(option.locator("xpath=ancestor::label")).not.toHaveCSS("box-shadow", "none");
   });
 }
-test("chat composer stays within a 640px desktop reading column", async ({ page }) => {
+test("chat composer uses a 768px desktop reading column", async ({ page }) => {
   await page.setViewportSize({ width: 1127, height: 945 });
   const dock = (await page.locator(".chat-composer-dock").boundingBox())!;
-  expect(dock.width).toBe(640);
+  expect(dock.width).toBe(768);
   const surface = (await page.locator(".chat-composer-surface").boundingBox())!;
-  expect(surface.height).toBeLessThanOrEqual(64);
+  expect(surface.height).toBeGreaterThanOrEqual(88);
+  expect(surface.height).toBeLessThanOrEqual(96);
 });
