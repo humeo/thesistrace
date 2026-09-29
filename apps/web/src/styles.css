@@ -520,6 +520,7 @@ code { font-family: var(--mono); }
   border-bottom-color: var(--border);
 }
 .app-shell .resource-nav ul {
+  gap: 4px;
   padding: 0;
 }
 .app-shell .sidebar-new-chat:hover,

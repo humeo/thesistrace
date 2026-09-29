@@ -255,6 +255,7 @@ test('expanded sidebar aligns brand, navigation, history and compact account ide
  const positions = await page.locator('.application-sidebar').evaluate(sidebar => {
   const rect = (selector: string) => sidebar.querySelector(selector)!.getBoundingClientRect();
   const historyLink = sidebar.querySelector('.chat-session-row > a')!;
+  const navigationLinks = Array.from(sidebar.querySelectorAll('.sidebar-new-chat, .resource-nav:not(.operator-nav) a'));
   return {
    brand: rect('.brand-mark').x,
    navigation: rect('.resource-nav a svg').x,
@@ -268,6 +269,8 @@ test('expanded sidebar aligns brand, navigation, history and compact account ide
    accountNameSize: getComputedStyle(sidebar.querySelector('.account-trigger .account-identity-copy strong')!).fontSize,
    accountEmailWeight: getComputedStyle(sidebar.querySelector('.account-trigger .account-identity-copy > span')!).fontWeight,
    historyGroupGap: getComputedStyle(sidebar.querySelector('.chat-session-groups')!).gap,
+   navigationGaps: navigationLinks.slice(1).map((link, index) =>
+    link.getBoundingClientRect().top - navigationLinks[index]!.getBoundingClientRect().bottom),
   };
  });
  expect(positions.brand).toBe(positions.navigation);
@@ -280,6 +283,7 @@ test('expanded sidebar aligns brand, navigation, history and compact account ide
  expect(positions.accountNameSize).toBe('13px');
  expect(positions.accountEmailWeight).toBe('400');
  expect(positions.historyGroupGap).toBe('16px');
+ expect(positions.navigationGaps).toEqual([4, 4, 4, 4, 4]);
 });
 
 test('sidebar avoids redundant expanded hints and retains one collapsed hint', async ({ page }) => {
