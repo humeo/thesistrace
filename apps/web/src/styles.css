@@ -587,7 +587,7 @@ code { font-family: var(--mono); }
 }
 .app-shell .sidebar-account-area {
   min-height: 49px;
-  padding: 4px;
+  padding: 4px 4px 12px;
   border-top-color: var(--border);
 }
 .app-shell .account-trigger {
