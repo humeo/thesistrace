@@ -479,6 +479,36 @@ code { font-family: var(--mono); }
   margin-inline: auto;
 }
 
+/* The approved result-detail surface is independent of the preserved Chat shell. */
+.main-content:has(.research-run-page), .result-surface {
+  --background: #fcfcf9;
+  --foreground: #27251e;
+  --card: #fdfbfa;
+  --card-foreground: var(--foreground);
+  --popover: #ffffff;
+  --popover-foreground: var(--foreground);
+  --primary: #27251e;
+  --primary-hover: #403d35;
+  --secondary: #f3f2ee;
+  --secondary-foreground: var(--foreground);
+  --muted: #f3f2ee;
+  --muted-foreground: #5b5952;
+  --accent: #f3f2ee;
+  --accent-foreground: var(--foreground);
+  --border: #deddd6;
+  --input: #8a8880;
+  --ring: #27251e;
+  --chart-1: #27251e;
+  --chart-4: #97826b;
+  --benchmark-foreground: #74624f;
+  --ink: var(--foreground);
+  --ink-soft: var(--muted-foreground);
+  --line: var(--border);
+  color: var(--foreground);
+}
+.main-content:has(.research-run-page) { padding-block: 24px; background: var(--background); }
+.result-surface ::selection { background: var(--secondary); color: var(--foreground); }
+
 /* Type and shared controls */
 @layer base {
   h1, h2, h3 { margin: 0; color: var(--ink); font-family: inherit; }

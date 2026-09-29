@@ -6,20 +6,27 @@ import { frameworkStages } from "./frameworkModules";
 import type { StrategyDecisionState } from "./strategyDecisionState";
 import { useTranslation } from "../i18n";
 
-export function FrameworkStateView({ state }: { state: StrategyDecisionState }) {
+export function FrameworkStateView({ state, variant = "panel" }: { state: StrategyDecisionState; variant?: "panel" | "row" }) {
   const { t } = useTranslation("strategy");
   const [open, setOpen] = useState(false);
   if (state.mode !== "framework" || !("module_states" in state)) return null;
+  const contents = <>
+    <p>{t("state.help")}</p>
+    {open ? <div className="grid gap-3">
+      <Disclosure title={t("state.signals")}><StateJson value={state.signals} /></Disclosure>
+      {frameworkStages.map(stage => <Disclosure key={stage} title={t("state.module", { stage: t(`stages.${stage}`) })}>
+        <StateJson value={state.module_states[stage]} />
+      </Disclosure>)}
+    </div> : null}
+  </>;
+  if (variant === "row") return <Disclosure variant="row" title={t("state.title")} open={open} onOpenChange={setOpen} className="framework-state">
+    <p>{t("state.summary", { candidates: state.universe.length, signals: state.signals.length })}</p>
+    {contents}
+  </Disclosure>;
   return <Collapsible open={open} onOpenChange={setOpen} className="framework-state min-w-0">
     <CollapsibleTrigger render={<Button variant="outline" className="h-auto min-h-11 whitespace-normal" />}>{t("state.summary", { candidates: state.universe.length, signals: state.signals.length })}</CollapsibleTrigger>
     <CollapsibleContent className="grid min-w-0 gap-3 py-3">
-      <p>{t("state.help")}</p>
-      {open && <>
-        <Disclosure title={t("state.signals")}><StateJson value={state.signals} /></Disclosure>
-        {frameworkStages.map(stage => <Disclosure key={stage} title={t("state.module", { stage: t(`stages.${stage}`) })}>
-          <StateJson value={state.module_states[stage]} />
-        </Disclosure>)}
-      </>}
+      {contents}
     </CollapsibleContent>
   </Collapsible>;
 }

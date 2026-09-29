@@ -32,6 +32,8 @@ The Research editor and its sidebar established the first implementation slice. 
 
 The Research preview uses weight 500 for its 24/32 page title, with regular-weight body copy, to soften the Chinese heading. Its research type and strategy authoring choices stay visible together in a quiet, grouped control area above the editor.
 
+The result detail follows the approved `docs/design/console-redesign-v1-result.png` composition. Its title uses 36/44 sans-serif with inline type/status badges; dates and the folder share the metadata line. The six-metric band uses 16px labels and 24–28/36 sans-serif tabular values, with inset dividers. Tabs lead directly into this band. Keep 12px between the metric band, approximately 334px desktop return chart, three-column ending-state panel and shared-border disclosure rows. The strategy curve is near-black and the benchmark is taupe and dashed. Help opens on hover, focus or click. Draft folder selection opens from the header and deletion stays in the secondary menu. The sidebar and Chat history retain their existing dimensions; reference values and curves remain illustrative.
+
 **Warm, reading-first research（温和、克制、以阅读和证据为中心的研究空间）**
 
 | Surface | Required treatment |

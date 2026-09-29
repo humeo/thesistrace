@@ -12,11 +12,12 @@ export type CloseRiskPosition = {
   last_close_adjusted_price: string;
 };
 
-export function CloseRiskFacts({ session, nav, positions }: {
+export function CloseRiskFacts({ session, nav, positions, variant }: {
   session: string; nav: string; positions: CloseRiskPosition[];
+  variant?: "panel" | "row";
 }) {
   const { t } = useTranslation("strategy");
-  return <Disclosure title={<>{t("closeRisk.title")}</>}>
+  return <Disclosure variant={variant} title={t("closeRisk.title")}>
     <p>{t("closeRisk.nav", { session })} <strong>{new Decimal(nav).toString()}</strong></p>
     <p>{t("closeRisk.help")}</p>
     {positions.length === 0 ? <p>{t("closeRisk.empty")}</p> : <ul>{positions.map(position => <li key={position.instrument_id}>

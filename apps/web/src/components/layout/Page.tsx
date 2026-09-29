@@ -6,17 +6,22 @@ export function Page({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
 }
 
 export function PageHeader({
-  title, description, actions, className,
+  title, description, actions, className, badges, variant = "default",
 }: {
   title: ReactNode;
   description?: ReactNode;
   actions?: ReactNode;
   className?: string;
+  badges?: ReactNode;
+  variant?: "default" | "result";
 }) {
   return (
     <header className={cn("mb-8 flex flex-col items-start justify-between gap-6 max-[768px]:mb-6 min-[769px]:flex-row min-[769px]:flex-wrap", className)}>
       <div className="grid w-full min-w-0 flex-1 gap-2 min-[769px]:flex-[1_1_20rem]">
-        <h1 className="m-0 text-2xl leading-8 font-semibold tracking-normal [overflow-wrap:anywhere]">{title}</h1>
+        {variant === "result" ? <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
+          <h1 className="m-0 min-w-0 text-4xl leading-[44px] font-semibold tracking-normal [overflow-wrap:anywhere]">{title}</h1>
+          {badges}
+        </div> : <h1 className="m-0 text-2xl leading-8 font-semibold tracking-normal [overflow-wrap:anywhere]">{title}</h1>}
         {description ? <p className="m-0 text-sm leading-[22px] text-muted-foreground">{description}</p> : null}
       </div>
       {actions ? <div className="flex max-w-full shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}

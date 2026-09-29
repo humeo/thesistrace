@@ -15,17 +15,18 @@ const curves = Array.from({ length: 550 }, (_, index) => ({
   net_excess_nav: 1 + index / 2000,
   net_excess_return: index / 2000,
 }));
+const resultChart = new URLSearchParams(location.search).has("result");
 function HelpSample() {
   const { t } = useTranslation("analysis");
   return <MetricHelp label={t("chart.strategy")} content={strategyMetricHelp().netCumulative} />;
 }
-createRoot(document.getElementById("root")!).render(<main style={{ padding: 20 }}>
+createRoot(document.getElementById("root")!).render(<main className={resultChart ? "result-surface" : undefined} style={{ padding: 20 }}>
   <button onClick={() => changeInterfaceLanguage("en")}>English</button>
   <button onClick={() => changeInterfaceLanguage("zh-CN")}>简体中文</button>
   <HelpSample />
   <Tabs defaultValue="chart">
     <TabsList><TabsTrigger value="chart">Performance</TabsTrigger><TabsTrigger value="configuration">Configuration</TabsTrigger></TabsList>
-    <TabsContent value="chart" keepMounted><StrategyPerformanceChart curves={curves} /></TabsContent>
+    <TabsContent value="chart" keepMounted><StrategyPerformanceChart curves={curves} variant={resultChart ? "result" : "default"} /></TabsContent>
     <TabsContent value="configuration" keepMounted>Frozen configuration</TabsContent>
   </Tabs>
 </main>);

@@ -19,7 +19,12 @@ import { FrozenFrameworkModules, FrozenPythonProgram, FrozenSimulationCosts } fr
 import {
   CaretDown,
   CaretLeft,
+  CalendarBlank,
   CheckCircle,
+  DotsThree,
+  FileText,
+  FolderSimple,
+  Play,
   Trash,
 } from "@phosphor-icons/react";
 import { useState } from "react";
@@ -45,6 +50,8 @@ import { Badge } from "../components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { FactorResultView } from "./FactorResultView";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "../components/ui/dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
 
 type CorrelationSummary = {
   mean: number | null;
@@ -261,6 +268,8 @@ function ResearchRunDetail({ detail, folderError, folders, onRefreshFolders, res
   const [visited, setVisited] = useState<string[]>(["overview"]);
   const terminal = isTerminalResearch(run.status);
   const result = run.status === "succeeded" ? run.result : null;
+  const strategyResult = result != null && !("factor" in result);
+  const sourceFolder = folders.find(folder => folder.id === run.folder_id);
   const folderContent = detail.deleting ? null : folderError ? (
     <ResearchFolderLoadFailure error={folderError} onRetry={onRefreshFolders} />
   ) : folders.length === 0 ? (
@@ -272,24 +281,41 @@ function ResearchRunDetail({ detail, folderError, folders, onRefreshFolders, res
     run={run}
   />;
 
-  return <Page aria-label={t("title")} className="research-run-page">
-    <PageContent className="flex flex-col gap-6">
+  return <Page aria-label={t("title")} className="research-run-page result-surface">
+    <PageContent className="flex flex-col gap-4">
       <div className="text-sm text-muted-foreground"><a href="/research-runs" onClick={followCoreLink} aria-label={t("back")} className="hover:underline">{t("title")}</a><span aria-hidden="true"> / </span><span className="text-foreground">{run.name}</span></div>
       <PageHeader
         className="mb-0"
+        variant="result"
         title={run.name}
+        badges={<span className="flex items-center gap-2">
+          <Badge variant="secondary" className="h-7 rounded-md">{researchKindLabel(run.research_kind)}</Badge>
+          <Badge variant={run.status === "failed" ? "destructive" : run.status === "succeeded" ? "success" : "outline"} className="h-7 rounded-md">
+            {run.status === "succeeded" ? <CheckCircle weight="fill" aria-hidden="true" /> : null}{t(`statuses.${run.status}`)}
+          </Badge>
+        </span>}
         description={<span className="flex flex-wrap items-center gap-3">
-          <Badge variant="secondary">{researchKindLabel(run.research_kind)}</Badge>
-          <Badge variant={run.status === "failed" ? "destructive" : run.status === "succeeded" ? "default" : "outline"} className="rounded-md">{t(`statuses.${run.status}`)}</Badge>
-          <span>{run.start_date} — {run.end_date}</span>
+          <span className="inline-flex items-center gap-2"><CalendarBlank aria-hidden="true" className="size-4" />{run.start_date} — {run.end_date}</span>
+          {sourceFolder ? <span className="ml-3 inline-flex items-center gap-2"><FolderSimple aria-hidden="true" className="size-4" />{folderDisplayName(sourceFolder)}</span> : null}
         </span>}
         actions={<>
           {run.batch_id ? <Button variant="outline" nativeButton={false} role="link" render={<a href={`/research-runs/batches/${encodeURIComponent(run.batch_id)}`} onClick={followCoreLink} />}>{t("viewBatch")}</Button> : null}
           {run.batch_id && ["queued", "running", "cancelling"].includes(run.status) ? <ResearchBatchCancelButton key={run.batch_id} batchId={run.batch_id} status={run.status} /> : null}
           {!run.batch_id && (run.status === "queued" || run.status === "running") ? <Button variant="outline" disabled={detail.canceling} onClick={() => void detail.cancel()}>{t(detail.canceling ? "cancelling" : "cancel")}</Button> : null}
-          {run.status === "succeeded" && run.research_kind === "strategy_backtest" ? <Button disabled={detail.startingTracking || detail.deleting} onClick={() => void detail.startTracking()}>{t(detail.startingTracking ? "startingTracking" : "startTracking")}</Button> : null}
-          {terminal && run.input && folders.length > 0 ? <Button variant="outline" aria-label={t("draft.open")} onClick={() => { setTab("overview"); window.requestAnimationFrame(() => document.getElementById("research-use-as-draft")?.scrollIntoView({ behavior: "smooth", block: "center" })); }}>{t("draft.create")}</Button> : null}
-          {terminal ? <Button variant="ghost" size="icon" aria-label={t(detail.deleting ? "deleting" : "delete")} title={t(detail.deleting ? "deleting" : "delete")} disabled={detail.deleting || detail.startingTracking} onClick={detail.openDeleteDialog} ref={detail.deleteTrigger}><Trash aria-hidden="true" /></Button> : null}
+          {run.status === "succeeded" && run.research_kind === "strategy_backtest" ? <Button size="xl" disabled={detail.startingTracking || detail.deleting} onClick={() => void detail.startTracking()}><Play aria-hidden="true" />{t(detail.startingTracking ? "startingTracking" : "startTracking")}</Button> : null}
+          {strategyResult && run.input && folders.length > 0 ? <Dialog>
+            <DialogTrigger render={<Button variant="outline" size="xl" disabled={detail.deleting} />}><FileText aria-hidden="true" />{t("draft.use")}</DialogTrigger>
+            <DialogContent className="result-surface" closeLabel={i18n.t("common:close")}>
+              <DialogHeader><DialogTitle>{t("draft.title")}</DialogTitle><DialogDescription>{t("draft.description")}</DialogDescription></DialogHeader>
+              <UseAsDraftPanel embedded folders={folders} input={run.input} researcherId={researcherId} sourceFolderId={run.folder_id} />
+            </DialogContent>
+          </Dialog> : terminal && run.input && folders.length > 0 ? <Button variant="outline" size="xl" aria-label={t("draft.open")} onClick={() => { setTab(result ? "configuration" : "overview"); setVisited(current => current.includes("configuration") ? current : [...current, "configuration"]); window.requestAnimationFrame(() => document.getElementById("research-use-as-draft")?.scrollIntoView({ behavior: "smooth", block: "center" })); }}>{t("draft.create")}</Button> : null}
+          {terminal ? <DropdownMenu>
+            <DropdownMenuTrigger render={<Button variant="outline" size="icon-xl" aria-label={t("moreActions")} disabled={detail.deleting || detail.startingTracking} ref={detail.deleteTrigger} />}><DotsThree aria-hidden="true" /></DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="result-surface min-w-44"><DropdownMenuGroup>
+              <DropdownMenuItem variant="destructive" onClick={detail.openDeleteDialog}><Trash aria-hidden="true" />{t(detail.deleting ? "deleting" : "delete")}</DropdownMenuItem>
+            </DropdownMenuGroup></DropdownMenuContent>
+          </DropdownMenu> : null}
         </>}
       />
       {detail.cancelError ? <Alert variant="destructive"><AlertDescription>{t(detail.cancelError)}</AlertDescription></Alert> : null}
@@ -304,19 +330,18 @@ function ResearchRunDetail({ detail, folderError, folders, onRefreshFolders, res
       {result ? <Tabs value={tab} onValueChange={(value) => {
         setTab(value);
         setVisited((current) => current.includes(value) ? current : [...current, value]);
-      }} className="gap-6">
-        <TabsList aria-label={t("result.views")} variant="line" className="h-auto w-full justify-start gap-4 overflow-x-auto border-b border-border p-0">
-          <TabsTrigger className="min-h-11 flex-none px-2" value="overview">{t("result.overview")}</TabsTrigger>
-          {"factor" in result ? <TabsTrigger className="min-h-11 flex-none px-2" value="evidence">{t("result.evidence")}</TabsTrigger> : <>
-            <TabsTrigger className="min-h-11 flex-none px-2" value="holdings">{i18n.t("analysis:holdings.title")}</TabsTrigger>
-            <TabsTrigger className="min-h-11 flex-none px-2" value="events">{i18n.t("analysis:events.title")}</TabsTrigger>
+      }} className="mt-2 gap-6">
+        <TabsList aria-label={t("result.views")} variant="line" className="h-auto w-full justify-start gap-6 overflow-x-auto border-b border-border p-0">
+          <TabsTrigger size="lg" className="min-w-28 flex-none" value="overview">{t("result.overview")}</TabsTrigger>
+          {"factor" in result ? <TabsTrigger size="lg" className="min-w-28 flex-none" value="evidence">{t("result.evidence")}</TabsTrigger> : <>
+            <TabsTrigger size="lg" className="min-w-28 flex-none" value="holdings">{i18n.t("analysis:holdings.title")}</TabsTrigger>
+            <TabsTrigger size="lg" className="min-w-28 flex-none" value="events">{i18n.t("analysis:events.title")}</TabsTrigger>
           </>}
-          <TabsTrigger className="min-h-11 flex-none px-2" value="inputs">{t("result.inputs")}</TabsTrigger>
-          <TabsTrigger className="min-h-11 flex-none px-2" value="configuration">{t("result.configuration")}</TabsTrigger>
+          <TabsTrigger size="lg" className="min-w-28 flex-none" value="inputs">{t("result.inputs")}</TabsTrigger>
+          <TabsTrigger size="lg" className="min-w-28 flex-none" value="configuration">{t("result.configuration")}</TabsTrigger>
         </TabsList>
         <TabsContent keepMounted value="overview" className="flex flex-col gap-6">
           <ResearchResultView result={result} />
-          {!("factor" in result) && !detail.deleting && folders.length > 0 && run.input ? <UseAsDraftPanel folders={folders} input={run.input} researcherId={researcherId} sourceFolderId={run.folder_id} /> : null}
         </TabsContent>
         {"factor" in result ? <TabsContent keepMounted value="evidence">
           {visited.includes("evidence") ? <FactorEvidence runId={run.id} embedded /> : null}
@@ -551,6 +576,7 @@ export function isTerminalResearch(status: ResearchRun["status"]): boolean {
 }
 
 export function UseAsDraftPanel({
+  embedded = false,
   folders,
   input,
   researcherId,
@@ -558,6 +584,7 @@ export function UseAsDraftPanel({
   storage = window.localStorage,
   navigate = (path) => window.location.assign(path),
 }: {
+  embedded?: boolean;
   folders: ResearchFolderOption[];
   input: FrozenResearchAuthorableInput;
   researcherId: string;
@@ -594,9 +621,9 @@ export function UseAsDraftPanel({
   }
 
   return (
-    <section id="research-use-as-draft" aria-label={t("draft.title")} className="grid min-w-0 gap-4 rounded-lg border border-border bg-card p-5">
-      <div><h2 className="m-0 text-base font-semibold">{t("draft.title")}</h2>
-        <p className="mb-0 mt-1 text-sm text-muted-foreground">{t("draft.description")}</p></div>
+    <section id="research-use-as-draft" aria-label={t("draft.title")} className={embedded ? "grid min-w-0 gap-4" : "grid min-w-0 gap-4 rounded-lg border border-border bg-card p-5"}>
+      {!embedded ? <div><h2 className="m-0 text-base font-semibold">{t("draft.title")}</h2>
+        <p className="mb-0 mt-1 text-sm text-muted-foreground">{t("draft.description")}</p></div> : null}
       <div className="flex min-w-0 flex-wrap items-end gap-3">
         <ResearchFolderSelect id="draft-folder" label={t("draft.folder")} folders={folders} value={targetFolderId} onChange={setTargetFolderId} />
         <Button onClick={() => useAsDraft(false)}>{t("draft.create")}</Button>

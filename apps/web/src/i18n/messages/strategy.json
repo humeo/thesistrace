@@ -114,6 +114,7 @@
       "modulePython": "{{stage}} · Frozen Python source and parameters"
     },
     "state": {
+      "title": "Framework state",
       "summary": "Strategy decisions · {{candidates}} candidates · {{signals}} active signals",
       "help": "Signals and module state inform later decisions. They do not represent orders or fills.",
       "signals": "Active signals",
@@ -422,6 +423,7 @@
       "modulePython": "{{stage}} · 冻结的 Python 源码与参数"
     },
     "state": {
+      "title": "框架状态",
       "summary": "策略决策 · {{candidates}} 个候选 · {{signals}} 条活跃信号",
       "help": "信号和模块状态为后续决策提供依据，不代表委托或成交。",
       "signals": "活跃信号",

@@ -1,6 +1,7 @@
 export const analysisEn = {
   "unknownReason": "Unrecognized reason",
   "chart": {
+    "title": "Cumulative return",
     "empty": "No comparison observations.",
     "label": "Net Strategy and {{benchmark}} performance chart",
     "strategy": "Net Strategy",
@@ -284,6 +285,7 @@ export const analysisEn = {
 export const analysisZh = {
   "unknownReason": "原因无法识别",
   "chart": {
+    "title": "累计收益",
     "empty": "暂无对比观测数据。",
     "label": "净策略与{{benchmark}}表现图",
     "strategy": "净策略",

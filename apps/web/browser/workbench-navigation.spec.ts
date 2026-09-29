@@ -169,7 +169,8 @@ test("Research deletion uses an in-page decision instead of a browser dialog", a
   });
 
   await page.goto(`/research-runs/${runId}`);
-  await page.getByRole("button", { name: "Delete Research", exact: true }).click();
+  await page.getByRole("button", { name: "More actions", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Delete Research", exact: true }).click();
 
   const decision = page.getByRole("alertdialog", { name: "Delete Research?" });
   await expect(decision).toBeVisible();
@@ -181,16 +182,18 @@ test("Research deletion uses an in-page decision instead of a browser dialog", a
 
   await page.keyboard.press("Escape");
   await expect(decision).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Delete Research", exact: true })).toBeFocused();
+  await expect(page.getByRole("button", { name: "More actions", exact: true })).toBeFocused();
   expect(deleteRequestCount).toBe(0);
 
-  await page.getByRole("button", { name: "Delete Research", exact: true }).click();
+  await page.getByRole("button", { name: "More actions", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Delete Research", exact: true }).click();
   await decision.getByRole("button", { name: "Keep Research" }).click();
   await expect(decision).toHaveCount(0);
   await expect(page).toHaveURL(new RegExp(`/research-runs/${runId}$`));
   expect(deleteRequestCount).toBe(0);
 
-  await page.getByRole("button", { name: "Delete Research", exact: true }).click();
+  await page.getByRole("button", { name: "More actions", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Delete Research", exact: true }).click();
   await decision.getByRole("button", { name: "Delete Research", exact: true }).click();
   await expect(page).toHaveURL(/\/research-runs$/);
   expect(deleteRequestCount).toBe(1);

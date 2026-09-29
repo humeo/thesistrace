@@ -8,11 +8,11 @@ test.beforeAll(async () => {
   ({ script, styles } = await buildProductFixture(new URL("./fixtures/chart-language.tsx", import.meta.url), "ChartLanguageFixture"));
 });
 
-test("chart language updates keep manually zoomed and panned observations", async ({ page }, testInfo) => {
+for (const variant of ["default", "result"]) test(`${variant} chart language updates keep manually zoomed and panned observations`, async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1050, height: 800 });
   await serveBrandAssets(page);
-  await page.route("https://chart.test/", route => route.fulfill({ contentType: "text/html", body: `${fontStylesheet}<div id="root"></div>` }));
-  await page.goto("https://chart.test/");
+  await page.route("https://chart.test/?**", route => route.fulfill({ contentType: "text/html", body: `${fontStylesheet}<div id="root"></div>` }));
+  await page.goto(`https://chart.test/?${variant === "result" ? "result" : "default"}`);
   await page.addStyleTag({ content: styles });
   await page.addScriptTag({ content: script });
   await page.evaluate(() => document.fonts.ready);

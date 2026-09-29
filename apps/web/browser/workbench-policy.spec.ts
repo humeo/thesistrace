@@ -83,7 +83,7 @@ for (const scenario of cases) {
     await page.getByRole("button", { name: "Fees and slippage", exact: true }).click();
     await page.getByRole("button", { name: "Run backtest", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/research-runs/${runId}$`));
-    await expect(page.getByRole("heading", { name: "Strategy Summary" })).toBeVisible();
+    await expect(page.getByRole("group", { name: "Strategy Summary", exact: true })).toBeVisible();
     expect(submitted).toHaveLength(1);
     const original = structuredClone(submitted[0]);
     expect(original.modules.risk_management).toEqual(scenario.expectedRisk);
