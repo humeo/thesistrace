@@ -22,13 +22,16 @@ for (const [width, inset] of [[320, 16], [390, 16], [768, 16], [1280, 32], [1440
 }
 test('account popup aligns with its trigger and keeps Discord in keyboard order', async ({page}, testInfo) => {
  const account=page.getByRole('button',{name:'Account menu'}); await account.click();
- await expect(account.locator('.account-avatar')).toBeVisible();
- await expect(account).toContainText('Researcher');
- await expect(account).toContainText('researcher@example.test');
+ await expect(account.locator('.account-trigger-name')).toHaveText('Researcher');
+ await expect(account.locator('.account-avatar')).toBeHidden();
+ await expect(account).not.toContainText('researcher@example.test');
+ await expect(page.locator('.account-menu-panel .account-avatar')).toBeVisible();
+ await expect(page.locator('.account-menu-panel')).toContainText('researcher@example.test');
  const trigger=(await account.boundingBox())!; const panel=(await page.locator('.account-menu-panel').boundingBox())!;
  expect(Math.abs(panel.x - trigger.x)).toBeLessThanOrEqual(1); expect(panel.width).toBeGreaterThanOrEqual(trigger.width);
+ expect(panel.height).toBeLessThanOrEqual(260);
  expect(panel.y + panel.height).toBeLessThan(trigger.y);
- await page.screenshot({path:testInfo.outputPath('account-card.png'),clip:{x:0,y:panel.y-8,width:224,height:850-panel.y+8}});
+ await page.screenshot({path:testInfo.outputPath('account-card.png'),clip:{x:0,y:panel.y-8,width:240,height:850-panel.y+8}});
  await page.screenshot({path:testInfo.outputPath('account-menu-desktop.png')});
  await account.press('Tab'); await expect(page.getByRole('link',{name:'Join Discord'})).toBeFocused();
  await page.keyboard.press('Tab'); await expect(page.getByRole('button',{name:'Log out'})).toBeFocused();
@@ -46,8 +49,8 @@ test('sidebar resizes by pointer and keyboard, clamps bounds and retains width a
  await page.getByRole('button',{name:'Collapse sidebar',exact:true}).click(); await expect(handle).toBeHidden();
  await expect(page.locator('.application-sidebar')).toHaveCSS('width','56px');
  await page.getByRole('button',{name:'Account menu'}).click(); expect((await page.locator('.account-menu-panel').boundingBox())!.width).toBeGreaterThan(200);
- await expect(page.getByRole('button',{name:'Account menu'}).locator('.account-avatar')).toBeVisible();
- await expect(page.getByRole('button',{name:'Account menu'}).locator('.account-identity-copy')).toBeHidden();
+ await expect(page.getByRole('button',{name:'Account menu'}).locator('.account-trigger-avatar')).toBeVisible();
+ await expect(page.getByRole('button',{name:'Account menu'}).locator('.account-trigger-name')).toBeHidden();
  await page.screenshot({path:testInfo.outputPath('account-menu-collapsed.png')});
  await page.keyboard.press('Escape'); await page.getByRole('button',{name:'Expand sidebar',exact:true}).click(); await expect(page.locator('.application-sidebar')).toHaveCSS('width','320px');
  await handle.focus(); await handle.press('ArrowRight'); await expect(handle).toHaveAttribute('aria-valuenow','336');
@@ -56,8 +59,8 @@ test('sidebar resizes by pointer and keyboard, clamps bounds and retains width a
  await page.setViewportSize({width:390,height:844}); await expect(handle).toBeHidden();
  await page.getByRole('button',{name:'Open navigation'}).click(); await page.getByRole('button',{name:'Account menu'}).click();
  const trigger=(await page.getByRole('button',{name:'Account menu'}).boundingBox())!; const panel=(await page.locator('.account-menu-panel').boundingBox())!; expect(panel.width).toBeGreaterThanOrEqual(trigger.width); expect(panel.x+panel.width).toBeLessThanOrEqual(390);
- await expect(page.getByRole('button',{name:'Account menu'}).locator('.account-avatar')).toBeVisible();
- await expect(page.getByRole('button',{name:'Account menu'}).locator('.account-identity-copy')).toBeVisible();
+ await expect(page.getByRole('button',{name:'Account menu'}).locator('.account-trigger-avatar')).toBeHidden();
+ await expect(page.getByRole('button',{name:'Account menu'}).locator('.account-trigger-name')).toBeVisible();
  await page.screenshot({path:testInfo.outputPath('account-menu-mobile.png')});
 });
 
@@ -261,13 +264,9 @@ test('expanded sidebar aligns brand, navigation, history and compact account ide
    navigation: rect('.resource-nav a svg').x,
    historyHeading: rect('.chat-session-heading h3').x,
    historyText: historyLink.getBoundingClientRect().x + parseFloat(getComputedStyle(historyLink).paddingLeft),
-   avatar: rect('.account-trigger .account-avatar').x,
-   avatarWidth: rect('.account-trigger .account-avatar').width,
-   accountText: rect('.account-trigger .account-identity-copy').x,
-   wordmark: rect('.quantgrove-wordmark').x,
+   accountText: rect('.account-trigger-name').x,
    accountHeight: rect('.account-trigger').height,
-   accountNameSize: getComputedStyle(sidebar.querySelector('.account-trigger .account-identity-copy strong')!).fontSize,
-   accountEmailWeight: getComputedStyle(sidebar.querySelector('.account-trigger .account-identity-copy > span')!).fontWeight,
+   accountNameSize: getComputedStyle(sidebar.querySelector('.account-trigger-name')!).fontSize,
    historyHeadingGap: getComputedStyle(sidebar.querySelector('.chat-session-heading')!).marginBottom,
    navigationGaps: navigationLinks.slice(1).map((link, index) =>
     link.getBoundingClientRect().top - navigationLinks[index]!.getBoundingClientRect().bottom),
@@ -276,12 +275,9 @@ test('expanded sidebar aligns brand, navigation, history and compact account ide
  expect(positions.brand).toBe(positions.navigation);
  expect(positions.historyHeading).toBe(positions.navigation);
  expect(positions.historyText).toBe(positions.navigation);
- expect(positions.avatar).toBe(positions.navigation);
- expect(positions.accountText).toBe(positions.wordmark);
- expect(positions.avatarWidth).toBe(24);
- expect(positions.accountHeight).toBe(56);
- expect(positions.accountNameSize).toBe('13px');
- expect(positions.accountEmailWeight).toBe('400');
+ expect(positions.accountText).toBe(positions.navigation);
+ expect(positions.accountHeight).toBe(40);
+ expect(positions.accountNameSize).toBe('14px');
  expect(positions.historyHeadingGap).toBe('4px');
  expect(positions.navigationGaps).toEqual([4, 4, 4, 4, 4]);
 });

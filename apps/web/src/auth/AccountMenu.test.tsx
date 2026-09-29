@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { AccountMenuContent } from "./AccountMenu";
 
-test("shows only the compact account identity and supported actions", () => {
+test("shows only the username in the closed account trigger", () => {
   const markup = renderToStaticMarkup(
     <AccountMenuContent
       session={{
@@ -18,7 +18,8 @@ test("shows only the compact account identity and supported actions", () => {
 
   expect(markup).toContain('aria-label="Account menu"');
   expect(markup).toContain('aria-haspopup="dialog"');
-  expect(markup).toContain("researcher@example.test");
+  expect(markup).toContain('class="account-trigger-name"');
+  expect(markup).not.toContain("researcher@example.test");
   expect(markup).not.toContain("Change password");
   expect(markup).not.toContain("Settings");
   expect(markup).not.toContain("Profile");

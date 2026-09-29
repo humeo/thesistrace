@@ -1,4 +1,4 @@
-import { CaretRight, CaretUpDown, SignOut } from "@phosphor-icons/react";
+import { CaretUpDown, SignOut } from "@phosphor-icons/react";
 import { useState } from "react";
 
 import { Alert, AlertDescription } from "../components/ui/alert";
@@ -37,16 +37,6 @@ export function AccountMenuContent({ session, signOut }: AccountMenuContentProps
   const initials = session.displayLabel.trim().split(/\s+/u)
     .map((part) => Array.from(part)[0]).slice(0, 2).join("").toLocaleUpperCase();
 
-  const identity = (
-    <>
-      <span className="account-avatar" aria-hidden="true">{initials}</span>
-      <span className="account-identity-copy">
-        <strong>{session.displayLabel}</strong>
-        <span title={session.email}>{session.email}</span>
-      </span>
-    </>
-  );
-
   async function submitSignOut(): Promise<void> {
     if (signingOut) return;
     setSigningOut(true);
@@ -61,27 +51,32 @@ export function AccountMenuContent({ session, signOut }: AccountMenuContentProps
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger aria-label={t("accountMenu")} render={<Button variant="ghost" type="button" className="account-trigger" />}>
-        {identity}
-        <CaretUpDown className="account-trigger-chevron" aria-hidden="true" size={18} />
+        <span className="account-trigger-name" title={session.displayLabel}>{session.displayLabel}</span>
+        <span className="account-avatar account-trigger-avatar" aria-hidden="true">{initials}</span>
+        <CaretUpDown className="account-trigger-chevron" aria-hidden="true" size={16} />
         <span className="sr-only">{t("accountMenu")}</span>
       </PopoverTrigger>
       <PopoverContent side="top" align="start" className="account-menu-panel">
         <PopoverTitle className="sr-only">{t("accountMenu")}</PopoverTitle>
-        <div className="account-identity">{identity}</div>
+        <div className="account-identity">
+          <span className="account-avatar account-menu-avatar" aria-hidden="true">{initials}</span>
+          <span className="account-identity-copy">
+            <strong>{session.displayLabel}</strong>
+            <span title={session.email}>{session.email}</span>
+          </span>
+        </div>
+        <Separator className="account-menu-divider" />
         {message !== null ? <Alert variant="destructive"><AlertDescription>{t(`auth:errors.${message}`)}</AlertDescription></Alert> : null}
         <Button variant="ghost" className="account-action" render={
           <a href="https://discord.gg/tdwxubVhMJ" target="_blank" rel="noopener noreferrer" />
         }>
           <img src="/brand/discord-symbol-white.svg" alt="" width={20} height={16} />
           <span>{t("joinCommunity")}</span>
-          <CaretRight className="account-action-chevron" aria-hidden="true" size={16} />
         </Button>
         <Button variant="ghost" className="account-action" disabled={signingOut} onClick={() => void submitSignOut()} type="button">
-          <SignOut aria-hidden="true" size={20} />
+          <SignOut aria-hidden="true" size={18} />
           <span>{t(signingOut ? "signingOut" : "signOut")}</span>
-          <CaretRight className="account-action-chevron" aria-hidden="true" size={16} />
         </Button>
-        <Separator />
         <div className="account-language">
           <span>{t("language")}</span>
           <ToggleGroup

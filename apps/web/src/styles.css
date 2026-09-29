@@ -448,7 +448,7 @@ code { font-family: var(--mono); }
 .sidebar-account-area .account-trigger {
   width: 100%;
   max-width: none;
-  min-height: 56px;
+  min-height: 40px;
 }
 .application-frame {
   flex: 1;
@@ -586,6 +586,7 @@ code { font-family: var(--mono); }
   padding-left: 7px;
 }
 .app-shell .sidebar-account-area {
+  min-height: 49px;
   padding: 4px;
   border-top-color: var(--border);
 }
@@ -596,7 +597,7 @@ code { font-family: var(--mono); }
 
 .app-shell-collapsed .application-frame { margin-left: 0; }
 .app-shell-collapsed .sidebar-label,
-.app-shell-collapsed .sidebar-account-area .account-trigger .account-identity-copy {
+.app-shell-collapsed .sidebar-account-area .account-trigger-name {
   width: 0;
   overflow: hidden;
   opacity: 0;
@@ -758,22 +759,34 @@ code { font-family: var(--mono); }
   letter-spacing: .02em;
 }
 
-/* Account card and its upward-opening menu share the same identity layout. */
+/* Keep the sidebar entry quiet; show the full identity in its menu. */
 .account-trigger {
   display: flex;
-  min-height: 56px;
+  min-height: 40px;
   max-width: 220px;
   align-items: center;
   gap: 8px;
   padding: 8px 11px;
   color: var(--ink);
-  background: var(--surface-2);
+  background: transparent;
   border: 1px solid transparent;
-  border-radius: 12px;
+  border-radius: 8px;
   cursor: pointer;
 }
 .account-trigger:hover,
-.account-trigger[aria-expanded="true"] { background: var(--surface-3); border-color: var(--line-strong); }
+.account-trigger[aria-expanded="true"] { background: var(--surface-2); }
+.account-trigger-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .account-avatar {
   display: inline-flex;
   flex: 0 0 24px;
@@ -787,6 +800,7 @@ code { font-family: var(--mono); }
   font-size: 12px;
   font-weight: 500;
 }
+.account-trigger-avatar { display: none; }
 .account-identity-copy { display: grid; flex: 1; min-width: 0; gap: 0; text-align: left; }
 .account-identity-copy strong,
 .account-identity-copy > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -795,18 +809,21 @@ code { font-family: var(--mono); }
 .account-trigger-chevron { flex: 0 0 auto; color: var(--ink-soft); }
 .account-menu-panel {
   display: grid;
-  width: max(224px, var(--anchor-width));
+  gap: 0;
+  width: max(232px, var(--anchor-width));
   max-width: calc(100vw - 24px);
-  padding: 8px;
+  padding: 6px;
   background: var(--surface-3);
   border: 1px solid var(--line-strong);
   border-radius: 12px;
 }
-.account-identity { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 12px 4px 16px; margin: 0 4px 8px; border-bottom: 1px solid var(--line-strong); }
+.account-identity { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 8px; }
+.account-menu-avatar { flex-basis: 28px; width: 28px; height: 28px; }
+.account-menu-divider { margin: 6px 8px; }
 .account-action {
   justify-content: flex-start;
   gap: 10px;
-  min-height: 44px;
+  min-height: 40px;
   margin: 0;
   padding-inline: 10px;
   color: var(--ink-muted);
@@ -818,17 +835,17 @@ code { font-family: var(--mono); }
 }
 .account-action > svg, .account-action > img { flex-shrink: 0; }
 .account-action > img { filter: brightness(0) invert(1); }
-.account-action-chevron { margin-left: auto; color: var(--ink-soft); }
-.account-language { border-top: 1px solid var(--line); margin-top: 4px; padding: 10px 8px 4px; }
+.account-language { border-top: 1px solid var(--line); margin-top: 6px; padding: 10px 8px 4px; }
 .account-language > span { color: var(--ink-soft); font-size: 12px; }
-.account-language-options { display: flex; gap: 4px; margin-top: 8px; }
-.account-language-options > button { flex: 1; min-width: 0; min-height: 36px; padding: 6px; font-size: 12px; }
-.account-language-options > button[aria-pressed="true"] { color: var(--ink); background: var(--surface-3); border-color: var(--line-strong); }
-.account-action:hover, .account-action:hover:not(:disabled) { color: var(--ink); background: var(--line-strong); border-color: transparent; }
+.account-language-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; gap: 2px; margin-top: 6px; padding: 2px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; }
+.account-language-options > button { min-width: 0; min-height: 32px; padding: 5px; color: var(--ink-muted); background: transparent; border-color: transparent; font-size: 12px; }
+.account-language-options > button[aria-pressed="true"] { color: var(--ink); background: var(--surface-4); border-color: transparent; }
+.account-action:hover, .account-action:hover:not(:disabled) { color: var(--ink); background: var(--surface-4); border-color: transparent; }
 @media (min-width: 769px) {
   .app-shell-collapsed .account-trigger { gap: 0; }
-  .app-shell-collapsed .account-trigger .account-identity-copy,
+  .app-shell-collapsed .account-trigger .account-trigger-name,
   .app-shell-collapsed .account-trigger .account-trigger-chevron { display: none; }
+  .app-shell-collapsed .account-trigger .account-trigger-avatar { display: inline-flex; }
 }
 
 /* Data */
@@ -928,7 +945,7 @@ code { font-family: var(--mono); }
   .app-shell-collapsed .application-frame { margin-left: 0; }
   .app-shell-collapsed .sidebar-label,
   .app-shell-collapsed .chat-session-region,
-  .app-shell-collapsed .sidebar-account-area .account-trigger .account-identity-copy {
+  .app-shell-collapsed .sidebar-account-area .account-trigger-name {
     width: auto;
     overflow: visible;
     opacity: 1;
