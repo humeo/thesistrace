@@ -107,6 +107,33 @@ const MAX_FORMULA_LENGTH = 4_096;
 export const MAX_HYPOTHESIS_LENGTH = 1_024;
 const MAX_TEXT_LENGTH = 10_000;
 
+// The function-based sample was saved into browser drafts before the class SDK shipped.
+// Match the complete built-in source so authored programs are never rewritten.
+const PREVIOUS_DIRECT_EXAMPLE = `def decide(context, state, parameters):
+    history = context["history"]
+    prices = history["fields"]["price.close.adjusted"]
+    candidates = {row["instrument_id"] for row in context["candidates"]}
+    scores = {}
+    for instrument, closes in zip(history["instruments"], prices):
+        if closes[0] is not None and closes[-1] is not None and closes[0] > 0:
+            scores[instrument] = closes[-1] / closes[0] - 1
+    eligible = [item for item in scores if item in candidates]
+    output = None
+    if eligible:
+        best = max(eligible, key=lambda item: (scores[item], item))
+        held = [row["instrument_id"] for row in context["account"]["positions"]]
+        held_score = max((scores.get(item, -1) for item in held), default=-1)
+        if best not in held and (not held or scores[best] > held_score + parameters["improvement"]):
+            output = {
+                "reason": "better_momentum_candidate",
+                "allocation": {"mode": "rebalance", "instrument_ids": [best],
+                               "relative_weights": {best: "1"}, "exposure": 1.0},
+                "position_limits": {},
+            }
+    state["decisions"] = state.get("decisions", 0) + 1
+    return {"output": output, "state": state}
+`;
+
 export function emptyResearchDraft(): ResearchDraft {
   return {
     researchKind: "factor_evaluation",
@@ -152,7 +179,7 @@ export function loadResearchDraftState(
   storage: Pick<Storage, "getItem">,
   researcherId: string,
   folderId: string,
-): { draft: ResearchDraft; restored: boolean } {
+): { draft: ResearchDraft; restored: boolean; upgradedExample?: true } {
   const stored = storage.getItem(researchDraftKey(researcherId, folderId));
   if (stored === null || new TextEncoder().encode(stored).byteLength > MAX_DRAFT_BYTES) {
     return { draft: emptyResearchDraft(), restored: false };
@@ -160,7 +187,12 @@ export function loadResearchDraftState(
   try {
     const value: unknown = JSON.parse(stored);
     const draft = readDraft(value);
-    return draft === null ? { draft: emptyResearchDraft(), restored: false } : { draft, restored: true };
+    if (draft === null) return { draft: emptyResearchDraft(), restored: false };
+    if (draft.programSource.trimEnd() === PREVIOUS_DIRECT_EXAMPLE.trimEnd()
+      && draft.lastAdmittedBaseline === null && draft.pendingAdmission === null) {
+      return { draft: { ...draft, programSource: DIRECT_EXAMPLE }, restored: true, upgradedExample: true };
+    }
+    return { draft, restored: true };
   } catch {
     return { draft: emptyResearchDraft(), restored: false };
   }

@@ -34,7 +34,14 @@ export function useResearchDraftController({
 }) {
   const { t } = useTranslation("research");
   const [initial] = useState(() => {
-    try { return { ...loadResearchDraftState(storage, researcherId, folderId), failed: false }; }
+    try {
+      const loaded = loadResearchDraftState(storage, researcherId, folderId);
+      if (loaded.upgradedExample) {
+        try { persistResearchDraft(storage, researcherId, folderId, loaded.draft); }
+        catch { return { ...loaded, failed: true }; }
+      }
+      return { ...loaded, failed: false };
+    }
     catch { return { draft: emptyResearchDraft(), restored: false, failed: true }; }
   });
   const [draft, setDraft] = useState<ResearchDraft>(initial.draft);
