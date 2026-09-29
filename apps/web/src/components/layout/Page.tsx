@@ -13,12 +13,12 @@ export function PageHeader({
   actions?: ReactNode;
   className?: string;
   badges?: ReactNode;
-  variant?: "default" | "result";
+  variant?: "default" | "result" | "console";
 }) {
   return (
     <header className={cn("mb-8 flex flex-col items-start justify-between gap-6 max-[768px]:mb-6 min-[769px]:flex-row min-[769px]:flex-wrap", className)}>
       <div className="grid w-full min-w-0 flex-1 gap-2 min-[769px]:flex-[1_1_20rem]">
-        {variant === "result" ? <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
+        {variant !== "default" ? <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
           <h1 className="m-0 min-w-0 text-4xl leading-[44px] font-semibold tracking-normal [overflow-wrap:anywhere]">{title}</h1>
           {badges}
         </div> : <h1 className="m-0 text-2xl leading-8 font-semibold tracking-normal [overflow-wrap:anywhere]">{title}</h1>}
@@ -37,17 +37,18 @@ export function PageContent({
 }
 
 export function Section({
-  title, actions, children, className,
+  title, actions, children, className, variant = "default",
 }: {
   title: ReactNode;
   actions?: ReactNode;
   children: ReactNode;
   className?: string;
+  variant?: "default" | "console";
 }) {
   return (
     <section className={cn("grid min-w-0 gap-4", className)}>
       <header className="flex flex-col items-start justify-between gap-4 min-[769px]:flex-row min-[769px]:items-center">
-        <h2 className="m-0 text-base leading-6 font-semibold">{title}</h2>
+        <h2 className={cn("m-0 font-semibold", variant === "console" ? "text-[28px] leading-9" : "text-base leading-6")}>{title}</h2>
         {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
       </header>
       {children}

@@ -140,15 +140,14 @@ export function DataOverviewView({
       coverage: overview.benchmark_coverage,
       state: overview.benchmark_research_readiness ? "ready" : "not_ready", families: [] },
   ];
-  return <Page aria-label={t("title")}><PageContent className="flex flex-col gap-8">
-    <PageHeader className="mb-0" title={t("title")} actions={<Button variant="outline" onClick={onRefresh} disabled={refreshing}><ArrowClockwise aria-hidden="true" data-icon="inline-start" />{t("reload")}</Button>} />
+  return <Page className="console-workspace" aria-label={t("title")}><PageContent className="flex flex-col gap-6">
+    <PageHeader variant="console" className="mb-0" title={t("title")} actions={<Button size="xl" variant="outline" onClick={onRefresh} disabled={refreshing}><ArrowClockwise aria-hidden="true" data-icon="inline-start" />{t("reload")}</Button>} />
     {error && <Alert variant="destructive"><AlertDescription>{t(error)}</AlertDescription></Alert>}
     <TooltipProvider><section aria-label={t("coverage")} className="grid overflow-hidden rounded-xl border border-border bg-card md:grid-cols-2 xl:grid-cols-4">
-      {rows.map(row => <div key={row.id} className="min-w-0 border-b border-border p-4 last:border-0 md:border-r xl:border-b-0">
-        <div className="flex items-center justify-between gap-2"><h2 className="m-0 text-base font-semibold">{t(`${row.id}Title`)}</h2><Badge variant={row.state === "ready" ? "default" : "outline"}>{t(row.state === "ready" ? "available" : row.state === "not_ready" ? "notAvailable" : "limitedCoverage")}</Badge></div>
-        <div className="mt-3 flex items-center gap-1 text-xs text-muted-foreground"><span>{t("availableRange")}</span><Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon-xs" aria-label={`${t(`${row.id}Title`)} · ${t("coverageHint")}`} />}><Info aria-hidden="true" /></TooltipTrigger><TooltipContent>{row.description} {t("availabilityVaries")}</TooltipContent></Tooltip></div>
-        <p className="mb-0 mt-1 text-sm tabular-nums">{row.coverage ? `${row.coverage.start} — ${row.coverage.end}` : t("noCoverage")}</p>
-        {row.detail ? <p className="mb-0 mt-1 text-xs text-muted-foreground">{row.detail}</p> : null}
+      {rows.map(row => <div key={row.id} className="min-w-0 border-b border-border px-5 py-4 last:border-0 md:border-r xl:border-b-0">
+        <div className="flex items-center justify-between gap-2"><h2 className="m-0 text-lg font-semibold">{t(`${row.id}Title`)}</h2><Badge variant={row.state === "ready" ? "success" : "outline"}>{t(row.state === "ready" ? "available" : row.state === "not_ready" ? "notAvailable" : "limitedCoverage")}</Badge></div>
+        <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground"><span>{t("availableRange")}</span><Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon-xs" aria-label={`${t(`${row.id}Title`)} · ${t("coverageHint")}`} aria-description={row.detail ?? undefined} />}><Info aria-hidden="true" /></TooltipTrigger><TooltipContent className="console-workspace">{row.description} {row.detail} {t("availabilityVaries")}</TooltipContent></Tooltip>
+        <span className="tabular-nums">{row.coverage ? `${row.coverage.start} — ${row.coverage.end}` : t("noCoverage")}</span></div>
         {row.state !== "ready" && row.families.length > 0 && <p className="mb-0 mt-2 text-xs text-muted-foreground">
           {row.families.filter(family => family.readiness !== "ready").map(family =>
             t("familyAvailability", { available: family.available_field_ids.length, total: family.supported_field_ids.length }) + (family.coverage_end ? t("through", { date: family.coverage_end }) : "")).join("; ")}.{" "}
@@ -156,9 +155,9 @@ export function DataOverviewView({
         </p>}
       </div>)}
     </section></TooltipProvider>
-    <p className="m-0 -mt-6 text-xs text-muted-foreground">{overview.data_through_session ? t("dataThrough", { date: overview.data_through_session }) : t("noDataDate")}</p>
     <ResearchFieldCatalog catalog={catalog} />
     <CommonInputCatalog catalog={catalog} />
+    <p className="m-0 text-right text-xs text-muted-foreground">{overview.data_through_session ? t("dataThrough", { date: overview.data_through_session }) : t("noDataDate")}</p>
   </PageContent></Page>;
 }
 
@@ -166,7 +165,7 @@ function CommonInputCatalog({ catalog }: { catalog: AlphaCatalog }) {
   const { t } = useTranslation("data");
   const inputs = catalog.builtins.filter((builtin) => builtin.result_type === "common_series");
   if (inputs.length === 0) return null;
-  return <Disclosure title={<>{t("commonInputs")} · {t("expressions", { total: inputs.length })}</>}>
+  return <Disclosure variant="row" title={<>{t("commonInputs")} · {t("expressions", { total: inputs.length })}</>}>
     <p>{t("commonInputHint")}</p>
     <Table scrollLabel={t("commonExpressions")} className="min-w-[640px]">
       <TableCaption className="sr-only">{t("commonExpressions")}</TableCaption>
@@ -233,9 +232,9 @@ export function ResearchFieldCatalog({ catalog }: { catalog: AlphaCatalog }) {
     setDetailsOpen(true);
     setCopyErrorFor(null);
   }
-  return <div ref={catalogContainer} className="min-w-0"><Section title={<>{t("researchFields")} <span className="ml-2 text-sm font-normal text-muted-foreground">{t("fieldCount", { total: catalog.fields.length })}</span></>}>
-    <div className="flex flex-wrap items-center gap-3">
-      <Field className="min-w-60 w-auto flex-[1_1_260px]">
+  return <div ref={catalogContainer} className="min-w-0"><Section variant="console" title={<>{t("researchFields")} <span className="ml-2 text-xl font-normal text-muted-foreground">{t("fieldCount", { total: catalog.fields.length })}</span></>}>
+    <div className={cn("grid min-w-0 items-start gap-6", !narrow && "grid-cols-[minmax(0,1.85fr)_minmax(320px,1fr)]")}><div className="flex min-w-0 flex-col gap-4"><div className="flex flex-wrap items-center gap-3">
+      <Field className="min-w-48 w-auto flex-[1_1_220px]">
         <FieldLabel className="sr-only" htmlFor="data-field-search">{t("searchFields")}</FieldLabel>
         <InputGroup>
           <InputGroupAddon><MagnifyingGlass aria-hidden="true" /></InputGroupAddon>
@@ -251,33 +250,33 @@ export function ResearchFieldCatalog({ catalog }: { catalog: AlphaCatalog }) {
           </ToggleGroupItem>)}
         </ToggleGroup>
         <Select value={purpose} onValueChange={value => { if (value !== null) { setPurpose(value); setPage(1); } }}>
-          <SelectTrigger className="w-48" aria-label={t("purpose")}><SelectValue>{purpose ? catalogLabel("purposes", purpose) : t("allPurposes")}</SelectValue></SelectTrigger>
-          <SelectContent><SelectGroup><SelectItem value="">{t("allPurposes")}</SelectItem>
+          <SelectTrigger className="w-36" aria-label={t("purpose")}><SelectValue>{purpose ? catalogLabel("purposes", purpose) : t("allPurposes")}</SelectValue></SelectTrigger>
+          <SelectContent className="console-workspace"><SelectGroup><SelectItem value="">{t("allPurposes")}</SelectItem>
             {[...new Set(catalog.fields.map(field => field.research_purpose))].sort(compareResearchPurposes).map(value => <SelectItem key={value} value={value}>{catalogLabel("purposes", value)}</SelectItem>)}
           </SelectGroup></SelectContent>
         </Select>
       </div>
     </div>
-    {pageFields.length ? <div className={cn("grid min-w-0 gap-6", !narrow && "grid-cols-[minmax(0,1fr)_320px]")}>
-      <div className="flex min-w-0 flex-col gap-4">
-        <Table scrollLabel={t("researchFields")} className="min-w-[480px]">
+    {pageFields.length ? <div className="flex min-w-0 flex-col gap-4">
+        <div className="max-h-[408px] overflow-y-auto rounded-md border border-border">
+        <Table density="catalog" scrollLabel={t("researchFields")} className="min-w-[480px]">
           <TableCaption className="sr-only">{t("researchFields")}</TableCaption>
           <TableHeader><TableRow><TableHead>{t("field")}</TableHead><TableHead>{t("formulaName")}</TableHead><TableHead>{t("unit")}</TableHead></TableRow></TableHeader>
           <TableBody>{pageFields.map(field => <TableRow key={field.field_id} onClick={event => { if (!(event.target as HTMLElement).closest("button")) selectField(field); }} data-state={selected?.field_id === field.field_id ? "selected" : undefined}>
-            <TableCell className="max-w-64 whitespace-normal"><Button variant="ghost" className="h-auto min-h-11 w-full justify-start whitespace-normal text-left" aria-pressed={selected?.field_id === field.field_id}
+            <TableCell className="max-w-64 whitespace-normal"><Button variant="ghost" className="h-auto min-h-9 w-full justify-start whitespace-normal text-left" aria-pressed={selected?.field_id === field.field_id}
               ref={selected?.field_id === field.field_id ? selectedTrigger : undefined} onClick={() => selectField(field)}>
               {fieldDisplay(field.field_id).name}
             </Button></TableCell>
             <TableCell><code>{field.identifier}</code></TableCell><TableCell>{catalogLabel("units", field.unit)}</TableCell>
           </TableRow>)}</TableBody>
-        </Table>
+        </Table></div>
         <PageNavigation label={t("pages")} previousLabel={t("previous")} nextLabel={t("next")} previousDisabled={currentPage === 1} nextDisabled={currentPage === pageCount}
           onPrevious={() => setPage(currentPage - 1)} onNext={() => setPage(currentPage + 1)}>
           <span role="status">{t("showing", { start: (currentPage - 1) * PAGE_SIZE + 1, end: Math.min(currentPage * PAGE_SIZE, visible.length), total: visible.length })}</span><span>{currentPage} / {pageCount}</span>
         </PageNavigation>
-      </div>
-      {selected && !narrow && <aside className="min-w-0 rounded-lg border border-border bg-card p-4" aria-label={t("details")}><FieldDetail field={selected} copyError={copyErrorFor === selected.field_id} onCopy={copy} /></aside>}
-    </div> : <Empty><EmptyHeader><EmptyTitle>{t(catalog.fields.length ? "noMatches" : "noFields")}</EmptyTitle></EmptyHeader></Empty>}
+      </div> : <Empty><EmptyHeader><EmptyTitle>{t(catalog.fields.length ? "noMatches" : "noFields")}</EmptyTitle></EmptyHeader></Empty>}</div>
+      {selected && !narrow && <aside className="min-w-0 rounded-md border border-border bg-card p-6" aria-label={t("details")}><FieldDetail field={selected} copyError={copyErrorFor === selected.field_id} onCopy={copy} /></aside>}
+    </div>
     <Sheet open={narrow && detailsOpen && !!selected} onOpenChange={setDetailsOpen}>
       <SheetContent showCloseButton={false} className="w-[min(100%,440px)] max-w-full overflow-y-auto p-4 sm:max-w-[440px]" finalFocus={() => selectedTrigger.current?.isConnected ? selectedTrigger.current : searchInput.current}>
         <SheetHeader className="p-0"><SheetTitle>{t("details")}</SheetTitle></SheetHeader>
@@ -292,17 +291,18 @@ function FieldDetail({ field, copyError, onCopy }: { field: AlphaCatalogField; c
   const { t } = useTranslation("data");
   const display = fieldDisplay(field.field_id);
   return <div className="flex min-w-0 flex-col gap-4 [overflow-wrap:anywhere]">
-    <h3 className="m-0 text-base font-semibold">{display.name}</h3>
+    <h3 className="m-0 text-2xl leading-8 font-semibold">{display.name}</h3>
     <div className="flex min-w-0 items-start justify-between gap-2"><code className="min-w-0">{field.identifier}</code><Button variant="outline" size="icon" aria-label={t("copyFormula")} onClick={() => void onCopy(field.identifier)}><Copy aria-hidden="true" /></Button></div>
-    <p className="m-0 text-sm">{display.description}</p>
-    <dl className="m-0 grid gap-4 text-sm">
+    <p className="m-0 text-base leading-6 text-muted-foreground">{display.description}</p>
+    <dl className="m-0 grid grid-cols-2 gap-4 border-b border-border pb-5 text-base">
       <div><dt className="text-xs text-muted-foreground">{t("unit")}</dt><dd className="m-0">{catalogLabel("units", field.unit)}</dd></div>
       <div><dt className="text-xs text-muted-foreground">{t("period")}</dt><dd className="m-0">{catalogLabel("reportPeriods", field.report_period_selection)}</dd></div>
-      <div><dt className="text-xs text-muted-foreground">{t("availableAt")}</dt><dd className="m-0">{catalogLabel("availability", field.availability)}</dd></div>
-      <div><dt className="text-xs text-muted-foreground">{t("missingValues")}</dt><dd className="m-0">{catalogLabel("missingness", field.missingness)}</dd></div>
-      <div><dt className="text-xs text-muted-foreground">{t("appliesTo")}</dt><dd className="m-0">{field.applicable_company_types.length ? t("companyTypes", { types: field.applicable_company_types.join(", ") }) : t("allInstruments")}</dd></div>
+
     </dl>
-    {field.example && <div><p className="text-xs text-muted-foreground">{t("example")}</p><div className="flex min-w-0 items-start justify-between gap-2"><code className="min-w-0">{field.example}</code><Button variant="outline" size="icon" aria-label={t("copyExample")} onClick={() => void onCopy(field.example)}><Copy aria-hidden="true" /></Button></div></div>}
+    <div><Disclosure variant="row" title={t("availableAt")}><p>{catalogLabel("availability", field.availability)}</p><p>{t("appliesTo")}: {field.applicable_company_types.length ? t("companyTypes", { types: field.applicable_company_types.join(", ") }) : t("allInstruments")}</p></Disclosure>
+    <Disclosure variant="row" title={t("missingValues")}><p>{catalogLabel("missingness", field.missingness)}</p></Disclosure>
+    <Disclosure variant="row" title={t("formulaName")}><code>{field.field_id}</code></Disclosure></div>
+    {field.example && <div><p className="m-0 mb-2 text-sm text-muted-foreground">{t("example")}</p><div className="flex min-w-0 items-start justify-between gap-2"><code className="min-w-0">{field.example}</code><Button variant="outline" size="icon" aria-label={t("copyExample")} onClick={() => void onCopy(field.example)}><Copy aria-hidden="true" /></Button></div></div>}
     {copyError && <Alert variant="destructive"><AlertDescription>{t("copyUnavailable")}</AlertDescription></Alert>}
   </div>;
 }
@@ -331,8 +331,8 @@ export function DataPage() {
     void refresh();
   }, [refresh]);
 
-  if (!resources) return <Page aria-label={t("title")}><PageContent>
-    <PageHeader title={t("title")} />
+  if (!resources) return <Page className="console-workspace" aria-label={t("title")}><PageContent>
+    <PageHeader variant="console" title={t("title")} />
     {error ? <Alert variant="destructive"><AlertDescription>{t(error)}<Button variant="outline" disabled={refreshing} onClick={() => void refresh()}>{t("retry")}</Button></AlertDescription></Alert> : <p role="status">{t("loading")}</p>}
   </PageContent></Page>;
   return <DataOverviewView catalog={resources.catalog} overview={resources.overview} error={error} refreshing={refreshing} onRefresh={() => void refresh()} />;

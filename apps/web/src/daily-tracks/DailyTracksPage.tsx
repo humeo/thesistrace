@@ -310,7 +310,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
 
   const submitting = advanceState === "submitting" || retryState === "submitting" || stopState === "submitting" || deleting;
   if (error && track === null && items === null) {
-    return <Page aria-label={t("title")}><PageContent><PageHeader title={t("title")} />
+    return <Page className="console-workspace" aria-label={t("title")}><PageContent><PageHeader variant="console" title={t("title")} />
       <Alert variant="destructive"><AlertDescription>{t("unavailable")}<Button variant="outline" onClick={reloadStatus}>{t("retry")}</Button></AlertDescription></Alert>
     </PageContent></Page>;
   }
@@ -318,11 +318,10 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
   if (!trackId && items === null) return <TrackLoading detail={false} />;
   if (trackId && track) {
     return <>
-      <DailyTrackWorkspace key={track.id} track={track} items={items} listError={listError} onReloadList={reloadStatus} actions={<>
+      <DailyTrackWorkspace key={track.id} track={track} items={items} listError={listError} onReloadList={reloadStatus} reloadAction={<Button size="xl" ref={reloadTrigger} variant="outline" disabled={loadState !== null || submitting} onClick={reloadStatus}>{t("reloadStatus")}</Button>} actions={<>
         {track.status === "active" ? <Button disabled={!dailyTrackCanRefresh(track) || advanceState !== null || submitting}
           onClick={() => void refreshToLatestData()}>{t(advanceState === "submitting" ? "queuing" : dailyTrackNeedsPolling(track) ? "updating" : "refresh")}</Button> : null}
         {track.status === "blocked" ? <Button disabled={retryState !== null || submitting} onClick={() => void retryBlockedTrack()}>{t("retryBlocked")}</Button> : null}
-        <Button ref={reloadTrigger} variant="outline" disabled={loadState !== null || submitting} onClick={reloadStatus}>{t("reloadStatus")}</Button>
         <DropdownMenu><DropdownMenuTrigger render={<Button variant="outline" ref={manageTrigger} />} disabled={submitting || track.status === "stopping"}>{t("manage")}</DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="min-w-56">
             {track.status === "active" || track.status === "blocked" ? <DropdownMenuItem variant="destructive" onClick={() => { setActionError(null); setConfirmStop(true); }} disabled={stopState !== null}>{t("stop")}</DropdownMenuItem> : null}
@@ -346,18 +345,18 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
         onCancel={() => setConfirmDelete(false)} onConfirm={() => void deleteTrack()} finalFocus={() => stopState === "accepted" || manageTrigger.current?.disabled ? reloadTrigger.current : manageTrigger.current} />
     </>;
   }
-  return <Page aria-label={t("title")}><PageContent className="flex flex-col gap-6">
-    <PageHeader title={t("title")} className="mb-0" actions={<Button variant="outline" disabled={loadState !== null} onClick={reloadStatus}>{t("reloadStatus")}</Button>} />
+  return <Page className="console-workspace" aria-label={t("title")}><PageContent className="flex flex-col gap-6">
+    <PageHeader variant="console" title={t("title")} className="mb-0" actions={<Button variant="outline" disabled={loadState !== null} onClick={reloadStatus}>{t("reloadStatus")}</Button>} />
     {error ? <Alert variant="destructive"><AlertDescription>{t("listReloadFailed")}</AlertDescription></Alert> : null}
     {items?.length === 0 ? <Empty><EmptyHeader><EmptyTitle role="heading" aria-level={2}>{t("emptyTitle")}</EmptyTitle><EmptyDescription>{t("emptyDescription")}</EmptyDescription></EmptyHeader>
       <Button nativeButton={false} role="link" render={<a href="/research-runs" />}>{t("browseRuns")}</Button>
-    </Empty> : <div className="grid min-w-0 gap-6 lg:grid-cols-[260px_minmax(0,1fr)]"><DailyTrackListPanel items={items ?? []} /><div className="flex min-h-80 items-center justify-center rounded-xl border border-border bg-card p-8 text-center text-muted-foreground">{t("selectTrack")}</div></div>}
+    </Empty> : <div className="grid min-w-0 gap-6 lg:grid-cols-[280px_minmax(0,1fr)]"><DailyTrackListPanel items={items ?? []} /><div className="flex min-h-80 items-center justify-center rounded-xl border border-border bg-card p-8 text-center text-muted-foreground">{t("selectTrack")}</div></div>}
   </PageContent></Page>;
 }
 
 function TrackLoading({ detail }: { detail: boolean }) {
   const { t } = useTranslation("daily");
-  return <Page aria-label={t("title")} aria-busy="true"><PageContent><p role="status">{t(detail ? "loading" : "loadingList")}</p></PageContent></Page>;
+  return <Page className="console-workspace" aria-label={t("title")} aria-busy="true"><PageContent><p role="status">{t(detail ? "loading" : "loadingList")}</p></PageContent></Page>;
 }
 
 function TrackActionDialog({ open, submitting, title, description, cancelLabel, confirmLabel, error, onCancel, onConfirm, finalFocus }: {

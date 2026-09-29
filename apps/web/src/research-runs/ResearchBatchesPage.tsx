@@ -110,9 +110,9 @@ export function ResearchBatchesPage({ batchId }: { batchId?: string }) {
     if (!batchId) navigateCorePath(batchPath(detail.id));
   }
 
-  return <Page aria-label={t("title")}>
+  return <Page className="console-workspace" aria-label={t("title")}>
     <PageContent className="flex flex-col gap-6">
-      <PageHeader className="mb-0" title={batchId ? t("batch") : i18n.t("runs:title")} actions={batchId
+      <PageHeader variant="console" className="mb-0" title={batchId ? t("batch") : i18n.t("runs:title")} actions={batchId
         ? <Button variant="outline" nativeButton={false} role="link" render={<a href="/research-runs/batches" onClick={followCoreLink} />}>{t("back")}</Button> : undefined} />
       {!batchId && <ResearchRunsNavigation active="batches" />}
       {error && <Alert variant="destructive"><AlertDescription>{t(error)}<Button variant="outline" onClick={() => setRefresh(value => value + 1)}>{t("reload")}</Button></AlertDescription></Alert>}
@@ -148,7 +148,7 @@ export function ResearchBatchesPage({ batchId }: { batchId?: string }) {
         </div>
         {items === null && loading && <p role="status">{t("loadingBatches")}</p>}
         {items?.length === 0 && !error && <Empty><EmptyHeader><EmptyTitle>{t(activeOnly ? "emptyActive" : "empty")}</EmptyTitle></EmptyHeader></Empty>}
-        {items && items.length > 0 && <Table scrollLabel={t("title")} className="min-w-[720px]">
+        {items && items.length > 0 && <Table density="comfortable" scrollLabel={t("title")} className="min-w-[720px]">
           <TableHeader><TableRow><TableHead scope="col">{t("batchColumn")}</TableHead><TableHead scope="col">{t("created")}</TableHead><TableHead scope="col">{t("completed")}</TableHead><TableHead scope="col">{t("status")}</TableHead><TableHead scope="col" aria-label={t("actions")} /></TableRow></TableHeader>
           <TableBody>{items.map(item => <TableRow key={item.id}>
             <TableCell className="min-w-48 max-w-72 whitespace-normal [overflow-wrap:anywhere]"><a className="block min-h-11 content-center text-primary underline-offset-4 hover:underline md:min-h-0" href={batchPath(item.id)} onClick={followCoreLink}>{kindLabel(item)}<code className="block text-xs">{item.id}</code></a></TableCell>

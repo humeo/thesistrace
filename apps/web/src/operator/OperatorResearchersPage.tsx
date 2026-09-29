@@ -1,3 +1,5 @@
+import { Fragment } from "react";
+import { CaretRight } from "@phosphor-icons/react";
 import { MagnifyingGlass } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { i18n, useTranslation } from "../i18n";
@@ -313,7 +315,7 @@ export function OperatorResearchersView({
       id={operatorPageFallbackId}
       tabIndex={-1}
     >
-      <PageHeader title={t("researchers.directory.title")} className="mb-0" actions={onInvitationAction === undefined ? null : <Button disabled={state !== "ready"} id={inviteResearcherButtonId} onClick={(event) => onInvitationAction(event.currentTarget, { email: "", operation: "issue" })} type="button">{t("researchers.directory.inviteResearcher")}</Button>} />
+      <PageHeader variant="console" title={t("researchers.directory.title")} className="mb-0" actions={onInvitationAction === undefined ? null : <Button size="xl" disabled={state !== "ready"} id={inviteResearcherButtonId} onClick={(event) => onInvitationAction(event.currentTarget, { email: "", operation: "issue" })} type="button">{t("researchers.directory.inviteResearcher")}</Button>} />
 
       <OperatorConsoleNavigation current="researchers" />
 
@@ -461,6 +463,7 @@ function ResearcherTable({
   state: "loading" | "ready" | "unavailable";
 }>) {
   const { t } = useTranslation("operator");
+  const [expanded, setExpanded] = useState<string | null>(null);
   if (items === null) {
     return (
       <p className="m-0 py-4 text-sm text-muted-foreground">
@@ -471,21 +474,22 @@ function ResearcherTable({
   if (items.length === 0) return <p className="m-0 py-4 text-sm text-muted-foreground">{t("researchers.directory.noResearchers")}</p>;
   return (
     <div className="min-w-0 overflow-hidden rounded-xl border border-border bg-card [&_thead]:bg-muted/50">
-      <Table scrollLabel={t("researchers.directory.researchers")}>
+      <Table density="comfortable" scrollLabel={t("researchers.directory.researchers")}>
         <TableCaption className="sr-only">{t("researchers.directory.researchers")}</TableCaption>
         <TableHeader>
           <TableRow>
+            <TableHead scope="col"><span className="sr-only">{t("researchers.directory.details")}</span></TableHead>
             <TableHead scope="col">{t("researchers.directory.researcher")}</TableHead>
             <TableHead scope="col">{t("researchers.directory.access")}</TableHead>
             <TableHead scope="col">{t("researchers.directory.latestLogin")}</TableHead>
             <TableHead scope="col">{t("researchers.directory.currentSessions")}</TableHead>
-            <TableHead scope="col">{t("researchers.directory.details")}</TableHead>
             {onRevoke === undefined ? null : <TableHead scope="col">{t("researchers.directory.sessionAction")}</TableHead>}
           </TableRow>
         </TableHeader>
         <TableBody>
           {items.map((researcher) => (
-            <TableRow key={researcher.researcher_id}>
+            <Fragment key={researcher.researcher_id}><TableRow>
+              <TableCell><Button variant="ghost" size="icon" aria-label={`${t("researchers.directory.details")} · ${researcher.display_label}`} aria-expanded={expanded === researcher.researcher_id} aria-controls={`researcher-details-${researcher.researcher_id}`} onClick={() => setExpanded(current => current === researcher.researcher_id ? null : researcher.researcher_id)}><CaretRight className={expanded === researcher.researcher_id ? "rotate-90" : undefined} /></Button></TableCell>
               <TableHead data-label={t("researchers.directory.researcher")} scope="row">
                 <div className={operatorAccessLayout.identity}><strong className="line-clamp-2" title={researcher.display_label}>{researcher.display_label}</strong><small>{researcher.email}</small></div>
               </TableHead>
@@ -499,17 +503,8 @@ function ResearcherTable({
                   ? t("researchers.directory.never")
                   : <Timestamp value={researcher.latest_successful_login_at} />}
               </TableCell>
-              <TableCell data-label={t("researchers.directory.currentSessions")} className="text-right font-mono tabular-nums">
+              <TableCell data-label={t("researchers.directory.currentSessions")} className="text-right tabular-nums">
                 {formatNumber(researcher.current_session_count)}
-              </TableCell>
-              <TableCell data-label={t("researchers.directory.details")}>
-                <Disclosure title={t("researchers.directory.details")} className="min-w-48">
-                  <dl className="mt-3 grid gap-2 text-xs [&_dd]:m-0 [&_dt]:text-muted-foreground">
-                    <div><dt>{t("researchers.directory.researcherId")}</dt><dd><code className="break-all">{researcher.researcher_id}</code></dd></div>
-                    <div><dt>{t("researchers.directory.created")}</dt><dd><Timestamp value={researcher.created_at} /></dd></div>
-                    <div><dt>{t("researchers.directory.effectiveInvitation")}</dt><dd>{researcher.effective_invitation === null ? t("researchers.directory.none") : <>{statusLabel(researcher.effective_invitation.status)} · {t("researchers.directory.expiresAt", { time: formatTimestamp(researcher.effective_invitation.expires_at) })}</>}</dd></div>
-                  </dl>
-                </Disclosure>
               </TableCell>
               {onRevoke === undefined ? null : (
                 <TableCell data-label={t("researchers.directory.sessionAction")}>
@@ -536,7 +531,11 @@ function ResearcherTable({
                   )}
                 </TableCell>
               )}
-            </TableRow>
+            </TableRow>{expanded === researcher.researcher_id ? <TableRow id={`researcher-details-${researcher.researcher_id}`}><TableCell /><TableCell colSpan={onRevoke === undefined ? 4 : 5}><dl className="m-0 grid grid-cols-3 gap-6 rounded-md border border-border bg-muted/40 p-5 text-sm [&_dd]:m-0 [&_dt]:text-muted-foreground">
+                    <div><dt>{t("researchers.directory.researcherId")}</dt><dd><code className="break-all">{researcher.researcher_id}</code></dd></div>
+                    <div><dt>{t("researchers.directory.created")}</dt><dd><Timestamp value={researcher.created_at} /></dd></div>
+                    <div><dt>{t("researchers.directory.effectiveInvitation")}</dt><dd>{researcher.effective_invitation === null ? t("researchers.directory.none") : <>{statusLabel(researcher.effective_invitation.status)} · {t("researchers.directory.expiresAt", { time: formatTimestamp(researcher.effective_invitation.expires_at) })}</>}</dd></div>
+                  </dl></TableCell></TableRow> : null}</Fragment>
           ))}
         </TableBody>
       </Table>
@@ -561,7 +560,7 @@ function InvitationTable({ disabled, items, onReissue, state }: Readonly<{
   if (items.length === 0) return <p className="m-0 py-4 text-sm text-muted-foreground">{t("researchers.directory.noInvitations")}</p>;
   return (
     <div className="min-w-0 overflow-hidden rounded-xl border border-border bg-card [&_thead]:bg-muted/50">
-      <Table scrollLabel={t("researchers.directory.invitations")}>
+      <Table density="comfortable" scrollLabel={t("researchers.directory.invitations")}>
         <TableCaption className="sr-only">{t("researchers.directory.invitations")}</TableCaption>
         <TableHeader>
           <TableRow>

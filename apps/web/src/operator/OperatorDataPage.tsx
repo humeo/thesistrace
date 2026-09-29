@@ -283,8 +283,8 @@ export function OperatorDataPage() {
 
   return (
     <>
-      <PageContent><Page role="region" aria-label={t("data.common.pageLabel")} className={styles.page}>
-        <PageHeader title={t("data.common.title")} className="mb-0 max-[768px]:mb-0" />
+      <PageContent><Page role="region" aria-label={t("data.common.pageLabel")} className={`console-workspace ${styles.page}`}>
+        <PageHeader variant="console" title={t("data.common.title")} className="mb-0 max-[768px]:mb-0" />
 
         <OperatorConsoleNavigation current="data" />
 

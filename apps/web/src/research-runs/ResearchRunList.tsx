@@ -27,27 +27,27 @@ export function ResearchRunList({ list }: { list: ReturnType<typeof useResearchR
   const { items, folders, folderFilter, researchKindFilter, pageIndex, sort, metricFilters, totalCount, folderError, error, loadState, refresh, refreshFolders, changeSort, changeFolderFilter, changeResearchKindFilter, showPreviousPage, showNextPage, applyMetricFilters } = list;
   const selectedFolder = folders.find(folder => folder.id === folderFilter);
   const [metricOpen, setMetricOpen] = useState(false);
-  return <Page aria-label={t("title")}>
+  return <Page className="console-workspace" aria-label={t("title")}>
     <PageContent className="flex flex-col gap-6">
-      <PageHeader title={t("title")} className="mb-0" />
+      <PageHeader variant="console" title={t("title")} className="mb-0" />
       <ResearchRunsNavigation active="runs" />
       {folderError ? <ResearchFolderLoadFailure error={folderError} onRetry={refreshFolders} /> : null}
-      <FieldGroup className="flex-row flex-wrap items-end gap-4 border-b border-border pb-5">
-        <Field className="w-56 max-w-full">
+      <FieldGroup className="flex-row flex-wrap items-end gap-6">
+        <Field className="w-72 max-w-full">
           <FieldLabel htmlFor="runs-folder-filter">{t("folder")}</FieldLabel>
           <Select value={folderFilter} onValueChange={value => { if (value !== null) changeFolderFilter(value); }} disabled={folderError !== null}>
             <SelectTrigger id="runs-folder-filter" aria-label={t("filterFolder")} className="w-full"><SelectValue>{folderFilter ? (selectedFolder ? folderDisplayName(selectedFolder) : folderFilter) : t("allFolders")}</SelectValue></SelectTrigger>
-            <SelectContent><SelectGroup>
+            <SelectContent className="console-workspace"><SelectGroup>
               <SelectItem value="">{t("allFolders")}</SelectItem>
               {folders.map(folder => <SelectItem key={folder.id} value={folder.id}>{folderDisplayName(folder)}</SelectItem>)}
             </SelectGroup></SelectContent>
           </Select>
         </Field>
-        <Field className="w-56 max-w-full">
+        <Field className="w-72 max-w-full">
           <FieldLabel htmlFor="runs-kind-filter">{t("type")}</FieldLabel>
           <Select value={researchKindFilter} onValueChange={value => { if (value !== null) changeResearchKindFilter(value as ResearchKindFilter); }}>
             <SelectTrigger id="runs-kind-filter" aria-label={t("filterType")} className="w-full"><SelectValue>{researchKindFilter ? researchKindLabel(researchKindFilter) : t("allTypes")}</SelectValue></SelectTrigger>
-            <SelectContent><SelectGroup>
+            <SelectContent className="console-workspace"><SelectGroup>
               <SelectItem value="">{t("allTypes")}</SelectItem>
               <SelectItem value="factor_evaluation">{researchKindLabel("factor_evaluation")}</SelectItem>
               <SelectItem value="strategy_backtest">{researchKindLabel("strategy_backtest")}</SelectItem>
@@ -154,14 +154,14 @@ export function ResearchMetricFilters({ researchKind, filters, onApply }: {
             <FieldLabel htmlFor={"metric-" + row.id}>{t("filters.metric")}</FieldLabel>
             <Select value={row.metric} onValueChange={value => { if (value) update(row.id, { metric: value as ResearchMetricFilter["metric"], value: "" }); }}>
               <SelectTrigger id={"metric-" + row.id} aria-label={t("filters.metricAt", { index: formatNumber(index + 1) })} className="w-full"><SelectValue>{t(columns.find(column => column.key === row.metric)!.label)}</SelectValue></SelectTrigger>
-              <SelectContent alignItemWithTrigger={false}><SelectGroup>{columns.map(column => <SelectItem key={column.key} value={column.key}>{t(column.label)}</SelectItem>)}</SelectGroup></SelectContent>
+              <SelectContent className="console-workspace" alignItemWithTrigger={false}><SelectGroup>{columns.map(column => <SelectItem key={column.key} value={column.key}>{t(column.label)}</SelectItem>)}</SelectGroup></SelectContent>
             </Select>
           </Field>
           <Field>
             <FieldLabel htmlFor={"comparison-" + row.id}>{t("filters.comparison")}</FieldLabel>
             <Select value={row.operator} onValueChange={value => { if (value) update(row.id, { operator: value as ResearchMetricFilter["operator"] }); }}>
               <SelectTrigger id={"comparison-" + row.id} aria-label={t("filters.comparisonAt", { index: formatNumber(index + 1) })} className="w-full"><SelectValue>{{ gt: ">", gte: "≥", lt: "<", lte: "≤" }[row.operator]}</SelectValue></SelectTrigger>
-              <SelectContent alignItemWithTrigger={false}><SelectGroup><SelectItem value="gt">&gt;</SelectItem><SelectItem value="gte">≥</SelectItem><SelectItem value="lt">&lt;</SelectItem><SelectItem value="lte">≤</SelectItem></SelectGroup></SelectContent>
+              <SelectContent className="console-workspace" alignItemWithTrigger={false}><SelectGroup><SelectItem value="gt">&gt;</SelectItem><SelectItem value="gte">≥</SelectItem><SelectItem value="lt">&lt;</SelectItem><SelectItem value="lte">≤</SelectItem></SelectGroup></SelectContent>
             </Select>
           </Field>
           <Field>
@@ -217,13 +217,13 @@ export function ResearchRunHistory({
           <FieldLabel htmlFor="runs-sort">{t("sortBy")}</FieldLabel>
           <Select value={sort.key} onValueChange={value => { if (value) selectSort(value as ResearchRunSortKey); }}>
             <SelectTrigger id="runs-sort" aria-label={t("sortByAria")} className="w-full"><SelectValue>{sort.key === "created_at" ? t("created") : t([...FACTOR_RESEARCH_RUN_METRICS, ...STRATEGY_RESEARCH_RUN_METRICS].find(column => column.key === sort.key)!.label)}</SelectValue></SelectTrigger>
-            <SelectContent><SelectGroup><SelectItem value="created_at">{t("created")}</SelectItem>{metricColumns.map(column => <SelectItem key={column.key} value={column.key}>{t(column.label)}</SelectItem>)}</SelectGroup></SelectContent>
+            <SelectContent className="console-workspace"><SelectGroup><SelectItem value="created_at">{t("created")}</SelectItem>{metricColumns.map(column => <SelectItem key={column.key} value={column.key}>{t(column.label)}</SelectItem>)}</SelectGroup></SelectContent>
           </Select>
         </Field>
         <Button variant="outline" aria-label={t(sort.direction === "ascending" ? "sortAscending" : "sortDescending")} onClick={toggleSortDirection}><MobileSortIcon data-icon="inline-start" />{t(sort.direction === "ascending" ? "ascending" : "descending")}</Button>
       </FieldGroup>
-      <div className="min-w-0">
-      <Table aria-label={t("title")} scrollLabel={t("title")} className="min-w-[880px]">
+      <div className="min-w-0 overflow-hidden rounded-md border border-border">
+      <Table density="comfortable" aria-label={t("title")} scrollLabel={t("title")} className="min-w-[880px]">
         <TableHeader>
           <TableRow>
             <TableHead scope="col">{i18n.t("research:title")}</TableHead>
@@ -252,18 +252,18 @@ export function ResearchRunHistory({
           {items.map((item) => (
             <TableRow key={item.id}>
               <TableCell className="min-w-48 max-w-80 whitespace-normal break-words font-medium">
-                <a className="block min-h-11 w-full content-center text-primary underline-offset-4 hover:underline md:min-h-0" href={`/research-runs/${encodeURIComponent(item.id)}`} onClick={followCoreLink}>{item.name}</a>
-                <span className="block text-xs font-normal text-muted-foreground">{item.start_date} — {item.end_date}</span>
+                <a className="block min-h-11 w-full content-center text-primary no-underline underline-offset-4 hover:underline md:min-h-0" href={`/research-runs/${encodeURIComponent(item.id)}`} onClick={followCoreLink}>{item.name}</a>
+                <span className="block text-sm font-normal text-muted-foreground">{item.start_date} — {item.end_date}</span>
               </TableCell>
               {researchKind === "" ? <TableCell data-label={t("type")}>{researchKindLabel(item.research_kind)}</TableCell> : null}
               <TableCell data-label={t("createdUtc")}>
                 <time dateTime={item.created_at}>{formatResearchRunCreatedAt(item.created_at)}</time>
               </TableCell>
-              <TableCell data-label={t("status")}><Badge variant={item.status === "failed" ? "destructive" : item.status === "succeeded" ? "default" : "outline"}>{t(`statuses.${item.status}`)}</Badge></TableCell>
+              <TableCell data-label={t("status")}><Badge variant={item.status === "failed" ? "destructive" : item.status === "succeeded" ? "secondary" : "outline"}>{t(`statuses.${item.status}`)}</Badge></TableCell>
               {metricColumns.length === 0 ? (
                 <ResearchRunResultSummary item={item} />
               ) : metricColumns.map((column) => (
-                <TableCell className="text-right font-mono tabular-nums" data-label={t(column.label)} key={column.key}>
+                <TableCell className="text-right tabular-nums" data-label={t(column.label)} key={column.key}>
                   {formatResearchRunMetric(item, column.key)}
                 </TableCell>
               ))}
@@ -287,7 +287,7 @@ function ResearchRunResultSummary({ item }: { item: ResearchRun }) {
         {columns.map((column) => (
           <span className="grid gap-1" key={column.key}>
             <span className="text-xs text-muted-foreground">{t(column.shortLabel)}</span>
-            <strong className="font-mono font-medium tabular-nums">{formatResearchRunMetric(item, column.key)}</strong>
+            <strong className="font-medium tabular-nums">{formatResearchRunMetric(item, column.key)}</strong>
           </span>
         ))}
       </div>

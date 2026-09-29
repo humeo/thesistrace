@@ -1,7 +1,7 @@
 import * as React from "react"
 import { cn } from "cn"
 
-function Table({ className, scrollLabel, ...props }: React.ComponentProps<"table"> & { scrollLabel?: string }) {
+function Table({ className, scrollLabel, density = "default", ...props }: React.ComponentProps<"table"> & { scrollLabel?: string; density?: "default" | "comfortable" | "catalog" }) {
   return (
     <div
       data-slot="table-container"
@@ -12,7 +12,7 @@ function Table({ className, scrollLabel, ...props }: React.ComponentProps<"table
     >
       <table
         data-slot="table"
-        className={cn("w-full caption-bottom text-sm leading-[22px]", className)}
+        className={cn("w-full caption-bottom text-sm leading-[22px]", density !== "default" && "border-collapse text-base leading-6 [&_tr]:border-border [&_tbody_button]:text-base [&_tbody_button]:font-normal [&_thead]:bg-muted/50 [&_th]:px-4 [&_td]:px-4 [&_thead_tr]:h-12", density === "comfortable" && "[&_tbody_tr]:h-20 [&_td]:py-4 [&_tbody_th]:py-4", density === "catalog" && "[&_tbody_tr]:h-11 [&_td]:py-1", className)}
         {...props}
       />
     </div>

@@ -1,10 +1,10 @@
 /** Shared researcher directory and confirmation layout. */
 export const operatorAccessLayout = {
-  page: "flex min-w-0 flex-col gap-6",
+  page: "console-workspace flex min-w-0 flex-col gap-6",
   section: "flex min-w-0 flex-col gap-4",
-  header: "flex flex-wrap items-end justify-between gap-4 [&_h2]:m-0 [&_h2]:text-base [&_h2]:leading-6 [&_h2]:font-semibold",
+  header: "flex flex-wrap items-end justify-between gap-4 [&_h2]:m-0 [&_h2]:text-2xl [&_h2]:leading-8 [&_h2]:font-semibold",
   search: "w-full max-w-[520px]",
-  identity: "flex min-w-[180px] max-w-80 flex-col gap-1 whitespace-normal [overflow-wrap:anywhere] [&_small]:text-xs [&_small]:leading-[18px] [&_small]:text-muted-foreground",
+  identity: "flex min-w-[180px] max-w-80 flex-col gap-1 whitespace-normal [overflow-wrap:anywhere] [&_small]:text-sm [&_small]:leading-[22px] [&_small]:text-muted-foreground",
   form: "min-w-0",
   emailTarget: "min-w-0 [overflow-wrap:anywhere]",
   eyebrow: "m-0 text-xs leading-[18px] text-muted-foreground",

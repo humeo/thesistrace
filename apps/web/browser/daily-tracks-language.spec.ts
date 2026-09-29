@@ -88,7 +88,9 @@ test("tracking chart retains its zoom and data while switching display language"
   const requests = await open(page);
   await expect(page.getByRole("region", { name: "Daily Tracks list" }).getByRole("link", { name: "track_ui" })).toHaveAttribute("aria-current", "page");
   const chart = page.getByRole("figure", { name: /Return since tracking|跟踪开始以来收益/ });
-  const plot = chart.locator("canvas").first();
+  const canvases = chart.locator("canvas");
+  // The left price axis precedes the plot in the chart library's DOM.
+  const plot = canvases.nth(await canvases.evaluateAll(elements => elements.reduce((largest, element, index) => element.clientWidth > elements[largest].clientWidth ? index : largest, 0)));
   await plot.scrollIntoViewIfNeeded();
   const bounds = (await plot.boundingBox())!;
   await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + 100);

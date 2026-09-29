@@ -87,7 +87,8 @@ describe("Operator Researcher view", () => {
     expect(markup).toContain("researcher@example.com");
     expect(markup).toContain("Current sessions");
     expect(markup).toContain("Latest login");
-    expect(markup).toContain("Effective invitation");
+    expect(markup).toContain("researcher-details-");
+    expect(markup).toContain('aria-expanded="false"');
     expect(markup).toContain('aria-label="Search researchers"');
     expect(markup).toContain("Invite Researcher");
     expect(markup).toContain("Reissue");

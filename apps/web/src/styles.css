@@ -480,7 +480,7 @@ code { font-family: var(--mono); }
 }
 
 /* The approved result-detail surface is independent of the preserved Chat shell. */
-.main-content:has(.research-run-page), .result-surface {
+.main-content:has(.research-run-page), .main-content:has(.console-workspace), .console-workspace, .result-surface {
   --background: #fcfcf9;
   --foreground: #27251e;
   --card: #fdfbfa;
@@ -506,7 +506,7 @@ code { font-family: var(--mono); }
   --line: var(--border);
   color: var(--foreground);
 }
-.main-content:has(.research-run-page) { padding-block: 24px; background: var(--background); }
+.main-content:has(.research-run-page), .main-content:has(.console-workspace) { padding-block: 24px; background: var(--background); }
 .result-surface ::selection { background: var(--secondary); color: var(--foreground); }
 
 /* Type and shared controls */
