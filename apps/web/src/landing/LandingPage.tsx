@@ -29,7 +29,7 @@ export default function Landing() {
     };
     return <div className="landing-page">
     <header className="qt-header">
-      <a className="qt-brand" href="#top" aria-label={t.home}><Brand className="qt-logo" size={32} /></a>
+      <a className="qt-brand" href="#top" aria-label={t.home}><Brand className="qt-logo" size={32} inverse /></a>
       <nav aria-label={t.navigation}>
         <a className="qt-community" href="https://discord.gg/tdwxubVhMJ" target="_blank" rel="noopener noreferrer" aria-label={t.community} title={t.community}><img src="/brand/discord-symbol-white.svg" alt="" width={20} height={15}/><span>Discord</span></a>
         <div className="qt-language" role="group" aria-label="Language / 语言">
@@ -76,6 +76,6 @@ export default function Landing() {
       </section>
       <section className="qt-access"><h2>{t.accessTitle}</h2><p>{t.accessBody}</p><a className="qt-primary" href={loginHref}>{t.login}</a></section>
     </main>
-    <footer><a className="qt-brand" href="#top" aria-label={t.home}><Brand className="qt-logo" size={24} /></a><p>{t.footer}</p><a className="qt-footer-community" href="https://discord.gg/tdwxubVhMJ" target="_blank" rel="noopener noreferrer">{t.community}</a></footer>
+    <footer><a className="qt-brand" href="#top" aria-label={t.home}><Brand className="qt-logo" size={24} inverse /></a><p>{t.footer}</p><a className="qt-footer-community" href="https://discord.gg/tdwxubVhMJ" target="_blank" rel="noopener noreferrer">{t.community}</a></footer>
   </div>;
 }

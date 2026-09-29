@@ -35,7 +35,7 @@ export function StrategyResultView({ result }: { result: StrategyBacktestResearc
         help={<MetricHelp hover label={item.label} content={item.help} />} />)}
     </MetricGroup>
     <StrategyComparisonPanel comparison={result.strategy.comparison} variant="result" />
-    <section aria-labelledby="result-ending-state" className="rounded-md border border-border bg-card px-5 py-2">
+    <section aria-labelledby="result-ending-state" className="rounded-md border border-border bg-card px-4 py-2">
       <h2 id="result-ending-state" className="m-0 text-base leading-6 font-semibold">{t("result.terminalState")}</h2>
       <dl className="m-0 mt-2 grid grid-cols-3 [&>div]:border-r [&>div]:border-border [&>div]:px-6 [&>div:first-child]:pl-0 [&>div:last-child]:border-r-0 [&_dd]:m-0 [&_dd]:font-sans [&_dd]:text-xl [&_dd]:leading-7 [&_dd]:tabular-nums [&_dt]:flex [&_dt]:items-center [&_dt]:gap-1 [&_dt]:text-sm [&_dt]:text-muted-foreground">
         <div>
@@ -57,7 +57,7 @@ export function StrategyResultView({ result }: { result: StrategyBacktestResearc
       <CloseRiskFacts variant="row" session={state.session} nav={state.close_risk_nav_cny} positions={state.positions} />
       <FrameworkStateView variant="row" state={state.decision_state} />
       <Disclosure title={t("result.conventions")} variant="row">
-        <ul className="m-0 pl-5"><li>{t("result.nextOpen")}</li><li>{t("result.allocation")}</li></ul>
+        <ul className="m-0 pl-4"><li>{t("result.nextOpen")}</li><li>{t("result.allocation")}</li></ul>
       </Disclosure>
     </div>
   </section>;

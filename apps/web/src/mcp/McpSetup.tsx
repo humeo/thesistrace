@@ -13,7 +13,7 @@ export function McpSetup({ endpoint }: { endpoint: string }) {
   const prompt = setupPrompt(client, endpoint);
   const loginCommand = `codex mcp login ${mcpServerName}`;
   return <section className={`${mcpLayout.stack} rounded-md border border-border bg-card p-6`} aria-labelledby="mcp-setup-heading">
-    <div className="flex flex-col gap-5"><h2 id="mcp-setup-heading">{t("connect")}</h2>
+    <div className="flex flex-col gap-4"><h2 id="mcp-setup-heading">{t("connect")}</h2>
       <ToggleGroup variant="line" value={[client]} onValueChange={values => { if (values[0]) setClient(values[0] as McpClient); }} aria-label={t("client")} className="flex-wrap">
         {(Object.keys(clients) as McpClient[]).map(key => <ToggleGroupItem key={key} value={key}>{key === "other" ? t("otherClient") : clients[key]}</ToggleGroupItem>)}
       </ToggleGroup>

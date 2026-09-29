@@ -538,7 +538,7 @@ export function ResearchDraftWorkspace({
   const alphaAuthoring = <>
         <div className="research-editor-panel overflow-hidden rounded-lg border border-border bg-card focus-within:ring-2 focus-within:ring-ring/30">
           <header className="flex min-h-12 items-center justify-between gap-3 border-b border-border px-4">
-            <h2 id="alpha-formula-title" className="m-0 text-base font-semibold">{t("formula")}</h2>
+            <h2 id="alpha-formula-title" className="m-0 text-xl leading-7 font-semibold">{t("formula")}</h2>
             {fieldsButton()}
           </header>
           {inputError("formula") && <p className="px-4 text-sm text-destructive">{inputError("formula")}</p>}
@@ -764,7 +764,7 @@ export function ResearchDraftWorkspace({
 
           <aside aria-label={t("settings")} className="grid min-w-0 gap-6">
             <section className="research-settings-panel grid min-w-0 gap-5 rounded-lg border border-border bg-card p-4">
-            <h2 className="m-0 text-base font-semibold">{factor ? t("settings") : i18n.t("strategy:workbench.conditionsTitle")}</h2>
+            <h2 className="m-0 text-xl leading-7 font-semibold">{factor ? t("settings") : i18n.t("strategy:workbench.conditionsTitle")}</h2>
             <Field>
               <FieldLabel htmlFor="research-name">{t("name")}</FieldLabel>
               <Input id="research-name" aria-label={t("name")} autoComplete="off" maxLength={200} placeholder={t("untitled")} value={draft.name}

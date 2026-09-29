@@ -143,9 +143,9 @@ export function DataOverviewView({
   return <Page className="console-workspace" aria-label={t("title")}><PageContent className="flex flex-col gap-6">
     <PageHeader variant="console" className="mb-0" title={t("title")} actions={<Button size="xl" variant="outline" onClick={onRefresh} disabled={refreshing}><ArrowClockwise aria-hidden="true" data-icon="inline-start" />{t("reload")}</Button>} />
     {error && <Alert variant="destructive"><AlertDescription>{t(error)}</AlertDescription></Alert>}
-    <TooltipProvider><section aria-label={t("coverage")} className="grid overflow-hidden rounded-xl border border-border bg-card md:grid-cols-2 xl:grid-cols-4">
-      {rows.map(row => <div key={row.id} className="min-w-0 border-b border-border px-5 py-4 last:border-0 md:border-r xl:border-b-0">
-        <div className="flex items-center justify-between gap-2"><h2 className="m-0 text-lg font-semibold">{t(`${row.id}Title`)}</h2><Badge variant={row.state === "ready" ? "success" : "outline"}>{t(row.state === "ready" ? "available" : row.state === "not_ready" ? "notAvailable" : "limitedCoverage")}</Badge></div>
+    <TooltipProvider><section aria-label={t("coverage")} className="data-coverage-grid grid overflow-hidden rounded-xl border border-border bg-card md:grid-cols-2">
+      {rows.map(row => <div key={row.id} className="min-w-0 border-b border-border p-4 last:border-0">
+        <div className="flex items-center justify-between gap-2"><h2 className="m-0 text-xl leading-7 font-semibold">{t(`${row.id}Title`)}</h2><Badge variant={row.state === "ready" ? "success" : "outline"}>{t(row.state === "ready" ? "available" : row.state === "not_ready" ? "notAvailable" : "limitedCoverage")}</Badge></div>
         <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground"><span>{t("availableRange")}</span><Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon-xs" aria-label={`${t(`${row.id}Title`)} · ${t("coverageHint")}`} aria-description={row.detail ?? undefined} />}><Info aria-hidden="true" /></TooltipTrigger><TooltipContent className="console-workspace">{row.description} {row.detail} {t("availabilityVaries")}</TooltipContent></Tooltip>
         <span className="tabular-nums">{row.coverage ? `${row.coverage.start} — ${row.coverage.end}` : t("noCoverage")}</span></div>
         {row.state !== "ready" && row.families.length > 0 && <p className="mb-0 mt-2 text-xs text-muted-foreground">
@@ -232,8 +232,8 @@ export function ResearchFieldCatalog({ catalog }: { catalog: AlphaCatalog }) {
     setDetailsOpen(true);
     setCopyErrorFor(null);
   }
-  return <div ref={catalogContainer} className="min-w-0"><Section variant="console" title={<>{t("researchFields")} <span className="ml-2 text-xl font-normal text-muted-foreground">{t("fieldCount", { total: catalog.fields.length })}</span></>}>
-    <div className={cn("grid min-w-0 items-start gap-6", !narrow && "grid-cols-[minmax(0,1.85fr)_minmax(320px,1fr)]")}><div className="flex min-w-0 flex-col gap-4"><div className="flex flex-wrap items-center gap-3">
+  return <div ref={catalogContainer} className="min-w-0"><Section variant="console" title={<>{t("researchFields")} <span className="ml-2 text-base font-normal text-muted-foreground">{t("fieldCount", { total: catalog.fields.length })}</span></>}>
+    <div className={cn("grid min-w-0 items-start gap-6", !narrow && "grid-cols-[minmax(0,1fr)_320px]")}><div className="flex min-w-0 flex-col gap-4"><div className="flex flex-wrap items-center gap-3">
       <Field className="min-w-48 w-auto flex-[1_1_220px]">
         <FieldLabel className="sr-only" htmlFor="data-field-search">{t("searchFields")}</FieldLabel>
         <InputGroup>

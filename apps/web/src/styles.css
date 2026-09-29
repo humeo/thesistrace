@@ -7,39 +7,39 @@
 /* Classic tokens are shared by the console and authentication. Tailwind Preflight is
    intentionally omitted so the established public landing keeps its own reset. */
 :root {
-  color: #1f1f1f;
-  background: #faf9f4;
-  color-scheme: light;
+  color: #f7f8f8;
+  background: #010102;
+  color-scheme: dark;
   --font-body: Inter, "Noto Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-  --font-display: "Source Serif 4", "Noto Serif SC", Georgia, "Songti SC", STSong, serif;
+  --font-display: var(--font-body);
   font-family: var(--font-body);
   font-synthesis: none;
   line-height: 1.5;
-  --background: #faf9f4;
-  --foreground: #1f1f1f;
-  --card: #ffffff;
+  --background: #010102;
+  --foreground: #f7f8f8;
+  --card: #111216;
   --card-foreground: var(--foreground);
-  --popover: #ffffff;
+  --popover: #22242c;
   --popover-foreground: var(--foreground);
-  --primary: #0f3d2e;
+  --primary: #5e6ad2;
   --primary-foreground: #ffffff;
-  --secondary: #f1f3ec;
-  --secondary-foreground: #1f1f1f;
-  --muted: #f1f3ec;
-  --muted-foreground: #626b61;
-  --accent: #e8ede4;
-  --accent-foreground: #0f3d2e;
-  --destructive: #a33a32;
-  --border: #e2e4da;
-  --input: #858d7e;
-  --ring: #0f3d2e;
-  --chart-1: #0f3d2e;
-  --chart-2: #557963;
-  --chart-3: #9b865e;
-  --chart-4: #677a8c;
-  --chart-5: #a46c5c;
+  --secondary: #191b21;
+  --secondary-foreground: #f7f8f8;
+  --muted: #191b21;
+  --muted-foreground: #a6abb5;
+  --accent: #22242c;
+  --accent-foreground: #f7f8f8;
+  --destructive: #f07d86;
+  --border: #23252a;
+  --input: #393c46;
+  --ring: #5e69d1;
+  --chart-1: #5e6ad2;
+  --chart-2: #a6abb5;
+  --chart-3: #d0d6e0;
+  --chart-4: #8a8f98;
+  --chart-5: #6f75a4;
   --radius: 0.5rem;
-  --sidebar: #ffffff;
+  --sidebar: #111216;
   --sidebar-foreground: var(--foreground);
   --sidebar-primary: var(--primary);
   --sidebar-primary-foreground: #ffffff;
@@ -49,65 +49,124 @@
   --sidebar-ring: var(--ring);
   /* Shared semantic aliases used by the public landing and product visualizations. */
   --ink: var(--foreground);
-  --ink-muted: #50594f;
+  --ink-muted: #d0d6e0;
   --ink-soft: var(--muted-foreground);
   --ink-faint: var(--muted-foreground);
   --canvas: var(--background);
   --surface-1: var(--card);
   --surface-2: var(--secondary);
-  --surface-3: #ffffff;
-  --surface-4: var(--accent);
+  --surface-3: #22242c;
+  --surface-4: #2b2e39;
   --line: var(--border);
   --line-strong: var(--input);
-  --line-tertiary: #d9d6cc;
-  --primary-hover: #164f3d;
+  --line-tertiary: #4a4f5b;
+  --primary-hover: #828fff;
   --primary-control-hover: var(--primary-hover);
   --primary-focus: var(--ring);
-  --success: #276749;
-  --warning: #80551e;
+  --success: #58c878;
+  --warning: #e0b95e;
   --danger: var(--destructive);
   --danger-action: var(--destructive);
-  --danger-action-hover: #862f29;
-  --syntax-function: #235b48;
-  --syntax-field: #175f69;
-  --syntax-number: #725220;
+  --danger-action-hover: #dc6671;
+  --syntax-function: #adb5ff;
+  --syntax-field: #b7c4df;
+  --syntax-number: #dbc99e;
   --resource-content-width: 1280px;
-  --sidebar-expanded: 224px;
+  --sidebar-expanded: 240px;
   --sidebar-collapsed: 56px;
   --sidebar-header-height: 48px;
   --mono: "Geist Mono", "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
 
-/* The public landing keeps its existing scoped palette. */
+/* Linear DesignMD dark surface ladder adapted for a dense research console. */
+body:has(.app-shell) {
+  --font-body: Inter, "Noto Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", sans-serif;
+  --font-display: var(--font-body);
+  --background: #010102;
+  --foreground: #f7f8f8;
+  --card: #111216;
+  --card-foreground: #f7f8f8;
+  --popover: #22242c;
+  --popover-foreground: #f7f8f8;
+  --primary: #5e6ad2;
+  --primary-foreground: #ffffff;
+  --primary-hover: #828fff;
+  --primary-control-hover: #828fff;
+  --primary-focus: #5e69d1;
+  --secondary: #191b21;
+  --secondary-foreground: #f7f8f8;
+  --muted: #191b21;
+  --muted-foreground: #a6abb5;
+  --accent: #22242c;
+  --accent-foreground: #f7f8f8;
+  --destructive: #f07d86;
+  --border: #23252a;
+  --input: #393c46;
+  --ring: #5e69d1;
+  --sidebar: #111216;
+  --sidebar-foreground: #f7f8f8;
+  --sidebar-primary: #5e6ad2;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #22242c;
+  --sidebar-accent-foreground: #f7f8f8;
+  --sidebar-border: #23252a;
+  --sidebar-ring: #5e69d1;
+  --canvas: #010102;
+  --surface-1: #111216;
+  --surface-2: #191b21;
+  --surface-3: #22242c;
+  --surface-4: #2b2e39;
+  --ink: #f7f8f8;
+  --ink-muted: #d0d6e0;
+  --ink-soft: #a6abb5;
+  --ink-faint: #8a8f98;
+  --line: #23252a;
+  --line-strong: #393c46;
+  --line-tertiary: #4a4f5b;
+  --chart-1: #5e6ad2;
+  --benchmark-foreground: #b8bec8;
+  --success: #58c878;
+  --warning: #e0b95e;
+  --danger: #f07d86;
+  --danger-action: #f07d86;
+  --danger-action-hover: #dc6671;
+  --shadow-card: none;
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  color: var(--foreground);
+  background: var(--background);
+  font-family: var(--font-body);
+}
+
+/* Public and authentication surfaces use the same Linear-inspired dark ladder. */
 .landing-page, .login-page, .auth-page {
-  color-scheme: light;
-  --canvas: #faf9f4;
-  --surface-1: #ffffff;
-  --surface-2: #f1f3ec;
-  --surface-3: #ffffff;
-  --surface-4: #e8ede4;
-  --ink: #1f1f1f;
-  --ink-muted: #50594f;
-  --ink-soft: #626b61;
-  --ink-faint: #626b61;
-  --line: #e2e4da;
-  --line-strong: #878f80;
-  --line-tertiary: #d9d6cc;
-  --primary: #0f3d2e;
-  --primary-hover: #164f3d;
-  --primary-control-hover: #164f3d;
-  --primary-focus: #0f3d2e;
-  --success: #276749;
-  --warning: #80551e;
-  --danger: #a33a32;
-  --danger-action: #a33a32;
-  --danger-action-hover: #862f29;
+  color-scheme: dark;
+  --canvas: #010102;
+  --surface-1: #111216;
+  --surface-2: #191b21;
+  --surface-3: #22242c;
+  --surface-4: #2b2e39;
+  --ink: #f7f8f8;
+  --ink-muted: #d0d6e0;
+  --ink-soft: #a6abb5;
+  --ink-faint: #8a8f98;
+  --line: #23252a;
+  --line-strong: #393c46;
+  --line-tertiary: #4a4f5b;
+  --primary: #5e6ad2;
+  --primary-hover: #828fff;
+  --primary-control-hover: #828fff;
+  --primary-focus: #5e69d1;
+  --success: #58c878;
+  --warning: #e0b95e;
+  --danger: #f07d86;
+  --danger-action: #f07d86;
+  --danger-action-hover: #dc6671;
   color: var(--ink);
   background: var(--canvas);
 }
 html:has(.landing-page, .login-page, .auth-page) {
-  color-scheme: light;
-  background: #faf9f4;
+  color-scheme: dark;
+  background: #010102;
 }
 .quantgrove-wordmark { font-family: var(--font-display); }
 
@@ -409,55 +468,17 @@ code { font-family: var(--mono); }
 @media (min-width: 769px) {
   .app-shell .mobile-navigation-toggle { display: none; }
 }
-/* Shared Research sidebar presentation; tokens stay inside the sidebar so
-   Chat messages and the composer retain their existing presentation. */
+/* One DesignMD sidebar across all workspace routes. */
 .app-shell .application-sidebar {
-  --background: #fcfcf9;
-  --foreground: #27251e;
-  --card: #fdfbfa;
-  --card-foreground: #27251e;
-  --popover: #ffffff;
-  --popover-foreground: #27251e;
-  --primary: #27251e;
-  --primary-foreground: #ffffff;
-  --secondary: #f3f2ee;
-  --secondary-foreground: #27251e;
-  --muted: #f3f2ee;
-  --muted-foreground: #5b5952;
-  --accent: #efeee9;
-  --accent-foreground: #27251e;
-  --border: #deddd6;
-  --input: #8a8880;
-  --ring: #27251e;
-  --sidebar: #f5f4ef;
-  --sidebar-foreground: #27251e;
-  --sidebar-primary: #27251e;
-  --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #eae8e1;
-  --sidebar-accent-foreground: #27251e;
-  --sidebar-border: #deddd6;
-  --sidebar-ring: #27251e;
-  --canvas: #fcfcf9;
-  --surface-1: #fdfbfa;
-  --surface-2: #f3f2ee;
-  --surface-3: #ffffff;
-  --surface-4: #efeee9;
-  --ink: #27251e;
-  --ink-muted: #5b5952;
-  --ink-soft: #5b5952;
-  --ink-faint: #68665e;
-  --line: #deddd6;
-  --line-strong: #8a8880;
-  --line-tertiary: #c8c6bd;
-  --primary-hover: #403d35;
-  --primary-control-hover: #403d35;
-  --primary-focus: #27251e;
-  --syntax-function: #365f54;
-  --syntax-field: #285b68;
-  --syntax-number: #71593d;
-  --font-display: var(--font-body);
-  --shadow-card: 0 1px 2px rgb(0 0 0 / 8%);
-  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --sidebar: #111216;
+  --sidebar-border: #23252a;
+  --sidebar-accent: #22242c;
+  --sidebar-ring: #5e69d1;
+  --ink: #f7f8f8;
+  --ink-muted: #d0d6e0;
+  --ink-soft: #a6abb5;
+  --primary: #5e6ad2;
+  --border: #23252a;
 }
 
 .app-shell .application-sidebar {
@@ -470,53 +491,68 @@ code { font-family: var(--mono); }
   border-bottom-color: transparent;
 }
 .app-shell .quantgrove-wordmark {
-  font-family: "Source Serif 4", "Noto Serif SC", Georgia, serif;
+  font-family: var(--font-body);
+}
+.app-shell .sidebar-primary-header {
+  gap: 0;
 }
 .app-shell .sidebar-new-chat-menu {
-  padding: 12px 12px 8px;
+  padding: 8px 4px 0;
 }
-.app-shell .sidebar-new-chat {
-  min-height: 42px;
+.app-shell .sidebar-new-chat,
+.app-shell .resource-nav a {
+  min-height: 40px;
+  padding: 8px 12px;
+  gap: 8px;
+  color: var(--ink-muted);
   background: transparent;
-  border-color: transparent;
-  border-radius: 10px;
+  border: 0;
+  border-radius: 8px;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
   box-shadow: none;
+  transition: color 120ms ease, background-color 120ms ease;
 }
 .app-shell .resource-nav {
-  padding: 6px 12px 16px;
+  gap: 0;
+  padding: 4px 4px 8px;
   border-bottom-color: var(--border);
 }
 .app-shell .resource-nav ul {
   padding: 0;
 }
-.app-shell .resource-nav a {
-  min-height: 40px;
-  padding-inline: 10px;
-  color: var(--ink-muted);
-  border-color: transparent;
-  border-radius: 10px;
-  transition: color 75ms var(--ease-standard), background-color 75ms var(--ease-standard);
-}
-.app-shell .resource-nav a:hover,
-.app-shell .sidebar-new-chat:hover {
+.app-shell .sidebar-new-chat:hover,
+.app-shell .resource-nav a:hover {
   color: var(--ink);
-  background: var(--sidebar-accent);
+  background: #191b21;
 }
+.app-shell .sidebar-new-chat[aria-current="page"],
 .app-shell .resource-nav a[aria-current="page"] {
   color: var(--ink);
   background: var(--sidebar-accent);
-  border-color: transparent;
-  font-weight: 600;
+  font-weight: 500;
 }
-.app-shell .resource-nav a[aria-current="page"]::before,
-.app-shell .chat-session-row-current::before {
-  content: none;
+.app-shell .sidebar-new-chat[aria-current="page"]::before,
+.app-shell .resource-nav a[aria-current="page"]::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 3px;
+  background: #5e6ad2;
+  border-radius: 3px 0 0 3px;
+  content: "";
 }
+.app-shell .chat-session-row-current::before { content: none; }
 .app-shell .chat-session-region {
-  padding: 18px 12px;
+  padding: 16px 8px;
 }
 .app-shell .chat-session-groups {
   gap: 24px;
+}
+.app-shell .chat-session-list {
+  gap: 4px;
 }
 .app-shell .chat-session-groups h3 {
   margin-bottom: 8px;
@@ -529,20 +565,20 @@ code { font-family: var(--mono); }
 }
 .app-shell .chat-session-row:hover,
 .app-shell .chat-session-row-current {
-  background: var(--sidebar-accent);
+  background: #191b21;
   border-color: transparent;
 }
 .app-shell .chat-session-row > a {
   min-height: 40px;
-  padding-left: 10px;
+  padding-left: 8px;
 }
 .app-shell .sidebar-account-area {
-  padding: 10px 12px;
+  padding: 12px;
   border-top-color: var(--border);
 }
 .app-shell .account-trigger {
-  background: var(--sidebar-accent);
-  border-radius: 12px;
+  background: transparent;
+  border-radius: 8px;
 }
 
 .app-shell-collapsed .application-frame { margin-left: 0; }
@@ -560,7 +596,7 @@ code { font-family: var(--mono); }
   justify-content: center;
   padding-inline: 0;
 }
-.app-shell-collapsed .chat-session-region { padding: 14px 7px; }
+.app-shell-collapsed .chat-session-region { padding: 12px 8px; }
 .app-shell-collapsed .chat-session-empty-full { display: none; }
 .app-shell-collapsed .chat-session-groups h3 {
   margin-inline: 0;
@@ -572,14 +608,14 @@ code { font-family: var(--mono); }
   font-size: 12px;
 }
 .app-shell-collapsed .chat-session-groups { gap: 8px; }
-.app-shell-collapsed .chat-session-list { gap: 2px; }
+.app-shell-collapsed .chat-session-list { gap: 4px; }
 .app-shell-collapsed .chat-session-row { grid-template-columns: 1fr; }
 .app-shell-collapsed .chat-session-row > a {
   min-height: 48px;
   grid-template-columns: 1fr;
   grid-template-rows: auto auto;
   justify-items: center;
-  gap: 1px;
+  gap: 4px;
   padding: 0;
 }
 .app-shell-collapsed .chat-session-row > a em {
@@ -615,42 +651,27 @@ code { font-family: var(--mono); }
   margin-inline: auto;
 }
 
-/* The approved result-detail surface is independent of the preserved Chat shell. */
-.main-content:has(.research-run-page), .main-content:has(.console-workspace), .console-workspace, .result-surface {
-  --background: #fcfcf9;
-  --foreground: #27251e;
-  --card: #fdfbfa;
-  --card-foreground: var(--foreground);
-  --popover: #ffffff;
-  --popover-foreground: var(--foreground);
-  --primary: #27251e;
-  --primary-hover: #403d35;
-  --secondary: #f3f2ee;
-  --secondary-foreground: var(--foreground);
-  --muted: #f3f2ee;
-  --muted-foreground: #5b5952;
-  --accent: #f3f2ee;
-  --accent-foreground: var(--foreground);
-  --border: #deddd6;
-  --input: #8a8880;
-  --ring: #27251e;
-  --chart-1: #27251e;
-  --chart-4: #97826b;
-  --benchmark-foreground: #74624f;
-  --ink: var(--foreground);
-  --ink-soft: var(--muted-foreground);
-  --line: var(--border);
+/* Workspace pages inherit the shared DesignMD tokens. */
+.main-content:has(.research-run-page),
+.main-content:has(.console-workspace),
+.console-workspace,
+.result-surface {
   color: var(--foreground);
 }
-.main-content:has(.research-run-page), .main-content:has(.console-workspace) { padding-block: 24px; background: var(--background); }
+.main-content:has(.research-run-page),
+.main-content:has(.console-workspace) {
+  padding-block: 32px;
+  background: var(--background);
+}
+
 .result-surface ::selection { background: var(--secondary); color: var(--foreground); }
 
 /* Type and shared controls */
 @layer base {
   h1, h2, h3 { margin: 0; color: var(--ink); font-family: inherit; }
-  h1 { font-family: var(--font-body); font-size: 28px; font-weight: 600; line-height: 1.2; letter-spacing: 0; }
-  h2 { font-size: 20px; font-weight: 500; line-height: 1.3; letter-spacing: 0; }
-  h3 { font-size: 14px; font-weight: 500; }
+  h1 { font-family: var(--font-display); font-size: 28px; font-weight: 600; line-height: 1.2; letter-spacing: -.02em; }
+  h2 { font-family: var(--font-display); font-size: 24px; font-weight: 600; line-height: 1.25; letter-spacing: -.015em; }
+  h3 { font-family: var(--font-display); font-size: 20px; font-weight: 500; line-height: 1.3; }
 }
 .landing-page button {
   display: inline-flex;
@@ -709,7 +730,7 @@ code { font-family: var(--mono); }
 }
 .auth-panel {
   width: min(440px, 100%);
-  padding: 28px;
+  padding: 24px;
   background: var(--surface-1);
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -718,7 +739,7 @@ code { font-family: var(--mono); }
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 36px;
+  margin-bottom: 32px;
   color: var(--ink);
   font-size: 14px;
   font-weight: 600;
@@ -757,7 +778,7 @@ code { font-family: var(--mono); }
   align-items: center;
   justify-content: center;
   color: #ffffff;
-  background: var(--primary);
+  background: #5e6ad2;
   border-radius: 50%;
   font-size: 12px;
   font-weight: 500;
@@ -792,7 +813,7 @@ code { font-family: var(--mono); }
   text-decoration: none;
 }
 .account-action > svg, .account-action > img { flex-shrink: 0; }
-.account-action > img { filter: brightness(0); }
+.account-action > img { filter: brightness(0) invert(1); }
 .account-action-chevron { margin-left: auto; color: var(--ink-soft); }
 .account-language { border-top: 1px solid var(--line); margin-top: 4px; padding: 10px 8px 4px; }
 .account-language > span { color: var(--ink-soft); font-size: 12px; }
@@ -829,7 +850,7 @@ code { font-family: var(--mono); }
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0;
-  margin: 18px 0 0;
+  margin: 16px 0 0;
   background: var(--surface-1);
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -837,19 +858,19 @@ code { font-family: var(--mono); }
 .research-run-facts p {
   min-width: 0;
   margin: 0;
-  padding: 15px;
+  padding: 16px;
   color: var(--ink-muted);
   font-family: var(--font-body);
   font-size: 14px;
-  line-height: 1.55;
+  line-height: 20px;
   overflow-wrap: anywhere;
 }
 .research-run-facts p + p { border-left: 1px solid var(--line); }
 .research-run-facts p:nth-child(4n + 1) { border-left: 0; }
 .research-run-facts p:nth-child(n + 5) { border-top: 1px solid var(--line); }
 .research-run-facts strong { display: block; margin-bottom: 5px; color: var(--muted-foreground); font-size: 12px; font-weight: 500; }
-.research-run-facts code { font-family: var(--mono); font-size: 13px; overflow-wrap: anywhere; }
-.research-run-facts a { color: var(--primary); text-underline-offset: 3px; }
+.research-run-facts code { font-family: var(--mono); font-size: 14px; overflow-wrap: anywhere; }
+.research-run-facts a { color: var(--primary-hover); text-underline-offset: 3px; }
 .research-run-page > [role="status"], .research-run-page > [role="alert"] { font-size: 12px; }
 /* Responsive */
 @media (any-pointer: coarse), (max-width: 768px) {
@@ -1028,7 +1049,7 @@ code { font-family: var(--mono); }
 /* Data discovery: coverage first, searchable fields and their research semantics. */
 
 @theme inline {
-  --font-heading: var(--font-body);
+  --font-heading: var(--font-display);
   --font-sans: var(--font-body);
   --font-mono: var(--mono);
   --color-sidebar-ring: var(--sidebar-ring);
@@ -1085,3 +1106,103 @@ code { font-family: var(--mono); }
   outline-offset: -2px;
   box-shadow: none;
 }
+
+/* Linear DesignMD controls and hairline-bounded charcoal cards. */
+body:has(.app-shell) [data-slot="card"] {
+  background: var(--card);
+  border-color: var(--border);
+  border-radius: 12px;
+  box-shadow: none;
+}
+body:has(.app-shell) [data-slot="input"] {
+  min-height: 40px;
+  padding-inline: 14px;
+  border-radius: 8px;
+  font-size: 14px;
+  line-height: 20px;
+}
+body:has(.app-shell) [data-slot="input"]:focus-visible {
+  border-color: #828fff;
+  box-shadow: 0 0 0 3px rgb(94 106 210 / 28%);
+}
+body:has(.app-shell) [data-slot="input-group"] {
+  min-height: 40px;
+  border-radius: 8px;
+  background: var(--surface-1);
+}
+body:has(.app-shell) [data-slot="button"]:is([data-size="default"], [data-size="lg"], [data-size="xl"]):not([data-variant="navigation"]) {
+  height: 40px;
+  min-height: 40px;
+  padding-inline: 20px;
+  border-radius: 8px;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+}
+body:has(.app-shell) [data-slot="button"]:is([data-size="default"], [data-size="lg"], [data-size="xl"])[data-variant="default"] {
+  border-color: #5e6ad2;
+  box-shadow: none;
+}
+body:has(.app-shell) [data-slot="button"]:is([data-size="default"], [data-size="lg"], [data-size="xl"])[data-variant="default"]:hover:not(:disabled) {
+  background: #828fff;
+  color: #010102;
+  box-shadow: none;
+}
+body:has(.app-shell) [data-slot="button"]:is([data-size="default"], [data-size="lg"], [data-size="xl"])[data-variant="default"]:active:not(:disabled) {
+  background: #4b58b4;
+  color: #ffffff;
+}
+body:has(.app-shell) [data-slot="button"]:is([data-size="default"], [data-size="lg"], [data-size="xl"]):is([data-variant="outline"], [data-variant="secondary"]) {
+  background: var(--secondary);
+  color: var(--secondary-foreground);
+  border-color: var(--border);
+  box-shadow: none;
+}
+body:has(.app-shell) [data-slot="button"]:is([data-size="default"], [data-size="lg"], [data-size="xl"]):is([data-variant="outline"], [data-variant="secondary"]):hover:not(:disabled) {
+  background: #191b21;
+  border-color: #393c46;
+}
+
+/* Shared desktop form and catalog rhythm from the DesignMD scale. */
+body:has(.app-shell) [data-slot="select-trigger"][data-size="default"] {
+  height: 40px;
+  padding-inline: 14px;
+  border-radius: 8px;
+  font-size: 14px;
+  line-height: 20px;
+}
+body:has(.app-shell) [data-slot="table"][data-density="catalog"] tbody tr { height: 44px; }
+body:has(.app-shell) [data-slot="table"][data-density="catalog"] td { padding-block: 2px; }
+body:has(.app-shell) [data-slot="table"][data-density="catalog"] code { font-size: 14px; line-height: 20px; }
+
+/* Data status cards use two balanced columns on desktop. */
+@media (min-width: 768px) {
+  .data-coverage-grid > div:nth-child(odd) { border-right: 1px solid var(--border); }
+  .data-coverage-grid > div:nth-last-child(-n + 2) { border-bottom: 0; }
+}
+body:has(.app-shell) [data-slot="input-group"] [data-slot="input-group-control"] {
+  min-height: 40px;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+/* Shared console labels, tabs, and filter controls use the compact UI type role. */
+body:has(.app-shell) [data-slot="field-label"],
+body:has(.app-shell) [data-slot="label"] { font-size: 14px; line-height: 20px; font-weight: 500; }
+body:has(.app-shell) [data-slot="toggle-group-item"]:not([data-variant="chart"]) {
+  height: 40px;
+  padding-inline: 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  line-height: 20px;
+}
+body:has(.app-shell) [data-slot="tabs-trigger"] {
+  min-height: 40px;
+  padding-inline: 16px;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+/* Links and focus share the limited lavender accent. */
+body:has(.app-shell) :is(a.text-primary, [data-slot="button"][data-variant="link"], [data-slot="badge"][data-variant="link"]) { color: var(--primary-hover); }
+html[lang="zh-CN"] .app-shell :is(h1, h2, h3) { letter-spacing: 0; }

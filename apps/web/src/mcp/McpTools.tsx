@@ -20,7 +20,7 @@ function title(name: string): string { return name.replaceAll("_", " ").replace(
 export function McpTools({ tools, checking }: { tools: Connection["tools"] | null; checking: boolean }) {
   const { t } = useTranslation("mcp");
   const toolCount = (count: number) => t("toolCount", { count, countLabel: formatNumber(count) });
-  return <section className={`${mcpLayout.stack} rounded-xl border border-border bg-card p-5`} aria-labelledby="mcp-tools-heading">
+  return <section className={`${mcpLayout.stack} rounded-xl border border-border bg-card p-6`} aria-labelledby="mcp-tools-heading">
     <div className={mcpLayout.row}><h2 id="mcp-tools-heading">{t("toolSet")}</h2><Badge variant="secondary">{checking ? t("checking") : tools ? toolCount(tools.length) : t("unverified")}</Badge></div>
     {!tools ? <Empty><EmptyHeader><EmptyTitle>{checking ? t("discovering") : t("toolNotVerified")}</EmptyTitle><EmptyDescription>{checking ? t("waitingService") : t("checkAgain")}</EmptyDescription></EmptyHeader></Empty> : <div className="grid min-w-0 gap-3 lg:grid-cols-2">{groups.map(groupId => {
       const members = tools.filter(tool => group(tool.name) === groupId);

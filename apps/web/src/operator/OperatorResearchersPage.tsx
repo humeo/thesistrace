@@ -330,7 +330,7 @@ export function OperatorResearchersView({
         aria-labelledby="operator-researchers-title"
         className={operatorAccessLayout.section}
       >
-        <header className="flex flex-col items-start gap-3 [&_h2]:m-0 [&_h2]:text-base [&_h2]:font-semibold">
+        <header className="flex flex-col items-start gap-3 [&_h2]:m-0 [&_h2]:text-2xl [&_h2]:leading-8 [&_h2]:font-semibold">
           <div>
             <h2 id="operator-researchers-title">{t("researchers.directory.researchers")}</h2>
           </div>
@@ -531,7 +531,7 @@ function ResearcherTable({
                   )}
                 </TableCell>
               )}
-            </TableRow>{expanded === researcher.researcher_id ? <TableRow id={`researcher-details-${researcher.researcher_id}`}><TableCell /><TableCell colSpan={onRevoke === undefined ? 4 : 5}><dl className="m-0 grid grid-cols-3 gap-6 rounded-md border border-border bg-muted/40 p-5 text-sm [&_dd]:m-0 [&_dt]:text-muted-foreground">
+            </TableRow>{expanded === researcher.researcher_id ? <TableRow id={`researcher-details-${researcher.researcher_id}`}><TableCell /><TableCell colSpan={onRevoke === undefined ? 4 : 5}><dl className="m-0 grid grid-cols-3 gap-6 rounded-md border border-border bg-muted/40 p-4 text-sm [&_dd]:m-0 [&_dt]:text-muted-foreground">
                     <div><dt>{t("researchers.directory.researcherId")}</dt><dd><code className="break-all">{researcher.researcher_id}</code></dd></div>
                     <div><dt>{t("researchers.directory.created")}</dt><dd><Timestamp value={researcher.created_at} /></dd></div>
                     <div><dt>{t("researchers.directory.effectiveInvitation")}</dt><dd>{researcher.effective_invitation === null ? t("researchers.directory.none") : <>{statusLabel(researcher.effective_invitation.status)} · {t("researchers.directory.expiresAt", { time: formatTimestamp(researcher.effective_invitation.expires_at) })}</>}</dd></div>

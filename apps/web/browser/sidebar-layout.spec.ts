@@ -52,7 +52,7 @@ test('sidebar resizes by pointer and keyboard, clamps bounds and retains width a
  await page.keyboard.press('Escape'); await page.getByRole('button',{name:'Expand sidebar',exact:true}).click(); await expect(page.locator('.application-sidebar')).toHaveCSS('width','320px');
  await handle.focus(); await handle.press('ArrowRight'); await expect(handle).toHaveAttribute('aria-valuenow','336');
  await handle.press('End'); await expect(page.locator('.application-sidebar')).toHaveCSS('width','400px');
- await handle.press('Home'); await expect(page.locator('.application-sidebar')).toHaveCSS('width','224px');
+ await handle.press('Home'); await expect(page.locator('.application-sidebar')).toHaveCSS('width','240px');
  await page.setViewportSize({width:390,height:844}); await expect(handle).toBeHidden();
  await page.getByRole('button',{name:'Open navigation'}).click(); await page.getByRole('button',{name:'Account menu'}).click();
  const trigger=(await page.getByRole('button',{name:'Account menu'}).boundingBox())!; const panel=(await page.locator('.account-menu-panel').boundingBox())!; expect(panel.width).toBeGreaterThanOrEqual(trigger.width); expect(panel.x+panel.width).toBeLessThanOrEqual(390);
@@ -247,7 +247,7 @@ test('shared sidebar keeps its presentation across workspace routes and collapse
  await page.getByRole('button', { name: 'Collapse sidebar', exact: true }).click();
  await expect(page.locator('.application-sidebar')).toHaveCSS('width', '56px');
  await page.getByRole('button', { name: 'Expand sidebar', exact: true }).click();
- await expect(page.locator('.application-sidebar')).toHaveCSS('width', '224px');
+ await expect(page.locator('.application-sidebar')).toHaveCSS('width', '240px');
  expect(await presentation()).toEqual(reference);
 });
 

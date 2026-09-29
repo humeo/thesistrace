@@ -70,7 +70,7 @@ export function DailyTrackWorkspace({ track, items, listError = false, onReloadL
       <DailyTrackListPanel items={visibleItems} selectedId={track.id} loading={items === null} error={listError} onRetry={onReloadList} />
       <div className="flex min-w-0 flex-col gap-4 rounded-md border border-border bg-card p-6">
       <header className="flex flex-wrap items-start justify-between gap-4"><div className="min-w-0"><h2 className="m-0 flex flex-wrap items-center gap-3 text-2xl leading-8 font-semibold">{t("trackHeading")} {track.id.replace(/^track_/, "").slice(0, 6)}<InfoHelp label={t("strategyObservation")}><code>{track.id}</code></InfoHelp><Badge variant={track.status === "blocked" ? "destructive" : "secondary"}>{trackStatusLabel(track)}</Badge></h2></div><div className="flex flex-wrap items-center gap-2">{actions}</div></header>
-      <dl className="m-0 grid grid-cols-3 gap-5 border-b border-border pb-4 text-base [&>div+div]:border-l [&>div+div]:border-border [&>div+div]:pl-5 [&_dd]:m-0 [&_dd]:mt-2 [&_dd]:text-xl [&_dt]:text-muted-foreground">
+      <dl className="m-0 grid grid-cols-3 gap-4 border-b border-border pb-4 text-base [&>div+div]:border-l [&>div+div]:border-border [&>div+div]:pl-4 [&_dd]:m-0 [&_dd]:mt-2 [&_dd]:text-xl [&_dt]:text-muted-foreground">
         <div><dt className="flex items-center gap-2"><CalendarBlankIcon aria-hidden="true" />{t("trackingFrom")}</dt><dd><time>{track.origin.strategy_session}</time></dd></div>
         <div><dt>{t("lastObservation")}</dt><dd><time>{track.strategy_session}</time></dd></div>
         <div><dt>{t("dataThrough")}</dt><dd><time>{track.data_through_session}</time></dd></div>

@@ -621,7 +621,7 @@ export function UseAsDraftPanel({
   }
 
   return (
-    <section id="research-use-as-draft" aria-label={t("draft.title")} className={embedded ? "grid min-w-0 gap-4" : "grid min-w-0 gap-4 rounded-lg border border-border bg-card p-5"}>
+    <section id="research-use-as-draft" aria-label={t("draft.title")} className={embedded ? "grid min-w-0 gap-4" : "grid min-w-0 gap-4 rounded-lg border border-border bg-card p-6"}>
       {!embedded ? <div><h2 className="m-0 text-base font-semibold">{t("draft.title")}</h2>
         <p className="mb-0 mt-1 text-sm text-muted-foreground">{t("draft.description")}</p></div> : null}
       <div className="flex min-w-0 flex-wrap items-end gap-3">
@@ -687,7 +687,7 @@ export function ResearchOrganizationPanel({
   }
 
   return (
-    <section aria-label={t("organization.title")} className="grid min-w-0 gap-4 rounded-lg border border-border bg-card p-5">
+    <section aria-label={t("organization.title")} className="grid min-w-0 gap-4 rounded-lg border border-border bg-card p-6">
       <h2 className="m-0 text-base font-semibold">{t("organization.title")}</h2>
       <FieldGroup className="grid min-w-0 gap-4 sm:grid-cols-2">
         <Field><FieldLabel htmlFor="run-organization-name" className="text-sm font-medium">{i18n.t("research:name")}</FieldLabel>
