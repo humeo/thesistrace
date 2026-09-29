@@ -69,7 +69,7 @@ export function McpPage() {
       <section className={`${mcpLayout.stack} rounded-md border border-border bg-card p-6`} aria-labelledby="mcp-apps-heading">
         <div className={mcpLayout.row}><h2 ref={appsHeading} tabIndex={-1} id="mcp-apps-heading">{t("authorizedApps")}</h2>{catalog && !catalogError ? <Badge variant="secondary">{formatNumber(catalog.apps.length)}</Badge> : null}</div>
         <div role="status">{notice ? t("revoked", notice) : null}</div>
-        {!catalog || catalogError ? <p>{catalogError ? t("appUnverified") : t("loadingApps")}</p> : catalog.apps.length === 0 ? <Empty className="border-0"><ShieldCheck aria-hidden="true" /><EmptyHeader><EmptyTitle>{t("noApps")}</EmptyTitle><EmptyDescription>{t("noAppsDescription")}</EmptyDescription></EmptyHeader></Empty> : catalog.apps.map(app => <article aria-label={app.name || app.client_id} key={app.id}>
+        {!catalog || catalogError ? <p>{catalogError ? t("appUnverified") : t("loadingApps")}</p> : catalog.apps.length === 0 ? <Empty><ShieldCheck aria-hidden="true" /><EmptyHeader><EmptyTitle>{t("noApps")}</EmptyTitle><EmptyDescription>{t("noAppsDescription")}</EmptyDescription></EmptyHeader></Empty> : catalog.apps.map(app => <article aria-label={app.name || app.client_id} key={app.id}>
           <Card><CardHeader className="flex-row items-center justify-between"><CardTitle>{app.name || app.client_id}</CardTitle><Badge variant="secondary">{t("authorized")}</Badge></CardHeader><CardContent className={mcpLayout.stack}>
             <div className="border-t border-border pt-3 text-xs font-medium text-muted-foreground">{t("permission")}</div>
             <ul className="grid gap-1">{app.scopes.map(scope => <li key={scope}>{scopeLabel(scope)}</li>)}</ul>
