@@ -1,5 +1,4 @@
-/* Research is the first slice of the warm reading workspace. The route class
-   keeps the visual pilot independent from other, still Classic product pages. */
+/* Research editor surface. Shared sidebar styling lives in styles.css. */
 body:has(.app-shell-research) {
   --background: #fcfcf9;
   --foreground: #27251e;
@@ -53,90 +52,6 @@ body:has(.app-shell-research) {
 
 .app-shell-research {
   background: var(--background);
-}
-.app-shell-research .application-sidebar {
-  background: var(--sidebar);
-  border-right-color: var(--sidebar-border);
-}
-.app-shell-research .sidebar-brand-row {
-  min-height: 64px;
-  padding-inline: 16px;
-  border-bottom-color: transparent;
-}
-.app-shell-research .quantgrove-wordmark {
-  font-family: "Source Serif 4", "Noto Serif SC", Georgia, serif;
-}
-.app-shell-research .sidebar-new-chat-menu {
-  padding: 12px 12px 8px;
-}
-.app-shell-research .sidebar-new-chat {
-  min-height: 42px;
-  background: #ffffff;
-  border-color: var(--border);
-  border-radius: 12px;
-  box-shadow: var(--shadow-card);
-}
-.app-shell-research .resource-nav {
-  padding: 6px 12px 16px;
-  border-bottom-color: var(--border);
-}
-.app-shell-research .resource-nav ul {
-  padding: 0;
-}
-.app-shell-research .resource-nav a {
-  min-height: 40px;
-  padding-inline: 10px;
-  color: var(--ink-muted);
-  border-color: transparent;
-  border-radius: 10px;
-  transition: color 75ms var(--ease-standard), background-color 75ms var(--ease-standard);
-}
-.app-shell-research .resource-nav a:hover,
-.app-shell-research .sidebar-new-chat:hover {
-  color: var(--ink);
-  background: #ffffff;
-}
-.app-shell-research .resource-nav a[aria-current="page"] {
-  color: var(--ink);
-  background: var(--sidebar-accent);
-  border-color: transparent;
-  font-weight: 600;
-}
-.app-shell-research .resource-nav a[aria-current="page"]::before,
-.app-shell-research .chat-session-row-current::before {
-  content: none;
-}
-.app-shell-research .chat-session-region {
-  padding: 18px 12px;
-}
-.app-shell-research .chat-session-groups {
-  gap: 24px;
-}
-.app-shell-research .chat-session-groups h3 {
-  margin-bottom: 8px;
-  color: var(--ink-muted);
-  font-weight: 600;
-  letter-spacing: 0;
-}
-.app-shell-research .chat-session-row {
-  border-radius: 10px;
-}
-.app-shell-research .chat-session-row:hover,
-.app-shell-research .chat-session-row-current {
-  background: var(--sidebar-accent);
-  border-color: transparent;
-}
-.app-shell-research .chat-session-row > a {
-  min-height: 40px;
-  padding-left: 10px;
-}
-.app-shell-research .sidebar-account-area {
-  padding: 10px 12px;
-  border-top-color: var(--border);
-}
-.app-shell-research .account-trigger {
-  background: var(--sidebar-accent);
-  border-radius: 12px;
 }
 .app-shell-research .main-content {
   padding-top: 32px;
@@ -317,7 +232,6 @@ body:has(.app-shell-research) [data-slot="button"] {
 
 @media (max-width: 768px) {
   .app-shell-research .main-content { padding-top: 72px; }
-  .app-shell-research .sidebar-brand-row { padding-inline: 12px; }
   .research-reading-workspace .research-page-header h1 { min-height: 42px; font-size: 27px; line-height: 36px; }
   .research-reading-workspace .research-page-header { margin-bottom: 24px; }
   .research-reading-workspace .research-settings-panel { padding: 16px; }
@@ -325,7 +239,6 @@ body:has(.app-shell-research) [data-slot="button"] {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .app-shell-research .resource-nav a,
   .research-reading-workspace .research-mode-option,
   body:has(.app-shell-research) [data-slot="button"] { transition: none; }
 }

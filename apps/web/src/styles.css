@@ -409,6 +409,142 @@ code { font-family: var(--mono); }
 @media (min-width: 769px) {
   .app-shell .mobile-navigation-toggle { display: none; }
 }
+/* Shared Research sidebar presentation; tokens stay inside the sidebar so
+   Chat messages and the composer retain their existing presentation. */
+.app-shell .application-sidebar {
+  --background: #fcfcf9;
+  --foreground: #27251e;
+  --card: #fdfbfa;
+  --card-foreground: #27251e;
+  --popover: #ffffff;
+  --popover-foreground: #27251e;
+  --primary: #27251e;
+  --primary-foreground: #ffffff;
+  --secondary: #f3f2ee;
+  --secondary-foreground: #27251e;
+  --muted: #f3f2ee;
+  --muted-foreground: #5b5952;
+  --accent: #efeee9;
+  --accent-foreground: #27251e;
+  --border: #deddd6;
+  --input: #8a8880;
+  --ring: #27251e;
+  --sidebar: #f5f4ef;
+  --sidebar-foreground: #27251e;
+  --sidebar-primary: #27251e;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #eae8e1;
+  --sidebar-accent-foreground: #27251e;
+  --sidebar-border: #deddd6;
+  --sidebar-ring: #27251e;
+  --canvas: #fcfcf9;
+  --surface-1: #fdfbfa;
+  --surface-2: #f3f2ee;
+  --surface-3: #ffffff;
+  --surface-4: #efeee9;
+  --ink: #27251e;
+  --ink-muted: #5b5952;
+  --ink-soft: #5b5952;
+  --ink-faint: #68665e;
+  --line: #deddd6;
+  --line-strong: #8a8880;
+  --line-tertiary: #c8c6bd;
+  --primary-hover: #403d35;
+  --primary-control-hover: #403d35;
+  --primary-focus: #27251e;
+  --syntax-function: #365f54;
+  --syntax-field: #285b68;
+  --syntax-number: #71593d;
+  --font-display: var(--font-body);
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 8%);
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.app-shell .application-sidebar {
+  background: var(--sidebar);
+  border-right-color: var(--sidebar-border);
+}
+.app-shell .sidebar-brand-row {
+  min-height: 64px;
+  padding-inline: 16px;
+  border-bottom-color: transparent;
+}
+.app-shell .quantgrove-wordmark {
+  font-family: "Source Serif 4", "Noto Serif SC", Georgia, serif;
+}
+.app-shell .sidebar-new-chat-menu {
+  padding: 12px 12px 8px;
+}
+.app-shell .sidebar-new-chat {
+  min-height: 42px;
+  background: #ffffff;
+  border-color: var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-card);
+}
+.app-shell .resource-nav {
+  padding: 6px 12px 16px;
+  border-bottom-color: var(--border);
+}
+.app-shell .resource-nav ul {
+  padding: 0;
+}
+.app-shell .resource-nav a {
+  min-height: 40px;
+  padding-inline: 10px;
+  color: var(--ink-muted);
+  border-color: transparent;
+  border-radius: 10px;
+  transition: color 75ms var(--ease-standard), background-color 75ms var(--ease-standard);
+}
+.app-shell .resource-nav a:hover,
+.app-shell .sidebar-new-chat:hover {
+  color: var(--ink);
+  background: #ffffff;
+}
+.app-shell .resource-nav a[aria-current="page"] {
+  color: var(--ink);
+  background: var(--sidebar-accent);
+  border-color: transparent;
+  font-weight: 600;
+}
+.app-shell .resource-nav a[aria-current="page"]::before,
+.app-shell .chat-session-row-current::before {
+  content: none;
+}
+.app-shell .chat-session-region {
+  padding: 18px 12px;
+}
+.app-shell .chat-session-groups {
+  gap: 24px;
+}
+.app-shell .chat-session-groups h3 {
+  margin-bottom: 8px;
+  color: var(--ink-muted);
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.app-shell .chat-session-row {
+  border-radius: 10px;
+}
+.app-shell .chat-session-row:hover,
+.app-shell .chat-session-row-current {
+  background: var(--sidebar-accent);
+  border-color: transparent;
+}
+.app-shell .chat-session-row > a {
+  min-height: 40px;
+  padding-left: 10px;
+}
+.app-shell .sidebar-account-area {
+  padding: 10px 12px;
+  border-top-color: var(--border);
+}
+.app-shell .account-trigger {
+  background: var(--sidebar-accent);
+  border-radius: 12px;
+}
+
 .app-shell-collapsed .application-frame { margin-left: 0; }
 .app-shell-collapsed .sidebar-label,
 .app-shell-collapsed .sidebar-account-area .account-trigger .account-identity-copy {
@@ -933,4 +1069,11 @@ code { font-family: var(--mono); }
   --radius-2xl: 0.75rem;
   --radius-3xl: 0.75rem;
   --radius-4xl: 0.75rem;
+}
+
+@media (max-width: 768px) {
+  .app-shell .sidebar-brand-row { padding-inline: 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .app-shell .resource-nav a { transition: none; }
 }

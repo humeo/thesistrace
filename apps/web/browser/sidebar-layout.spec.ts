@@ -227,3 +227,25 @@ for (const width of [1200, 390, 320]) {
   await expect(page.locator('html')).toHaveAttribute('lang', 'en');
  });
 }
+
+
+test('shared sidebar keeps its presentation across workspace routes and collapse', async ({ page }) => {
+ const presentation = () => page.locator('.application-sidebar').evaluate(sidebar =>
+  ['.sidebar-brand-row', '.sidebar-new-chat', '.resource-nav', '.chat-session-region', '.account-trigger'].map(selector => {
+   const element = sidebar.querySelector(selector)!;
+   const style = getComputedStyle(element);
+   return { selector, height: element.getBoundingClientRect().height, padding: style.padding, background: style.backgroundColor, radius: style.borderRadius, font: style.fontFamily };
+  }));
+ await page.getByRole('link', { name: 'Research', exact: true }).click();
+ const reference = await presentation();
+ for (const name of ['Data', 'MCP', 'New Chat', 'Research']) {
+  await page.getByRole('link', { name, exact: true }).click();
+  expect(await presentation()).toEqual(reference);
+  await expect(page.getByRole('link', { name: 'Quality Alpha', exact: true })).toBeVisible();
+ }
+ await page.getByRole('button', { name: 'Collapse sidebar', exact: true }).click();
+ await expect(page.locator('.application-sidebar')).toHaveCSS('width', '56px');
+ await page.getByRole('button', { name: 'Expand sidebar', exact: true }).click();
+ await expect(page.locator('.application-sidebar')).toHaveCSS('width', '224px');
+ expect(await presentation()).toEqual(reference);
+});
