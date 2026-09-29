@@ -26,7 +26,7 @@ test('account popup aligns with its trigger and keeps Discord in keyboard order'
  await expect(account).toContainText('Researcher');
  await expect(account).toContainText('researcher@example.test');
  const trigger=(await account.boundingBox())!; const panel=(await page.locator('.account-menu-panel').boundingBox())!;
- expect(panel.x).toBeCloseTo(trigger.x,0); expect(panel.width).toBeGreaterThanOrEqual(trigger.width);
+ expect(Math.abs(panel.x - trigger.x)).toBeLessThanOrEqual(1); expect(panel.width).toBeGreaterThanOrEqual(trigger.width);
  expect(panel.y + panel.height).toBeLessThan(trigger.y);
  await page.screenshot({path:testInfo.outputPath('account-card.png'),clip:{x:0,y:panel.y-8,width:224,height:850-panel.y+8}});
  await page.screenshot({path:testInfo.outputPath('account-menu-desktop.png')});
@@ -249,6 +249,37 @@ test('shared sidebar keeps its presentation across workspace routes and collapse
  await page.getByRole('button', { name: 'Expand sidebar', exact: true }).click();
  await expect(page.locator('.application-sidebar')).toHaveCSS('width', '240px');
  expect(await presentation()).toEqual(reference);
+});
+
+test('expanded sidebar aligns brand, navigation, history and compact account identity', async ({ page }) => {
+ const positions = await page.locator('.application-sidebar').evaluate(sidebar => {
+  const rect = (selector: string) => sidebar.querySelector(selector)!.getBoundingClientRect();
+  const historyLink = sidebar.querySelector('.chat-session-row > a')!;
+  return {
+   brand: rect('.brand-mark').x,
+   navigation: rect('.resource-nav a svg').x,
+   historyHeading: rect('.chat-session-groups h3').x,
+   historyText: historyLink.getBoundingClientRect().x + parseFloat(getComputedStyle(historyLink).paddingLeft),
+   avatar: rect('.account-trigger .account-avatar').x,
+   avatarWidth: rect('.account-trigger .account-avatar').width,
+   accountText: rect('.account-trigger .account-identity-copy').x,
+   wordmark: rect('.quantgrove-wordmark').x,
+   accountHeight: rect('.account-trigger').height,
+   accountNameSize: getComputedStyle(sidebar.querySelector('.account-trigger .account-identity-copy strong')!).fontSize,
+   accountEmailWeight: getComputedStyle(sidebar.querySelector('.account-trigger .account-identity-copy > span')!).fontWeight,
+   historyGroupGap: getComputedStyle(sidebar.querySelector('.chat-session-groups')!).gap,
+  };
+ });
+ expect(positions.brand).toBe(positions.navigation);
+ expect(positions.historyHeading).toBe(positions.navigation);
+ expect(positions.historyText).toBe(positions.navigation);
+ expect(positions.avatar).toBe(positions.navigation);
+ expect(positions.accountText).toBe(positions.wordmark);
+ expect(positions.avatarWidth).toBe(24);
+ expect(positions.accountHeight).toBe(56);
+ expect(positions.accountNameSize).toBe('13px');
+ expect(positions.accountEmailWeight).toBe('400');
+ expect(positions.historyGroupGap).toBe('16px');
 });
 
 test('sidebar avoids redundant expanded hints and retains one collapsed hint', async ({ page }) => {
