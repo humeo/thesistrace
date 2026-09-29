@@ -51,8 +51,8 @@ export function AccountMenuContent({ session, signOut }: AccountMenuContentProps
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger aria-label={t("accountMenu")} render={<Button variant="ghost" type="button" className="account-trigger" />}>
-        <span className="account-trigger-name" title={session.displayLabel}>{session.displayLabel}</span>
         <span className="account-avatar account-trigger-avatar" aria-hidden="true">{initials}</span>
+        <span className="account-trigger-name" title={session.displayLabel}>{session.displayLabel}</span>
         <CaretUpDown className="account-trigger-chevron" aria-hidden="true" size={16} />
         <span className="sr-only">{t("accountMenu")}</span>
       </PopoverTrigger>

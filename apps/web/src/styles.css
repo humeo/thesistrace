@@ -766,7 +766,7 @@ code { font-family: var(--mono); }
   max-width: 220px;
   align-items: center;
   gap: 8px;
-  padding: 8px 11px;
+  padding: 6px 11px;
   color: var(--ink);
   background: transparent;
   border: 1px solid transparent;
@@ -800,7 +800,6 @@ code { font-family: var(--mono); }
   font-size: 12px;
   font-weight: 500;
 }
-.account-trigger-avatar { display: none; }
 .account-identity-copy { display: grid; flex: 1; min-width: 0; gap: 0; text-align: left; }
 .account-identity-copy strong,
 .account-identity-copy > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -845,7 +844,6 @@ code { font-family: var(--mono); }
   .app-shell-collapsed .account-trigger { gap: 0; }
   .app-shell-collapsed .account-trigger .account-trigger-name,
   .app-shell-collapsed .account-trigger .account-trigger-chevron { display: none; }
-  .app-shell-collapsed .account-trigger .account-trigger-avatar { display: inline-flex; }
 }
 
 /* Data */

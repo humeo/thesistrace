@@ -23,7 +23,7 @@ for (const [width, inset] of [[320, 16], [390, 16], [768, 16], [1280, 32], [1440
 test('account popup aligns with its trigger and keeps Discord in keyboard order', async ({page}, testInfo) => {
  const account=page.getByRole('button',{name:'Account menu'}); await account.click();
  await expect(account.locator('.account-trigger-name')).toHaveText('Researcher');
- await expect(account.locator('.account-avatar')).toBeHidden();
+ await expect(account.locator('.account-avatar')).toBeVisible();
  await expect(account).not.toContainText('researcher@example.test');
  await expect(page.locator('.account-menu-panel .account-avatar')).toBeVisible();
  await expect(page.locator('.account-menu-panel')).toContainText('researcher@example.test');
@@ -59,7 +59,7 @@ test('sidebar resizes by pointer and keyboard, clamps bounds and retains width a
  await page.setViewportSize({width:390,height:844}); await expect(handle).toBeHidden();
  await page.getByRole('button',{name:'Open navigation'}).click(); await page.getByRole('button',{name:'Account menu'}).click();
  const trigger=(await page.getByRole('button',{name:'Account menu'}).boundingBox())!; const panel=(await page.locator('.account-menu-panel').boundingBox())!; expect(panel.width).toBeGreaterThanOrEqual(trigger.width); expect(panel.x+panel.width).toBeLessThanOrEqual(390);
- await expect(page.getByRole('button',{name:'Account menu'}).locator('.account-trigger-avatar')).toBeHidden();
+ await expect(page.getByRole('button',{name:'Account menu'}).locator('.account-trigger-avatar')).toBeVisible();
  await expect(page.getByRole('button',{name:'Account menu'}).locator('.account-trigger-name')).toBeVisible();
  await page.screenshot({path:testInfo.outputPath('account-menu-mobile.png')});
 });
@@ -264,6 +264,8 @@ test('expanded sidebar aligns brand, navigation, history and compact account ide
    navigation: rect('.resource-nav a svg').x,
    historyHeading: rect('.chat-session-heading h3').x,
    historyText: historyLink.getBoundingClientRect().x + parseFloat(getComputedStyle(historyLink).paddingLeft),
+   avatar: rect('.account-trigger-avatar').x,
+   avatarWidth: rect('.account-trigger-avatar').width,
    accountText: rect('.account-trigger-name').x,
    accountHeight: rect('.account-trigger').height,
    accountNameSize: getComputedStyle(sidebar.querySelector('.account-trigger-name')!).fontSize,
@@ -275,7 +277,9 @@ test('expanded sidebar aligns brand, navigation, history and compact account ide
  expect(positions.brand).toBe(positions.navigation);
  expect(positions.historyHeading).toBe(positions.navigation);
  expect(positions.historyText).toBe(positions.navigation);
- expect(positions.accountText).toBe(positions.navigation);
+ expect(positions.avatar).toBe(positions.navigation);
+ expect(positions.avatarWidth).toBe(24);
+ expect(positions.accountText - positions.avatar).toBe(32);
  expect(positions.accountHeight).toBe(40);
  expect(positions.accountNameSize).toBe('14px');
  expect(positions.historyHeadingGap).toBe('4px');

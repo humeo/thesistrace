@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { AccountMenuContent } from "./AccountMenu";
 
-test("shows only the username in the closed account trigger", () => {
+test("shows the avatar and username without email in the closed account trigger", () => {
   const markup = renderToStaticMarkup(
     <AccountMenuContent
       session={{
@@ -18,6 +18,7 @@ test("shows only the username in the closed account trigger", () => {
 
   expect(markup).toContain('aria-label="Account menu"');
   expect(markup).toContain('aria-haspopup="dialog"');
+  expect(markup).toContain('class="account-avatar account-trigger-avatar"');
   expect(markup).toContain('class="account-trigger-name"');
   expect(markup).not.toContain("researcher@example.test");
   expect(markup).not.toContain("Change password");
