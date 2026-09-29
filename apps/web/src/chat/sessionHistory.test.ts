@@ -8,7 +8,6 @@ import {
   appendAgentSessionPage,
   decodeAgentSessionPage,
   deleteAgentSession,
-  groupSessionsByRecency,
   loadAgentSession,
   renameAgentSession,
   watchGeneratedSessionTitle,
@@ -54,37 +53,6 @@ describe("Agent Chat Session history", () => {
     { extra: true, next_cursor: null, sessions: [] },
   ])("rejects an unbounded, duplicate, unstable, or expanded page", (value) => {
     expect(() => decodeAgentSessionPage(value)).toThrow(AgentSessionInvalidError);
-  });
-
-  it("groups local calendar boundaries without reordering Sessions", () => {
-    const now = new Date(2026, 7, 30, 12, 0, 0);
-    const sessions = [
-      session({ activity_at: databaseInstant(new Date(2026, 7, 30, 0, 0, 0)), title: "Today" }),
-      session({
-        activity_at: databaseInstant(new Date(2026, 7, 29, 23, 59, 59)),
-        id: "00000000-0000-4000-8000-000000000002",
-        title: "Yesterday",
-      }),
-      session({
-        activity_at: databaseInstant(new Date(2026, 7, 23, 0, 0, 0)),
-        id: "00000000-0000-4000-8000-000000000003",
-        title: "Seven days",
-      }),
-      session({
-        activity_at: databaseInstant(new Date(2026, 7, 22, 23, 59, 59)),
-        id: "00000000-0000-4000-8000-000000000004",
-        title: "Older",
-      }),
-    ];
-
-    expect(groupSessionsByRecency(sessions, now).map((group) => ({
-      id: group.id,
-      titles: group.sessions.map((candidate) => candidate.title),
-    }))).toEqual([
-      { id: "today", titles: ["Today"] },
-      { id: "previous", titles: ["Yesterday", "Seven days"] },
-      { id: "older", titles: ["Older"] },
-    ]);
   });
 
   it("appends only a strict continuation across a page boundary", () => {
@@ -383,10 +351,6 @@ function session(
     version: "2026-08-30T04:00:00.000Z",
     ...overrides,
   };
-}
-
-function databaseInstant(value: Date): string {
-  return value.toISOString().replace("Z", "000Z");
 }
 
 function historyState(): SessionHistoryState {

@@ -259,7 +259,7 @@ test('expanded sidebar aligns brand, navigation, history and compact account ide
   return {
    brand: rect('.brand-mark').x,
    navigation: rect('.resource-nav a svg').x,
-   historyHeading: rect('.chat-session-groups h3').x,
+   historyHeading: rect('.chat-session-heading h3').x,
    historyText: historyLink.getBoundingClientRect().x + parseFloat(getComputedStyle(historyLink).paddingLeft),
    avatar: rect('.account-trigger .account-avatar').x,
    avatarWidth: rect('.account-trigger .account-avatar').width,
@@ -268,7 +268,7 @@ test('expanded sidebar aligns brand, navigation, history and compact account ide
    accountHeight: rect('.account-trigger').height,
    accountNameSize: getComputedStyle(sidebar.querySelector('.account-trigger .account-identity-copy strong')!).fontSize,
    accountEmailWeight: getComputedStyle(sidebar.querySelector('.account-trigger .account-identity-copy > span')!).fontWeight,
-   historyGroupGap: getComputedStyle(sidebar.querySelector('.chat-session-groups')!).gap,
+   historyHeadingGap: getComputedStyle(sidebar.querySelector('.chat-session-heading')!).marginBottom,
    navigationGaps: navigationLinks.slice(1).map((link, index) =>
     link.getBoundingClientRect().top - navigationLinks[index]!.getBoundingClientRect().bottom),
   };
@@ -282,8 +282,22 @@ test('expanded sidebar aligns brand, navigation, history and compact account ide
  expect(positions.accountHeight).toBe(56);
  expect(positions.accountNameSize).toBe('13px');
  expect(positions.accountEmailWeight).toBe('400');
- expect(positions.historyGroupGap).toBe('16px');
+ expect(positions.historyHeadingGap).toBe('4px');
  expect(positions.navigationGaps).toEqual([4, 4, 4, 4, 4]);
+});
+
+test('history has one Recent heading with a new Chat action on its right', async ({ page }) => {
+ const heading = page.locator('.chat-session-heading h3');
+ const shortcut = page.getByRole('link', { name: 'Start a new Chat from history' });
+ await expect(heading).toHaveText('Recent');
+ await expect(page.locator('.chat-session-row')).toHaveCount(1);
+ await expect(page.locator('.chat-session-list')).toHaveCount(1);
+ await expect(page.locator('.chat-session-region h3')).toHaveCount(1);
+ const headingBox = await heading.boundingBox();
+ const shortcutBox = await shortcut.boundingBox();
+ expect(shortcutBox!.x).toBeGreaterThan(headingBox!.x + headingBox!.width);
+ await shortcut.click();
+ await expect(page.getByTestId('workspace-content')).toContainText('/chat');
 });
 
 test('sidebar avoids redundant expanded hints and retains one collapsed hint', async ({ page }) => {
