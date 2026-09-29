@@ -55,9 +55,9 @@ type AppShellProps = {
 
 export function AppShell(props: AppShellProps) {
   const [isCollapsed, setIsCollapsed] = useState(false);
-  const [sidebarWidth, setSidebarWidth] = useState(224);
+  const [sidebarWidth, setSidebarWidth] = useState(240);
   const [isResizing, setIsResizing] = useState(false);
-  const resizeSidebar = (width: number) => setSidebarWidth(Math.max(224, Math.min(400, width)));
+  const resizeSidebar = (width: number) => setSidebarWidth(Math.max(240, Math.min(400, width)));
   const isChat = props.currentPath === "/chat";
   return (
     <SidebarProvider
@@ -105,10 +105,10 @@ function WorkspaceShellContent({
   return (
     <WorkspaceContext value={{ navigate: openPage, sessionHistory }}>
       <Sidebar id="primary-navigation" className="application-sidebar" collapsible="icon" mobileTitle={t("navigation")}>
-        <SidebarHeader className="p-0">
+        <SidebarHeader className="sidebar-primary-header p-0">
           <div className="sidebar-brand-row">
             <a className="brand" aria-label={t("home")} href="/">
-              <Brand className="brand-mark" wordmarkClassName="sidebar-label" />
+              <Brand className="brand-mark" wordmarkClassName="sidebar-label" inverse />
             </a>
             {!isMobile ? (
               <SidebarTrigger
@@ -132,7 +132,6 @@ function WorkspaceShellContent({
                 aria-current={isNewChat ? "page" : undefined}
                 className="sidebar-new-chat"
                 tooltip={t("newChat")}
-                title={t("newChat")}
               >
                 <NotePencil aria-hidden="true" size={18} weight="regular" />
                 <span className="sidebar-label">{t("newChat")}</span>
@@ -170,7 +169,7 @@ function WorkspaceShellContent({
         {!isMobile && open ? (
           <div className="sidebar-resize-handle" role="separator" tabIndex={0}
             aria-label={t("resize")} aria-orientation="vertical" aria-controls="primary-navigation"
-            aria-valuemin={224} aria-valuemax={400} aria-valuenow={sidebarWidth}
+            aria-valuemin={240} aria-valuemax={400} aria-valuenow={sidebarWidth}
             onPointerDown={(event) => {
               if (event.button !== 0) return;
               event.preventDefault();
@@ -189,7 +188,7 @@ function WorkspaceShellContent({
             onKeyDown={(event) => {
               if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
               event.preventDefault();
-              resizeSidebar(event.key === "Home" ? 224 : event.key === "End" ? 400 : sidebarWidth + (event.key === "ArrowRight" ? 16 : -16));
+              resizeSidebar(event.key === "Home" ? 240 : event.key === "End" ? 400 : sidebarWidth + (event.key === "ArrowRight" ? 16 : -16));
             }}
           />
         ) : null}
@@ -230,7 +229,6 @@ function ResourceLink({ currentPath, navigate, resource }: {
         isActive={isCurrent}
         aria-current={isCurrent ? "page" : undefined}
         tooltip={t(resource.label)}
-        title={t(resource.label)}
       >
         <Icon aria-hidden="true" size={18} weight={isCurrent ? "fill" : "regular"} />
         <span className="sidebar-label">{t(resource.label)}</span>

@@ -10,7 +10,13 @@ export const researchEditorTheme = EditorView.theme({
     font: "14px/1.65 var(--mono)",
   },
   "&.cm-focused": { outline: "0" },
-  ".cm-scroller": { height: "100%", overflow: "auto" },
+  ".cm-scroller": {
+    height: "100%",
+    overflow: "auto",
+    fontFamily: "var(--mono)",
+    fontSize: "14px",
+    lineHeight: "1.65",
+  },
   ".cm-content": { padding: "14px 12px", caretColor: "var(--ink)" },
   ".cm-cursor": { borderLeftColor: "var(--primary)" },
   ".cm-gutters": {

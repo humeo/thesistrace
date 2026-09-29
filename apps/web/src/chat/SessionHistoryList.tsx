@@ -25,7 +25,7 @@ import { handleWorkspaceNavigation } from "../shell/navigation";
 import { chatSessionHref } from "./chatNavigation";
 import {
   AgentSessionActiveRunError, AgentSessionChangedError, AgentSessionInvalidError,
-  AgentSessionNotFoundError, AgentSessionTitleInvalidError, groupSessionsByRecency,
+  AgentSessionNotFoundError, AgentSessionTitleInvalidError,
   type AgentSessionSummary,
 } from "./sessionHistory";
 import type { SessionHistoryController } from "./useSessionHistory";
@@ -48,7 +48,6 @@ export function SessionHistoryList({
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const menuButtons = useRef(new Map<string, HTMLButtonElement>());
   const openMenuActivity = useRef<Readonly<{ activeRun: boolean; id: string }> | null>(null);
-  const groups = groupSessionsByRecency(controller.sessions);
   const openMenuSession = controller.sessions.find((session) => session.id === openMenu);
   const openMenuHasActiveTurn = openMenuSession?.current_turn !== null
     && openMenuSession?.current_turn !== undefined;
@@ -116,75 +115,66 @@ export function SessionHistoryList({
     </div>
   ) : (
     <>
-      <div className="chat-session-groups">
-        {groups.map((group) => (
-          <section aria-labelledby={`chat-session-group-${group.id}`} key={group.id}>
-            <h3 data-collapsed-label={collapsedGroupLabel(group.id)} id={`chat-session-group-${group.id}`}>
-              {t(`recency.${group.id}`)}
-            </h3>
-            <div className="chat-session-list">
-              {group.sessions.map((session) => (
-                <div
-                  className={`chat-session-row${session.id === currentSessionId ? " chat-session-row-current" : ""}`}
-                  key={session.id}
-                >
-                  <a
-                    aria-current={session.id === currentSessionId ? "page" : undefined}
-                    aria-label={`${displayTitle(session.title)}${session.current_turn === null ? "" : `, ${t(session.current_turn.status === "waiting_for_user" ? "waitingShort" : "runningShort")}`}`}
-                    href={chatSessionHref(session.id)}
-                    onClick={(event) => handleWorkspaceNavigation(event, () => {
-                      if (session.id !== currentSessionId) navigate(chatSessionHref(session.id));
-                    })}
-                    title={`${displayTitle(session.title)}${session.current_turn === null ? "" : ` — ${t(session.current_turn.status === "waiting_for_user" ? "waitingShort" : "runningShort")}`}`}
-                  >
-                    <span>{displayTitle(session.title)}</span>
-                    {session.current_turn === null ? null : (
-                      <em aria-hidden="true" className="chat-session-turn-state">
-                        {session.current_turn.status === "waiting_for_user"
-                          ? <Question className="chat-session-waiting-icon" size={15} weight="bold" />
-                          : <CircleNotch className="chat-session-active-spinner" size={15} />}
-                      </em>
-                    )}
-                  </a>
-                  <DropdownMenu
-                    modal={isMobile}
-                    open={openMenu === session.id && navigationInteractive}
-                    onOpenChange={(next) => setOpenMenu(next ? session.id : null)}
-                  >
-                    <DropdownMenuTrigger
-                      aria-label={t("actionsFor", { name: displayTitle(session.title) })}
-                      render={<Button variant="ghost" size="icon-sm" className="chat-session-menu-trigger" type="button" />}
-                      ref={(element) => {
-                        if (element === null) menuButtons.current.delete(session.id);
-                        else menuButtons.current.set(session.id, element);
-                      }}
-                    >
-                      <DotsThree aria-hidden="true" size={17} weight="bold" />
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent
-                      aria-label={t("actionsFor", { name: displayTitle(session.title) })}
-                      className="chat-session-menu w-42"
-                      id={`chat-session-menu-${session.id}`}
-                      side="right"
-                    >
-                      <DropdownMenuGroup>
-                        <DropdownMenuItem onClick={() => openDecision("rename", session)}>
-                          <NotePencil aria-hidden="true" size={16} />{t("rename")}
-                        </DropdownMenuItem>
-                        {session.current_turn === null ? (
-                          <DropdownMenuItem variant="destructive" onClick={() => openDecision("delete", session)}>
-                            <Trash aria-hidden="true" size={16} />{t("deleteChat")}
-                          </DropdownMenuItem>
-                        ) : null}
-                      </DropdownMenuGroup>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
-              ))}
-            </div>
-          </section>
+      <nav aria-labelledby="chat-session-recent" className="chat-session-list">
+        {controller.sessions.map((session) => (
+          <div
+            className={`chat-session-row${session.id === currentSessionId ? " chat-session-row-current" : ""}`}
+            key={session.id}
+          >
+            <a
+              aria-current={session.id === currentSessionId ? "page" : undefined}
+              aria-label={`${displayTitle(session.title)}${session.current_turn === null ? "" : `, ${t(session.current_turn.status === "waiting_for_user" ? "waitingShort" : "runningShort")}`}`}
+              href={chatSessionHref(session.id)}
+              onClick={(event) => handleWorkspaceNavigation(event, () => {
+                if (session.id !== currentSessionId) navigate(chatSessionHref(session.id));
+              })}
+              title={`${displayTitle(session.title)}${session.current_turn === null ? "" : ` — ${t(session.current_turn.status === "waiting_for_user" ? "waitingShort" : "runningShort")}`}`}
+            >
+              <span>{displayTitle(session.title)}</span>
+              {session.current_turn === null ? null : (
+                <em aria-hidden="true" className="chat-session-turn-state">
+                  {session.current_turn.status === "waiting_for_user"
+                    ? <Question className="chat-session-waiting-icon" size={15} weight="bold" />
+                    : <CircleNotch className="chat-session-active-spinner" size={15} />}
+                </em>
+              )}
+            </a>
+            <DropdownMenu
+              modal={isMobile}
+              open={openMenu === session.id && navigationInteractive}
+              onOpenChange={(next) => setOpenMenu(next ? session.id : null)}
+            >
+              <DropdownMenuTrigger
+                aria-label={t("actionsFor", { name: displayTitle(session.title) })}
+                render={<Button variant="ghost" size="icon-sm" className="chat-session-menu-trigger" type="button" />}
+                ref={(element) => {
+                  if (element === null) menuButtons.current.delete(session.id);
+                  else menuButtons.current.set(session.id, element);
+                }}
+              >
+                <DotsThree aria-hidden="true" size={17} weight="bold" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                aria-label={t("actionsFor", { name: displayTitle(session.title) })}
+                className="chat-session-menu w-42"
+                id={`chat-session-menu-${session.id}`}
+                side="right"
+              >
+                <DropdownMenuGroup>
+                  <DropdownMenuItem onClick={() => openDecision("rename", session)}>
+                    <NotePencil aria-hidden="true" size={16} />{t("rename")}
+                  </DropdownMenuItem>
+                  {session.current_turn === null ? (
+                    <DropdownMenuItem variant="destructive" onClick={() => openDecision("delete", session)}>
+                      <Trash aria-hidden="true" size={16} />{t("deleteChat")}
+                    </DropdownMenuItem>
+                  ) : null}
+                </DropdownMenuGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         ))}
-      </div>
+      </nav>
       {controller.error === null ? null : <p className="chat-session-pagination-error" role="alert" title={controller.error}>{controller.error}</p>}
       {controller.nextCursor === null ? null : (
         <Button variant="ghost" className="chat-session-load-more" disabled={controller.loadingMore} onClick={() => void controller.loadMore()} type="button">
@@ -194,7 +184,22 @@ export function SessionHistoryList({
     </>
   );
 
-  return historyContent;
+  return (
+    <>
+      <div className="chat-session-heading">
+        <h3 id="chat-session-recent">{t("recent")}</h3>
+        <a
+          aria-label={t("newChatShortcut")}
+          className="chat-session-new-chat"
+          href="/chat"
+          onClick={(event) => handleWorkspaceNavigation(event, () => navigate("/chat"))}
+        >
+          <NotePencil aria-hidden="true" size={18} weight="regular" />
+        </a>
+      </div>
+      {historyContent}
+    </>
+  );
 }
 
 export function SessionDecisionDialog({
@@ -301,12 +306,4 @@ export function sessionDialogErrorMessage(
   error: AgentSessionInvalidError | AgentSessionTitleInvalidError,
 ): string {
   return i18n.t(`chat:errors.${sessionDialogErrorKey(kind, error)}`);
-}
-
-function collapsedGroupLabel(id: "today" | "previous" | "older"): string {
-  switch (id) {
-    case "today": return "T";
-    case "previous": return "7d";
-    case "older": return "O";
-  }
 }

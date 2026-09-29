@@ -83,12 +83,12 @@ function LoginPage() {
   return (
     <div className="login-page">
       <a className="login-brand" href={`/?lang=${publicLanguageCode(interfaceLocale())}`}>
-        <Brand size={28} />
+        <Brand size={28} inverse />
       </a>
       <main className="login-main">
       <section className="login-content" aria-labelledby="login-title">
       <header className="login-heading">
-        <BrandMark size={48} />
+        <BrandMark size={48} inverse />
         <h1 id="login-title">{t(sent ? "checkEmail" : "welcome")}</h1>
         <p>{t(sent ? "enterCode" : "introduction")}</p>
       </header>
@@ -341,7 +341,7 @@ export function AuthSurface({ eyebrow, title, children, as: Root = "main" }: {
     <Root className="auth-page">
       <section aria-labelledby="auth-title" className="auth-panel">
         <a className="auth-brand" href={`/login?lang=${publicLanguageCode(interfaceLocale())}`}>
-          <Brand />
+          <Brand inverse />
         </a>
         <header>
           <span className="auth-eyebrow">{eyebrow}</span>

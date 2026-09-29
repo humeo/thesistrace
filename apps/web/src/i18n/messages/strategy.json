@@ -114,6 +114,7 @@
       "modulePython": "{{stage}} · Frozen Python source"
     },
     "state": {
+      "title": "Framework state",
       "summary": "Strategy decisions · {{candidates}} candidates · {{signals}} active signals",
       "help": "Signals and module state inform later decisions. They do not represent orders or fills.",
       "signals": "Active signals",
@@ -205,6 +206,14 @@
       "active": "Held {{shares}} shares at decision; ordinary additions are forbidden during this take-profit cycle until full exit. A reduction is attempted at next Open; related records show actual fills and rejections."
     },
     "workbench": {
+      "moduleNavigation": "Strategy modules",
+      "stageTab": { "universe_selection": "Universe", "alpha": "Signals", "portfolio_construction": "Portfolio", "risk_management": "Risk" },
+      "stageHeading": { "universe_selection": "Stock universe", "alpha": "Selection signals", "portfolio_construction": "Portfolio settings", "risk_management": "Risk settings" },
+      "stagePortfolioSummary": "{{holdings}} stocks · {{weighting}}",
+      "stageRiskConfigured": "Additional rules set",
+      "stageRiskEmpty": "No additional rules",
+      "executionLabel": "Execution timing",
+      "executionShort": "Decide at Close, simulate at the next Open",
       "intro": "Build the rules, then test them on historical data.",
       "factorIntro": "Measure whether a scoring formula predicts future returns.",
       "conditionsTitle": "Backtest conditions",
@@ -251,7 +260,7 @@
       "fixedMode": "Fixed percentage",
       "dynamicMode": "Formula based",
       "fixedHelp": "The remaining capital stays in cash. For example, 60 means a 60% stock allocation.",
-      "summaryTitle": "What this strategy will do",
+      "summaryTitle": "Strategy summary",
       "summarySelection": "Stock universe",
       "summaryRanking": "Selection rule",
       "summaryUniverse": "Top {{count}} stocks by liquidity",
@@ -410,6 +419,7 @@
       "modulePython": "{{stage}} · 冻结的 Python 源码"
     },
     "state": {
+      "title": "框架状态",
       "summary": "策略决策 · {{candidates}} 个候选 · {{signals}} 条活跃信号",
       "help": "信号和模块状态为后续决策提供依据，不代表委托或成交。",
       "signals": "活跃信号",
@@ -501,6 +511,14 @@
       "active": "判断时持仓 {{shares}} 股；止盈周期内禁止普通补仓，直至完全退出。下一开盘尝试减仓，实际成交与拒绝见关联记录。"
     },
     "workbench": {
+      "moduleNavigation": "策略模块",
+      "stageTab": { "universe_selection": "股票池", "alpha": "选股信号", "portfolio_construction": "组合构建", "risk_management": "风险管理" },
+      "stageHeading": { "universe_selection": "股票池", "alpha": "选股信号", "portfolio_construction": "组合配置", "risk_management": "风险管理" },
+      "stagePortfolioSummary": "{{holdings}} 只 · {{weighting}}",
+      "stageRiskConfigured": "已设置额外规则",
+      "stageRiskEmpty": "未设置额外规则",
+      "executionLabel": "执行方式",
+      "executionShort": "收盘决策，次日开盘模拟",
       "intro": "配置选股和交易规则，用历史数据检验策略表现。",
       "factorIntro": "检验一个评分公式能否识别未来收益更高的股票。",
       "conditionsTitle": "回测条件",
@@ -547,7 +565,7 @@
       "fixedMode": "固定比例",
       "dynamicMode": "按公式动态调整",
       "fixedHelp": "剩余资金保留为现金。例如填 60，表示目标股票仓位为 60%。",
-      "summaryTitle": "这套策略会怎样运行",
+      "summaryTitle": "策略摘要",
       "summarySelection": "选股范围",
       "summaryRanking": "选股规则",
       "summaryUniverse": "流动性最高的 {{count}} 只股票",

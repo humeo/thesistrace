@@ -1,149 +1,13 @@
-/* Research is the first slice of the warm reading workspace. The route class
-   keeps the visual pilot independent from other, still Classic product pages. */
-body:has(.app-shell-research) {
-  --background: #fcfcf9;
-  --foreground: #27251e;
-  --card: #fdfbfa;
-  --card-foreground: #27251e;
-  --popover: #ffffff;
-  --popover-foreground: #27251e;
-  --primary: #27251e;
-  --primary-foreground: #ffffff;
-  --secondary: #f3f2ee;
-  --secondary-foreground: #27251e;
-  --muted: #f3f2ee;
-  --muted-foreground: #5b5952;
-  --accent: #efeee9;
-  --accent-foreground: #27251e;
-  --border: #deddd6;
-  --input: #8a8880;
-  --ring: #27251e;
-  --sidebar: #f5f4ef;
-  --sidebar-foreground: #27251e;
-  --sidebar-primary: #27251e;
-  --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #eae8e1;
-  --sidebar-accent-foreground: #27251e;
-  --sidebar-border: #deddd6;
-  --sidebar-ring: #27251e;
-  --canvas: #fcfcf9;
-  --surface-1: #fdfbfa;
-  --surface-2: #f3f2ee;
-  --surface-3: #ffffff;
-  --surface-4: #efeee9;
-  --ink: #27251e;
-  --ink-muted: #5b5952;
-  --ink-soft: #5b5952;
-  --ink-faint: #68665e;
-  --line: #deddd6;
-  --line-strong: #8a8880;
-  --line-tertiary: #c8c6bd;
-  --primary-hover: #403d35;
-  --primary-control-hover: #403d35;
-  --primary-focus: #27251e;
-  --syntax-function: #365f54;
-  --syntax-field: #285b68;
-  --syntax-number: #71593d;
-  --font-display: var(--font-body);
-  --shadow-card: 0 1px 2px rgb(0 0 0 / 8%);
-  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
-  color: var(--foreground);
-  background: var(--background);
-}
-
+/* Research editor surface. Shared sidebar styling lives in styles.css. */
 .app-shell-research {
   background: var(--background);
-}
-.app-shell-research .application-sidebar {
-  background: var(--sidebar);
-  border-right-color: var(--sidebar-border);
-}
-.app-shell-research .sidebar-brand-row {
-  min-height: 64px;
-  padding-inline: 16px;
-  border-bottom-color: transparent;
-}
-.app-shell-research .quantgrove-wordmark {
-  font-family: "Source Serif 4", "Noto Serif SC", Georgia, serif;
-}
-.app-shell-research .sidebar-new-chat-menu {
-  padding: 12px 12px 8px;
-}
-.app-shell-research .sidebar-new-chat {
-  min-height: 42px;
-  background: #ffffff;
-  border-color: var(--border);
-  border-radius: 12px;
-  box-shadow: var(--shadow-card);
-}
-.app-shell-research .resource-nav {
-  padding: 6px 12px 16px;
-  border-bottom-color: var(--border);
-}
-.app-shell-research .resource-nav ul {
-  padding: 0;
-}
-.app-shell-research .resource-nav a {
-  min-height: 40px;
-  padding-inline: 10px;
-  color: var(--ink-muted);
-  border-color: transparent;
-  border-radius: 10px;
-  transition: color 75ms var(--ease-standard), background-color 75ms var(--ease-standard);
-}
-.app-shell-research .resource-nav a:hover,
-.app-shell-research .sidebar-new-chat:hover {
-  color: var(--ink);
-  background: #ffffff;
-}
-.app-shell-research .resource-nav a[aria-current="page"] {
-  color: var(--ink);
-  background: var(--sidebar-accent);
-  border-color: transparent;
-  font-weight: 600;
-}
-.app-shell-research .resource-nav a[aria-current="page"]::before,
-.app-shell-research .chat-session-row-current::before {
-  content: none;
-}
-.app-shell-research .chat-session-region {
-  padding: 18px 12px;
-}
-.app-shell-research .chat-session-groups {
-  gap: 24px;
-}
-.app-shell-research .chat-session-groups h3 {
-  margin-bottom: 8px;
-  color: var(--ink-muted);
-  font-weight: 600;
-  letter-spacing: 0;
-}
-.app-shell-research .chat-session-row {
-  border-radius: 10px;
-}
-.app-shell-research .chat-session-row:hover,
-.app-shell-research .chat-session-row-current {
-  background: var(--sidebar-accent);
-  border-color: transparent;
-}
-.app-shell-research .chat-session-row > a {
-  min-height: 40px;
-  padding-left: 10px;
-}
-.app-shell-research .sidebar-account-area {
-  padding: 10px 12px;
-  border-top-color: var(--border);
-}
-.app-shell-research .account-trigger {
-  background: var(--sidebar-accent);
-  border-radius: 12px;
 }
 .app-shell-research .main-content {
   padding-top: 32px;
   background: var(--background);
 }
 .app-shell-research .main-content > section {
-  width: min(1160px, 100%);
+  width: min(1280px, 100%);
 }
 
 .research-reading-workspace .research-page-content {
@@ -156,8 +20,9 @@ body:has(.app-shell-research) {
 .research-reading-workspace .research-page-header h1 {
   max-width: 100%;
   color: var(--foreground);
-  font-size: 26px;
-  line-height: 34px;
+  font-family: var(--font-display);
+  font-size: 28px;
+  line-height: 1.2;
   font-weight: 600;
   letter-spacing: -.02em;
 }
@@ -166,15 +31,47 @@ html[lang="zh-CN"] .research-reading-workspace .research-page-header h1 {
 }
 .research-reading-workspace .research-page-header p {
   color: var(--ink-muted);
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 400;
 }
-.research-reading-workspace .research-mode-switch {
-  margin-bottom: 20px;
+.research-reading-workspace [data-slot="field-label"] {
+  line-height: 24px;
+}
+.research-reading-workspace [data-slot="field-description"] {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 400;
+}
+.research-reading-workspace .research-authoring-options {
+  margin-bottom: 24px;
+  padding: 0 0 16px;
+  border-bottom: 1px solid var(--border);
+}
+.research-reading-workspace .research-authoring-options > div {
+  align-items: center;
+}
+.research-reading-workspace .research-authoring-options fieldset {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 12px;
+}
+.research-reading-workspace .research-authoring-options legend {
+  float: left;
+  margin: 0;
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+.research-reading-workspace .research-authoring-options [data-slot="radio-group"] {
+  width: auto;
 }
 .research-reading-workspace .research-mode-option {
-  min-height: 42px;
-  padding-inline: 16px;
-  border-radius: 9999px;
-  border-color: var(--border);
+  min-height: 36px;
+  padding-inline: 8px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
   background: transparent;
   transition: background-color 75ms var(--ease-standard), border-color 75ms var(--ease-standard);
 }
@@ -183,13 +80,70 @@ html[lang="zh-CN"] .research-reading-workspace .research-page-header h1 {
 }
 .research-reading-workspace .research-mode-option:has([data-checked]) {
   border-color: var(--primary);
+  background: transparent;
+}
+.research-reading-workspace .research-mode-option [data-slot="radio-group-item"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+.research-reading-workspace .research-mode-option:has([data-slot="radio-group-item"]:focus-visible) {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.research-stage-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+}
+.research-stage-tabs button {
+  display: grid;
+  min-width: 0;
+  min-height: 72px;
+  align-content: center;
+  gap: 4px;
+  padding: 12px 16px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.research-stage-tabs button + button { border-left: 1px solid var(--border); }
+.research-stage-tabs button:hover { background: var(--secondary); }
+.research-stage-tabs button[aria-selected="true"] {
+  border-bottom-color: var(--primary);
   background: var(--secondary);
+}
+.research-stage-tabs button:focus-visible { outline: 2px solid var(--ring); outline-offset: -3px; }
+.research-stage-name { font-size: 15px; font-weight: 600; }
+.research-stage-summary {
+  overflow: hidden;
+  color: var(--ink-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.research-stage-panel { min-height: 340px; padding: 16px 2px; }
+.research-infotip-trigger { width: 32px; height: 32px; color: var(--ink-muted); }
+.research-infotip-trigger:hover { color: var(--ink); }
+.research-infotip-content { gap: 4px; padding: 12px 14px; }
+.research-infotip-content [data-slot="popover-title"] { font-size: 14px; }
+.research-reading-workspace .research-settings-panel { align-self: start; }
+.research-reading-workspace .research-submit-bar { margin-top: 4px; }
+@container (max-width: 700px) {
+  .research-stage-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .research-stage-tabs button:nth-child(3) { border-left: 0; }
 }
 .research-reading-workspace .research-editor-panel,
 .research-reading-workspace .research-settings-panel {
   background: var(--card);
   border-color: var(--border);
-  border-radius: 16px;
+  border-radius: 12px;
   box-shadow: var(--shadow-card);
 }
 .research-reading-workspace .research-editor-panel > header {
@@ -204,7 +158,7 @@ html[lang="zh-CN"] .research-reading-workspace .research-page-header h1 {
 }
 .research-reading-workspace .research-settings-panel {
   gap: 16px;
-  padding: 16px;
+  padding: 24px;
 }
 .research-reading-workspace .research-submit-bar {
   position: static;
@@ -219,7 +173,7 @@ html[lang="zh-CN"] .research-reading-workspace .research-page-header h1 {
 body:has(.app-shell-research) [data-slot="popover-content"],
 body:has(.app-shell-research) [data-slot="sheet-content"],
 body:has(.app-shell-research) [data-slot="alert-dialog-content"] {
-  border-radius: 16px;
+  border-radius: 12px;
   box-shadow: var(--shadow-card);
 }
 body:has(.app-shell-research) [data-slot="button"] {
@@ -228,7 +182,6 @@ body:has(.app-shell-research) [data-slot="button"] {
 
 @media (max-width: 768px) {
   .app-shell-research .main-content { padding-top: 72px; }
-  .app-shell-research .sidebar-brand-row { padding-inline: 12px; }
   .research-reading-workspace .research-page-header h1 { min-height: 42px; font-size: 27px; line-height: 36px; }
   .research-reading-workspace .research-page-header { margin-bottom: 24px; }
   .research-reading-workspace .research-settings-panel { padding: 16px; }
@@ -236,7 +189,6 @@ body:has(.app-shell-research) [data-slot="button"] {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .app-shell-research .resource-nav a,
   .research-reading-workspace .research-mode-option,
   body:has(.app-shell-research) [data-slot="button"] { transition: none; }
 }

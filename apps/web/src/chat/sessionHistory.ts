@@ -24,11 +24,6 @@ export type AgentSessionPage = Readonly<{
   sessions: readonly AgentSessionSummary[];
 }>;
 
-export type SessionGroup = Readonly<{
-  id: "today" | "previous" | "older";
-  sessions: readonly AgentSessionSummary[];
-}>;
-
 export class AgentSessionInvalidError extends Error {
   constructor() {
     super("Agent Chat Session response is invalid");
@@ -336,34 +331,6 @@ export function appendAgentSessionPage(
     throw new AgentSessionInvalidError();
   }
   return [...existing, ...page.sessions];
-}
-
-export function groupSessionsByRecency(
-  sessions: readonly AgentSessionSummary[],
-  now = new Date(),
-): readonly SessionGroup[] {
-  if (Number.isNaN(now.getTime())) throw new AgentSessionInvalidError();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const previousSevenDays = new Date(today);
-  previousSevenDays.setDate(previousSevenDays.getDate() - 7);
-  const buckets: Record<SessionGroup["id"], AgentSessionSummary[]> = {
-    today: [],
-    previous: [],
-    older: [],
-  };
-  for (const session of sessions) {
-    const activity = databaseInstantDate(session.activity_at);
-    if (activity >= today) buckets.today.push(session);
-    else if (activity >= previousSevenDays) buckets.previous.push(session);
-    else buckets.older.push(session);
-  }
-  return (["today", "previous", "older"] as const).flatMap((id) => (
-    buckets[id].length === 0 ? [] : [{ id, sessions: buckets[id] }]
-  ));
-}
-
-function databaseInstantDate(value: string): Date {
-  return new Date(`${value.slice(0, 23)}Z`);
 }
 
 function normalizeTitle(value: string): string {

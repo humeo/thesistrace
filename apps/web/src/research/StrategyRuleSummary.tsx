@@ -1,6 +1,7 @@
 import { useTranslation } from "../i18n";
 import type { ResearchInputs } from "./draft";
 import { exposurePercentage, readScoringRule } from "./strategyRules";
+import { RuleDisclosure } from "./RuleDisclosure";
 
 export function StrategyRuleSummary({ inputs }: { inputs: ResearchInputs }) {
   const { t } = useTranslation("strategy");
@@ -28,8 +29,8 @@ export function StrategyRuleSummary({ inputs }: { inputs: ResearchInputs }) {
       risk.push(t("workbench.summaryDrawdown", { threshold: inputs.drawdownThreshold || "—", exposure: inputs.drawdownMaximumExposure || "—" }));
     }
   }
-  return <section aria-label={t("workbench.summaryTitle")} className="grid gap-3 rounded-lg bg-secondary p-4">
-    <h2 className="m-0 text-base font-semibold">{t("workbench.summaryTitle")}</h2>
+  return <RuleDisclosure title={t("workbench.summaryTitle")}>
+    <section aria-label={t("workbench.summaryTitle")} className="grid gap-3 rounded-lg bg-secondary p-4">
     {direct ? <p className="m-0 text-sm">{t("workbench.summaryDirect")}</p>
       : <dl className="m-0 grid gap-3 text-sm">
         {rows.map(row => <div key={row.label}><dt className="text-muted-foreground">{row.label}</dt><dd className="m-0 mt-1">{row.text}</dd></div>)}
@@ -40,6 +41,6 @@ export function StrategyRuleSummary({ inputs }: { inputs: ResearchInputs }) {
         <div><dt className="text-muted-foreground">{t("workbench.summaryExit")}</dt>
           <dd className="m-0 mt-1">{risk.length ? risk.join(t("workbench.listSeparator")) : t("workbench.summaryNoRisk")}</dd></div>
       </dl>}
-    <p className="m-0 border-t border-border pt-3 text-xs text-muted-foreground">{t("workbench.execution")}</p>
-  </section>;
+    </section>
+  </RuleDisclosure>;
 }

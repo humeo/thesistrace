@@ -1,3 +1,4 @@
+import { InfoHelp } from "../components/product/InfoHelp";
 import { Metric, MetricGroup } from "../components/product/MetricGroup";
 import { Section } from "../components/layout/Page";
 import { Button } from "../components/ui/button";
@@ -44,12 +45,12 @@ export function ObservationSummary({ observation, originSession }: {
 }) {
   const { t } = useTranslation("daily");
   return (
-    <MetricGroup label={t("account")} className="sm:grid-cols-3 xl:grid-cols-5">
-      <Metric label={t("returnSince")} value={formatReturn(observation.net_return)} detail={t("sinceDate", { date: originSession })} />
-      <Metric label={t("maximumDrawdown")} value={formatReturn(observation.maximum_drawdown)} detail={t("sinceDate", { date: originSession })} />
-      <Metric label={t("nav")} value={formatMoney(observation.net_asset_value_cny)} detail={t("changeSince", { amount: formatMoney(observation.net_change_cny) })} />
-      <Metric label={t("cashAvailable")} value={formatMoney(observation.cash_cny)} detail={t("simulatedCny")} />
-      <Metric label={t("holdings")} value={`${formatNumber(observation.holdings.length)}${t("securities")}`} detail={t("asOf", { date: observation.session })} />
+    <MetricGroup variant="observation" label={t("account")}>
+      <Metric variant="observation" label={t("returnSince")} value={formatReturn(observation.net_return)} help={<InfoHelp label={t("returnSince")}>{t("sinceDate", { date: originSession })}</InfoHelp>} />
+      <Metric variant="observation" label={t("maximumDrawdown")} value={formatReturn(observation.maximum_drawdown)} help={<InfoHelp label={t("maximumDrawdown")}>{t("sinceDate", { date: originSession })}</InfoHelp>} />
+      <Metric variant="observation" label={t("nav")} value={formatMoney(observation.net_asset_value_cny)} help={<InfoHelp label={t("nav")}>{t("changeSince", { amount: formatMoney(observation.net_change_cny) })}</InfoHelp>} />
+      <Metric variant="observation" label={t("cashAvailable")} value={formatMoney(observation.cash_cny)} help={<InfoHelp label={t("cashAvailable")}>{t("simulatedCny")}</InfoHelp>} />
+      <Metric variant="observation" label={t("holdings")} value={`${formatNumber(observation.holdings.length)}${t("securities")}`} help={<InfoHelp label={t("holdings")}>{t("asOf", { date: observation.session })}</InfoHelp>} />
     </MetricGroup>
   );
 }
@@ -131,15 +132,16 @@ export function TrackingReturnChart({ observation, originSession }: {
     setSelected(null);
     const theme = chartTheme(element);
     const chart = createChart(element, {
-      width: element.clientWidth, height: 280,
+      width: element.clientWidth, height: 216,
       layout: { background: { type: ColorType.Solid, color: theme.background }, textColor: theme.text, fontFamily: "Inter, Noto Sans SC, -apple-system, BlinkMacSystemFont, sans-serif", attributionLogo: false },
       grid: { vertLines: { visible: false }, horzLines: { color: theme.grid } },
-      rightPriceScale: { borderColor: theme.border },
+      leftPriceScale: { visible: true, borderColor: theme.border },
+      rightPriceScale: { visible: false },
       timeScale: { borderColor: theme.border, fixLeftEdge: true, fixRightEdge: true },
       localization: { locale: interfaceLocale(), priceFormatter: formatReturn },
     });
     chartRef.current = chart;
-    const series = chart.addSeries(LineSeries, { color: theme.strategy, lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
+    const series = chart.addSeries(LineSeries, { priceScaleId: "left", color: theme.strategy, lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
     series.setData(observation.returns.map((point) => ({ time: point.session as Time, value: point.net_return })));
     series.createPriceLine({ price: 0, color: theme.zero, lineStyle: 2, lineWidth: 1, axisLabelVisible: false, title: "" });
     if (visibleRange.current) chart.timeScale().setVisibleLogicalRange(visibleRange.current);
@@ -159,9 +161,9 @@ export function TrackingReturnChart({ observation, originSession }: {
   if (observation.returns.length < 2) {
     return <Empty><EmptyHeader><EmptyTitle>{t("chartEmpty")}</EmptyTitle><EmptyDescription>{t("chartEmptyDescription", { date: originSession })}</EmptyDescription></EmptyHeader></Empty>;
   }
-  return <figure className="m-0 min-w-0 overflow-hidden rounded-lg border border-border bg-card p-4" aria-label={t("chartTitle") }>
-    <figcaption className="mb-4 flex flex-wrap justify-between gap-2 text-xs text-muted-foreground"><span>{t("netReturnSince", { date: originSession })}</span><span>{t("observations", { count: observation.returns.length })}</span></figcaption>
-    <div ref={containerRef} className="min-h-[280px] min-w-0" />
+  return <figure className="m-0 min-w-0 overflow-hidden" aria-label={t("chartTitle") }>
+    <figcaption className="sr-only mb-4 flex flex-wrap justify-between gap-2 text-xs text-muted-foreground"><span>{t("netReturnSince", { date: originSession })}</span><span>{t("observations", { count: observation.returns.length })}</span></figcaption>
+    <div ref={containerRef} className="min-h-[216px] min-w-0" />
     <div aria-live="polite" className="mt-3 flex flex-wrap justify-between gap-2 text-xs text-muted-foreground"><span>{selected ? `${formatSessionDate(selected.session)}  ${formatReturn(selected.net_return)}` : t("chartHint")}</span>
       <Button variant="link" nativeButton={false} role="link" render={<a href="https://www.tradingview.com/" target="_blank" rel="noreferrer" />} className="h-auto min-h-11 whitespace-normal p-0 text-xs">TradingView Lightweight Charts™</Button></div>
   </figure>;

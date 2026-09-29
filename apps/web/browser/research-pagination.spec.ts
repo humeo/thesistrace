@@ -93,8 +93,8 @@ test("sorts all Research on the server before paging and keeps sorting across pa
   expect(requests.at(-1)?.get("sort_direction")).toBe("ascending");
 });
 
-test("applies percentage and factor conditions globally and clears them on Type change", async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 964 });
+test("applies percentage and factor conditions globally and clears them on Type change", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
   const requests: URLSearchParams[] = [];
   await page.route("http://research.test/", route => route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' }));
   await page.route("**/api/research-folders", route => route.fulfill({ json: { items: [{ id: "folder_default", name: "Default", is_default: true }], next_cursor: null } }));
@@ -106,6 +106,7 @@ test("applies percentage and factor conditions globally and clears them on Type 
   await page.addStyleTag({ content: styles });
   await page.addScriptTag({ content: timelineScript });
   await choose(page, "Filter by Type", "strategy_backtest");
+  await page.getByRole("button", { name: "Metric filters", exact: true }).click();
   await page.getByRole("button", { name: "Add condition", exact: true }).click();
   await page.getByLabel("Threshold 1", { exact: true }).fill("10");
   await page.getByRole("button", { name: "Add condition", exact: true }).click();
@@ -122,7 +123,7 @@ test("applies percentage and factor conditions globally and clears them on Type 
   await expect(page.getByText("Changes not applied.")).toHaveCount(0);
   const form = page.getByRole("form", { name: "Metric filters" });
   expect(await form.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: "../../.scratch/research-global-sort/metric-filters-mobile.png", fullPage: true });
+  await page.screenshot({ path: testInfo.outputPath("metric-filters-desktop.png"), fullPage: true });
   await page.getByRole("combobox", { name: "Metric 2", exact: true }).click();
   await expect(page.getByRole("option")).toHaveCount(3);
   await expect(page.getByRole("option", { name: "1-session Rank IC", exact: true })).toHaveCount(0);
@@ -171,6 +172,7 @@ test("returning from a Run keeps applied filters and page across language and wi
   await page.addStyleTag({ content: styles });
   await page.addScriptTag({ content: timelineScript });
   await choose(page, "Filter by Type", "strategy_backtest");
+  await page.getByRole("button", { name: "Metric filters", exact: true }).click();
   await page.getByRole("button", { name: "Add condition", exact: true }).click();
   await page.getByLabel("Threshold 1", { exact: true }).fill("29");
   await page.getByRole("button", { name: "Apply filters", exact: true }).click();
@@ -208,6 +210,7 @@ test("failed filter requests retain editable conditions and retry the same query
   await page.addStyleTag({ content: styles });
   await page.addScriptTag({ content: timelineScript });
   await choose(page, "Filter by Type", "strategy_backtest");
+  await page.getByRole("button", { name: "Metric filters", exact: true }).click();
   await page.getByRole("button", { name: "Add condition", exact: true }).click();
   await page.getByLabel("Threshold 1", { exact: true }).fill("10");
   reject = true;

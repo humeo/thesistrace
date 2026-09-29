@@ -22,13 +22,16 @@ for (const [width, inset] of [[320, 16], [390, 16], [768, 16], [1280, 32], [1440
 }
 test('account popup aligns with its trigger and keeps Discord in keyboard order', async ({page}, testInfo) => {
  const account=page.getByRole('button',{name:'Account menu'}); await account.click();
+ await expect(account.locator('.account-trigger-name')).toHaveText('Researcher');
  await expect(account.locator('.account-avatar')).toBeVisible();
- await expect(account).toContainText('Researcher');
- await expect(account).toContainText('researcher@example.test');
+ await expect(account).not.toContainText('researcher@example.test');
+ await expect(page.locator('.account-menu-panel .account-avatar')).toBeVisible();
+ await expect(page.locator('.account-menu-panel')).toContainText('researcher@example.test');
  const trigger=(await account.boundingBox())!; const panel=(await page.locator('.account-menu-panel').boundingBox())!;
- expect(panel.x).toBeCloseTo(trigger.x,0); expect(panel.width).toBeGreaterThanOrEqual(trigger.width);
+ expect(Math.abs(panel.x - trigger.x)).toBeLessThanOrEqual(1); expect(panel.width).toBeGreaterThanOrEqual(trigger.width);
+ expect(panel.height).toBeLessThanOrEqual(260);
  expect(panel.y + panel.height).toBeLessThan(trigger.y);
- await page.screenshot({path:testInfo.outputPath('account-card.png'),clip:{x:0,y:panel.y-8,width:224,height:850-panel.y+8}});
+ await page.screenshot({path:testInfo.outputPath('account-card.png'),clip:{x:0,y:panel.y-8,width:240,height:850-panel.y+8}});
  await page.screenshot({path:testInfo.outputPath('account-menu-desktop.png')});
  await account.press('Tab'); await expect(page.getByRole('link',{name:'Join Discord'})).toBeFocused();
  await page.keyboard.press('Tab'); await expect(page.getByRole('button',{name:'Log out'})).toBeFocused();
@@ -46,18 +49,18 @@ test('sidebar resizes by pointer and keyboard, clamps bounds and retains width a
  await page.getByRole('button',{name:'Collapse sidebar',exact:true}).click(); await expect(handle).toBeHidden();
  await expect(page.locator('.application-sidebar')).toHaveCSS('width','56px');
  await page.getByRole('button',{name:'Account menu'}).click(); expect((await page.locator('.account-menu-panel').boundingBox())!.width).toBeGreaterThan(200);
- await expect(page.getByRole('button',{name:'Account menu'}).locator('.account-avatar')).toBeVisible();
- await expect(page.getByRole('button',{name:'Account menu'}).locator('.account-identity-copy')).toBeHidden();
+ await expect(page.getByRole('button',{name:'Account menu'}).locator('.account-trigger-avatar')).toBeVisible();
+ await expect(page.getByRole('button',{name:'Account menu'}).locator('.account-trigger-name')).toBeHidden();
  await page.screenshot({path:testInfo.outputPath('account-menu-collapsed.png')});
  await page.keyboard.press('Escape'); await page.getByRole('button',{name:'Expand sidebar',exact:true}).click(); await expect(page.locator('.application-sidebar')).toHaveCSS('width','320px');
  await handle.focus(); await handle.press('ArrowRight'); await expect(handle).toHaveAttribute('aria-valuenow','336');
  await handle.press('End'); await expect(page.locator('.application-sidebar')).toHaveCSS('width','400px');
- await handle.press('Home'); await expect(page.locator('.application-sidebar')).toHaveCSS('width','224px');
+ await handle.press('Home'); await expect(page.locator('.application-sidebar')).toHaveCSS('width','240px');
  await page.setViewportSize({width:390,height:844}); await expect(handle).toBeHidden();
  await page.getByRole('button',{name:'Open navigation'}).click(); await page.getByRole('button',{name:'Account menu'}).click();
  const trigger=(await page.getByRole('button',{name:'Account menu'}).boundingBox())!; const panel=(await page.locator('.account-menu-panel').boundingBox())!; expect(panel.width).toBeGreaterThanOrEqual(trigger.width); expect(panel.x+panel.width).toBeLessThanOrEqual(390);
- await expect(page.getByRole('button',{name:'Account menu'}).locator('.account-avatar')).toBeVisible();
- await expect(page.getByRole('button',{name:'Account menu'}).locator('.account-identity-copy')).toBeVisible();
+ await expect(page.getByRole('button',{name:'Account menu'}).locator('.account-trigger-avatar')).toBeVisible();
+ await expect(page.getByRole('button',{name:'Account menu'}).locator('.account-trigger-name')).toBeVisible();
  await page.screenshot({path:testInfo.outputPath('account-menu-mobile.png')});
 });
 
@@ -227,3 +230,87 @@ for (const width of [1200, 390, 320]) {
   await expect(page.locator('html')).toHaveAttribute('lang', 'en');
  });
 }
+
+
+test('shared sidebar keeps its presentation across workspace routes and collapse', async ({ page }) => {
+ const presentation = () => page.locator('.application-sidebar').evaluate(sidebar =>
+  ['.sidebar-brand-row', '.sidebar-new-chat', '.resource-nav', '.chat-session-region', '.account-trigger'].map(selector => {
+   const element = sidebar.querySelector(selector)!;
+   const style = getComputedStyle(element);
+   return { selector, height: element.getBoundingClientRect().height, padding: style.padding, background: style.backgroundColor, radius: style.borderRadius, font: style.fontFamily };
+  }));
+ await page.getByRole('link', { name: 'Research', exact: true }).click();
+ const reference = await presentation();
+ for (const name of ['Data', 'MCP', 'New Chat', 'Research']) {
+  await page.getByRole('link', { name, exact: true }).click();
+  await page.getByTestId('workspace-content').hover();
+  expect(await presentation()).toEqual(reference);
+  await expect(page.getByRole('link', { name: 'Quality Alpha', exact: true })).toBeVisible();
+ }
+ await page.getByRole('button', { name: 'Collapse sidebar', exact: true }).click();
+ await expect(page.locator('.application-sidebar')).toHaveCSS('width', '56px');
+ await page.getByRole('button', { name: 'Expand sidebar', exact: true }).click();
+ await expect(page.locator('.application-sidebar')).toHaveCSS('width', '240px');
+ expect(await presentation()).toEqual(reference);
+});
+
+test('expanded sidebar aligns brand, navigation, history and compact account identity', async ({ page }) => {
+ const positions = await page.locator('.application-sidebar').evaluate(sidebar => {
+  const rect = (selector: string) => sidebar.querySelector(selector)!.getBoundingClientRect();
+  const historyLink = sidebar.querySelector('.chat-session-row > a')!;
+  const navigationLinks = Array.from(sidebar.querySelectorAll('.sidebar-new-chat, .resource-nav:not(.operator-nav) a'));
+  return {
+   brand: rect('.brand-mark').x,
+   navigation: rect('.resource-nav a svg').x,
+   historyHeading: rect('.chat-session-heading h3').x,
+   historyText: historyLink.getBoundingClientRect().x + parseFloat(getComputedStyle(historyLink).paddingLeft),
+   avatar: rect('.account-trigger-avatar').x,
+   avatarWidth: rect('.account-trigger-avatar').width,
+   accountText: rect('.account-trigger-name').x,
+   accountHeight: rect('.account-trigger').height,
+   accountNameSize: getComputedStyle(sidebar.querySelector('.account-trigger-name')!).fontSize,
+   historyHeadingGap: getComputedStyle(sidebar.querySelector('.chat-session-heading')!).marginBottom,
+   navigationGaps: navigationLinks.slice(1).map((link, index) =>
+    link.getBoundingClientRect().top - navigationLinks[index]!.getBoundingClientRect().bottom),
+  };
+ });
+ expect(positions.brand).toBe(positions.navigation);
+ expect(positions.historyHeading).toBe(positions.navigation);
+ expect(positions.historyText).toBe(positions.navigation);
+ expect(positions.avatar).toBe(positions.navigation);
+ expect(positions.avatarWidth).toBe(24);
+ expect(positions.accountText - positions.avatar).toBe(32);
+ expect(positions.accountHeight).toBe(40);
+ expect(positions.accountNameSize).toBe('14px');
+ expect(positions.historyHeadingGap).toBe('4px');
+ expect(positions.navigationGaps).toEqual([4, 4, 4, 4, 4]);
+});
+
+test('history has one Recent heading with a new Chat action on its right', async ({ page }) => {
+ const heading = page.locator('.chat-session-heading h3');
+ const shortcut = page.getByRole('link', { name: 'Start a new Chat from history' });
+ await expect(heading).toHaveText('Recent');
+ await expect(page.locator('.chat-session-row')).toHaveCount(1);
+ await expect(page.locator('.chat-session-list')).toHaveCount(1);
+ await expect(page.locator('.chat-session-region h3')).toHaveCount(1);
+ const headingBox = await heading.boundingBox();
+ const shortcutBox = await shortcut.boundingBox();
+ expect(shortcutBox!.x).toBeGreaterThan(headingBox!.x + headingBox!.width);
+ await shortcut.click();
+ await expect(page.getByTestId('workspace-content')).toContainText('/chat');
+});
+
+test('sidebar avoids redundant expanded hints and retains one collapsed hint', async ({ page }) => {
+ const research = page.getByRole('link', { name: 'Research', exact: true });
+ await expect(research).not.toHaveAttribute('title');
+ await research.hover();
+ await expect(page.locator('[data-slot=tooltip-content]')).toHaveCount(0);
+ await expect(research).not.toHaveCSS('background-color', 'rgb(255, 255, 255)');
+ const newChat = page.getByRole('link', { name: 'New Chat', exact: true });
+ await expect(newChat).not.toHaveAttribute('title');
+ await expect(newChat).toHaveCSS('box-shadow', 'none');
+ await page.getByRole('button', { name: 'Collapse sidebar', exact: true }).click();
+ await research.hover();
+ await expect(page.locator('[data-slot=tooltip-content]')).toHaveText('Research');
+ await expect(page.locator('[data-slot=tooltip-content]')).toHaveCount(1);
+});

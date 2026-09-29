@@ -22,6 +22,12 @@ for (const width of [320, 390, 768, 1280, 1440]) {
     const table = page.getByRole("table", { name: "Researchers", exact: true });
     await expect(table.getByRole("row")).toHaveCount(2);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    const details = table.getByRole("button", { name: /^Details ·/ });
+    await details.click();
+    await expect(table.getByText("Effective invitation", { exact: true })).toBeVisible();
+    await expect(table.getByText("00000000-0000-4000-8000-000000000002", { exact: true })).toBeVisible();
+    await details.click();
+    await expect(table.getByRole("row")).toHaveCount(2);
     await invite.click();
     const dialog = page.getByRole("dialog");
     const email = dialog.getByLabel("Target email", { exact: true });

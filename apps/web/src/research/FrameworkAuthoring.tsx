@@ -1,7 +1,7 @@
 import { cn } from "cn";
 import type { ReactNode } from "react";
 import { Code } from "@phosphor-icons/react";
-import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "../components/ui/field";
+import { Field, FieldError, FieldGroup, FieldLabel } from "../components/ui/field";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { useTranslation } from "../i18n";
@@ -14,11 +14,13 @@ import type { ProgramInputs } from "./pythonStrategy";
 import { TakeProfitAuthoring } from "./TakeProfitAuthoring";
 import type { TakeProfitTierDraft } from "./takeProfit";
 import { RuleDisclosure } from "./RuleDisclosure";
+import { ResearchInfotip } from "./ResearchInfotip";
 
 export function FrameworkAuthoring({ factor = false, drawdown, updateDrawdown, modules, selectModule, updateProgram,
   stopLossThreshold, updateStopLoss, maximumHoldingSessions, updateMaximumHoldingSessions,
   minimumHoldingSessions, updateMinimumHoldingSessions, takeProfitTiers, updateTakeProfitTiers,
-  error, errorLine, fieldsButton, alphaEditor, portfolioSettings, universeSettings, neutralizationSettings }: {
+  error, errorLine, fieldsButton, alphaEditor, portfolioSettings, universeSettings, neutralizationSettings,
+  activeStage, onStageChange, stageSummaries }: {
   factor?: boolean;
   drawdown: DrawdownInputs; updateDrawdown: (changes: Partial<DrawdownInputs>) => void;
   modules: FrameworkModulesDraft;
@@ -33,18 +35,39 @@ export function FrameworkAuthoring({ factor = false, drawdown, updateDrawdown, m
   errorLine?: (stage: FrameworkStage) => number | null;
   fieldsButton: PythonFieldsButton;
   alphaEditor: ReactNode; portfolioSettings?: ReactNode; universeSettings?: ReactNode; neutralizationSettings?: ReactNode;
+  activeStage: FrameworkStage; onStageChange: (stage: FrameworkStage) => void;
+  stageSummaries: Record<FrameworkStage, string>;
 }) {
   const { t } = useTranslation("strategy");
-  return <div className="grid min-w-0 gap-8">
+  return <div className="grid min-w-0 gap-5">
+    {!factor && <div role="tablist" aria-label={t("workbench.moduleNavigation")} className="research-stage-tabs">
+      {frameworkStages.map((stage) => <Button key={stage} variant="ghost" type="button" role="tab"
+        id={`research-stage-tab-${stage}`} aria-controls={`research-stage-panel-${stage}`}
+        aria-selected={activeStage === stage} tabIndex={activeStage === stage ? 0 : -1}
+        onClick={() => onStageChange(stage)}
+        onKeyDown={event => {
+          if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") return;
+          event.preventDefault();
+          const offset = event.key === "ArrowRight" ? 1 : -1;
+          const next = frameworkStages[(frameworkStages.indexOf(stage) + offset + frameworkStages.length) % frameworkStages.length];
+          onStageChange(next);
+          document.getElementById(`research-stage-tab-${next}`)?.focus();
+        }}>
+        <span className="research-stage-name">{t(`workbench.stageTab.${stage}`)}</span>
+        <span className="research-stage-summary">{stageSummaries[stage]}</span>
+      </Button>)}
+    </div>}
     {frameworkStages.map((stage) => {
-      const hidden = factor && stage !== "alpha";
+      const hidden = factor ? stage !== "alpha" : activeStage !== stage;
       const python = !factor && modules[stage].kind === "python";
-      return <section key={stage} hidden={hidden} aria-label={factor && stage === "alpha" ? undefined : t(`workbench.section.${stage}`)}
-        className={cn("grid min-w-0 gap-4", !factor && "border-b border-border pb-8 last:border-b-0 last:pb-0", hidden && "hidden")}>
+      return <section key={stage} hidden={hidden} id={`research-stage-panel-${stage}`}
+        role={factor ? undefined : "tabpanel"} aria-labelledby={factor ? undefined : `research-stage-tab-${stage}`}
+        aria-label={factor && stage === "alpha" ? undefined : t(`workbench.stageHeading.${stage}`)}
+        className={cn("research-stage-panel grid min-w-0 gap-5", hidden && "hidden")}>
         {!factor && <header className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <h2 className="m-0 text-base font-semibold">{t(`workbench.section.${stage}`)}</h2>
-            <p className="mb-0 mt-1 text-sm text-muted-foreground">{t(`workbench.sectionHelp.${stage}`)}</p>
+          <div className="flex min-w-0 flex-1 items-center gap-1">
+            <h2 className="m-0 text-xl font-semibold">{t(`workbench.stageHeading.${stage}`)}</h2>
+            <ResearchInfotip label={t(`workbench.stageHeading.${stage}`)}>{t(`workbench.sectionHelp.${stage}`)}</ResearchInfotip>
           </div>
           <Button variant="ghost" size="sm" type="button"
             aria-label={t(python ? "workbench.backToRule" : "workbench.customizeRule", { stage: t(`stages.${stage}`) })}
@@ -62,14 +85,14 @@ export function FrameworkAuthoring({ factor = false, drawdown, updateDrawdown, m
           {stage === "alpha" ? <div className="grid min-w-0 gap-4">{alphaEditor}{!factor && neutralizationSettings}</div>
             : stage === "portfolio_construction" ? <FieldGroup className="gap-4">
               {portfolioSettings}
-              <RuleDisclosure title={t("workbench.minimumHolding")} description={t("workbench.minimumHoldingHelp")}
+              <RuleDisclosure title={t("workbench.minimumHolding")}
                 configured={minimumHoldingSessions !== ""} invalid={Boolean(error("minimumHoldingSessions"))}>
                 <PolicyInput id="minimum-holding-sessions" label={t("authoring.minimumHolding")} help={t("authoring.minimumHoldingHelp")}
                   value={minimumHoldingSessions} onChange={updateMinimumHoldingSessions} error={error("minimumHoldingSessions")} />
               </RuleDisclosure>
             </FieldGroup>
             : stage === "risk_management" ? <div className="grid gap-3">
-              <RuleDisclosure title={t("workbench.basicRisk")} description={t("workbench.basicRiskHelp")}
+              <RuleDisclosure title={t("workbench.basicRisk")}
                 configured={stopLossThreshold !== "" || maximumHoldingSessions !== ""}
                 invalid={Boolean(error("stopLossThreshold") || error("maximumHoldingSessions"))}>
                 <FieldGroup className="grid gap-4 @min-[560px]:grid-cols-2">
@@ -79,11 +102,11 @@ export function FrameworkAuthoring({ factor = false, drawdown, updateDrawdown, m
                     value={maximumHoldingSessions} onChange={updateMaximumHoldingSessions} error={error("maximumHoldingSessions")} />
                 </FieldGroup>
               </RuleDisclosure>
-              <RuleDisclosure title={t("workbench.profitRisk")} description={t("workbench.profitRiskHelp")} configured={takeProfitTiers.length > 0}
+              <RuleDisclosure title={t("workbench.profitRisk")} configured={takeProfitTiers.length > 0}
                 invalid={takeProfitTiers.some((_, index) => Boolean(error(`takeProfitTiers.${index}.profitThreshold`) || error(`takeProfitTiers.${index}.cumulativeReduction`)))}>
                 <TakeProfitAuthoring tiers={takeProfitTiers} onChange={updateTakeProfitTiers} error={error} />
               </RuleDisclosure>
-              <RuleDisclosure title={t("workbench.drawdownRisk")} description={t("workbench.drawdownRiskHelp")}
+              <RuleDisclosure title={t("workbench.drawdownRisk")}
                 configured={drawdownFields.some(field => drawdown[field] !== "")} invalid={drawdownFields.some(field => Boolean(error(field)))}>
                 <PortfolioDrawdownAuthoring values={drawdown} onChange={updateDrawdown} error={error} />
               </RuleDisclosure>
@@ -100,11 +123,10 @@ function PolicyInput({ id, label, help, value, onChange, error, inputMode = "num
 }) {
   const { t } = useTranslation("strategy");
   return <Field data-invalid={Boolean(error)}>
-    <FieldLabel htmlFor={id}>{label}</FieldLabel>
+    <div className="flex items-center gap-1"><FieldLabel htmlFor={id}>{label}</FieldLabel><ResearchInfotip label={label}>{help}</ResearchInfotip></div>
     <Input id={id} type="text" inputMode={inputMode} placeholder={t("authoring.off")}
       maxLength={inputMode === "numeric" ? 16 : 128} value={value} onChange={event => onChange(event.target.value)}
-      aria-invalid={Boolean(error)} aria-describedby={`${id}-help${error ? ` ${id}-error` : ""}`} />
-    <FieldDescription id={`${id}-help`}>{help}</FieldDescription>
+      aria-invalid={Boolean(error)} aria-describedby={error ? `${id}-error` : undefined} />
     <FieldError id={`${id}-error`}>{error}</FieldError>
   </Field>;
 }

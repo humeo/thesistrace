@@ -15,8 +15,7 @@ async function mountDirect(page: Page) {
   await page.goto("https://exposure.test/");
   await page.addStyleTag({ content: styles });
   await page.addScriptTag({ content: script });
-  await page.getByRole("combobox", { name: "Strategy authoring", exact: true }).click();
-  await page.getByRole("option", { name: "Complete Python strategy", exact: true }).click();
+  await page.getByRole("radio", { name: "Complete Python strategy", exact: true }).click();
 }
 
 test("Direct source survives checking and submission failures, with one pending request and safe retry", async ({ page }) => {
@@ -69,11 +68,9 @@ test("Direct source survives checking and submission failures, with one pending 
   await expect(editor).toBeFocused();
   await expect.poll(() => editor.evaluate(() => window.getSelection()?.toString())).toBe("# revised");
   await page.getByRole("button", { name: "English", exact: true }).dispatchEvent("click");
-  await page.getByRole("combobox", { name: "Strategy authoring", exact: true }).click();
-  await page.getByRole("option", { name: "Configure trading rules", exact: true }).click();
+  await page.getByRole("radio", { name: "Configure trading rules", exact: true }).click();
   await expect(editor).not.toBeVisible();
-  await page.getByRole("combobox", { name: "Strategy authoring", exact: true }).click();
-  await page.getByRole("option", { name: "Complete Python strategy", exact: true }).click();
+  await page.getByRole("radio", { name: "Complete Python strategy", exact: true }).click();
   await editor.focus();
   await expect.poll(() => editor.evaluate(() => window.getSelection()?.toString())).toBe("# revised");
   await page.keyboard.insertText("# fixed");

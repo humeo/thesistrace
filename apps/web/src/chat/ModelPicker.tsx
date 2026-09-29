@@ -35,7 +35,7 @@ export function ModelPicker({ catalog, onModelChange, onReasoningChange, selecti
       aria-label={selection === null ? t("nextTurnModel") : t("selectedModel", { model: selection.model.display_name, reasoning: effortLabel(selection.reasoningEffort) })}
       onKeyDown={event => { if (!open && event.key === "ArrowDown") { event.preventDefault(); setOpen(true); } }}>
       <strong className="min-w-0 truncate text-sm">{selection?.model.display_name ?? t("chooseModel")}</strong>
-      {selection ? <span className="text-xs text-muted-foreground">{effortLabel(selection.reasoningEffort)}</span> : null}<CaretDown aria-hidden="true" />
+      {selection ? <span className="text-xs">{effortLabel(selection.reasoningEffort)}</span> : null}<CaretDown aria-hidden="true" />
     </PopoverTrigger>
     <PopoverContent ref={popupRef} side="top" align="end" className="w-[min(380px,calc(100vw-32px))] gap-4 p-4" initialFocus={() => firstInColumn("model")} finalFocus={triggerRef} onKeyDown={moveColumn}>
       <PopoverTitle>{t("modelDialog")}</PopoverTitle>

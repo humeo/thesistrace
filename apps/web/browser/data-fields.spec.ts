@@ -86,7 +86,7 @@ for (const width of [1440, 1280, 768, 390, 320]) {
     await page.evaluate(() => document.fonts.ready);
     await expect(page.getByText("Limited coverage", { exact: true })).toBeVisible();
     expect(requests).toEqual(["/api/data"]);
-    await expect(page.getByRole("region", { name: "Data coverage", exact: true }).locator("tbody tr")).toHaveCount(4);
+    await expect(page.getByRole("region", { name: "Data coverage", exact: true }).locator(":scope > div")).toHaveCount(4);
     await expect(fieldTable(page).locator("tbody tr")).toHaveCount(25);
     await page.getByRole("button", { name: "Next", exact: true }).click();
     await expect(page.getByRole("status").filter({ hasText: "Showing" })).toHaveText("Showing 26–50 of 226");

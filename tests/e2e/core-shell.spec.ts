@@ -20,7 +20,7 @@ function lastObservation(page: Page): Locator {
 async function waitForStrategySummary(page: Page, timeout = 90_000): Promise<void> {
   const unavailable = page.getByRole("main").getByRole("alert").filter({ hasText: "ResearchRun unavailable" });
   const outcome = await Promise.race([
-    page.getByRole("heading", { name: "Strategy Summary" }).waitFor({ state: "visible", timeout }).then(() => "ready"),
+    page.getByRole("group", { name: "Strategy Summary", exact: true }).waitFor({ state: "visible", timeout }).then(() => "ready"),
     unavailable.waitFor({ state: "visible", timeout }).then(() => "unavailable"),
   ]);
   if (outcome === "unavailable") throw new Error(`ResearchRun detail failed: ${await unavailable.innerText()}`);
@@ -81,6 +81,7 @@ test("Framework modules author, execute, reuse frozen programs and refresh Daily
   await page.getByLabel("Research name").fill("Daily Framework modules");
   await page.getByLabel("Research start date").fill("2026-08-04");
   await page.getByLabel("Research end date").fill("2026-08-05");
+  await page.locator("#research-stage-tab-universe_selection").click();
   await page.getByRole("combobox", { name: "Universe", exact: true }).click();
   await page.getByRole("option", { name: "Top 300", exact: true }).click();
   const programs = [
@@ -116,11 +117,12 @@ class Risk(RiskManagement):
 ` },
   ];
   for (const program of programs) {
+    await page.locator(`#research-stage-tab-${program.stage}`).click();
     await page.getByRole("button", { name: `Customize ${program.label} with Python`, exact: true }).click();
-    const editor = page.getByRole("region", { name: program.section, exact: true });
+    const editor = page.locator(`#research-stage-panel-${program.stage}`);
     await editor.getByRole("textbox", { name: "Python source", exact: true }).fill(program.source);
   }
-  const riskSource = page.getByRole("region", { name: "When should positions be reduced or sold?", exact: true }).getByRole("textbox", { name: "Python source", exact: true });
+  const riskSource = page.locator("#research-stage-panel-risk_management").getByRole("textbox", { name: "Python source", exact: true });
   await riskSource.fill("class Broken(:");
   await page.getByRole("button", { name: "Check configuration" }).click();
   await expect(page.locator("#risk_management-python-source-error")).toContainText("line 1", { timeout: 60_000 });
@@ -146,7 +148,8 @@ class Risk(RiskManagement):
     testInfo.annotations.push({ type: "dependency-recovery", description: "Recovered a 503 Run read using the visible Retry action." });
     await page.getByRole("button", { name: "Retry", exact: true }).click();
   }
-  await expect(page.getByRole("heading", { name: "Strategy Summary" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("group", { name: "Strategy Summary", exact: true })).toBeVisible({ timeout: 30_000 });
+  await page.getByRole("button", { name: "Framework state", exact: true }).click();
   await expect(page.locator(".framework-state")).toContainText("active signals");
   await page.getByRole("tab", { name: "Configuration", exact: true }).click();
   const facts = page.getByRole("group", { name: "Research execution conditions" });
@@ -164,11 +167,12 @@ class Risk(RiskManagement):
   expect(evidence.status()).toBe(200);
   expect((await evidence.json()).rows).toHaveLength(2);
   await page.screenshot({ path: testInfo.outputPath("framework-result.png"), fullPage: true });
-  await page.getByRole("tab", { name: "Overview", exact: true }).click();
+  await page.getByRole("button", { name: "Use as draft", exact: true }).click();
   await page.getByRole("button", { name: "Create draft", exact: true }).click();
   await expect(page).toHaveURL(/\/research$/);
   for (const program of programs) {
-    await expect(page.getByRole("region", { name: program.section, exact: true })
+    await page.locator(`#research-stage-tab-${program.stage}`).click();
+    await expect(page.locator(`#research-stage-panel-${program.stage}`)
       .getByRole("textbox", { name: "Python source", exact: true })).toHaveText(program.source, { useInnerText: true });
   }
   await riskSource.fill("a later editable risk module");
@@ -220,10 +224,9 @@ test("Direct Python authoring executes, reuses frozen source and explicitly adva
   await page.getByLabel("Research name").fill("Daily Python");
   await page.getByLabel("Research start date").fill("2026-08-04");
   await page.getByLabel("Research end date").fill("2026-08-05");
+  await page.getByRole("radio", { name: "Complete Python strategy", exact: true }).check();
   await page.getByRole("combobox", { name: "Universe", exact: true }).click();
   await page.getByRole("option", { name: "Top 300", exact: true }).click();
-  await page.getByRole("combobox", { name: "Strategy authoring", exact: true }).click();
-  await page.getByRole("option", { name: "Complete Python strategy", exact: true }).click();
   const source = `from quantgrove import Strategy
 class BuyAndHold(Strategy):
     def on_close(self, data, account):
@@ -275,7 +278,7 @@ class BuyAndHold(Strategy):
   await expect(page.getByRole("cell", { name: "price.close.adjusted", exact: true })).toHaveCount(2);
   await page.screenshot({ path: testInfo.outputPath("python-sdk-data-reads.png"), fullPage: true });
 
-  await page.getByRole("tab", { name: "Overview", exact: true }).click();
+  await page.getByRole("button", { name: "Use as draft", exact: true }).click();
   await page.getByRole("button", { name: "Create draft", exact: true }).click();
   await expect(page).toHaveURL(/\/research$/);
   await expect(page.getByRole("textbox", { name: "Python source", exact: true })).toHaveText(source, { useInnerText: true });
@@ -376,6 +379,7 @@ test("Combined risk rules survives Run reuse and DailyTrack refresh", { tag: "@i
   expect((await (await page.request.get(`/api/research-runs/${runId}`)).json()).result.terminal_strategy_state.pending_target).not.toBeNull();
   await page.screenshot({ path: testInfo.outputPath("combined-risk-reasons.png"), fullPage: true });
   await page.getByRole("tab", { name: "Configuration", exact: true }).click();
+  await page.getByRole("button", { name: "Use as draft", exact: true }).click();
   await page.getByRole("button", { name: "Create draft", exact: true }).click();
   await expect(page.getByLabel("Drawdown threshold (%)", { exact: true })).toHaveValue("1");
   await expect(page.getByLabel("Maximum stock exposure (%)", { exact: true })).toHaveValue("30");
@@ -1155,7 +1159,7 @@ test("Batch children keep ordinary Research organization, reuse, tracking, and d
   await expect(page).toHaveURL(new RegExp(`/research-runs/${firstRunId}$`));
   await expect(researchRunHeader(page)).toContainText("succeeded");
   await page.getByRole("tab", { name: "Configuration", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Create draft" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Use as draft" })).toBeVisible();
   await expect(page.getByRole("button", { name: /Batch/, exact: true })).toHaveCount(0);
 
   const folderResponse = await page.request.post("/api/research-folders", {
@@ -1177,6 +1181,7 @@ test("Batch children keep ordinary Research organization, reuse, tracking, and d
     items: Array<{ research_run_id: string }>;
   }).items.map((item) => item.research_run_id)).toEqual([firstRunId, siblingRunId]);
 
+  await page.getByRole("button", { name: "Use as draft", exact: true }).click();
   await page.getByRole("combobox", { name: "Target Folder" }).click();
   await page.getByRole("option", { name: "Browser Batch Review" }).click();
   await page.getByRole("button", { name: "Create draft" }).click();
@@ -1324,7 +1329,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
       pendingAdmission: null,
     });
     await page.reload();
-    await expect(page.getByRole("heading", { name: "Strategy Summary" })).toBeVisible();
+    await expect(page.getByRole("group", { name: "Strategy Summary", exact: true })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Factor Summary" })).toHaveCount(0);
 
     const acceptedHistory = await page.request.get("/api/research-runs");
@@ -1370,7 +1375,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await expect(factorConditions.getByText("Selection", { exact: true })).toHaveCount(0);
     await page.getByRole("tab", { name: "Overview" }).click();
     await expect(page.getByRole("heading", { name: "Factor Summary" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Strategy Summary" })).toHaveCount(0);
+    await expect(page.getByRole("group", { name: "Strategy Summary", exact: true })).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Daily Observations" })).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Final Portfolio" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Start Tracking" })).toHaveCount(0);
@@ -1534,11 +1539,12 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await page.getByLabel("Research name").fill("Target Local Name");
     await page.goto(`/research-runs/${defaultRunId}`);
     await page.getByRole("tab", { name: "Configuration", exact: true }).click();
-    await expect(page.getByRole("button", { name: "Create draft" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Use as draft" })).toBeVisible();
     const sourceBeforeReuseResponse = await page.request.get(`/api/research-runs/${defaultRunId}`);
     const sourceBeforeReuse = await sourceBeforeReuseResponse.json();
     const historyBeforeReuse = await page.request.get("/api/research-runs");
     const historyCountBeforeReuse = ((await historyBeforeReuse.json()).items as unknown[]).length;
+    await page.getByRole("button", { name: "Use as draft", exact: true }).click();
     await page.getByRole("combobox", { name: "Target Folder" }).click();
     await page.getByRole("option", { name: "Signals" }).click();
     await page.getByRole("button", { name: "Create draft" }).click();
@@ -1584,7 +1590,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     });
     await page.getByRole("button", { name: "Start Tracking" }).click();
     const heldStartTrackingRoute = await heldStartTracking;
-    await expect(page.getByRole("button", { name: "Delete Research" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "More actions" })).toBeDisabled();
     await heldStartTrackingRoute.continue();
     await page.unroute(startTrackingPath);
     await expect(page).toHaveURL(/\/daily-tracks\/track_[a-f0-9]+$/);
@@ -1623,7 +1629,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     expect(injectedDetailFailures).toBe(1);
     await page.unroute(reusedRunPath);
     await page.getByRole("button", { name: "Retry", exact: true }).click();
-    await expect(page.getByRole("button", { name: "Delete Research", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "More actions", exact: true })).toBeVisible();
     const deleteDialog = await openResearchDeleteDialog(page);
     await deleteDialog.getByRole("button", { name: "Keep Research" }).click();
     await expect(page).toHaveURL(new RegExp(`/research-runs/${reusedRunId}$`));
@@ -1707,7 +1713,8 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
 });
 
 async function openResearchDeleteDialog(page: Page): Promise<Locator> {
-  await page.getByRole("button", { name: "Delete Research", exact: true }).first().click();
+  await page.getByRole("button", { name: "More actions", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Delete Research", exact: true }).click();
   const dialog = page.getByRole("alertdialog", { name: "Delete Research?" });
   await expect(dialog).toBeVisible();
   return dialog;

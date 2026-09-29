@@ -1436,7 +1436,7 @@ test("the same Chat entry runs and explains a real Strategy Backtest", async ({
 
   await result.locator("a.chat-markdown-run-link").click();
   await expect(page).toHaveURL(new RegExp(`/research-runs/${runId}$`));
-  await expect(page.getByRole("heading", { name: "Strategy Summary" })).toBeVisible();
+  await expect(page.getByRole("group", { name: "Strategy Summary", exact: true })).toBeVisible();
 });
 
 test("Chat fails closed on a real Auth exchange timeout and recovers", async ({ page }) => {

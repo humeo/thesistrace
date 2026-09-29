@@ -493,6 +493,7 @@ describe("browser Research Draft", () => {
   it("renders the DSL as the only Alpha surface without server-edit controls", () => {
     const markup = renderToStaticMarkup(<ResearchDraftWorkspace catalog={catalog} data={data} folder={folder} researcherId={researcherId} storage={new MemoryStorage()} />);
     expect(markup).toContain("Alpha formula editor");
+    expect(markup).toContain('class="h-[180px] min-w-0 overflow-hidden bg-card"');
     expect(markup).toContain('id="alpha-formula-title"');
     expect(markup).toContain('>Alpha formula</h2>');
     expect(markup).toContain('aria-label="Research name"');
@@ -501,7 +502,7 @@ describe("browser Research Draft", () => {
 
     expect(markup).toContain("Run evaluation");
     expect(markup).toContain('aria-label="Run settings"');
-    expect(markup).toContain('class="sr-only">Research type</legend>');
+    expect(markup).toContain('>Research type</legend>');
     expect(markup).not.toContain("Research period");
     expect(markup).toContain('role="radiogroup"');
     expect(markup).toContain('aria-checked="true"');

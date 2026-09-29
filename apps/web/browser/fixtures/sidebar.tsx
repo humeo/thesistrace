@@ -1,6 +1,7 @@
 import { createRoot } from 'react-dom/client';
 import { useState } from 'react';
 import '../../src/styles.css';
+import '../../src/research/research-perplexity.css';
 import { AppShell } from '../../src/shell/AppShell';
 import { Page, PageContent, PageHeader } from '../../src/components/layout/Page';
 import type { SessionHistoryController } from '../../src/chat/useSessionHistory';

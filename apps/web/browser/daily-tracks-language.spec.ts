@@ -86,8 +86,11 @@ test("switching retains holdings filters, open stop decision and failure state o
 
 test("tracking chart retains its zoom and data while switching display language", async ({ page }) => {
   const requests = await open(page);
+  await expect(page.getByRole("region", { name: "Daily Tracks list" }).getByRole("link", { name: "track_ui" })).toHaveAttribute("aria-current", "page");
   const chart = page.getByRole("figure", { name: /Return since tracking|跟踪开始以来收益/ });
-  const plot = chart.locator("canvas").first();
+  const canvases = chart.locator("canvas");
+  // The left price axis precedes the plot in the chart library's DOM.
+  const plot = canvases.nth(await canvases.evaluateAll(elements => elements.reduce((largest, element, index) => element.clientWidth > elements[largest].clientWidth ? index : largest, 0)));
   await plot.scrollIntoViewIfNeeded();
   const bounds = (await plot.boundingBox())!;
   await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + 100);
@@ -147,7 +150,7 @@ test("stop confirmation guards pending work and waits for the server terminal st
   await expect(dialog).toBeVisible();
   release();
   await expect(dialog).toHaveCount(0);
-  await expect(page.getByRole("heading", { level: 1 })).toContainText("Stopping");
+  await expect(page.getByRole("heading", { level: 2, name: /Stopping/ })).toContainText("Stopping");
   await expect(page.getByRole("button", { name: "Reload status", exact: true })).toBeFocused();
   await expect(page.getByText("DailyTrack is stopping. Waiting for the current execution to finish stopping.")).toBeVisible();
   await expect(page.getByRole("group", { name: "Tracking account", exact: true })).toContainText("10.00%");
@@ -156,7 +159,7 @@ test("stop confirmation guards pending work and waits for the server terminal st
   await expect(page.getByRole("tabpanel", { name: "Rebalance", exact: true })).not.toContainText("Tracking stopped");
   value.status = "stopped";
   value.progress.phase = "stopped";
-  await expect(page.getByRole("heading", { level: 1 })).toContainText("Stopped");
+  await expect(page.getByRole("heading", { level: 2, name: /Stopped/ })).toContainText("Stopped");
   await expect(page.getByRole("button", { name: "Refresh to latest data" })).toHaveCount(0);
 });
 
@@ -194,14 +197,14 @@ test("track list retains published rows after failure and distinguishes an empty
   await page.addStyleTag({ content: styles });
   await page.addScriptTag({ content: script });
   const list = page.getByRole("region", { name: "Daily Tracks list", exact: true });
-  await expect(list.locator("tbody tr")).toHaveCount(4);
+  await expect(list.getByRole("link")).toHaveCount(4);
   await expect(list).toContainText("2026-08-20");
   expect((await page.getByRole("link", { name: "track_0", exact: true }).boundingBox())?.height).toBeGreaterThanOrEqual(44);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   failed = true;
   await page.getByRole("button", { name: "Reload status", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("Showing the last loaded list");
-  await expect(list.locator("tbody tr")).toHaveCount(4);
+  await expect(list.getByRole("link")).toHaveCount(4);
   failed = false; empty = true;
   await page.getByRole("button", { name: "Reload status", exact: true }).click();
   await expect(page.getByRole("alert")).toHaveCount(0);

@@ -169,7 +169,8 @@ test("Research deletion uses an in-page decision instead of a browser dialog", a
   });
 
   await page.goto(`/research-runs/${runId}`);
-  await page.getByRole("button", { name: "Delete Research", exact: true }).click();
+  await page.getByRole("button", { name: "More actions", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Delete Research", exact: true }).click();
 
   const decision = page.getByRole("alertdialog", { name: "Delete Research?" });
   await expect(decision).toBeVisible();
@@ -181,25 +182,28 @@ test("Research deletion uses an in-page decision instead of a browser dialog", a
 
   await page.keyboard.press("Escape");
   await expect(decision).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Delete Research", exact: true })).toBeFocused();
+  await expect(page.getByRole("button", { name: "More actions", exact: true })).toBeFocused();
   expect(deleteRequestCount).toBe(0);
 
-  await page.getByRole("button", { name: "Delete Research", exact: true }).click();
+  await page.getByRole("button", { name: "More actions", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Delete Research", exact: true }).click();
   await decision.getByRole("button", { name: "Keep Research" }).click();
   await expect(decision).toHaveCount(0);
   await expect(page).toHaveURL(new RegExp(`/research-runs/${runId}$`));
   expect(deleteRequestCount).toBe(0);
 
-  await page.getByRole("button", { name: "Delete Research", exact: true }).click();
+  await page.getByRole("button", { name: "More actions", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Delete Research", exact: true }).click();
   await decision.getByRole("button", { name: "Delete Research", exact: true }).click();
   await expect(page).toHaveURL(/\/research-runs$/);
   expect(deleteRequestCount).toBe(1);
 });
 
 test("Notes keeps multiline research context visible", async ({ page }) => {
-  await page.setViewportSize({ width: 956, height: 958 });
+  await page.setViewportSize({ width: 1440, height: 958 });
   await page.goto("/research");
 
+  await page.getByRole("button", { name: "Research notes (optional)", exact: true }).click();
   const notes = page.getByLabel("Notes", { exact: true });
   await expect(notes).toBeVisible();
   await notes.fill(
@@ -211,21 +215,16 @@ test("Notes keeps multiline research context visible", async ({ page }) => {
     scrollHeight: element.scrollHeight,
   }));
 
-  expect(layout.height).toBeGreaterThanOrEqual(72);
+  expect(layout.height).toBeGreaterThanOrEqual(64);
   expect(layout.scrollHeight).toBeLessThanOrEqual(layout.clientHeight);
 });
 
-test("Alpha formula editor keeps line numbers on the Classic workbench surface", async ({ page }) => {
+test("Alpha formula editor keeps line numbers on the research workbench", async ({ page }) => {
   await page.goto("/research");
 
-  await expect(page.getByRole("textbox", { name: "Alpha formula", exact: true }).locator("..").locator(".cm-gutters")).toHaveCSS(
-    "background-color",
-    "rgb(241, 243, 236)",
-  );
-  await expect(page.getByRole("textbox", { name: "Alpha formula", exact: true }).locator("..").locator(".cm-activeLineGutter")).toHaveCSS(
-    "background-color",
-    "rgb(241, 243, 236)",
-  );
+  const editor = page.getByRole("textbox", { name: "Alpha formula", exact: true });
+  await expect(editor.locator("..").locator(".cm-gutters")).toContainText("1");
+  await expect(editor.locator("..").locator(".cm-activeLineGutter")).toBeVisible();
 });
 
 test("date inputs retain manually entered values when focus leaves the field", async ({ page }) => {
@@ -249,6 +248,7 @@ test("date inputs retain manually entered values when focus leaves the field", a
     await page.keyboard.press("Tab");
   }
 
+  await page.getByRole("button", { name: "Research notes (optional)", exact: true }).click();
   await page.getByLabel("Notes", { exact: true }).fill("Trigger a controlled React rerender.");
   await expect(page.getByLabel("Research start date")).toHaveValue("2025-08-13");
   await expect(page.getByLabel("Research end date")).toHaveValue("2026-08-13");

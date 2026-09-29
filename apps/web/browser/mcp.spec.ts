@@ -79,3 +79,20 @@ test("long authorization target stays readable and successful revoke focuses a s
   await dialog.getByRole("button", { name: "Revoke access", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Authorized apps" })).toBeFocused();
 });
+
+test("MCP discovery state has no black dashed frame", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.route("http://mcp.test/**", route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    if (path.endsWith("/connections")) return route.fulfill({ json: { server_url: "https://quantgrove.example.test/mcp", apps: [] } });
+    if (path.endsWith("/connection")) return;
+    return route.fulfill({ status: 404 });
+  });
+  await page.goto("http://mcp.test/");
+  await page.addStyleTag({ content: fixture.styles });
+  await page.addScriptTag({ content: fixture.script });
+  const discovery = page.locator('[data-slot="empty"]').filter({ hasText: "Discovering tools" });
+  await expect(discovery).toBeVisible();
+  await expect(discovery).toHaveCSS("border-top-style", "none");
+});

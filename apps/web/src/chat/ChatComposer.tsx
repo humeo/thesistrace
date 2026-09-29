@@ -96,10 +96,10 @@ export function ChatComposer({
           onKeyDown={keyDown}
           placeholder={t(controller.phase === "active" ? "activePlaceholder" : "newPlaceholder")}
           ref={controller.textareaRef}
-          rows={2}
+          rows={1}
           value={controller.draft}
         />
-        <div className="chat-composer-toolbar flex min-h-12 items-center justify-between gap-3 px-3 pb-2">
+        <div className="chat-composer-toolbar flex min-h-12 items-center justify-between gap-3 px-3 pb-2 min-[769px]:min-h-10">
           {controller.draftBytes < MAX_CHAT_MESSAGE_BYTES * .8 ? null : (
             <span className={cn("chat-byte-count whitespace-nowrap text-xs", tooLarge ? "text-destructive" : "text-muted-foreground")}>
               {t("byteCount", { current: formatNumber(controller.draftBytes), limit: formatNumber(MAX_CHAT_MESSAGE_BYTES) })}

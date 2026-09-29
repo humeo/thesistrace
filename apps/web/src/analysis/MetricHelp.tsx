@@ -1,5 +1,6 @@
-import { Question, X } from "@phosphor-icons/react";
+import { Info, Question, X } from "@phosphor-icons/react";
 import { useState } from "react";
+import { cn } from "cn";
 import { Button } from "../components/ui/button";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "../components/ui/popover";
 import { useTranslation } from "../i18n";
@@ -12,14 +13,14 @@ export type MetricHelpContent = Readonly<{
   note?: string;
 }>;
 
-export function MetricHelp({ label, content }: { label: string; content: MetricHelpContent }) {
+export function MetricHelp({ label, content, hover = false }: { label: string; content: MetricHelpContent; hover?: boolean }) {
   const { t } = useTranslation("analysis");
   const [open, setOpen] = useState(false);
   return <Popover open={open} onOpenChange={setOpen}>
-    <PopoverTrigger render={<Button variant="ghost" size="icon-xs" className="size-11 sm:size-7" aria-label={t("help.about", { label })} />}>
-      <Question aria-hidden="true" />
+    <PopoverTrigger openOnHover={hover} delay={300} closeDelay={100} render={<Button variant="ghost" size="icon-xs" className="size-11 sm:size-7" aria-label={t("help.about", { label })} />}>
+      {hover ? <Info aria-hidden="true" className="size-4" /> : <Question aria-hidden="true" />}
     </PopoverTrigger>
-    <PopoverContent className="max-h-[calc(100dvh-24px)] w-[min(360px,calc(100vw-24px))] overflow-y-auto p-4" align="end">
+    <PopoverContent className={cn("max-h-[calc(100dvh-24px)] w-[min(360px,calc(100vw-24px))] overflow-y-auto p-4", hover && "result-surface")} align="end">
       <div className="flex items-start justify-between gap-3">
         <PopoverTitle className="text-sm font-semibold">{label}</PopoverTitle>
         <Button variant="ghost" size="icon-xs" className="size-11 sm:size-7" aria-label={t("help.close")} onClick={() => setOpen(false)}><X aria-hidden="true" /></Button>

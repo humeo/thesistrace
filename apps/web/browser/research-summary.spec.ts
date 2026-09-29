@@ -51,15 +51,19 @@ test("strategy summary prioritizes metrics and keeps execution conventions expan
   const summary = page.getByRole("region", { name: "Strategy Summary", exact: true });
   const conventions = summary.getByRole("button", { name: "Execution conventions", exact: true });
   const explanation = summary.getByText(/Decisions execute at the next Open/);
-  for (const width of [1050, 390]) {
+  for (const width of [1050, 1440]) {
     await page.setViewportSize({ width, height: 964 });
-    await expect(summary.getByText("Account through 2026-08-04")).toBeVisible();
-    await expect(summary.getByText("Last Close target")).toBeVisible();
-    await expect(summary.getByText("Actual Open allocation")).toBeVisible();
+    await expect(summary.getByRole("region", { name: "Ending state", exact: true }).getByText("2026-08-04", { exact: true })).toBeVisible();
+    await expect(summary.getByText("Target stock exposure", { exact: true })).toBeVisible();
+    await expect(summary.getByText("Actual stock exposure", { exact: true })).toBeVisible();
+    const selection = summary.getByRole("button", { name: "Selection check", exact: true });
+    await expect(summary.getByText("No candidates excluded by weighting.")).not.toBeVisible();
+    await selection.click();
     await expect(summary.getByText("No candidates excluded by weighting.")).toBeVisible();
+    await selection.click();
     await expect(explanation).not.toBeVisible();
     const metricsBox = await summary.getByRole("group", { name: "Strategy Summary", exact: true }).boundingBox();
-    const contextBox = await summary.getByRole("heading", { name: "Exposure", exact: true }).boundingBox();
+    const contextBox = await summary.getByRole("heading", { name: "Ending state", exact: true }).boundingBox();
     expect(metricsBox!.y + metricsBox!.height).toBeLessThanOrEqual(contextBox!.y);
     await conventions.focus();
     await conventions.press("Enter");
@@ -118,7 +122,7 @@ test("result tabs hide inactive panels and retain applied holdings filters", asy
 
 test.describe("Frozen Framework touch controls", () => {
   test.use({ hasTouch: true });
-  test("frozen module source disclosures work at desktop widths", async ({ page }) => {
+  test("frozen module source disclosures work on desktop touch layouts", async ({ page }) => {
     const program = { source: "from quantgrove import PortfolioConstruction\nclass Example(PortfolioConstruction):\n    def on_close(self, data, account): return None" };
     const input = { research_kind: "strategy_backtest", strategy_mode: "framework", initial_cash_cny: "100000", costs: defaultSimulationCosts(),
       hypothesis: null, start_date: "2026-08-03", end_date: "2026-08-04", universe: "top300", modules: {
@@ -197,15 +201,15 @@ test("result header keeps its title readable beside an expanded sidebar", async 
   await page.goto("https://research-evidence.test/");
   await page.addStyleTag({ content: styles });
   await page.addScriptTag({ content: script });
-  for (const [width, sidebar] of [[800, 224], [1024, 400], [1440, 224]]) {
+  for (const [width, sidebar] of [[1280, 224], [1440, 400], [1584, 224]]) {
     await page.setViewportSize({ width, height: 964 });
     // The shell owns this width; the result must fit the remaining content area.
     await page.locator("#root").evaluate((element, offset) => { element.style.marginLeft = `${offset}px`; }, sidebar);
     const title = page.getByRole("heading", { name: run.name, exact: true });
     const titleBounds = await title.boundingBox();
     expect(titleBounds!.width).toBeGreaterThanOrEqual(200);
-    for (const name of ["Back to Research Runs", "View batch", "Start Tracking", "Delete Research"]) {
-      const action = page.getByRole(name === "Start Tracking" || name === "Delete Research" ? "button" : "link", { name, exact: true });
+    for (const name of ["Back to Research Runs", "View batch", "Start Tracking", "More actions"]) {
+      const action = page.getByRole(name === "Start Tracking" || name === "More actions" ? "button" : "link", { name, exact: true });
       await expect(action).toBeVisible();
       const bounds = await action.boundingBox();
       expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);

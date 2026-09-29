@@ -144,8 +144,8 @@ export function StaticChatMain({
             </div>
           )}
           <div className={cn(chatLayout.surface, "opacity-60")}>
-            <Textarea className={chatLayout.input} aria-label={t("message")} disabled placeholder={t("newPlaceholder")} rows={2} />
-            <div className="flex min-h-12 items-center justify-between gap-3 px-3 pb-2">
+            <Textarea className={chatLayout.input} aria-label={t("message")} disabled placeholder={t("newPlaceholder")} rows={1} />
+            <div className="flex min-h-12 items-center justify-between gap-3 px-3 pb-2 min-[769px]:min-h-10">
               <div className="ml-auto flex min-w-0 items-center gap-2">
                 {modelControls}
                 <Button size="icon" aria-label={t("send")} disabled type="button">

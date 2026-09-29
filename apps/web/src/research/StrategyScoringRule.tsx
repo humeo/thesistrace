@@ -2,10 +2,11 @@ import { cn } from "cn";
 import { useState, type ReactNode } from "react";
 import type { AlphaCatalog } from "../alphaCatalog";
 import { useTranslation } from "../i18n";
-import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "../components/ui/field";
+import { Field, FieldError, FieldGroup, FieldLabel } from "../components/ui/field";
 import { Input } from "../components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { readScoringRule, scoringRuleFormula, supportsScoringRules } from "./strategyRules";
+import { ResearchInfotip } from "./ResearchInfotip";
 
 export function StrategyScoringRule({ enabled = true, formula, onChange, catalog, error, children }: {
   enabled?: boolean; formula: string; onChange: (formula: string) => void; catalog: AlphaCatalog; error?: string; children: ReactNode;
@@ -35,14 +36,13 @@ export function StrategyScoringRule({ enabled = true, formula, onChange, catalog
       {selected !== "custom" && <FieldError>{error}</FieldError>}
     </Field>
     {enabled && rule && selected !== "custom" && <Field data-invalid={windowInvalid || Boolean(error)}>
-      <FieldLabel htmlFor="scoring-window">{t("workbench.lookback")}</FieldLabel>
+      <div className="flex items-center gap-1"><FieldLabel htmlFor="scoring-window">{t("workbench.lookback")}</FieldLabel>
+        <ResearchInfotip label={t("workbench.lookback")}>{t(`workbench.scoringHelp.${rule.kind}`, { count: Number(rule.sessions) || 0 })}</ResearchInfotip></div>
       <Input id="scoring-window" className="max-w-40" type="number" min={1} max={252} step={1}
-        value={rule.sessions} aria-invalid={windowInvalid || Boolean(error)} aria-describedby="scoring-window-help"
+        value={rule.sessions} aria-invalid={windowInvalid || Boolean(error)}
         onChange={event => onChange(scoringRuleFormula({ ...rule, sessions: event.target.value }))} />
-      <FieldDescription id="scoring-window-help">{t(`workbench.scoringHelp.${rule.kind}`, { count: Number(rule.sessions) || 0 })}</FieldDescription>
       <FieldError>{windowInvalid ? t("workbench.windowInvalid") : undefined}</FieldError>
     </Field>}
     <div id="scoring-custom-formula" hidden={enabled && selected !== "custom"} className={cn("min-w-0", enabled && selected !== "custom" && "hidden")}>{children}</div>
-    {enabled && selected === "" && <p className="m-0 text-sm text-muted-foreground">{t("workbench.scoringStart")}</p>}
   </FieldGroup>;
 }

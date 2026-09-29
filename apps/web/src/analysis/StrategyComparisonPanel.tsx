@@ -6,8 +6,10 @@ import type { StrategyComparison } from "./strategyComparison";
 
 export function StrategyComparisonPanel({
   comparison,
+  variant,
 }: {
   comparison: StrategyComparison;
+  variant?: "default" | "result";
 }) {
   const { t } = useTranslation("analysis");
   const benchmark = catalogLabel("benchmarks", "csi300-price-index-open");
@@ -27,5 +29,5 @@ export function StrategyComparisonPanel({
     );
   }
 
-  return <StrategyPerformanceChart curves={comparison.curves} />;
+  return <StrategyPerformanceChart curves={comparison.curves} variant={variant} />;
 }

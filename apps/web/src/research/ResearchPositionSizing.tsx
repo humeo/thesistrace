@@ -4,12 +4,13 @@ import type { AlphaCatalog } from "../alphaCatalog";
 import { useTranslation } from "../i18n";
 import { Trans } from "react-i18next";
 import { ResearchParameterHelp } from "./ResearchParameterHelp";
-import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "../components/ui/field";
+import { Field, FieldError, FieldGroup, FieldLabel } from "../components/ui/field";
 import { Input } from "../components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { AlphaFormulaEditor, type AlphaFormulaEditorHandle } from "./AlphaFormulaEditor";
 import type { FormulaDiagnostic } from "./diagnostics";
 import { exposurePercentage, percentageExposure } from "./strategyRules";
+import { ResearchInfotip } from "./ResearchInfotip";
 
 export function ResearchPositionSizing({ ref, catalog, expression, diagnostics, onChange, error }: {
   ref: Ref<AlphaFormulaEditorHandle>; error?: string;
@@ -34,12 +35,12 @@ export function ResearchPositionSizing({ ref, catalog, expression, diagnostics, 
       </Select>
     </Field>
     {!dynamic && <Field data-invalid={Boolean(error)}>
-      <FieldLabel htmlFor="stock-exposure-percent">{strategyT("workbench.fixedExposure")}</FieldLabel>
+      <div className="flex items-center gap-1"><FieldLabel htmlFor="stock-exposure-percent">{strategyT("workbench.fixedExposure")}</FieldLabel>
+        <ResearchInfotip label={strategyT("workbench.fixedExposure")}>{strategyT("workbench.fixedHelp")}</ResearchInfotip></div>
       <Input id="stock-exposure-percent" className="max-w-40" type="number" min={0} max={100} step="any"
         value={expression === "" ? "" : exposurePercentage(expression) ?? ""}
-        aria-invalid={Boolean(error)} aria-describedby="stock-exposure-help position-sizing-error"
+        aria-invalid={Boolean(error)} aria-describedby={error ? "position-sizing-error" : undefined}
         onChange={event => onChange(percentageExposure(event.target.value))} />
-      <FieldDescription id="stock-exposure-help">{strategyT("workbench.fixedHelp")}</FieldDescription>
     </Field>}
     <div hidden={!dynamic} className={cn("min-w-0", !dynamic && "hidden")}>
       <Field>

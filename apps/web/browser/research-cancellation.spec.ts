@@ -93,7 +93,8 @@ test("completed Factor result preserves metrics, visited views, folders and mobi
   await page.getByRole("combobox", { name: "Folder", exact: true }).click();
   await expect(page.getByRole("option", { name: "Default" })).toBeVisible();
   await page.keyboard.press("Escape");
-  await page.getByRole("button", { name: "Delete Research", exact: true }).first().click();
+  await page.getByRole("button", { name: "More actions", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Delete Research", exact: true }).click();
   const decision = page.getByRole("alertdialog");
   await expect(decision).toContainText("DailyTracks will remain.");
   await decision.getByRole("button", { name: "Keep Research" }).focus();
@@ -121,7 +122,7 @@ test("failed Factor run leads with the server reason and keeps its frozen config
   const configuration = page.getByRole("group", { name: "Research execution conditions" });
   await expect(configuration).toContainText("rank(-pb)");
   await expect(configuration).toContainText("Top 1000");
-  await expect(page.getByRole("button", { name: "Delete Research" }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "More actions" })).toBeVisible();
 });
 
 test("reusing a Factor run asks before replacing unsent browser changes", async ({ page }) => {
