@@ -132,7 +132,6 @@ function WorkspaceShellContent({
                 aria-current={isNewChat ? "page" : undefined}
                 className="sidebar-new-chat"
                 tooltip={t("newChat")}
-                title={t("newChat")}
               >
                 <NotePencil aria-hidden="true" size={18} weight="regular" />
                 <span className="sidebar-label">{t("newChat")}</span>
@@ -230,7 +229,6 @@ function ResourceLink({ currentPath, navigate, resource }: {
         isActive={isCurrent}
         aria-current={isCurrent ? "page" : undefined}
         tooltip={t(resource.label)}
-        title={t(resource.label)}
       >
         <Icon aria-hidden="true" size={18} weight={isCurrent ? "fill" : "regular"} />
         <span className="sidebar-label">{t(resource.label)}</span>

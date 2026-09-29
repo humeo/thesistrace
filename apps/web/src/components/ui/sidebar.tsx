@@ -487,7 +487,7 @@ function SidebarMenuButton({
     tooltip?: string | React.ComponentProps<typeof TooltipContent>
   } & VariantProps<typeof sidebarMenuButtonVariants>) {
   const { isMobile, state } = useSidebar()
-  const showTooltip = Boolean(tooltip) && !isMobile
+  const showTooltip = Boolean(tooltip) && !isMobile && state === "collapsed"
   const comp = useRender({
     defaultTagName: "button",
     props: mergeProps<"button">(
@@ -521,7 +521,6 @@ function SidebarMenuButton({
       <TooltipContent
         side="right"
         align="center"
-        hidden={state !== "collapsed"}
         {...tooltip}
       />
     </Tooltip>

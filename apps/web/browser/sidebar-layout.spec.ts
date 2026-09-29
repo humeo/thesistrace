@@ -240,6 +240,7 @@ test('shared sidebar keeps its presentation across workspace routes and collapse
  const reference = await presentation();
  for (const name of ['Data', 'MCP', 'New Chat', 'Research']) {
   await page.getByRole('link', { name, exact: true }).click();
+  await page.getByTestId('workspace-content').hover();
   expect(await presentation()).toEqual(reference);
   await expect(page.getByRole('link', { name: 'Quality Alpha', exact: true })).toBeVisible();
  }
@@ -248,4 +249,19 @@ test('shared sidebar keeps its presentation across workspace routes and collapse
  await page.getByRole('button', { name: 'Expand sidebar', exact: true }).click();
  await expect(page.locator('.application-sidebar')).toHaveCSS('width', '224px');
  expect(await presentation()).toEqual(reference);
+});
+
+test('sidebar avoids redundant expanded hints and retains one collapsed hint', async ({ page }) => {
+ const research = page.getByRole('link', { name: 'Research', exact: true });
+ await expect(research).not.toHaveAttribute('title');
+ await research.hover();
+ await expect(page.locator('[data-slot=tooltip-content]')).toHaveCount(0);
+ await expect(research).not.toHaveCSS('background-color', 'rgb(255, 255, 255)');
+ const newChat = page.getByRole('link', { name: 'New Chat', exact: true });
+ await expect(newChat).not.toHaveAttribute('title');
+ await expect(newChat).toHaveCSS('box-shadow', 'none');
+ await page.getByRole('button', { name: 'Collapse sidebar', exact: true }).click();
+ await research.hover();
+ await expect(page.locator('[data-slot=tooltip-content]')).toHaveText('Research');
+ await expect(page.locator('[data-slot=tooltip-content]')).toHaveCount(1);
 });

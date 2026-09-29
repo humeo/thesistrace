@@ -477,10 +477,10 @@ code { font-family: var(--mono); }
 }
 .app-shell .sidebar-new-chat {
   min-height: 42px;
-  background: #ffffff;
-  border-color: var(--border);
-  border-radius: 12px;
-  box-shadow: var(--shadow-card);
+  background: transparent;
+  border-color: transparent;
+  border-radius: 10px;
+  box-shadow: none;
 }
 .app-shell .resource-nav {
   padding: 6px 12px 16px;
@@ -500,7 +500,7 @@ code { font-family: var(--mono); }
 .app-shell .resource-nav a:hover,
 .app-shell .sidebar-new-chat:hover {
   color: var(--ink);
-  background: #ffffff;
+  background: var(--sidebar-accent);
 }
 .app-shell .resource-nav a[aria-current="page"] {
   color: var(--ink);
@@ -1076,4 +1076,12 @@ code { font-family: var(--mono); }
 }
 @media (prefers-reduced-motion: reduce) {
   .app-shell .resource-nav a { transition: none; }
+}
+
+/* One keyboard focus indicator, without the menu button's additional ring. */
+.app-shell .sidebar-new-chat:focus-visible,
+.app-shell .resource-nav a:focus-visible {
+  outline: 2px solid var(--sidebar-ring);
+  outline-offset: -2px;
+  box-shadow: none;
 }
