@@ -1511,12 +1511,14 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await expect(page.getByRole("navigation", { name: "Research Runs pages" })).toContainText("Page 1");
     await page.getByRole("combobox", { name: "Filter by Type" }).click();
     await page.getByRole("option", { name: "Factor Evaluation", exact: true }).click();
-    await expect(researchRunsTable.getByText("Factor Evaluation", { exact: true })).toHaveCount(1);
-    await expect(researchRunsTable.getByText("Strategy Backtest", { exact: true })).toHaveCount(0);
+    await expect(researchRunsTable.getByRole("link")).toHaveCount(1);
+    await expect(researchRunsTable.locator(`a[href="/research-runs/${customRunId}"]`)).toBeVisible();
     await expect(page.getByRole("columnheader", { name: "1-session Rank IC" })).toBeVisible();
     await page.getByRole("combobox", { name: "Filter by Type" }).click();
     await page.getByRole("option", { name: "Strategy Backtest", exact: true }).click();
-    await expect(researchRunsTable.getByText("Strategy Backtest", { exact: true })).toHaveCount(2);
+    await expect(researchRunsTable.getByRole("link")).toHaveCount(2);
+    await expect(researchRunsTable.locator(`a[href="/research-runs/${defaultRunId}"]`)).toBeVisible();
+    await expect(researchRunsTable.locator(`a[href="/research-runs/${convertedRunId}"]`)).toBeVisible();
     await expect(page.getByRole("columnheader", { name: "Annualized excess" })).toBeVisible();
     await page.getByRole("combobox", { name: "Filter by Type" }).click();
     await page.getByRole("option", { name: "All Types", exact: true }).click();
