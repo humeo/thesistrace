@@ -27,8 +27,14 @@ async function mount() {
   function Harness() { current = useDataRefresh("market", callbacks); return null; }
   const host = document.createElement("div"); const root = createRoot(host);
   await act(async () => root.render(<Harness />));
-  cleanups.push(async () => { await act(async () => root.unmount()); host.remove(); });
-  return { state: () => current, accepted };
+  let mounted = true;
+  const unmount = async () => {
+    if (!mounted) return;
+    mounted = false;
+    await act(async () => root.unmount()); host.remove();
+  };
+  cleanups.push(unmount);
+  return { state: () => current, accepted, unmount };
 }
 
 test("dismissed proof cannot submit even when its ignored abort resolves late", async () => {
@@ -95,5 +101,42 @@ test("exact retry takes fresh proof and stop checking isolates all earlier compl
   expect(view.state().pendingRequest).toBeNull();
   expect(view.state().operation).toBeNull();
   expect(view.state().submissionFailure?.kind).toBe("stopped");
+  expect(view.accepted).not.toHaveBeenCalled();
+});
+
+test.each(["stop", "retry"] as const)("%s receipt checks keeps an already submitted mutation alive and fences its receipt", async action => {
+  const view = await mount();
+  const post = deferred<client.MarketRefreshOperation>();
+  let submittedSignal!: AbortSignal;
+  vi.spyOn(client, "submitMarketRefresh").mockImplementation((_request, _proof, signal) => {
+    submittedSignal = signal!;
+    return post.promise;
+  });
+  await act(async () => view.state().review(request));
+  await act(async () => { void view.state().confirm(); });
+  await act(async () => view.state().dismissConfirmation());
+  await act(async () => action === "stop" ? view.state().stopChecking() : view.state().retryExact());
+  expect(submittedSignal.aborted).toBe(false);
+  await act(async () => post.resolve(complete));
+  expect(view.state().operation).toBeNull();
+  expect(view.state().pendingRequest).toBeNull();
+  if (action === "stop") expect(view.state().submissionFailure?.kind).toBe("stopped");
+  else expect(view.state().confirmation?.request).toEqual(request);
+});
+
+test("unmounting receipt checks leaves a dismissed submission alive without accepting its late receipt", async () => {
+  const view = await mount();
+  const post = deferred<client.MarketRefreshOperation>();
+  let submittedSignal!: AbortSignal;
+  vi.spyOn(client, "submitMarketRefresh").mockImplementation((_request, _proof, signal) => {
+    submittedSignal = signal!;
+    return post.promise;
+  });
+  await act(async () => view.state().review(request));
+  await act(async () => { void view.state().confirm(); });
+  await act(async () => view.state().dismissConfirmation());
+  await view.unmount();
+  expect(submittedSignal.aborted).toBe(false);
+  await act(async () => post.resolve(complete));
   expect(view.accepted).not.toHaveBeenCalled();
 });

@@ -62,7 +62,11 @@ export function useDataRefresh<K extends Kind>(kind: K, {
   pendingRef.current = pending;
   useEffect(() => {
     mounted.current = true;
-    return () => { mounted.current = false; submissionGeneration.current++; operationGeneration.current++; active.current?.controller.abort(); };
+    return () => {
+      mounted.current = false; submissionGeneration.current++; operationGeneration.current++;
+      const run = active.current;
+      if (run && (!run.dismissed || run.phase !== "submission")) run.controller.abort();
+    };
   }, []);
 
   function replaceOperation(operation: RefreshOperation<K>) {
@@ -178,13 +182,14 @@ export function useDataRefresh<K extends Kind>(kind: K, {
   function retryExact() {
     const selected = pendingRef.current;
     if (!selected) return;
-    submissionGeneration.current++; active.current?.controller.abort(); active.current = null;
+    // Receipt checks do not cancel a submitted mutation; its completion is fenced.
+    submissionGeneration.current++; active.current = null;
     setPending(null); setPollError(false); setSubmissionFailure(null);
     setConfirmation({ request: selected.request, submitting: false, error: null });
   }
   function stopChecking() {
     if (!pendingRef.current) return;
-    submissionGeneration.current++; active.current?.controller.abort(); active.current = null;
+    submissionGeneration.current++; active.current = null;
     setPending(null); setPollError(false); setSubmissionFailure({ kind: "stopped" });
   }
   return { confirmation, pendingRequest: pending?.request ?? null, operation: accepted?.operation ?? null,
