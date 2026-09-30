@@ -114,7 +114,9 @@ for (const scenario of cases) {
     } else await expect(page.getByRole("list", { name: "Risk decision reasons" })).toContainText("stop-loss threshold");
     await page.screenshot({ path: testInfo.outputPath("frozen-policy.png"), fullPage: true });
     await page.getByRole("tab", { name: "Overview", exact: true }).click();
-    await page.getByRole("button", { name: "Create draft", exact: true }).click();
+    await page.getByRole("button", { name: "Use as draft", exact: true }).click();
+    await page.getByRole("dialog", { name: "Create a draft", exact: true })
+      .getByRole("button", { name: "Create draft", exact: true }).click();
     await expect(page).toHaveURL(/\/research$/);
     for (const [label, value] of scenario.fields) {
       await page.getByRole("tab", { name: label.startsWith("Minimum holding") ? /Portfolio/ : /Risk/ }).click();

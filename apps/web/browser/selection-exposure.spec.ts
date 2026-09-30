@@ -586,7 +586,7 @@ for (const width of [1280, 1440]) {
     await page.evaluate(() => document.fonts.ready);
     const settings = page.getByRole("complementary", { name: "Run settings", exact: true });
     await expect(settings).toBeVisible();
-    await expect(settings.getByRole("heading", { name: "Backtest conditions", exact: true })).toHaveCSS("font-size", "16px");
+    await expect(settings.getByRole("heading", { name: "Backtest conditions", exact: true })).toHaveCSS("font-size", "20px");
     await page.getByRole("button", { name: "Research notes (optional)", exact: true }).click();
     const notes = page.getByLabel("Notes", { exact: true });
     await expect(notes).toBeVisible();
