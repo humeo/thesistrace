@@ -286,7 +286,7 @@ test("an unknown durable Session URL fails closed instead of becoming a new Chat
   await page.goto(`/chat?session=${unknownSession}`);
 
   await expect(page.getByRole("heading", { name: "Chat not found" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Start a New Chat" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Start a New Chat", exact: true })).toBeVisible();
   await expect(page.getByRole("textbox", { name: "Message", exact: true })).toHaveCount(0);
   await expect(page).toHaveURL(new RegExp(`/chat\\?session=${unknownSession}$`));
 

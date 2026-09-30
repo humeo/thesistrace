@@ -734,7 +734,11 @@ test("Complete field catalog composes one Formula and starts its DailyTrack", { 
     expect(fields.filter((field) => field.report_period_selection === "latest_visible_ttm")).toHaveLength(19);
     await expect(page.getByRole("heading", { name: "Research fields" })).toBeVisible();
     await expect(page.getByText("226 fields", { exact: true })).toBeVisible();
-    await expect(page.getByRole("region", { name: "Data coverage", exact: true }).locator("tbody tr")).toHaveCount(4);
+    const coverage = page.getByRole("region", { name: "Data coverage", exact: true });
+    await expect(coverage.getByRole("heading", { level: 2 })).toHaveCount(4);
+    for (const name of ["Market data", "Financial data", "Industry data", "Strategy benchmark"]) {
+      await expect(coverage.getByRole("heading", { name, exact: true })).toBeVisible();
+    }
     const categories = page.getByRole("group", { name: "Field category" });
     await expect(categories.getByRole("button", { name: /^Market/ })).toContainText("22");
     await expect(categories.getByRole("button", { name: /^Financial/ })).toContainText("204");
@@ -898,7 +902,7 @@ test("Complete field catalog composes one Formula and starts its DailyTrack", { 
     await expect(page).toHaveURL(/\/daily-tracks\/track_[a-f0-9]+$/);
     trackId = new URL(page.url()).pathname.split("/").at(-1);
     if (trackId === undefined) throw new Error("DailyTrack route has no identity");
-    await expect(page.getByRole("heading", { level: 1 }).locator("[data-slot=badge]")).toHaveText("Up to date", { timeout: 30_000 });
+    await expect(page.getByRole("heading", { level: 2, name: /^Daily Track / }).locator("[data-slot=badge]")).toHaveText("Up to date", { timeout: 30_000 });
     await expect(page.getByLabel("Tracking account")).toContainText("Return since tracking");
     await page.getByRole("tab", { name: /Holdings/ }).click();
     await expect(page.getByRole("table")).toContainText("Symbol");
@@ -956,7 +960,7 @@ test("Complete field catalog composes one Formula and starts its DailyTrack", { 
       (await (await page.request.get(`/api/daily-tracks/${trackId}`)).json() as { status: string }).status
     ), { timeout: 90_000 }).toBe("blocked");
     await page.getByRole("button", { name: "Reload status" }).click();
-    await expect(page.getByRole("heading", { level: 1 }).locator("[data-slot=badge]")).toHaveText("Update blocked");
+    await expect(page.getByRole("heading", { level: 2, name: /^Daily Track / }).locator("[data-slot=badge]")).toHaveText("Update blocked");
     await page.getByRole("button", { name: /Update details/ }).click();
     await expect(page.locator("[data-slot=collapsible-content]").filter({ hasText: "Advance phase" })).toContainText("Advance phase blocked");
     await expect(page.locator("[data-slot=collapsible-content]").filter({ hasText: "Advance phase" })).toContainText("Frozen target");
@@ -982,7 +986,7 @@ test("Complete field catalog composes one Formula and starts its DailyTrack", { 
       return ((await response.json()) as { strategy_session: string }).strategy_session;
     }, { timeout: 90_000 }).toBe("2026-08-11");
     await page.getByRole("button", { name: "Reload status" }).click();
-    await expect(page.getByRole("heading", { level: 1 }).locator("[data-slot=badge]")).toHaveText("Up to date");
+    await expect(page.getByRole("heading", { level: 2, name: /^Daily Track / }).locator("[data-slot=badge]")).toHaveText("Up to date");
     await expect(lastObservation(page)).toHaveText("2026-08-11");
     const finalObservation = (await (await page.request.get(`/api/daily-tracks/${trackId}`)).json()).observation;
     expect(finalObservation.session).toBe("2026-08-11");
@@ -1187,8 +1191,10 @@ test("Batch children keep ordinary Research organization, reuse, tracking, and d
   await page.getByRole("button", { name: "Create draft" }).click();
   await expect(page).toHaveURL(new RegExp(`/research\\?folder=${folderId}$`));
   await expect(page.getByRole("radio", { name: /Strategy Backtest/ })).toBeChecked({ timeout: 30_000 });
+  await page.getByRole("tab", { name: /^Signals/ }).click();
   await expect(page.getByRole("textbox", { name: "Alpha formula", exact: true })).toHaveText("close");
   await expect(page.getByLabel("Notes")).toHaveValue("Browser Batch hypothesis");
+  await page.getByRole("tab", { name: /^Portfolio/ }).click();
   await expect(page.getByLabel("Holdings count")).toHaveValue("10");
   await expect(page.getByLabel("Selection interval (trading days)")).toHaveValue("1");
   expect((await page.request.get(`/api/research-runs/${firstRunId}`)).status()).toBe(200);
@@ -1227,7 +1233,7 @@ test("Batch children keep ordinary Research organization, reuse, tracking, and d
   await page.getByRole("button", { name: /Tracking origin/ }).click();
   await expect(page.getByText(`${firstRunId} (deleted)`, { exact: true })).toBeVisible();
   await confirmTrackStop(page);
-  await expect(page.getByRole("heading", { level: 1 }).locator("[data-slot=badge]")).toHaveText("Stopped", { timeout: 90_000 });
+  await expect(page.getByRole("heading", { level: 2, name: /^Daily Track / }).locator("[data-slot=badge]")).toHaveText("Stopped", { timeout: 90_000 });
   await page.getByRole("button", { name: "Manage", exact: true }).click();
   await page.getByRole("menuitem", { name: "Delete DailyTrack", exact: true }).click();
   await page.getByRole("alertdialog", { name: "Delete DailyTrack", exact: true }).getByRole("button", { name: "Delete DailyTrack", exact: true }).click();
@@ -1337,6 +1343,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     const acceptedItems = (await acceptedHistory.json()).items as Array<{ id: string }>;
 
     await page.goto("/research");
+    await page.getByRole("tab", { name: /^Signals/ }).click();
     await expect(page.getByRole("textbox", { name: "Alpha formula", exact: true })).toHaveText("ts_mean(close, 3)");
     await replaceFormula(page, "unknown_field");
     await page.getByRole("button", { name: /^Run (backtest|evaluation)$/, exact: true }).click();
@@ -1345,6 +1352,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     const rejectedHistory = await page.request.get("/api/research-runs");
     expect(((await rejectedHistory.json()).items as unknown[])).toHaveLength(acceptedItems.length);
     await page.reload();
+    await page.getByRole("tab", { name: /^Signals/ }).click();
     await expect(page.getByRole("textbox", { name: "Alpha formula", exact: true })).toHaveText("unknown_field");
 
     await openResearchFolderMenu(page);
@@ -1415,6 +1423,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await page.getByLabel("Research name").fill("Converted Factor Strategy");
 
     await expect(page.getByLabel("Initial cash (CNY)")).toHaveValue("100000");
+    await page.getByRole("tab", { name: /^Portfolio/ }).click();
     await expect(page.getByLabel("Holdings count")).toHaveValue("10");
     await expect(page.getByLabel("Selection interval (trading days)")).toHaveValue("5");
     await page.getByLabel("Initial cash (CNY)").fill("100000");
@@ -1550,13 +1559,17 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await page.getByRole("button", { name: "Create draft" }).click();
     await expect(page).toHaveURL(new RegExp(`/research\\?folder=${customFolderId}$`));
     await expect(page.getByLabel("Research name")).toHaveValue("Target Local Name");
+    await page.getByRole("tab", { name: /^Signals/ }).click();
     await expect(page.getByRole("textbox", { name: "Alpha formula", exact: true })).toHaveText("ts_mean(close, 2)");
     await expect(page.getByLabel("Notes")).toHaveValue("Browser Run acceptance.");
     await expect(page.getByLabel("Research start date")).toHaveValue("2026-08-04");
     await expect(page.getByLabel("Research end date")).toHaveValue("2026-08-05");
+    await page.getByRole("tab", { name: /^Universe/ }).click();
     await expect(page.getByRole("combobox", { name: "Universe", exact: true })).toContainText("Top 300");
+    await page.getByRole("tab", { name: /^Signals/ }).click();
     await expect(page.getByRole("combobox", { name: "Neutralization", exact: true })).toContainText("None");
     await expect(page.getByRole("radio", { name: /Strategy Backtest/ })).toBeChecked();
+    await page.getByRole("tab", { name: /^Portfolio/ }).click();
     await expect(page.getByLabel("Holdings count")).toHaveValue("10");
     await expect(page.getByLabel("Selection interval (trading days)")).toHaveValue("2");
     const historyAfterCopy = await page.request.get("/api/research-runs");
@@ -1694,7 +1707,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await page.goto(`/daily-tracks/${trackId}`);
 
     await confirmTrackStop(page);
-    await expect(page.getByRole("heading", { level: 1 }).locator("[data-slot=badge]")).toHaveText("Stopped");
+    await expect(page.getByRole("heading", { level: 2, name: /^Daily Track / }).locator("[data-slot=badge]")).toHaveText("Stopped");
     await page.getByRole("button", { name: "Manage", exact: true }).click();
     await page.getByRole("menuitem", { name: "Delete DailyTrack", exact: true }).click();
     const deleteTrackDialog = page.getByRole("alertdialog", { name: "Delete DailyTrack", exact: true });
@@ -1743,12 +1756,17 @@ async function fillCompleteDraft(
   await page.getByLabel("Research start date").fill("2026-08-04");
   await page.getByLabel("Research end date").fill("2026-08-05");
   if (researchKind === "strategy_backtest") {
+    await page.getByRole("tab", { name: /^Universe/ }).click();
     await page.getByRole("combobox", { name: "Universe", exact: true }).click();
-  await page.getByRole("option", { name: "Top 300", exact: true }).click();
+    await page.getByRole("option", { name: "Top 300", exact: true }).click();
 
+    await page.getByRole("tab", { name: /^Signals/ }).click();
+    const adjustment = page.getByRole("button", { name: "Industry adjustment", exact: true });
+    if ((await adjustment.getAttribute("aria-expanded")) !== "true") await adjustment.click();
     await page.getByRole("combobox", { name: "Neutralization", exact: true }).click();
-  await page.getByRole("option", { name: "None", exact: true }).click();
+    await page.getByRole("option", { name: "None", exact: true }).click();
     await page.getByLabel("Initial cash (CNY)").fill("100000");
+    await page.getByRole("tab", { name: /^Portfolio/ }).click();
     await page.getByLabel("Holdings count").fill("10");
     await page.getByLabel("Selection interval (trading days)").fill("2");
 
@@ -1764,6 +1782,11 @@ async function fillCompleteDraft(
 }
 
 async function replaceFormula(page: Page, formula: string): Promise<void> {
+  if (await page.getByRole("radio", { name: /Strategy Backtest/ }).isChecked()) {
+    await page.getByRole("tab", { name: /^Signals/ }).click();
+    await page.getByRole("combobox", { name: "How should stocks be ranked?", exact: true }).click();
+    await page.getByRole("option", { name: "Custom scoring formula", exact: true }).click();
+  }
   const editor = page.getByRole("textbox", { name: "Alpha formula", exact: true });
   await editor.click();
   await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
@@ -1829,6 +1852,8 @@ async function confirmTrackStop(page: Page) {
 
 
 async function fillResearchNotes(page: Page, value: string): Promise<void> {
+  const disclosure = page.getByRole("button", { name: "Research notes (optional)", exact: true });
+  if ((await disclosure.getAttribute("aria-expanded")) !== "true") await disclosure.click();
   const notes = page.getByLabel("Notes", { exact: true });
   await notes.fill(value);
 }

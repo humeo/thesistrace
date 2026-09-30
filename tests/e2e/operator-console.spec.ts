@@ -329,12 +329,14 @@ test("Operator researchers and invitations", { tag: "@isolated" }, async ({ page
   const effectiveInvitation = invitationRows.filter({ hasText: "Effective · Delivered" });
   const terminalInvitation = invitationRows.filter({ hasText: "Terminal · Revoked" });
   await expect(effectiveInvitation).toHaveCount(1);
-  await expect(effectiveInvitation.locator("code")).toHaveText(
+  await effectiveInvitation.getByRole("button", { name: "Details", exact: true }).click();
+  await expect(effectiveInvitation.locator("dt").filter({ hasText: /^ID$/ }).locator("xpath=following-sibling::dd/code")).toHaveText(
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
   );
   await expect(effectiveInvitation.locator("time")).toHaveCount(2);
-  await expect(effectiveInvitation.locator('[data-label="Terminal"]')).toHaveText("—");
+  await expect(effectiveInvitation.locator("dt").filter({ hasText: /^Terminal$/ }).locator("xpath=following-sibling::dd")).toHaveText("—");
   await expect(terminalInvitation).toHaveCount(1);
+  await terminalInvitation.getByRole("button", { name: "Details", exact: true }).click();
   await expect(terminalInvitation.locator("time")).toHaveCount(3);
 
   const consoleInvitationEmail = "browser-console-invited@example.test";
@@ -2295,12 +2297,14 @@ async function prepareOperatorDirectory(
   const operatorRow = researcherTable.getByRole("row").filter({ hasText: operator.email });
   await expect(operatorRow.getByText("browser-operator", { exact: true })).toBeVisible();
   await expect(operatorRow.getByText(operator.email, { exact: true })).toBeVisible();
-  await expect(operatorRow.locator('[data-label="Researcher ID"]')).toHaveText(operator.id);
+  await operatorRow.getByRole("button", { name: "Details · browser-operator", exact: true }).click();
+  const operatorDetails = researcherTable.getByRole("row").filter({ hasText: operator.id });
+  await expect(operatorDetails.getByText(operator.id, { exact: true })).toBeVisible();
   await expect(operatorRow.locator('[data-label="Access"]')).toHaveText("Active");
-  await expect(operatorRow.locator('[data-label="Created"] time')).toHaveCount(1);
+  await expect(operatorDetails.locator("dt").filter({ hasText: /^Created$/ }).locator("xpath=following-sibling::dd/time")).toHaveCount(1);
   await expect(operatorRow.locator('[data-label="Latest login"]')).toHaveText(/.+/);
   await expect(operatorRow.locator('[data-label="Current sessions"]')).toHaveText("1");
-  await expect(operatorRow.locator('[data-label="Effective invitation"]')).toHaveText("None");
+  await expect(operatorDetails.locator("dt").filter({ hasText: /^Effective invitation$/ }).locator("xpath=following-sibling::dd")).toHaveText("None");
   await expect(researcherTable.getByText(ordinary.email, { exact: true })).toBeVisible();
 
   return { invitationEmail, researcherTable, operatorRow };
