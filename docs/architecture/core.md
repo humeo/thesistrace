@@ -468,6 +468,12 @@ Garbage collection does too. The private CLI and Operator Console submit
 to and inspect the same durable records; neither HTTP request executes a source
 call or publication.
 
+The Web `operator/useDataRefresh.ts` module owns proof, submission, uncertain
+acceptance reconciliation, independent response fencing and visibility polling
+for all three Refresh kinds. Forms retain target authoring, receipt presentation
+and focus. Retrying preserves the exact request while obtaining fresh proof;
+stopping receipt inspection invalidates outstanding responses.
+
 Bootstrap creates the first Core Market Data Generation and Dataset Head.
 Market, Financial, and Industry publish independent immutable Family manifests
 which are composed into one Generation behind the one mutable Dataset Head.
@@ -480,6 +486,12 @@ calling Industry endpoints. Financial and Industry Refresh each build and
 validate their own candidate, recompose it with the latest unaffected Families,
 and atomically move Head only if its target Family is still current. Any
 failure leaves the previous Head readable.
+
+`data/financial_composition.py` owns same-task candidate proof, current-byte
+verification and Financial plus optional Indicator composition against the exact
+Financial predecessor. Before-CAS recovery repeats that verification under the
+mounted Data mutation lock while preserving the persisted manifest identity.
+Refresh modules retain collection, GC protection, Head CAS and receipt recovery.
 
 Industry submission freezes an explicit observation-through Research Session
 and exact idempotency key, then returns `accepted` before source work. Its safe
@@ -512,6 +524,11 @@ The Alpha Language exposes one read-only Catalog and authoritative Formula
 Diagnostics. Authoring state is one browser-local Draft per Research Folder.
 It may remain incomplete and has no server identity, Revision, or audit
 authority. Run submits one complete Draft for compilation and admission.
+
+The Web Draft controller uses `research/draftFeedback.ts` to attribute feedback
+to the current Draft, prioritize field issues and map program line diagnostics.
+The workspace page retains rendering, disclosure and focus; translated error
+text is derived during rendering rather than becoming feedback identity.
 
 ```text
 GET  /api/alpha/catalog
@@ -770,6 +787,13 @@ against current ownership and an unexpired Attempt lease before committing it.
 Lease checks use current database time after lock waits. An expired Attempt
 cannot renew itself or commit new Checkpoints or Results; the existing recovery
 path grants a new Attempt and resumes from verified Checkpoints.
+
+`research_run/evidence.py` owns admitted evidence scope, coverage, ordering,
+bounded staging and final assembly for ordinary Runs, their verified Checkpoint
+reconstruction and Batch child Runs. Ordinary ordinals include Calculation
+Warm-up; Batch evidence ordinals begin at the Research Period. Supervisors retain
+checkpoint chain bindings, leases, fences, scratch ownership and publication
+transactions. Holding evidence keeps its independent retention unit.
 
 The Batch Research supervisor owns the Batch Attempt, fence, Data Generation
 Pin, complete-task acknowledgements, private shared artifact, cancellation, and
