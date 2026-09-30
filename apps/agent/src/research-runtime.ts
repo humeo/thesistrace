@@ -1,8 +1,4 @@
-import { SessionModelRecovery } from "./session-model-recovery.js";
-import { invalidRecoveryMessageIds } from "./model-step-recovery.js";
-import { isSessionControlMessageId, sessionControlMessage, sessionControlMessageId } from "./session-control-message.js";
-import { ContextLanguageModel } from "./context-language-model.js";
-import { SessionContextController } from "./session-context-controller.js";
+import { createSessionContinuation, type SessionContinuation } from "./session-continuation.js";
 import { Agent } from "@mastra/core/agent";
 import { noopLogger } from "@mastra/core/logger";
 import { Mastra } from "@mastra/core/mastra";
@@ -178,6 +174,7 @@ export async function createResearchRuntime(
     schemaName: "agent",
   });
   const memories = new Map<string, Memory>();
+  const continuation = createSessionContinuation({ repository, storage, mastra: () => mastra, selection: selectionFrom });
   const agent = new Agent({
     defaultOptions: ({ requestContext }) => {
       const observation = requestContext.get<string, RunModelObservation | undefined>("modelObservation");
@@ -212,67 +209,7 @@ export async function createResearchRuntime(
       }
       return memory;
     },
-    inputProcessors: () => [{
-      id: "session-context-input",
-      processInputStep: async ({ messageList, requestContext, rotateResponseMessageId, retryCount }) => {
-        if (!requestContext) throw new Error("SESSION_CONTEXT_IDENTITY_MISSING");
-        const threadId = requestContext.get<string, string>("contextThreadId");
-        const researcherId = requestContext.get<string, string>("contextResearcherId");
-        const runId = requestContext.get<string, string>("agentRunId");
-        const abortSignal = requestContext.get<string, AbortSignal>("agentAbortSignal");
-        if (!threadId || !researcherId || !runId || !abortSignal) throw new Error("SESSION_CONTEXT_IDENTITY_MISSING");
-        abortSignal.throwIfAborted();
-        await assertOwnedThread(repository, threadId, researcherId);
-        const recoveries = await repository.modelStepRecoveries(threadId, researcherId);
-        messageList.removeByIds(invalidRecoveryMessageIds(recoveries));
-        const runObservation = requestContext.get<string, RunModelObservation | undefined>("modelObservation");
-        if (runObservation) runObservation.recoveryAttempts = recoveries.filter(record => record.runId === runId)
-          .reduce((total, record) => total + record.attempts, 0);
-        if (!messageList.get.all.db().some((message) => message.id === sessionControlMessageId(runId))) {
-          const lastCreated = Math.max(Date.now(), ...messageList.get.all.db().map((message) => message.createdAt.getTime() + 1));
-          messageList.add(sessionControlMessage({ runId, threadId, researcherId, createdAt: new Date(lastCreated),
-            continueIntent: requestContext.get("continueIntent") === true }), "context", { merge: false });
-        }
-        if (!rotateResponseMessageId) throw new Error("SESSION_CONTEXT_RESPONSE_BOUNDARY_MISSING");
-        const freshResponseId = rotateResponseMessageId();
-        const messages = messageList.get.all.db().filter((message) => message.role !== "system" && message.content.parts.length > 0);
-        if (messages.some((message) => message.threadId !== threadId || message.resourceId !== researcherId)) {
-          throw new Error("SESSION_CONTEXT_SOURCE_IDENTITY_MISMATCH");
-        }
-        // Persist the complete current tool batch before freezing its source watermark.
-        await createResearchMemory(storage).saveMessages({ messages });
-        requestContext.set("contextCurrentRequestId", [...messages].reverse().find((message) => message.role === "user" && !isSessionControlMessageId(message.id))?.id);
-        if (!requestContext.get("sessionContextController")) requestContext.set("sessionContextController", new SessionContextController({
-          repository, threadId, researcherId, runId, selection: selectionFrom(requestContext),
-          storage, mastra, requestContext, abortSignal,
-        }));
-        let recovery = requestContext.get<string, SessionModelRecovery | undefined>("sessionModelRecovery");
-        if (!recovery) {
-          const observation = requestContext.get<string, RunModelObservation | undefined>("modelObservation");
-          const context = requestContext.get<string, SessionContextController>("sessionContextController");
-          if (!observation || !context) throw new Error("SESSION_CONTEXT_IDENTITY_MISSING");
-          recovery = new SessionModelRecovery({ repository, memory: createResearchMemory(storage), threadId, researcherId, runId,
-            selection: selectionFrom(requestContext), context, observation, abortSignal,
-            notify: claimed => requestContext.get<string, ((claimed: boolean) => void) | undefined>("notifyModelRecovery")?.(claimed) });
-          requestContext.set("sessionModelRecovery", recovery);
-        }
-        return { messageId: recovery.responseMessageId(freshResponseId, retryCount) };
-      },
-    }],
-    outputProcessors: [{ id: "session-replacement-completion", processOutputStep: async ({ requestContext, finishReason, messageList }) => {
-      await requestContext?.get<string, SessionModelRecovery | undefined>("sessionModelRecovery")?.completeResponse(finishReason);
-      return messageList;
-    } }],
-    errorProcessors: [{ id: "session-model-recovery", processAPIError: async ({ error, messageList, requestContext }) => {
-      const recovery = requestContext?.get<string, SessionModelRecovery | undefined>("sessionModelRecovery");
-      if (!recovery) throw error;
-      return recovery.handle(error, messageList, requestContext?.get<string, string | undefined>("contextCurrentRequestId"));
-    } }],
-    model: ({ requestContext }) => new ContextLanguageModel(selectionFrom(requestContext).languageModel, async (request) => {
-      const controller = requestContext.get<string, SessionContextController | undefined>("sessionContextController");
-      if (!controller) throw new Error("SESSION_CONTEXT_INPUT_NOT_PREPARED");
-      return controller.prepare(request, requestContext.get<string, string | undefined>("contextCurrentRequestId"));
-    }),
+    ...continuation.agentOptions,
     name: "ThesisTrace Research Agent",
     tools: ({ requestContext }) => researchToolsFrom(requestContext),
   });
@@ -353,7 +290,6 @@ export async function createResearchRuntime(
         : modelRuntime.resolve(validated.modelKey, validated.reasoningEffort, undefined, { budget: modelBudget, researcherId });
       const requestContext = createRequestContext(selection);
       requestContext.set("modelObservation", modelObservation);
-      requestContext.set("continueIntent", validated?.command === "continue");
 
       if (validated === undefined) {
         return {
@@ -378,6 +314,7 @@ export async function createResearchRuntime(
 
       return {
         [RESEARCH_AGENT_ID]: createRunAgent({
+          continuation,
           agentBuildRevision: settings.agentBuildRevision,
           mastra,
           modelObservation,
@@ -497,6 +434,7 @@ export async function createResearchRuntime(
 }
 
 function createRunAgent(options: Readonly<{
+  continuation: SessionContinuation;
   agentBuildRevision: string;
   mastra: Mastra;
   modelObservation: RunModelObservation;
@@ -517,9 +455,10 @@ function createRunAgent(options: Readonly<{
 }>): ResearchMastraAgent {
   const agent = options.mastra.getAgent(RESEARCH_AGENT_ID);
   if (agent === undefined) throw new Error("RESEARCH_AGENT_NOT_REGISTERED");
-  options.requestContext.set("agentRunId", options.run.input.runId);
-  options.requestContext.set("contextThreadId", options.run.input.threadId);
-  options.requestContext.set("contextResearcherId", options.researcherId);
+  options.continuation.initialize(options.requestContext, {
+    runId: options.run.input.runId, threadId: options.run.input.threadId, researcherId: options.researcherId,
+    continueIntent: options.run.command === "continue", selection: options.selection, observation: options.modelObservation,
+  });
   const telemetry = createRunTelemetry({
     modelKey: options.selection.model.key,
     providerModelId: options.providerModelId,
@@ -532,7 +471,7 @@ function createRunAgent(options: Readonly<{
     metrics: () => ({ steps: options.modelObservation.steps, usage: options.usageCapture.value(),
       recoveryAttempts: options.modelObservation.recoveryAttempts,
       inputEstimate: options.modelObservation.inputEstimate,
-      compaction: options.requestContext.get<string, SessionContextController | undefined>("sessionContextController")?.compactionStatistics }),
+      compaction: options.continuation.compactionStatistics(options.requestContext) }),
     write: options.telemetry,
   });
   options.modelObservation.onCallFinished = call => telemetry.modelCallFinished(call);
