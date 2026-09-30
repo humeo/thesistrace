@@ -1,17 +1,13 @@
 import { existsSync, rmSync, rmdirSync } from 'node:fs';
-import { imageServices } from './resources.mjs';
+import { CommandError } from '../process.mjs';
 import { captureEvidence, captureLogs, sanitize, scanCanaries } from './evidence.mjs';
 
 export async function cleanupImages(run) {
   if (run.keep_images) return;
-  const names = (await run.exec('docker', ['image', 'ls', '--format', '{{.Repository}}', '--filter', `reference=${run.project_name}-*`], { capture: true })).trim().split('\n');
-  let failure;
-  for (const service of imageServices) {
-    const name = `${run.project_name}-${service}`;
-    if (!names.includes(name)) continue;
-    try { await run.exec('docker', ['image', 'rm', name], { quiet: true }); } catch (error) { failure ??= error; }
-  }
-  if (failure) throw failure;
+  const results = await run.images.release();
+  run.record({ image_cleanup: JSON.stringify(results) });
+  const failure = results.find(result => result.status !== 0);
+  if (failure) throw new CommandError('Test image cleanup', failure.status);
 }
 export async function cleanupProject(run) {
   // Existing-project commands validate persisted metadata at the CLI boundary.

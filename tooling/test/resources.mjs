@@ -7,9 +7,8 @@ import { CommandError } from '../process.mjs';
 import { execute } from './commands.mjs';
 import { fixtureValues, composeEnvironment, deterministicEnvironment, hostEnvironment } from './environment.mjs';
 import { runPhase } from './phase.mjs';
+import { TestImages, validateTestProject, announceTestProject } from './images.mjs';
 
-export const imageServices = ['api', 'research-worker', 'batch-research-worker', 'tracking-worker', 'publication-maintenance-worker', 'data-operator-worker', 'initialize', 'agent', 'auth', 'web'];
-export const projectPattern = /^thesistrace-test-\d{8}t\d{6}z-\d+-[a-f0-9]{8}$/;
 export function runId() {
   return `${new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'z').replace('T', 't')}-${process.pid}-${randomBytes(4).toString('hex')}`;
 }
@@ -25,6 +24,7 @@ export class TestRun {
     this.image_smoke_file = `${root}/deploy/compose.image-smoke.yaml`;
     this.project_name = options.project ?? `thesistrace-test-${runId()}`;
     this.validateProject();
+    this.images = new TestImages(this.project_name, (...args) => this.exec(...args));
     this.run_id = this.project_name.slice('thesistrace-test-'.length);
     this.bucket_name = this.project_name;
     this.state_root = resolve(ambient.THESISTRACE_TEST_STATE_ROOT ?? `${root}/.local/test-runs`);
@@ -49,7 +49,7 @@ export class TestRun {
     this.interrupted_status = 0;
   }
   validateProject() {
-    if (!projectPattern.test(this.project_name)) throw new CommandError(`refusing non-canonical Test project: ${this.project_name}`, 2);
+    validateTestProject(this.project_name);
   }
   setMounts(base) {
     this.data_mount = `${base}/canonical-data`;
@@ -124,6 +124,7 @@ export class TestRun {
     this.port_acquired = true;
     this.record({ caddy_port: this.caddy_port, public_origin: this.public_origin });
     console.log(`Test run: ${this.run_id}\nCompose project: ${this.project_name}`);
+    await announceTestProject(this.project_name);
   }
   loadExisting() {
     this.validateProject();
@@ -139,14 +140,8 @@ export class TestRun {
     this.port_acquired = false;
   }
   async buildImages() {
-    if (this.source_project) {
-      if (!projectPattern.test(this.source_project)) throw new CommandError('invalid source Test project', 2);
-      this.record({ image_source_project: this.source_project });
-      for (const service of imageServices) await this.exec('docker', ['image', 'tag', `${this.source_project}-${service}`, `${this.project_name}-${service}`]);
-      return;
-    }
-    await this.compose(['build', 'initialize', 'auth-initialize', 'agent', 'web']);
-    for (const service of ['api', 'research-worker', 'batch-research-worker', 'tracking-worker', 'publication-maintenance-worker', 'data-operator-worker']) await this.exec('docker', ['image', 'tag', `${this.project_name}-initialize`, `${this.project_name}-${service}`]);
+    if (this.source_project) this.record({ image_source_project: this.source_project });
+    await this.images.build(args => this.compose(args), this.source_project);
   }
   async provisionAuth() {
     if (!this.auth_session_file) throw new CommandError('missing private Auth session path', 2);

@@ -10,7 +10,8 @@ for (const mode of ['success', 'test-failure', 'cleanup-failure', 'reverse']) te
   const cwd = mkdtempSync(join(tmpdir(), 'e2e-runner-'));
   try {
     mkdirSync(join(cwd, 'tooling/test'), {recursive:true}); mkdirSync(join(cwd, 'bin'));
-    for (const file of ['run-e2e.mjs', 'e2e-groups.mjs']) copyFileSync(resolve('tooling/test', file), join(cwd, 'tooling/test', file));
+    for (const file of ['run-e2e.mjs', 'e2e-groups.mjs', 'images.mjs', 'commands.mjs']) copyFileSync(resolve('tooling/test', file), join(cwd, 'tooling/test', file));
+    copyFileSync(resolve('tooling/process.mjs'), join(cwd, 'tooling/process.mjs'));
     const executable = (path, body) => writeFileSync(join(cwd, path), `#!${process.execPath}\n${body}`, { mode: 0o755 });
     executable('bin/pnpm', `
       const specs = ['read', 'write A', 'write B'].map((title, i) => ({ title, id: String(i), tags: i ? ['isolated'] : [] }));
@@ -20,7 +21,7 @@ for (const mode of ['success', 'test-failure', 'cleanup-failure', 'reverse']) te
     `);
     executable('bin/docker', `
       if (${mode === 'cleanup-failure'} && process.argv[3] === 'ls') process.exit(1);
-      if (process.argv[3] === 'ls') console.log(['initialize','api','research-worker','batch-research-worker','tracking-worker','data-operator-worker','auth','agent','web'].map(name => 'thesistrace-test-20260907t000000z-1-aaaaaaaa-' + name).join('\\n'));
+      if (process.argv[3] === 'ls') console.log(['initialize','api','research-worker','batch-research-worker','tracking-worker','publication-maintenance-worker','data-operator-worker','auth','agent','web'].map(name => 'thesistrace-test-20260907t000000z-1-aaaaaaaa-' + name).join('\\n'));
       require('node:fs').appendFileSync('docker.log', process.argv.slice(2).join(' ') + '\\n');
     `);
     executable('tooling/test/cli.mjs', `
@@ -29,7 +30,9 @@ for (const mode of ['success', 'test-failure', 'cleanup-failure', 'reverse']) te
       const project = 'thesistrace-test-20260907t000000z-' + (previous.length + 1) + '-aaaaaaaa';
       previous.push({ project, source: process.env.THESISTRACE_TEST_IMAGE_SOURCE_PROJECT, keep: process.env.THESISTRACE_TEST_KEEP_IMAGES });
       fs.writeFileSync('runs.json', JSON.stringify(previous));
-      console.log('Compose project: ' + project);
+      console.log('Compose project: misleading-human-log');
+      await new Promise((resolve, reject) => process.send({ type: 'test-run-allocated', project }, error => error ? reject(error) : resolve()));
+      process.disconnect();
       process.exit(${failing} && previous.length === 1 ? 1 : 0);
     `);
     const result = spawnSync(process.execPath, ['tooling/test/run-e2e.mjs'], { cwd, env: { ...process.env, PATH: `${cwd}/bin:${process.env.PATH}`, THESISTRACE_TEST_PLAYWRIGHT_GREP: '', THESISTRACE_TEST_E2E_GROUP_ORDER: mode === 'reverse' ? 'reverse' : undefined }, encoding: 'utf8', timeout: 15_000 });
@@ -47,6 +50,10 @@ for (const mode of ['success', 'test-failure', 'cleanup-failure', 'reverse']) te
       : ['ordinary', 'case.spec.ts write A', 'case.spec.ts write B']);
     const cleanup = JSON.parse(readFileSync(join(cwd, '.local/e2e-runs', evidence, 'cleanup.json')));
     if (mode === 'cleanup-failure') assert.deepEqual(cleanup, [{ operation: 'image-list', status: 1 }]);
-    else assert.match(readFileSync(join(cwd, 'docker.log'), 'utf8'), new RegExp(`image rm ${runs[0].project}-agent`));
+    else {
+      const commands = readFileSync(join(cwd, 'docker.log'), 'utf8');
+      assert.match(commands, new RegExp(`image rm ${runs[0].project}-agent`));
+      assert.match(commands, new RegExp(`image rm ${runs[0].project}-publication-maintenance-worker`));
+    }
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 });

@@ -2,6 +2,8 @@ import { spawn, execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { groupsFromReport } from './e2e-groups.mjs';
+import { TestImages, validateTestProject } from './images.mjs';
+import { execute } from './commands.mjs';
 
 if (process.argv.length > 2) throw new Error('Use THESISTRACE_TEST_PLAYWRIGHT_GREP to select E2E cases');
 const filter = process.env.THESISTRACE_TEST_PLAYWRIGHT_GREP;
@@ -36,22 +38,17 @@ try {
     if (cancelled) break;
     const started = Date.now();
     let project;
-    let pending = '';
     const status = await new Promise((resolveStatus, reject) => {
       child = spawn('./tooling/test/cli.mjs', ['e2e'], {
         env: { ...process.env, THESISTRACE_TEST_PLAYWRIGHT_GREP: group.grep,
           THESISTRACE_TEST_IMAGE_SOURCE_PROJECT: sourceProject ?? '',
           THESISTRACE_TEST_KEEP_IMAGES: sourceProject ? '0' : '1' },
-        stdio: ['ignore', 'pipe', 'inherit'],
+        stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
       });
-      child.stdout.on('data', data => {
-        process.stdout.write(data);
-        pending += data.toString();
-        const lines = pending.split('\n'); pending = lines.pop();
-        for (const line of lines) {
-          const match = /^Compose project: (thesistrace-test-\d{8}t\d{6}z-\d+-[a-f0-9]{8})$/.exec(line);
-          if (match) project = match[1];
-        }
+      child.on('message', message => {
+        if (message?.type !== 'test-run-allocated') return;
+        try { project = validateTestProject(message.project); }
+        catch (error) { child.kill('SIGTERM'); reject(error); }
       });
       child.on('error', reject);
       child.on('close', (code, signal) => resolveStatus(code ?? (signal === 'SIGTERM' ? 143 : 130)));
@@ -63,24 +60,8 @@ try {
   }
 } finally {
   if (sourceProject) {
-    const cleanup = [];
-    try {
-      const existing = execFileSync('docker', ['image', 'ls', '--format', '{{.Repository}}', '--filter', `reference=${sourceProject}-*`], { encoding: 'utf8' }).trim().split('\n');
-      for (const service of ['initialize', 'api', 'research-worker', 'batch-research-worker', 'tracking-worker', 'data-operator-worker', 'auth', 'agent', 'web']) {
-        const image = `${sourceProject}-${service}`;
-        if (!existing.includes(image)) continue;
-        try {
-          execFileSync('docker', ['image', 'rm', image], { stdio: 'ignore' });
-          cleanup.push({ image, status: 0 });
-        } catch {
-          cleanupFailed = true;
-          cleanup.push({ image, status: 1 });
-        }
-      }
-    } catch {
-      cleanupFailed = true;
-      cleanup.push({ operation: 'image-list', status: 1 });
-    }
+    const cleanup = await new TestImages(sourceProject, execute).release();
+    cleanupFailed = cleanup.some(result => result.status !== 0);
     writeFileSync(`${evidence}/cleanup.json`, JSON.stringify(cleanup, null, 2));
   }
 }
