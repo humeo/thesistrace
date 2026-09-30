@@ -134,6 +134,8 @@ for (const width of [1280, 1440]) {
     await expect(page.getByLabel("Alpha formula", { exact: true })).not.toBeVisible();
     await expect(page.getByLabel("Holdings count", { exact: true })).not.toBeVisible();
     await portfolio.getByRole("textbox", { name: "Python source", exact: true }).fill("");
+    await page.getByRole("tab", { name: /Signals/ }).click();
+    await expect(portfolio.getByRole("textbox", { name: "Python source", exact: true })).not.toBeVisible();
     await page.getByRole("button", { name: "Run backtest", exact: true }).click();
     await expect(portfolio.getByRole("textbox", { name: "Python source", exact: true })).toBeFocused();
     expect(submissions).toHaveLength(0);

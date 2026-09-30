@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 
 import { coreFetch } from "../auth/coreFetch";
-import { useTranslation } from "../i18n";
-import { readResearchIssues, type ResearchRunAdmissionIssue } from "./admission";
+import { interfaceLocale, useTranslation } from "../i18n";
+import { formatResearchIssue, readResearchIssues, type ResearchRunAdmissionIssue } from "./admission";
 import { createDiagnosticsScheduler, type DiagnosticState } from "./diagnostics";
+import { researchDraftFeedback, type AdmissionFeedback, type ConfigurationFeedback } from "./draftFeedback";
 import {
   beginResearchRun, emptyResearchDraft, finishResearchRun, hasUnexecutedChanges,
   loadResearchDraftState, persistResearchDraft, researchDraftKey, researchInputIssues,
@@ -12,14 +13,6 @@ import {
 } from "./draft";
 
 export type ResearchRunAdmissionRejection = { issues: ResearchRunAdmissionIssue[] };
-export type AdmissionFeedback = { key: string; issues: ResearchRunAdmissionIssue[] };
-type ConfigurationFeedback = {
-  key: string;
-  checking: boolean;
-  status: "checking" | "valid" | "invalid" | "unavailable";
-  issues: ResearchRunAdmissionIssue[];
-};
-
 /** Owns the research draft's persistence, validation, diagnostics and admission lifecycle. */
 export function useResearchDraftController({
   researcherId, folderId, storage, confirmDiscard, startNewOnOpen, onInvalidInput, onNew,
@@ -55,9 +48,18 @@ export function useResearchDraftController({
   const [validationAttempted, setValidationAttempted] = useState(false);
   const specKey = JSON.stringify(researchInputs(draft));
   const inputIssues = validationAttempted ? researchInputIssues(researchInputs(draft)) : [];
-  const inputError = (field: ResearchInputField) => {
-    const issue = inputIssues.find((item) => item.field === field);
-    return issue === undefined ? undefined : t(`inputErrors.${issue.code}`);
+  const attributed = researchDraftFeedback({ key: specKey, inputIssues, admission: admissionFeedback, configuration: specFeedback, diagnostics: diagnosticState });
+  const feedback = {
+    ...attributed,
+    inputError(field: ResearchInputField) {
+      const issue = attributed.inputIssue(field);
+      return issue ? t(`inputErrors.${issue.code}`) : undefined;
+    },
+    fieldError(field: ResearchInputField) {
+      const result = attributed.fieldIssue(field);
+      return result?.kind === "input" ? t(`inputErrors.${result.issue.code}`)
+        : result?.kind === "server" ? formatResearchIssue(result.issue, interfaceLocale()) : undefined;
+    },
   };
 
   const formulaDiagnostics = useRef(createDiagnosticsScheduler());
@@ -220,7 +222,7 @@ export function useResearchDraftController({
 
   return {
     draft, hasStoredDraft, storageError, diagnosticState, exposureDiagnosticState,
-    admissionFeedback, specFeedback, specKey, submitting, validationAttempted, inputIssues, inputError,
+    feedback, submitting, validationAttempted,
     updateDraft, startNewResearch, checkConfiguration, runResearch,
   };
 }
