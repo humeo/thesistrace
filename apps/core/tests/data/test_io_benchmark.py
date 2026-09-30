@@ -69,6 +69,8 @@ def _long_research_evidence() -> dict[str, object]:
                     "terminal_positions",
                     "terminal_positions.part-000000",
                     "terminal_strategy_state",
+                    "strategy_history_reads",
+                    "strategy_history_reads.part-000000",
                     "strategy_framework",
                     "strategy_framework.part-000000",
                     "strategy_targets",

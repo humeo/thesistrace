@@ -21,7 +21,6 @@ from psycopg_pool import PoolTimeout
 
 from thesistrace._paging import fit_page
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
-from thesistrace.daily_holding_evidence import HoldingEvidencePublication
 from thesistrace.data import DatasetLifecycle
 from thesistrace.data.lifecycle import lock_data_lifecycle
 from thesistrace.publication import (
@@ -82,13 +81,9 @@ from thesistrace.research_batch.private_artifact import (
     validate_private_alpha_factor_artifact,
 )
 from thesistrace.research_folder import BATCH_RESEARCH_FOLDER_ID
-from thesistrace.research_kernel.factor_evidence import (
-    factor_resolution_coordinates,
-    validate_factor_observations,
-)
 from thesistrace.research_kernel.research_chunks import AlphaFactorExecutionBinding
+from thesistrace.research_run.evidence import ResultEvidence
 from thesistrace.research_run.execution import ResearchExecutionResourceExhausted
-from thesistrace.research_run.factor_result import FactorEvidencePublication, factor_daily_payload
 from thesistrace.research_run.models import (
     DirectStrategyAdmissionCommand,
     FactorEvaluationAdmissionCommand,
@@ -98,8 +93,6 @@ from thesistrace.research_run.models import (
 from thesistrace.research_run.result import (
     RESULT_DAILY_PARTITION_SESSION_COUNT,
     STRATEGY_DAILY_OBSERVATIONS_CONTRACT,
-    common_input_observation_payload,
-    validate_common_chunk_observations,
 )
 from thesistrace.research_run.service import (
     SEMANTIC_VERSIONS,
@@ -110,10 +103,6 @@ from thesistrace.research_run.service import (
 )
 from thesistrace.researcher.quota import QuotaPolicyUnavailable
 from thesistrace.researcher.scheduling import record_execution_opportunity
-from thesistrace.strategy_evidence import (
-    StrategyEvidencePublication,
-    append_staged_strategy_evidence,
-)
 
 BATCH_ADMISSION_RETENTION_SECONDS = 15 * 60
 BATCH_ATTEMPT_LEASE_SECONDS = 15 * 60
@@ -386,19 +375,10 @@ class ResearchBatchService:
                 claim_announced = True
             external_emit(event)
 
-        common_partitions: dict[int, list[tuple[StagedPayload, int, str, str]]] = {
-            ordinal: [] for ordinal, _key, _run in claim.items
+        evidence = {
+            ordinal: ResultEvidence(run_claim.immutable_input)
+            for ordinal, _key, run_claim in claim.items
         }
-        holding_evidence = {
-            ordinal: HoldingEvidencePublication() for ordinal, _key, _run in claim.items
-        }
-        strategy_evidence = {
-            ordinal: StrategyEvidencePublication() for ordinal, _key, _run in claim.items
-        }
-        factor_evidence = {
-            ordinal: FactorEvidencePublication() for ordinal, _key, _run in claim.items
-        }
-        factor_chunk_counts = {ordinal: 0 for ordinal, _key, _run in claim.items}
         execution: SupervisedResearchBatchExecution | None = None
         private_artifact_path: Path | None = None
         try:
@@ -483,88 +463,15 @@ class ResearchBatchService:
                     if message.get("status") == "item_started":
                         execution.advance("acknowledge_progress")
                         continue
-                    if message.get("status") == "item_factor_evidence_succeeded":
-                        if claim.batch_kind != "factor_evaluation":
-                            raise RuntimeError("Factor evidence requires a Factor Batch")
-                        chunk_ordinal = message.get("chunk_ordinal")
-                        rows = message.get("factor_daily_observations")
-                        if (
-                            type(chunk_ordinal) is not int
-                            or chunk_ordinal != factor_chunk_counts[ordinal] + 1
-                            or not isinstance(rows, list)
-                        ):
-                            raise RuntimeError("Factor Batch evidence order is invalid")
-                        plan = run_claim.immutable_input.execution_plan
-                        sessions = tuple(day.isoformat() for day in
-                                         plan.calculation_sessions[plan.research_session_offset:])
-                        before = (chunk_ordinal - 1) * plan.chunk_session_count
-                        after = min(len(sessions), before + plan.chunk_session_count)
-                        expected = factor_resolution_coordinates(
-                            sessions, before=before, after=after, final=after == len(sessions),
-                        )
-                        values = validate_factor_observations(rows)
-                        if [(row["horizon"], row["session"]) for row in values] != expected:
-                            raise RuntimeError("Factor Batch evidence coverage is incomplete")
-                        if values:
-                            staged = self._publication.stage(
-                                factor_daily_payload(values),
-                                staging_authority=lambda: self._authorize_claim_staging(claim),
-                            )
-                            factor_evidence[ordinal].add(staged, values)
-                        factor_chunk_counts[ordinal] = chunk_ordinal
-                        execution.advance("acknowledge_progress")
-                        continue
-                    if message.get("status") == "item_common_input_chunk_succeeded":
-                        parts = common_partitions[ordinal]
-                        chunk_ordinal = message.get("chunk_ordinal")
-                        rows = message.get("common_input_observations")
-                        if type(chunk_ordinal) is not int or chunk_ordinal != len(parts) + 1:
-                            raise RuntimeError("Common Batch partition order is invalid")
-                        plan = run_claim.immutable_input.execution_plan
-                        research_sessions = plan.calculation_sessions[plan.research_session_offset:]
-                        offset = (chunk_ordinal - 1) * plan.chunk_session_count
-                        sessions = tuple(day.isoformat() for day in research_sessions[
-                            offset:offset + plan.chunk_session_count
-                        ])
-                        if not sessions or not isinstance(rows, list):
-                            raise RuntimeError("Common Batch partition scope is invalid")
-                        validate_common_chunk_observations(
-                            rows, expressions=run_claim.immutable_input.expression_trees,
-                            sessions=sessions,
-                        )
-                        if not rows:
-                            raise RuntimeError("Unexpected empty Common Batch partition")
-                        staged = self._publication.stage(
-                            common_input_observation_payload(rows),
-                            staging_authority=lambda: self._authorize_claim_staging(claim),
-                        )
-                        parts.append((staged, len(rows), sessions[0], sessions[-1]))
-                        execution.advance("acknowledge_progress")
-                        continue
-                    if message.get("status") == "item_strategy_chunk_succeeded":
-                        if claim.batch_kind != "strategy_sweep":
-                            raise RuntimeError("Research Batch item response Kind is invalid")
-                        self._stage_strategy_partition(claim, message)
-                        events = message.get("strategy_events")
-                        if not isinstance(events, dict):
-                            raise RuntimeError("Strategy Batch event evidence is missing")
-                        partition = message["strategy_partition"]
-                        plan = run_claim.immutable_input.execution_plan
-                        sessions = tuple(day.isoformat() for day in plan.calculation_sessions
-                                         if partition["first_session"] <= day.isoformat()
-                                         <= partition["last_session"])
-                        if message.get("holding_sessions") != list(sessions):
-                            raise RuntimeError("Strategy Batch holding coverage is invalid")
-                        holding_evidence[ordinal].add_segment(
-                            list(sessions), message["holding_observations"],
-                            stage=lambda payload: self._publication.stage(
-                                payload,
-                                staging_authority=lambda: self._authorize_claim_staging(claim),
-                            ),
-                        )
-                        append_staged_strategy_evidence(
-                            strategy_evidence[ordinal], self._publication, events,
-                            sessions=sessions,
+                    if message.get("status") in {
+                        "item_factor_evidence_succeeded",
+                        "item_common_input_chunk_succeeded",
+                        "item_strategy_chunk_succeeded",
+                    }:
+                        if message.get("status") == "item_strategy_chunk_succeeded":
+                            self._stage_strategy_partition(claim, message)
+                        evidence[ordinal].append_batch_chunk(
+                            message, self._publication,
                             staging_authority=lambda: self._authorize_claim_staging(claim),
                         )
                         execution.advance("acknowledge_progress")
@@ -605,19 +512,13 @@ class ResearchBatchService:
                         chunk = message.get("chunk")
                         if not isinstance(chunk, Mapping):
                             raise RuntimeError("Strategy Sweep child task is invalid")
+                        evidence[ordinal].bind_strategy_partitions(self._strategy_partitions(
+                            claim, item_ordinal=ordinal,
+                        ))
                         self._research_runs.complete_batch_owned_strategy_item(
                             run_claim,
                             chunk,
-                            strategy_evidence=strategy_evidence[ordinal],
-                            holding_evidence=holding_evidence[ordinal],
-                            staged_common_partitions=common_partitions[ordinal],
-                            staged_partitions=self._strategy_partitions(
-                                claim,
-                                item_ordinal=ordinal,
-                                expected_research_sessions=(
-                                    run_claim.immutable_input.execution_plan.research_session_count
-                                ),
-                            ),
+                            evidence=evidence[ordinal],
                             authorize_batch=lambda transaction: (
                                 self._authorize_claim_in_transaction(transaction, claim)
                             ),
@@ -645,8 +546,7 @@ class ResearchBatchService:
                         self._research_runs.complete_batch_owned_factor_item(
                             run_claim,
                             chunk,
-                            factor_evidence=factor_evidence[ordinal],
-                            staged_common_partitions=common_partitions[ordinal],
+                            evidence=evidence[ordinal],
                             authorize_batch=lambda transaction: (
                                 self._authorize_claim_in_transaction(transaction, claim)
                             ),
@@ -2654,8 +2554,7 @@ class ResearchBatchService:
         claim: _ResearchBatchClaim,
         *,
         item_ordinal: int,
-        expected_research_sessions: int,
-    ) -> tuple[tuple[StagedPayload, int, str, str], ...]:
+    ) -> tuple[tuple[int, StagedPayload, int, str, str], ...]:
         ledger_path = self._strategy_partition_ledger_path(claim.attempt_id)
         selected: list[tuple[int, StagedPayload, int, str, str]] = []
         try:
@@ -2685,16 +2584,7 @@ class ResearchBatchService:
             raise RuntimeError("Strategy output partition ledger is missing") from None
         except (KeyError, TypeError, ValueError, json.JSONDecodeError):
             raise RuntimeError("Strategy output partition ledger is invalid") from None
-        if (
-            not selected
-            or tuple(value[0] for value in selected) != tuple(range(1, len(selected) + 1))
-            or sum(value[2] for value in selected) != expected_research_sessions
-        ):
-            raise RuntimeError("Strategy output partitions are incomplete")
-        return tuple(
-            (payload, row_count, first_session, last_session)
-            for _ordinal, payload, row_count, first_session, last_session in selected
-        )
+        return tuple(selected)
 
     @contextmanager
     def _authorize_claim_staging(self, claim: _ResearchBatchClaim) -> Iterator[None]:

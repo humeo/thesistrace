@@ -31,11 +31,6 @@ from thesistrace.benchmark import (
     StrategyComparisonService,
     strategy_comparison_summary,
 )
-from thesistrace.daily_holding_evidence import (
-    HoldingEvidencePublication,
-    merge_verified_holding_segment,
-    stage_holding_evidence,
-)
 from thesistrace.daily_holding_queries import HoldingQuery, holding_query_response
 from thesistrace.daily_track import (
     DailyTrackActivationLimitReached,
@@ -55,7 +50,6 @@ from thesistrace.data.lifecycle import lock_data_lifecycle
 from thesistrace.operational_events import non_blocking_operational_event_sink
 from thesistrace.publication import (
     JsonPayload,
-    ParquetRowsPayload,
     PreparedPublication,
     Publication,
     PublicationNotFoundError,
@@ -73,10 +67,6 @@ from thesistrace.research_kernel.common_inputs import (
     common_input_references,
     requires_common_industry,
 )
-from thesistrace.research_kernel.factor_evidence import (
-    factor_resolution_coordinates,
-    validate_factor_observations,
-)
 from thesistrace.research_kernel.numeric import (
     MAX_INITIAL_CASH_CNY,
     NUMERIC_CONTRACT_ID,
@@ -88,6 +78,11 @@ from thesistrace.research_kernel.strategy_program_runtime import (
     StrategyProgramError,
     StrategyProgramFailure,
     get_strategy_runtime,
+)
+from thesistrace.research_run.evidence import (
+    ResearchCheckpointIntegrityError,
+    ResultEvidence,
+    checkpoint_evidence_names,
 )
 from thesistrace.research_run.execution import (
     ExecutionEvent,
@@ -102,12 +97,7 @@ from thesistrace.research_run.execution import (
     SupervisedResearchExecutor,
 )
 from thesistrace.research_run.factor_result import (
-    FACTOR_DAILY_CONTRACT,
     FACTOR_SUMMARY_PAYLOAD_NAMES,
-    FactorEvidencePublication,
-    factor_daily_payload,
-    factor_evidence_publication_payloads,
-    read_factor_daily_partition,
     read_factor_summary_bundle,
 )
 from thesistrace.research_run.failure_policy import (
@@ -192,18 +182,11 @@ from thesistrace.research_run.planning import (
 )
 from thesistrace.research_run.quota import daily_run_count
 from thesistrace.research_run.result import (
-    COMMON_INPUT_OBSERVATIONS_CONTRACT,
-    STRATEGY_DAILY_OBSERVATIONS_CONTRACT,
     ResearchResultError,
     SemanticResultSectionRead,
-    common_input_observation_payload,
-    enforce_result_bundle_budget,
-    read_common_input_observation_partition,
     read_result_bundle,
     read_semantic_result_section,
     read_strategy_reporting_bundle,
-    result_publication_payloads_from_staged,
-    validate_common_chunk_observations,
 )
 from thesistrace.researcher.quota import (
     QuotaPolicyLookup,
@@ -213,14 +196,10 @@ from thesistrace.researcher.quota import (
 from thesistrace.researcher.scheduling import record_execution_opportunity
 from thesistrace.strategy_evidence import (
     StrategyEventQuery,
-    StrategyEvidencePublication,
     StrategyEvidenceSource,
     read_retained_strategy_events,
-    stage_strategy_evidence,
     strategy_event_payload_names,
-    strategy_event_record_count,
     strategy_event_response,
-    verified_event_partitions,
 )
 
 ATTEMPT_LEASE_SECONDS = 15 * 60
@@ -260,10 +239,6 @@ ActivateTrack = Callable[
 
 
 class ResearchRunFenced(RuntimeError):
-    pass
-
-
-class ResearchCheckpointIntegrityError(RuntimeError):
     pass
 
 
@@ -665,22 +640,18 @@ class ResearchRunService:
         claim: ResearchRunExecutionClaim,
         final_chunk: Mapping[str, object],
         *,
-        factor_evidence: FactorEvidencePublication,
-        staged_common_partitions: Sequence[tuple[StagedPayload, int, str, str]],
+        evidence: ResultEvidence,
         authorize_batch: BatchExecutionAuthorization,
         complete_batch_item: BatchItemCompletion,
     ) -> None:
         if self._publication is None:
             raise RuntimeError("ResearchRun Result publication is not configured")
         final_values = self._validate_batch_factor_final_chunk(claim, final_chunk)
-        _validate_batch_common_partitions(claim.immutable_input, staged_common_partitions)
         provenance = _result_provenance(claim)
         key_metrics = _result_key_metrics(final_values, "factor_evaluation")
-        payloads = result_publication_payloads_from_staged(
-            final_values, [], research_kind="factor_evaluation",
-            common_partitions=staged_common_partitions,
-        )
-        payloads.update(factor_evidence.finish(summary=final_values["factor_summary"]))
+        assembled = evidence.finish(final_values, batch=True)
+        completed_sessions = len(assembled.sessions)
+        payloads = assembled.payloads
         prepared = self._publication.prepare(
             kind="research.result",
             payloads=payloads,
@@ -690,17 +661,7 @@ class ResearchRunService:
                 authorize_batch,
             ),
         )
-        completed_sessions = sum(
-            chunk.research_session_count for chunk in claim.immutable_input.execution_plan.chunks
-        )
-        enforce_result_bundle_budget(
-            prepared.exact_bytes, completed_sessions,
-            strategy_event_count=strategy_event_record_count(payloads),
-            strategy_target_count=strategy_event_record_count(payloads, section="strategy_targets"),
-            strategy_framework_count=strategy_event_record_count(
-                payloads, section="strategy_framework",
-            ),
-        )
+        assembled.enforce_budget(prepared.exact_bytes)
         with self._database.transaction() as transaction:
             lock_publication_mutation(transaction)
             authorize_batch(transaction)
@@ -816,10 +777,7 @@ class ResearchRunService:
         claim: ResearchRunExecutionClaim,
         final_chunk: Mapping[str, object],
         *,
-        strategy_evidence: StrategyEvidencePublication,
-        holding_evidence: HoldingEvidencePublication,
-        staged_common_partitions: Sequence[tuple[StagedPayload, int, str, str]],
-        staged_partitions: Sequence[tuple[StagedPayload, int, str, str]],
+        evidence: ResultEvidence,
         authorize_batch: BatchExecutionAuthorization,
         complete_batch_item: BatchItemCompletion,
     ) -> None:
@@ -829,29 +787,14 @@ class ResearchRunService:
             claim,
             final_chunk,
         )
-        _validate_batch_common_partitions(claim.immutable_input, staged_common_partitions)
         provenance = _result_provenance(claim)
         key_metrics = _result_key_metrics(
             final_values,
             "strategy_backtest",
             annualized_excess_return=self._strategy_annualized_excess(final_values),
         )
-        partitions = tuple(staged_partitions)
-        if (
-            not partitions
-            or sum(row_count for _payload, row_count, _first, _last in partitions)
-            != claim.immutable_input.execution_plan.research_session_count
-            or partitions[0][2]
-            != claim.immutable_input.data_admission.first_research_session.isoformat()
-            or partitions[-1][3]
-            != claim.immutable_input.data_admission.last_research_session.isoformat()
-        ):
-            raise ResearchResultError("Strategy Sweep observation partitions are incomplete")
-        payloads = result_publication_payloads_from_staged(
-            final_values, partitions, research_kind="strategy_backtest",
-            common_partitions=staged_common_partitions,
-        )
-        payloads.update(strategy_evidence.finish())
+        assembled = evidence.finish(final_values, batch=True)
+        payloads = assembled.payloads
         prepared = self._publication.prepare(
             kind="research.result", payloads=payloads,
             provenance=provenance,
@@ -860,26 +803,14 @@ class ResearchRunService:
                 authorize_batch,
             ),
         )
-        holding_payloads = holding_evidence.finish()
-        plan = claim.immutable_input.execution_plan
-        sessions = [day.isoformat() for day in
-                    plan.calculation_sessions[plan.research_session_offset:]]
-        if holding_payloads["daily_holdings"].value["sessions"] != sessions:
-            raise ResearchResultError("Strategy Sweep holding coverage is incomplete")
+        holding_payloads = assembled.holding_payloads
+        sessions = list(assembled.sessions)
         holding_prepared = self._publication.prepare(
             kind=HOLDING_KIND, payloads=holding_payloads,
             provenance={**provenance, "holding_unit_id": claim.run_id},
             staging_authority=lambda: self._authorize_batch_result_staging(claim, authorize_batch),
         )
-        completed_sessions = claim.immutable_input.execution_plan.research_session_count
-        enforce_result_bundle_budget(
-            prepared.exact_bytes, completed_sessions,
-            strategy_event_count=strategy_event_record_count(payloads),
-            strategy_target_count=strategy_event_record_count(payloads, section="strategy_targets"),
-            strategy_framework_count=strategy_event_record_count(
-                payloads, section="strategy_framework",
-            ),
-        )
+        assembled.enforce_budget(prepared.exact_bytes)
         with self._database.transaction() as transaction:
             lock_publication_mutation(transaction)
             authorize_batch(transaction)
@@ -3364,6 +3295,7 @@ class ResearchRunService:
         if not rows:
             return None
         try:
+            evidence = ResultEvidence(claim.immutable_input)
             prior_chain: str | None = None
             continuation: Mapping[str, object] | None = None
             final_values: Mapping[str, object] | None = None
@@ -3421,15 +3353,11 @@ class ResearchRunService:
                     expected_payload_names.add("final_values")
                 if set(bundle.payloads) != expected_payload_names:
                     raise ResearchCheckpointIntegrityError
-                if event_values:
-                    for _ in verified_event_partitions(
-                        bundle, sessions=_checkpoint_research_sessions(
-                            claim.immutable_input, expected_ordinal,
-                        ),
-                    ):
-                        pass
-                elif expected_observation_count:
-                    raise ResearchCheckpointIntegrityError
+                evidence.append_verified_checkpoint(
+                    row, replace(bundle, payloads={
+                        name: bundle.payloads[name] for name in checkpoint_evidence_names(row)
+                    }),
+                )
                 continuation = _checkpoint_json_payload(
                     bundle.payloads["continuation"],
                     subject="continuation",
@@ -3448,41 +3376,6 @@ class ResearchRunService:
                     )
                     if final_values_value is not None
                     else None
-                )
-                observation = bundle.payloads.get("strategy_daily_observations")
-                if observation is not None and (
-                    observation.media_type != "application/vnd.apache.parquet"
-                    or observation.serialization
-                    != {
-                        "format": "canonical-parquet",
-                        "writer_contract": (STRATEGY_DAILY_OBSERVATIONS_CONTRACT.descriptor()),
-                    }
-                ):
-                    raise ResearchCheckpointIntegrityError
-                common_rows = []
-                if common_value is not None:
-                    common_payload = bundle.payloads["common_input_observations"]
-                    if common_payload.serialization != {
-                        "format": "canonical-parquet",
-                        "writer_contract": COMMON_INPUT_OBSERVATIONS_CONTRACT.descriptor(),
-                    } or common_payload.media_type != "application/vnd.apache.parquet":
-                        raise ResearchCheckpointIntegrityError
-                    common_rows = read_common_input_observation_partition(common_payload.content)
-                validate_common_chunk_observations(
-                    common_rows, expressions=claim.immutable_input.expression_trees,
-                    sessions=_checkpoint_research_sessions(claim.immutable_input, expected_ordinal),
-                )
-                factor_rows = []
-                if factor_value is not None:
-                    factor_payload = bundle.payloads["factor_daily_observations"]
-                    if factor_payload.serialization != {
-                        "format": "canonical-parquet",
-                        "writer_contract": FACTOR_DAILY_CONTRACT.descriptor(),
-                    } or factor_payload.media_type != "application/vnd.apache.parquet":
-                        raise ResearchCheckpointIntegrityError
-                    factor_rows = read_factor_daily_partition(factor_payload.content)
-                _validate_factor_checkpoint_rows(
-                    claim.immutable_input, expected_ordinal, factor_rows,
                 )
                 prior_chain = chain_sha256
             latest = rows[-1]
@@ -3552,205 +3445,37 @@ class ResearchRunService:
         provenance = _result_provenance(claim)
         with self._database.transaction() as transaction:
             rows = transaction.execute(
-                """
-                SELECT observation_payload, observation_row_count,
-                       observation_first_session, observation_last_session
-                FROM research_runs.execution_checkpoints
-                WHERE run_id = %s AND observation_row_count > 0
-                ORDER BY ordinal
-                """,
-                (claim.run_id,),
-            ).fetchall()
-            common_rows = transaction.execute(
-                """
-                SELECT ordinal, common_observation_payload
-                FROM research_runs.execution_checkpoints
-                WHERE run_id = %s AND common_observation_payload IS NOT NULL
-                ORDER BY ordinal
-                """,
-                (claim.run_id,),
-            ).fetchall()
-            progress = transaction.execute(
-                """
-                SELECT completed_research_sessions
-                FROM research_runs.progress
-                WHERE run_id = %s
-                """,
-                (claim.run_id,),
-            ).fetchone()
-        partitions = [
-            (
-                _staged_payload(row["observation_payload"]),
-                int(row["observation_row_count"]),
-                row["observation_first_session"].isoformat(),
-                row["observation_last_session"].isoformat(),
-            )
-            for row in rows
-        ]
-        common_partitions = []
-        input_count = len(common_input_references(*claim.immutable_input.expression_trees))
-        for row in common_rows:
-            sessions = _checkpoint_research_sessions(claim.immutable_input, int(row["ordinal"]))
-            if not sessions or input_count == 0:
-                raise ResearchResultError("Unexpected common observation checkpoint partition")
-            common_partitions.append((
-                _staged_payload(row["common_observation_payload"]),
-                len(sessions) * input_count, sessions[0], sessions[-1],
-            ))
-        payloads = result_publication_payloads_from_staged(
-            final_values,
-            partitions,
-            research_kind=claim.immutable_input.research_kind,
-            common_partitions=common_partitions,
-        )
-        if claim.immutable_input.research_kind == "factor_evaluation":
-            payloads.update(factor_evidence_publication_payloads(
-                self._factor_checkpoint_partitions(claim),
-                summary=final_values["factor_summary"],
-            ))
-        if claim.immutable_input.research_kind == "strategy_backtest":
-            payloads.update(self._strategy_checkpoint_evidence(claim))
-        prepared = self._publication.prepare(
-            kind="research.result",
-            payloads=payloads,
-            provenance=provenance,
-            staging_authority=lambda: self._authorize_result_staging(claim),
-        )
-        if progress is None:
-            raise ResearchResultError("Research Progress is missing")
-        enforce_result_bundle_budget(
-            prepared.exact_bytes,
-            int(progress["completed_research_sessions"]),
-            strategy_event_count=strategy_event_record_count(payloads),
-            strategy_target_count=strategy_event_record_count(payloads, section="strategy_targets"),
-            strategy_framework_count=strategy_event_record_count(
-                payloads, section="strategy_framework",
-            ),
-        )
-        holding_prepared = None
-        if claim.immutable_input.research_kind == "strategy_backtest":
-            holding_prepared = self._prepare_checkpoint_holdings(claim, provenance)
-        return prepared, provenance, key_metrics, holding_prepared
-
-    def _prepare_checkpoint_holdings(self, claim, provenance):
-        with self._database.transaction() as transaction:
-            rows = transaction.execute(
                 "SELECT checkpoint.*, attempt.fence AS creator_fence, attempt.data_generation_id "
                 "FROM research_runs.execution_checkpoints AS checkpoint "
                 "JOIN research_runs.attempts AS attempt ON attempt.id = checkpoint.attempt_id "
                 "WHERE checkpoint.run_id = %s ORDER BY checkpoint.ordinal", (claim.run_id,),
             ).fetchall()
-        builder = HoldingEvidencePublication()
+        evidence = ResultEvidence(claim.immutable_input)
         prior_chain = None
         for row in rows:
             binding = _checkpoint_row_binding(claim.immutable_input, claim.run_id, row, prior_chain)
             prior_chain = str(row["chain_sha256"])
             if hashlib.sha256(canonical_json_bytes(binding)).hexdigest() != prior_chain:
                 raise ResearchCheckpointIntegrityError
-            sessions = _checkpoint_research_sessions(claim.immutable_input, int(row["ordinal"]))
-            references = {name: _staged_payload(value)
-                          for name, value in row["holding_payloads"].items()}
-            if not sessions:
-                if references:
-                    raise ResearchCheckpointIntegrityError
-                continue
             bundle = self._publication.read_selected(PublishedRef(
                 manifest_sha256=str(row["checkpoint_manifest_sha256"]),
                 kind="research.execution-checkpoint", provenance=binding,
-            ), frozenset(references))
-            merge_verified_holding_segment(builder, bundle, references, sessions=list(sessions))
-        return self._publication.prepare(
-            kind=HOLDING_KIND, payloads=builder.finish(),
-            provenance={**provenance, "holding_unit_id": claim.run_id},
+            ), checkpoint_evidence_names(row))
+            evidence.append_verified_checkpoint(row, bundle)
+        assembled = evidence.finish(final_values, batch=False)
+        prepared = self._publication.prepare(
+            kind="research.result", payloads=assembled.payloads, provenance=provenance,
             staging_authority=lambda: self._authorize_result_staging(claim),
         )
-
-    def _strategy_checkpoint_evidence(self, claim: ResearchRunExecutionClaim):
-        assert self._publication is not None
-        with self._database.transaction() as transaction:
-            rows = transaction.execute(
-                """
-                SELECT checkpoint.*, attempt.fence AS creator_fence,
-                       attempt.data_generation_id
-                FROM research_runs.execution_checkpoints AS checkpoint
-                JOIN research_runs.attempts AS attempt ON attempt.id = checkpoint.attempt_id
-                WHERE checkpoint.run_id = %s
-                ORDER BY checkpoint.ordinal
-                """,
-                (claim.run_id,),
-            ).fetchall()
-        builder = StrategyEvidencePublication()
-        prior_chain = None
-        for row in rows:
-            binding = _checkpoint_row_binding(
-                claim.immutable_input, claim.run_id, row, prior_chain,
+        assembled.enforce_budget(prepared.exact_bytes)
+        holding_prepared = None
+        if assembled.holding_payloads is not None:
+            holding_prepared = self._publication.prepare(
+                kind=HOLDING_KIND, payloads=assembled.holding_payloads,
+                provenance={**provenance, "holding_unit_id": claim.run_id},
+                staging_authority=lambda: self._authorize_result_staging(claim),
             )
-            prior_chain = str(row["chain_sha256"])
-            if hashlib.sha256(canonical_json_bytes(binding)).hexdigest() != prior_chain:
-                raise ResearchCheckpointIntegrityError
-            sessions = _checkpoint_research_sessions(claim.immutable_input, int(row["ordinal"]))
-            descriptors = row["strategy_event_payloads"]
-            if not sessions:
-                if descriptors != {}:
-                    raise ResearchCheckpointIntegrityError
-                continue
-            if not isinstance(descriptors, dict) or not descriptors:
-                raise ResearchCheckpointIntegrityError
-            bundle = self._publication.read_selected(
-                PublishedRef(
-                    manifest_sha256=str(row["checkpoint_manifest_sha256"]),
-                    kind="research.execution-checkpoint", provenance=binding,
-                ), frozenset(descriptors),
-            )
-            for section, name, event_rows in verified_event_partitions(bundle, sessions=sessions):
-                staged = _staged_payload(descriptors[name])
-                payload = bundle.payloads[name]
-                if (hashlib.sha256(payload.content).hexdigest() != staged.sha256
-                    or len(payload.content) != staged.byte_size):
-                    raise ResearchCheckpointIntegrityError
-                builder.add(section, staged, event_rows)
-        return builder.finish()
-
-    def _factor_checkpoint_partitions(
-        self, claim: ResearchRunExecutionClaim,
-    ) -> Iterator[tuple[StagedPayload, list[dict[str, object]]]]:
-        assert self._publication is not None
-        with self._database.transaction() as transaction:
-            rows = transaction.execute(
-                """
-                SELECT checkpoint.*, attempt.fence AS creator_fence,
-                       attempt.data_generation_id
-                FROM research_runs.execution_checkpoints AS checkpoint
-                JOIN research_runs.attempts AS attempt
-                  ON attempt.id = checkpoint.attempt_id
-                WHERE checkpoint.run_id = %s
-                ORDER BY checkpoint.ordinal
-                """,
-                (claim.run_id,),
-            ).fetchall()
-        prior_chain = None
-        for row in rows:
-            binding = _checkpoint_row_binding(
-                claim.immutable_input, claim.run_id, row, prior_chain,
-            )
-            prior_chain = str(row["chain_sha256"])
-            if hashlib.sha256(canonical_json_bytes(binding)).hexdigest() != prior_chain:
-                raise ResearchCheckpointIntegrityError
-            if row["factor_observation_payload"] is None:
-                continue
-            bundle = self._publication.read_selected(
-                PublishedRef(
-                    manifest_sha256=str(row["checkpoint_manifest_sha256"]),
-                    kind="research.execution-checkpoint",
-                    provenance=binding,
-                ),
-                frozenset({"factor_daily_observations"}),
-            )
-            daily = read_factor_daily_partition(
-                bundle.payloads["factor_daily_observations"].content
-            )
-            _validate_factor_checkpoint_rows(claim.immutable_input, int(row["ordinal"]), daily)
-            yield _staged_payload(row["factor_observation_payload"]), daily
+        return prepared, provenance, key_metrics, holding_prepared
 
     def _commit_execution_chunk(
         self,
@@ -3765,8 +3490,6 @@ class ResearchRunService:
         completed_research = int(chunk["completed_research_sessions"])
         continuation = chunk.get("continuation")
         observations = chunk.get("strategy_daily_observations")
-        common_rows = chunk.get("common_input_observations")
-        factor_rows = chunk.get("factor_daily_observations")
         final_values = chunk.get("final_values")
         try:
             plan_chunk = claim.immutable_input.execution_plan.chunks[ordinal - 1]
@@ -3806,68 +3529,22 @@ class ResearchRunService:
             )
         except ValueError as error:
             raise ResearchResultError("Research Chunk continuation is invalid") from error
-        if not isinstance(common_rows, list) or any(
-            not isinstance(row, Mapping) for row in common_rows
-        ):
-            raise ResearchResultError("Common Chunk observations are invalid")
-        validate_common_chunk_observations(
-            common_rows, expressions=claim.immutable_input.expression_trees,
-            sessions=_checkpoint_research_sessions(claim.immutable_input, ordinal),
+        staged = ResultEvidence(claim.immutable_input).stage_checkpoint(
+            ordinal, chunk, self._publication,
+            staging_authority=lambda: self._authorize_result_staging(claim),
         )
-        _validate_factor_checkpoint_rows(claim.immutable_input, ordinal, factor_rows)
-        event_rows = chunk.get("strategy_events")
-        collect_events = (claim.immutable_input.research_kind == "strategy_backtest"
-                          and plan_chunk.research_session_count > 0)
-        if not isinstance(event_rows, dict) or (not collect_events and event_rows != {}):
-            raise ResearchResultError("Research Chunk event evidence is invalid")
-        event_payloads = (stage_strategy_evidence(
-            self._publication, event_rows,
-            sessions=_checkpoint_research_sessions(claim.immutable_input, ordinal),
-            staging_authority=lambda: self._authorize_result_staging(claim),
-        ) if collect_events else {})
-        holding_sessions = chunk.get("holding_sessions")
-        holding_rows = chunk.get("holding_observations")
-        expected_holding_sessions = list(_checkpoint_research_sessions(
-            claim.immutable_input, ordinal,
-        )) if collect_events else []
-        if holding_sessions != expected_holding_sessions or not isinstance(holding_rows, Sequence):
-            raise ResearchResultError("Research Chunk holding coverage is invalid")
-        if not collect_events and holding_rows:
-            raise ResearchResultError("Non-Strategy Chunk cannot contain holdings")
-        holding_payloads = stage_holding_evidence(
-            self._publication, holding_sessions, holding_rows,
-            staging_authority=lambda: self._authorize_result_staging(claim),
-        ) if collect_events else {}
+        observation_payload = staged.observation
+        common_payload = staged.common
+        factor_payload = staged.factor
+        holding_payloads = staged.holdings
+        event_payloads = staged.events
         holding_values = {name: _staged_payload_value(payload)
                           for name, payload in holding_payloads.items()}
         event_values = {name: _staged_payload_value(payload)
                         for name, payload in event_payloads.items()}
-        factor_payload = (
-            self._publication.stage(
-                factor_daily_payload(factor_rows),
-                staging_authority=lambda: self._authorize_result_staging(claim),
-            ) if factor_rows else None
-        )
-        common_payload = (
-            self._publication.stage(
-                common_input_observation_payload(common_rows),
-                staging_authority=lambda: self._authorize_result_staging(claim),
-            ) if common_rows else None
-        )
         continuation_payload = self._publication.stage(
             JsonPayload(continuation),
             staging_authority=lambda: self._authorize_result_staging(claim),
-        )
-        observation_payload = (
-            self._publication.stage(
-                ParquetRowsPayload(
-                    rows=tuple(dict(value) for value in observations),
-                    contract=STRATEGY_DAILY_OBSERVATIONS_CONTRACT,
-                ),
-                staging_authority=lambda: self._authorize_result_staging(claim),
-            )
-            if observations
-            else None
         )
         final_values_payload = (
             self._publication.stage(
@@ -5155,20 +4832,6 @@ def _staged_payload_value(payload: StagedPayload) -> dict[str, object]:
     }
 
 
-def _staged_payload(value: object) -> StagedPayload:
-    if not isinstance(value, Mapping):
-        raise ResearchResultError("Staged Result payload reference is invalid")
-    serialization = value.get("serialization")
-    if not isinstance(serialization, Mapping):
-        raise ResearchResultError("Staged Result payload serialization is invalid")
-    return StagedPayload(
-        sha256=str(value["sha256"]),
-        byte_size=int(value["byte_size"]),
-        media_type=str(value["media_type"]),
-        serialization=dict(serialization),
-    )
-
-
 def _checkpoint_row_binding(
     immutable_input: ImmutableRunInput,
     run_id: str,
@@ -5728,66 +5391,6 @@ def research_result_manifest_is_referenced(
             (manifest_sha256,),
         ).fetchone()
         is not None
-    )
-
-
-def _checkpoint_research_sessions(
-    immutable_input: ImmutableRunInput, ordinal: int,
-) -> tuple[str, ...]:
-    plan = immutable_input.execution_plan
-    chunk = plan.chunks[ordinal - 1]
-    return tuple(
-        session.isoformat()
-        for session in plan.calculation_sessions[plan.research_session_offset:]
-        if chunk.first_session <= session <= chunk.last_session
-    )
-
-
-def _validate_batch_common_partitions(
-    immutable_input: ImmutableRunInput,
-    partitions: Sequence[tuple[StagedPayload, int, str, str]],
-) -> None:
-    input_count = len(common_input_references(*immutable_input.expression_trees))
-    plan = immutable_input.execution_plan
-    sessions = plan.calculation_sessions[plan.research_session_offset :]
-    expected = []
-    if input_count:
-        for offset in range(0, len(sessions), plan.chunk_session_count):
-            window = sessions[offset : offset + plan.chunk_session_count]
-            expected.append(
-                (len(window) * input_count, window[0].isoformat(), window[-1].isoformat())
-            )
-    if [(count, first, last) for _payload, count, first, last in partitions] != expected:
-        raise ResearchResultError("Batch common observation partitions are incomplete")
-
-
-def _validate_factor_checkpoint_rows(
-    immutable_input: ImmutableRunInput, ordinal: int, rows: object,
-) -> None:
-    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
-        raise ResearchResultError("Factor Chunk observations are invalid")
-    try:
-        values = validate_factor_observations(rows)
-        expected = _factor_checkpoint_coordinates(immutable_input, ordinal)
-        if [(row["horizon"], row["session"]) for row in values] != expected:
-            raise ValueError("Factor Chunk signal coverage is incomplete")
-    except ValueError as error:
-        raise ResearchResultError("Factor Chunk evidence is invalid") from error
-
-
-def _factor_checkpoint_coordinates(
-    immutable_input: ImmutableRunInput, ordinal: int,
-) -> list[tuple[int, str]]:
-    if immutable_input.research_kind != "factor_evaluation":
-        return []
-    plan = immutable_input.execution_plan
-    sessions = tuple(
-        day.isoformat() for day in plan.calculation_sessions[plan.research_session_offset:]
-    )
-    before = sum(chunk.research_session_count for chunk in plan.chunks[:ordinal - 1])
-    after = before + plan.chunks[ordinal - 1].research_session_count
-    return factor_resolution_coordinates(
-        sessions, before=before, after=after, final=ordinal == len(plan.chunks),
     )
 
 
