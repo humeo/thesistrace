@@ -5,7 +5,6 @@ import {
   MarketRefreshReceipt,
   OperatorDataPage,
   marketRefreshAsOfForDate,
-  marketRefreshPollGenerationIsCurrent,
   suggestMarketRefreshKey,
 } from "./OperatorDataPage";
 
@@ -80,11 +79,4 @@ test("keeps the last known running state honest when status polling fails", () =
   expect(markup).toContain('role="status"');
   expect(markup).toContain("Showing the last known state");
   expect(markup).not.toContain("remains queued");
-});
-
-test("fences stale operation polls and reconciled submissions independently", () => {
-  expect(marketRefreshPollGenerationIsCurrent("operation", 4, 9, 4)).toBe(true);
-  expect(marketRefreshPollGenerationIsCurrent("operation", 4, 9, 5)).toBe(false);
-  expect(marketRefreshPollGenerationIsCurrent("pending", 9, 9, 4)).toBe(true);
-  expect(marketRefreshPollGenerationIsCurrent("pending", 9, 10, 4)).toBe(false);
 });

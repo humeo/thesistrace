@@ -13,30 +13,16 @@ import { OperatorDatasetStatus } from "./OperatorDatasetStatus";
 import { OperatorFinancialRefreshPanel } from "./OperatorFinancialRefreshPanel";
 import { OperatorIndustryRefreshPanel } from "./OperatorIndustryRefreshPanel";
 import { OperatorMarketRefreshDialog } from "./OperatorMarketRefreshDialog";
-import { OperatorPageNotFoundError } from "./operatorDirectoryClient";
+import { useDataRefresh } from "./useDataRefresh";
 import {
-  loadMarketRefresh,
   isMarketRefreshIdempotencyKey,
   type MarketRefreshOperation,
   type MarketRefreshRequest,
-  OperatorMutationError,
 } from "./operatorMutationClient";
-
-const pollIntervalMilliseconds = 5_000;
 
 type MarketRefreshFieldErrors = Readonly<{
   asOf: string | null;
   idempotencyKey: string | null;
-}>;
-
-type TrackedMarketRefreshRequest = Readonly<{
-  generation: number;
-  request: MarketRefreshRequest;
-}>;
-
-type TrackedMarketRefreshOperation = Readonly<{
-  generation: number;
-  operation: MarketRefreshOperation;
 }>;
 
 const noFieldErrors: MarketRefreshFieldErrors = {
@@ -47,146 +33,40 @@ const noFieldErrors: MarketRefreshFieldErrors = {
 export function OperatorDataPage() {
   const { t } = useTranslation("operator");
   const [asOf, setAsOf] = useState("");
-  const [confirmation, setConfirmation] = useState<TrackedMarketRefreshRequest | null>(null);
-  const [pendingSubmission, setPendingSubmission] = useState<TrackedMarketRefreshRequest | null>(null);
-  const [operation, setOperation] = useState<TrackedMarketRefreshOperation | null>(null);
-  const [pollError, setPollError] = useState(false);
-  const [submissionError, setSubmissionError] = useState<"rejectedRequest" | "stopped" | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [fieldErrors, setFieldErrors] = useState(noFieldErrors);
   const [datasetStatusReloadGeneration, setDatasetStatusReloadGeneration] = useState(0);
   const asOfInput = useRef<HTMLInputElement | null>(null);
   const pendingFieldFocus = useRef<keyof MarketRefreshFieldErrors | null>(null);
-  const activeOperationGeneration = useRef(0);
-  const activeSubmissionGeneration = useRef(0);
-  const pendingSubmissionRef = useRef<TrackedMarketRefreshRequest | null>(null);
   const trigger = useRef<HTMLButtonElement | null>(null);
-  const focusAfterCommit = useRef<HTMLElement | null>(null);
-  useEffect(() => {
-    if (confirmation !== null || pendingSubmission !== null) return;
-    focusAfterCommit.current?.focus();
-    focusAfterCommit.current = null;
-  }, [confirmation, pendingSubmission]);
-  pendingSubmissionRef.current = pendingSubmission;
+  const wasBusy = useRef(false);
+  const attributedFailure = useRef<unknown>(null);
   const showNotFound = useCallback(() => setNotFound(true), []);
   const notifyOperationAccepted = useCallback(
     () => setDatasetStatusReloadGeneration((current) => current + 1),
     [],
   );
 
+  const refresh = useDataRefresh("market", { onAccessNotFound: showNotFound, onOperationAccepted: notifyOperationAccepted });
+  const { confirmation, pendingRequest: pendingSubmission, operation, pollError, submissionFailure } = refresh;
+  const submissionError = submissionFailure?.kind === "rejected" && (submissionFailure.code === "conflict"
+    || !isMarketRefreshIdempotencyKey(submissionFailure.request.idempotencyKey)) ? "rejectedRequest"
+    : submissionFailure?.kind === "stopped" ? "stopped" : null;
   useEffect(() => {
-    if (
-      confirmation !== null
-      || pendingSubmission !== null
-      || pendingFieldFocus.current === null
-    ) return;
-    const target = asOfInput.current;
-    if (target === null) return;
-    pendingFieldFocus.current = null;
-    target.focus();
-  }, [confirmation, fieldErrors, pendingSubmission]);
-
-  useEffect(() => {
-    const trackedRequest = pendingSubmission !== null
-      ? { ...pendingSubmission, source: "pending" as const }
-      : (operation !== null && !isTerminal(operation.operation)
-        ? {
-            generation: operation.generation,
-            request: {
-              asOf: operation.operation.asOf,
-              idempotencyKey: operation.operation.idempotencyKey,
-            },
-            source: "operation" as const,
-          }
-        : null);
-    if (notFound || trackedRequest === null) return;
-    let disposed = false;
-    let timer: number | undefined;
-    let controller: AbortController | null = null;
-
-    const stop = (): void => {
-      disposed = true;
-      window.clearTimeout(timer);
-      controller?.abort();
-      document.removeEventListener("visibilitychange", visibilityChanged);
-    };
-
-    const schedule = (delay = pollIntervalMilliseconds): void => {
-      if (disposed || document.visibilityState !== "visible") return;
-      window.clearTimeout(timer);
-      timer = window.setTimeout(() => void poll(), delay);
-    };
-    const poll = async (): Promise<void> => {
-      if (disposed || document.visibilityState !== "visible") return;
-      controller?.abort();
-      controller = new AbortController();
-      try {
-        const next = await loadMarketRefresh(trackedRequest.request, controller.signal);
-        if (disposed || !pollGenerationIsCurrent(trackedRequest)) return;
-        setPollError(false);
-        if (trackedRequest.source === "pending") {
-          activeSubmissionGeneration.current += 1;
-          setPendingSubmission(null);
-          replaceOperation(next);
-          notifyOperationAccepted();
-          focusAfterCommit.current = trigger.current;
-        } else {
-          setOperation({ generation: trackedRequest.generation, operation: next });
-        }
-        if (!isTerminal(next)) schedule();
-      } catch (reason) {
-        if (disposed || (reason instanceof DOMException && reason.name === "AbortError")) {
-          return;
-        }
-        if (!pollGenerationIsCurrent(trackedRequest)) return;
-        if (reason instanceof OperatorPageNotFoundError) {
-          if (trackedRequest.source === "pending") {
-            setPollError(true);
-            schedule();
-            return;
-          }
-          stop();
-          activeOperationGeneration.current += 1;
-          setOperation(null);
-          setNotFound(true);
-          return;
-        }
-        if (
-          trackedRequest.source === "pending"
-          && reason instanceof OperatorMutationError
-          && (reason.code === "conflict" || reason.code === "request-invalid")
-        ) {
-          showRejectedRequest(trackedRequest, reason.code);
-          return;
-        }
-        setPollError(true);
-        schedule();
+    const busy = confirmation !== null || pendingSubmission !== null;
+    if (submissionFailure?.kind === "rejected" && attributedFailure.current !== submissionFailure) {
+      attributedFailure.current = submissionFailure;
+      if (submissionFailure.code === "request-invalid" && isMarketRefreshIdempotencyKey(submissionFailure.request.idempotencyKey)) {
+        setFieldErrors({ asOf: "selectedAsOfInvalid", idempotencyKey: null });
       }
-    };
-    const visibilityChanged = (): void => {
-      if (document.visibilityState === "visible") {
-        schedule(0);
-      } else {
-        window.clearTimeout(timer);
-        controller?.abort();
-      }
-    };
-
-    document.addEventListener("visibilitychange", visibilityChanged);
-    schedule();
-    return stop;
-  }, [notFound, notifyOperationAccepted, operation, pendingSubmission]);
-
-  function pollGenerationIsCurrent(
-    tracked: TrackedMarketRefreshRequest & Readonly<{ source: "operation" | "pending" }>,
-  ): boolean {
-    return marketRefreshPollGenerationIsCurrent(
-      tracked.source,
-      tracked.generation,
-      activeSubmissionGeneration.current,
-      activeOperationGeneration.current,
-    );
-  }
+      pendingFieldFocus.current = "asOf";
+    }
+    if (!busy && pendingFieldFocus.current !== null) {
+      pendingFieldFocus.current = null;
+      asOfInput.current?.focus();
+    } else if (wasBusy.current && !busy) trigger.current?.focus();
+    wasBusy.current = busy;
+  }, [confirmation, fieldErrors, pendingSubmission, submissionFailure]);
 
   if (notFound) {
     return (
@@ -195,19 +75,6 @@ export function OperatorDataPage() {
         <p>{t("data.common.notFoundDescription")}</p>
       </section>
     );
-  }
-
-  function dismissConfirmation(generation: number): void {
-    if (activeSubmissionGeneration.current !== generation) return;
-    activeSubmissionGeneration.current += 1;
-    setConfirmation(null);
-    focusAfterCommit.current = trigger.current;
-  }
-
-  function replaceOperation(next: MarketRefreshOperation): void {
-    const generation = activeOperationGeneration.current + 1;
-    activeOperationGeneration.current = generation;
-    setOperation({ generation, operation: next });
   }
 
   function reviewRefresh(): void {
@@ -224,61 +91,10 @@ export function OperatorDataPage() {
       pendingFieldFocus.current = invalid;
       return;
     }
-    setPollError(false);
-    setSubmissionError(null);
-    beginConfirmation({
+    refresh.review({
       asOf: marketRefreshAsOfForDate(asOf),
       idempotencyKey,
     });
-  }
-
-  function beginConfirmation(request: MarketRefreshRequest): void {
-    const generation = activeSubmissionGeneration.current + 1;
-    activeSubmissionGeneration.current = generation;
-    setConfirmation({ generation, request });
-  }
-
-  function showRejectedRequest(
-    tracked: TrackedMarketRefreshRequest,
-    code: "conflict" | "request-invalid",
-  ): void {
-    if (activeSubmissionGeneration.current !== tracked.generation) return;
-    activeSubmissionGeneration.current += 1;
-    setConfirmation(null);
-    setPendingSubmission(null);
-    setSubmissionError(null);
-    if (
-      code === "conflict"
-      || !isMarketRefreshIdempotencyKey(tracked.request.idempotencyKey)
-    ) {
-      setSubmissionError("rejectedRequest");
-      pendingFieldFocus.current = "asOf";
-      return;
-    }
-    pendingFieldFocus.current = "asOf";
-    setFieldErrors({
-      asOf: "selectedAsOfInvalid",
-      idempotencyKey: null,
-    });
-  }
-
-  function reconcileSubmission(tracked: TrackedMarketRefreshRequest): void {
-    if (activeSubmissionGeneration.current !== tracked.generation) return;
-    setConfirmation(null);
-    activeOperationGeneration.current += 1;
-    setOperation(null);
-    setPollError(false);
-    setSubmissionError(null);
-    setPendingSubmission(tracked);
-    focusAfterCommit.current = trigger.current;
-  }
-
-  function failUncertainSubmission(tracked: TrackedMarketRefreshRequest): void {
-    if (
-      activeSubmissionGeneration.current !== tracked.generation
-      || pendingSubmissionRef.current?.generation !== tracked.generation
-    ) return;
-    setPollError(true);
   }
 
   return (
@@ -336,27 +152,14 @@ export function OperatorDataPage() {
 
         {pendingSubmission === null ? null : (
           <MarketRefreshReconciliation
-            onRetry={() => {
-              setPendingSubmission(null);
-              setPollError(false);
-              setSubmissionError(null);
-              beginConfirmation(pendingSubmission.request);
-            }}
-            onStop={() => {
-              if (activeSubmissionGeneration.current === pendingSubmission.generation) {
-                activeSubmissionGeneration.current += 1;
-              }
-              setPendingSubmission(null);
-              setPollError(false);
-              setSubmissionError("stopped");
-              focusAfterCommit.current = trigger.current;
-            }}
+            onRetry={refresh.retryExact}
+            onStop={refresh.stopChecking}
             pollError={pollError}
-            request={pendingSubmission.request}
+            request={pendingSubmission}
           />
         )}
         {operation === null ? null : (
-          <MarketRefreshReceipt operation={operation.operation} pollError={pollError} />
+          <MarketRefreshReceipt operation={operation} pollError={pollError} />
         )}
 
         <OperatorFinancialRefreshPanel
@@ -370,21 +173,10 @@ export function OperatorDataPage() {
       </Page></PageContent>
       {confirmation === null ? null : (
         <OperatorMarketRefreshDialog
-          onDismiss={() => dismissConfirmation(confirmation.generation)}
-          onRequestRejected={(code) => showRejectedRequest(confirmation, code)}
-          onSubmissionFailed={() => failUncertainSubmission(confirmation)}
-          onSubmissionUncertain={() => reconcileSubmission(confirmation)}
-          onSucceeded={(accepted) => {
-            if (activeSubmissionGeneration.current !== confirmation.generation) return;
-            activeSubmissionGeneration.current += 1;
-            replaceOperation(accepted);
-            notifyOperationAccepted();
-            setConfirmation(null);
-            setPendingSubmission(null);
-            setPollError(false);
-            setSubmissionError(null);
-            focusAfterCommit.current = trigger.current;
-          }}
+          onDismiss={refresh.dismissConfirmation}
+          onSubmit={refresh.confirm}
+          submitting={confirmation.submitting}
+          error={confirmation.error}
           request={confirmation.request}
         />
       )}
@@ -541,16 +333,7 @@ export function marketRefreshAsOfForDate(date: string): string {
   return `${date}T18:00:00+08:00`;
 }
 
-export function marketRefreshPollGenerationIsCurrent(
-  source: "operation" | "pending",
-  trackedGeneration: number,
-  activeSubmissionGeneration: number,
-  activeOperationGeneration: number,
-): boolean {
-  return source === "pending"
-    ? trackedGeneration === activeSubmissionGeneration
-    : trackedGeneration === activeOperationGeneration;
-}
+
 
 const marketRefreshKeyError = "keyInvalid";
 

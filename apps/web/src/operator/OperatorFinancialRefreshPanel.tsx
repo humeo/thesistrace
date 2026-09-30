@@ -11,21 +11,14 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { OperatorPageNotFoundError } from "./operatorDirectoryClient";
 import { FinancialRefreshTelemetry } from "./FinancialRefreshTelemetry";
 import { operatorDataClasses as styles } from "./operatorDataClasses";
+import { useDataRefresh } from "./useDataRefresh";
 import {
-  confirmFinancialRefreshProof,
   type FinancialRefreshOperation,
   type FinancialRefreshRequest,
   isIsoResearchSession,
   isMarketRefreshIdempotencyKey,
-  loadFinancialRefresh,
   OperatorMutationError,
-  submitFinancialRefresh,
 } from "./operatorMutationClient";
-
-const pollIntervalMilliseconds = 5_000;
-
-type TrackedRequest = Readonly<{ generation: number; request: FinancialRefreshRequest }>;
-type TrackedOperation = Readonly<{ generation: number; operation: FinancialRefreshOperation }>;
 
 export function OperatorFinancialRefreshPanel({
   onAccessNotFound,
@@ -36,182 +29,32 @@ export function OperatorFinancialRefreshPanel({
 }>) {
   const { t } = useTranslation("operator");
   const [target, setTarget] = useState("");
-  const [confirmation, setConfirmation] = useState<TrackedRequest | null>(null);
-  const [pending, setPending] = useState<TrackedRequest | null>(null);
-  const [operation, setOperation] = useState<TrackedOperation | null>(null);
-  const [pollError, setPollError] = useState(false);
   const [targetError, setTargetError] = useState<ParseKeys<"operator"> | null>(null);
-  const [submissionError, setSubmissionError] = useState<ParseKeys<"operator"> | null>(null);
   const targetInput = useRef<HTMLInputElement | null>(null);
   const trigger = useRef<HTMLButtonElement | null>(null);
-  const submissionGeneration = useRef(0);
-  const operationGeneration = useRef(0);
-  const focusAfterCommit = useRef<HTMLElement | null>(null);
-
+  const refresh = useDataRefresh("financial", { onAccessNotFound, onOperationAccepted });
+  const { confirmation, pendingRequest: pending, operation, pollError, submissionFailure } = refresh;
+  const wasBusy = useRef(false);
+  const rejected = submissionFailure?.kind === "rejected" ? submissionFailure : null;
+  const invalidTarget = rejected?.code === "request-invalid" && isMarketRefreshIdempotencyKey(rejected.request.idempotencyKey);
+  const submissionError = rejected && !invalidTarget ? "data.common.rejectedRequest"
+    : submissionFailure?.kind === "stopped" ? "data.common.stopped"
+    : submissionFailure?.kind === "failed" ? financialMutationMessage(submissionFailure.reason) : null;
   useEffect(() => {
-    if (confirmation !== null || pending !== null) return;
-    // A frame may run before React removes disabled or closes the dialog.
-    focusAfterCommit.current?.focus();
-    focusAfterCommit.current = null;
-  }, [confirmation, pending]);
-
-  useEffect(() => {
-    const tracked = pending !== null
-      ? { ...pending, source: "pending" as const }
-      : operation !== null && !financialRefreshIsTerminal(operation.operation)
-        ? {
-            generation: operation.generation,
-            request: {
-              idempotencyKey: operation.operation.idempotencyKey,
-              observationThroughSession: operation.operation.observationThroughSession,
-            },
-            source: "operation" as const,
-          }
-        : null;
-    if (tracked === null) return;
-    let disposed = false;
-    let timer: number | undefined;
-    let controller: AbortController | null = null;
-
-    const stop = (): void => {
-      disposed = true;
-      window.clearTimeout(timer);
-      controller?.abort();
-      document.removeEventListener("visibilitychange", visibilityChanged);
-    };
-    const current = (): boolean => tracked.source === "pending"
-      ? tracked.generation === submissionGeneration.current
-      : tracked.generation === operationGeneration.current;
-    const schedule = (delay = pollIntervalMilliseconds): void => {
-      if (disposed || document.visibilityState !== "visible") return;
-      window.clearTimeout(timer);
-      timer = window.setTimeout(() => void poll(), delay);
-    };
-    const poll = async (): Promise<void> => {
-      if (disposed || document.visibilityState !== "visible") return;
-      controller?.abort();
-      controller = new AbortController();
-      try {
-        const next = await loadFinancialRefresh(tracked.request, controller.signal);
-        if (disposed || !current()) return;
-        setPollError(false);
-        if (tracked.source === "pending") {
-          submissionGeneration.current += 1;
-          setPending(null);
-          replaceOperation(next);
-          onOperationAccepted();
-          focusAfterCommit.current = trigger.current;
-        } else {
-          setOperation({ generation: tracked.generation, operation: next });
-        }
-        if (!financialRefreshIsTerminal(next)) schedule();
-      } catch (reason) {
-        if (disposed || (reason instanceof DOMException && reason.name === "AbortError")) {
-          return;
-        }
-        if (!current()) return;
-        if (reason instanceof OperatorPageNotFoundError) {
-          if (tracked.source === "pending") {
-            setPollError(true);
-            schedule();
-            return;
-          }
-          stop();
-          operationGeneration.current += 1;
-          setOperation(null);
-          onAccessNotFound();
-          return;
-        }
-        if (
-          tracked.source === "pending"
-          && reason instanceof OperatorMutationError
-          && (reason.code === "conflict" || reason.code === "request-invalid")
-        ) {
-          rejectRequest(tracked, reason.code);
-          return;
-        }
-        setPollError(true);
-        schedule();
-      }
-    };
-    const visibilityChanged = (): void => {
-      if (document.visibilityState === "visible") schedule(0);
-      else {
-        window.clearTimeout(timer);
-        controller?.abort();
-      }
-    };
-
-    document.addEventListener("visibilitychange", visibilityChanged);
-    schedule();
-    return stop;
-  }, [onAccessNotFound, onOperationAccepted, operation, pending]);
-
-  function replaceOperation(next: FinancialRefreshOperation): void {
-    const generation = operationGeneration.current + 1;
-    operationGeneration.current = generation;
-    setOperation({ generation, operation: next });
-  }
+    const busy = confirmation !== null || pending !== null;
+    if (invalidTarget) setTargetError("data.financial.targetInvalid");
+    if (wasBusy.current && !busy) {
+      (invalidTarget ? targetInput.current : trigger.current)?.focus();
+    }
+    wasBusy.current = busy;
+  }, [confirmation, pending, submissionFailure]);
 
   function review(): void {
     if (confirmation !== null || pending !== null) return;
-    const idempotencyKey = suggestFinancialRefreshKey(new Date());
-    const nextTargetError = isIsoResearchSession(target)
-      ? null
-      : "data.financial.targetInvalid";
-    setTargetError(nextTargetError);
-    if (nextTargetError !== null) {
-      window.requestAnimationFrame(() => targetInput.current?.focus());
-      return;
-    }
-    setPollError(false);
-    setSubmissionError(null);
-    beginConfirmation({ idempotencyKey, observationThroughSession: target });
-  }
-
-  function beginConfirmation(request: FinancialRefreshRequest): void {
-    const generation = submissionGeneration.current + 1;
-    submissionGeneration.current = generation;
-    setConfirmation({ generation, request });
-  }
-
-  function rejectRequest(
-    tracked: TrackedRequest,
-    code: "conflict" | "request-invalid",
-  ): void {
-    if (tracked.generation !== submissionGeneration.current) return;
-    submissionGeneration.current += 1;
-    setConfirmation(null);
-    setPending(null);
-    setSubmissionError(null);
-    if (code === "conflict" || !isMarketRefreshIdempotencyKey(tracked.request.idempotencyKey)) {
-      setSubmissionError("data.common.rejectedRequest");
-      focusAfterCommit.current = trigger.current;
-    } else {
-      setTargetError("data.financial.targetInvalid");
-      focusAfterCommit.current = targetInput.current;
-    }
-  }
-
-  function reconcileSubmission(tracked: TrackedRequest): void {
-    if (tracked.generation !== submissionGeneration.current) return;
-    setConfirmation(null);
-    operationGeneration.current += 1;
-    setOperation(null);
-    setPollError(false);
-    setSubmissionError(null);
-    setPending(tracked);
-    focusAfterCommit.current = trigger.current;
-  }
-
-  function failKnownSubmission(tracked: TrackedRequest, reason: unknown): void {
-    if (tracked.generation !== submissionGeneration.current) return;
-    submissionGeneration.current += 1;
-    setConfirmation(null);
-    setPending(null);
-    setPollError(false);
-    setSubmissionError(financialMutationMessage(reason));
-    focusAfterCommit.current = trigger.current;
+    const error = isIsoResearchSession(target) ? null : "data.financial.targetInvalid";
+    setTargetError(error);
+    if (error) { targetInput.current?.focus(); return; }
+    refresh.review({ idempotencyKey: suggestFinancialRefreshKey(new Date()), observationThroughSession: target });
   }
 
   return (
@@ -262,52 +105,21 @@ export function OperatorFinancialRefreshPanel({
 
       {pending === null ? null : (
         <FinancialRefreshReconciliation
-          onRetry={() => {
-            setPending(null);
-            setPollError(false);
-            setSubmissionError(null);
-            beginConfirmation(pending.request);
-          }}
-          onStop={() => {
-            if (submissionGeneration.current === pending.generation) {
-              submissionGeneration.current += 1;
-            }
-            setPending(null);
-            setPollError(false);
-            setSubmissionError(
-              "data.common.stopped",
-            );
-            focusAfterCommit.current = trigger.current;
-          }}
+          onRetry={refresh.retryExact}
+          onStop={refresh.stopChecking}
           pollError={pollError}
-          request={pending.request}
+          request={pending}
         />
       )}
       {operation === null ? null : (
-        <FinancialRefreshReceipt operation={operation.operation} pollError={pollError} />
+        <FinancialRefreshReceipt operation={operation} pollError={pollError} />
       )}
       {confirmation === null ? null : (
         <FinancialRefreshDialog
-          onDismiss={() => {
-            if (confirmation.generation !== submissionGeneration.current) return;
-            submissionGeneration.current += 1;
-            setConfirmation(null);
-            focusAfterCommit.current = trigger.current;
-          }}
-          onRejected={(code) => rejectRequest(confirmation, code)}
-          onSubmissionFailed={(reason) => failKnownSubmission(confirmation, reason)}
-          onSubmissionUncertain={() => reconcileSubmission(confirmation)}
-          onSucceeded={(accepted) => {
-            if (confirmation.generation !== submissionGeneration.current) return;
-            submissionGeneration.current += 1;
-            replaceOperation(accepted);
-            onOperationAccepted();
-            setConfirmation(null);
-            setPending(null);
-            setPollError(false);
-            setSubmissionError(null);
-            focusAfterCommit.current = trigger.current;
-          }}
+          onDismiss={refresh.dismissConfirmation}
+          onSubmit={refresh.confirm}
+          submitting={confirmation.submitting}
+          error={confirmation.error}
           request={confirmation.request}
         />
       )}
@@ -396,107 +208,20 @@ export function FinancialRefreshReceipt({
   );
 }
 
-function FinancialRefreshDialog({
-  onDismiss,
-  onRejected,
-  onSubmissionFailed,
-  onSubmissionUncertain,
-  onSucceeded,
-  request: refreshRequest,
-}: Readonly<{
+function FinancialRefreshDialog({ onDismiss, onSubmit, submitting, error, request: refreshRequest }: Readonly<{
   onDismiss: () => void;
-  onRejected: (code: "conflict" | "request-invalid") => void;
-  onSubmissionFailed: (reason: unknown) => void;
-  onSubmissionUncertain: () => void;
-  onSucceeded: (operation: FinancialRefreshOperation) => void;
+  onSubmit: () => Promise<void>;
+  submitting: boolean;
+  error: unknown | null;
   request: FinancialRefreshRequest;
 }>) {
   const { t } = useTranslation("operator");
   const initialFocus = useRef<HTMLButtonElement | null>(null);
-  const dismissed = useRef(false);
-  const mounted = useRef(true);
-  const phase = useRef<"idle" | "proof" | "submission">("idle");
-  const activeRequest = useRef<AbortController | null>(null);
-  const [error, setError] = useState<ParseKeys<"operator"> | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-      if (!dismissed.current || phase.current !== "submission") activeRequest.current?.abort();
-      activeRequest.current = null;
-    };
-  }, []);
-
-  async function submit(): Promise<void> {
-    if (submitting) return;
-    activeRequest.current?.abort();
-    const controller = new AbortController();
-    activeRequest.current = controller;
-    let accepted: FinancialRefreshOperation | null = null;
-    let rejected: "conflict" | "request-invalid" | null = null;
-    let uncertain = false;
-    let knownFailureAfterDismissal = false;
-    let knownFailureReason: unknown;
-    setSubmitting(true);
-    setError(null);
-    try {
-      phase.current = "proof";
-      const confirmed = await confirmFinancialRefreshProof(
-        refreshRequest,
-        controller.signal,
-      );
-      if (dismissed.current || !mounted.current) return;
-
-      phase.current = "submission";
-      accepted = await submitFinancialRefresh(
-        refreshRequest,
-        confirmed.proof,
-        controller.signal,
-      );
-    } catch (reason) {
-      if (phase.current === "submission" && submissionFailureIsUncertain(reason)) {
-        if (!dismissed.current && mounted.current) uncertain = true;
-      } else if (reason instanceof DOMException && reason.name === "AbortError") {
-        // Closing request confirmation before Core submission has no mutation side effect.
-      } else if (
-        reason instanceof OperatorMutationError
-        && (reason.code === "conflict" || reason.code === "request-invalid")
-      ) {
-        rejected = reason.code;
-      } else if (dismissed.current) {
-        knownFailureAfterDismissal = true;
-        knownFailureReason = reason;
-      }
-      else if (mounted.current) setError(financialMutationMessage(reason));
-    } finally {
-      phase.current = "idle";
-      activeRequest.current = null;
-      if (mounted.current) {
-        setSubmitting(false);
-      }
-    }
-    if (rejected !== null) onRejected(rejected);
-    else if (accepted !== null) onSucceeded(accepted);
-    else if (uncertain) onSubmissionUncertain();
-    else if (knownFailureAfterDismissal) onSubmissionFailed(knownFailureReason);
-  }
-
-  function dismiss(): void {
-    dismissed.current = true;
-    if (phase.current === "submission") onSubmissionUncertain();
-    else {
-      activeRequest.current?.abort();
-      activeRequest.current = null;
-      onDismiss();
-    }
-  }
 
   return (
-    <Dialog open onOpenChange={(open) => { if (!open) dismiss(); }}>
+    <Dialog open onOpenChange={(open) => { if (!open) onDismiss(); }}>
       <DialogContent finalFocus={false} initialFocus={initialFocus} showCloseButton={false} className="max-h-[calc(100dvh-32px)] overflow-y-auto sm:max-w-lg">
-        <form className={styles.confirmationForm} onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+        <form className={styles.confirmationForm} onSubmit={(event) => { event.preventDefault(); void onSubmit(); }}>
           <DialogHeader>
             <p className={styles.eyebrow}>{t("data.common.confirmUpdate")}</p>
             <DialogTitle id="operator-financial-refresh-title">{t("data.financial.submitTitle")}</DialogTitle>
@@ -508,9 +233,9 @@ function FinancialRefreshDialog({
             <div><dt>{t("data.common.idempotencyKey")}</dt><dd><code>{refreshRequest.idempotencyKey}</code></dd></div>
           </dl>
           <Alert role="note"><AlertDescription><strong>{t("data.common.effect")}</strong><p>{t("data.common.queueEffect")}</p></AlertDescription></Alert>
-          {error === null ? null : <Alert variant="destructive" role="alert"><AlertDescription>{t(error)}</AlertDescription></Alert>}
+          {error === null ? null : <Alert variant="destructive" role="alert"><AlertDescription>{t(financialMutationMessage(error))}</AlertDescription></Alert>}
           <DialogFooter>
-            <Button variant="outline" onClick={dismiss} ref={initialFocus} type="button">{t("data.common.cancel")}</Button>
+            <Button variant="outline" onClick={onDismiss} ref={initialFocus} type="button">{t("data.common.cancel")}</Button>
             <Button disabled={submitting} type="submit">{submitting ? t("data.common.submitting") : t("data.common.submitRefresh")}</Button>
           </DialogFooter>
         </form>
@@ -573,10 +298,6 @@ function financialPresentation(operation: FinancialRefreshOperation): Readonly<{
   };
 }
 
-function financialRefreshIsTerminal(operation: FinancialRefreshOperation): boolean {
-  return operation.status === "succeeded" || operation.status === "failed";
-}
-
 function financialMutationMessage(reason: unknown): ParseKeys<"operator"> {
   if (reason instanceof OperatorPageNotFoundError) return "data.common.accessLost";
   if (!(reason instanceof OperatorMutationError)) return "data.financial.submitFailed";
@@ -585,12 +306,6 @@ function financialMutationMessage(reason: unknown): ParseKeys<"operator"> {
   if (reason.code === "data-not-ready") return "data.financial.dataNotReady";
   if (reason.code === "rate-limited") return "data.common.rateLimited";
   return "data.financial.unavailable";
-}
-
-function submissionFailureIsUncertain(reason: unknown): boolean {
-  if (reason instanceof DOMException && reason.name === "AbortError") return true;
-  if (reason instanceof OperatorPageNotFoundError) return false;
-  return !(reason instanceof OperatorMutationError) || reason.code === "unavailable";
 }
 
 export function suggestFinancialRefreshKey(now: Date): string {
