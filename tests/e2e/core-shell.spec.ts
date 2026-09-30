@@ -885,9 +885,10 @@ test("Complete field catalog composes one Formula and starts its DailyTrack", { 
     await expect(terminalProgress.locator("time")).toHaveCount(2);
     await expect(page.getByRole("heading", { name: "Daily Observations" })).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Provenance" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Use as draft", exact: true })).toBeVisible();
     expect(await page.locator("[aria-label='ResearchRun progress']").evaluate(
       (progress) => progress.compareDocumentPosition(
-        document.querySelector("[aria-label='Create a draft']")!,
+        document.querySelector("[aria-label='Name and folder']")!,
       ) & Node.DOCUMENT_POSITION_FOLLOWING,
     )).toBeTruthy();
     controlWorker("unpause");
