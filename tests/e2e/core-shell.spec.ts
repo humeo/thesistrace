@@ -1570,6 +1570,8 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await page.getByRole("tab", { name: /^Universe/ }).click();
     await expect(page.getByRole("combobox", { name: "Universe", exact: true })).toContainText("Top 300");
     await page.getByRole("tab", { name: /^Signals/ }).click();
+    const copiedAdjustment = page.getByRole("button", { name: "Industry adjustment", exact: true });
+    if ((await copiedAdjustment.getAttribute("aria-expanded")) !== "true") await copiedAdjustment.click();
     await expect(page.getByRole("combobox", { name: "Neutralization", exact: true })).toContainText("None");
     await expect(page.getByRole("radio", { name: /Strategy Backtest/ })).toBeChecked();
     await page.getByRole("tab", { name: /^Portfolio/ }).click();
