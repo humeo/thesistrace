@@ -23,6 +23,7 @@ from thesistrace.data.financial_collection import (
     FinancialCollectionService,
     FinancialRawSource,
 )
+from thesistrace.data.financial_composition import FinancialComposition
 from thesistrace.data.generation_store import GenerationStoreError, MountedGenerationStore
 from thesistrace.data.head_store import DatasetHeadConflict
 from thesistrace.data.lifecycle import (
@@ -81,6 +82,7 @@ class FinancialRefreshService:
         )
         self._candidates = FinancialCandidateStore(mount_root)
         self._generations = MountedGenerationStore(mount_root)
+        self._composition = FinancialComposition(self._generations, self._candidates)
         self._lifecycle = DatasetLifecycle(database, mount_root)
 
     def reproject(
@@ -190,10 +192,10 @@ class FinancialRefreshService:
             prepared_at = self._validated_clock()
             operation_id = _publication_operation_id(idempotency_key, 0)
             with mounted_data_mutation_lock(self._database):
-                self._candidates.verify_for_publication(outcome.candidate.manifest_sha256)
-                composed = self._generations._compose_prevalidated_financial_candidate(
+                composed = self._composition.compose(
                     current.generation_manifest_sha256,
                     outcome.candidate.manifest_sha256,
+                    financial_predecessor=prior_candidate,
                     prepared_at=prepared_at,
                     publication_coordinate=fingerprint,
                 )
@@ -433,9 +435,10 @@ class FinancialRefreshService:
                 prepared_at = self._validated_clock()
                 operation_id = _publication_operation_id(idempotency_key, attempt)
                 with mounted_data_mutation_lock(self._database):
-                    composed = self._generations._compose_prevalidated_financial_candidate(
+                    composed = self._composition.compose(
                         current.generation_manifest_sha256,
                         outcome.candidate.manifest_sha256,
+                        financial_predecessor=source_financial,
                         prepared_at=prepared_at,
                         publication_coordinate=fingerprint,
                     )
@@ -545,34 +548,43 @@ class FinancialRefreshService:
                     != str(row["generation_manifest_sha256"])
                 ):
                     return None
-                recovered = False
-                for attempt in range(4):
-                    operation_id = _publication_operation_id(idempotency_key, attempt)
-                    try:
-                        self._lifecycle.protect_prevalidated_candidate(
-                            operation_id=operation_id,
-                            generation_manifest_sha256=composed,
-                            lease_seconds=900,
-                        )
-                    except DataLifecycleError:
-                        continue
-                    try:
-                        self._lifecycle.compare_and_swap_head(
-                            expected_generation_manifest_sha256=(
-                                current.generation_manifest_sha256
-                            ),
-                            candidate_generation_manifest_sha256=composed,
-                            operation_id=operation_id,
-                            prepared_at=row["publication_prepared_at"],
-                            financial_publication_key=idempotency_key,
-                        )
-                    except DatasetHeadConflict:
-                        self._lifecycle.release_candidate(operation_id=operation_id)
-                        return None
-                    recovered = True
-                    break
-                if not recovered:
-                    raise FinancialRefreshError("FINANCIAL_PUBLICATION_RECOVERY_CONFLICT")
+                with mounted_data_mutation_lock(self._database):
+                    self._composition.verify_persisted(
+                        composed, current.generation_manifest_sha256, publication_candidate,
+                        financial_predecessor=self._generations.inspect_root(
+                            current.generation_manifest_sha256,
+                        ).financial_candidate_manifest_sha256,
+                        prepared_at=row["publication_prepared_at"],
+                        publication_coordinate=str(row["fingerprint"]),
+                    )
+                    recovered = False
+                    for attempt in range(4):
+                        operation_id = _publication_operation_id(idempotency_key, attempt)
+                        try:
+                            self._lifecycle.protect_prevalidated_candidate(
+                                operation_id=operation_id,
+                                generation_manifest_sha256=composed,
+                                lease_seconds=900,
+                            )
+                        except DataLifecycleError:
+                            continue
+                        try:
+                            self._lifecycle.compare_and_swap_head(
+                                expected_generation_manifest_sha256=(
+                                    current.generation_manifest_sha256
+                                ),
+                                candidate_generation_manifest_sha256=composed,
+                                operation_id=operation_id,
+                                prepared_at=row["publication_prepared_at"],
+                                financial_publication_key=idempotency_key,
+                            )
+                        except DatasetHeadConflict:
+                            self._lifecycle.release_candidate(operation_id=operation_id)
+                            return None
+                        recovered = True
+                        break
+                    if not recovered:
+                        raise FinancialRefreshError("FINANCIAL_PUBLICATION_RECOVERY_CONFLICT")
             else:
                 for attempt in range(4):
                     self._lifecycle.release_candidate(

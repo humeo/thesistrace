@@ -25,6 +25,7 @@ from thesistrace.data.financial_collection import (
     FinancialShardCheckpoint,
     RawFinancialBatchStore,
 )
+from thesistrace.data.financial_composition import FinancialComposition
 from thesistrace.data.financial_series import FinancialSeriesResolver
 from thesistrace.data.generation_files import AddressedFileStore
 from thesistrace.data.generation_store import GenerationFileRef, MountedGenerationStore
@@ -1609,12 +1610,14 @@ def test_daily_composition_does_not_revalidate_the_published_parent_family(
         ),
     )
 
-    composed = generations.compose_financial_candidate(
-        source.manifest_sha256,
-        candidate.manifest_sha256,
-        prepared_at=datetime(2026, 8, 13, 10, tzinfo=UTC),
-    )
-
+    with measure_data_io() as io:
+        composed = FinancialComposition(generations, store).compose(
+            source.manifest_sha256, candidate.manifest_sha256,
+            financial_predecessor=prior.manifest_sha256,
+            prepared_at=datetime(2026, 8, 13, 10, tzinfo=UTC),
+            publication_coordinate="b" * 64,
+        )
+    assert io.financial_parquet_scans == 0
     assert composed.financial_candidate_manifest_sha256 == candidate.manifest_sha256
 
 

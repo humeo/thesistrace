@@ -3425,6 +3425,109 @@ def test_market_refresh_completes_while_financial_collection_is_blocked(
         database.close()
 
 
+@pytest.mark.parametrize("damage", [False, True])
+def test_financial_publication_recovery_revalidates_bytes_before_cas(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    damage: bool,
+) -> None:
+    database = _database(core_settings)
+    key = f"financial-pre-cas-recovery-{damage}"
+    try:
+        market = _market_generation(tmp_path)
+        _establish_head(database, tmp_path, market, operation_id=f"{key}-market")
+        contract = _executable_contract()
+        prior = _initial_candidate(
+            database,
+            tmp_path,
+            ExecutableStatementSource(),
+            market,
+            idempotency_key=f"{key}-prior",
+            contract=contract,
+        )
+        source = _financial_generation(tmp_path, market, prior)
+        _establish_head(database, tmp_path, source, operation_id=f"{key}-source", expected=market)
+        service = FinancialRefreshService(
+            database,
+            tmp_path,
+            ExecutableStatementSource(),
+            clock=lambda: COLLECTED_AT + timedelta(days=1),
+        )
+        command = dict(
+            idempotency_key=key,
+            generation_manifest_sha256=source,
+            contract=contract,
+            prior_candidate_manifest_sha256=prior.manifest_sha256,
+            observation_through_session="2026-08-13",
+        )
+
+        def interrupted_cas(*args: object, **kwargs: object) -> object:
+            raise RuntimeError("interrupted before CAS")
+
+        with monkeypatch.context() as interrupted:
+            interrupted.setattr(DatasetLifecycle, "compare_and_swap_head", interrupted_cas)
+            with pytest.raises(RuntimeError, match="interrupted before CAS"):
+                service.publish(**command)
+        assert (
+            MountedDatasetHeadStore(tmp_path).current_pointer().generation_manifest_sha256 == source
+        )
+        with database.transaction() as transaction:
+            recorded = transaction.execute(
+                "SELECT composed_generation_manifest_sha256 "
+                "FROM data.financial_refresh_operations WHERE idempotency_key=%s",
+                (key,),
+            ).fetchone()["composed_generation_manifest_sha256"]
+        assert recorded is not None
+        if damage:
+            # A referenced Financial object changes after the task/store proof was lost.
+            family = json.loads(
+                (tmp_path / "manifests/sha256" / recorded[:2] / f"{recorded}.json").read_bytes()
+            )
+            financial = next(
+                item for item in family["families"] if item["family_id"] == "equity.financial_pit"
+            )
+            candidate_digest = financial["manifest_sha256"]
+            candidate = json.loads(
+                (
+                    tmp_path
+                    / "manifests/sha256"
+                    / candidate_digest[:2]
+                    / f"{candidate_digest}.json"
+                ).read_bytes()
+            )
+            table = candidate["tables"][0]
+            digest = table["manifest_sha256"]
+            table_manifest = json.loads(
+                (tmp_path / "manifests/sha256" / digest[:2] / f"{digest}.json").read_bytes()
+            )
+            obj = table_manifest["objects"][0]["sha256"]
+            (tmp_path / "objects/sha256" / obj[:2] / f"{obj}.parquet").write_bytes(
+                b"damaged after interruption"
+            )
+        restarted = FinancialRefreshService(
+            database,
+            tmp_path,
+            ExecutableStatementSource(),
+            clock=lambda: COLLECTED_AT + timedelta(days=2),
+        )
+        if damage:
+            with pytest.raises(FinancialCandidateError):
+                restarted.publish(**command)
+            assert (
+                MountedDatasetHeadStore(tmp_path).current_pointer().generation_manifest_sha256
+                == source
+            )
+        else:
+            assert restarted.publish(**command).generation_manifest_sha256 == recorded
+            assert (
+                MountedDatasetHeadStore(tmp_path).current_pointer().generation_manifest_sha256
+                == recorded
+            )
+    finally:
+        database.close()
+
+
 def test_financial_publication_reconciles_a_post_cas_completion_failure(
     core_settings: CoreSettings,
     tmp_path: Path,

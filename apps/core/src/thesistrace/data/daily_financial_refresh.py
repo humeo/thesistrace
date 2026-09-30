@@ -29,6 +29,7 @@ from thesistrace.data.financial_collection import (
     _raw_batch_content,
     _source_failure_code,
 )
+from thesistrace.data.financial_composition import FinancialComposition
 from thesistrace.data.financial_disclosures import (
     FinancialDisclosureDiscovery,
     FinancialDisclosureSource,
@@ -1083,6 +1084,7 @@ class DailyFinancialRefreshService:
         self._store = FinancialDailyRefreshStore(database)
         self._candidates = FinancialCandidateStore(self._root)
         self._generations = MountedGenerationStore(self._root)
+        self._composition = FinancialComposition(self._generations, self._candidates)
         self._lifecycle = DatasetLifecycle(database, self._root)
 
     def _completed_stage(self, key: str, phase: str, started: float, **counts: object) -> None:
@@ -1690,21 +1692,13 @@ class DailyFinancialRefreshService:
             )
             with mounted_data_mutation_lock(self._database):
                 composition_started = perf_counter()
-                self._candidates.verify_for_publication(candidate.manifest_sha256)
-                composed = self._generations._compose_prevalidated_financial_candidate(
-                    current.generation_manifest_sha256,
-                    candidate.manifest_sha256,
-                    prepared_at=prepared_at,
-                    publication_coordinate=fingerprint,
+                composed = self._composition.compose(
+                    current.generation_manifest_sha256, candidate.manifest_sha256,
+                    financial_predecessor=current_financial,
+                    prepared_at=prepared_at, publication_coordinate=fingerprint,
+                    indicator_manifest_sha256=indicator_candidate,
+                    indicator_store=indicators,
                 )
-                if indicator_candidate is not None:
-                    composed = self._generations._compose_incremental_indicator_candidate(
-                        composed.manifest_sha256,
-                        str(indicator_candidate),
-                        published_generation_sha256=current.generation_manifest_sha256,
-                        prepared_at=prepared_at,
-                        indicator_store=indicators,
-                    )
                 self._completed_stage(idempotency_key, "composition", composition_started)
                 publication_started = perf_counter()
                 self._store.record_composed_generation(

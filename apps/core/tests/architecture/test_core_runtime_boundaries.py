@@ -840,7 +840,8 @@ def test_daily_track_working_cache_is_private_concrete_and_worker_local() -> Non
 def test_financial_refresh_composes_only_its_prevalidated_candidate() -> None:
     source = (ROOT / "apps/core/src/thesistrace" / "data" / "financial_refresh.py").read_text()
 
-    assert "._compose_prevalidated_financial_candidate(" in source
+    assert "._composition.compose(" in source
+    assert "._compose_prevalidated_financial_candidate(" not in source
     assert ".compose_financial_candidate(" not in source
 
 
@@ -849,7 +850,8 @@ def test_daily_financial_refresh_composes_only_its_prevalidated_candidate() -> N
         ROOT / "apps/core/src/thesistrace" / "data" / "daily_financial_refresh.py"
     ).read_text()
 
-    assert "._compose_prevalidated_financial_candidate(" in source
+    assert "._composition.compose(" in source
+    assert "._compose_prevalidated_financial_candidate(" not in source
     assert ".compose_financial_candidate(" not in source
 
 
