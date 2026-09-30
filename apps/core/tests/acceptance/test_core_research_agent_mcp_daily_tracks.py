@@ -1712,6 +1712,7 @@ def _assert_compact_track(
 ) -> None:
     serialized = str(payload).lower()
     assert payload["available_result_sections"] == [
+        "strategy_history_reads",
         "strategy_framework", "strategy_targets", "strategy_orders", "strategy_child_orders",
         "strategy_fills", "strategy_adjustments", "strategy_execution_constraints",
         "daily_holdings_status", "daily_holdings",
