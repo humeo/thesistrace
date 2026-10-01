@@ -8,6 +8,14 @@ const exactRoutes = new Set([
   "/api/auth/change-password",
   "/api/auth/get-session",
   "/api/auth/ok",
+  "/api/auth/oauth2/authorize",
+  "/api/auth/oauth2/token",
+  "/api/auth/oauth2/register",
+  "/api/auth/oauth2/consent",
+  "/api/auth/oauth2/continue",
+  "/api/auth/oauth2/public-client",
+  "/api/auth/oauth2/revoke",
+  "/api/auth/oauth2/introspect",
   "/api/auth/request-password-reset",
   "/api/auth/researcher-invitation/accept",
   "/api/auth/researcher-invitation/inspect",
@@ -31,6 +39,7 @@ export type AuthHttpEvent = Readonly<{
   method: string;
   route: string;
   status_code: number;
+  retry_after_seconds?: number;
   timestamp: string;
 }>;
 
@@ -42,7 +51,7 @@ type AuthHttpObservation = Readonly<{
 export type AuthHttpObserver = Readonly<{
   complete: (
     observation: AuthHttpObservation,
-    request: Readonly<{ method: string; path: string; status: number }>,
+    request: Readonly<{ method: string; path: string; status: number; retryAfter?: string | null }>,
   ) => void;
   start: (headers: Headers) => AuthHttpObservation;
 }>;
@@ -65,6 +74,8 @@ export function createAuthHttpObserver(
 
   return {
     complete(observation, request) {
+      const retry = request.retryAfter;
+      const retrySeconds = retry && /^[1-9][0-9]*$/.test(retry) ? Number(retry) : NaN;
       write({
         component: "auth_http",
         duration_ms: Math.max(
@@ -77,6 +88,7 @@ export function createAuthHttpObserver(
         method: normalizeMethod(request.method),
         route: normalizeAuthRoute(request.path),
         status_code: normalizeStatus(request.status),
+        ...(request.status === 429 && Number.isSafeInteger(retrySeconds) && retrySeconds <= 60 ? {retry_after_seconds: retrySeconds} : {}),
         timestamp: clock().toISOString(),
       });
     },

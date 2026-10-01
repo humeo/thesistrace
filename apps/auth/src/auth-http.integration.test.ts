@@ -652,6 +652,86 @@ describe.sequential("Auth database-backed HTTP contract", () => {
     ).toMatchObject({ rows: [{ count: "0" }] });
   });
 
+  it("uses fixed windows for continuous low-frequency sign-in attempts", async () => {
+    const { app } = runtime();
+    const start = Date.now();
+    let now = start;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      for (let attempt = 0; attempt < 12; attempt += 1) {
+        now = start + attempt * 20_000;
+        const response = await app.request(settings.publicOrigin + "/api/auth/sign-in/email-otp", {
+          method: "POST",
+          headers: { "content-type": "application/json", origin: settings.publicOrigin, "x-thesistrace-client-ip": "192.0.2.181" },
+          body: JSON.stringify({ email: "missing@example.com", otp: "000000" }),
+        });
+        expect(response.status).toBe(400);
+      }
+    } finally { clock.mockRestore(); }
+  });
+
+  it.each([
+    ["/sign-out", "POST", 60, 200],
+    ["/oauth2/token", "POST", 20, 415],
+    ["/oauth2/authorize", "GET", 30, 302],
+    ["/oauth2/register", "POST", 5, 400],
+    ["/oauth2/introspect", "POST", 100, 415],
+    ["/oauth2/revoke", "POST", 30, 415],
+    ["/oauth2/consent", "POST", 60, 400],
+    ["/oauth2/continue", "POST", 60, 401],
+    ["/oauth2/public-client", "GET", 60, 400],
+    ["/ok", "GET", 60, 200],
+  ] as const)("keeps continuous low-frequency %s requests in separate windows", async (path, method, max, expected) => {
+    const {app} = runtime(); const start = Date.now(); let now = start;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      for (let attempt = 0; attempt <= max; attempt += 1) {
+        now = start + attempt * 20_000;
+        const response = await app.request(settings.publicOrigin + "/api/auth" + path, {
+          method, headers: {"content-type": "application/json", origin: settings.publicOrigin, "x-thesistrace-client-ip": "192.0.2.184"},
+          ...(method === "POST" ? {body: "{}"} : {}),
+        });
+        expect(response.status).toBe(expected);
+      }
+    } finally {clock.mockRestore();}
+  });
+
+  it("returns a finite retry time without extending a rejected window", async () => {
+    const { app } = runtime();
+    const start = Date.now(); let now = start;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const request = () => app.request(settings.publicOrigin + "/api/auth/sign-in/email-otp", {
+      method: "POST", headers: { "content-type": "application/json", origin: settings.publicOrigin, "x-thesistrace-client-ip": "192.0.2.182" },
+      body: JSON.stringify({ email: "missing@example.com", otp: "000000" }),
+    });
+    try {
+      for (let i = 0; i < 5; i += 1) expect((await request()).status).toBe(400);
+      now = start + 20_001;
+      const blocked = await request();
+      expect(blocked.status).toBe(429);
+      expect(blocked.headers.get("retry-after")).toBe("40");
+      expect(blocked.headers.get("x-retry-after")).toBe("40");
+      expect(blocked.headers.get("content-type")).toContain("application/json");
+      expect(await blocked.json()).toMatchObject({ message: expect.any(String) });
+      now = start + 59_999;
+      expect((await request()).headers.get("retry-after")).toBe("1");
+      now = start + 60_000;
+      expect((await request()).status).toBe(400);
+    } finally { clock.mockRestore(); }
+  });
+
+  it("returns unavailable when the PostgreSQL rate-limit store fails", async () => {
+    const { app } = runtime();
+    await owner.query('REVOKE SELECT, INSERT, UPDATE ON auth."rateLimit" FROM auth_runtime');
+    try {
+      const response = await app.request(settings.publicOrigin + "/api/auth/ok", { headers: { "x-thesistrace-client-ip": "192.0.2.183" } });
+      expect(response.status).toBe(503);
+      expect(response.headers.has("retry-after")).toBe(false);
+      expect(await response.text()).not.toMatch(/permission|rateLimit|postgresql|42501/);
+    } finally { await owner.query('GRANT SELECT, INSERT, UPDATE ON auth."rateLimit" TO auth_runtime'); }
+    expect((await app.request(settings.publicOrigin + "/api/auth/ok")).status).toBe(200);
+  });
+
   it("enforces the sign-in rate limit in PostgreSQL", async () => {
     const { app } = runtime();
     const statuses: number[] = [];

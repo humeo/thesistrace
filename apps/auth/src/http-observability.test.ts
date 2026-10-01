@@ -69,6 +69,16 @@ describe("Auth HTTP observability", () => {
     expect(JSON.stringify(events)).not.toContain("token-canary");
   });
 
+  it("records a bounded recovery time and a concrete OAuth route", () => {
+    const events: AuthHttpEvent[] = [];
+    const observer = createAuthHttpObserver({write: event => events.push(event)});
+    observer.complete(observer.start(new Headers()), {method: "POST", path: "/api/auth/oauth2/token", status: 429, retryAfter: "37"});
+    expect(events[0]).toMatchObject({route: "/api/auth/oauth2/token", status_code: 429, retry_after_seconds: 37});
+    observer.complete(observer.start(new Headers()), {method: "POST", path: "/api/auth/oauth2/token", status: 429, retryAfter: "token-canary"});
+    expect(events[1]).not.toHaveProperty("retry_after_seconds");
+    expect(JSON.stringify(events)).not.toContain("token-canary");
+  });
+
   it("never records an unmatched raw path", () => {
     expect(normalizeAuthRoute("/private/formula-canary")).toBe("/unmatched");
     expect(normalizeAuthRoute("/internal/token-canary")).toBe("/internal/*");
