@@ -234,6 +234,9 @@ export function createThesisTraceAuth(
     ],
     rateLimit: {
       customRules: {
+        // Automatic Session checks must stay available during continuous activity.
+        // Better Auth's default counter resets only after an idle window.
+        "/get-session": false,
         "/sign-in/email-otp": { max: 5, window: 60 },
         "/sign-in/email": { max: 5, window: 60 },
         "/sign-up/email": { max: 1, window: 60 },

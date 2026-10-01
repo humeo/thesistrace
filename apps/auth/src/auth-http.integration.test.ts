@@ -1,7 +1,7 @@
 import { createPublicKey, verify } from "node:crypto";
 
 import { Pool } from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ResearcherAccessService } from "./access.js";
 import { createAuthApp } from "./app.js";
@@ -850,6 +850,60 @@ describe.sequential("Auth database-backed HTTP contract", () => {
     expect(cookie).toMatch(/; HttpOnly/i);
     expect(cookie).toMatch(/; SameSite=Lax/i);
     expect(cookie).toMatch(/; Secure/i);
+  });
+
+  it("keeps a Session available through continuous low-frequency access checks", async () => {
+    const { app, auth } = runtime();
+    const cookie = await createSessionCookie(auth, "continuous-access@example.com");
+    const startedAt = Date.now();
+    let now = startedAt;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      for (let check = 0; check < 61; check += 1) {
+        now = startedAt + check * 15_000;
+        const response = await app.request(
+          `${settings.publicOrigin}/api/auth/get-session`,
+          { headers: { cookie, "x-thesistrace-client-ip": "192.0.2.150" } },
+        );
+
+        expect(response.status, `Session check ${check + 1}`).toBe(200);
+        expect(await response.json()).toMatchObject({
+          user: { email: "continuous-access@example.com", active: true },
+        });
+      }
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("verifies and revokes a Session even when its access-check rate bucket is exhausted", async () => {
+    const { app, auth } = runtime();
+    const cookie = await createSessionCookie(auth, "exhausted-access@example.com");
+    const headers = { cookie, "x-thesistrace-client-ip": "192.0.2.151" };
+    await owner.query(
+      'INSERT INTO auth."rateLimit" (key, count, "lastRequest") VALUES ($1, 60, $2)',
+      ["192.0.2.151|/get-session", Date.now()],
+    );
+    const readSession = () => app.request(
+      `${settings.publicOrigin}/api/auth/get-session`,
+      { headers },
+    );
+
+    const available = await readSession();
+    expect(available.status).toBe(200);
+    expect(await available.json()).toMatchObject({
+      user: { email: "exhausted-access@example.com", active: true },
+    });
+
+    const signOut = await app.request(`${settings.publicOrigin}/api/auth/sign-out`, {
+      method: "POST",
+      headers: { ...headers, origin: settings.publicOrigin, "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(signOut.status).toBe(200);
+    const revoked = await readSession();
+    expect(revoked.status).toBe(200);
+    expect(await revoked.json()).toBeNull();
   });
 
   it("refreshes an aged Session through the public get-session endpoint", async () => {
