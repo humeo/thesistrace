@@ -15,14 +15,14 @@ export type AuthState =
   | Readonly<{ status: "setup"; session: PublicSession }>
   | Readonly<{ status: "setup-failure"; session: PublicSession }>
   | Readonly<{ status: "authenticated"; session: PublicSession }>
-  | Readonly<{ status: "unavailable"; session: PublicSession | null }>;
+  | Readonly<{ status: "unavailable"; session: PublicSession | null; retryAt?: number }>;
 
 export type AuthAction =
   | Readonly<{ type: "session-available"; session: PublicSession }>
   | Readonly<{ type: "session-missing" }>
   | Readonly<{ type: "setup-succeeded"; session: PublicSession }>
   | Readonly<{ type: "setup-failed"; session: PublicSession }>
-  | Readonly<{ type: "auth-unavailable" }>
+  | Readonly<{ type: "auth-unavailable"; retryAt?: number }>
   | Readonly<{ type: "core-unauthorized" }>;
 
 export function authStateReducer(state: AuthState, action: AuthAction): AuthState {
@@ -41,7 +41,7 @@ export function authStateReducer(state: AuthState, action: AuthAction): AuthStat
     case "setup-failed":
       return { status: "setup-failure", session: action.session };
     case "auth-unavailable":
-      return { status: "unavailable", session: state.session };
+      return { status: "unavailable", session: state.session, ...(action.retryAt === undefined ? {} : { retryAt: action.retryAt }) };
   }
 }
 

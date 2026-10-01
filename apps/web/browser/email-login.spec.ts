@@ -127,3 +127,42 @@ test("invitation mismatch, failed acceptance and retry preserve entered values",
   await expect(page.getByRole("status")).toHaveText("Signed in as invited@example.com");
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
 });
+
+test("authentication recovery deadline preserves the code and enables manual retry on desktop", async ({page}) => {
+  let authenticated = false;
+  let limited = true;
+  const user = {id: "00000000-0000-4000-8000-000000000001", email: "researcher@example.com", name: "researcher", active: true};
+  await page.route("http://auth.fixture/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/login") {await route.fulfill({contentType: "text/html", body: `${fontStylesheet}<style>${styles}</style><div id="root"></div>`}); return;}
+    if (path === "/api/auth/operator/capability") {await route.fulfill({status: 404, body: ""}); return;}
+    if (path === "/api/auth/sign-in/email-otp" && limited) {
+      limited = false;
+      await route.fulfill({status: 429, headers: {"Retry-After": "23"}, contentType: "application/json", body: JSON.stringify({message: "Too many requests"})});
+      return;
+    }
+    let body: unknown;
+    if (path === "/api/auth/get-session") body = authenticated ? {user} : null;
+    else if (path === "/api/auth/email-otp/send-verification-otp") body = {success: true};
+    else if (path === "/api/auth/sign-in/email-otp") {authenticated = true; body = {user};}
+    else if (path === "/api/researcher/bootstrap") body = {researcher_id: user.id, system_folders: {default: "folder_default", batch_research: "folder_batch_research"}};
+    else throw new Error("Unexpected request " + path);
+    await route.fulfill({contentType: "application/json", body: JSON.stringify(body)});
+  });
+  await serveBrandAssets(page);
+  await page.setViewportSize({width: 1200, height: 850});
+  await page.goto("http://auth.fixture/login"); await page.addScriptTag({content: script});
+  await page.clock.install();
+  await page.getByLabel("Email", {exact: true}).fill(user.email);
+  await page.getByRole("button", {name: "Continue with email"}).click();
+  await page.getByLabel("Verification code").fill("123456");
+  await page.getByRole("button", {name: "Verify and continue"}).click();
+  await expect(page.getByRole("alert")).toContainText("23s");
+  await expect(page.getByRole("button", {name: "Verify and continue"})).toBeDisabled();
+  await page.clock.fastForward(24_000);
+  await expect(page.getByRole("button", {name: "Verify and continue"})).toBeEnabled();
+  await expect(page.getByLabel("Verification code")).toHaveValue("123456");
+  await expect(page.getByRole("status")).toHaveCount(0);
+  await page.getByRole("button", {name: "Verify and continue"}).click();
+  await expect(page.getByRole("status")).toHaveText("Signed in as researcher@example.com");
+});

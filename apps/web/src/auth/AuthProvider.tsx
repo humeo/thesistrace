@@ -25,7 +25,7 @@ import {
   type PublicSession,
 } from "./session";
 
-import type { AuthErrorCode, AuthResult, InvitationInspection } from "./errors";
+import { authRetryAfter, type AuthErrorCode, type AuthFailure, type AuthResult, type InvitationInspection } from "./errors";
 
 type AuthContextValue = Readonly<{
   state: AuthState;
@@ -47,105 +47,126 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const readyResearcherId = useRef<string | null>(null);
   const stateRef = useRef(state);
   const refreshInFlight = useRef<Promise<void> | null>(null);
+  const generation = useRef(0);
+  const sessionRetryAt = useRef(0);
+  const cooldowns = useRef<Partial<Record<"signIn" | "signOut" | "sendCode" | "invitation", number>>>({});
+  const remaining = useCallback((operation: keyof typeof cooldowns.current): AuthFailure | null => {
+    const seconds = Math.ceil(((cooldowns.current[operation] ?? 0) - Date.now()) / 1_000);
+    return seconds > 0 ? { ok: false, code: "tooManyRequests", retryAfterSeconds: seconds } : null;
+  }, []);
+  const limited = useCallback((operation: keyof typeof cooldowns.current, seconds: number | null): AuthFailure => {
+    if (seconds === null) return failure("unavailable");
+    cooldowns.current[operation] = Date.now() + seconds * 1_000;
+    return { ok: false, code: "tooManyRequests", retryAfterSeconds: seconds };
+  }, []);
   stateRef.current = state;
 
-  const bootstrap = useCallback(async (session: PublicSession): Promise<void> => {
+  const invalidate = useCallback(() => {
+    generation.current += 1;
+    sessionRetryAt.current = 0;
+    readyResearcherId.current = null;
+    refreshInFlight.current = null;
+  }, []);
+
+  const clearSession = useCallback(() => {
+    invalidate();
+    dispatch({ type: "session-missing" });
+  }, [invalidate]);
+
+  const bootstrap = useCallback(async (session: PublicSession, epoch: number): Promise<void> => {
     const bootstrapFetch = createCoreFetch({
       fetch: (...args) => globalThis.fetch(...args),
-      onUnauthorized: () => dispatch({ type: "core-unauthorized" }),
+      onUnauthorized: () => { if (epoch === generation.current) clearSession(); },
     });
     try {
-      const response = await bootstrapFetch("/api/researcher/bootstrap", {
-        method: "POST",
-        body: JSON.stringify({}),
-      });
+      const response = await bootstrapFetch("/api/researcher/bootstrap", { method: "POST", body: JSON.stringify({}) });
       if (!response.ok) throw new CoreUnavailableError();
       const payload = await response.json() as unknown;
-      if (
-        !isRecord(payload)
-        || payload.researcher_id !== session.researcherId
-        || !isSystemFolderContract(payload.system_folders)
-      ) throw new CoreUnavailableError();
+      if (!isRecord(payload) || payload.researcher_id !== session.researcherId || !isSystemFolderContract(payload.system_folders)) throw new CoreUnavailableError();
+      if (epoch !== generation.current) return;
       readyResearcherId.current = session.researcherId;
       dispatch({ type: "setup-succeeded", session });
     } catch (error) {
-      if (error instanceof CoreAuthenticationRequiredError) return;
+      if (epoch !== generation.current || error instanceof CoreAuthenticationRequiredError) return;
       dispatch({ type: "setup-failed", session });
     }
-  }, []);
+  }, [clearSession]);
 
   const refreshSession = useCallback(async (forceSetup = false): Promise<void> => {
+    if (sessionRetryAt.current > Date.now()) return;
     if (refreshInFlight.current !== null) return refreshInFlight.current;
+    let epoch = generation.current;
     const request = (async () => {
       try {
-        const result = await authClient.getSession();
+        let retryAfter: number | null = null;
+        const result = await authClient.getSession({ fetchOptions: { onError: ({response}) => { retryAfter = authRetryAfter(response); } } });
+        if (epoch !== generation.current) return;
         if (result.error !== null) {
-          if (result.error.status === 401) {
-            readyResearcherId.current = null;
-            dispatch({ type: "session-missing" });
-          } else {
-            dispatch({ type: "auth-unavailable" });
+          if (result.error.status === 401) clearSession();
+          else {
+            sessionRetryAt.current = result.error.status === 429 && retryAfter !== null ? Date.now() + retryAfter * 1_000 : 0;
+            dispatch({ type: "auth-unavailable", ...(sessionRetryAt.current > 0 ? {retryAt: sessionRetryAt.current} : {}) });
           }
           return;
         }
         const researcherSession = decodePublicSession(result.data);
-        if (researcherSession === null) {
+        if (researcherSession === null) { clearSession(); return; }
+        if (stateRef.current.session !== null && stateRef.current.session.researcherId !== researcherSession.researcherId) {
+          generation.current += 1;
+          epoch = generation.current;
           readyResearcherId.current = null;
-          dispatch({ type: "session-missing" });
-          return;
+          dispatch({type: "session-available", session: researcherSession});
         }
-        const session: PublicSession = {
-          ...researcherSession,
-          operator: await loadOperatorCapability(),
-        };
+        const session: PublicSession = { ...researcherSession, operator: await loadOperatorCapability() };
+        if (epoch !== generation.current) return;
         if (!forceSetup && readyResearcherId.current === session.researcherId) {
           dispatch({ type: "setup-succeeded", session });
           return;
         }
         dispatch({ type: "session-available", session });
-        await bootstrap(session);
+        await bootstrap(session, epoch);
       } catch {
-        dispatch({ type: "auth-unavailable" });
+        if (epoch === generation.current) dispatch({ type: "auth-unavailable" });
       }
     })();
     refreshInFlight.current = request;
-    try {
-      await request;
-    } finally {
-      refreshInFlight.current = null;
-    }
-  }, [bootstrap]);
+    try { await request; }
+    finally { if (refreshInFlight.current === request) refreshInFlight.current = null; }
+  }, [bootstrap, clearSession]);
 
-  useEffect(() => setCoreUnauthorizedHandler(() => {
-    readyResearcherId.current = null;
-    dispatch({ type: "core-unauthorized" });
-  }), []);
+  useEffect(() => setCoreUnauthorizedHandler(clearSession), [clearSession]);
 
   useEffect(() => {
     void refreshSession();
     const refreshWhenUsable = () => {
-      if (document.visibilityState === "visible" && navigator.onLine) {
-        void refreshSession();
-      }
+      if (document.visibilityState === "visible" && navigator.onLine) void refreshSession();
     };
     const interval = window.setInterval(refreshWhenUsable, SESSION_REFRESH_INTERVAL_MS);
     window.addEventListener("focus", refreshWhenUsable);
     window.addEventListener("online", refreshWhenUsable);
     document.addEventListener("visibilitychange", refreshWhenUsable);
     return () => {
+      invalidate();
       window.clearInterval(interval);
       window.removeEventListener("focus", refreshWhenUsable);
       window.removeEventListener("online", refreshWhenUsable);
       document.removeEventListener("visibilitychange", refreshWhenUsable);
     };
-  }, [refreshSession]);
+  }, [refreshSession, invalidate]);
 
   const signIn = useCallback(async (email: string, otp: string): Promise<AuthResult> => {
+    const cooling = remaining("signIn");
+    if (cooling) return cooling;
+    invalidate();
+    const epoch = generation.current;
     try {
-      const result = await authClient.signIn.emailOtp({ email: email.trim().toLowerCase(), otp });
+      let retryAfter: number | null = null;
+      const result = await authClient.signIn.emailOtp({ email: email.trim().toLowerCase(), otp }, { onError: ({response}) => { retryAfter = authRetryAfter(response); } });
+      if (epoch !== generation.current) return failure("operationFailed");
       if (result.error !== null) {
         if (result.error.code === "ACCOUNT_INACTIVE") return failure("accountInactive");
-        if (result.error.status === 429 || result.error.code === "TOO_MANY_ATTEMPTS") return failure("tooManyAttempts");
+        if (result.error.status === 429) return limited("signIn", retryAfter);
+        if (result.error.code === "TOO_MANY_ATTEMPTS") return failure("tooManyAttempts");
         if (result.error.status >= 500) return failure("unavailable");
         if (result.error.code === "INVALID_OTP" || result.error.code === "OTP_EXPIRED") return failure("invalidCode");
         return failure("operationFailed");
@@ -160,48 +181,66 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {
       return failure("unavailable");
     }
-  }, [refreshSession]);
+  }, [refreshSession, invalidate, remaining, limited]);
 
   const sendCode = useCallback(async (email: string): Promise<AuthResult> => {
+    const cooling = remaining("sendCode");
+    if (cooling) return cooling;
     try {
       const result = await authJson("/api/auth/email-otp/send-verification-otp", {email: email.trim().toLowerCase(), type: "sign-in"});
-      if (!result.ok) return failure(result.status === 429 ? "tooManyRequests" : "codeDeliveryFailed");
+      if (result.status === 429) return limited("sendCode", result.retryAfterSeconds);
+      if (!result.ok) return failure("codeDeliveryFailed");
       return {ok: true};
     } catch { return failure("codeDeliveryFailed"); }
-  }, []);
+  }, [remaining, limited]);
 
   const signOut = useCallback(async (): Promise<AuthResult> => {
+    const cooling = remaining("signOut");
+    if (cooling) return cooling;
+    invalidate();
+    const epoch = generation.current;
     try {
-      const result = await authClient.signOut();
+      let retryAfter: number | null = null;
+      const result = await authClient.signOut({ fetchOptions: { onError: ({response}) => { retryAfter = authRetryAfter(response); } } });
+      if (epoch !== generation.current) return failure("operationFailed");
+      if (result.error?.status === 429) return limited("signOut", retryAfter);
       if (result.error !== null) return failure("signOutFailed");
-      readyResearcherId.current = null;
-      dispatch({ type: "session-missing" });
+      clearSession();
       return { ok: true };
     } catch {
       return failure("signOutFailed");
     }
-  }, []);
+  }, [clearSession, invalidate, remaining, limited]);
 
   const inspectInvitation = useCallback(async (token: string): Promise<InvitationInspection> => {
+    const cooling = remaining("invitation");
+    if (cooling) return cooling;
     try {
       const response = await authJson("/api/auth/researcher-invitation/inspect", { token });
+      if (response.status === 429) return limited("invitation", response.retryAfterSeconds);
       if (!response.ok) return invitationFailure(response);
       if (!isRecord(response.data) || typeof response.data.email !== "string") return failure("operationFailed");
       return { ok: true, email: response.data.email };
     } catch {
       return failure("unavailable");
     }
-  }, []);
+  }, [remaining, limited]);
 
   const acceptInvitation = useCallback(async (
     token: string,
     password: string,
   ): Promise<AuthResult> => {
+    const cooling = remaining("invitation");
+    if (cooling) return cooling;
+    invalidate();
+    const epoch = generation.current;
     try {
       const response = await authJson("/api/auth/researcher-invitation/accept", {
         password,
         token,
       });
+      if (epoch !== generation.current) return failure("operationFailed");
+      if (response.status === 429) return limited("invitation", response.retryAfterSeconds);
       if (!response.ok) return invitationFailure(response);
       readyResearcherId.current = null;
       await refreshSession(true);
@@ -209,7 +248,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {
       return failure("unavailable");
     }
-  }, [refreshSession]);
+  }, [refreshSession, invalidate, remaining, limited]);
 
   const value = useMemo<AuthContextValue>(() => ({
     state,
@@ -243,6 +282,7 @@ async function authJson(path: string, body: Record<string, string>): Promise<Rea
   ok: boolean;
   status: number;
   data: unknown;
+  retryAfterSeconds: number | null;
 }>> {
   const response = await fetch(path, {
     method: "POST",
@@ -256,7 +296,7 @@ async function authJson(path: string, body: Record<string, string>): Promise<Rea
   } catch {
     // Status is authoritative; do not retain response text that may contain secrets.
   }
-  return { data, ok: response.ok, status: response.status };
+  return { data, ok: response.ok, status: response.status, retryAfterSeconds: response.status === 429 ? authRetryAfter(response) : null };
 }
 
 function failure(code: AuthErrorCode): Readonly<{ ok: false; code: AuthErrorCode }> {
@@ -264,7 +304,6 @@ function failure(code: AuthErrorCode): Readonly<{ ok: false; code: AuthErrorCode
 }
 
 function invitationFailure(response: Readonly<{ status: number; data: unknown }>) {
-  if (response.status === 429) return failure("tooManyRequests");
   if (response.status >= 500) return failure("unavailable");
   if (isRecord(response.data) && response.data.code === "INVITATION_INVALID") return failure("invitationExpired");
   return failure("operationFailed");
