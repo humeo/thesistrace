@@ -1,0 +1,38 @@
+/* Desktop ChatGPT reading measurements; X Markdown still owns rendering and colors. */
+.x-markdown.x-markdown-dark.chat-markdown-reading {
+  --font-size: 16px;
+  --margin-block: 16px 0;
+  --margin-ul-ol: 0;
+  --padding-ul-ol: 0 0 0 26px;
+  --margin-li: 0;
+  font-family: -apple-system-body, ui-sans-serif, -apple-system, system-ui, "Segoe UI", Helvetica, "Apple Color Emoji", Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol";
+  font-weight: 400;
+  line-height: 26px;
+  letter-spacing: normal;
+}
+
+.chat-markdown-reading :is(strong, b) { font-weight: 600; }
+
+.x-markdown.x-markdown-dark.chat-markdown-reading :is(h2, h3) {
+  margin: 16px 0 4px;
+  line-height: 28px;
+}
+
+.x-markdown.x-markdown-dark.chat-markdown-reading :is(h2, h3):first-child { margin-top: 0; }
+.x-markdown.x-markdown-dark.chat-markdown-reading :is(h2, h3) + p { margin-top: 0; }
+.x-markdown.x-markdown-dark.chat-markdown-reading li { padding-left: 6px; }
+
+.x-markdown.x-markdown-dark.chat-markdown-reading blockquote {
+  margin: 0 0 8px;
+  padding: 0 0 0 24px;
+  line-height: 24px;
+}
+
+.chat-markdown-reading .ant-typography { font-family: inherit; font-size: inherit; line-height: inherit; }
+
+.quantgrove-chat .chat-message-user .ant-bubble-content {
+  font-family: -apple-system-body, ui-sans-serif, -apple-system, system-ui, "Segoe UI", Helvetica, "Apple Color Emoji", Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol";
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 26px;
+}

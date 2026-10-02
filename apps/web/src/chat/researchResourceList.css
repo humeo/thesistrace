@@ -1,0 +1,3 @@
+/* The surrounding A2UI layout owns spacing before and after the list. */
+.chat-research-list-row:first-child { padding-block-start: 0; }
+.chat-research-list-row:last-child { padding-block-end: 0; }

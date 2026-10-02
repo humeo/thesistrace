@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Toaster } from "../../src/components/ui/toast";
+import { ChatTestProvider } from "../../src/chat/chatTestProvider";
+import { ChatConversationView } from "../../src/chat/ChatConversation";
 import { ChatTimeline } from "../../src/chat/ChatTimeline";
 import type { ChatConversationController } from "../../src/chat/useChatConversation";
 import type { TimelineEntry, TimelineTurn } from "../../src/chat/chatProtocol";
@@ -28,9 +30,18 @@ function surface(id: string, status: string, runId = "run_0123456789abcdef0123")
 
 // Production timeline, deterministic local state; no Auth, Agent or network effects.
 function TimelineFixture() {
+  const initial = new URLSearchParams(location.search).get("initial");
+  const [historyLoaded, setHistoryLoaded] = useState(initial !== "history");
   const [state, setState] = useState("running");
   const [toolRunning, setToolRunning] = useState(false);
-  const [sentTurns, setSentTurns] = useState<TimelineTurn[]>([]);
+  const [sentTurns, setSentTurns] = useState<TimelineTurn[]>(() => initial ? [{
+    id: "sent-1", started_at: time, completed_at: initial === "history" ? time : null,
+    status: initial === "history" ? "completed" : "running", entries: [
+      { entry_id: "sent-1-prompt", turn_id: "sent-1", created_at: time, kind: "user_input", payload: { source: "prompt", content: "Hi", inputId: "sent-1" } },
+      ...(initial === "history" ? [{ ...text("sent-1-response", "Hello. How can I help?"), turn_id: "sent-1" }] : []),
+    ],
+  }] : []);
+  const streamedParagraphs = useRef(60);
   const entries = [text("before", "Checking the research context."), tool("first-tool"),
     text("between", "The context is ready. Checking the results."), surface("progress", "running"), tool("second-tool"),
     { entry_id: "question", turn_id: turnId, created_at: time, kind: "question" as const, payload: {
@@ -46,7 +57,7 @@ function TimelineFixture() {
   const turn: TimelineTurn = { id: turnId, started_at: time, completed_at: state === "running" ? null : time,
     status: state as TimelineTurn["status"], entries };
   const controller = {
-    turns: [turn, ...sentTurns], phase: (sentTurns.at(-1)?.status ?? state) === "running" ? "active" : "idle", currentTurnId: sentTurns.at(-1)?.id ?? turnId,
+    turns: historyLoaded ? [...(initial ? [] : [turn]), ...sentTurns] : [], phase: (sentTurns.at(-1)?.status ?? state) === "running" ? "active" : "idle", currentTurnId: sentTurns.at(-1)?.id ?? turnId,
     hasFirstAssistantText: true, nextCursor: null, loadingOlder: false, timelineError: false,
     question: null, loadOlder: async () => false, retryTimeline: async () => undefined,
   } as unknown as ChatConversationController;
@@ -62,9 +73,10 @@ function TimelineFixture() {
       entries: [item.entries[0]!, { ...text(`${item.id}-response`, content), turn_id: item.id }],
     } : item));
   }
-  return <main style={{ height: "100vh", maxWidth: 900, margin: "auto", display: "grid", gridTemplateRows: "auto minmax(0, 1fr)" }}>
+  return <main style={{ height: "100vh", display: "grid", gridTemplateRows: "auto minmax(0, 1fr)" }}>
     <nav aria-label="Fixture state"><button onClick={() => setState("running")}>Running</button>
       <button onClick={() => setState("completed")}>Complete</button>
+      <button onClick={() => setHistoryLoaded(true)}>Load history</button>
       <button onClick={() => setToolRunning(true)}>Start tool</button>
       <button onClick={() => setToolRunning(false)}>Finish tool</button>
       <button onClick={() => setState("failed")}>Fail</button>
@@ -72,9 +84,10 @@ function TimelineFixture() {
       <button onClick={() => respond("Hello. How can I help?")}>Short reply</button>
       <button onClick={() => respond("**数据截至：**2026-08-27\n\n`**原文：**保持`", true)}>CJK reply</button>
       <button onClick={() => respond("Hello. How can I help?", true)}>Finish reply</button>
+      <button onClick={() => respond("First **paragraph**.\n\nSecond paragraph.\n\n### Section\n\nSection content.\n\n- First item\n- Second item\n\n## Summary\n\nSummary content.", true)}>Typography reply</button>
       <button onClick={() => respond("[X](/research-runs/run_0123456789abcdef0123)", true)}>Run link reply</button>
-      <button onClick={() => respond("A longer streamed paragraph.\n\n".repeat(60))}>Long reply</button></nav>
-    <ChatTimeline controller={controller} onAnnounce={() => undefined} /><Toaster />
+      <button onClick={() => respond("A longer streamed paragraph.\n\n".repeat(++streamedParagraphs.current))}>Long reply</button></nav>
+    <ChatTestProvider controller={controller}><ChatConversationView controller={{ ...controller, action: { enabled: false, kind: "send", label: "Send" }, queue: [], error: null, errorCode: null, draft: "", draftBytes: 0, textareaRef: { current: null }, setDraft: () => {} }} existingSession agentId="default" threadId="fixture" modelControls={null} /></ChatTestProvider><Toaster />
   </main>;
 }
 function RecoveryFixture() {
@@ -98,7 +111,7 @@ function RecoveryFixture() {
     <nav aria-label="Recovery fixture state">
       <button onClick={() => change("recovering")}>Recovering</button><button onClick={() => change("succeeded")}>Recovery succeeded</button>
       <button onClick={() => change("failed")}>Recovery failed</button>
-    </nav><ChatTimeline controller={controller} onAnnounce={() => undefined} />
+    </nav><ChatTestProvider controller={controller}><ChatTimeline controller={controller} /></ChatTestProvider>
   </main>;
 }
 createRoot(document.getElementById("root")!).render(new URLSearchParams(location.search).get("mode") === "recovery" ? <RecoveryFixture /> : <TimelineFixture />);

@@ -286,7 +286,27 @@ test('expanded sidebar aligns brand, navigation, history and compact account ide
  expect(positions.navigationGaps).toEqual([4, 4, 4, 4, 4]);
 });
 
-test('history has one Recent heading with a new Chat action on its right', async ({ page }) => {
+test('sidebar panel trigger and collapsed navigation share their visual center', async ({ page }, testInfo) => {
+ const collapse = page.getByRole('button', { name: 'Collapse sidebar', exact: true });
+ const header = (await page.locator('.sidebar-brand-row').boundingBox())!;
+ const expandedIcon = (await collapse.locator('svg').boundingBox())!;
+ expect(Math.abs(expandedIcon.y + expandedIcon.height / 2 - (header.y + header.height / 2))).toBeLessThanOrEqual(1);
+ await collapse.click();
+ await expect(page.locator('.application-sidebar')).toHaveCSS('width', '56px');
+ const sidebar = (await page.locator('.application-sidebar').boundingBox())!;
+ const center = sidebar.x + (sidebar.width - 1) / 2;
+ const icons = page.locator('.sidebar-toggle svg, .sidebar-new-chat svg, .resource-nav a svg');
+ for (const icon of await icons.all()) {
+  const bounds = (await icon.boundingBox())!;
+  expect(Math.abs(bounds.x + bounds.width / 2 - center)).toBeLessThanOrEqual(1);
+ }
+ await page.screenshot({ path: testInfo.outputPath('sidebar-panel-centered.png') });
+ await page.getByRole('button', { name: 'Expand sidebar', exact: true }).press('Enter');
+ await expect(page.locator('.application-sidebar')).toHaveCSS('width', '240px');
+ await expect(collapse).toBeFocused();
+});
+
+test('history reveals its new Chat action on hover and focus', async ({ page }) => {
  const heading = page.locator('.chat-session-heading h3');
  const shortcut = page.getByRole('link', { name: 'Start a new Chat from history' });
  await expect(heading).toHaveText('Recent');
@@ -296,6 +316,17 @@ test('history has one Recent heading with a new Chat action on its right', async
  const headingBox = await heading.boundingBox();
  const shortcutBox = await shortcut.boundingBox();
  expect(shortcutBox!.x).toBeGreaterThan(headingBox!.x + headingBox!.width);
+ await page.getByTestId('workspace-content').hover();
+ await expect(shortcut).toHaveCSS('opacity', '0');
+ await heading.hover();
+ await expect(shortcut).toHaveCSS('opacity', '1');
+ await shortcut.hover();
+ await expect(page.locator('[data-slot="tooltip-content"]')).toHaveText('Start a new Chat from history');
+ await page.getByTestId('workspace-content').hover();
+ await expect(page.locator('[data-slot="tooltip-content"]')).toHaveCount(0);
+ await shortcut.focus();
+ await expect(shortcut).toHaveCSS('opacity', '1');
+ await expect(page.locator('[data-slot="tooltip-content"]')).toHaveText('Start a new Chat from history');
  await shortcut.click();
  await expect(page.getByTestId('workspace-content')).toContainText('/chat');
 });

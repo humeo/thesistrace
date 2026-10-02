@@ -6,7 +6,7 @@ import {
   type CatalogDefinitions,
   useA2UI,
 } from "@copilotkit/a2ui-renderer";
-import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
 import "../i18n";
@@ -18,19 +18,8 @@ import {
   RESEARCH_A2UI_CATALOG_ID,
 } from "@thesistrace/contracts/research-a2ui";
 
-import { cn } from "cn";
-import { CaretDown } from "@phosphor-icons/react";
-import { Button } from "../components/ui/button";
-import { Badge } from "../components/ui/badge";
-import { Card, CardHeader, CardTitle, CardContent } from "../components/ui/card";
-import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "../components/ui/collapsible";
-import { Separator } from "../components/ui/separator";
-import { Spinner } from "../components/ui/spinner";
-import { Alert, AlertDescription } from "../components/ui/alert";
-import { toast } from "../components/ui/toast";
-import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell, TableCaption } from "../components/ui/table";
-import styles from "./A2UISurfaces.module.css";
-import { ResearchResourceCards } from "./ResearchResourceCards";
+import { Alert, App, Card, Collapse, Descriptions, Divider, Flex, Spin, Table, Tag, Typography } from "antd";
+import { ResearchResourceList } from "./ResearchResourceList";
 
 const pairSchema = (labelLength: number, valueLength: number) => z.object({
   label: z.string().min(1).max(labelLength),
@@ -110,27 +99,26 @@ export const researchA2UICatalogDefinitions = {
 const researchA2UICatalog = createCatalog(
   researchA2UICatalogDefinitions,
   {
-    Text: ({ props }) => (
-      <p className={cn(styles.text, styles[props.variant ?? "body"])}>
-        {props.text}
-      </p>
-    ),
+    Text: ({ props }) => props.variant === "title"
+      ? <Typography.Title level={5} style={{ margin: 0 }}>{props.text}</Typography.Title>
+      : <Typography.Text type={props.variant === "caption" ? "secondary" : undefined}
+        strong={props.variant === "label"}>{props.text}</Typography.Text>,
     Row: ({ children, props }) => (
-      <div className={cn(styles.row, styles[props.gap ?? "normal"], styles[props.align ?? "stretch"])}>
-        {props.children.map((id) => <span className={styles.child} key={id}>{children(id)}</span>)}
-      </div>
+      <Flex wrap gap={layoutGap(props.gap)} align={layoutAlign(props.align)}>
+        {props.children.map((id) => <Flex vertical style={{ flex: 1, minWidth: 0 }} key={id}>{children(id)}</Flex>)}
+      </Flex>
     ),
     Column: ({ children, props }) => (
-      <div className={cn(styles.column, styles[props.gap ?? "normal"], styles[props.align ?? "stretch"])}>
-        {props.children.map((id) => <div className={styles.child} key={id}>{children(id)}</div>)}
-      </div>
+      <Flex vertical gap={layoutGap(props.gap)} align={layoutAlign(props.align)}>
+        {props.children.map((id) => <Flex vertical style={{ minWidth: 0, maxWidth: "100%" }} key={id}>{children(id)}</Flex>)}
+      </Flex>
     ),
-    Divider: () => <Separator />,
+    Divider: () => <Divider />,
     Formula: ({ props }) => <FormulaSurface expression={props.expression} label={props.label} />,
     AlphaProposal: ({ props }) => <AlphaProposalSurface props={props} />,
-    ResearchRun: ({ props }) => <ResearchResourceCards kind="run" ids={[props.runId]} />,
-    ResearchComparison: ({ props }) => <ResearchResourceCards kind="run" ids={props.runIds} />,
-    DailyTrack: ({ props }) => <ResearchResourceCards kind="track" ids={[props.trackId]} />,
+    ResearchRun: ({ props }) => <ResearchResourceList kind="run" ids={[props.runId]} />,
+    ResearchComparison: ({ props }) => <ResearchResourceList kind="run" ids={props.runIds} />,
+    DailyTrack: ({ props }) => <ResearchResourceList kind="track" ids={[props.trackId]} />,
     Table: ({ props }) => <ResearchTable {...props} />,
     Navigation: ({ props }) => <ResearchNavigation href={props.href} label={props.label} />,
   },
@@ -140,26 +128,33 @@ const researchA2UICatalog = createCatalog(
   },
 );
 
+function layoutGap(gap: "compact" | "normal" | "wide" = "normal") {
+  return { compact: 8, normal: 16, wide: 24 }[gap];
+}
+
+function layoutAlign(align: "start" | "center" | "end" | "stretch" = "stretch") {
+  return align === "start" ? "flex-start" : align === "end" ? "flex-end" : align;
+}
+
 function AlphaProposalSurface({ props }: { props: z.infer<typeof researchA2UICatalogDefinitions.AlphaProposal.props> }) {
   const { t } = useTranslation("chat");
   return (
       <section aria-label={t("a2ui.alphaProposal", { title: props.title })} >
-        <Card><CardHeader>
-          <div className={styles.row}><span>{t("a2ui.proposal")}</span><Badge variant="secondary">{t("a2ui.chatOwned")}</Badge></div>
-          <CardTitle role="heading" aria-level={2}>{props.title}</CardTitle>
-        </CardHeader><CardContent className={styles.column}>
-        <dl className={styles.facts}>
-          <Fact label={t("a2ui.hypothesis")} value={props.hypothesis} wide />
-          <Fact label={t("a2ui.universe")} value={props.universe} />
-          <Fact label={t("a2ui.period")} value={props.period} />
-          <Fact label={t("a2ui.researchType")} value={props.researchType} />
-          {props.strategy.map((entry) => <Fact key={entry.label} label={entry.label} value={entry.value} />)}
-        </dl>
-        <div className={styles.column}>
-          <span>{t("a2ui.formulaWord")}</span>
-          <code className={styles.code}>{props.formula}</code>
-        </div>
-        <p>{props.explanation}</p></CardContent></Card>
+        <Card size="small" title={props.title}
+          extra={<Tag>{t("a2ui.chatOwned")}</Tag>}>
+        <Flex vertical gap={16}><Typography.Text type="secondary">{t("a2ui.proposal")}</Typography.Text>
+        <Descriptions size="small" column={2} items={[
+          { key: "hypothesis", label: t("a2ui.hypothesis"), children: props.hypothesis, span: 2 },
+          { key: "universe", label: t("a2ui.universe"), children: props.universe },
+          { key: "period", label: t("a2ui.period"), children: props.period },
+          { key: "researchType", label: t("a2ui.researchType"), children: props.researchType },
+          ...props.strategy.map((entry, index) => ({ key: `strategy-${index}`, label: entry.label, children: entry.value })),
+        ]} />
+        <Flex vertical gap={8}>
+          <Typography.Text>{t("a2ui.formulaWord")}</Typography.Text>
+          <Typography.Text code style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{props.formula}</Typography.Text>
+        </Flex>
+        <Typography.Text>{props.explanation}</Typography.Text></Flex></Card>
       </section>
   );
 }
@@ -168,8 +163,8 @@ function ResearchNavigation({ href: sourceHref, label }: { href: string; label: 
   const { t } = useTranslation("chat");
   const href = parseResearchA2UINavigationHref(sourceHref);
   return href === null
-    ? <Alert variant="destructive">{t("a2ui.unavailableLink")}</Alert>
-    : <Button variant="link" className="h-auto min-h-11 max-w-full whitespace-normal text-left" nativeButton={false} role="link" render={<a href={href} />}>{label}</Button>;
+    ? <Alert type="error" title={t("a2ui.unavailableLink")} />
+    : <Typography.Link href={href}>{label}</Typography.Link>;
 }
 
 export function ResearchA2UIActivity({
@@ -182,23 +177,21 @@ export function ResearchA2UIActivity({
   const projection = projectResearchA2UIContent(message.content);
   if (projection.kind === "loading") {
     return (
-      <article aria-label={t("a2ui.preparing")} className={styles.row} role="status">
-        <Spinner aria-hidden="true" />
-        <span>{t(projection.content.status === "retrying" ? "a2ui.rebuilding" : "a2ui.building")}</span>
-      </article>
+      <Flex gap={8} align="center" aria-label={t("a2ui.preparing")} role="status">
+        <Spin size="small" />
+        <Typography.Text>{t(projection.content.status === "retrying" ? "a2ui.rebuilding" : "a2ui.building")}</Typography.Text>
+      </Flex>
     );
   }
   if (projection.kind === "error") {
     return (
-      <Alert variant="destructive">
-        {t("a2ui.preparationFailed")}
-        <AlertDescription>{t("a2ui.reference", { id: message.id, code: String(projection.content.errorCode) })}</AlertDescription>
-      </Alert>
+      <Alert type="error" title={t("a2ui.preparationFailed")}
+        description={t("a2ui.reference", { id: message.id, code: String(projection.content.errorCode) })} />
     );
   }
   const operationsJson = JSON.stringify(projection.content.a2ui_operations);
   return (
-    <article aria-label={t("a2ui.surface")} className={styles.surface}>
+    <article aria-label={t("a2ui.surface")} style={{ minWidth: 0 }}>
       <A2UIProvider catalog={researchA2UICatalog} onAction={() => undefined}>
         <ReadyA2UIRenderer
           key={message.id}
@@ -220,10 +213,10 @@ function ReadyA2UIRenderer({ operationsJson }: { operationsJson: string }) {
     processMessages(operations);
   }, [operations, processMessages]);
   return surfaceId === null ? (
-    <Alert variant="destructive">{t("a2ui.displayFailed")}</Alert>
+    <Alert type="error" title={t("a2ui.displayFailed")} />
   ) : (
     <A2UIRenderer
-      fallback={<Spinner role="status" aria-label={t("a2ui.preparing")} />}
+      fallback={<span role="status" aria-label={t("a2ui.preparing")}><Spin /></span>}
       surfaceId={surfaceId}
     />
   );
@@ -245,34 +238,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function FormulaSurface({ expression, label }: { expression: string; label?: string }) {
   const { t } = useTranslation("chat");
-  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
-  async function copy(): Promise<void> {
-    try {
-      await navigator.clipboard.writeText(expression);
-      setCopyState("copied");
-      toast.add({ title: <FormulaCopyFeedback message="a2ui.formulaCopied" />, type: "success" });
-    } catch {
-      setCopyState("failed");
-      toast.add({ title: <FormulaCopyFeedback message="a2ui.formulaCopyFailed" />, type: "error" });
-    }
-  }
+  const { message } = App.useApp();
+  const [copied, setCopied] = useState(false);
   return (
-    <section aria-label={label ?? t("a2ui.formula")} className={styles.formula}>
-      <header className={styles.row}>
-        <span>{label ?? t("a2ui.formula")}</span>
-        <Button variant="outline" onClick={() => void copy()}>{t("copy")}</Button>
-      </header>
-      <code className={styles.code}>{expression}</code>
+    <section aria-label={label ?? t("a2ui.formula")}>
+      <Flex vertical gap={8}>
+      <Flex align="center" justify="space-between">
+        <Typography.Text>{label ?? t("a2ui.formula")}</Typography.Text>
+        <Typography.Text copyable={{ text: expression, tooltips: [t("copy"), t("a2ui.formulaCopied")],
+          onCopy: () => { setCopied(true); void message.success(t("a2ui.formulaCopied")); } }} />
+      </Flex>
+      <Typography.Text code style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{expression}</Typography.Text>
       <span className="sr-only">
-        {copyState === "copied" ? t("a2ui.formulaCopied") : copyState === "failed" ? t("a2ui.formulaCopyFailed") : ""}
+        {copied ? t("a2ui.formulaCopied") : ""}
       </span>
+      </Flex>
     </section>
   );
-}
-
-function FormulaCopyFeedback({ message }: { message: "a2ui.formulaCopied" | "a2ui.formulaCopyFailed" }) {
-  const { t } = useTranslation("chat");
-  return t(message);
 }
 
 function ResearchTable({
@@ -290,64 +272,17 @@ function ResearchTable({
 }) {
   const headerId = useId();
   return (
-    <LocalDisclosure initiallyExpanded={initiallyExpanded} summary={summary}>
-      <div className={styles.child}>
-        <Table role="table" scrollLabel={caption}>
-          <TableCaption>{caption}</TableCaption>
-          <TableHeader role="rowgroup">
-            <TableRow role="row">
-              {columns.map((column, index) => (
-                <TableHead id={`${headerId}-${index}`} key={`${index}:${column}`} role="columnheader" scope="col">
-                  {column}
-                </TableHead>
-              ))}
-            </TableRow>
-          </TableHeader>
-          <TableBody role="rowgroup">
-            {rows.map((row, rowIndex) => (
-              <TableRow key={`${rowIndex}:${row.join("\u0000")}`} role="row">
-                {row.map((cell, columnIndex) => (
-                  <TableCell
-                    data-label={columns[columnIndex]}
-                    headers={`${headerId}-${columnIndex}`}
-                    key={`${columnIndex}:${cell}`}
-                    role="cell"
-                  >
-                    <span aria-hidden="true" className="chat-a2ui-cell-label sr-only">{columns[columnIndex]}</span>
-                    <span className="chat-a2ui-cell-value">{cell}</span>
-                  </TableCell>
-                ))}
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
-    </LocalDisclosure>
-  );
-}
-
-function LocalDisclosure({
-  children,
-  initiallyExpanded = false,
-  summary,
-}: {
-  children: ReactNode;
-  initiallyExpanded?: boolean;
-  summary: string;
-}) {
-  return <Collapsible defaultOpen={initiallyExpanded} className="min-w-0 rounded-lg border border-border">
-    <CollapsibleTrigger render={<Button variant="ghost" className="h-auto min-h-11 w-full justify-between whitespace-normal p-3 text-left" />}>
-      {summary}<CaretDown aria-hidden="true" data-icon="inline-end" />
-    </CollapsibleTrigger>
-    <CollapsibleContent keepMounted className="min-w-0 p-3">{children}</CollapsibleContent>
-  </Collapsible>;
-}
-
-function Fact({ label, value, wide = false }: { label: string; value: string; wide?: boolean }) {
-  return (
-    <div className={cn(wide && styles.wide)}>
-      <dt>{label}</dt>
-      <dd>{value}</dd>
-    </div>
+    <Collapse defaultActiveKey={initiallyExpanded ? ["table"] : []} items={[{
+      key: "table", label: summary, forceRender: true,
+      children: <Table size="small" pagination={false} scroll={{ x: "max-content" }}
+        title={() => caption} aria-label={caption}
+        columns={columns.map((column, index) => ({
+          key: index, title: column, dataIndex: index,
+          onHeaderCell: () => ({ id: `${headerId}-${index}`, role: "columnheader", scope: "col" }),
+          onCell: () => ({ headers: `${headerId}-${index}`, role: "cell", "data-label": column }),
+          render: (cell: string) => <><span aria-hidden="true" className="chat-a2ui-cell-label sr-only">{column}</span><span className="chat-a2ui-cell-value">{cell}</span></>,
+        }))}
+        dataSource={rows.map((row, key) => ({ ...row, key }))} />,
+    }]} />
   );
 }

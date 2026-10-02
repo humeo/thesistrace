@@ -26,7 +26,7 @@ export const navigationZh = {
   dailyTracks: "每日跟踪",
   mcp: "MCP",
   operator: "管理",
-  newChat: "新建对话",
+  newChat: "新对话",
   chats: "对话",
   workspace: "工作区",
   navigation: "导航",

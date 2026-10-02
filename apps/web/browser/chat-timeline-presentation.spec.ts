@@ -1,189 +1,245 @@
 import { expect, test } from "@playwright/test";
-import { buildProductFixture } from "./build-product-fixture";
-
-let styles: string;
-let timelineScript: string;
-
+import { buildModuleProductFixture } from "./build-product-fixture";
+let files: Awaited<ReturnType<typeof buildModuleProductFixture>>;
+test.use({ viewport: { width: 1159, height: 964 }, timezoneId: "UTC" });
 test.beforeAll(async () => {
-  ({ script: timelineScript, styles } = await buildProductFixture(new URL("./fixtures/chat-timeline.tsx", import.meta.url), "ChatTimelineFixture"));
+  test.setTimeout(60_000);
+  files = await buildModuleProductFixture(new URL("./fixtures/chat-timeline.tsx", import.meta.url));
 });
-
 test.beforeEach(async ({ page }) => {
-  await page.setContent(`<style>${styles}</style><div id="root"></div>`);
-  await page.addScriptTag({ content: timelineScript });
+  await page.route("https://chat.fixture/**", route => {
+    const path = new URL(route.request().url()).pathname.slice(1) || "index.html";
+    const asset = files.get(path);
+    return asset ? route.fulfill(asset) : route.fulfill({ status: 404, body: "" });
+  });
+  await page.goto("https://chat.fixture/");
 });
-
-
-test("completion keeps compact results and treats answers as tool history", async ({ page }) => {
-  await expect(page.locator('[data-entry-id="progress"]')).toBeVisible();
+test("desktop messages match ChatGPT's reading width while the native scroll viewport reaches the page edge", async ({ page }) => {
+  await page.setViewportSize({ width: 1552, height: 942 });
   await page.getByRole("button", { name: "Complete", exact: true }).click();
-  await expect(page.locator('[data-entry-id="progress"]')).toBeHidden();
+  await page.getByRole("button", { name: "Send next", exact: true }).click();
+  await page.getByRole("button", { name: "Finish reply", exact: true }).click();
+  const main = (await page.locator("main.quantgrove-chat").boundingBox())!;
+  const scroll = (await page.locator(".ant-bubble-list-scroll-box").first().boundingBox())!;
+  const reply = (await page.locator('[data-entry-id="sent-1-response"] .x-markdown').boundingBox())!;
+  const sender = (await page.locator(".ant-sender").boundingBox())!;
+  expect(Math.abs(scroll.x + scroll.width - main.x - main.width)).toBeLessThanOrEqual(1);
+  expect(reply.width).toBe(768);
+  await expect(page.locator('[data-entry-id="sent-1-response"] .x-markdown')).toHaveCSS("font-size", "16px");
+  await expect(page.locator('[data-entry-id="sent-1-response"] .x-markdown')).toHaveCSS("line-height", "26px");
+  const replyFont = await page.locator('[data-entry-id="sent-1-response"] .x-markdown').evaluate(element => getComputedStyle(element).fontFamily);
+  expect(replyFont).not.toMatch(/Inter|Noto Sans SC/);
+  expect(Math.abs(reply.x - sender.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(reply.width - sender.width)).toBeLessThanOrEqual(1);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await expect(page.locator('.chat-message-user .ant-bubble-content').last()).toHaveCSS("font-size", "16px");
+  await expect(page.locator('.chat-message-user .ant-bubble-content').last()).toHaveCSS("line-height", "26px");
+  await page.getByRole("button", { name: "Typography reply", exact: true }).click();
+  const prose = page.locator('[data-entry-id="sent-1-response"] .x-markdown');
+  await expect(prose.locator("strong")).toHaveCSS("font-weight", "600");
+  await expect(prose.locator("h2")).toHaveCSS("font-size", "20px");
+  await expect(prose.locator("h3")).toHaveCSS("font-size", "18px");
+  await expect(prose.locator("h3")).toHaveCSS("line-height", "28px");
+  const gaps = await prose.evaluate(element => {
+    const gap = (before: Element, after: Element) => after.getBoundingClientRect().top - before.getBoundingClientRect().bottom;
+    const paragraphs = element.querySelectorAll(":scope > p");
+    const heading = element.querySelector("h3")!;
+    const items = element.querySelectorAll("li");
+    return { paragraph: gap(paragraphs[0]!, paragraphs[1]!), headingBefore: gap(paragraphs[1]!, heading),
+      headingAfter: gap(heading, paragraphs[2]!), list: gap(items[0]!, items[1]!) };
+  });
+  expect(gaps).toEqual({ paragraph: 16, headingBefore: 16, headingAfter: 4, list: 0 });
+});
+test("native work disclosure folds process while preserving final research views", async ({ page }) => {
+  await page.getByRole("button", { name: "Complete", exact: true }).click();
+  await expect(page.locator('[data-entry-id="progress"]')).toHaveCount(0);
   await expect(page.locator('[data-entry-id="result"]')).toBeVisible();
   await expect(page.locator('[data-entry-id="other-result"]')).toBeVisible();
-  await expect(page.locator('[data-entry-id="final"]')).toBeVisible();
-  const footer = page.locator('.chat-response-footer');
-  await page.mouse.move(0, 0);
-  await expect(footer).toHaveCSS('opacity', '0');
-  await page.locator('.chat-turn-response').hover();
-  await expect(footer).toHaveCSS('opacity', '1');
-  await expect(footer.locator('time')).toHaveAttribute('datetime', '2026-09-06T00:00:00.000Z');
-  const footerBox = (await footer.boundingBox())!;
-  const finalBox = (await page.locator('[data-entry-id="final"]').boundingBox())!;
-  const contentBox = (await page.locator('.chat-timeline-content').boundingBox())!;
-  expect(footerBox.y).toBeGreaterThanOrEqual(finalBox.y + finalBox.height);
-  expect(footerBox.y - finalBox.y - finalBox.height).toBeLessThanOrEqual(12);
-  expect(contentBox.y + contentBox.height - footerBox.y - footerBox.height).toBeGreaterThanOrEqual(56);
-  expect(contentBox.y + contentBox.height - finalBox.y - finalBox.height).toBeLessThanOrEqual(112);
-  expect(footerBox.x).toBe(finalBox.x);
-  await page.mouse.move(0, 0);
-  await footer.getByRole('button', { name: 'Copy response' }).focus();
-  await expect(footer).toHaveCSS('opacity', '1');
-  await expect(page.locator('[data-entry-id="before"]')).toBeHidden();
-  await expect(page.locator('[data-entry-id="between"]')).toBeHidden();
-  await page.locator('.chat-work-history > [data-slot="collapsible-trigger"]').click();
+  await expect(page.locator('[data-entry-id="final"]')).toHaveText(/Both research tasks finished/);
+  const work = page.locator(".ant-think-status-text").filter({ hasText: /^Worked for/ });
+  const details = page.locator(".ant-think-content").first();
+  await expect(details).toBeHidden();
+  await work.click();
   await expect(page.locator('[data-entry-id="before"]')).toBeVisible();
-  await expect(page.locator('[data-entry-id="between"]')).toBeVisible();
-  await expect(page.getByText('Last observed progress', { exact: true })).toHaveCount(0);
-  await expect(page.locator('.chat-message-user')).toHaveCount(0);
-  await page.locator('.chat-tool-group > [data-slot="collapsible-trigger"]').last().click();
-  const question = page.locator('[data-tool-name="ask_user"]');
-  await expect(question).toBeVisible();
-  await question.getByText('Question and answer', { exact: true }).click();
-  await expect(question.getByText('Default approach', { exact: true })).toBeVisible();
-  expect(await page.locator('.chat-message-assistant').allTextContents()).toEqual([
-    "Checking the research context.", "The context is ready. Checking the results.", "Both research tasks finished.",
-  ]);
-  await page.getByRole("button", { name: "Fail", exact: true }).click();
-  await expect(page.getByText("Last observed progress", { exact: true })).toHaveCount(0);
+  await details.getByText("Question answered", { exact: true }).click();
+  await expect(page.getByText("Default approach", { exact: true })).toBeVisible();
+  await work.click();
+  await expect(details).toBeHidden();
 });
-
-test("new turns start near the top and keep their position through a short reply", async ({ page }) => {
+test("work steps fill the reading width with native titles, content and disclosure", async ({ page }) => {
+  await page.getByRole("button", { name: "Complete", exact: true }).click();
+  await page.locator(".ant-think-status-text").filter({ hasText: /^Worked for/ }).click();
+  const process = page.locator(".ant-think-content").first();
+  await expect(process.locator(".ant-card")).toBeVisible();
+  await expect(process.locator(".ant-thought-chain-box")).toHaveCount(1);
+  const card = (await process.locator(".ant-card").boundingBox())!;
+  const reply = (await page.locator('[data-entry-id="final"] .x-markdown').boundingBox())!;
+  expect(Math.abs(card.x + card.width - reply.x - reply.width)).toBeLessThanOrEqual(1);
+  expect(card.width).toBeGreaterThan(reply.width - 20);
+  await expect(process.locator("button, .ant-bubble, .ant-thought-chain-node-footer, .ant-bubble-list")).toHaveCount(0);
+  await expect(process.getByRole("listitem", { name: "Tool get_research_context: Completed", exact: true })).toHaveCount(1);
+  const toolStep = process.getByText("Used 1 tool", { exact: true }).first();
+  await toolStep.click();
+  await expect(process.getByRole("listitem")).toHaveCount(0);
+  await toolStep.click();
+  await expect(process.getByRole("listitem")).toHaveCount(1);
+  await process.getByText("Used 1 tool", { exact: true }).last().click();
+  await expect(process.getByRole("listitem")).toHaveCount(2);
+  const question = process.getByText("Question answered", { exact: true });
+  const presentation = await question.evaluate(element => ({
+    height: element.getBoundingClientRect().height,
+    fontSize: getComputedStyle(element).fontSize,
+    weight: getComputedStyle(element).fontWeight,
+  }));
+  expect(presentation).toEqual({ height: 22, fontSize: "14px", weight: "500" });
+  await question.click();
+  await expect(process.getByText("Which approach?", { exact: true })).toBeVisible();
+  await expect(process.getByText("Default approach", { exact: true })).toBeVisible();
+  await question.click();
+  await expect(process.getByText("Which approach?", { exact: true })).toBeHidden();
+  await expect(process.getByText("Default approach", { exact: true })).toBeHidden();
+});
+test("native message footers copy original text and include the requested time format", async ({ page }) => {
+  await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (value: string) => { (window as unknown as { copied: string }).copied = value; } } }));
   await page.getByRole("button", { name: "Complete", exact: true }).click();
   await page.getByRole("button", { name: "Send next", exact: true }).click();
-  const viewport = page.getByRole("log");
-  const latest = page.locator('.chat-turn').last();
-  const offset = async () => (await latest.boundingBox())!.y - (await viewport.boundingBox())!.y;
-  await expect.poll(offset).toBeGreaterThanOrEqual(88);
-  await expect.poll(offset).toBeLessThanOrEqual(104);
-  await expect.poll(offset).toBeCloseTo(96, 0);
-  const initialOffset = await offset();
-  await page.getByRole("button", { name: "Short reply", exact: true }).click();
-  await expect.poll(offset).toBeCloseTo(initialOffset, 0);
   await page.getByRole("button", { name: "Finish reply", exact: true }).click();
-  await expect.poll(offset).toBeCloseTo(initialOffset, 0);
-  const bubble = (await latest.locator('.chat-message-user').boundingBox())!;
-  const work = (await latest.locator('.chat-turn-assistant-meta').boundingBox())!;
-  const previousFooter = (await page.locator('.chat-turn').first().locator('.chat-response-footer').boundingBox())!;
-  expect(work.y - bubble.y - bubble.height).toBeGreaterThanOrEqual(0);
-  expect(work.y - bubble.y - bubble.height).toBeLessThanOrEqual(24);
-  expect(bubble.y - previousFooter.y - previousFooter.height).toBeGreaterThanOrEqual(0);
-  expect(bubble.y - previousFooter.y - previousFooter.height).toBeLessThanOrEqual(24);
-  await latest.locator('.chat-message-user').hover();
-  await expect(latest.locator('.chat-message-actions')).toHaveCSS('opacity', '1');
-  const userCopy = (await latest.getByRole('button', { name: 'Copy your message' }).boundingBox())!;
-  const reply = (await latest.locator('.chat-message-assistant').boundingBox())!;
-  expect(userCopy.y + userCopy.height).toBeLessThanOrEqual(reply.y);
-  await viewport.hover();
-  await page.mouse.wheel(0, -180);
-  await expect.poll(() => viewport.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeGreaterThan(100);
-  await expect(latest.locator('.chat-message-assistant')).toBeInViewport({ ratio: 1 });
-  await expect(page.getByRole("button", { name: "Back to latest" })).toBeHidden();
-  await page.mouse.wheel(0, 500);
-  await expect.poll(() => viewport.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThanOrEqual(2);
-  await page.setViewportSize({ width: 390, height: 700 });
-  await expect.poll(offset).toBeGreaterThanOrEqual(88);
-  await expect.poll(offset).toBeLessThanOrEqual(104);
-  await page.getByRole("button", { name: "Long reply", exact: true }).click();
-  await expect.poll(() => viewport.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThanOrEqual(2);
-  await viewport.hover();
-  await page.mouse.wheel(0, -300);
-  await expect(page.getByRole("button", { name: "Back to latest" })).toBeVisible();
-  const readingPosition = await viewport.evaluate((el) => el.scrollTop);
-  await page.getByRole("button", { name: "Long reply", exact: true }).click();
-  await expect.poll(() => viewport.evaluate((el) => el.scrollTop)).toBeCloseTo(readingPosition, 0);
-  await page.getByRole("button", { name: "Send next", exact: true }).click();
-  await expect.poll(offset).toBeGreaterThanOrEqual(88);
-  await expect.poll(offset).toBeLessThanOrEqual(104);
+  const user = page.locator('.chat-message-user').last();
+  const reply = page.locator('[data-entry-id="sent-1-response"]');
+  await page.mouse.move(0, 0);
+  await expect(user.locator(".ant-bubble-footer")).toHaveCSS("opacity", "0");
+  await expect(reply.locator(".ant-bubble-footer")).toHaveCSS("opacity", "0");
+  const userBefore = await user.boundingBox();
+  await user.hover();
+  await expect(user.locator(".ant-bubble-footer")).toHaveCSS("opacity", "1");
+  await expect(reply.locator(".ant-bubble-footer")).toHaveCSS("opacity", "0");
+  expect(await user.boundingBox()).toEqual(userBefore);
+  await user.getByRole("button", { name: "Copy message", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { copied: string }).copied)).toBe("Hi");
+  const replyBefore = await reply.boundingBox();
+  await reply.hover();
+  await expect(reply.locator(".ant-bubble-footer")).toHaveCSS("opacity", "1");
+  expect(await reply.boundingBox()).toEqual(replyBefore);
+  await reply.getByRole("button", { name: "Copy response", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { copied: string }).copied)).toBe("Hello. How can I help?");
+  await expect(reply.locator("time")).toHaveText("12:00 AM");
+  await expect(user.locator("time")).toHaveText("12:00 AM");
+  const replyCopy = (await reply.getByRole("button", { name: "Copy response", exact: true }).boundingBox())!;
+  const replyText = (await reply.locator(".x-markdown").boundingBox())!;
+  const replyTime = (await reply.locator("time").boundingBox())!;
+  expect(Math.abs(replyCopy.x - replyText.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(replyCopy.y + replyCopy.height / 2 - replyTime.y - replyTime.height / 2)).toBeLessThanOrEqual(1);
+  await page.mouse.move(0, 0);
+  await page.getByRole("button", { name: "Finish reply", exact: true }).focus();
+  await expect(user.locator(".ant-bubble-footer")).toHaveCSS("opacity", "0");
+  await expect(reply.locator(".ant-bubble-footer")).toHaveCSS("opacity", "0");
+  await user.getByRole("button").focus();
+  await expect(user.getByRole("button")).toBeFocused();
+  await expect(user.getByRole("button")).toBeVisible();
+  await expect(user.locator(".ant-bubble-footer")).toHaveCSS("opacity", "1");
+  await reply.getByRole("button").focus();
+  await expect(reply.locator(".ant-bubble-footer")).toHaveCSS("opacity", "1");
+  await expect(user.locator(".ant-bubble-footer")).toHaveCSS("opacity", "0");
 });
-
-for (const reducedMotion of ["no-preference", "reduce"] as const) {
-  test(`sending moves smoothly above the reply area with motion preference ${reducedMotion}`, async ({ page }) => {
-    await page.emulateMedia({ reducedMotion });
-    await page.getByRole("button", { name: "Complete", exact: true }).click();
-    const positions = await page.evaluate(async () => {
-      const viewport = document.querySelector('.chat-timeline')!;
-      const send = [...document.querySelectorAll('button')].find((button) => button.textContent === 'Send next')!;
-      send.click();
-      return new Promise<number[]>((resolve) => {
-        const samples: number[] = [];
-        const start = performance.now();
-        function sample() {
-          const latest = document.querySelector('[data-turn-id="sent-1"]');
-          if (!latest) { requestAnimationFrame(sample); return; }
-          const offset = latest.getBoundingClientRect().top - viewport.getBoundingClientRect().top;
-          samples.push(offset);
-          if (samples.length === 1) {
-            [...document.querySelectorAll('button')].find((button) => button.textContent === 'Short reply')!.click();
-          }
-          if (Math.abs(offset - 96) < 0.5 || performance.now() - start > 1500) resolve(samples);
-          else requestAnimationFrame(sample);
-        }
-        requestAnimationFrame(sample);
-      });
-    });
-    expect(positions.at(-1)).toBeCloseTo(96, 0);
-    if (reducedMotion === 'reduce') expect(positions).toEqual([expect.closeTo(96, 0)]);
-    else expect(new Set(positions.filter((value) => value > 104).map(Math.round)).size).toBeGreaterThan(2);
-  });
-}
-
-test("latest tool status stays visible when history is folded and respects reduced motion", async ({ page }) => {
-  await page.getByRole("button", { name: "Start tool", exact: true }).click();
-  const activity = page.locator(".chat-current-activity");
-  await expect(activity).toContainText("Running submit research run");
-  await page.locator('.chat-work-history > [data-slot="collapsible-trigger"]').click();
-  await expect(activity).toBeVisible();
-  await expect(page.locator('.chat-work-history > [data-slot="collapsible-trigger"]')).toContainText("Working for");
-  await expect(activity).toHaveAttribute("role", "status");
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  await expect(activity.locator("span")).toHaveCSS("animation-name", "none");
-  await expect(activity).toBeVisible();
-  await page.getByRole("button", { name: "Finish tool", exact: true }).click();
-  await expect(activity).toContainText("Preparing response");
+test("plain and expandable elapsed labels share native typography with icons aligned to the reading edge", async ({ page }) => {
   await page.getByRole("button", { name: "Complete", exact: true }).click();
-  await expect(activity).toHaveCount(0);
-  await expect(page.locator('.chat-work-history > [data-slot="collapsible-trigger"]')).toContainText("Worked for");
+  await page.getByRole("button", { name: "Send next", exact: true }).click();
+  await page.getByRole("button", { name: "Finish reply", exact: true }).click();
+  const headings = page.locator(".ant-think-status-text").filter({ hasText: /^Worked for/ });
+  expect(await headings.count()).toBe(2);
+  const geometry = await headings.evaluateAll(elements => elements.map(element => ({
+    x: element.closest(".ant-think")!.getBoundingClientRect().x, fontSize: getComputedStyle(element).fontSize,
+    weight: getComputedStyle(element).fontWeight,
+  })));
+  expect(geometry[0]).toEqual(geometry[1]);
+  const reply = page.locator('[data-entry-id="sent-1-response"] .x-markdown');
+  expect(Math.abs((await reply.boundingBox())!.x - geometry[1]!.x)).toBeLessThanOrEqual(1);
+  const gaps = await headings.evaluateAll(elements => elements.map(element => {
+    const work = element.closest(".ant-bubble")!;
+    const content = work.nextElementSibling!.querySelector(".ant-bubble-content")!;
+    return content.getBoundingClientRect().top - work.querySelector(".ant-divider")!.getBoundingClientRect().bottom;
+  }));
+  // Both research views and plain replies keep the same gap after the work separator.
+  expect(gaps).toEqual([16, 16]);
 });
-
-test("renders Chinese punctuation emphasis while preserving code in a completed reply", async ({ page }) => {
+test("new prompts sit near the top with reply space and stay there through short replies", async ({ page }) => {
+  await page.getByRole("button", { name: "Complete", exact: true }).click();
+  await page.getByRole("button", { name: "Send next", exact: true }).click();
+  const scroll = page.locator(".ant-bubble-list-scroll-box").first();
+  const prompt = page.locator('.chat-message-user .ant-bubble-content').last();
+  const relativeTop = async () => (await prompt.boundingBox())!.y - (await scroll.boundingBox())!.y;
+  const relativePosition = async () => await relativeTop() / (await scroll.boundingBox())!.height;
+  await expect.poll(relativePosition).toBeGreaterThanOrEqual(0.18);
+  await expect.poll(relativePosition).toBeLessThanOrEqual(0.25);
+  const position = await relativeTop();
+  await page.getByRole("button", { name: "Short reply", exact: true }).click();
+  await expect(page.locator('[data-entry-id="sent-1-response"]')).toContainText("Hello. How can I help?");
+  await expect.poll(relativeTop).toBeCloseTo(position, 0);
+  await page.getByRole("button", { name: "Finish reply", exact: true }).click();
+  await expect.poll(relativeTop).toBeCloseTo(position, 0);
+  await page.setViewportSize({ width: 1552, height: 942 });
+  await expect.poll(relativePosition).toBeGreaterThanOrEqual(0.18);
+  await expect.poll(relativePosition).toBeLessThanOrEqual(0.25);
+  await page.screenshot({ path: new URL("../../../.local/ant-design-x-chat/turn-position/new-prompt.png", import.meta.url).pathname });
+});
+test("the first accepted prompt reserves reply space when the timeline mounts", async ({ page }) => {
+  await page.goto("https://chat.fixture/?initial=prompt");
+  const scroll = page.locator(".ant-bubble-list-scroll-box").first();
+  const prompt = page.locator('.chat-message-user .ant-bubble-content').last();
+  const relativePosition = async () => ((await prompt.boundingBox())!.y - (await scroll.boundingBox())!.y) / (await scroll.boundingBox())!.height;
+  await expect.poll(relativePosition).toBeGreaterThanOrEqual(0.18);
+  await expect.poll(relativePosition).toBeLessThanOrEqual(0.25);
+});
+test("loading completed history retains the latest position without a reply spacer", async ({ page }) => {
+  await page.goto("https://chat.fixture/?initial=history");
+  await page.getByRole("button", { name: "Load history", exact: true }).click();
+  const scroll = page.locator(".ant-bubble-list-scroll-box").first();
+  const reply = page.locator('[data-entry-id="sent-1-response"]');
+  await expect(reply).toBeVisible();
+  const bottomGap = async () => {
+    const viewport = (await scroll.boundingBox())!;
+    const message = (await reply.boundingBox())!;
+    return viewport.y + viewport.height - message.y - message.height;
+  };
+  await expect.poll(bottomGap).toBeLessThanOrEqual(16);
+});
+test("sending while reading older content brings only the new prompt into the upper reading area", async ({ page }) => {
+  await page.getByRole("button", { name: "Complete", exact: true }).click();
+  await page.getByRole("button", { name: "Send next", exact: true }).click();
+  await page.getByRole("button", { name: "Long reply", exact: true }).click();
+  const scroll = page.locator(".ant-bubble-list-scroll-box").first();
+  await scroll.hover();
+  await page.mouse.wheel(0, -800);
+  await expect.poll(() => scroll.evaluate(element => -element.scrollTop)).toBeGreaterThan(100);
+  await page.getByRole("button", { name: "Send next", exact: true }).click();
+  const prompt = page.locator('.chat-message-user .ant-bubble-content').last();
+  const relativePosition = async () => ((await prompt.boundingBox())!.y - (await scroll.boundingBox())!.y) / (await scroll.boundingBox())!.height;
+  await expect.poll(relativePosition).toBeLessThanOrEqual(0.25);
+  await expect.poll(relativePosition).toBeGreaterThanOrEqual(0.18);
+});
+test("native scrolling preserves an upward reading position during streaming", async ({ page }) => {
+  await page.getByRole("button", { name: "Complete", exact: true }).click();
+  await page.getByRole("button", { name: "Send next", exact: true }).click();
+  await page.getByRole("button", { name: "Long reply", exact: true }).click();
+  const scroll = page.locator(".ant-bubble-list-scroll-box").first();
+  await expect(scroll).toBeVisible();
+  await expect(page.locator('[data-entry-id="sent-1-response"]')).toContainText("A longer streamed paragraph.");
+  await scroll.hover(); await page.mouse.wheel(0, -800);
+  await expect.poll(() => scroll.evaluate(element => -element.scrollTop)).toBeGreaterThan(100);
+  // Native Bubble.List uses reverse scrolling: added content changes scrollTop,
+  // while the paragraph being read must stay at the same screen position.
+  const anchor = page.locator('[data-entry-id="sent-1-response"] .x-markdown p').first();
+  const position = (await anchor.boundingBox())!.y;
+  await page.getByRole("button", { name: "Long reply", exact: true }).click();
+  await expect.poll(async () => (await anchor.boundingBox())!.y).toBeCloseTo(position, 0);
+});
+test("native Markdown retains CJK formatting and the product link boundary", async ({ page }) => {
+  await page.getByRole("button", { name: "Complete", exact: true }).click();
   await page.getByRole("button", { name: "Send next", exact: true }).click();
   await page.getByRole("button", { name: "CJK reply", exact: true }).click();
-  const message = page.locator('[data-entry-id="sent-1-response"]');
-  await expect(message.locator("strong")).toHaveText("数据截至：");
-  await expect(message.locator("code")).toHaveText("**原文：**保持");
-  await expect(message).toContainText("2026-08-27");
-});
-
-test("short Markdown run links remain reachable on a phone", async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByRole("button", { name: "Send next", exact: true }).click();
+  await expect(page.locator('[data-entry-id="sent-1-response"] strong')).toHaveText("数据截至：");
+  await expect(page.locator('[data-entry-id="sent-1-response"] code')).toHaveText("**原文：**保持");
   await page.getByRole("button", { name: "Run link reply", exact: true }).click();
-  const link = page.getByRole("link", { name: "X", exact: true });
-  await expect(link).toHaveAttribute("href", "/research-runs/run_0123456789abcdef0123");
-  const bounds = (await link.boundingBox())!;
-  expect(bounds.width).toBeGreaterThanOrEqual(44);
-  expect(bounds.height).toBeGreaterThanOrEqual(44);
+  await expect(page.getByRole("link", { name: /^X/ })).toHaveAttribute("href", "/research-runs/run_0123456789abcdef0123");
+  await expect(page.getByRole("link", { name: /^X/ })).toHaveCSS("font-size", "16px");
 });
-for (const failed of [false, true]) {
-  test(`copy feedback is visible when clipboard ${failed ? "rejects" : "succeeds"}`, async ({ page }) => {
-    await page.evaluate(failed => Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
-      writeText: async () => { if (failed) throw new DOMException("Denied", "NotAllowedError"); },
-    } }), failed);
-    await page.getByRole("button", { name: "Complete", exact: true }).click();
-    await page.locator(".chat-turn-response").hover();
-    await page.getByRole("button", { name: "Copy response", exact: true }).click();
-    await expect(page.locator("[data-slot=toast]")).toContainText(failed ? "Could not copy to clipboard." : "Copied to clipboard.");
-    await expect(page.locator("[data-slot=toast]")).toBeVisible();
-    await expect(page.locator('[data-entry-id="final"]')).toBeVisible();
-  });
-}

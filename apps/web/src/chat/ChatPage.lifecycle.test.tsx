@@ -4,6 +4,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vitest";
 
+import { ChatTestProvider } from "./chatTestProvider";
 import { ChatComposer } from "./ChatComposer";
 import type { StagedInput } from "./stagedInputStore";
 import type { ChatConversationController } from "./useChatConversation";
@@ -26,7 +27,7 @@ test.each([
 ] as const)("renders the state machine's %s primary action with an action name", async (kind, label) => {
   const execute = vi.fn(async () => undefined);
   await mount(composerController({ action: { enabled: true, kind, label }, executeMainAction: execute }));
-  const button = document.querySelector<HTMLButtonElement>(`button[type="submit"]`);
+  const button = document.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
   expect(button?.getAttribute("aria-label")).toBe(label);
   await act(async () => button?.click());
   expect(execute).toHaveBeenCalledOnce();
@@ -96,12 +97,13 @@ test.each(["single_select", "multi_select", "free_text"] as const)("keeps %s que
     question: { ...pendingQuestion, selection_mode: mode, options: mode === "free_text" ? null : pendingQuestion.options },
     setAnswerSelections: selections,
   }));
-  expect(document.querySelector(".chat-question-composer h2")?.textContent).toBe(pendingQuestion.question);
+  const questionSurface = document.querySelector(".chat-question-composer")!;
+  expect(document.getElementById(questionSurface.getAttribute("aria-labelledby")!)?.textContent).toBe(pendingQuestion.question);
   expect(document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Answer"]')?.disabled).toBe(false);
   expect(document.querySelector<HTMLButtonElement>('[aria-label="Send answer"]')?.disabled).toBe(true);
   expect(document.body.textContent).not.toContain("Model settings");
   if (mode !== "free_text") {
-    await act(async () => document.querySelector<HTMLInputElement>('[data-slot="checkbox"], [data-slot="radio-group-item"]')?.click());
+    await act(async () => document.querySelector<HTMLInputElement>('input[type="checkbox"], input[type="radio"]')?.click());
     expect(selections).toHaveBeenCalledWith(["Quality"]);
   }
 });
@@ -121,7 +123,9 @@ test("answers explicitly, keeps Stop independent, and never treats blank Enter a
   expect(stop).not.toHaveBeenCalled();
   await mount({ ...controller, action: { enabled: true, kind: "answer", label: "Send answer" }, draft: "Keep churn low", answerSelections: ["Quality"] });
   const answer = document.querySelector("textarea")!;
+  await act(async () => answer.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true })));
   await act(async () => answer.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter", isComposing: true })));
+  await act(async () => answer.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true })));
   expect(execute).not.toHaveBeenCalled();
   await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Send answer"]')?.click());
   expect(execute).toHaveBeenCalledOnce();
@@ -136,8 +140,8 @@ test.each(["opening", "recovering", "stopping"] as const)("retains but locks the
   }));
   expect(document.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("Retained note");
   expect(document.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(true);
-  expect(document.querySelector<HTMLInputElement>('[data-slot="checkbox"], [data-slot="radio-group-item"]')?.getAttribute("data-checked")).toBe("");
-  expect(document.querySelector<HTMLFieldSetElement>("fieldset")?.disabled).toBe(true);
+  expect(document.querySelector<HTMLInputElement>('input[type="checkbox"], input[type="radio"]')?.checked).toBe(true);
+  expect(document.querySelector<HTMLInputElement>('input[type="radio"]')?.disabled).toBe(true);
   expect(document.querySelector<HTMLButtonElement>('[aria-label="Stop"]')?.disabled).toBe(true);
 });
 
@@ -172,7 +176,7 @@ test("shows FIFO controls and exposes Steer only on the active head item", async
     queue: [head, staged("Second staged input", 2)],
     steerStaged: steer,
   }));
-  expect(document.querySelectorAll(".chat-staged-queue li")).toHaveLength(2);
+  expect(document.querySelectorAll(".chat-staged-queue [data-staged-input]")).toHaveLength(2);
   const steerButtons = [...document.querySelectorAll<HTMLButtonElement>(".chat-staged-actions button")]
     .filter((button) => button.textContent === "Steer");
   expect(steerButtons).toHaveLength(1);
@@ -187,7 +191,7 @@ async function mount(controller: ChatConversationController): Promise<void> {
   document.body.append(container);
   root = createRoot(container);
   await act(async () => {
-    root?.render(<ChatComposer announcement="" controller={controller} modelControls={<span>Model settings</span>} />);
+    root?.render(<ChatTestProvider controller={controller}><ChatComposer controller={controller} modelControls={<span>Model settings</span>} /></ChatTestProvider>);
   });
 }
 

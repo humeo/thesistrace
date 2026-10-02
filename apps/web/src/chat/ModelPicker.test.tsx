@@ -10,6 +10,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { resolveModelSelection } from "./chatState";
 import type { AgentModelCatalog } from "./modelCatalog";
 import { ModelPicker } from "./ModelPicker";
+import { ChatUiProvider } from "./ChatUiProvider";
 import { decodeAgentModelCatalog } from "./modelCatalog";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -22,7 +23,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-test("shows all configured Luna efforts and selects Max", async () => {
+test("maps the configured Luna range to supported efforts and selects Max", async () => {
   const configured = JSON.parse(readFileSync(
     resolve(dirname(fileURLToPath(import.meta.url)), "../../../agent/config/model-registry.json"), "utf8",
   ));
@@ -36,52 +37,70 @@ test("shows all configured Luna efforts and selects Max", async () => {
   await mount(<ModelPicker catalog={current} onModelChange={vi.fn()}
     onReasoningChange={onReasoningChange}
     selection={resolveModelSelection(current, current.default_model_key, null)} />);
-  await act(async () => document.querySelector<HTMLButtonElement>('[data-slot=popover-trigger]')!.click());
-  const options = [...document.querySelectorAll<HTMLButtonElement>('[data-picker-column="reasoning"]')];
-  expect(options.map((button) => button.textContent)).toEqual(["Low", "Medium", "High", "X-high", "Max"]);
-  await act(async () => options[4].click());
+  await act(async () => document.querySelector<HTMLButtonElement>('button[aria-haspopup="dialog"]')!.click());
+  const slider = document.querySelector<HTMLInputElement>('[role="slider"]')!;
+  expect(slider.getAttribute("aria-valuemin")).toBe("0");
+  expect(slider.getAttribute("aria-valuemax")).toBe("4");
+  expect(slider.getAttribute("aria-valuetext")).toBe("High");
+  await act(async () => slider.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "End", keyCode: 35 })));
   expect(onReasoningChange).toHaveBeenCalledWith("max");
-  expect(document.querySelector('[role="dialog"]')).toBeNull();
+  expect(document.querySelector('[role="dialog"]')).not.toBeNull();
 });
 
-test("keeps a two-column picker open for Model, then closes and restores focus for Reasoning", async () => {
+test("updates the reasoning range when switching models and keeps the picker open while adjusting", async () => {
   await mount();
-  const trigger = document.querySelector<HTMLButtonElement>('[data-slot=popover-trigger]')!;
+  const trigger = document.querySelector<HTMLButtonElement>('button[aria-haspopup="dialog"]')!;
   await act(async () => trigger.click());
 
   const menu = document.querySelector<HTMLElement>('[role="dialog"]')!;
-  expect(menu.querySelectorAll('[data-slot=toggle-group][role="group"]')).toHaveLength(2);
-  const sol = [...menu.querySelectorAll<HTMLButtonElement>('[data-picker-column="model"]')]
-    .find((button) => button.textContent?.includes("GPT-5.6 Sol"))!;
+  const sol = [...menu.querySelectorAll<HTMLInputElement>('input[type="radio"]')]
+    .find((button) => button.getAttribute("aria-label") === "GPT-5.6 Sol")!;
   await act(async () => sol.click());
   expect(document.querySelector('[role="dialog"]')).not.toBeNull();
   expect(trigger.textContent).toContain("GPT-5.6 Sol");
   expect(trigger.textContent).toContain("X-high");
 
-  const medium = [...document.querySelectorAll<HTMLButtonElement>('[data-picker-column="reasoning"]')]
-    .find((button) => button.textContent?.includes("Medium"))!;
-  await act(async () => medium.click());
-  expect(document.querySelector('[role="dialog"]')).toBeNull();
-  expect(document.activeElement).toBe(trigger);
+  const slider = document.querySelector<HTMLInputElement>('[role="slider"]')!;
+  expect(slider.getAttribute("aria-valuetext")).toBe("X-high");
+  await act(async () => slider.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Home", keyCode: 36 })));
+  expect(slider.getAttribute("aria-valuetext")).toBe("Medium");
+  expect(document.querySelector('[role="dialog"]')).not.toBeNull();
   expect(trigger.textContent).toContain("Medium");
 });
 
-test("supports keyboard opening, column movement, and Escape focus restoration", async () => {
+test("supports keyboard opening, horizontal reasoning navigation, and Escape focus restoration", async () => {
   await mount();
-  const trigger = document.querySelector<HTMLButtonElement>('[data-slot=popover-trigger]')!;
+  const trigger = document.querySelector<HTMLButtonElement>('button[aria-haspopup="dialog"]')!;
   trigger.focus();
   await act(async () => trigger.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" })));
   await act(async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
   const selectedModel = document.querySelector<HTMLButtonElement>(
-    '[data-picker-column="model"][aria-pressed="true"]',
+    'input[type="radio"]:checked',
   )!;
   expect(document.activeElement).toBe(selectedModel);
 
-  await act(async () => selectedModel.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowRight" })));
-  expect((document.activeElement as HTMLElement)?.dataset.pickerColumn).toBe("reasoning");
+  const selectedReasoning = document.querySelector<HTMLInputElement>('[role="slider"]')!;
+  await act(async () => selectedReasoning.focus());
+  await act(async () => selectedReasoning.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowLeft", keyCode: 37 })));
+  expect(selectedReasoning.getAttribute("aria-valuetext")).toBe("Medium");
+  expect(document.activeElement).toBe(selectedReasoning);
   await act(async () => document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" })));
-  expect(document.querySelector('[role="dialog"]')).toBeNull();
+  expect(trigger.getAttribute("aria-expanded")).toBe("false");
   expect(document.activeElement).toBe(trigger);
+});
+
+test("shows a fixed effort without an adjustable range when the model supports only one effort", async () => {
+  const fixedCatalog: AgentModelCatalog = {
+    default_model_key: "fixed",
+    models: [{ key: "fixed", display_name: "Fixed model", default_reasoning_effort: "medium", reasoning_efforts: ["medium"] }],
+  };
+  const onReasoningChange = vi.fn();
+  await mount(<ModelPicker catalog={fixedCatalog} onModelChange={vi.fn()} onReasoningChange={onReasoningChange}
+    selection={resolveModelSelection(fixedCatalog, "fixed", null)} />);
+  await act(async () => document.querySelector<HTMLButtonElement>('button[aria-haspopup="dialog"]')!.click());
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Medium");
+  expect(document.querySelector('[role="slider"]')).toBeNull();
+  expect(onReasoningChange).not.toHaveBeenCalled();
 });
 
 test("focuses the first Model when a removed selection must be replaced", async () => {
@@ -93,19 +112,19 @@ test("focuses the first Model when a removed selection must be replaced", async 
       selection={null}
     />,
   );
-  const trigger = document.querySelector<HTMLButtonElement>('[data-slot=popover-trigger]')!;
+  const trigger = document.querySelector<HTMLButtonElement>('button[aria-haspopup="dialog"]')!;
   trigger.focus();
   await act(async () => trigger.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" })));
   await act(async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
 
-  expect(document.activeElement).toBe(document.querySelector('[data-picker-column="model"]'));
+  expect(document.activeElement).toBe(document.querySelector('input[type="radio"]'));
 });
 
 async function mount(element: ReactNode = <Harness />): Promise<void> {
   const container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
-  await act(async () => root?.render(element));
+  await act(async () => root?.render(<ChatUiProvider>{element}</ChatUiProvider>));
 }
 
 function Harness() {
@@ -136,6 +155,6 @@ const catalog: AgentModelCatalog = {
     default_reasoning_effort: "xhigh",
     display_name: "GPT-5.6 Sol",
     key: "sol",
-    reasoning_efforts: ["medium", "xhigh"],
+    reasoning_efforts: ["xhigh", "medium"],
   }],
 };

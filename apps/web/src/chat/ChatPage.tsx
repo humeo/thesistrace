@@ -1,5 +1,6 @@
-import { Button } from "../components/ui/button";
-import { useEffect, useState } from "react";
+import { Alert, Button, Result, Typography } from "antd";
+import { ChatUiProvider } from "./ChatUiProvider";
+import { type MouseEvent, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { useWorkspace } from "../shell/AppShell";
@@ -146,8 +147,9 @@ export function ChatContent({
           || selectedSessionState.status === "loading"
         ) ? (
           <AuthoritativeStaticChatMain
-            modelControls={<p className="text-xs text-muted-foreground" role="status">{t("loadingSettings")}</p>}
+            modelControls={<Typography.Text type="secondary" role="status">{t("loadingSettings")}</Typography.Text>}
             opening
+            sessionTitle={currentSession?.title && currentSession.title !== "Untitled" ? currentSession.title : t("session")}
           />
         ) : thread.kind === "session" && (
           preferenceState.status !== "ready"
@@ -156,6 +158,7 @@ export function ChatContent({
           <AuthoritativeStaticChatMain
             error={t("sessionLoadFailed")}
             modelControls={null}
+            sessionTitle={currentSession?.title && currentSession.title !== "Untitled" ? currentSession.title : t("session")}
           />
         ) : (
           <AuthoritativeAgentConversation
@@ -180,17 +183,10 @@ export function ChatContent({
 function ChatNotFoundMain({ navigate }: { navigate: () => void }) {
   const { t } = useTranslation("chat");
   return (
-    <main className="grid min-h-dvh place-items-center p-4 md:p-8">
-      <section className="flex max-w-lg flex-col items-start gap-4" role="alert">
-        <p className="text-sm text-muted-foreground">{t("session")}</p>
-        <h1 className="text-2xl leading-8 font-semibold">{t("chatNotFound")}</h1>
-        <p>{t("chatNotFoundDescription")}</p>
-        <Button nativeButton={false} role="link" render={<a href="/chat" onClick={(event) => handleWorkspaceNavigation(event, navigate)} />}
-        >
-          {t("newChat")}
-        </Button>
-      </section>
-    </main>
+    <ChatUiProvider><main className="quantgrove-chat grid h-full place-items-center" role="alert" aria-label={t("session")}>
+      <Result status="404" title={<Typography.Title level={1}>{t("chatNotFound")}</Typography.Title>} subTitle={t("chatNotFoundDescription")}
+        extra={<Button type="primary" href="/chat" onClick={event => handleWorkspaceNavigation(event as MouseEvent<HTMLAnchorElement>, navigate)}>{t("newChat")}</Button>} />
+    </main></ChatUiProvider>
   );
 }
 
@@ -211,7 +207,7 @@ function CatalogControls({
 }) {
   const { t } = useTranslation("chat");
   if (catalogState.status === "loading") {
-    return <p className="text-xs text-muted-foreground" role="status">{t("loadingModels")}</p>;
+    return <Typography.Text type="secondary" role="status">{t("loadingModels")}</Typography.Text>;
   }
   if (catalogState.status === "ready" && selectionRequired) {
     return (
@@ -235,14 +231,8 @@ function CatalogControls({
         ? t("invalidCatalog")
         : t("agentHostUnavailable");
     return (
-      <div className="flex min-w-0 items-center gap-2 text-xs text-destructive" role="alert">
-        <span>{message}</span>
-        {catalogState.status !== "authentication-required" ? (
-          <Button variant="ghost" onClick={reloadCatalog} type="button">
-            {t("retry")}
-          </Button>
-        ) : null}
-      </div>
+      <Alert type="error" title={message} action={catalogState.status !== "authentication-required"
+        ? <Button type="text" onClick={reloadCatalog}>{t("retry")}</Button> : undefined} />
     );
   }
   return (

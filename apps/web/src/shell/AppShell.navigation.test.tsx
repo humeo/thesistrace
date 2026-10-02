@@ -56,31 +56,31 @@ test("retains the same sidebar, history scroll, and collapsed state across Chat 
   const sidebar = document.querySelector("#primary-navigation");
   const historyRegion = document.querySelector(".chat-session-region")!;
   historyRegion.scrollTop = 75;
-  const dataLink = document.querySelector<HTMLAnchorElement>('.resource-nav a[href="/data"]')!;
-  const conversationLink = document.querySelector<HTMLAnchorElement>(`.chat-session-row a`)!;
+  const dataLink = () => document.querySelector<HTMLAnchorElement>('.resource-nav a[href="/data"]')!;
+  const conversationLink = () => document.querySelector<HTMLAnchorElement>(`.chat-session-row a`)!;
 
   expect(document.querySelector(".context-bar")).toBeNull();
   const collapse = document.querySelector<HTMLButtonElement>('[aria-label="Collapse sidebar"]')!;
   expect(collapse?.closest(".sidebar-brand-row")).not.toBeNull();
   expect(sidebar?.contains(collapse)).toBe(true);
   await act(async () => collapse.click());
-  await act(async () => dataLink.click());
+  await act(async () => dataLink().click());
 
   expect(document.querySelector("h1")?.textContent).toBe("Data overview");
   expect(document.querySelector("#primary-navigation")).toBe(sidebar);
   expect(document.querySelector(".chat-session-region")).toBe(historyRegion);
   expect(historyRegion.scrollTop).toBe(75);
   expect(document.querySelector(".app-shell-collapsed")).not.toBeNull();
-  expect(dataLink.getAttribute("aria-current")).toBe("page");
-  expect(conversationLink.getAttribute("aria-current")).toBeNull();
+  expect(dataLink().getAttribute("aria-current")).toBe("page");
+  expect(conversationLink().getAttribute("aria-current")).toBeNull();
   expect(document.querySelector(".context-bar")).toBeNull();
 
-  await act(async () => conversationLink.click());
+  await act(async () => conversationLink().click());
   expect(document.querySelector("h1")?.textContent).toBe("Conversation");
   expect(document.querySelector("#primary-navigation")).toBe(sidebar);
   expect(document.querySelector(".app-shell-collapsed")).not.toBeNull();
-  expect(conversationLink.getAttribute("aria-current")).toBe("page");
-  expect(dataLink.getAttribute("aria-current")).toBeNull();
+  expect(conversationLink().getAttribute("aria-current")).toBe("page");
+  expect(dataLink().getAttribute("aria-current")).toBeNull();
   expect(document.querySelectorAll('[data-slot="sidebar"]')).toHaveLength(1);
   expect(document.querySelector(".context-bar")).toBeNull();
   const expand = document.querySelector<HTMLButtonElement>('[aria-label="Expand sidebar"]')!;
