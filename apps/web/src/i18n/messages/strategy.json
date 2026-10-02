@@ -25,9 +25,9 @@
       "pythonModule": "Python module",
       "stopLoss": "Stop loss (%)",
       "off": "Off",
-      "stopLossHelp": "Leave blank to disable. Uses actual acquisition cost including buy fees. Checks at Close and attempts to sell at the next Open; gaps or trading restrictions can increase the loss.",
+      "stopLossHelp": "Enable this rule to require a stop-loss percentage. Switching it off keeps the percentage without applying it. Uses actual acquisition cost including buy fees. Checks at Close and attempts to sell at the next Open; gaps or trading restrictions can increase the loss.",
       "maximumHolding": "Maximum holding (trading sessions)",
-      "maximumHoldingHelp": "Leave blank to disable. The first actual buy counts as session 1. At the Nth Close, request an exit at the next Open. Adding shares does not restart the count.",
+      "maximumHoldingHelp": "Enable this rule to require a positive number of trading sessions. Switching it off keeps the value without applying it. The first actual buy counts as session 1. At the Nth Close, request an exit at the next Open. Adding shares does not restart the count.",
       "minimumHolding": "Minimum holding (trading sessions)",
       "minimumHoldingHelp": "Leave blank to disable. Younger holdings retain their shares and occupy portfolio slots during ordinary changes. Risk exits can still reduce or sell them."
     },
@@ -56,6 +56,14 @@
     },
     "cost": {
       "title": "Fees and slippage",
+      "groups": { "commission": "Commission", "taxes": "Taxes and transfer fees" },
+      "compactLabels": {
+        "commission_rate_all_in": "Commission rate",
+        "commission_min_cny": "Minimum (CNY)",
+        "stamp_duty_sell_rate": "Stamp duty rate",
+        "transfer_fee_rate": "Transfer fee rate",
+        "slippage_bps": "Price slippage (basis points)"
+      },
       "help": "Frozen for this backtest and its DailyTrack. Defaults are simulation assumptions; actual broker and historical charges may differ.",
       "labels": {
         "commission_rate_all_in": "Buy/sell commission rate",
@@ -72,9 +80,17 @@
         "slippage_bps": "10 bp raises buy prices and lowers sell prices by 0.1%. Must be below 10,000 bp."
       }
     },
+    "riskPolicies": {
+      "stopLoss": "Stop loss",
+      "maximumHolding": "Maximum holding",
+      "drawdown": "Portfolio drawdown limit",
+      "enabled": "Enabled",
+      "disabled": "Not enabled",
+      "enable": "Enable {{name}}"
+    },
     "drawdown": {
       "title": "Portfolio drawdown",
-      "help": "Leave all three fields blank to disable. When enabled, complete every field. Close account value is compared with the current risk-cycle peak; the next Open applies the stock exposure cap.",
+      "help": "Enable this rule to require all three fields. Switching it off retains the fields without applying the limit. Compare Close account value with the current risk-cycle peak; apply the stock-exposure cap at the next Open.",
       "labels": {
         "drawdownThreshold": "Drawdown threshold (%)",
         "drawdownMaximumExposure": "Maximum stock exposure (%)",
@@ -84,7 +100,7 @@
     },
     "takeProfit": {
       "title": "Cumulative take profit",
-      "help": "Off when no tiers are configured. At the first trigger, freeze the holding baseline. A 30% tier followed by 60% sells another 30% of that baseline, not 60% of the remaining shares. Ordinary selections cannot add shares until this holding fully exits.",
+      "help": "Enable this rule to configure take-profit tiers. Switching it off retains the tiers without applying them. At the first trigger, freeze the holding baseline. A 30% tier followed by 60% sells another 30% of that baseline, not 60% of the remaining shares. Ordinary selections cannot add shares until this holding fully exits.",
       "tier": "Tier {{count}}",
       "profitThreshold": "Profit threshold (%)",
       "cumulativeReduction": "Cumulative reduction (%)",
@@ -93,7 +109,7 @@
       "footer": "Both percentages must increase with each tier. Checks use acquisition cost at Close; fills at the following Open determine actual progress. Blocked sales and rounding remain uncompleted."
     },
     "frozen": {
-      "fees": "Frozen fees and slippage",
+      "fees": "Fees and slippage",
       "feesHelp": "Minimum commission applies to each filled child order. Slippage changes execution prices and is not charged again as a fee.",
       "python": "Frozen Python source",
       "history": "History",
@@ -207,32 +223,38 @@
     },
     "workbench": {
       "moduleNavigation": "Strategy modules",
-      "stageTab": { "universe_selection": "Universe", "alpha": "Signals", "portfolio_construction": "Portfolio", "risk_management": "Risk" },
-      "stageHeading": { "universe_selection": "Stock universe", "alpha": "Selection signals", "portfolio_construction": "Portfolio settings", "risk_management": "Risk settings" },
+      "stageMode": "{{stage}} authoring mode",
+      "stageModeHelp": "Configure uses the controls below. Code uses Python to replace the logic of this stage only. Switching keeps both drafts. The Python authoring option above controls the whole strategy.",
+      "formMode": "Configure",
+      "pythonMode": "Code",
+      "baseUniverse": "Base stock universe",
+      "baseUniverseOption": "Top {{count}} by liquidity",
+      "universeFilter": "Custom filter (Python, optional)",
+      "universeFilterHelp": "Configure uses all candidates in the base universe. Code uses Python to select candidates within that base universe. Switching keeps the selected universe and your code.",
+      "stageIssueCount": "{{count}} issue(s)",
+      "stageTab": {
+        "universe_selection": "Universe",
+        "alpha": "Signals",
+        "portfolio_construction": "Portfolio",
+        "risk_management": "Risk"
+      },
+      "stageHeading": {
+        "universe_selection": "Stock universe",
+        "alpha": "Selection signals",
+        "portfolio_construction": "Portfolio settings",
+        "risk_management": "Risk settings"
+      },
       "stagePortfolioSummary": "{{holdings}} stocks · {{weighting}}",
       "stageRiskConfigured": "Additional rules set",
       "stageRiskEmpty": "No additional rules",
+      "unset": "Not set",
       "executionLabel": "Execution timing",
       "executionShort": "Decide at Close, simulate at the next Open",
       "intro": "Build the rules, then test them on historical data.",
       "factorIntro": "Measure whether a scoring formula predicts future returns.",
       "conditionsTitle": "Backtest conditions",
-      "ruleModeHelp": "Choose stocks, allocate capital, then add exit rules if needed.",
-      "directHelp": "This program decides the complete portfolio. Use rule configuration to combine built-in rules with custom Python.",
-      "chooseRule": "Choose a ranking rule",
-      "rankBy": "How should stocks be ranked?",
-      "lookback": "Measure over trading days",
-      "scoring": {
-        "momentum": "Strongest recent returns",
-        "reversal": "Weakest recent returns",
-        "custom": "Custom scoring formula"
-      },
-      "scoringHelp": {
-        "momentum": "Rank stocks by their return over the past {{count}} trading days, highest first.",
-        "reversal": "Rank stocks by their return over the past {{count}} trading days, lowest first."
-      },
-      "scoringStart": "Choose a common rule to start without writing a formula.",
-      "windowInvalid": "Enter 1–252 trading days.",
+      "ruleModeHelp": "Build the strategy in four modules: universe, signals, portfolio and risk. Each module can use built-in settings or Python code.",
+      "directHelp": "Write one Python program for the complete strategy: stock selection, allocation and exits. Switching authoring methods keeps both drafts.",
       "section": {
         "universe_selection": "Which stocks can be selected?",
         "alpha": "How are stocks selected?",
@@ -255,45 +277,12 @@
       "drawdownRiskHelp": "Optional: lower stock exposure after a portfolio loss.",
       "minimumHolding": "Minimum holding period",
       "minimumHoldingHelp": "Optional: keep a position through ordinary selection changes.",
-      "fixedExposure": "Stock allocation (%)",
-      "exposureMode": "How is stock allocation set?",
+      "fixedExposure": "Total stock exposure (%)",
+      "exposureMode": "How is total stock exposure set?",
       "fixedMode": "Fixed percentage",
       "dynamicMode": "Formula based",
       "fixedHelp": "The remaining capital stays in cash. For example, 60 means a 60% stock allocation.",
-      "summaryTitle": "Strategy summary",
-      "summarySelection": "Stock universe",
-      "summaryRanking": "Selection rule",
-      "summaryUniverse": "Top {{count}} stocks by liquidity",
-      "summaryUniverseMissing": "Choose a stock universe",
-      "summaryUniversePython": "Python filters the selected universe",
-      "summaryAlphaPython": "Python computes the scores",
-      "summaryScoring": {
-        "momentum": "Highest {{count}}-day returns first",
-        "reversal": "Lowest {{count}}-day returns first"
-      },
-      "summaryCustomFormula": "Rank by your custom scoring formula",
-      "summaryRankingMissing": "Choose a scoring rule",
-      "summaryPortfolio": "Portfolio and rebalancing",
-      "summaryPortfolioPython": "Python controls holdings and rebalancing",
-      "summaryHoldings": "Up to {{holdings}} stocks · select every {{sessions}} trading days · stock allocation {{exposure}}",
-      "summaryWeighting": "Allocation between stocks",
-      "weighting": {
-        "equal_weight": "Equal allocation",
-        "rank_weight": "Higher ranks receive more capital",
-        "inverse_volatility": "Lower volatility receives more capital"
-      },
-      "summaryMinHolding": "Minimum holding period",
       "sessions": "{{count}} trading days",
-      "summaryExit": "Additional exits",
-      "summaryRiskPython": "Python applies the exit rules",
-      "summaryNoRisk": "None; positions change through the portfolio rules",
-      "summaryStop": "Stop loss {{percent}}%",
-      "summaryMaxHolding": "Hold at most {{count}} trading days",
-      "summaryProfit": "{{count}} take-profit levels",
-      "summaryDrawdown": "At {{threshold}}% drawdown, cap stocks at {{exposure}}%",
-      "listSeparator": "; ",
-      "dynamicExposureShort": "set by formula",
-      "summaryDirect": "The Python program determines selection, allocation and exits.",
       "execution": "Decide after the Close and simulate trades at the next trading day's Open. Trading restrictions can prevent fills.",
       "resultsHelp": "The result shows returns, drawdown, holdings and the reasons for simulated trades.",
       "programHelp": "Python reference",
@@ -330,9 +319,9 @@
       "pythonModule": "Python 模块",
       "stopLoss": "止损（%）",
       "off": "关闭",
-      "stopLossHelp": "留空表示关闭。使用含买入费用的实际取得成本。收盘检查并尝试在下一开盘卖出；跳空或交易限制可能扩大亏损。",
+      "stopLossHelp": "开启后填写止损百分比；关闭时保留参数，但不应用规则。使用包含买入费用的实际取得成本。收盘检查，下一开盘尝试卖出；跳空或交易限制可能扩大亏损。",
       "maximumHolding": "最长持有（交易日）",
-      "maximumHoldingHelp": "留空表示关闭。首次实际买入计为第 1 个交易日；第 N 个收盘时请求下一开盘退出。追加持仓不会重新计数。",
+      "maximumHoldingHelp": "开启后填写正整数交易日；关闭时保留参数，但不应用规则。首次实际买入计为第 1 个交易日，第 N 个收盘请求下一开盘退出。追加买入不重置持有天数。",
       "minimumHolding": "最短持有（交易日）",
       "minimumHoldingHelp": "留空表示关闭。未满期限的持仓在普通调仓中保留股数并占用组合名额；风险退出仍可减仓或卖出。"
     },
@@ -361,6 +350,14 @@
     },
     "cost": {
       "title": "费用与滑点",
+      "groups": { "commission": "佣金", "taxes": "税费" },
+      "compactLabels": {
+        "commission_rate_all_in": "佣金费率",
+        "commission_min_cny": "最低佣金（元）",
+        "stamp_duty_sell_rate": "印花税费率",
+        "transfer_fee_rate": "过户费率",
+        "slippage_bps": "价格滑点（基点）"
+      },
       "help": "费用设置在本次回测及其 DailyTrack 中冻结。默认值是模拟假设，实际券商和历史费用可能不同。",
       "labels": {
         "commission_rate_all_in": "买卖佣金费率",
@@ -377,9 +374,17 @@
         "slippage_bps": "10 基点使买价上升、卖价下降 0.1%；必须小于 10,000 基点。"
       }
     },
+    "riskPolicies": {
+      "stopLoss": "止损",
+      "maximumHolding": "最长持有",
+      "drawdown": "回撤限制",
+      "enabled": "已启用",
+      "disabled": "未启用",
+      "enable": "启用{{name}}"
+    },
     "drawdown": {
       "title": "组合回撤",
-      "help": "三个字段全部留空表示关闭。启用后须填写所有字段。收盘账户价值与当前风险周期峰值比较；下一开盘应用股票仓位上限。",
+      "help": "开启后须填写三个字段；关闭时保留参数，但不应用限制。收盘账户价值与当前风险周期峰值比较；下一开盘应用股票仓位上限。",
       "labels": {
         "drawdownThreshold": "回撤阈值（%）",
         "drawdownMaximumExposure": "股票最大仓位（%）",
@@ -389,7 +394,7 @@
     },
     "takeProfit": {
       "title": "累计止盈",
-      "help": "未设置层级时关闭。首次触发时冻结持仓基准。30% 后接 60% 的层级，是再卖出基准的 30%，不是剩余持仓的 60%。完全退出前，普通选股不能追加持仓。",
+      "help": "开启后设置止盈层级；关闭时保留层级，但不应用规则。首次触发时冻结持仓基准。30% 后接 60% 的层级，是再卖出基准的 30%，不是剩余持仓的 60%。完全退出前，普通选股不能追加持仓。",
       "tier": "第 {{count}} 层",
       "profitThreshold": "盈利阈值（%）",
       "cumulativeReduction": "累计减仓（%）",
@@ -398,7 +403,7 @@
       "footer": "两个百分比须随层级递增。收盘时按取得成本检查，下一开盘的成交决定实际进度；受阻卖出和取整未成交部分不计为完成。"
     },
     "frozen": {
-      "fees": "冻结的费用与滑点",
+      "fees": "费用与滑点",
       "feesHelp": "最低佣金适用于每笔已成交子委托。滑点改变成交价格，不会再作为费用重复收取。",
       "python": "冻结的 Python 源码",
       "history": "历史窗口",
@@ -512,32 +517,38 @@
     },
     "workbench": {
       "moduleNavigation": "策略模块",
-      "stageTab": { "universe_selection": "股票池", "alpha": "选股信号", "portfolio_construction": "组合构建", "risk_management": "风险管理" },
-      "stageHeading": { "universe_selection": "股票池", "alpha": "选股信号", "portfolio_construction": "组合配置", "risk_management": "风险管理" },
+      "stageMode": "{{stage}}编写方式",
+      "stageModeHelp": "配置通过下方控件设置规则；Code 使用 Python 自定义这一阶段的逻辑。切换只影响当前阶段，并分别保留已有配置和代码。上方的“Python 编写”则负责整套策略。",
+      "formMode": "配置",
+      "pythonMode": "Code",
+      "baseUniverse": "基础股票范围",
+      "baseUniverseOption": "流动性前 {{count}} 只",
+      "universeFilter": "自定义筛选（Python，可选）",
+      "universeFilterHelp": "选择配置时，基础范围内的全部候选股票参与后续评分；选择 Code 时，用 Python 在所选基础范围内进一步筛选。切换会保留基础范围和已有代码。",
+      "stageIssueCount": "{{count}} 个问题",
+      "stageTab": {
+        "universe_selection": "股票池",
+        "alpha": "选股信号",
+        "portfolio_construction": "组合构建",
+        "risk_management": "风险管理"
+      },
+      "stageHeading": {
+        "universe_selection": "股票池",
+        "alpha": "选股信号",
+        "portfolio_construction": "组合配置",
+        "risk_management": "风险管理"
+      },
       "stagePortfolioSummary": "{{holdings}} 只 · {{weighting}}",
       "stageRiskConfigured": "已设置额外规则",
       "stageRiskEmpty": "未设置额外规则",
+      "unset": "未设置",
       "executionLabel": "执行方式",
       "executionShort": "收盘决策，次日开盘模拟",
       "intro": "配置选股和交易规则，用历史数据检验策略表现。",
       "factorIntro": "检验一个评分公式能否识别未来收益更高的股票。",
       "conditionsTitle": "回测条件",
-      "ruleModeHelp": "先确定选股和持仓规则，再按需要添加退出条件。",
-      "directHelp": "这段程序负责完整的选股、仓位和退出决策。需要组合现成规则时，可切回规则配置。",
-      "chooseRule": "选择一种选股规则",
-      "rankBy": "按什么给股票排序？",
-      "lookback": "观察最近多少个交易日",
-      "scoring": {
-        "momentum": "近期涨幅高的优先",
-        "reversal": "近期跌幅大的优先",
-        "custom": "自己编写评分公式"
-      },
-      "scoringHelp": {
-        "momentum": "比较最近 {{count}} 个交易日的涨幅，涨幅越高越优先。",
-        "reversal": "比较最近 {{count}} 个交易日的涨幅，涨幅越低越优先。"
-      },
-      "scoringStart": "选择常用规则即可开始，无需先写公式。",
-      "windowInvalid": "请输入 1–252 个交易日。",
+      "ruleModeHelp": "按股票池、选股信号、组合构建和风险管理四个模块编写策略；各模块可单独选择配置或 Python 代码。",
+      "directHelp": "用一段 Python 程序编写整套策略，负责选股、仓位和退出决策。切换编写方式会分别保留两种方式的草稿。",
       "section": {
         "universe_selection": "从哪些股票里选？",
         "alpha": "按什么规则选股？",
@@ -560,45 +571,12 @@
       "drawdownRiskHelp": "可选：组合亏损达到阈值时，降低股票仓位。",
       "minimumHolding": "最短持有期",
       "minimumHoldingHelp": "可选：普通换仓时，保留尚未达到持有期限的股票。",
-      "fixedExposure": "股票仓位（%）",
-      "exposureMode": "股票仓位如何确定？",
+      "fixedExposure": "股票总仓位（%）",
+      "exposureMode": "股票总仓位如何确定？",
       "fixedMode": "固定比例",
       "dynamicMode": "按公式动态调整",
       "fixedHelp": "剩余资金保留为现金。例如填 60，表示目标股票仓位为 60%。",
-      "summaryTitle": "策略摘要",
-      "summarySelection": "选股范围",
-      "summaryRanking": "选股规则",
-      "summaryUniverse": "流动性最高的 {{count}} 只股票",
-      "summaryUniverseMissing": "尚未选择股票池",
-      "summaryUniversePython": "Python 在所选股票池内筛选候选",
-      "summaryAlphaPython": "由 Python 计算选股评分",
-      "summaryScoring": {
-        "momentum": "近 {{count}} 日涨幅高的优先",
-        "reversal": "近 {{count}} 日涨幅低的优先"
-      },
-      "summaryCustomFormula": "按自定义公式的评分排序",
-      "summaryRankingMissing": "尚未选择选股规则",
-      "summaryPortfolio": "持仓与换仓",
-      "summaryPortfolioPython": "由 Python 决定持仓和换仓时机",
-      "summaryHoldings": "最多 {{holdings}} 只股票，每 {{sessions}} 个交易日选股，股票仓位 {{exposure}}",
-      "summaryWeighting": "股票之间如何分配",
-      "weighting": {
-        "equal_weight": "每只股票分配相同资金",
-        "rank_weight": "排名越靠前，分配越多",
-        "inverse_volatility": "波动越低，分配越多"
-      },
-      "summaryMinHolding": "最短持有期",
       "sessions": "{{count}} 个交易日",
-      "summaryExit": "额外退出条件",
-      "summaryRiskPython": "由 Python 决定",
-      "summaryNoRisk": "未设置；持仓按组合规则调整",
-      "summaryStop": "亏损 {{percent}}% 止损",
-      "summaryMaxHolding": "最多持有 {{count}} 个交易日",
-      "summaryProfit": "{{count}} 档止盈",
-      "summaryDrawdown": "回撤 {{threshold}}% 时，股票仓位不超过 {{exposure}}%",
-      "listSeparator": "；",
-      "dynamicExposureShort": "由公式决定",
-      "summaryDirect": "由 Python 程序决定选股、仓位和退出条件。",
       "execution": "收盘后判断，下一交易日开盘模拟交易。交易限制可能导致无法成交。",
       "resultsHelp": "运行后可查看收益、回撤、每日持仓，以及每次模拟交易的原因。",
       "programHelp": "Python 使用说明",

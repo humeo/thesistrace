@@ -103,5 +103,5 @@ export function PythonSourceEditor({ id, label, describedBy, source, error, erro
       to: line?.to ?? 0, severity: "error", message: error }] : []));
   }, [id, label, describedBy, error, errorLine, locale, source]);
 
-  return <div ref={host} className="h-[480px] min-w-0 overflow-hidden rounded-md border border-input bg-card focus-within:ring-2 focus-within:ring-ring/30" />;
+  return <div ref={host} className="python-source-editor h-[280px] min-h-[180px] resize-y min-w-0 overflow-hidden rounded-md border border-input bg-card focus-within:ring-2 focus-within:ring-ring/30" />;
 }

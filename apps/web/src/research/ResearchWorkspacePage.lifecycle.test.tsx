@@ -34,7 +34,9 @@ test.each(["success", "failure"])("a late Folder A %s cannot replace the loaded 
     await act(async () => { await i18n.changeLanguage("en"); });
     await act(async () => root.render(<ResearchWorkspacePage researcherId="owner" location={{ pathname: "/research", search: "", hash: "" }} />));
     await act(async () => root.render(<ResearchWorkspacePage researcherId="owner" location={{ pathname: "/research", search: "?folder=folder_b", hash: "" }} />));
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-labelledby="research-choice-factor_evaluation"]')!.click());
     expect(container.querySelector('[aria-label="Research Folders"]')?.textContent).toContain("B folder");
+    await act(async () => container.querySelector<HTMLButtonElement>('[title="Edit research name"]')!.click());
     const name = container.querySelector<HTMLInputElement>("#research-name")!;
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(name, "My 中文 idea");
@@ -42,13 +44,15 @@ test.each(["success", "failure"])("a late Folder A %s cannot replace the loaded 
     });
     const menu = container.querySelector<HTMLButtonElement>('[aria-label="Research Folders"]')!;
     await act(async () => menu.click());
+    await act(async () => Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+      .find(item => item.textContent?.trim() === "New Folder")!.click());
     const newFolderName = document.querySelector<HTMLInputElement>("#new-folder-name")!;
     newFolderName.focus();
     const beforeSwitch = vi.mocked(fetch).mock.calls.length;
     await act(async () => { await i18n.changeLanguage("zh-CN"); });
-    expect(container.querySelector('[aria-label="研究名称"]')).toBe(name);
-    expect(name.value).toBe("My 中文 idea");
-    expect(menu.getAttribute("aria-expanded")).toBe("true");
+    expect(container.querySelector('[title="编辑研究名称"]')?.textContent).toContain("My 中文 idea");
+    expect(menu.getAttribute("aria-expanded")).toBe("false");
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("新建文件夹");
     expect(document.activeElement).toBe(newFolderName);
     expect(vi.mocked(fetch).mock.calls.length).toBe(beforeSwitch);
     await act(async () => { settle(outcome === "success" ? Response.json({ items: folders, next_cursor: null }) : new Response(null, { status: 500 })); });

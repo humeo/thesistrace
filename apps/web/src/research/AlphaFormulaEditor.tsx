@@ -156,8 +156,8 @@ export function AlphaFormulaEditor({
     editor.dispatch(setDiagnostics(editor.state, mapped));
   }, [diagnostics, locale, formula]);
 
-  return <div aria-label={t(context === "signal" ? "formulaEditor" : "exposureEditor")}
-    className={className ?? "alpha-formula-editor"} ref={host} />;
+  return <div data-slot="input-group-control" aria-invalid={Boolean(error)} aria-label={t(context === "signal" ? "formulaEditor" : "exposureEditor")}
+    className={className ?? "h-full w-full min-w-0"} ref={host} />;
 }
 
 function editorPresentation(catalog: AlphaCatalog, context: "signal" | "exposure", locale: InterfaceLocale) {

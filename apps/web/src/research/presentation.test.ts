@@ -15,6 +15,7 @@ test("folder rejections retain their distinct causes without interpreting server
   for (const [code, expected] of [
     ["SYSTEM_FOLDER_RENAME_FORBIDDEN", "systemRename"],
     ["SYSTEM_FOLDER_DELETE_FORBIDDEN", "systemDelete"], ["FOLDER_NOT_EMPTY", "nonempty"],
+    ["FOLDER_NAME_EXISTS", "nameExists"],
     ["UNKNOWN_CODE", "unavailable"],
   ]) expect(await folderMutationError(Response.json({ detail: { code } }, { status: 409 }))).toBe(expected);
   expect(await folderMutationError(Response.json({ detail: "private server message" }, { status: 409 }))).toBe("unavailable");

@@ -1,8 +1,9 @@
-import { drawdownEnabled, drawdownSpec, type DrawdownInputs, type PortfolioDrawdownPolicy } from "./portfolioDrawdown";
-import { takeProfitSpec, type TakeProfitTier, type TakeProfitTierDraft } from "./takeProfit";
+import { drawdownEnabled, drawdownSpec, type PortfolioDrawdownPolicy } from "./portfolioDrawdown";
+import { takeProfitSpec, type TakeProfitTier } from "./takeProfit";
 import Decimal from "decimal.js";
 import { programDraft, programSpec, type ProgramInputs, type PythonProgram } from "./pythonStrategy";
 import { frameworkExample } from "./frameworkExamples";
+import { activeRiskPolicies, riskPolicyEnabled, type RiskPolicyInputs } from "./riskPolicies";
 
 export const builtinFrameworkModules = {
   universe_selection: "dataset_universe/v1",
@@ -31,16 +32,18 @@ export function builtinModulesDraft(): FrameworkModulesDraft {
     kind: "builtin", program: frameworkExample(stage),
   }])) as FrameworkModulesDraft;
 }
-export function frameworkSpec(draft: FrameworkModulesDraft, policies: DrawdownInputs & {
-  stopLossThreshold: string; maximumHoldingSessions: string; minimumHoldingSessions: string; takeProfitTiers: TakeProfitTierDraft[];
+export function frameworkSpec(draft: FrameworkModulesDraft, policies: RiskPolicyInputs & {
+  minimumHoldingSessions: string;
 }): FrameworkModules {
-  const { stopLossThreshold, maximumHoldingSessions, minimumHoldingSessions, takeProfitTiers } = policies;
+  const active = activeRiskPolicies(policies);
+  const { stopLossThreshold, maximumHoldingSessions, takeProfitTiers } = active;
+  const { minimumHoldingSessions } = policies;
   return Object.fromEntries(frameworkStages.map(stage => [stage, draft[stage].kind === "builtin"
     ? stage === "portfolio_construction" && minimumHoldingSessions !== ""
       ? { kind: "periodic_top_n/v1", minimum_holding_sessions: holdingSessionsInputError(minimumHoldingSessions) ? Number.NaN : Number(minimumHoldingSessions) }
-    : stage === "risk_management" && (stopLossThreshold !== "" || maximumHoldingSessions !== "" || takeProfitTiers.length > 0 || drawdownEnabled(policies))
+    : stage === "risk_management" && (stopLossThreshold !== "" || maximumHoldingSessions !== "" || takeProfitTiers.length > 0 || drawdownEnabled(active))
       ? { kind: "builtin_risk/v1",
-        ...(drawdownEnabled(policies) ? { portfolio_drawdown: drawdownSpec(policies) } : {}),
+        ...(drawdownEnabled(active) ? { portfolio_drawdown: drawdownSpec(active) } : {}),
         ...(takeProfitTiers.length ? { take_profit_tiers: takeProfitSpec(takeProfitTiers) } : {}),
         ...(stopLossThreshold !== "" ? { stop_loss_threshold: stopLossInputError(stopLossThreshold) ? Number.NaN : new Decimal(stopLossThreshold).div(100).toNumber() } : {}),
         ...(maximumHoldingSessions !== "" ? { maximum_holding_sessions: holdingSessionsInputError(maximumHoldingSessions) ? Number.NaN : Number(maximumHoldingSessions) } : {}) }

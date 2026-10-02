@@ -202,6 +202,7 @@ test("Two Researchers isolate Drafts, receipts, pages, and system Folder identit
   const researcherA = await createResearcher(page, "browser-isolation-a@example.test");
   const bootstrapA = await bootstrap(page);
   await page.goto("/research");
+  await page.getByRole("button", { name: "Factor Evaluation", exact: true }).click();
   await page.getByLabel("Research name").fill("Researcher A draft");
   await replaceFormula(page, "close");
   const keyA = `thesistrace.research-draft.${researcherA.id}.folder_default`;
@@ -215,6 +216,7 @@ test("Two Researchers isolate Drafts, receipts, pages, and system Folder identit
     batch_research: "folder_batch_research",
   });
   await page.goto("/research");
+  await page.getByRole("button", { name: "Factor Evaluation", exact: true }).click();
   await expect(page.getByLabel("Research name")).toHaveValue("");
   await page.getByLabel("Research name").fill("Researcher B draft");
   await replaceFormula(page, "volume");

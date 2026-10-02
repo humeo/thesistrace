@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 
 import { coreFetch } from "../auth/coreFetch";
+import { navigateCorePath } from "../shell/navigation";
 import { useTranslation } from "../i18n";
 import { readResearchIssues, type ResearchRunAdmissionIssue } from "./admission";
 import { createDiagnosticsScheduler, type DiagnosticState } from "./diagnostics";
 import {
   beginResearchRun, emptyResearchDraft, finishResearchRun, hasUnexecutedChanges,
   loadResearchDraftState, persistResearchDraft, researchDraftKey, researchInputIssues,
-  researchInputs, researchSpec, usesBuiltinAlpha, usesBuiltinPortfolio,
+  researchInputs, researchSpec, selectResearchKind, usesBuiltinAlpha, usesBuiltinPortfolio,
   type ResearchDraft, type ResearchInputField,
 } from "./draft";
 
@@ -46,6 +47,7 @@ export function useResearchDraftController({
   });
   const [draft, setDraft] = useState<ResearchDraft>(initial.draft);
   const [hasStoredDraft, setHasStoredDraft] = useState(initial.restored);
+  const [choosingType, setChoosingType] = useState(!initial.restored);
   const [storageError, setStorageError] = useState<"failed" | "accepted" | null>(initial.failed ? "failed" : null);
   const [diagnosticState, setDiagnosticState] = useState<DiagnosticState>({ kind: "idle", result: null });
   const [exposureDiagnosticState, setExposureDiagnosticState] = useState<DiagnosticState>({ kind: "idle", result: null });
@@ -88,7 +90,7 @@ export function useResearchDraftController({
     if (!startNewOnOpen || handledGlobalNew.current) return;
     handledGlobalNew.current = true;
     startNewResearch();
-    window.history.replaceState(null, "", "/research");
+    navigateCorePath("/research", { replace: true });
   }, [startNewOnOpen]);
 
   function updateDraft(change: (current: ResearchDraft) => ResearchDraft): void {
@@ -114,11 +116,18 @@ export function useResearchDraftController({
       return;
     }
     setDraft(emptyResearchDraft());
+    setChoosingType(true);
     setHasStoredDraft(false);
     setValidationAttempted(false);
     setStorageError(null);
     setAdmissionFeedback(null);
+    setSpecFeedback(null);
     onNew();
+  }
+
+  function chooseResearchKind(kind: ResearchDraft["researchKind"]): void {
+    updateDraft(current => selectResearchKind(current, kind));
+    setChoosingType(false);
   }
 
   function validateInputs(): boolean {
@@ -219,8 +228,8 @@ export function useResearchDraftController({
   }
 
   return {
-    draft, hasStoredDraft, storageError, diagnosticState, exposureDiagnosticState,
+    draft, hasStoredDraft, choosingType, storageError, diagnosticState, exposureDiagnosticState,
     admissionFeedback, specFeedback, specKey, submitting, validationAttempted, inputIssues, inputError,
-    updateDraft, startNewResearch, checkConfiguration, runResearch,
+    updateDraft, chooseResearchKind, showResearchTypes: () => setChoosingType(true), startNewResearch, checkConfiguration, runResearch,
   };
 }

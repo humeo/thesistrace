@@ -168,7 +168,7 @@ describe("browser Research Draft", () => {
     expect(selectResearchKind(emptyResearchDraft(), "strategy_backtest")).toMatchObject({
       researchKind: "strategy_backtest",
       holdingsCount: "10",
-      initialCashCny: "100000",
+      initialCashCny: "1000000",
       selectionEverySessions: "5",
     });
   });
@@ -311,7 +311,7 @@ describe("browser Research Draft", () => {
       researchKind: "factor_evaluation",
       formula: "rank(close)",
       holdingsCount: "10",
-      initialCashCny: "100000",
+      initialCashCny: "1000000",
       selectionEverySessions: "5",
       pendingAdmission: null,
     });
@@ -376,7 +376,7 @@ describe("browser Research Draft", () => {
 
     expect(copied).toBe(false);
     expect(confirmDiscard).toHaveBeenCalledOnce();
-    expect(loadResearchDraft(storage, researcherId, "folder_target")).toEqual(target);
+    expect(researchInputs(loadResearchDraft(storage, researcherId, "folder_target"))).toEqual(researchInputs(target));
   });
 
   it("reuses one request ID for the same pending snapshot and preserves later edits on acceptance", () => {
@@ -455,7 +455,7 @@ describe("browser Research Draft", () => {
     persistResearchDraft(storage, researcherId, folder.id, replacement);
 
     expect(finishResearchRun(storage, researcherId, folder.id, "stale-request")).toBeNull();
-    expect(loadResearchDraft(storage, researcherId, folder.id)).toEqual(replacement);
+    expect(researchInputs(loadResearchDraft(storage, researcherId, folder.id))).toEqual(researchInputs(replacement));
   });
 
   it("opens empty when its one Folder key is absent and round-trips the bounded payload", () => {
@@ -468,7 +468,7 @@ describe("browser Research Draft", () => {
     persistResearchDraft(storage, researcherId, folder.id, draft);
     expect(storage.length).toBe(1);
     expect(storage.key(0)).toBe(researchDraftKey(researcherId, folder.id));
-    expect(loadResearchDraft(storage, researcherId, folder.id)).toEqual(draft);
+    expect(researchInputs(loadResearchDraft(storage, researcherId, folder.id))).toEqual(researchInputs(draft));
   });
 
   it("keeps independent Draft values under distinct Folder keys", () => {
@@ -491,37 +491,48 @@ describe("browser Research Draft", () => {
   });
 
   it("renders the DSL as the only Alpha surface without server-edit controls", () => {
-    const markup = renderToStaticMarkup(<ResearchDraftWorkspace catalog={catalog} data={data} folder={folder} researcherId={researcherId} storage={new MemoryStorage()} />);
+    const storage = new MemoryStorage();
+    persistResearchDraft(storage, researcherId, folder.id, emptyResearchDraft());
+    const markup = renderToStaticMarkup(<ResearchDraftWorkspace catalog={catalog} data={data} folder={folder} researcherId={researcherId} storage={storage} />);
     expect(markup).toContain("Alpha formula editor");
-    expect(markup).toContain('class="h-[180px] min-w-0 overflow-hidden bg-card"');
-    expect(markup).toContain('id="alpha-formula-title"');
     expect(markup).toContain('>Alpha formula</h2>');
-    expect(markup).toContain('aria-label="Research name"');
-    expect(markup).toContain("New research");
-    expect(markup).toContain('autoComplete="off"');
+    expect(markup).not.toContain("Ctrl + Space to autocomplete");
+    expect(markup).toContain(">Browse fields<");
+    expect(markup).toContain('title="Edit research name"');
+    expect(markup).toContain('aria-label="New research"');
+    expect(markup).not.toContain('for="research-name"');
 
     expect(markup).toContain("Run evaluation");
     expect(markup).toContain('aria-label="Run settings"');
-    expect(markup).toContain('>Research type</legend>');
+    expect(markup).toContain('aria-label="Back to research types"');
     expect(markup).not.toContain("Research period");
-    expect(markup).toContain('role="radiogroup"');
-    expect(markup).toContain('aria-checked="true"');
-    expect(markup).toContain("Factor Evaluation");
-    expect(markup).toContain("Strategy Backtest");
+    expect(markup).not.toContain('>Research type</legend>');
+    expect(markup).not.toContain('research-choice-factor_evaluation');
     expect(markup).toContain('aria-label="Open start date calendar"');
     expect(markup).toContain('aria-label="Open end date calendar"');
     expect(markup).toContain('aria-label="Use last 1 year"');
     expect(markup).toContain('aria-label="Use all available data"');
-    expect(markup).toContain('for="research-notes">Notes</label>');
+    expect(markup).toContain('for="research-notes">Research notes (optional)</label>');
     expect(markup).not.toContain("context-disclosure");
     expect(markup).not.toContain("formula-validity");
     expect(markup).not.toContain("run-settings-link");
     expect(markup).not.toContain("Close run settings");
     expect(markup).not.toContain(">Cancel<");
-    expect(markup).toContain("New draft");
+    expect(markup).not.toContain("New draft");
     expect(markup).not.toContain("Financial fields");
     expect(markup).not.toContain("revenue");
     for (const removed of ["Save Research", "Refresh", "Revision", "Definition", "Add Alpha"]) expect(markup).not.toContain(removed);
+  });
+
+  it.each([0, 1024, 1025])("shows a Research notes warning only above the Unicode character limit (%i)", (length) => {
+    const storage = new MemoryStorage();
+    persistResearchDraft(storage, researcherId, folder.id, { ...emptyResearchDraft(), hypothesis: "📚".repeat(length) });
+    const markup = renderToStaticMarkup(
+      <ResearchDraftWorkspace catalog={catalog} data={data} folder={folder} researcherId={researcherId} storage={storage} />,
+    );
+    expect(markup.includes("Keep notes within 1,024 characters.")).toBe(length > 1024);
+    expect(markup.includes('aria-describedby="research-notes-limit"')).toBe(length > 1024);
+    expect(markup).not.toMatch(/\d+\s*\/\s*1024\s*characters/);
   });
 
   it("builds exact data-bounded quick date ranges", () => {
@@ -539,6 +550,9 @@ describe("browser Research Draft", () => {
       startDate: "2023-02-28",
       endDate: "2024-02-29",
     });
+    expect(buildResearchDatePresets("2010-01-04", "2026-08-13", "2024-02-29")[0]).toEqual({
+      id: "1Y", startDate: "2023-02-28", endDate: "2024-02-29",
+    });
   });
 
   it("renders required bounded Strategy inputs only for Strategy Backtest", () => {
@@ -551,7 +565,7 @@ describe("browser Research Draft", () => {
     const markup = renderToStaticMarkup(
       <ResearchDraftWorkspace catalog={catalog} data={data} folder={folder} researcherId={researcherId} storage={storage} />,
     );
-    expect(markup).toMatch(/<input[^>]*checked=""[^>]*value="strategy_backtest"/);
+    expect(markup).toContain("Run backtest");
     expect(markup).toContain("Holdings count");
     expect(markup).toContain("Selection interval (trading days)");
     expect(markup).toContain('aria-label="Decrease number of holdings"');
@@ -588,6 +602,8 @@ describe("browser Research Draft", () => {
         activeFolder={folder}
         error={null}
         folders={[folder, custom]}
+        menuOpen={false}
+        onMenuOpenChange={() => {}}
         onCreate={async () => true}
         onDelete={async () => true}
         onRename={async () => true}
@@ -725,7 +741,7 @@ describe("Direct Python authoring", () => {
     expect(switched.holdingsCount).toBe("10");
   });
 
-  it("keeps empty source editable and shows input and output guidance", () => {
+  it("keeps empty source editable and offers input and output guidance on demand", () => {
     const draft = { ...selectStrategyMode(selectResearchKind(emptyResearchDraft(), "strategy_backtest"), "direct"),
       startDate: "2026-08-03", endDate: "2026-08-05", universe: "top300", programSource: "" };
     const storage = new MemoryStorage();
@@ -735,8 +751,9 @@ describe("Direct Python authoring", () => {
     const markup = renderToStaticMarkup(<ResearchDraftWorkspace researcherId={researcherId} folder={folder} catalog={catalog} data={data} storage={storage} />);
     expect(markup).toContain("Python source");
     expect(markup).not.toContain("Parameters (JSON)");
-    expect(markup).toContain("System input");
-    expect(markup).toContain("Strategy output");
+    expect(markup).toContain('aria-label="Python reference"');
+    expect(markup).not.toContain("System input");
+    expect(markup).not.toContain("Strategy output");
     expect(markup).not.toContain("Declared fields");
     expect(markup).not.toContain("Framework · Built-in strategy. Decide");
   });

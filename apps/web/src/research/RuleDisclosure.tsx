@@ -11,7 +11,7 @@ export function RuleDisclosure({ title, description, configured = false, invalid
     <CollapsibleTrigger render={<Button variant="ghost" className="h-auto min-h-10 w-full justify-between whitespace-normal px-0 text-left" />}>
       {title}<CaretDown data-icon="inline-end" aria-hidden="true" />
     </CollapsibleTrigger>
-    {description && !open && !invalid && <p className="m-0 text-xs text-muted-foreground">{description}</p>}
+    {description && !open && !invalid && <p className="rule-disclosure-description m-0 text-xs text-muted-foreground">{description}</p>}
     <CollapsibleContent keepMounted className="min-w-0 pt-3">{children}</CollapsibleContent>
   </Collapsible>;
 }

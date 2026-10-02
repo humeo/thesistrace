@@ -1,5 +1,4 @@
 import Decimal from "decimal.js";
-import type { AlphaCatalog } from "../alphaCatalog";
 
 export type ScoringRule = { kind: "momentum" | "reversal"; sessions: string };
 
@@ -13,11 +12,6 @@ export function readScoringRule(formula: string): ScoringRule | null {
   if (!match) return null;
   const rule: ScoringRule = { kind: formula.startsWith("-(") ? "reversal" : "momentum", sessions: match[1] };
   return scoringRuleFormula(rule) === formula ? rule : null;
-}
-
-export function supportsScoringRules(catalog: AlphaCatalog): boolean {
-  return catalog.fields.some(field => field.identifier === "close" && field.field_id === "price.close.adjusted")
-    && catalog.builtins.some(builtin => builtin.identifier === "lag");
 }
 
 export function exposurePercentage(expression: string): string | null {

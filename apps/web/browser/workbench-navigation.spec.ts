@@ -202,10 +202,14 @@ test("Research deletion uses an in-page decision instead of a browser dialog", a
 test("Notes keeps multiline research context visible", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 958 });
   await page.goto("/research");
+  await page.getByRole("button", { name: "Factor Evaluation", exact: true }).click();
 
-  await page.getByRole("button", { name: "Research notes (optional)", exact: true }).click();
-  const notes = page.getByLabel("Notes", { exact: true });
+  await expect(page.getByRole("button", { name: "Research notes (optional)", exact: true })).toHaveCount(0);
+  const notes = page.getByLabel("Research notes (optional)", { exact: true });
   await expect(notes).toBeVisible();
+  const workbenchBox = (await page.locator(".research-workbench").boundingBox())!;
+  const notesBox = (await notes.boundingBox())!;
+  expect(notesBox.y - (workbenchBox.y + workbenchBox.height)).toBeGreaterThanOrEqual(32);
   await notes.fill(
     "Long turnover-amount leaders in Top 300; 20 holdings, rebalance every 5 sessions.",
   );
@@ -217,18 +221,177 @@ test("Notes keeps multiline research context visible", async ({ page }) => {
 
   expect(layout.height).toBeGreaterThanOrEqual(64);
   expect(layout.scrollHeight).toBeLessThanOrEqual(layout.clientHeight);
+
+  await page.reload();
+  await expect(notes).toBeVisible();
+  await expect(notes).toHaveValue("Long turnover-amount leaders in Top 300; 20 holdings, rebalance every 5 sessions.");
 });
 
-test("Alpha formula editor keeps line numbers on the research workbench", async ({ page }) => {
+test("Alpha formula editor aligns with the conditions by default and remains vertically resizable", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1544, height: 954 });
   await page.goto("/research");
+  await page.getByRole("button", { name: "Factor Evaluation", exact: true }).click();
 
+  await expect(page.getByRole("button", { name: "Expand editor", exact: true })).toHaveCount(0);
+  const heading = page.getByRole("heading", { name: "Alpha formula", exact: true });
+  await expect(heading).toBeVisible();
+  await expect(page.getByText("Ctrl + Space to autocomplete", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Browse fields", exact: true })).toBeVisible();
   const editor = page.getByRole("textbox", { name: "Alpha formula", exact: true });
+  await expect(editor.locator(".cm-placeholder")).toHaveText("rank(pct_change(close, 20))");
+  const help = page.getByRole("button", { name: "Alpha formula writing rules", exact: true });
+  const rules = page.getByRole("dialog", { name: "Alpha formula writing rules", exact: true });
+  await help.click();
+  await expect(rules).toContainText("Write a single expression");
+  await expect(rules).toContainText("Time windows are integers from 1 to 252");
+  await expect(rules).toContainText("rank(pct_change(close, 20))");
+  await page.keyboard.press("Escape");
+  await expect(rules).not.toBeVisible();
+  await expect(help).toBeFocused();
+  await help.press("Enter");
+  await expect(rules).toBeVisible();
+  await page.keyboard.press("Escape");
   await expect(editor.locator("..").locator(".cm-gutters")).toContainText("1");
   await expect(editor.locator("..").locator(".cm-activeLineGutter")).toBeVisible();
+  await editor.fill("rank(close)");
+  const frame = page.getByLabel("Alpha formula editor", { exact: true }).locator("..");
+  const box = (await frame.boundingBox())!;
+  expect(box.height).toBe(382);
+  await expect(frame).toHaveCSS("min-height", "180px");
+  await expect(frame).toHaveCSS("resize", "vertical");
+  const conditions = (await page.locator(".research-settings-panel").boundingBox())!;
+  const headingBox = (await heading.boundingBox())!;
+  const helpBox = (await help.boundingBox())!;
+  expect(Math.abs(headingBox.y + headingBox.height / 2 - conditions.y - 13)).toBeLessThan(2);
+  expect(helpBox.x).toBeGreaterThan(headingBox.x + headingBox.width);
+  expect(helpBox.y).toBeGreaterThanOrEqual(conditions.y - 8);
+  expect(helpBox.y + helpBox.height).toBeLessThan(box.y);
+  expect(Math.abs(box.y + box.height - conditions.y - conditions.height)).toBeLessThan(1);
+  await page.screenshot({ path: testInfo.outputPath("formula-aligned-with-conditions.png") });
+  await expect(frame).not.toHaveCSS("box-shadow", "none");
+  const numberAlignment = await editor.locator("..").locator(".cm-activeLineGutter").evaluate(number => {
+    const text = document.createRange();
+    text.selectNodeContents(number);
+    const textBox = text.getBoundingClientRect();
+    const gutterBox = number.closest(".cm-gutters")!.getBoundingClientRect();
+    return Math.abs(textBox.x + textBox.width / 2 - gutterBox.x - gutterBox.width / 2);
+  });
+  expect(numberAlignment).toBeLessThan(2);
+  const browse = page.getByRole("button", { name: "Browse fields", exact: true });
+  const browseBox = (await browse.boundingBox())!;
+  expect(browseBox.y + browseBox.height).toBeLessThan(box.y);
+  expect(Math.abs(browseBox.y + browseBox.height / 2 - headingBox.y - headingBox.height / 2)).toBeLessThan(1);
+  expect(Math.abs(browseBox.x + browseBox.width - box.x - box.width)).toBeLessThan(2);
+  expect(helpBox.x + helpBox.width).toBeLessThan(headingBox.x + headingBox.width + 40);
+  await expect(frame.getByRole("button", { name: "Browse fields", exact: true })).toHaveCount(0);
+  const lineBox = (await editor.locator(".cm-line").boundingBox())!;
+  expect(box.x + box.width - lineBox.x - lineBox.width).toBeLessThan(16);
+  await page.mouse.move(box.x + box.width - 3, box.y + box.height - 3);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width - 3, box.y + box.height + 97, { steps: 10 });
+  await page.mouse.up();
+  await expect.poll(async () => (await frame.boundingBox())!.height).toBeGreaterThan(box.height + 60);
+  const resizedHeight = (await frame.boundingBox())!.height;
+  await expect(editor).toHaveText("rank(close)");
+  await editor.fill(Array.from({ length: 30 }, () => "close").join("\n"));
+  expect((await frame.boundingBox())!.height).toBe(resizedHeight);
+  const scroller = editor.locator("..");
+  await expect(scroller).toHaveCSS("overflow-y", "auto");
+  const scrollSize = await scroller.evaluate(element => ({ height: element.clientHeight, contentHeight: element.scrollHeight }));
+  expect(scrollSize.contentHeight).toBeGreaterThan(scrollSize.height);
+  await editor.press("ControlOrMeta+End");
+  await expect.poll(() => scroller.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+  await editor.fill("rank(close)");
+  await browse.click();
+  const fields = page.getByRole("dialog", { name: "Field browser", exact: true });
+  await expect(fields.getByRole("searchbox", { name: "Search fields", exact: true })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(fields).not.toBeVisible();
+  await expect(browse).toBeFocused();
+  await editor.press("ControlOrMeta+A");
+  await browse.click();
+  await fields.getByRole("searchbox", { name: "Search fields", exact: true }).fill("close");
+  await fields.getByRole("button", { name: "Insert into formula", exact: true }).click();
+  await expect(fields).not.toBeVisible();
+  await expect(editor).toHaveText("close");
+  await expect(editor).toBeFocused();
+  await editor.fill("rank(close)");
+  await page.reload();
+  await expect(editor).toHaveText("rank(close)");
+  expect((await frame.boundingBox())!.height).toBe(382);
+});
+
+test("Configuration feedback follows the actions after checking, without a validation header", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1528, height: 954 });
+  let finish!: () => void;
+  const pending = new Promise<void>(resolve => { finish = resolve; });
+  let checks = 0;
+  await page.route("**/api/research/diagnostics", async route => {
+    checks += 1;
+    if (checks === 1) {
+      await pending;
+      return route.fulfill({ json: { valid: false, issues: [{
+        code: "WINDOW_OUT_OF_RANGE", field: "formula", severity: "error",
+        message: "Window must be between 1 and 252", details: { kind: "window", expected: [1, 252], actual: "253" },
+        range: { start: { offset: 15, line: 1, column: 16 }, end: { offset: 18, line: 1, column: 19 } },
+      }] } });
+    }
+    if (checks === 2) return route.fulfill({ json: { valid: true, issues: [] } });
+    return route.fulfill({ status: 503 });
+  });
+  await page.goto("/research?new");
+  await page.getByRole("button", { name: "Factor Evaluation", exact: true }).click();
+  const actions = page.getByRole("group", { name: "Research actions", exact: true });
+  const check = actions.getByRole("button", { name: "Check configuration", exact: true });
+  const formula = page.getByRole("textbox", { name: "Alpha formula", exact: true });
+  await expect(formula).toBeVisible();
+  await expect(formula.locator(".cm-placeholder")).toHaveText("rank(pct_change(close, 20))");
+  await expect(page.getByText("Not checked yet", { exact: true })).toHaveCount(0);
+  await expect(actions.getByRole("status")).toHaveCount(0);
+
+  await check.click();
+  await expect(actions.getByRole("alert")).toContainText("Choose a ranking rule or enter a formula.");
+  await expect(formula).toBeFocused();
+  expect(checks).toBe(0);
+  await formula.fill("ts_mean(close, 253)");
+  await page.getByLabel("Research start date").fill("2026-08-01");
+  await page.getByLabel("Research end date").fill("2026-08-05");
+  await page.getByRole("combobox", { name: "Universe", exact: true }).click();
+  await page.getByRole("option", { name: "Top 300", exact: true }).click();
+  await expect(actions.getByRole("alert")).toHaveCount(0);
+  await check.click();
+  await expect(actions.getByRole("status")).toHaveText("Checking configuration…");
+  await expect(check).toBeDisabled();
+  finish();
+  const issues = actions.getByRole("list", { name: "Configuration issues", exact: true });
+  await expect(issues).toContainText("Window must be between 1 and 252; received 253.");
+  await expect(actions.getByRole("status")).toHaveText("Resolve the configuration issues.");
+  await expect(page.locator(".research-workbench").getByRole("status")).toHaveCount(0);
+  await issues.getByRole("button").click();
+  await expect(formula).toBeFocused();
+  const actionBox = (await actions.boundingBox())!;
+  expect(actionBox.y + actionBox.height).toBeLessThanOrEqual(954 - 16);
+  const notes = page.getByRole("textbox", { name: "Research notes (optional)", exact: true });
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  const notesBox = (await notes.boundingBox())!;
+  expect(notesBox.y + notesBox.height).toBeLessThan(actionBox.y - 8);
+  await page.screenshot({ path: testInfo.outputPath("configuration-issues-with-actions.png") });
+
+  await formula.fill("rank(close)");
+  await expect(issues).toHaveCount(0);
+  await expect(actions.getByRole("status")).toHaveText("Configuration changed · check again");
+  await check.click();
+  await expect(actions.getByRole("status")).toContainText("Configuration is valid.");
+  await expect(actions.getByRole("alert")).toHaveCount(0);
+  await check.click();
+  await expect(actions.getByRole("status")).toHaveText("Configuration check is unavailable. Try again.");
+  await expect(formula).toHaveText("rank(close)");
+  await expect(check).toBeEnabled();
 });
 
 test("date inputs retain manually entered values when focus leaves the field", async ({ page }) => {
   await page.goto("/research?new");
+  await page.getByRole("button", { name: "Factor Evaluation", exact: true }).click();
   await page.getByLabel("Research name").fill("Browser populated dates");
   await page.getByRole("textbox", { name: "Alpha formula", exact: true }).click();
   await page.keyboard.type("close");
@@ -248,8 +411,7 @@ test("date inputs retain manually entered values when focus leaves the field", a
     await page.keyboard.press("Tab");
   }
 
-  await page.getByRole("button", { name: "Research notes (optional)", exact: true }).click();
-  await page.getByLabel("Notes", { exact: true }).fill("Trigger a controlled React rerender.");
+  await page.getByLabel("Research notes (optional)", { exact: true }).fill("Trigger a controlled React rerender.");
   await expect(page.getByLabel("Research start date")).toHaveValue("2025-08-13");
   await expect(page.getByLabel("Research end date")).toHaveValue("2026-08-13");
   await expect(page.getByRole("button", { name: /^Run (backtest|evaluation)$/ })).toBeEnabled();

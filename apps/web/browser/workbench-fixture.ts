@@ -37,10 +37,10 @@ export const test = base.extend<{ workbench: void }, { bundle: Map<string, { bod
     if (!files.has("index.html")) throw new Error("product HTML entry missing");
     await use(files);
   }, { scope: "worker", timeout: 60_000 }],
-  workbench: [async ({ page, bundle }, use) => {
+  workbench: [async ({ page, context, bundle }, use) => {
     const unexpected: string[] = [];
     page.on("pageerror", error => unexpected.push(error.message));
-    await page.route("https://workbench.fixture/**", async route => {
+    await context.route("https://workbench.fixture/**", async route => {
       const request = route.request();
       const path = new URL(request.url()).pathname;
       const asset = bundle.get(path.slice(1));

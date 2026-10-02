@@ -11,6 +11,7 @@ import {
   type FrameworkModules, type FrameworkModulesDraft, type FrameworkStage,
 } from "./frameworkModules";
 import { isIsoCalendarDate } from "../components/layout/calendarDate";
+import { activeRiskPolicies, readRiskPolicySelection, riskPolicies, riskPolicyEnabled, type RiskPolicy, type RiskPolicySelection } from "./riskPolicies";
 
 export type PortfolioWeighting = "equal_weight" | "rank_weight" | "inverse_volatility";
 
@@ -24,6 +25,7 @@ export type ResearchInputs = ProgramInputs & DrawdownInputs & {
   strategyMode: "framework" | "direct";
   frameworkModules: FrameworkModulesDraft;
   takeProfitTiers: TakeProfitTierDraft[];
+  riskPolicySelection?: RiskPolicySelection;
   stopLossThreshold: string;
   maximumHoldingSessions: string;
   minimumHoldingSessions: string;
@@ -151,7 +153,7 @@ export function emptyResearchDraft(): ResearchDraft {
     endDate: "",
     universe: "",
     neutralization: "none",
-    initialCashCny: "100000", costs: defaultSimulationCosts(),
+    initialCashCny: "1000000", costs: defaultSimulationCosts(),
     holdingsCount: "10",
     selectionEverySessions: "5",
     exposureExpression: "1",
@@ -208,7 +210,7 @@ export function persistResearchDraft(
   // from the visible inputs, so later edits still preserve accepted/pending input.
   const current = researchInputs(draft);
   const encoded = JSON.stringify({
-    ...draft, storageSchema: DRAFT_STORAGE_SCHEMA,
+    ...draft, riskPolicySelection: current.riskPolicySelection, storageSchema: DRAFT_STORAGE_SCHEMA,
     lastAdmittedBaseline: draft.lastAdmittedBaseline === null ? null : inputChanges(draft.lastAdmittedBaseline, current),
     pendingAdmission: draft.pendingAdmission === null ? null : { ...draft.pendingAdmission,
       inputs: inputChanges(draft.pendingAdmission.inputs, current),
@@ -227,7 +229,7 @@ export function researchInputs(draft: ResearchDraft): ResearchInputs {
     pendingAdmission: _pending,
     ...inputs
   } = draft;
-  return inputs;
+  return { ...inputs, riskPolicySelection: Object.fromEntries(riskPolicies.map(policy => [policy, riskPolicyEnabled(inputs, policy)])) };
 }
 
 export function selectResearchKind(
@@ -251,6 +253,16 @@ export function selectFrameworkModule(
     frameworkModules: { ...draft.frameworkModules, [stage]: {
       ...draft.frameworkModules[stage], kind,
     } },
+  };
+}
+
+export function selectRiskPolicy(draft: ResearchDraft, policy: RiskPolicy, enabled: boolean): ResearchDraft {
+  return {
+    ...draft,
+    riskPolicySelection: { ...draft.riskPolicySelection, [policy]: enabled },
+    ...(policy === "takeProfit" && enabled && draft.takeProfitTiers.length === 0
+      ? { takeProfitTiers: [{ profitThreshold: "", cumulativeReduction: "" }] } : {}),
+    pendingAdmission: null,
   };
 }
 
@@ -398,18 +410,25 @@ export function researchInputIssues(inputs: ResearchInputs): ResearchInputIssue[
   }
   if (inputs.researchKind === "strategy_backtest" && inputs.strategyMode === "framework"
     && inputs.frameworkModules.risk_management.kind === "builtin") {
-    issues.push(...drawdownIssues(inputs));
-    issues.push(...takeProfitIssues(inputs.takeProfitTiers));
-    const code = stopLossInputError(inputs.stopLossThreshold);
-    if (code) issues.push({ field: "stopLossThreshold", code });
-    const holdingCode = holdingSessionsInputError(inputs.maximumHoldingSessions);
-    if (holdingCode) issues.push({ field: "maximumHoldingSessions", code: holdingCode });
+    const active = activeRiskPolicies(inputs);
+    issues.push(...drawdownIssues(active, riskPolicyEnabled(inputs, "drawdown")));
+    if (riskPolicyEnabled(inputs, "takeProfit")) {
+      issues.push(...takeProfitIssues(active.takeProfitTiers.length ? active.takeProfitTiers : [{ profitThreshold: "", cumulativeReduction: "" }]));
+    }
+    if (riskPolicyEnabled(inputs, "stopLoss")) {
+      const code = active.stopLossThreshold === "" ? "stopLossRange" : stopLossInputError(active.stopLossThreshold);
+      if (code) issues.push({ field: "stopLossThreshold", code });
+    }
+    if (riskPolicyEnabled(inputs, "maximumHolding")) {
+      const code = active.maximumHoldingSessions === "" ? "holdingSessions" : holdingSessionsInputError(active.maximumHoldingSessions);
+      if (code) issues.push({ field: "maximumHoldingSessions", code });
+    }
   }
   if (inputs.researchKind === "strategy_backtest" && inputs.strategyMode === "framework"
     && inputs.frameworkModules.portfolio_construction.kind === "builtin") {
     const code = holdingSessionsInputError(inputs.minimumHoldingSessions);
     if (code) issues.push({ field: "minimumHoldingSessions", code });
-    if (inputs.frameworkModules.risk_management.kind === "builtin" && inputs.minimumHoldingSessions !== ""
+    if (inputs.frameworkModules.risk_management.kind === "builtin" && riskPolicyEnabled(inputs, "maximumHolding") && inputs.minimumHoldingSessions !== ""
       && inputs.maximumHoldingSessions !== "" && Number(inputs.minimumHoldingSessions) > Number(inputs.maximumHoldingSessions)) {
       issues.push({ field: "maximumHoldingSessions", code: "holdingOrder" });
     }
@@ -465,7 +484,7 @@ export function useResearchAsDraft(
     hypothesis: input.hypothesis ?? "", startDate: input.start_date, endDate: input.end_date,
     universe: input.universe, neutralization: "neutralization" in input ? input.neutralization ?? "none" : "none",
     researchKind: input.research_kind, strategyMode: direct ? "direct" : "framework",
-    initialCashCny: input.research_kind === "strategy_backtest" ? input.initial_cash_cny : "100000",
+    initialCashCny: input.research_kind === "strategy_backtest" ? input.initial_cash_cny : "1000000",
     costs: input.research_kind === "strategy_backtest" ? { ...input.costs } : defaultSimulationCosts(),
     holdingsCount: framework && input.holdings_count !== undefined ? String(input.holdings_count) : "10",
     exposureExpression: framework ? input.exposure_expression ?? "1" : "1",
@@ -480,6 +499,7 @@ export function useResearchAsDraft(
     stopLossThreshold: framework ? frozenStopLossPercentage(input.modules) : "",
     maximumHoldingSessions: framework ? frozenMaximumHoldingSessions(input.modules) : "",
     minimumHoldingSessions: framework ? frozenMinimumHoldingSessions(input.modules) : "",
+    riskPolicySelection: undefined,
   };
   if (
     wouldOverwriteUnexecutedAuthorableValue(current, nextInputs) &&
@@ -510,7 +530,7 @@ function wouldOverwriteUnexecutedAuthorableValue(
     "researchKind",
     "strategyMode",
     "programSource",
-    ...drawdownFields, "frameworkModules", "costs", "takeProfitTiers", "stopLossThreshold", "maximumHoldingSessions", "minimumHoldingSessions",
+    ...drawdownFields, "frameworkModules", "costs", "takeProfitTiers", "riskPolicySelection", "stopLossThreshold", "maximumHoldingSessions", "minimumHoldingSessions",
     "initialCashCny",
     "holdingsCount",
     "selectionEverySessions",
@@ -614,6 +634,8 @@ function readInputs(value: unknown): ResearchInputs | null {
   ) return null;
   const takeProfitTiers = readTakeProfitDraft(value.takeProfitTiers);
   if (takeProfitTiers === null) return null;
+  const riskPolicySelection = readRiskPolicySelection(value.riskPolicySelection);
+  if (riskPolicySelection === null) return null;
   const costs = readCostInputs(value.costs);
   if (costs === null) return null;
   const modules = value.frameworkModules;
@@ -628,7 +650,10 @@ function readInputs(value: unknown): ResearchInputs | null {
     if (new TextEncoder().encode(inputs.programSource).byteLength > 65536) return null;
     parsedModules[stage] = { kind: module.kind, program: inputs };
   }
-  return { ...Object.fromEntries(keys.map((key) => [key, strings[key]])), frameworkModules: parsedModules, costs, takeProfitTiers } as ResearchInputs;
+  const inputs = { ...Object.fromEntries(keys.map((key) => [key, strings[key]])), frameworkModules: parsedModules, costs, takeProfitTiers,
+    ...(riskPolicySelection !== undefined ? { riskPolicySelection } : {}),
+  } as ResearchInputs;
+  return { ...inputs, riskPolicySelection: Object.fromEntries(riskPolicies.map(policy => [policy, riskPolicyEnabled(inputs, policy)])) };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
