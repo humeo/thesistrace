@@ -4,6 +4,35 @@ import { buildProductFixture } from "./build-product-fixture";
 
 let script: string;
 let styles: string;
+
+test("Run reveals and focuses a hidden invalid Python module without submitting", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 964 });
+  let submissions = 0;
+  await page.route("https://exposure.test/**", route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/api/alpha/diagnostics") return route.fulfill({ json: { valid: true, diagnostics: [] } });
+    if (path === "/api/research-runs") {
+      submissions++;
+      return route.fulfill({ status: 202, json: { id: "run_unexpected" } });
+    }
+    return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+  });
+  await page.goto("https://exposure.test/");
+  await page.addStyleTag({ content: styles });
+  await page.addScriptTag({ content: script });
+  const portfolio = page.getByRole("tab", { name: /Portfolio/ });
+  await portfolio.click();
+  await page.getByRole("radio", { name: "Code", exact: true }).check();
+  await page.getByRole("textbox", { name: "Python source", exact: true }).fill("");
+  await page.getByRole("tab", { name: /Signals/ }).click();
+  await expect(page.getByRole("textbox", { name: "Python source", exact: true })).not.toBeVisible();
+  await page.getByRole("button", { name: "Run backtest", exact: true }).click();
+  await expect(portfolio).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("textbox", { name: "Python source", exact: true })).toBeFocused();
+  await expect(page.getByRole("list", { name: "Complete these settings to continue:", exact: true })).toContainText("Python");
+  expect(submissions).toBe(0);
+});
+
 const optionNames = {
   python: "Python module",
   equal_weight: "Equal weight", rank_weight: "Rank weight", inverse_volatility: "Inverse volatility",
