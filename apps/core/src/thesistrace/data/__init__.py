@@ -88,7 +88,7 @@ from thesistrace.data.operational_status import (
     DatasetOperationalStatusService,
 )
 from thesistrace.data.operator import BootstrapOutcome, DataOperator, DataOperatorError
-from thesistrace.data.overview import DatasetOverviewService
+from thesistrace.data.overview import DatasetOverviewService, DatasetOverviewTemporarilyUnavailable
 from thesistrace.data.refresh import (
     DataRefreshError,
     DataRefreshService,
@@ -141,6 +141,7 @@ __all__ = [
     "DatasetWarmupUnavailable",
     "DatasetCoverage",
     "DatasetOverviewService",
+    "DatasetOverviewTemporarilyUnavailable",
     "DatasetOperationalHead",
     "DatasetOperationalStatus",
     "DatasetOperationalStatusService",

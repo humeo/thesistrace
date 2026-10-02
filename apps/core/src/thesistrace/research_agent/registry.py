@@ -46,6 +46,7 @@ from thesistrace.daily_track import (
     DailyTrackStopOutcome as DomainDailyTrackStopOutcome,
 )
 from thesistrace.data.models import DataOverview
+from thesistrace.data.overview import DatasetOverviewTemporarilyUnavailable
 from thesistrace.research_agent.models import (
     AlphaCatalogIdentifiers,
     AlphaCatalogView,
@@ -105,6 +106,7 @@ from thesistrace.research_batch import (
     ResearchBatchCancelOutcome as DomainResearchBatchCancelOutcome,
 )
 from thesistrace.research_folder.models import ResearchFolderList
+from thesistrace.research_folder.service import ResearchFolderTemporarilyUnavailable
 from thesistrace.research_run import (
     CurrentDataRerunCommand,
     DailyTrackRerunSource,
@@ -422,6 +424,8 @@ class ResearchAgentCapabilityRegistry:
                 name="get_research_context",
                 description=(
                     "Read Data Overview, authoring constraints, and one folder page. "
+                    "Authoring constraints include the Python SDK import and executable "
+                    "Direct/Framework source templates. "
                     "Follow folders.next_cursor with folder_cursor; "
                     "folder_limit defaults to 20, at most 50."
                 ),
@@ -708,7 +712,9 @@ class ResearchAgentCapabilityRegistry:
                     "not submit a rerun. All submissions require "
                     "research:execute, is non-destructive, and is idempotent by request_id. "
                     "Invalid research is a successful structured rejected outcome; after "
-                    "acceptance, poll get_research_run using retry_after_seconds until terminal."
+                    "acceptance, poll get_research_run using retry_after_seconds until terminal. "
+                    "The accepted receipt is bounded; get_research_run returns the normalized "
+                    "frozen input."
                 ),
                 required_scope=ResearchAgentScope.RESEARCH_EXECUTE,
                 input_model=ResearchRunSubmissionCommand,
@@ -864,10 +870,16 @@ class ResearchAgentCapabilityRegistry:
     ) -> ResearchContext:
         self._require(ResearchAgentScope.RESEARCH_READ)
         request = GetResearchContextInput(folder_cursor=folder_cursor, folder_limit=folder_limit)
-        overview = self._modules.data_overview.overview()
+        try:
+            overview = self._modules.data_overview.overview()
+            folder_items = self._modules.research_folders.list(self._authority.researcher_id).items
+        except (
+            DatasetOverviewTemporarilyUnavailable, ResearchFolderTemporarilyUnavailable,
+        ) as error:
+            raise _temporarily_unavailable() from error
         constraints = self._modules.research_authoring.constraints()
         folders = sorted(
-            self._modules.research_folders.list(self._authority.researcher_id).items,
+            folder_items,
             key=lambda item: (not item.is_default, item.created_at, item.id),
         )
         try:
@@ -895,7 +907,10 @@ class ResearchAgentCapabilityRegistry:
     ) -> AlphaCatalogView:
         self._require(ResearchAgentScope.RESEARCH_READ)
         request = GetAlphaCatalogInput(identifiers=identifiers, cursor=cursor, limit=limit)
-        overview = self._modules.data_overview.overview()
+        try:
+            overview = self._modules.data_overview.overview()
+        except DatasetOverviewTemporarilyUnavailable as error:
+            raise _temporarily_unavailable() from error
         catalog = self._modules.alpha_language.catalog(
             available_field_ids=frozenset(overview.available_field_ids),
             generation_manifest_sha256=overview.generation_manifest_sha256,

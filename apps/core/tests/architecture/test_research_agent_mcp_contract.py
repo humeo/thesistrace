@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from datetime import UTC, date, datetime
 from hashlib import sha256
 from itertools import count
@@ -16,6 +17,8 @@ from mcp.client import Client
 from mcp.types import CallToolRequestParams, CallToolResult, ListToolsResult, TextContent
 from mcp_types.methods import serialize_server_result
 from mcp_types.version import LATEST_HANDSHAKE_VERSION
+from psycopg import OperationalError
+from psycopg_pool import PoolTimeout
 from pydantic import ValidationError
 
 from thesistrace.alpha_language import AlphaAuthoringCatalog, FormulaDiagnostics, alpha_language
@@ -46,6 +49,7 @@ from thesistrace.daily_track import (
     StopDailyTrackCommand,
 )
 from thesistrace.data.models import DataOverview, DatasetCoverage
+from thesistrace.data.overview import DatasetOverviewService
 from thesistrace.operational_events import OperationalEvent
 from thesistrace.research_agent import (
     ResearchAgentAuthority,
@@ -100,6 +104,7 @@ from thesistrace.research_batch.service import (
     ResearchBatchTemporarilyUnavailable,
 )
 from thesistrace.research_folder.models import ResearchFolderList, ResearchFolderSummary
+from thesistrace.research_folder.service import ResearchFolderService
 from thesistrace.research_run.models import (
     FactorResultSection,
     ResearchRunAdmissionAccepted,
@@ -135,6 +140,78 @@ from thesistrace.research_run.service import (
 )
 
 TEST_RESEARCHER_ID = UUID("018f6f7e-8342-7c9a-a4df-9a86147d2e01")
+
+
+@pytest.mark.parametrize("tool,dependency", [
+    ("get_research_context", "overview"),
+    ("get_alpha_catalog", "overview"),
+    ("get_research_context", "folders"),
+])
+@pytest.mark.parametrize("failure,code,retryable", [
+    (OperationalError("private database detail"), "TEMPORARILY_UNAVAILABLE", True),
+    (PoolTimeout("private pool detail"), "TEMPORARILY_UNAVAILABLE", True),
+    (RuntimeError("private program detail"), "INTERNAL", False),
+])
+def test_discovery_reads_report_dependency_unavailability_without_retrying_program_errors(
+    tmp_path: Path, tool: str, dependency: str, failure: Exception, code: str, retryable: bool,
+) -> None:
+    class UnavailableDatabase:
+        @contextmanager
+        def transaction(self):
+            raise failure
+            yield  # pragma: no cover
+
+    database = UnavailableDatabase()
+    registry = _registry(**({
+        "data_overview": DatasetOverviewService(
+            database, tmp_path / "data", tmp_path / "benchmark",
+        ),
+    } if dependency == "overview" else {
+        "research_folders": ResearchFolderService(database),
+    }))
+    result = registry.invoke(tool, {}, trace_id="trace_discovery_unavailable")
+    assert result.error.code == code
+    assert result.error.retryable is retryable
+    assert result.error.retry_after_seconds == (2 if retryable else None)
+    assert "private" not in result.error.model_dump_json()
+
+
+@pytest.mark.bounded_process
+@pytest.mark.parametrize("stage,entrypoint", [
+    ("direct", "Strategy"),
+    ("universe_selection", "UniverseSelection"),
+    ("alpha", "Alpha"),
+    ("portfolio_construction", "PortfolioConstruction"),
+    ("risk_management", "RiskManagement"),
+])
+def test_context_sdk_templates_can_be_validated_and_executed_in_the_real_guest(stage, entrypoint):
+    from thesistrace.research_kernel.strategy_program_runtime import get_strategy_runtime
+
+    constraints = _registry().get_research_context().authoring_constraints
+    assert constraints.python_program.sdk_module == "quantgrove"
+    source = (
+        constraints.python_program.source_template if stage == "direct"
+        else next(item.source_template for item in constraints.framework.stages
+                  if item.stage == stage)
+    )
+    runtime = get_strategy_runtime()
+    runtime.validate(source, entrypoint=entrypoint)
+    result = runtime.invoke(source, entrypoint=entrypoint, state={}, context={
+        "session": "2026-09-01", "account": {"positions": [], "cash_cny": "100000"},
+        "candidates": [{"instrument_id": "equity:600001.SH"}],
+        "framework": {"signals": [{"instrument_id": "equity:600001.SH", "value": 1.0}]},
+    })
+    if stage == "universe_selection":
+        assert result.output["instrument_ids"] == ["equity:600001.SH"]
+    elif stage == "alpha":
+        assert result.output["signals"] == [{
+            "instrument_id": "equity:600001.SH", "value": 1.0, "valid_for_sessions": 1,
+        }]
+    elif stage == "risk_management":
+        assert result.output is None
+    else:
+        assert result.output["allocation"]["instrument_ids"] == ["equity:600001.SH"]
+        assert result.output["allocation"]["exposure"] == 1.0
 
 
 class _DataOverviewReader:
@@ -1864,9 +1941,9 @@ def test_v1_inventory_scopes_descriptions_annotations_and_schemas_are_exact() ->
     canonical = _canonical_v1_contract()
 
     assert sha256(canonical).hexdigest() == (
-        "5b7a1b5161373297b5a92394c2e10b1b56902452de539094c9dc2a2d6f8fde97"
+        "809fcca2a6d3cde87eb208e137e7f5f22b31bad346a207191a1e92f724882105"
     )
-    assert len(canonical) == 309168
+    assert len(canonical) == 309613
 
 
 def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None:

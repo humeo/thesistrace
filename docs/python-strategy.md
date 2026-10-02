@@ -243,7 +243,11 @@ UTF-8. Duplicate output keys and implicit or unserializable state are rejected.
 
 MCP transport accepts requests up to 64 MiB, including JSON escaping for a
 20-item Framework Batch with four Python programs per item, and responses up
-to 16 MiB for complete targets and explicit state. Target evidence records
+to 16 MiB for complete targets and explicit state. HTTP request bodies have a
+single 60-second read deadline independent of transport chunk count; oversized
+bodies return 413 and incomplete bodies that exceed the deadline return 408.
+`get_research_context` includes the `quantgrove` SDK module and complete Direct
+and Framework source templates in its authoring constraints. Target evidence records
 have a 2 MiB limit; their pages reserve that capacity plus the ordinary
 32 KiB page budget. Framework event records have a 4 MiB limit; other event
 records retain their 24 KiB limit. Worker event frames carry at most 512
