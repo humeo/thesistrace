@@ -1,42 +1,59 @@
-import { InfoHelp } from "../components/product/InfoHelp";
-import { Terminal } from "@phosphor-icons/react";
 import { useState } from "react";
 import { interfaceLocale, useTranslation } from "../i18n";
 import { CopyButton } from "./CopyButton";
 import { addCommand, clients, mcpServerName, setupPrompt, type McpClient } from "./setup";
 import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group";
-import { Disclosure } from "../components/layout/Disclosure";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "../components/ui/card";
+import { Textarea } from "../components/ui/textarea";
+import { InputGroup, InputGroupAddon } from "../components/ui/input-group";
 import { mcpLayout } from "./mcpLayout";
 export function McpSetup({ endpoint }: { endpoint: string }) {
   const { t } = useTranslation("mcp");
   const [client, setClient] = useState<McpClient>("codex");
   const prompt = setupPrompt(client, endpoint);
   const loginCommand = `codex mcp login ${mcpServerName}`;
-  return <section className={`${mcpLayout.stack} rounded-md border border-border bg-card p-6`} aria-labelledby="mcp-setup-heading">
-    <div className="flex flex-col gap-4"><h2 id="mcp-setup-heading">{t("connect")}</h2>
-      <ToggleGroup variant="line" value={[client]} onValueChange={values => { if (values[0]) setClient(values[0] as McpClient); }} aria-label={t("client")} className="flex-wrap">
-        {(Object.keys(clients) as McpClient[]).map(key => <ToggleGroupItem key={key} value={key}>{key === "other" ? t("otherClient") : clients[key]}</ToggleGroupItem>)}
-      </ToggleGroup>
-    </div>
-    <div className={`${mcpLayout.row} justify-between border-t border-border pt-4`}><p>{t("copyIntro")}</p>
-      <CopyButton key={client} text={prompt} label={t("copyPrompt")} primary />
-    </div>
-    <ol className={mcpLayout.steps} aria-label={t("steps")}>
-      <li><span className="inline-flex items-center gap-1"><strong>{t("addServer")}</strong><InfoHelp label={t("addServer")}>{t("addServerDescription")}</InfoHelp></span></li>
-      <li><span className="inline-flex items-center gap-1"><strong>{t("approve")}</strong><InfoHelp label={t("approve")}>{t("approveDescription")}</InfoHelp></span></li>
-      <li><span className="inline-flex items-center gap-1"><strong>{t("verify")}</strong><InfoHelp label={t("verify")}>{t("verifyDescription")}</InfoHelp></span></li>
-    </ol>
-    <div key={client} className={mcpLayout.stack}>
-      <Disclosure variant="row" title={t("viewPrompt")}><p className={mcpLayout.prompt} lang={interfaceLocale()}>{prompt}</p></Disclosure>
-      <Disclosure variant="row" title={client === "other" ? t("addManual") : t("addCommand")}>
-        <div className={mcpLayout.stack}>{client === "other" ? <><p>{t("manualDescription")}</p><div className={mcpLayout.row}><span>{t("serverUrl")}</span><code>{endpoint}</code><CopyButton text={endpoint} label={t("copyUrl")} /></div><p>{t("name")}: <strong>Quantgrove</strong> · {t("transport")}: <strong>Streamable HTTP</strong></p></> : <>
-          <div className={mcpLayout.row}><h3><Terminal size={15} />{t("terminalStep")}</h3><CopyButton text={addCommand(client, endpoint)} label={t("copyCommand")} /></div>
+  return <section className="flex min-w-0 flex-col gap-8" aria-label={t("connect")}>
+    <ToggleGroup value={[client]} onValueChange={values => { if (values[0]) setClient(values[0] as McpClient); }} aria-label={t("client")} className="flex-wrap">
+      {(Object.keys(clients) as McpClient[]).map(key => <ToggleGroupItem key={key} value={key}>{key === "other" ? t("otherClient") : clients[key]}</ToggleGroupItem>)}
+    </ToggleGroup>
+    <div className="grid min-w-0 grid-cols-2 items-start gap-6">
+      <section className="min-w-0" aria-label={t("setupPromptTitle")}>
+        <Card>
+          <CardHeader><CardTitle><h2 className={mcpLayout.sectionTitle}>{t("assistantMethod")}</h2></CardTitle><CardAction><CopyButton key={client} text={prompt} label={t("copyPrompt")} /></CardAction></CardHeader>
+          <CardContent><Textarea readOnly value={prompt} aria-label={t("setupPromptTitle")} lang={interfaceLocale()} className="resize-none bg-background p-4 font-sans leading-6 text-muted-foreground" /></CardContent>
+        </Card>
+      </section>
+      <Card key={client}>
+      <CardHeader><CardTitle><h2 className={mcpLayout.sectionTitle}>{client === "other" ? t("addManual") : t("addCommand")}</h2></CardTitle></CardHeader>
+      <CardContent>
+      {client === "other" ? <div className={mcpLayout.stack}>
+        <p>{t("manualDescription")}</p>
+        <p>{t("serverUrl")}</p>
+        <InputGroup className="h-auto min-h-10 bg-muted">
+          <pre className={mcpLayout.code} tabIndex={0} aria-label={t("serverUrl")}><code>{endpoint}</code></pre>
+          <InputGroupAddon align="inline-end" className="py-0"><CopyButton iconOnly text={endpoint} label={t("copyUrl")} /></InputGroupAddon>
+        </InputGroup>
+        <p>{t("name")}: <strong>Quantgrove</strong> · {t("transport")}: <strong>Streamable HTTP</strong></p>
+      </div> : <div className="grid min-w-0 gap-6">
+        <div className={mcpLayout.stack}>
+        <h3 className="m-0 text-base leading-6 font-medium">{t("terminalStep")}</h3>
+        <InputGroup className="h-auto min-h-10 bg-muted">
           <pre className={mcpLayout.code} tabIndex={0} aria-label={t("addCommandAria", { client: clients[client] })}><code>{addCommand(client, endpoint)}</code></pre>
-          <h3>{t("authorizeStep")}</h3>
-          {client === "codex" ? <div className={mcpLayout.row}><code>{loginCommand}</code><CopyButton text={loginCommand} label={t("copyLogin")} /></div> : <p>{t("claudeOpen")} <code>/mcp</code>. {t("claudeSelect")} <code>{mcpServerName}</code> {t("claudeFollow")}</p>}
-          <p>{t("thenList", { client: clients[client] })}</p>
-        </>}</div>
-      </Disclosure>
+          <InputGroupAddon align="inline-end" className="py-0"><CopyButton iconOnly text={addCommand(client, endpoint)} label={t("copyCommand")} /></InputGroupAddon>
+        </InputGroup>
+        </div>
+        <div className={mcpLayout.stack}>
+        <h3 className="m-0 text-base leading-6 font-medium">{t("authorizeStep")}</h3>
+        {client === "claude" && <p>{t("claudeOpen")}</p>}
+        <InputGroup className="h-auto min-h-10 bg-muted">
+          <pre className={mcpLayout.code} tabIndex={0} aria-label={t("authorizeCommandAria", { client: clients[client] })}><code>{client === "codex" ? loginCommand : "/mcp"}</code></pre>
+          <InputGroupAddon align="inline-end" className="py-0"><CopyButton iconOnly text={client === "codex" ? loginCommand : "/mcp"} label={t("copyLogin")} /></InputGroupAddon>
+        </InputGroup>
+        {client === "claude" && <p>{t("claudeSelect")} <code className="font-mono text-sm font-normal">{mcpServerName}</code> {t("claudeFollow")}</p>}
+        </div>
+      </div>}
+      </CardContent>
+      </Card>
     </div>
   </section>;
 }
