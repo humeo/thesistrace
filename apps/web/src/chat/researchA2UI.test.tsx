@@ -8,7 +8,7 @@ import {
 } from "@copilotkit/react-core/v2/context";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   RESEARCH_A2UI_ACTIVITY_TYPE,
@@ -20,13 +20,19 @@ import {
   researchA2UICatalogDefinitions,
 } from "./researchA2UI";
 
+import { ChatUiProvider } from "./ChatUiProvider";
+
 const RUN_ID = "run_0123456789abcdef0123";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true;
 
+beforeEach(() => {
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ code: "NOT_FOUND" }), { status: 404 })));
+});
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   document.body.replaceChildren();
 });
 
@@ -48,6 +54,7 @@ describe("Research A2UI renderer", () => {
     for (const definition of Object.values(researchA2UICatalogDefinitions)) {
       expect(definition.props.safeParse({ unsafeExtraProp: true }).success).toBe(false);
     }
+    expect(researchA2UICatalogDefinitions.ResearchComparison.props.safeParse({ runIds: [RUN_ID, RUN_ID] }).success).toBe(false);
   });
 
   it("renders the reviewed components through CopilotKit and keeps interactions local", async () => {
@@ -68,25 +75,25 @@ describe("Research A2UI renderer", () => {
       .not.toBeNull();
     expect([...document.querySelectorAll('a')].find(a => a.textContent === 'Open authoritative ResearchRun')?.textContent)
       .toContain("Open authoritative ResearchRun");
-    expect(document.querySelector("img, iframe, script, style")).toBeNull();
+    expect(document.querySelector("img, iframe, script")).toBeNull();
 
     const copy = [...document.querySelectorAll("button")].find((button) => (
-      button.textContent === "Copy"
+      button.getAttribute("aria-label") === "Copy"
     ));
     if (copy === undefined) throw new Error("Formula copy control was not rendered");
     await act(async () => copy.click());
     expect(writeText).toHaveBeenCalledWith("rank(-abs(pct_change(close, 1)))");
     expect(document.body.textContent).toContain("Formula copied");
 
-    const metrics = [...document.querySelectorAll("button")].find((button) => (
+    const metrics = [...document.querySelectorAll<HTMLElement>('[role="button"]')].find((button) => (
       button.textContent?.includes("Inspect metrics") === true
     ));
     if (metrics === undefined) throw new Error("Metric disclosure was not rendered");
     expect(metrics.getAttribute("aria-expanded")).toBe("false");
     await act(async () => metrics.click());
     expect(metrics.getAttribute("aria-expanded")).toBe("true");
-    const table = document.querySelector("table");
-    expect(table?.querySelector("caption")?.textContent).toBe("Authoritative result metrics");
+    const table = document.querySelector('td[data-label="Metric"]')?.closest("table");
+    expect(document.querySelector(".ant-table-title")?.textContent).toBe("Authoritative result metrics");
     expect(table?.querySelector('td[data-label="Metric"] .chat-a2ui-cell-value')?.textContent)
       .toBe("Rank IC");
 
@@ -120,7 +127,7 @@ describe("Research A2UI renderer", () => {
     await vi.waitFor(() => expect(document.querySelectorAll('td[role="cell"]')).toHaveLength(1_200));
     const headers = [...document.querySelectorAll('th[role="columnheader"]')];
     expect(headers.map((header) => header.textContent)).toEqual(columns);
-    expect(document.querySelectorAll('tbody tr[role="row"]')).toHaveLength(100);
+    expect([...document.querySelectorAll('tbody tr')].filter(row => row.querySelector('td[role="cell"]'))).toHaveLength(100);
     for (const cell of document.querySelectorAll('td[role="cell"]')) {
       const header = document.getElementById(cell.getAttribute("headers") ?? "");
       expect(header?.textContent).toBe(cell.getAttribute("data-label"));
@@ -181,7 +188,7 @@ async function mount(message: ActivityMessage): Promise<Root> {
   await act(async () => {
     root.render(
       <CopilotKitContext.Provider value={{ copilotkit, executingToolCallIds: EMPTY_SET }}>
-        <ResearchA2UIActivity message={message} />
+        <ChatUiProvider><ResearchA2UIActivity message={message} /></ChatUiProvider>
       </CopilotKitContext.Provider>,
     );
     await Promise.resolve();

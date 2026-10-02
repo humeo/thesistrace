@@ -30,6 +30,6 @@ export function OperatorCodeField({value, onChange, disabled, autoFocus = true, 
     <FieldLabel htmlFor={id}>{t("researchers.code.label")}</FieldLabel>
     <Input id={id} ref={inputRef} autoFocus={autoFocus} autoComplete="one-time-code" inputMode="numeric" pattern="[0-9]{6}" minLength={6} maxLength={6} required disabled={disabled || sending} value={value} onChange={event => onChange(event.target.value)} />
     <Button variant="outline" type="button" disabled={disabled || sending} onClick={() => void send()}>{sending ? t("researchers.code.sending") : sent ? t("researchers.code.resend") : t("researchers.code.send")}</Button>
-    {message ? <p role="status" className="m-0 text-sm leading-[22px] text-muted-foreground">{t(`researchers.code.${message}`)}</p> : null}
+    {message ? <p role="status" className="m-0 text-sm text-muted-foreground">{t(`researchers.code.${message}`)}</p> : null}
   </Field>;
 }

@@ -1,9 +1,33 @@
+import type { BetterAuthRateLimitOptions } from "better-auth";
 import type { Pool, PoolClient } from "pg";
 
 import { unknownEmailHmac } from "./security.js";
 
 const WINDOW_MILLISECONDS = 60_000;
 const MAX_REQUESTS = 5;
+type RateLimitStorage = NonNullable<BetterAuthRateLimitOptions["customStorage"]>;
+
+/** Better Auth owns path policies; this Adapter owns atomic fixed windows. */
+export function createBetterAuthRateLimitStorage(dependencies: Readonly<{
+  pool: Pool;
+  clock?: () => Date;
+}>): RateLimitStorage {
+  const clock = dependencies.clock ?? (() => new Date(Date.now()));
+  return {
+    async consume(key, rule) {
+      const now = clock().getTime();
+      const windowMilliseconds = rule.window * 1_000;
+      if (!Number.isSafeInteger(now) || !Number.isSafeInteger(rule.max) || rule.max < 1
+        || !Number.isSafeInteger(rule.window) || rule.window < 1 || !Number.isSafeInteger(windowMilliseconds)) {
+        throw new Error("AUTH_RATE_LIMIT_RULE_INVALID");
+      }
+      const record = await consumeKey(dependencies.pool, key, now, windowMilliseconds);
+      return record.count <= rule.max
+        ? { allowed: true, retryAfter: null }
+        : { allowed: false, retryAfter: Math.min(rule.window, Math.max(1, Math.ceil((record.lastRequest + windowMilliseconds - now) / 1_000))) };
+    },
+  };
+}
 
 export type AuthRateLimitDecision = Readonly<{
   allowed: boolean;
@@ -85,9 +109,10 @@ function blockedDecision(
 }
 
 async function consumeKey(
-  client: PoolClient,
+  client: Pool | PoolClient,
   key: string,
   now: number,
+  windowMilliseconds = WINDOW_MILLISECONDS,
 ): Promise<Readonly<{ count: number; lastRequest: number }>> {
   const result = await client.query<{ count: number; lastRequest: string }>(
     `
@@ -111,11 +136,15 @@ async function consumeKey(
         END
       RETURNING "count", "lastRequest"
     `,
-    [key, now, WINDOW_MILLISECONDS],
+    [key, now, windowMilliseconds],
   );
   const record = result.rows[0];
   if (record === undefined) {
     throw new Error("AUTH_RATE_LIMIT_WRITE_FAILED");
   }
-  return { count: record.count, lastRequest: Number(record.lastRequest) };
+  const lastRequest = Number(record.lastRequest);
+  if (!Number.isSafeInteger(lastRequest) || !Number.isSafeInteger(record.count) || record.count < 1) {
+    throw new Error("AUTH_RATE_LIMIT_RECORD_INVALID");
+  }
+  return { count: record.count, lastRequest };
 }

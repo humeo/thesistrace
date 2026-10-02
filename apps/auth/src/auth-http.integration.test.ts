@@ -1,7 +1,7 @@
 import { createPublicKey, verify } from "node:crypto";
 
 import { Pool } from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ResearcherAccessService } from "./access.js";
 import { createAuthApp } from "./app.js";
@@ -652,6 +652,86 @@ describe.sequential("Auth database-backed HTTP contract", () => {
     ).toMatchObject({ rows: [{ count: "0" }] });
   });
 
+  it("uses fixed windows for continuous low-frequency sign-in attempts", async () => {
+    const { app } = runtime();
+    const start = Date.now();
+    let now = start;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      for (let attempt = 0; attempt < 12; attempt += 1) {
+        now = start + attempt * 20_000;
+        const response = await app.request(settings.publicOrigin + "/api/auth/sign-in/email-otp", {
+          method: "POST",
+          headers: { "content-type": "application/json", origin: settings.publicOrigin, "x-thesistrace-client-ip": "192.0.2.181" },
+          body: JSON.stringify({ email: "missing@example.com", otp: "000000" }),
+        });
+        expect(response.status).toBe(400);
+      }
+    } finally { clock.mockRestore(); }
+  });
+
+  it.each([
+    ["/sign-out", "POST", 60, 200],
+    ["/oauth2/token", "POST", 20, 415],
+    ["/oauth2/authorize", "GET", 30, 302],
+    ["/oauth2/register", "POST", 5, 400],
+    ["/oauth2/introspect", "POST", 100, 415],
+    ["/oauth2/revoke", "POST", 30, 415],
+    ["/oauth2/consent", "POST", 60, 400],
+    ["/oauth2/continue", "POST", 60, 401],
+    ["/oauth2/public-client", "GET", 60, 400],
+    ["/ok", "GET", 60, 200],
+  ] as const)("keeps continuous low-frequency %s requests in separate windows", async (path, method, max, expected) => {
+    const {app} = runtime(); const start = Date.now(); let now = start;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      for (let attempt = 0; attempt <= max; attempt += 1) {
+        now = start + attempt * 20_000;
+        const response = await app.request(settings.publicOrigin + "/api/auth" + path, {
+          method, headers: {"content-type": "application/json", origin: settings.publicOrigin, "x-thesistrace-client-ip": "192.0.2.184"},
+          ...(method === "POST" ? {body: "{}"} : {}),
+        });
+        expect(response.status).toBe(expected);
+      }
+    } finally {clock.mockRestore();}
+  });
+
+  it("returns a finite retry time without extending a rejected window", async () => {
+    const { app } = runtime();
+    const start = Date.now(); let now = start;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const request = () => app.request(settings.publicOrigin + "/api/auth/sign-in/email-otp", {
+      method: "POST", headers: { "content-type": "application/json", origin: settings.publicOrigin, "x-thesistrace-client-ip": "192.0.2.182" },
+      body: JSON.stringify({ email: "missing@example.com", otp: "000000" }),
+    });
+    try {
+      for (let i = 0; i < 5; i += 1) expect((await request()).status).toBe(400);
+      now = start + 20_001;
+      const blocked = await request();
+      expect(blocked.status).toBe(429);
+      expect(blocked.headers.get("retry-after")).toBe("40");
+      expect(blocked.headers.get("x-retry-after")).toBe("40");
+      expect(blocked.headers.get("content-type")).toContain("application/json");
+      expect(await blocked.json()).toMatchObject({ message: expect.any(String) });
+      now = start + 59_999;
+      expect((await request()).headers.get("retry-after")).toBe("1");
+      now = start + 60_000;
+      expect((await request()).status).toBe(400);
+    } finally { clock.mockRestore(); }
+  });
+
+  it("returns unavailable when the PostgreSQL rate-limit store fails", async () => {
+    const { app } = runtime();
+    await owner.query('REVOKE SELECT, INSERT, UPDATE ON auth."rateLimit" FROM auth_runtime');
+    try {
+      const response = await app.request(settings.publicOrigin + "/api/auth/ok", { headers: { "x-thesistrace-client-ip": "192.0.2.183" } });
+      expect(response.status).toBe(503);
+      expect(response.headers.has("retry-after")).toBe(false);
+      expect(await response.text()).not.toMatch(/permission|rateLimit|postgresql|42501/);
+    } finally { await owner.query('GRANT SELECT, INSERT, UPDATE ON auth."rateLimit" TO auth_runtime'); }
+    expect((await app.request(settings.publicOrigin + "/api/auth/ok")).status).toBe(200);
+  });
+
   it("enforces the sign-in rate limit in PostgreSQL", async () => {
     const { app } = runtime();
     const statuses: number[] = [];
@@ -850,6 +930,60 @@ describe.sequential("Auth database-backed HTTP contract", () => {
     expect(cookie).toMatch(/; HttpOnly/i);
     expect(cookie).toMatch(/; SameSite=Lax/i);
     expect(cookie).toMatch(/; Secure/i);
+  });
+
+  it("keeps a Session available through continuous low-frequency access checks", async () => {
+    const { app, auth } = runtime();
+    const cookie = await createSessionCookie(auth, "continuous-access@example.com");
+    const startedAt = Date.now();
+    let now = startedAt;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      for (let check = 0; check < 61; check += 1) {
+        now = startedAt + check * 15_000;
+        const response = await app.request(
+          `${settings.publicOrigin}/api/auth/get-session`,
+          { headers: { cookie, "x-thesistrace-client-ip": "192.0.2.150" } },
+        );
+
+        expect(response.status, `Session check ${check + 1}`).toBe(200);
+        expect(await response.json()).toMatchObject({
+          user: { email: "continuous-access@example.com", active: true },
+        });
+      }
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("verifies and revokes a Session even when its access-check rate bucket is exhausted", async () => {
+    const { app, auth } = runtime();
+    const cookie = await createSessionCookie(auth, "exhausted-access@example.com");
+    const headers = { cookie, "x-thesistrace-client-ip": "192.0.2.151" };
+    await owner.query(
+      'INSERT INTO auth."rateLimit" (key, count, "lastRequest") VALUES ($1, 60, $2)',
+      ["192.0.2.151|/get-session", Date.now()],
+    );
+    const readSession = () => app.request(
+      `${settings.publicOrigin}/api/auth/get-session`,
+      { headers },
+    );
+
+    const available = await readSession();
+    expect(available.status).toBe(200);
+    expect(await available.json()).toMatchObject({
+      user: { email: "exhausted-access@example.com", active: true },
+    });
+
+    const signOut = await app.request(`${settings.publicOrigin}/api/auth/sign-out`, {
+      method: "POST",
+      headers: { ...headers, origin: settings.publicOrigin, "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(signOut.status).toBe(200);
+    const revoked = await readSession();
+    expect(revoked.status).toBe(200);
+    expect(await revoked.json()).toBeNull();
   });
 
   it("refreshes an aged Session through the public get-session endpoint", async () => {

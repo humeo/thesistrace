@@ -1,12 +1,10 @@
-import { CaretDown, Check } from "@phosphor-icons/react";
-import { useRef, useState, type KeyboardEvent } from "react";
+import { Button, Divider, Flex, Popover, Radio, Slider, Typography } from "antd";
+import { CaretDown } from "@phosphor-icons/react";
+import { useRef, useState, type ComponentRef } from "react";
 import { useTranslation } from "react-i18next";
 import "../i18n";
-import { Button } from "../components/ui/button";
-import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "../components/ui/popover";
-import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group";
 import type { ResolvedModelSelection } from "./chatState";
-import type { AgentModelCatalog, ReasoningEffort } from "./modelCatalog";
+import { supportedReasoningEfforts, type AgentModelCatalog, type ReasoningEffort } from "./modelCatalog";
 
 export function ModelPicker({ catalog, onModelChange, onReasoningChange, selection }: {
   catalog: AgentModelCatalog;
@@ -16,47 +14,35 @@ export function ModelPicker({ catalog, onModelChange, onReasoningChange, selecti
 }) {
   const { t } = useTranslation("chat");
   const effortLabel = (effort: ReasoningEffort) => t(`reasoningLabels.${effort}`);
+  const efforts = supportedReasoningEfforts.filter(effort => selection?.model.reasoning_efforts.includes(effort));
   const [open, setOpen] = useState(false);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const popupRef = useRef<HTMLDivElement>(null);
-  const firstInColumn = (column: string) => popupRef.current?.querySelector<HTMLButtonElement>(`[data-picker-column="${column}"][aria-pressed="true"]`)
-    ?? popupRef.current?.querySelector<HTMLButtonElement>(`[data-picker-column="${column}"]`) ?? null;
-
-  // The two groups own vertical roving focus; Left/Right moves between settings.
-  function moveColumn(event: KeyboardEvent<HTMLDivElement>) {
-    const column = (event.target as HTMLElement).closest<HTMLElement>("[data-picker-column]")?.dataset.pickerColumn;
-    if ((column === "model" && event.key === "ArrowRight") || (column === "reasoning" && event.key === "ArrowLeft")) {
-      event.preventDefault();
-      firstInColumn(column === "model" ? "reasoning" : "model")?.focus();
-    }
-  }
-  return <Popover open={open} onOpenChange={setOpen}>
-    <PopoverTrigger ref={triggerRef} render={<Button variant="ghost" className="min-w-0 max-w-full gap-2 px-2" />}
+  const triggerRef = useRef<ComponentRef<typeof Button>>(null);
+  return <Popover trigger="click" placement="topLeft" open={open} onOpenChange={setOpen} destroyOnHidden
+    content={<div role="dialog" aria-label={t("modelDialog")} onKeyDown={event => {
+      if (event.key === "Escape") { event.stopPropagation(); setOpen(false); triggerRef.current?.focus(); }
+    }}><Flex vertical gap={8} style={{ width: 256 }}>
+      <Typography.Text strong>{t("model")}</Typography.Text>
+      <Radio.Group aria-label={t("model")} orientation="vertical" value={selection?.model.key}
+        onChange={event => onModelChange(String(event.target.value))}>
+        {catalog.models.map((model, index) => <Radio value={model.key} key={model.key} aria-label={model.display_name}
+          autoFocus={model.key === selection?.model.key || (selection === null && index === 0)}>{model.display_name}</Radio>)}
+      </Radio.Group>
+      <Divider style={{ marginBlock: 4 }} />
+      <Flex align="center" justify="space-between"><Typography.Text strong>{t("reasoning")}</Typography.Text>
+        {selection ? <Typography.Text type="secondary">{effortLabel(selection.reasoningEffort)}</Typography.Text> : null}
+      </Flex>
+      {selection && efforts.length > 1 ? <Slider min={0} max={efforts.length - 1} step={1} dots
+        value={efforts.indexOf(selection.reasoningEffort)}
+        marks={{ 0: effortLabel(efforts[0]), [efforts.length - 1]: effortLabel(efforts[efforts.length - 1]) }}
+        ariaLabelForHandle={t("reasoning")} ariaValueTextFormatterForHandle={value => effortLabel(efforts[value])}
+        tooltip={{ formatter: value => effortLabel(efforts[value!]) }} onChange={value => onReasoningChange(efforts[value])} />
+        : selection === null ? <Typography.Text type="secondary">{t("chooseModel")}</Typography.Text> : null}
+    </Flex></div>}>
+    <Button ref={triggerRef} type="text" aria-expanded={open} aria-haspopup="dialog"
       aria-label={selection === null ? t("nextTurnModel") : t("selectedModel", { model: selection.model.display_name, reasoning: effortLabel(selection.reasoningEffort) })}
       onKeyDown={event => { if (!open && event.key === "ArrowDown") { event.preventDefault(); setOpen(true); } }}>
-      <strong className="min-w-0 truncate text-sm">{selection?.model.display_name ?? t("chooseModel")}</strong>
-      {selection ? <span className="text-xs">{effortLabel(selection.reasoningEffort)}</span> : null}<CaretDown aria-hidden="true" />
-    </PopoverTrigger>
-    <PopoverContent ref={popupRef} side="top" align="end" className="w-[min(380px,calc(100vw-32px))] gap-4 p-4" initialFocus={() => firstInColumn("model")} finalFocus={triggerRef} onKeyDown={moveColumn}>
-      <PopoverTitle>{t("modelDialog")}</PopoverTitle>
-      <div className="grid min-w-0 grid-cols-2 gap-4">
-        <div className="min-w-0"><p className="m-0 mb-2 text-xs text-muted-foreground">{t("model")}</p>
-          <ToggleGroup orientation="vertical" className="w-full" aria-label={t("model")} value={selection ? [selection.model.key] : []}
-            onValueChange={values => { if (values[0]) onModelChange(values[0]); }}>
-            {catalog.models.map(model => <ToggleGroupItem key={model.key} value={model.key} data-picker-column="model" className="h-auto min-h-11 w-full justify-between whitespace-normal text-left">
-              <span className="min-w-0 [overflow-wrap:anywhere]">{model.display_name}</span>{selection?.model.key === model.key ? <Check aria-hidden="true" /> : null}
-            </ToggleGroupItem>)}
-          </ToggleGroup>
-        </div>
-        <div className="min-w-0 border-l border-border pl-4"><p className="m-0 mb-2 text-xs text-muted-foreground">{t("reasoning")}</p>
-          {selection ? <ToggleGroup orientation="vertical" className="w-full" aria-label={t("reasoning")} value={[selection.reasoningEffort]}
-            >
-            {selection.model.reasoning_efforts.map(effort => <ToggleGroupItem key={effort} value={effort} onClick={() => { onReasoningChange(effort); setOpen(false); }} data-picker-column="reasoning" className="min-h-11 w-full justify-between">
-              <span>{effortLabel(effort)}</span>{selection.reasoningEffort === effort ? <Check aria-hidden="true" /> : null}
-            </ToggleGroupItem>)}
-          </ToggleGroup> : <p className="text-xs text-muted-foreground">{t("chooseModel")}</p>}
-        </div>
-      </div>
-    </PopoverContent>
+      <Typography.Text type="secondary">{selection?.model.display_name ?? t("chooseModel")}</Typography.Text>
+      {selection ? <Typography.Text type="secondary">{effortLabel(selection.reasoningEffort)}</Typography.Text> : null}<CaretDown aria-hidden="true" />
+    </Button>
   </Popover>;
 }

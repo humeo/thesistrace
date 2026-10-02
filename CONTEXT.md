@@ -136,6 +136,9 @@ _避免混用_: Agent Chat Memory, Result Bundle, completed research without aut
 
 **Research Folder**:
 A one-level Researcher-owned grouping of ResearchRuns that organizes research without changing its accepted inputs or results.
+Creation and renaming require a name unique within that Researcher's Folders,
+after trimming surrounding whitespace and ignoring letter case. Folder IDs,
+rather than names, identify ownership and Browser Drafts.
 _避免混用_: Research Batch, Alpha definition
 
 **Batch Research Folder**:

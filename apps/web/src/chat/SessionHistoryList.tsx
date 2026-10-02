@@ -18,6 +18,7 @@ import {
 } from "../components/ui/dropdown-menu";
 import { Field, FieldLabel } from "../components/ui/field";
 import { Input } from "../components/ui/input";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../components/ui/tooltip";
 import { useIsMobile } from "../hooks/use-mobile";
 import { i18n } from "../i18n";
 import type { ChatErrorKey } from "../i18n/messages/chat";
@@ -188,14 +189,19 @@ export function SessionHistoryList({
     <>
       <div className="chat-session-heading">
         <h3 id="chat-session-recent">{t("recent")}</h3>
-        <a
-          aria-label={t("newChatShortcut")}
-          className="chat-session-new-chat"
-          href="/chat"
-          onClick={(event) => handleWorkspaceNavigation(event, () => navigate("/chat"))}
-        >
-          <NotePencil aria-hidden="true" size={18} weight="regular" />
-        </a>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger render={<a
+              aria-label={t("newChatShortcut")}
+              className="chat-session-new-chat"
+              href="/chat"
+              onClick={(event) => handleWorkspaceNavigation(event, () => navigate("/chat"))}
+            />}>
+              <NotePencil aria-hidden="true" size={18} weight="regular" />
+            </TooltipTrigger>
+            <TooltipContent side="right">{t("newChatShortcut")}</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       </div>
       {historyContent}
     </>

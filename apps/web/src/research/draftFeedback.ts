@@ -28,6 +28,7 @@ export function researchDraftFeedback({ key, inputIssues, admission, configurati
     inputIssues,
     admissionIssues,
     configuration: currentConfiguration,
+    configurationChanged: configuration !== null && configuration.key !== key,
     formulaDiagnostics: admissionDiagnostics.length ? admissionDiagnostics
       : diagnostics.kind === "complete" ? diagnostics.result.diagnostics : [],
     inputIssue(field: ResearchInputField) {

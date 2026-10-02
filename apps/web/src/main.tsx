@@ -1,6 +1,7 @@
 import React, { Suspense, lazy, useCallback, useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
 
+import { useAuthRetry } from "./auth/useAuthRetry";
 import { AuthProvider, useAuth } from "./auth/AuthProvider";
 import { AuthRoute, AuthSurface, returnToFromLocation } from "./auth/AuthPages";
 import {
@@ -124,6 +125,7 @@ function BrowserRoutedApp() {
       <AuthStatus
         action={() => void retry()}
         actionLabel={t("retry")}
+        retryAt={state.retryAt}
         message={t("unavailableMessage")}
         title={t("unavailable")}
       />
@@ -156,24 +158,26 @@ function BrowserRoutedApp() {
   );
 }
 
-function AuthStatus({ title, message, action, actionLabel }: {
+function AuthStatus({ title, message, action, actionLabel, retryAt = 0 }: {
   title: string;
   message: string;
   action?: () => void;
   actionLabel?: string;
+  retryAt?: number;
 }) {
   const { t } = useTranslation("auth");
+  const cooldown = useAuthRetry(retryAt);
   return (
     <AuthSurface eyebrow={t("workspace")} title={title}>
       {action !== undefined ? (
-        <Alert variant="destructive"><AlertDescription>{message}</AlertDescription></Alert>
+        <Alert variant="destructive"><AlertDescription>{cooldown > 0 ? t("rateLimited", {seconds: cooldown}) : message}</AlertDescription></Alert>
       ) : (
         <p className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
           <Spinner aria-hidden="true" />{message}
         </p>
       )}
       {action !== undefined ? (
-        <Button className="mt-4 w-full" onClick={action} type="button">
+        <Button className="mt-4 w-full" disabled={cooldown > 0} onClick={action} type="button">
           {actionLabel}
         </Button>
       ) : null}

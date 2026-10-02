@@ -30,10 +30,10 @@ test.each([
   ["ORIGIN_NOT_ALLOWED", 403, "operationFailed"],
   ["UNKNOWN_REASON", 400, "operationFailed"],
 ] as const)("invitation failures preserve the %s reason", async (code, status, expected) => {
-  vi.stubGlobal("fetch", async () => Response.json({ code }, { status }));
+  vi.stubGlobal("fetch", async () => Response.json({ code }, { status, headers: status === 429 ? {"Retry-After": "37"} : {} }));
   await withAuth(async (auth) => {
-    expect(await auth.inspectInvitation("invitation-token")).toEqual({ ok: false, code: expected });
-    expect(await auth.acceptInvitation("invitation-token", "unused-password")).toEqual({ ok: false, code: expected });
+    expect(await auth.inspectInvitation("invitation-token")).toEqual({ ok: false, code: expected, ...(status === 429 ? {retryAfterSeconds: 37} : {}) });
+    expect(await auth.acceptInvitation("invitation-token", "unused-password")).toEqual({ ok: false, code: expected, ...(status === 429 ? {retryAfterSeconds: 37} : {}) });
   });
 });
 
@@ -56,4 +56,28 @@ test.each([
   await withAuth(async (auth) => {
     expect(await auth.signIn("researcher@example.com", "123456")).toEqual({ ok: false, code: expected });
   });
+});
+
+
+test("carries server retry time for code delivery and does not retry during cooldown", async () => {
+  const request = vi.fn(async () => Response.json({code: "AUTH_RATE_LIMITED"}, {status: 429, headers: {"Retry-After": "37"}}));
+  vi.stubGlobal("fetch", request);
+  await withAuth(async auth => {
+    expect(await auth.sendCode("researcher@example.com")).toEqual({ok: false, code: "tooManyRequests", retryAfterSeconds: 37});
+    expect(await auth.sendCode("different@example.com")).toMatchObject({ok: false, code: "tooManyRequests"});
+  });
+  expect(request).toHaveBeenCalledTimes(1);
+});
+
+test.each([null, "NaN", "179082411974232", "0", "-1"])("rejects invalid retry metadata %s", async retry => {
+  vi.stubGlobal("fetch", async () => Response.json({}, {status: 429, headers: retry === null ? {} : {"Retry-After": retry}}));
+  await withAuth(async auth => expect(await auth.sendCode("researcher@example.com")).toEqual({ok: false, code: "unavailable"}));
+});
+
+test("uses the official client response hook for sign-in recovery time", async () => {
+  emailOtp.mockImplementation(async (_body, options) => {
+    options.onError({response: new Response(null, {status: 429, headers: {"Retry-After": "23"}})});
+    return {error: {code: "UNKNOWN_REASON", status: 429}};
+  });
+  await withAuth(async auth => expect(await auth.signIn("researcher@example.com", "123456")).toEqual({ok: false, code: "tooManyRequests", retryAfterSeconds: 23}));
 });

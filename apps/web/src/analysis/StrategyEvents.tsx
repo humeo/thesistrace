@@ -11,7 +11,8 @@ import { Field, FieldGroup, FieldLabel } from "../components/ui/field";
 import { Input } from "../components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { CalendarDateField } from "../components/layout/CalendarDateField";
-import { isIsoCalendarDate } from "../components/layout/calendarDate";
+import { InfoHelp } from "../components/product/InfoHelp";
+import { retrievalCalendarBounds, validateRetrievalDates, type RetrievalDateError, type RetrievalDateRange } from "./retrievalDates";
 
 type Page = { section: Section; status: "recorded" | "not_recorded" | "expired" | "partially_expired"; expires_at: string | null; rows: EventRow[]; next_cursor: string | null };
 type Filter = { start_session?: string; end_session?: string; instrument_id?: string; target_id?: string; order_id?: string; child_order_id?: string };
@@ -21,16 +22,16 @@ function stockFilter(value: string) {
   return /^\d{6}\.(SH|SZ)$/i.test(trimmed) ? "equity:" + trimmed.toUpperCase() : trimmed || undefined;
 }
 
-export function StrategyEvents({ endpoint, embedded = false }: { endpoint: string; embedded?: boolean }) {
+export function StrategyEvents({ endpoint, embedded = false, dateRange, initialQuery }: { endpoint: string; embedded?: boolean; dateRange?: RetrievalDateRange; initialQuery?: { section: Section; filters?: Filter; scope?: EventScope } }) {
   const { t } = useTranslation("analysis");
   const [open, setOpen] = useState(embedded);
   const id = useId();
-  const [fieldErrors, setFieldErrors] = useState<Partial<Record<"start_session" | "end_session", "invalidDate" | "invalidRange">>>({});
-  const [section, setSection] = useState<Section>("strategy_orders");
-  const [filters, setFilters] = useState<Filter>({});
+  const [fieldErrors, setFieldErrors] = useState<Partial<Record<"start_session" | "end_session", RetrievalDateError>>>({});
+  const [section, setSection] = useState<Section>(initialQuery?.section ?? "strategy_orders");
+  const [filters, setFilters] = useState<Filter>(initialQuery?.filters ?? {});
   const [draft, setDraft] = useState({ start_session: "", end_session: "", instrument_id: "" });
   const [cursors, setCursors] = useState<(string | null)[]>([null]);
-  const [scope, setScope] = useState<EventScope | null>(null);
+  const [scope, setScope] = useState<EventScope | null>(initialQuery?.scope ?? null);
   const [history, setHistory] = useState<View[]>([]);
   const [page, setPage] = useState<Page | null>(null);
   const [error, setError] = useState<"cursorError" | "invalidQuery" | "loadError" | null>(null);
@@ -77,18 +78,18 @@ export function StrategyEvents({ endpoint, embedded = false }: { endpoint: strin
     return () => controller.abort();
   }, [open, endpoint, section, filters, cursor, revision]);
   const content = <div className="flex min-w-0 flex-col gap-4">
-      <header className="flex flex-col gap-2 [&_p]:m-0 [&_p]:text-muted-foreground">
+      <header className="flex items-center justify-between gap-4">
         <h3 className="m-0 text-base font-semibold" ref={heading} tabIndex={-1}>{eventSectionLabel(section)}</h3>
-        <p>{t(`events.descriptions.${section}`)}</p>
-        <p>{t("events.retention")}</p>
+        <InfoHelp label={eventSectionLabel(section)} buttonLabel={t("help.about", { label: eventSectionLabel(section) })} closeLabel={t("help.close")}>
+          <div className="flex flex-col gap-2 [&_p]:m-0">
+            <p>{t(`events.descriptions.${section}`)}</p>
+            <p>{t("events.retention")}</p>
+          </div>
+        </InfoHelp>
       </header>
       <form onSubmit={event => {
         event.preventDefault();
-        const invalid: typeof fieldErrors = {};
-        for (const key of ["start_session", "end_session"] as const) {
-          if (draft[key] && !isIsoCalendarDate(draft[key])) invalid[key] = "invalidDate";
-        }
-        if (!Object.keys(invalid).length && draft.start_session && draft.end_session && draft.start_session > draft.end_session) invalid.end_session = "invalidRange";
+        const invalid = validateRetrievalDates(draft, dateRange);
         setFieldErrors(invalid);
         if (Object.keys(invalid).length) return;
         setPage(null); setCursors([null]);
@@ -107,9 +108,8 @@ export function StrategyEvents({ endpoint, embedded = false }: { endpoint: strin
             id={`${id}-${key}`} label={t(key === "start_session" ? "events.from" : "events.through")}
             openLabel={i18n.t(key === "start_session" ? "research:openStartCalendar" : "research:openEndCalendar")}
             value={draft[key]} onChange={value => setDraft({ ...draft, [key]: value })}
-            minimum={key === "end_session" ? draft.start_session || null : null}
-            maximum={key === "start_session" ? draft.end_session || null : null}
-            error={fieldErrors[key] ? t(`holdings.${fieldErrors[key]}`) : undefined} errorId={`${id}-${key}-error`} />)}
+            {...retrievalCalendarBounds(key, draft, dateRange)}
+            error={fieldErrors[key] ? t(`holdings.${fieldErrors[key]}`, dateRange) : undefined} errorId={`${id}-${key}-error`} />)}
           <Field><FieldLabel htmlFor={`${id}-instrument`}>{t("events.instrument")}</FieldLabel><Input id={`${id}-instrument`} disabled={section === "strategy_history_reads"} value={draft.instrument_id} placeholder="600000.SH" onChange={event => setDraft({ ...draft, instrument_id: event.target.value })} /></Field>
         </FieldGroup>
         <div className="mt-4 flex flex-wrap gap-2">
@@ -119,9 +119,9 @@ export function StrategyEvents({ endpoint, embedded = false }: { endpoint: strin
       </form>
       {scope && <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted p-4" role="region" aria-label={t("events.scope")}>
         <span>{t("events.relatedOnly", { relatedContext: eventScopeLabel(scope) })}</span>
-        <div className="flex flex-wrap gap-2">
-          {history.length > 0 && <Button variant="outline" type="button" onClick={goBack}>{t("events.back", { section: eventSectionLabel(history.at(-1)!.section) })}</Button>}
-          <Button variant="outline" type="button" onClick={() => navigate(section)}>{t("events.viewAll", { section: eventSectionLabel(section) })}</Button>
+        <div className="flex flex-wrap gap-4">
+          {history.length > 0 && <Button variant="link" size="sm" className="px-0" type="button" onClick={goBack}>{t("events.back", { section: eventSectionLabel(history.at(-1)!.section) })}</Button>}
+          <Button variant="link" size="sm" className="px-0" type="button" onClick={() => navigate(section)}>{t("events.viewAll", { section: eventSectionLabel(section) })}</Button>
         </div>
       </div>}
       <div className="flex flex-wrap justify-between gap-2 text-muted-foreground">

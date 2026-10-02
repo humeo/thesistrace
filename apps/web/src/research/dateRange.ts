@@ -15,6 +15,7 @@ const RESEARCH_DATE_HORIZONS = [
 export function buildResearchDatePresets(
   coverageStart: string | null,
   coverageEnd: string | null,
+  selectedEndDate?: string,
 ): ResearchDatePreset[] {
   const coverage = coverageStart !== null &&
     coverageEnd !== null &&
@@ -23,14 +24,17 @@ export function buildResearchDatePresets(
     coverageStart <= coverageEnd
     ? { startDate: coverageStart, endDate: coverageEnd }
     : null;
+  const anchor = coverage !== null && selectedEndDate && isIsoCalendarDate(selectedEndDate)
+    && selectedEndDate >= coverage.startDate && selectedEndDate <= coverage.endDate
+    ? selectedEndDate : coverage?.endDate ?? null;
 
   const horizonPresets = RESEARCH_DATE_HORIZONS.map(({ id, years }) => {
-    const candidate = coverage === null ? null : subtractCalendarYears(coverage.endDate, years);
+    const candidate = anchor === null ? null : subtractCalendarYears(anchor, years);
     const available = candidate !== null && coverage !== null && candidate > coverage.startDate;
     return {
       id,
       startDate: available ? candidate : null,
-      endDate: available ? coverage.endDate : null,
+      endDate: available ? anchor : null,
     };
   });
 

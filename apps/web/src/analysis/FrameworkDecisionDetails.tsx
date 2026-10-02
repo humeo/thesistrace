@@ -3,7 +3,7 @@ import { PortfolioDrawdownFacts, type PortfolioDrawdownObservation } from "./Por
 import { TakeProfitFacts, type TakeProfitObservation } from "./TakeProfitFacts";
 import Decimal from "decimal.js";
 import { useTranslation } from "../i18n";
-import { formatNumber } from "../i18n/format";
+import { formatDecimal, formatDecimalString, formatNumber } from "../i18n/format";
 import type { FrameworkStage } from "../research/frameworkModules";
 
 type Proposal = {
@@ -50,12 +50,12 @@ function Portfolio({ value }: { value: Proposal }) {
       <p>{t(`decision.${value.allocation.mode}`)} · {t("decision.targetExposure", { percent: (value.allocation.exposure * 100).toFixed(2) })}</p>
       <Disclosure title={<>{t("decision.weights", { count: value.allocation.instrument_ids.length })}</>}>
         <ul>{value.allocation.instrument_ids.map(id => <li key={id}>
-          {stock(id)}：{value.allocation!.relative_weights[id]}
+          {stock(id)}：<span title={value.allocation!.relative_weights[id]}>{formatDecimalString(value.allocation!.relative_weights[id], 4)}</span>
         </li>)}</ul>
       </Disclosure>
       {value.allocation.retained_instrument_ids?.length ? <p>{t("decision.retained", { stocks: value.allocation.retained_instrument_ids.map(stock).join(", ") })}</p> : null}
     </>}
-    {value.maximum_stock_exposure !== undefined && <p>{t("decision.cap", { percent: new Decimal(value.maximum_stock_exposure).mul(100).toString() })}</p>}
+    {value.maximum_stock_exposure !== undefined && <p>{t("decision.cap", { percent: formatDecimal(value.maximum_stock_exposure * 100, 2) })}</p>}
     {Object.keys(value.position_limits).length > 0 && <Limits limits={value.position_limits} />}
   </>;
 }
@@ -78,7 +78,7 @@ export function FrameworkDecisionDetails({ row }: { row: FrameworkRecord }) {
       {alpha.kind === "formula" ? <>
         <p>{t("decision.formulaValues", { count: alpha.values.length })}</p>
         <Disclosure title={<>{t("decision.viewAlpha")}</>}><ul>{alpha.values.map(item =>
-          <li key={item.instrument_id}>{stock(item.instrument_id)}: {item.value}</li>)}</ul></Disclosure>
+          <li key={item.instrument_id}>{stock(item.instrument_id)}: <span title={String(item.value)}>{formatNumber(item.value, { maximumFractionDigits: 4 })}</span></li>)}</ul></Disclosure>
       </> : <>
         <p>{t(alpha.updated ? "decision.signalsUpdated" : "decision.signalsRetained")}
           {" · " + t("decision.signalCount", { count: alpha.signals.length })}</p>
@@ -87,7 +87,7 @@ export function FrameworkDecisionDetails({ row }: { row: FrameworkRecord }) {
         {alpha.removed_signals.length > 0 && <p>{t("decision.removed", { stocks: alpha.removed_signals.map(stock).join(", ") })}</p>}
         <p>{t("decision.signalsHelp")}</p>
         {alpha.signals.length > 0 && <Disclosure title={<>{t("decision.signalValidity")}</>}><ul>{alpha.signals.map(item =>
-          <li key={item.instrument_id}>{t("decision.signalRow", { stock: stock(item.instrument_id), value: item.value, session: item.created_session, count: item.valid_for_sessions })}</li>)}</ul></Disclosure>}
+          <li key={item.instrument_id} title={String(item.value)}>{t("decision.signalRow", { stock: stock(item.instrument_id), value: formatNumber(item.value, { maximumFractionDigits: 4 }), session: item.created_session, count: item.valid_for_sessions })}</li>)}</ul></Disclosure>}
       </>}
     </section>
     <section aria-label={t("decision.stages.portfolio_construction")}><h4>3 · {t("decision.stages.portfolio_construction")}</h4>
@@ -106,8 +106,8 @@ export function FrameworkDecisionDetails({ row }: { row: FrameworkRecord }) {
             <strong>{stock(item.instrument_id)}</strong>
             {item.reason === "take_profit" ? <TakeProfitFacts item={item} /> : <>
             {item.reason === "stop_loss" ? <>
-              <p>{t("decision.stopLossValues", { cost: new Decimal(item.remaining_acquisition_cost_cny).toString(), value: new Decimal(item.close_market_value_cny).toString() })}</p>
-              <p>{t("decision.stopLossThreshold", { return: new Decimal(item.holding_return).mul(100).toString(), threshold: new Decimal(item.stop_loss_threshold).mul(100).toString() })}</p>
+              <p>{t("decision.stopLossValues", { cost: formatDecimalString(item.remaining_acquisition_cost_cny, 2), value: formatDecimalString(item.close_market_value_cny, 2) })}</p>
+              <p>{t("decision.stopLossThreshold", { return: formatDecimal(new Decimal(item.holding_return).mul(100).toNumber(), 2), threshold: formatDecimal(new Decimal(item.stop_loss_threshold).mul(100).toNumber(), 2) })}</p>
             </> : <p>{t("decision.maximumReached", { count: item.maximum_holding_sessions })}</p>}
             <p>{t("decision.positionAtDecision", { shares: item.execution_shares, age: item.holding_age })}</p>
             </>}

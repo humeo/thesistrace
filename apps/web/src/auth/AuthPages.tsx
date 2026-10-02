@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 
+import { useAuthRetry } from "./useAuthRetry";
 import { useAuth } from "./AuthProvider";
 import { Brand, BrandMark } from "../brand/Brand";
 import { safeReturnTo, type BrowserLocation, type InitialAuthSecret } from "./routing";
@@ -21,21 +22,19 @@ function LoginPage() {
   const [sent, setSent] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [retryAt, setRetryAt] = useState(0);
-  const [now, setNow] = useState(Date.now());
+  const [errorRetryAt, setErrorRetryAt] = useState(0);
+  const serverSendRetryAt = useRef(0);
+  const [verificationRetryAt, setVerificationRetryAt] = useState(0);
   const [error, setError] = useState<AuthErrorCode | null>(null);
   const otpRef = useRef<HTMLInputElement>(null);
   const emailRef = useRef<HTMLInputElement>(null);
-  const cooldown = Math.max(0, Math.ceil((retryAt - now) / 1000));
+  const cooldown = useAuthRetry(retryAt);
+  const verificationCooldown = useAuthRetry(verificationRetryAt);
+  const errorCooldown = useAuthRetry(errorRetryAt);
   useEffect(() => {
     document.title = `${t(sent ? "checkEmail" : "welcome")} · Quantgrove`;
     document.querySelector('meta[name="description"]')?.setAttribute("content", t("introduction"));
   }, [sent, t]);
-
-  useEffect(() => {
-    if (!retryAt) return;
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [retryAt]);
 
   useEffect(() => {
     if (sent) otpRef.current?.focus();
@@ -45,7 +44,7 @@ function LoginPage() {
     setSent(false);
     setOtp("");
     setError(null);
-    setRetryAt(0);
+    setRetryAt(serverSendRetryAt.current);
     window.requestAnimationFrame(() => emailRef.current?.focus());
   }
 
@@ -57,18 +56,23 @@ function LoginPage() {
     setSubmitting(false);
     if (!result.ok) {
       setError(result.code);
+      if (result.retryAfterSeconds !== undefined) {
+        const deadline = Date.now() + result.retryAfterSeconds * 1_000;
+        serverSendRetryAt.current = deadline;
+        setRetryAt(deadline);
+        setErrorRetryAt(deadline);
+      }
       return;
     }
     setEmail(email.trim().toLowerCase());
     setOtp("");
     setSent(true);
-    setNow(Date.now());
     setRetryAt(Date.now() + 60_000);
   }
 
   async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
-    if (submitting) return;
+    if (submitting || (sent && verificationCooldown > 0)) return;
     if (!sent) {
       await requestCode();
       return;
@@ -77,7 +81,14 @@ function LoginPage() {
     setError(null);
     const result = await signIn(email, otp);
     setSubmitting(false);
-    if (!result.ok) setError(result.code);
+    if (!result.ok) {
+      setError(result.code);
+      if (result.retryAfterSeconds !== undefined) {
+        const deadline = Date.now() + result.retryAfterSeconds * 1_000;
+        setVerificationRetryAt(deadline);
+        setErrorRetryAt(deadline);
+      }
+    }
   }
 
   return (
@@ -151,10 +162,10 @@ function LoginPage() {
               </Field>
             </>
           )}
-          {error !== null ? <Alert variant="destructive"><AlertDescription>{t(`errors.${error}`)}</AlertDescription></Alert> : null}
+          {error !== null ? <Alert variant="destructive"><AlertDescription>{error === "tooManyRequests" && errorCooldown > 0 ? t("rateLimited", {seconds: errorCooldown}) : t(`errors.${error}`)}</AlertDescription></Alert> : null}
           <Button
             className="w-full"
-            disabled={submitting || (!sent && cooldown > 0) || (sent && otp.length !== 6)}
+            disabled={submitting || (!sent && cooldown > 0) || (sent && (otp.length !== 6 || verificationCooldown > 0))}
             size="lg"
             type="submit"
           >
@@ -201,6 +212,8 @@ function AcceptInvitationPage({ secret, clearSecret }: {
     ? "invalidInvitation"
     : null);
   const inspected = useRef(false);
+  const [retryAt, setRetryAt] = useState(0);
+  const cooldown = useAuthRetry(retryAt);
 
   useEffect(() => {
     if (token === null || inspected.current) return;
@@ -209,7 +222,10 @@ function AcceptInvitationPage({ secret, clearSecret }: {
     void inspectInvitation(token)
       .then((result) => {
         if (!active) return;
-        if (!result.ok) setError(result.code);
+        if (!result.ok) {
+          setError(result.code);
+          if (result.retryAfterSeconds !== undefined) setRetryAt(Date.now() + result.retryAfterSeconds * 1_000);
+        }
         else setEmail(result.email);
       })
       .catch(() => {
@@ -221,9 +237,23 @@ function AcceptInvitationPage({ secret, clearSecret }: {
     return () => { active = false; };
   }, [inspectInvitation, token]);
 
+  async function retryInspection(): Promise<void> {
+    if (token === null || loading || cooldown > 0) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await inspectInvitation(token);
+      if (result.ok) setEmail(result.email);
+      else {
+        setError(result.code);
+        if (result.retryAfterSeconds !== undefined) setRetryAt(Date.now() + result.retryAfterSeconds * 1_000);
+      }
+    } finally { setLoading(false); }
+  }
+
   async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
-    if (token === null || email === null || submitting) return;
+    if (token === null || email === null || submitting || cooldown > 0) return;
     if (password !== confirmation) {
       setError("passwordMismatch");
       return;
@@ -234,6 +264,7 @@ function AcceptInvitationPage({ secret, clearSecret }: {
     setSubmitting(false);
     if (!result.ok) {
       setError(result.code);
+      if (result.retryAfterSeconds !== undefined) setRetryAt(Date.now() + result.retryAfterSeconds * 1_000);
       return;
     }
     clearSecret();
@@ -279,15 +310,16 @@ function AcceptInvitationPage({ secret, clearSecret }: {
                 value={confirmation}
               />
             </Field>
-            {error !== null ? <Alert variant="destructive"><AlertDescription>{t(`errors.${error}`)}</AlertDescription></Alert> : null}
-            <Button className="w-full" disabled={submitting} size="lg" type="submit">
+            {error !== null ? <Alert variant="destructive"><AlertDescription>{error === "tooManyRequests" && cooldown > 0 ? t("rateLimited", {seconds: cooldown}) : t(`errors.${error}`)}</AlertDescription></Alert> : null}
+            <Button className="w-full" disabled={submitting || cooldown > 0} size="lg" type="submit">
               {submitting ? <Spinner data-icon="inline-start" aria-hidden="true" /> : null}
               {t(submitting ? "creatingAccess" : "acceptInvitation")}
             </Button>
           </FieldGroup>
         </form>
       ) : null}
-      {!loading && email === null && error !== null ? <Alert variant="destructive"><AlertDescription>{t(`errors.${error}`)}</AlertDescription></Alert> : null}
+      {!loading && email === null && error !== null ? <Alert variant="destructive"><AlertDescription>{error === "tooManyRequests" && cooldown > 0 ? t("rateLimited", {seconds: cooldown}) : t(`errors.${error}`)}</AlertDescription></Alert> : null}
+      {!loading && email === null && error === "tooManyRequests" ? <Button className="mt-4 w-full" disabled={cooldown > 0} onClick={() => void retryInspection()} type="button">{t("retry")}</Button> : null}
     </AuthSurface>
   );
 }

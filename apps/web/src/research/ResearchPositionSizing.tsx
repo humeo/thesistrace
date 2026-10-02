@@ -11,6 +11,7 @@ import { AlphaFormulaEditor, type AlphaFormulaEditorHandle } from "./AlphaFormul
 import type { FormulaDiagnostic } from "./diagnostics";
 import { exposurePercentage, percentageExposure } from "./strategyRules";
 import { ResearchInfotip } from "./ResearchInfotip";
+import { ResearchCodeInput } from "./ResearchCodeInput";
 
 export function ResearchPositionSizing({ ref, catalog, expression, diagnostics, onChange, error }: {
   ref: Ref<AlphaFormulaEditorHandle>; error?: string;
@@ -20,9 +21,12 @@ export function ResearchPositionSizing({ ref, catalog, expression, diagnostics, 
   const { t: strategyT } = useTranslation("strategy");
   const [selection, setSelection] = useState({ anchor: 0, head: 0 });
   const [dynamic, setDynamic] = useState(exposurePercentage(expression) === null && expression !== "");
-  return <FieldGroup className="gap-4">
+  return <FieldGroup className="grid grid-cols-2 items-start gap-4">
     <Field>
-      <FieldLabel htmlFor="stock-exposure-mode">{strategyT("workbench.exposureMode")}</FieldLabel>
+      <div className="flex items-center gap-1">
+        <FieldLabel htmlFor="stock-exposure-mode">{strategyT("workbench.exposureMode")}</FieldLabel>
+        <ResearchInfotip label={strategyT("workbench.exposureMode")}>{t("allocationExplanation")}</ResearchInfotip>
+      </div>
       <Select value={dynamic ? "dynamic" : "fixed"} onValueChange={value => {
         setDynamic(value === "dynamic");
         if (value === "fixed" && exposurePercentage(expression) === null) onChange("1");
@@ -42,7 +46,7 @@ export function ResearchPositionSizing({ ref, catalog, expression, diagnostics, 
         aria-invalid={Boolean(error)} aria-describedby={error ? "position-sizing-error" : undefined}
         onChange={event => onChange(percentageExposure(event.target.value))} />
     </Field>}
-    <div hidden={!dynamic} className={cn("min-w-0", !dynamic && "hidden")}>
+    <div hidden={!dynamic} className={cn("col-span-2 min-w-0", !dynamic && "hidden")}>
       <Field>
         <div className="flex items-center gap-2"><FieldLabel>{t("positionSizing")}</FieldLabel>
           <ResearchParameterHelp helpId="exposure" text={<span className="grid gap-3">
@@ -52,11 +56,13 @@ export function ResearchPositionSizing({ ref, catalog, expression, diagnostics, 
             <span>{t("exposureRules")}</span>
           </span>} />
         </div>
-        <AlphaFormulaEditor ref={ref} error={error} className="h-40 min-w-0 overflow-hidden rounded-md border border-input bg-card focus-within:ring-2 focus-within:ring-ring/30"
+        <ResearchCodeInput>
+        <AlphaFormulaEditor ref={ref} error={error}
           catalog={catalog} context="exposure" diagnostics={diagnostics} formula={expression} selection={selection}
           onChange={(value, nextSelection) => { setSelection(nextSelection); onChange(value); }} />
+        </ResearchCodeInput>
       </Field>
     </div>
-    <FieldError id="position-sizing-error">{error}</FieldError>
+    <FieldError id="position-sizing-error" className="col-span-2">{error}</FieldError>
   </FieldGroup>;
 }

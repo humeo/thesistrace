@@ -2,7 +2,7 @@ import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createAuthPool } from "./database.js";
-import { AuthEndpointRateLimiter } from "./auth-rate-limit.js";
+import { createBetterAuthRateLimitStorage, AuthEndpointRateLimiter } from "./auth-rate-limit.js";
 import { initializeAuthSchema } from "./schema-initialize.js";
 
 const ownerDatabaseUrl = process.env.THESISTRACE_AUTH_TEST_OWNER_DATABASE_URL;
@@ -34,6 +34,40 @@ describe.sequential("Auth endpoint PostgreSQL rate limit", () => {
     await runtimePool.end();
     await owner.query("DROP SCHEMA IF EXISTS auth CASCADE");
     await owner.end();
+  });
+
+  it("shares atomic fixed windows across Better Auth storage instances, including expiry", async () => {
+    let now = fixedNow.getTime();
+    const instances = [0, 1].map(() => createBetterAuthRateLimitStorage({ pool: runtimePool, clock: () => new Date(now) }));
+    const consume = () => Promise.all(Array.from({ length: 6 }, (_, i) => instances[i % 2]!.consume("192.0.2.80|/sign-in/email-otp", { max: 5, window: 60 })));
+    for (const offset of [0, 60_000]) {
+      now = fixedNow.getTime() + offset;
+      const decisions = await consume();
+      expect(decisions.filter(d => d.allowed)).toHaveLength(5);
+      expect(decisions.filter(d => !d.allowed)).toEqual([{ allowed: false, retryAfter: 60 }]);
+    }
+    now += 59_999;
+    await expect(instances[0]!.consume("192.0.2.80|/sign-in/email-otp", { max: 5, window: 60 })).resolves.toEqual({ allowed: false, retryAfter: 1 });
+    now += 1;
+    await expect(instances[1]!.consume("192.0.2.80|/sign-in/email-otp", { max: 5, window: 60 })).resolves.toEqual({ allowed: true, retryAfter: null });
+  });
+
+  it("uses an existing persisted bucket until its window expires", async () => {
+    await owner.query('INSERT INTO auth."rateLimit" (key,count,"lastRequest") VALUES ($1,60,$2)', ['192.0.2.81|/ok', fixedNow.getTime()]);
+    let now = fixedNow.getTime() + 20_000;
+    const storage = createBetterAuthRateLimitStorage({ pool: runtimePool, clock: () => new Date(now) });
+    await expect(storage.consume('192.0.2.81|/ok', {max: 60, window: 60})).resolves.toEqual({allowed: false, retryAfter: 40});
+    now = fixedNow.getTime() + 60_000;
+    await expect(storage.consume('192.0.2.81|/ok', {max: 60, window: 60})).resolves.toEqual({allowed: true, retryAfter: null});
+  });
+
+  it.each(["email-code", "operator-proof", "password-reset", "researcher-invitation"] as const)("retains fixed windows for continuous activity in %s", async scope => {
+    let now = fixedNow.getTime();
+    const limiter = new AuthEndpointRateLimiter({authSecret: secret, pool: runtimePool, scope, clock: () => new Date(now)});
+    for (let i = 0; i < 20; i += 1) {
+      now = fixedNow.getTime() + i * 20_000;
+      await expect(limiter.consume("subject", new Headers({"x-thesistrace-client-ip": "192.0.2.82"}))).resolves.toEqual({allowed: true, retryAfterSeconds: 0});
+    }
   });
 
   it("atomically admits only five concurrent requests for one IP and token", async () => {

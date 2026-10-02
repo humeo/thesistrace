@@ -1,268 +1,138 @@
 // @vitest-environment happy-dom
-
-import { act, useState } from "react";
+import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vitest";
-
-import type { TimelineEntry, TimelineTurn } from "./chatProtocol";
 import { ChatTimeline } from "./ChatTimeline";
-import type { ChatConversationController } from "./useChatConversation";
+import { ChatTestProvider } from "./chatTestProvider";
+import { ChatConversationView } from "./ChatConversation";
 import { changeInterfaceLanguage } from "../i18n";
-
+import type { TimelineEntry, TimelineTurn } from "./chatProtocol";
+import type { ChatConversationController } from "./useChatConversation";
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let root: Root | undefined;
-
 afterEach(async () => {
-  await act(async () => changeInterfaceLanguage("en"));
-  await act(async () => root?.unmount());
-  root = undefined;
-  document.body.replaceChildren();
-  vi.useRealTimers();
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
+  await act(async () => root?.unmount()); root = undefined;
+  await changeInterfaceLanguage("en"); document.body.replaceChildren(); vi.restoreAllMocks();
 });
-
-test("switches fixed streaming labels without rewriting authored messages or turn identity", async () => {
-  await mount(controller({
-    currentTurnId: TURN_ID, phase: "active", turns: [timelineTurn([
-      entry("user_input", "user:1", { content: "Keep my formula rank(close)", inputId: INPUT_ID, source: "prompt" }),
-      entry("tool_activity", "tool:1", { name: "run_factor", status: "running" }),
-      entry("assistant_message", "assistant:1", { content: "作者原文不变", status: "streaming" }),
-    ], { completed_at: null, status: "running" })],
-  }));
-  const turn = document.querySelector<HTMLElement>(`[data-turn-id="${TURN_ID}"]`);
-  const authored = document.querySelector(".chat-message-assistant")?.textContent;
-  await act(async () => changeInterfaceLanguage("zh-CN"));
-  expect(document.querySelector<HTMLElement>(`[data-turn-id="${TURN_ID}"]`)).toBe(turn);
-  expect(document.querySelector(".chat-message-assistant")?.textContent).toBe(authored);
-  expect(document.querySelector(".chat-message-user")?.textContent).toContain("Keep my formula rank(close)");
-  expect(document.querySelector(".chat-current-activity")?.textContent).toContain("正在运行 run factor");
-  expect(document.querySelector('[role="log"]')?.getAttribute("aria-label")).toBe("对话时间线");
-});
-
-test("renders each complete Turn in order with assistant text and right-aligned user input", async () => {
-  await mount(controller({
-    turns: [timelineTurn([
-      entry("user_input", "user:1", { content: "My idea", inputId: INPUT_ID, source: "prompt" }),
-      entry("assistant_message", "assistant:1", { content: "A measured response", status: "complete" }),
-    ])],
-  }));
-
-  const log = document.querySelector<HTMLElement>('[role="log"]');
-  expect(log?.tabIndex).toBe(0);
-  expect(log?.getAttribute("aria-live")).toBe("off");
-  expect(document.querySelector(".chat-message-user")?.textContent).toContain("My idea");
-  expect(document.querySelector(".chat-message-assistant")?.textContent).toContain("A measured response");
-  expect(document.querySelector(".chat-turn-assistant-meta")?.textContent).toContain("Worked for 1m 0s");
-});
-
-test.each([
-  ["recovering", "preparing a replacement"],
-  ["succeeded", "replaced by the complete answer below"],
-  ["failed", "recovery failed"],
-] as const)("preserves partial text with durable %s recovery status", async (status, label) => {
-  await mount(controller({ turns: [timelineTurn([
-    entry("assistant_message", "assistant:original", { content: "Preserved partial answer", status: "complete",
-      recovery: { status, cause: "OUTPUT_LIMIT", attempts: 1, replacementMessageId: INPUT_ID, errorCode: status === "failed" ? "RECOVERY_FAILED" : null } }),
-    ...(status === "succeeded" ? [entry("assistant_message", "assistant:replacement", { content: "Complete replacement answer", status: "complete", supersedes: INPUT_ID })] : []),
-  ])] }));
-  expect(document.querySelector('[data-entry-id="assistant:original"]')?.textContent).toContain("Preserved partial answer");
-  expect(document.querySelector('[role="status"]')?.textContent).toContain(label);
-});
-
-test("shows only a quiet ring before the first assistant text in the active Turn", async () => {
-  await mount(controller({
-    currentTurnId: TURN_ID,
-    hasFirstAssistantText: false,
-    phase: "active",
-    turns: [timelineTurn([
-      entry("user_input", "user:1", { content: "My idea", inputId: INPUT_ID, source: "prompt" }),
-    ], { completed_at: null, status: "running" })],
-  }));
-  const indicator = document.querySelector(".chat-response-indicator");
-  expect(indicator?.getAttribute("aria-label")).toContain("preparing a response");
-  expect(indicator?.textContent).toBe("");
-
-  await mount(controller({
-    currentTurnId: TURN_ID,
-    hasFirstAssistantText: true,
-    phase: "active",
-    turns: [timelineTurn([
-      entry("assistant_message", "assistant:1", { content: "Started", status: "streaming" }),
-    ], { completed_at: null, status: "running" })],
-  }));
-  expect(document.querySelector(".chat-response-indicator")).toBeNull();
-});
-
-test("groups only consecutive tool activity into collapsed inline disclosures", async () => {
-  await mount(controller({
-    turns: [timelineTurn([
-      entry("assistant_message", "assistant:1", { content: "Checking.", status: "complete" }),
-      entry("tool_activity", "tool:1", { name: "read_context", status: "complete" }),
-      entry("tool_activity", "tool:2", { name: "run_factor", status: "running" }),
-      entry("assistant_message", "assistant:2", { content: "Continuing.", status: "complete" }),
-      entry("tool_activity", "tool:3", { name: "read_result", status: "failed" }),
-    ])],
-  }));
-
-  const groups = [...document.querySelectorAll<HTMLElement>(".chat-tool-group")];
-  expect(groups).toHaveLength(2);
-  expect(groups[0]?.querySelector("[aria-expanded]")?.getAttribute("aria-expanded")).toBe("false");
-  expect(groups[0]?.querySelector("[data-slot=collapsible-trigger]")?.textContent).toContain("Using 2 tools");
-  expect(groups[0]?.querySelector("[data-slot=collapsible-trigger]")?.textContent).toContain("1 active");
-  expect(groups[1]?.querySelector("[data-slot=collapsible-trigger]")?.textContent).toContain("1 failed");
-  const firstTool = groups[0]?.querySelector<HTMLElement>('[role="article"]');
-  expect(firstTool?.getAttribute("aria-label")).toBe("Tool read_context: Completed");
-  expect(firstTool?.textContent).toBe("read_contextCompleted");
-});
-
-test("announces a failed Turn with its public failure code", async () => {
-  await mount(controller({
-    turns: [timelineTurn([
-      entry("turn_outcome", "outcome:1", { errorCode: "MCP_TRANSIENT", status: "failed" }),
-    ], { status: "failed" })],
-  }));
-
-  const alert = document.querySelector<HTMLElement>('[role="alert"]');
-  expect(alert?.getAttribute("data-failure-code")).toBe("MCP_TRANSIENT");
-  expect(alert?.textContent).toContain("Turn failed");
-});
-
-test.each([
-  ["OUTPUT_LIMIT", "Answer was truncated"],
-  ["CONTEXT_COMPACTION_FAILED", "Conversation compression failed"],
-  ["CONTEXT_TOO_LARGE", "Conversation exceeds model capacity"],
-])("explains %s while retaining partial output and successful tools", async (errorCode, label) => {
-  await mount(controller({ turns: [timelineTurn([
-    entry("assistant_message", "assistant:partial", { content: "Partial answer retained", status: "complete" }),
-    entry("tool_activity", "tool:done", { name: "submit_research_run", status: "complete" }),
-    entry("turn_outcome", "outcome:1", { errorCode, status: "failed" }),
-  ], { status: "failed" })] }));
-  expect(document.querySelector('[role="alert"]')?.textContent).toContain(label);
-  expect(document.querySelector('[role="alert"]')?.textContent).toContain("do not resubmit successful operations");
-  expect(document.body.textContent).toContain("Partial answer retained");
-  expect(document.body.textContent).toContain("Completed");
-});
-
-test("keeps a compact question activity and directs answering to the composer", async () => {
-  const focusComposer = vi.fn();
-  const question = {
-    interrupt_id: `${TURN_ID}::tool-1`,
-    options: [{ description: "Lower turnover", label: "Quality" }, { label: "Risk" }],
-    question: "Which objective should lead?",
-    selection_mode: "single_select" as const,
-  };
-  await mount(controller({
-    phase: "waiting_for_user",
-    question,
-    focusComposer,
-    turns: [timelineTurn([
-      entry("question", "question:1", { ...question, status: "pending" }),
-    ], { completed_at: null, status: "waiting_for_user" })],
-  }));
-
-  expect(document.querySelector(".chat-question-activity [data-slot=collapsible-trigger]")?.textContent).toBe("Asking questions");
-  expect(document.querySelector(".chat-question-activity [data-slot=collapsible-content]")?.textContent).toBe("Which objective should lead?");
-  expect(document.querySelector(".chat-question-activity input")).toBeNull();
-  await act(async () => document.querySelector<HTMLButtonElement>(".chat-question-waiting")?.click());
-  expect(focusComposer).toHaveBeenCalledOnce();
-});
-
-test("copies the complete assistant response once while retaining user Copy", async () => {
-  vi.useFakeTimers();
-  const announce = vi.fn();
+async function mount(value: ChatConversationController, full = false) {
+  const container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+  await act(async () => root?.render(<ChatTestProvider controller={value}>{full
+    ? <ChatConversationView controller={value} existingSession agentId="default" threadId="test" modelControls={null} />
+    : <ChatTimeline controller={value} />}</ChatTestProvider>));
+}
+test("uses native message Copy controls and server timestamps across languages", async () => {
   const writeText = vi.fn(async () => undefined);
   Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
-  await mount(controller({
-    turns: [timelineTurn([
-      entry("user_input", "user:1", { content: "My idea", inputId: INPUT_ID, source: "prompt" }),
-      entry("assistant_message", "assistant:1", { content: "First", status: "complete" }),
-      entry("assistant_message", "assistant:2", { content: "Second", status: "complete" }),
-    ])],
-  }), announce);
-
-  await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Copy response"]')?.click());
-  expect(writeText).toHaveBeenCalledWith("First\n\nSecond");
-  expect(document.querySelector('[aria-label="Copy your message"]')).not.toBeNull();
-  expect(announce).toHaveBeenCalledWith("copied");
-  await act(async () => root?.unmount());
-  root = undefined;
-  expect(vi.getTimerCount()).toBe(0);
+  await mount(controller({ turns: [timelineTurn([
+    entry("user_input", "user", { content: "My idea", inputId: INPUT_ID, source: "prompt" }),
+    entry("assistant_message", "reply", { content: "**完整原文**", status: "complete" }),
+  ])] }));
+  expect(document.querySelector(".ant-bubble-list")).not.toBeNull();
+  expect(document.body.textContent).toContain("Worked for 1m 0s");
+  expect(document.querySelector("time")?.textContent).toMatch(/^\d{1,2}:\d{2} (AM|PM)$/);
+  await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Copy response"]')!.click());
+  expect(writeText).toHaveBeenCalledWith("**完整原文**");
+  await act(async () => changeInterfaceLanguage("zh-CN"));
+  expect(document.body.textContent).toContain("工作耗时 1 分 0 秒");
+  expect(document.querySelector('[aria-label="Copy message"]')).not.toBeNull();
+  expect(document.body.textContent).toContain("My idea");
 });
-
-test("automatically loads older Turns and preserves the first visible Turn", async () => {
-  let intersect!: () => void;
-  class TestIntersectionObserver {
-    constructor(private readonly callback: IntersectionObserverCallback) {
-      intersect = () => this.callback([{ isIntersecting: true } as IntersectionObserverEntry], this as unknown as IntersectionObserver);
-    }
-    disconnect() {}
-    observe() {}
-    takeRecords() { return []; }
-    unobserve() {}
+test("native work disclosure retains process text and successful tool results", async () => {
+  await mount(controller({ turns: [timelineTurn([
+    entry("assistant_message", "process", { content: "Checking quality", status: "complete" }),
+    entry("tool_activity", "tool", { name: "run_factor", status: "complete" }),
+    entry("assistant_message", "final", { content: "Finished", status: "complete" }),
+  ])] }));
+  expect(document.body.textContent).toContain("Finished");
+  const work = document.querySelector<HTMLElement>(".ant-think-status-wrapper")!;
+  expect(work.querySelector("button")).toBeNull();
+  await act(async () => work.click());
+  expect(document.body.textContent).toContain("Checking quality");
+  expect(document.body.textContent).toContain("run_factor");
+});
+test("work history is one connected chain with compact tool operations and retained answers", async () => {
+  await mount(controller({ turns: [timelineTurn([
+    entry("assistant_message", "process", { content: "Checking **quality**", status: "complete" }),
+    entry("tool_activity", "first", { name: "get_context", status: "complete" }),
+    entry("tool_activity", "second", { name: "run_factor", status: "complete" }),
+    entry("question", "question", { interrupt_id: "ask", options: null, selection_mode: "free_text", question: "Which objective?", status: "answered" }),
+    entry("user_input", "answer", { content: "Quality\nand liquidity", inputId: INPUT_ID, source: "answer" }),
+    entry("tool_activity", "third", { name: "submit_research", status: "complete" }),
+    entry("assistant_message", "final", { content: "Finished", status: "complete" }),
+  ])] }));
+  await act(async () => document.querySelector<HTMLElement>(".ant-think-status-wrapper")!.click());
+  const work = document.querySelector(".ant-think-content")!;
+  expect(work.querySelectorAll(".ant-thought-chain-box")).toHaveLength(1);
+  expect(work.querySelector(".ant-card")).not.toBeNull();
+  expect(work.querySelector("button")).toBeNull();
+  expect(work.querySelector(".ant-bubble")).toBeNull();
+  expect(work.querySelector(".ant-thought-chain-node-footer")).toBeNull();
+  expect(work.querySelector("strong")?.textContent).toBe("quality");
+  const question = [...work.querySelectorAll<HTMLElement>(".ant-thought-chain-node-title")].find(title => title.textContent === "Question answered")!;
+  await act(async () => question.click());
+  expect(work.textContent).toContain("Which objective?");
+  expect(work.textContent).toContain("Quality\nand liquidity");
+  await act(async () => [...work.querySelectorAll<HTMLElement>(".ant-thought-chain-node-title")].find(title => title.textContent === "Used 1 tool")!.click());
+  const order = work.textContent!;
+  expect(order.indexOf("get_context")).toBeLessThan(order.indexOf("Question answered"));
+  expect(order.indexOf("Quality\nand liquidity")).toBeLessThan(order.indexOf("submit_research"));
+});
+test("tool operations distinguish running, failed and stopped states without marking stops successful", async () => {
+  await mount(controller({ turns: [timelineTurn([
+    entry("tool_activity", "complete", { name: "completed_operation", status: "complete" }),
+    entry("tool_activity", "failed", { name: "failed_operation", status: "failed" }),
+    entry("tool_activity", "stopped", { name: "stopped_operation", status: "stopped" }),
+    entry("tool_activity", "running", { name: "running_operation", status: "running" }),
+  ], { status: "running", completed_at: null })] }));
+  await act(async () => document.querySelector<HTMLElement>(".ant-think-status-wrapper")!.click());
+  for (const [name, status] of [["completed", "Completed"], ["failed", "Failed"], ["stopped", "Stopped"], ["running", "Running"]]) {
+    const operation = document.querySelector(`[aria-label="Tool ${name}_operation: ${status}"]`)!;
+    expect(operation).not.toBeNull();
+    expect(operation.textContent).toContain(status);
+    if (name === "stopped") expect(operation.querySelector('.anticon-check-circle')).toBeNull();
   }
-  vi.stubGlobal("IntersectionObserver", TestIntersectionObserver);
-  let olderLoaded = false;
-  const container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-  await act(async () => root?.render(
-    <PaginationHarness onLoad={() => { olderLoaded = true; }} />,
-  ));
-
-  const viewport = document.querySelector<HTMLElement>('[role="log"]')!;
-  const first = document.querySelector<HTMLElement>(`[data-turn-id="${TURN_ID}"]`)!;
-  const firstVisible = document.querySelector<HTMLElement>(`[data-turn-id="${TURN_ID_2}"]`)!;
-  vi.spyOn(viewport, "getBoundingClientRect").mockReturnValue(rect(100, 500));
-  vi.spyOn(first, "getBoundingClientRect").mockImplementation(() => (
-    olderLoaded ? rect(150, 190) : rect(40, 80)
-  ));
-  vi.spyOn(firstVisible, "getBoundingClientRect").mockImplementation(() => (
-    olderLoaded ? rect(170, 210) : rect(140, 180)
-  ));
-  viewport.scrollTop = 250;
-
-  await act(async () => {
-    intersect();
-    await Promise.resolve();
+});
+test.each(["recovering", "succeeded", "failed"] as const)("retains partial answer and durable %s recovery", async status => {
+  await mount(controller({ turns: [timelineTurn([entry("assistant_message", "partial", {
+    content: "Partial retained", status: "complete", recovery: { status, cause: "OUTPUT_LIMIT", attempts: 1, replacementMessageId: INPUT_ID, errorCode: null },
+  })])] }));
+  expect(document.body.textContent).toContain("Partial retained");
+  expect(document.querySelector('[role="status"]')).not.toBeNull();
+});
+test("recovery and completion metadata update even when the answer text is unchanged", async () => {
+  const partial = (status: "recovering" | "succeeded") => entry("assistant_message", "partial", {
+    content: "Partial retained", status: "complete", recovery: { status, cause: "OUTPUT_LIMIT", attempts: 1, replacementMessageId: INPUT_ID, errorCode: null },
   });
-
-  expect(olderLoaded).toBe(true);
-  expect(viewport.scrollTop).toBe(280);
-  expect(document.querySelector(".chat-timeline-load-older")).toBeNull();
+  await mount(controller({ phase: "recovering", turns: [timelineTurn([partial("recovering")], { status: "running", completed_at: null })] }));
+  expect(document.querySelector('[role="status"]')?.textContent).toContain("preparing a replacement");
+  const next = controller({ turns: [timelineTurn([partial("succeeded")])] });
+  await act(async () => root?.render(<ChatTestProvider controller={next}><ChatTimeline controller={next} /></ChatTestProvider>));
+  expect(document.querySelector('[role="status"]')?.textContent).toContain("replaced by the complete answer below");
+  expect(document.querySelector("time")?.getAttribute("datetime")).toBe("2026-09-02T00:01:00.000000Z");
 });
-
-test("uses the controller's authoritative retry target for timeline failures", async () => {
-  const retryTimeline = vi.fn(async () => undefined);
-  const loadOlder = vi.fn(async () => true);
-  await mount(controller({
-    loadOlder,
-    nextCursor: "older-page",
-    retryTimeline,
-    timelineError: true,
-    turns: [timelineTurn([
-      entry("assistant_message", "assistant:1", { content: "Retained", status: "complete" }),
-    ])],
-  }));
-
-  await act(async () => document.querySelector<HTMLButtonElement>("[data-timeline-error] button")?.click());
-
-  expect(retryTimeline).toHaveBeenCalledOnce();
-  expect(loadOlder).not.toHaveBeenCalled();
+test.each([["MCP_TRANSIENT", "Turn failed"], ["OUTPUT_LIMIT", "Answer was truncated"], ["CONTEXT_TOO_LARGE", "Conversation exceeds model capacity"]])("explains failed %s without losing partial text", async (errorCode, label) => {
+  await mount(controller({ turns: [timelineTurn([
+    entry("assistant_message", "partial", { content: "Keep this answer", status: "failed" }),
+    entry("turn_outcome", "outcome", { status: "failed", errorCode }),
+  ], { status: "failed" })] }));
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain(label);
+  expect(document.body.textContent).toContain("Keep this answer");
 });
-
-async function mount(
-  value: ChatConversationController,
-  onAnnounce = vi.fn(),
-): Promise<void> {
-  if (root !== undefined) await act(async () => root?.unmount());
-  document.body.replaceChildren();
-  const container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-  await act(async () => root?.render(<ChatTimeline controller={value} onAnnounce={onAnnounce} />));
-}
-
+test("pending question uses existing controls and focuses the composer", async () => {
+  const focusComposer = vi.fn();
+  await mount(controller({ focusComposer, phase: "waiting_for_user", turns: [timelineTurn([
+    entry("question", "question", { interrupt_id: "ask", options: null, selection_mode: "free_text", question: "Which objective?", status: "pending" }),
+  ], { status: "waiting_for_user", completed_at: null })] }));
+  await act(async () => document.querySelector<HTMLButtonElement>(".chat-question-waiting")!.click());
+  expect(focusComposer).toHaveBeenCalledOnce();
+});
+test("older history and retry use authoritative controller commands", async () => {
+  const loadOlder = vi.fn(); const retryTimeline = vi.fn();
+  await mount(controller({ nextCursor: "older", timelineError: true, loadOlder, retryTimeline }), true);
+  await act(async () => [...document.querySelectorAll("button")].find(button => button.textContent === "Load more")!.click());
+  await act(async () => [...document.querySelectorAll("button")].find(button => button.textContent === "Retry")!.click());
+  expect(loadOlder).toHaveBeenCalledOnce(); expect(retryTimeline).toHaveBeenCalledOnce();
+});
 function controller(overrides: Partial<ChatConversationController> = {}): ChatConversationController {
   return {
     action: { enabled: false, kind: "send", label: "Send" },
@@ -301,48 +171,6 @@ function controller(overrides: Partial<ChatConversationController> = {}): ChatCo
   };
 }
 
-function PaginationHarness({ onLoad }: { onLoad: () => void }) {
-  const [loaded, setLoaded] = useState(false);
-  return (
-    <ChatTimeline
-      controller={controller({
-        loadOlder: async () => {
-          onLoad();
-          setLoaded(true);
-          return true;
-        },
-        nextCursor: loaded ? null : "older-page",
-        turns: [
-          ...(loaded ? [timelineTurn([
-            entry("assistant_message", "assistant:0", { content: "Older", status: "complete" }, TURN_ID_0),
-          ], { id: TURN_ID_0 })] : []),
-          timelineTurn([
-            entry("assistant_message", "assistant:1", { content: "Above viewport", status: "complete" }),
-          ]),
-          timelineTurn([
-            entry("assistant_message", "assistant:2", { content: "First visible", status: "complete" }, TURN_ID_2),
-          ], { id: TURN_ID_2 }),
-        ],
-      })}
-      onAnnounce={vi.fn()}
-    />
-  );
-}
-
-function rect(top: number, bottom: number): DOMRect {
-  return {
-    bottom,
-    height: bottom - top,
-    left: 0,
-    right: 760,
-    top,
-    width: 760,
-    x: 0,
-    y: top,
-    toJSON: () => ({}),
-  };
-}
-
 function timelineTurn(
   entries: readonly TimelineEntry[],
   overrides: Partial<TimelineTurn> = {},
@@ -372,135 +200,5 @@ function entry(
   } as TimelineEntry;
 }
 
-const TURN_ID_0 = "00000000-0000-4000-8000-000000000000";
 const TURN_ID = "00000000-0000-4000-8000-000000000001";
-const TURN_ID_2 = "00000000-0000-4000-8000-000000000003";
 const INPUT_ID = "00000000-0000-4000-8000-000000000002";
-
-function researchSurface(id: string, status: string, runId = "run_0123456789abcdef0123"): TimelineEntry {
-  return entry("a2ui", id, { activityType: "a2ui-surface", status: "ready", content: {
-    a2ui_operations: [
-      { version: "v0.9", createSurface: { catalogId: "urn:thesistrace:a2ui:research:v0.9", surfaceId: id } },
-      { version: "v0.9", updateComponents: { surfaceId: id, components: [
-        { id: "root", component: "Column", children: ["run"] },
-        { component: "ResearchRun", id: "run", runId },
-      ] } },
-    ],
-  } });
-}
-
-test("completed Turns omit progress while keeping distinct final results visible", async () => {
-  await mount(controller({ turns: [timelineTurn([
-    researchSurface("progress", "running"),
-    researchSurface("result", "succeeded"),
-    researchSurface("other-result", "succeeded", "run_abcdef0123456789abcd"),
-    entry("assistant_message", "final", { content: "Both finished.", status: "complete" }),
-  ])] }));
-  expect(document.querySelector('[data-entry-id="progress"]')).toBeNull();
-  expect(document.body.textContent).not.toContain("Last observed progress");
-  expect(document.querySelector('[data-entry-id="result"]')?.closest("[data-slot=collapsible]")).toBeNull();
-  expect(document.querySelector('[data-entry-id="other-result"]')?.closest("[data-slot=collapsible]")).toBeNull();
-  expect(document.querySelector('[data-entry-id="final"]')?.closest("[data-slot=collapsible]")).toBeNull();
-});
-
-test("active Turns replace older progress only for the same research resources", async () => {
-  await mount(controller({ turns: [timelineTurn([
-    researchSurface("older", "queued"), researchSurface("newer", "running"),
-    researchSurface("unrelated", "running", "run_abcdef0123456789abcd"),
-  ], { status: "running", completed_at: null })] }));
-  expect(document.querySelector('[data-entry-id="older"]')).toBeNull();
-  expect(document.querySelector('[data-entry-id="newer"]')?.closest(".chat-progress-history")).toBeNull();
-  expect(document.querySelector('[data-entry-id="unrelated"]')?.closest(".chat-progress-history")).toBeNull();
-});
-
-test("interrupted Turns retain resource references for current authoritative reads", async () => {
-  await mount(controller({ turns: [timelineTurn([researchSurface("progress", "running")], { status: "failed" })] }));
-  expect(document.querySelector('[data-entry-id="progress"]')).not.toBeNull();
-});
-
-test("Worked for folds the complete execution history but leaves the final answer outside", async () => {
-  await mount(controller({ turns: [timelineTurn([
-    entry("assistant_message", "before", { content: "Checking.", status: "complete" }),
-    entry("tool_activity", "call-one", { name: "get_context", status: "complete" }),
-    entry("assistant_message", "between", { content: "Checking results.", status: "complete" }),
-    entry("tool_activity", "call-two", { name: "get_results", status: "complete" }),
-    entry("assistant_message", "final", { content: "Finished.", status: "complete" }),
-  ])] }));
-  const work = document.querySelector<HTMLElement>(".chat-work-history")!;
-  expect(work).not.toBeNull();
-  expect(work.querySelector("[aria-expanded]")?.getAttribute("aria-expanded")).toBe("false");
-  expect(work.querySelector("[data-slot=collapsible-trigger]")?.textContent).toContain("Worked for");
-  expect(work.querySelector('[data-entry-id="before"]')).not.toBeNull();
-  expect(work.querySelector('[data-entry-id="between"]')).not.toBeNull();
-  expect(work.querySelector('[data-entry-id="call-two"]')).not.toBeNull();
-  expect(document.querySelector('[data-entry-id="final"]')?.closest(".chat-work-history")).toBeNull();
-});
-
-test("answered questions stay in the tool history with their answer, without a user bubble", async () => {
-  await mount(controller({ turns: [timelineTurn([
-    entry("user_input", "prompt", { source: "prompt", content: "Research", inputId: INPUT_ID }),
-    entry("question", "question:1", { interrupt_id: `${TURN_ID}::ask`, status: "answered", question: "Which approach?", options: null, selection_mode: "free_text" }),
-    entry("user_input", "answer", { source: "answer", content: "Default approach", inputId: INPUT_ID }),
-    entry("assistant_message", "final", { content: "Submitted.", status: "complete" }),
-  ])] }));
-  expect(document.querySelectorAll('.chat-message-user')).toHaveLength(1);
-  const tool = document.querySelector('[data-tool-name="ask_user"]');
-  expect(tool).not.toBeNull();
-  expect(tool?.closest('.chat-work-history')).not.toBeNull();
-  expect(tool?.textContent).toContain("Which approach?");
-  expect(tool?.textContent).toContain("Default approach");
-  expect(document.body.textContent).not.toContain("Question answered");
-});
-
-test("keeps the current tool visible outside folded history and clears running state at completion", async () => {
-  const entries = [
-    entry("assistant_message", "assistant:progress", { content: "Submitting research.", status: "complete" }),
-    entry("tool_activity", "tool:running", { name: "submit_research_run", status: "running" }),
-  ];
-  await mount(controller({ currentTurnId: TURN_ID, phase: "active", hasFirstAssistantText: true,
-    turns: [timelineTurn(entries, { completed_at: null, status: "running" })] }));
-  const live = document.querySelector(".chat-current-activity");
-  expect(live?.textContent).toContain("Running submit research run");
-  expect(live?.closest("[data-slot=collapsible]")).toBeNull();
-  expect(document.querySelector(".chat-work-meta")?.textContent).toContain("Working for");
-  await mount(controller({ currentTurnId: TURN_ID, phase: "active", hasFirstAssistantText: true,
-    turns: [timelineTurn([entries[0], entry("tool_activity", "tool:running", { name: "submit_research_run", status: "complete" })],
-      { completed_at: null, status: "running" })] }));
-  expect(document.querySelector(".chat-current-activity")?.textContent).toContain("Preparing response");
-  await mount(controller({ turns: [timelineTurn(entries)] }));
-  expect(document.querySelector(".chat-current-activity")).toBeNull();
-});
-
-test("keeps restored history at the bottom as resource cards grow without stealing an upward scroll", async () => {
-  let resized = () => {};
-  class TestResizeObserver {
-    constructor(callback: ResizeObserverCallback) {
-      resized = () => callback([], this as unknown as ResizeObserver);
-    }
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  }
-  vi.stubGlobal("ResizeObserver", TestResizeObserver);
-  await mount(controller({ turns: [timelineTurn([
-    entry("assistant_message", "assistant:1", { content: "Restored response", status: "complete" }),
-  ])] }));
-  const viewport = document.querySelector<HTMLElement>('[role="log"]')!;
-  const content = document.querySelector<HTMLElement>(".chat-timeline-content")!;
-  content.style.paddingBottom = "0px";
-  let height = 1000;
-  Object.defineProperty(viewport, "clientHeight", { configurable: true, value: 600 });
-  Object.defineProperty(viewport, "scrollHeight", { configurable: true, get: () => height });
-  await act(async () => resized());
-  expect(viewport.scrollTop + viewport.clientHeight).toBeGreaterThanOrEqual(height);
-
-  height = 2000;
-  await act(async () => resized());
-  expect(viewport.scrollTop + viewport.clientHeight).toBeGreaterThanOrEqual(height);
-
-  await act(async () => viewport.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -100 })));
-  viewport.scrollTop = 300;
-  height = 2400;
-  await act(async () => resized());
-  expect(viewport.scrollTop).toBe(300);
-});

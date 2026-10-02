@@ -53,9 +53,15 @@ test("an open metric explanation updates without losing its panel or keyboard fo
   await page.goto("https://chart.test/");
   await page.addStyleTag({ content: styles });
   await page.addScriptTag({ content: script });
-  await page.getByRole("button", { name: "About Net Strategy", exact: true }).click();
+  const help = page.getByRole("button", { name: "About Net Strategy", exact: true });
+  await expect(help.locator("svg")).toHaveCSS("width", "12px");
+  await help.hover();
   const panel = page.getByRole("dialog");
   await expect(panel).toContainText("after trading costs");
+  await help.press("Escape");
+  await expect(panel).not.toBeVisible();
+  await help.press("Enter");
+  await expect(panel).toBeVisible();
   const close = panel.getByRole("button", { name: "Close explanation", exact: true });
   await close.focus();
   // Change the shared locale owner without an outside click that dismisses Base UI Popover.

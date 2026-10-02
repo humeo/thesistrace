@@ -330,7 +330,7 @@ export function OperatorResearchersView({
         aria-labelledby="operator-researchers-title"
         className={operatorAccessLayout.section}
       >
-        <header className="flex flex-col items-start gap-3 [&_h2]:m-0 [&_h2]:text-2xl [&_h2]:leading-8 [&_h2]:font-semibold">
+        <header className="flex flex-col items-start gap-3 [&_h2]:m-0 [&_h2]:text-xl [&_h2]:leading-7 [&_h2]:font-semibold">
           <div>
             <h2 id="operator-researchers-title">{t("researchers.directory.researchers")}</h2>
           </div>

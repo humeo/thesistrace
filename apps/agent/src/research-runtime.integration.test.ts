@@ -47,7 +47,7 @@ import {
   SCRIPTED_INVALID_A2UI_PROMPT,
   SCRIPTED_INVALID_A2UI_TOP_LEVEL_PROMPT,
   SCRIPTED_INVALID_A2UI_DATA_PROMPT,
-  SCRIPTED_LARGE_A2UI_TABLE_PROMPT,
+  SCRIPTED_A2UI_PROPOSAL_PROMPT,
   SCRIPTED_ASK_USER_PROMPT,
   SCRIPTED_TOOL_PROMPT,
 } from "./scripted-language-model.js";
@@ -2743,7 +2743,7 @@ describe.sequential("durable Research Agent runtime", () => {
 
   it("completes and replays an A2UI-only answer after an empty final model step", async () => {
     let runtime = await createIntegrationRuntime();
-    const input = runInput({ content: SCRIPTED_LARGE_A2UI_TABLE_PROMPT,
+    const input = runInput({ content: SCRIPTED_A2UI_PROPOSAL_PROMPT,
       threadId: fixedUuid(8011), runId: fixedUuid(8012), messageId: fixedUuid(8013) });
     try {
       const events = await run(runtime, input, primaryResearcher);

@@ -2,28 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { buildProductFixture } from "./build-product-fixture";
 let script: string;
 let styles: string;
-const track = {
-  id: "track_ui", status: "active", checkpoint_manifest_sha256: "a".repeat(64),
-  origin: { seed_run_id: "My original run", seed_research_available: true, strategy_session: "2026-08-01",
-    result_checksum_sha256: "b".repeat(64), terminal_account: { net_nav: "10000", net_cash: "10000", positions: [] } },
-  strategy_session: "2026-08-20", data_through_session: "2026-08-21", lag_sessions: 1,
-  progress: { phase: "waiting", head_session: "2026-08-20", lag_sessions: 1, target_start_session: null,
-    target_end_session: null, target_session_count: 0, completed_target_sessions: 0, current_session: null,
-    cycle_attempt: null, cycle_attempt_limit: 3, retry_wait: false, next_attempt_eligible_at: null },
-  blocked_reason: null, blocked_code: null,
-  observation: { session: "2026-08-20", net_asset_value_cny: "11000", close_risk_nav_cny: "11000", cash_cny: "2000", net_change_cny: "1000",
-    net_return: 0.1, maximum_drawdown: 0.025, transaction_cost_cny: "27.50", session_count: 20,
-    holdings: [{ instrument_id: "000001.SZ", shares: 1000, market_value_cny: "9000", weight: 9 / 11,
-      adjusted_units: "1000", last_close_adjusted_price: "9", remaining_acquisition_cost_cny: "8500",
-      holding_cycle_started_session: "2026-08-01", holding_age: 20 }],
-    decision_state: { mode: "framework", selection: { signal_session: "2026-08-19", eligibility_exclusions: {} }, selection_interval: 5, exposure: 0.7 },
-    target_selection: { signal_session: "2026-08-19", eligibility_exclusions: {} },
-    target_exposure: 0.7, selection_interval: 5, pending_target_session: null, sessions_until_next_signal: 4,
-    returns: Array.from({ length: 20 }, (_, index) => ({ session: `2026-08-${String(index + 1).padStart(2, "0")}`, net_return: index / 1000 })) },
-  strategy: { summary: { metrics: { net_cumulative_return: 0.1, benchmark_cumulative_return: null, benchmark_cagr: null,
-    annualized_excess_return: null, maximum_drawdown: { value: 0.025 }, sharpe: null, transaction_costs: { cumulative_amount: 27.50 } } },
-    comparison: { status: "unavailable", reason: "benchmark_snapshot_unavailable" }, observations: [] },
-};
+import { exampleDailyTrack as track } from "./fixtures/daily-track";
 
 test.beforeAll(async () => {
   test.setTimeout(120_000);
@@ -47,15 +26,64 @@ async function open(page: Page, value = track) {
   return { reads: () => reads, mutations: () => mutations };
 }
 
-test("switching retains holdings filters, open stop decision and failure state on all widths", async ({ page }) => {
+test("daily metric explanations share compact hover and keyboard help without changing the observation", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  const requests = await open(page);
+  await page.getByRole("tab", { name: /^Holdings\b/ }).click();
+  const help = page.getByRole("button", { name: "Return since tracking", exact: true });
+  await expect(help.locator("svg")).toHaveCSS("width", "12px");
+  const reads = requests.reads();
+  await help.hover();
+  const info = page.getByRole("dialog", { name: "Return since tracking", exact: true });
+  await expect(info).toContainText("Since 2026-08-01");
+  await help.press("Escape");
+  await expect(info).toHaveCount(0);
+  await expect(help).toBeFocused();
+  await help.press("Enter");
+  await expect(info).toBeVisible();
+  await help.press("Escape");
+  await expect(page.getByRole("tab", { name: /^Holdings\b/ })).toHaveAttribute("aria-selected", "true");
+  expect(requests.reads()).toBe(reads);
+  expect(requests.mutations()).toBe(0);
+});
+
+test("a failed track detail request shows an error instead of loading forever", async ({ page }) => {
+  await page.route("https://daily-language.test/**", route => {
+    const url = new URL(route.request().url());
+    if (url.pathname === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    if (url.pathname === "/api/daily-tracks") return route.fulfill({ json: { items: [track], next_cursor: null } });
+    return route.fulfill({ status: 503 });
+  });
+  await page.goto("https://daily-language.test/");
+  await page.addStyleTag({ content: styles });
+  await page.addScriptTag({ content: script });
+  await expect(page.getByText("DailyTrack unavailable")).toBeVisible();
+  await expect(page.getByText("Loading DailyTrack…")).toHaveCount(0);
+});
+
+test("a deleted track link points back to the Daily Tracks list", async ({ page }) => {
+  await page.route("https://daily-language.test/**", route => {
+    const url = new URL(route.request().url());
+    if (url.pathname === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    if (url.pathname === "/api/daily-tracks") return route.fulfill({ json: { items: [], next_cursor: null } });
+    return route.fulfill({ status: 404 });
+  });
+  await page.goto("https://daily-language.test/");
+  await page.addStyleTag({ content: styles });
+  await page.addScriptTag({ content: script });
+  await expect(page.getByText("DailyTrack not found")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Back to Daily Tracks" })).toHaveAttribute("href", "/daily-tracks");
+});
+
+test("switching retains holdings filters, open stop decision and failure state on desktop", async ({ page }) => {
   const requests = await open(page);
   await page.getByRole("tab", { name: "Holdings" }).click();
   await page.getByRole("searchbox", { name: "Filter holdings by symbol" }).fill("000001");
-  await page.getByRole("tab", { name: "Performance", exact: true }).click();
+  await page.getByRole("tab", { name: "Overview", exact: true }).click();
   await page.getByRole("tab", { name: "Holdings" }).click();
   await expect(page.getByRole("searchbox", { name: "Filter holdings by symbol" })).toHaveValue("000001");
   const reads = requests.reads();
-  for (const width of [1440, 1280, 768, 390, 320]) {
+  for (const width of [1440, 1280]) {
     await page.setViewportSize({ width, height: 964 });
     await page.getByRole("button", { name: "简体中文", exact: true }).click();
     await expect(page.getByRole("tab", { name: "持仓" })).toHaveAttribute("aria-selected", "true");
@@ -65,9 +93,9 @@ test("switching retains holdings filters, open stop decision and failure state o
     await page.getByRole("button", { name: "English", exact: true }).click();
   }
   expect(requests.reads()).toBe(reads);
-  await page.getByRole("button", { name: /Tracking origin/ }).click();
+  await page.getByRole("button", { name: "Source and starting account", exact: true }).click();
   expect((await page.getByRole("link", { name: "My original run", exact: true }).boundingBox())?.height).toBeGreaterThanOrEqual(44);
-  await page.getByRole("button", { name: /Tracking origin/ }).click();
+  await page.keyboard.press("Escape");
   expect(requests.mutations()).toBe(0);
   await page.getByRole("button", { name: "Manage", exact: true }).click();
   await page.getByRole("menuitem", { name: "Stop DailyTrack", exact: true }).click();
@@ -86,7 +114,9 @@ test("switching retains holdings filters, open stop decision and failure state o
 
 test("tracking chart retains its zoom and data while switching display language", async ({ page }) => {
   const requests = await open(page);
-  await expect(page.getByRole("region", { name: "Daily Tracks list" }).getByRole("link", { name: "track_ui" })).toHaveAttribute("aria-current", "page");
+  await page.getByRole("button", { name: "Switch strategy" }).click();
+  await expect(page.getByRole("menuitem", { name: "track_ui" })).toHaveAttribute("aria-current", "page");
+  await page.keyboard.press("Escape");
   const chart = page.getByRole("figure", { name: /Return since tracking|跟踪开始以来收益/ });
   const canvases = chart.locator("canvas");
   // The left price axis precedes the plot in the chart library's DOM.
@@ -110,7 +140,7 @@ test("tracking chart retains its zoom and data while switching display language"
   expect((await chart.getByRole("link", { name: "TradingView Lightweight Charts™" }).boundingBox())?.height).toBeGreaterThanOrEqual(44);
   const before = await inspect();
   await page.getByRole("tab", { name: "Holdings" }).click();
-  await page.getByRole("tab", { name: "Performance", exact: true }).click();
+  await page.getByRole("tab", { name: "Overview", exact: true }).click();
   expect(await inspect()).toEqual(before);
   await page.getByRole("button", { name: "Full strategy", exact: true }).click();
   await page.getByRole("button", { name: "Since tracking", exact: true }).click();
@@ -182,13 +212,14 @@ test("stopped track deletion failure remains recoverable in the confirmation", a
 
 
 test("track list retains published rows after failure and distinguishes an empty list", async ({ page }) => {
-  await page.setViewportSize({ width: 320, height: 844 });
+  await page.setViewportSize({ width: 1440, height: 960 });
   let failed = false;
   let empty = false;
   await page.route("https://daily-list.test/**", route => {
     const pathname = new URL(route.request().url()).pathname;
     if (pathname === "/") return route.fulfill({ contentType: "text/html", body: '<!doctype html><meta charset="utf-8"><div id="root"></div>' });
     if (failed) return route.fulfill({ status: 503 });
+    if (pathname !== "/api/daily-tracks") return route.fulfill({ status: 503 });
     return route.fulfill({ json: { items: empty ? [] : ["active", "blocked", "stopping", "stopped"].map((status, index) => ({
       id: `track_${index}`, status, seed_run_id: "run_origin", result_checksum_sha256: "a".repeat(64), origin_session: "2026-08-01", strategy_session: "2026-08-20",
     })), next_cursor: null } });
@@ -198,15 +229,94 @@ test("track list retains published rows after failure and distinguishes an empty
   await page.addScriptTag({ content: script });
   const list = page.getByRole("region", { name: "Daily Tracks list", exact: true });
   await expect(list.getByRole("link")).toHaveCount(4);
+  const reload = page.getByRole("button", { name: "Reload status", exact: true });
+  await expect(reload).toHaveText("");
+  await expect(reload.locator("svg")).toHaveAttribute("aria-hidden", "true");
+  await expect(reload).toHaveCSS("width", "40px");
+  await expect(reload).toHaveAttribute("data-variant", "ghost");
   await expect(list).toContainText("2026-08-20");
-  expect((await page.getByRole("link", { name: "track_0", exact: true }).boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  expect((await list.getByRole("button", { name: "Daily Track 0", exact: true }).boundingBox())?.height).toBeGreaterThanOrEqual(44);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   failed = true;
   await page.getByRole("button", { name: "Reload status", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("Showing the last loaded list");
   await expect(list.getByRole("link")).toHaveCount(4);
   failed = false; empty = true;
-  await page.getByRole("button", { name: "Reload status", exact: true }).click();
+  await reload.press("Enter");
   await expect(page.getByRole("alert")).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "Your strategy watch starts with a backtest" })).toBeVisible();
+  const heading = page.getByRole("heading", { name: "Your strategy watch starts with a backtest" });
+  await expect(heading).toBeVisible();
+  await expect(heading).toHaveCSS("font-size", "20px");
+  await expect(heading).toHaveCSS("line-height", "28px");
+  await expect(page.locator('[data-slot="empty-description"]')).toHaveCSS("font-size", "14px");
+  await expect(page.getByRole("link", { name: "Browse Research Runs" })).toHaveAttribute("href", "/research-runs");
+  await page.getByRole("button", { name: "简体中文", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "从一次回测开始观察策略" })).toHaveCSS("font-size", "20px");
+  const translatedReload = page.getByRole("button", { name: "重新加载状态", exact: true });
+  await translatedReload.hover();
+  await expect(page.getByText("重新加载状态", { exact: true })).toBeVisible();
+  await translatedReload.press("Escape");
+  await expect(page.getByText("重新加载状态", { exact: true })).toHaveCount(0);
+});
+
+test("daily review queries the selected published session and distinguishes expired events", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  const value = structuredClone(track);
+  value.observation.returns = [
+    { session: "2026-08-01", net_return: 0 },
+    { session: "2026-08-19", net_return: 0.05 },
+    { session: "2026-08-20", net_return: 0.10 },
+  ];
+  const queries: { section: string; start_session: string; end_session: string }[] = [];
+  await open(page, value);
+  await page.route("**/api/daily-tracks/track_ui/events/query", async route => {
+    const body = route.request().postDataJSON(); queries.push(body);
+    return route.fulfill({ json: { section: body.section, status: body.start_session === "2026-08-19" ? "expired" : "recorded", rows: [], next_cursor: null, expires_at: null } });
+  });
+  await page.getByRole("tab", { name: "Daily review", exact: true }).click();
+  const review = page.getByRole("tabpanel", { name: "Daily review", exact: true });
+  await expect(review.getByRole("group", { name: "Session result" })).toContainText("4.76%");
+  await expect(review).toContainText("No records of this event type");
+  expect(queries.at(-1)).toMatchObject({ section: "strategy_fills", start_session: "2026-08-20", end_session: "2026-08-20" });
+  await review.getByRole("button", { name: "2026-08-19", exact: true }).click();
+  await expect(review).toContainText("These event records have expired");
+  await expect(review.getByRole("group", { name: "Session result" })).toContainText("10,500.00");
+  expect(queries.at(-1)).toMatchObject({ start_session: "2026-08-19", end_session: "2026-08-19" });
+  const count = queries.length;
+  await review.getByRole("button", { name: /2026-08-01/ }).click();
+  await expect(review).toContainText("This is the starting account");
+  await expect(review.getByRole("group", { name: "Session result" })).toContainText("—");
+  expect(queries).toHaveLength(count);
+});
+
+test("comparison selects real account previews and leaves failed observations unavailable", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  const summaries = ["track_ui", "track_other", "track_failed"].map(id => ({ id, status: "active", seed_run_id: id === "track_ui" ? "run_momentum" : "run_quality", result_checksum_sha256: "a".repeat(64), origin_session: "2026-08-01", strategy_session: "2026-08-20" }));
+  let mutations = 0;
+  await page.route("https://daily-compare.test/**", route => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (pathname === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    if (route.request().method() !== "GET") { mutations++; return route.fulfill({ status: 503 }); }
+    if (pathname === "/api/daily-tracks") return route.fulfill({ json: { items: summaries, next_cursor: null } });
+    if (pathname.startsWith("/api/research-runs/")) return route.fulfill({ json: { name: pathname.endsWith("run_momentum") ? "Momentum" : "Quality" } });
+    if (pathname.endsWith("track_failed")) return route.fulfill({ status: 503 });
+    const value = structuredClone(track);
+    if (pathname.endsWith("track_other")) { value.id = "track_other"; value.observation.cash_cny = "8000"; value.observation.holdings[0].instrument_id = "600000.SH"; value.observation.holdings[0].market_value_cny = "3000"; value.observation.holdings[0].weight = 3 / 11; }
+    return route.fulfill({ json: value });
+  });
+  await page.goto("https://daily-compare.test/?list"); await page.addStyleTag({ content: styles }); await page.addScriptTag({ content: script });
+  const rows = page.getByRole("region", { name: "Strategy comparison table" });
+  await expect(rows.getByRole("row", { name: /track_failed/ })).toContainText("Observation unavailable");
+  await expect(rows.getByRole("row", { name: /track_failed/ })).not.toContainText("0.00%");
+  await rows.getByRole("button", { name: "Quality", exact: true }).first().click();
+  await expect(page.getByRole("region", { name: "Largest holdings", exact: true })).toContainText("600000.SH");
+  await expect(page.getByRole("figure", { name: "Strategy comparison chart" }).locator("canvas").first()).toBeVisible();
+  const visible = page.getByRole("group", { name: "Visible strategies", exact: true });
+  await visible.getByRole("button", { name: "Momentum", exact: true }).click();
+  await visible.getByRole("button", { name: "Quality", exact: true }).click();
+  await expect(page.getByText("All strategy curves are hidden", { exact: true })).toBeVisible();
+  await visible.getByRole("button", { name: "Quality", exact: true }).click();
+  await expect(page.getByRole("figure", { name: "Strategy comparison chart" }).locator("canvas").first()).toBeVisible();
+  await expect(rows.getByRole("link", { name: "track_other", exact: true })).toHaveAttribute("href", "/daily-tracks/track_other");
+  expect(mutations).toBe(0);
 });

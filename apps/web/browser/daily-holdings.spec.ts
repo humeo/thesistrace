@@ -12,7 +12,48 @@ test.beforeAll(async () => {
 const unit = { unit_id: "unit_a", source_kind: "research_run", first_session: "2026-08-03", last_session: "2026-08-04", expires_at: "2026-08-11T00:00:00Z", status: "available" };
 const row = { session: "2026-08-03", instrument_id: "equity:600000.SH", execution_shares: 7000, adjusted_units: "3500", adjusted_mark: "20", market_value_cny: "70000", weight: 0.7 };
 
+test("holdings dates stay in the selected period and decimal strings display readable values", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const reads: Record<string, unknown>[] = [];
+  const precise = { ...row, adjusted_units: "2459526774595267745952677459e-24", adjusted_mark: "2110284e-5", market_value_cny: "5190299999999999999999999999e-23" };
+  await page.route("https://holdings.test/**", route => {
+    if (new URL(route.request().url()).pathname === "/") return route.fulfill({ contentType: "text/html", body: `${fontStylesheet}<div id="root"></div>` });
+    const query = route.request().postDataJSON() as Record<string, unknown>;
+    reads.push(query);
+    return route.fulfill({ json: query.section === "daily_holdings_status"
+      ? { status: "recorded", units: [unit], next_cursor: null }
+      : { status: "available", unit, rows: [precise], coverage: { session_count: 2 }, next_cursor: null } });
+  });
+  await page.goto("https://holdings.test/");
+  await page.addStyleTag({ content: styles });
+  await page.addScriptTag({ content: script });
+  await page.getByRole("button", { name: "Daily holdings", exact: true }).click();
+  await expect(page.getByLabel("Recorded period")).toBeVisible();
+  await page.getByRole("textbox", { name: "From", exact: true }).fill("2026-08-02");
+  await page.getByRole("button", { name: "Load holdings", exact: true }).click();
+  await expect(page.getByRole("alert")).toHaveText("Choose a date from 2026-08-03 through 2026-08-04.");
+  expect(reads).toHaveLength(1);
+  await page.getByRole("textbox", { name: "From", exact: true }).fill("2026-08-03");
+  await page.getByRole("textbox", { name: "Through", exact: true }).fill("2026-08-05");
+  await page.getByRole("button", { name: "Load holdings", exact: true }).click();
+  await expect(page.getByRole("alert")).toHaveText("Choose a date from 2026-08-03 through 2026-08-04.");
+  expect(reads).toHaveLength(1);
+  await page.getByRole("textbox", { name: "Through", exact: true }).fill("2026-08-04");
+  await page.getByRole("button", { name: "Open start date calendar" }).click();
+  const calendar = page.getByRole("dialog", { name: "Open start date calendar" });
+  await expect(calendar.getByRole("button", { name: "Sunday, August 2nd, 2026", exact: true })).toBeDisabled();
+  await expect(calendar.getByRole("button", { name: "Wednesday, August 5th, 2026", exact: true })).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Load holdings", exact: true }).click();
+  await expect(page.getByRole("cell", { name: "2,459.5268", exact: true })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "21.1028", exact: true })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "51,903.00", exact: true })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "51,903.00", exact: true })).toHaveAttribute("title", precise.market_value_cny);
+  expect(reads.at(-1)).toMatchObject({ start_session: "2026-08-03", end_session: "2026-08-04" });
+});
+
 test("holdings require explicit detail reads and preserve applied filters when paging", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
   const reads: Record<string, unknown>[] = [];
   await page.route("https://holdings.test/**", route => {
     if (new URL(route.request().url()).pathname === "/") return route.fulfill({ contentType: "text/html", body: `${fontStylesheet}<div id="root"></div>` });
@@ -60,11 +101,6 @@ test("holdings require explicit detail reads and preserve applied filters when p
   await page.getByRole("button", { name: "Daily holdings", exact: false }).click();
   await expect(page.getByText("70.00%", { exact: true })).toBeVisible();
   expect(reads).toHaveLength(count);
-  await page.setViewportSize({ width: 390, height: 844 });
-  const records = page.getByRole("region", { name: "Daily holdings rows", exact: true });
-  await records.focus();
-  await records.press("ArrowRight");
-  await expect.poll(() => records.evaluate(element => element.scrollLeft)).toBeGreaterThan(0);
   await page.screenshot({ path: "../../.local/browser-tests/daily-holdings.png", fullPage: true });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
@@ -141,7 +177,7 @@ test("Track rerun pins the checkpoint and investigates the selected period from 
   await page.getByRole("button", { name: "Daily holdings", exact: false }).click();
   await expect(page.getByText("Runs from the original research start through 2026-08-04.", { exact: false })).toBeVisible();
   expect(submitted).toBeNull();
-  await page.setViewportSize({ width: 390, height: 844 });
+  await page.setViewportSize({ width: 1280, height: 900 });
   await page.screenshot({ path: "../../.local/browser-tests/expired-holdings-rerun.png", fullPage: true });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.getByRole("button", { name: "Rerun to generate holdings" }).click();

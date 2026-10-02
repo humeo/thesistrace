@@ -6,7 +6,7 @@ import { Progress } from "../components/ui/progress";
 import { StrategyResultView } from "./StrategyResultView";
 import { Trans } from "react-i18next";
 import { catalogLabel } from "../i18n/catalog";
-import { formatDuration, formatNumber, formatUtcTimestamp } from "../i18n/format";
+import { formatDecimalString, formatDuration, formatNumber, formatUtcTimestamp } from "../i18n/format";
 import { folderDisplayName } from "../research/folders";
 import { formatRunError, formatExecutionFailure, readOrganizationError, type OrganizationError, type HttpActionError } from "./errors";
 export { formatDuration } from "../i18n/format";
@@ -15,9 +15,8 @@ import { CurrentDataRerunOrigin, type RerunOrigin } from "../analysis/CurrentDat
 import { DailyHoldings } from "../analysis/DailyHoldings";
 import { StrategyEvents } from "../analysis/StrategyEvents";
 import { type StrategyDecisionState } from "../research/strategyDecisionState";
-import { FrozenFrameworkModules, FrozenPythonProgram, FrozenSimulationCosts } from "../research/FrozenStrategyDefinition";
+import { FrozenFact, FrozenFrameworkModules, FrozenPythonProgram, FrozenSimulationCosts } from "../research/FrozenStrategyDefinition";
 import {
-  CaretDown,
   CaretLeft,
   CalendarBlank,
   CheckCircle,
@@ -27,7 +26,9 @@ import {
   Play,
   Trash,
 } from "@phosphor-icons/react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useUrlSelection } from "../shell/useUrlSelection";
+import { cn } from "cn";
 
 import { FactorEvidence } from "../analysis/FactorEvidence";
 import { CommonInputObservations } from "../analysis/CommonInputObservations";
@@ -44,9 +45,9 @@ import { Page, PageContent, PageHeader, Section } from "../components/layout/Pag
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Field, FieldGroup, FieldLabel } from "../components/ui/field";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../components/ui/collapsible";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Badge } from "../components/ui/badge";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { FactorResultView } from "./FactorResultView";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
@@ -264,11 +265,15 @@ function ResearchRunDetail({ detail, folderError, folders, onRefreshFolders, res
   run: ResearchRun;
 }) {
   const { t } = useTranslation("runs");
-  const [tab, setTab] = useState("overview");
-  const [visited, setVisited] = useState<string[]>(["overview"]);
   const terminal = isTerminalResearch(run.status);
   const result = run.status === "succeeded" ? run.result : null;
   const strategyResult = result != null && !("factor" in result);
+  const tabs = result == null ? ["overview"] : "factor" in result
+    ? ["overview", "evidence", "inputs", "configuration"]
+    : ["overview", "holdings", "events", "inputs", "configuration"];
+  const [tab, setTab] = useUrlSelection("tab", tabs, "overview");
+  const [visited, setVisited] = useState<string[]>([tab]);
+  useEffect(() => { setVisited(values => values.includes(tab) ? values : [...values, tab]); }, [tab]);
   const sourceFolder = folders.find(folder => folder.id === run.folder_id);
   const folderContent = detail.deleting ? null : folderError ? (
     <ResearchFolderLoadFailure error={folderError} onRetry={onRefreshFolders} />
@@ -347,10 +352,10 @@ function ResearchRunDetail({ detail, folderError, folders, onRefreshFolders, res
           {visited.includes("evidence") ? <FactorEvidence runId={run.id} embedded /> : null}
         </TabsContent> : <>
           <TabsContent keepMounted value="holdings">
-            {visited.includes("holdings") ? <DailyHoldings embedded endpoint={`/api/research-runs/${encodeURIComponent(run.id)}/holdings/query`} rerun={{ folderId: run.folder_id, source: { kind: "research_run", run_id: run.id } }} /> : null}
+            {visited.includes("holdings") ? <DailyHoldings embedded dateRange={{ start: run.start_date, end: run.end_date }} endpoint={`/api/research-runs/${encodeURIComponent(run.id)}/holdings/query`} rerun={{ folderId: run.folder_id, source: { kind: "research_run", run_id: run.id } }} /> : null}
           </TabsContent>
           <TabsContent keepMounted value="events">
-            {visited.includes("events") ? <StrategyEvents embedded endpoint={`/api/research-runs/${encodeURIComponent(run.id)}/events/query`} /> : null}
+            {visited.includes("events") ? <StrategyEvents embedded dateRange={{ start: run.start_date, end: run.end_date }} endpoint={`/api/research-runs/${encodeURIComponent(run.id)}/events/query`} /> : null}
           </TabsContent>
         </>}
         <TabsContent keepMounted value="inputs" className="text-sm">
@@ -404,7 +409,7 @@ export function ResearchDeleteDialog({
         <p className="m-0 text-xs font-semibold uppercase tracking-wide text-destructive">{t("deleteDialog.permanent")}</p>
         <AlertDialogTitle className="text-base font-semibold">{t("deleteDialog.title")}</AlertDialogTitle>
       </AlertDialogHeader>
-      <AlertDialogDescription className="text-sm leading-[22px] text-foreground">
+      <AlertDialogDescription className="text-sm text-foreground">
         <Trans t={t} i18nKey="deleteDialog.description" components={{ name: <strong>{name}</strong> }} />
       </AlertDialogDescription>
       <p className="m-0 text-sm text-muted-foreground">{t("deleteDialog.retained")}</p>
@@ -429,7 +434,6 @@ export function ResearchRunProgressView({
   timing?: ResearchRunExecutionTiming;
 }) {
   const { t } = useTranslation("runs");
-  const [timingOpen, setTimingOpen] = useState(false);
   const estimate = progress.remaining_duration_estimate_seconds;
   const completed = progress.completed_warmup_sessions + progress.completed_research_sessions;
   const total = progress.total_warmup_sessions + progress.total_research_sessions;
@@ -449,23 +453,22 @@ export function ResearchRunProgressView({
   );
   if (status === "succeeded") {
     return (
-      <section aria-label={t("progress")} className="min-w-0 rounded-lg border border-border bg-card p-4">
-        <Collapsible open={timingOpen} onOpenChange={setTimingOpen} className="min-w-0">
-          <CollapsibleTrigger render={<Button variant="ghost" className="h-auto min-h-11 w-full flex-wrap justify-start gap-4 whitespace-normal text-left" />}>
-            <span className="flex items-center gap-2">
-              <CheckCircle aria-hidden="true" size={18} weight="fill" />{t("executionComplete")}</span>
-            <span className="flex flex-wrap items-center gap-2">
-              <strong>{formatNumber(progress.completed_research_sessions)} / {formatNumber(progress.total_research_sessions)}</strong> {t("sessions")}
-            </span>
-            <span className="flex flex-wrap items-center gap-2">
-              <span>{t("executionTime")}</span> <strong>{formatDuration(timing?.elapsed_seconds ?? null)}</strong>
-            </span>
-            <span className="flex items-center gap-2">{t("timingDetails")}<CaretDown aria-hidden="true" size={14} className={timingOpen ? "rotate-180" : undefined} />
-            </span>
-          </CollapsibleTrigger>
-          <CollapsibleContent className="pt-4">{executionTiming}</CollapsibleContent>
-        </Collapsible>
-      </section>
+      <Card aria-label={t("progress")} role="region" className="min-w-0">
+        <CardHeader>
+          <CardTitle role="heading" aria-level={2}>{t("executionInfo")}</CardTitle>
+          <CardAction><span className="flex items-center gap-2 text-muted-foreground">
+            <CheckCircle aria-hidden="true" size={18} weight="fill" />{t("executionComplete")}
+          </span></CardAction>
+        </CardHeader>
+        <CardContent>
+          <dl className="m-0 grid min-w-0 gap-4 lg:grid-cols-4">
+            <FrozenFact label={t("researchSessions")}>{formatNumber(progress.completed_research_sessions)} / {formatNumber(progress.total_research_sessions)}</FrozenFact>
+            <FrozenFact label={t("executionTime")}>{formatDuration(timing?.elapsed_seconds ?? null)}</FrozenFact>
+            <FrozenFact label={t("started")}><span className="font-mono"><ExecutionTimestamp value={timing?.started_at ?? null} /></span></FrozenFact>
+            <FrozenFact label={t("finished")}><span className="font-mono"><ExecutionTimestamp value={timing?.finished_at ?? null} /></span></FrozenFact>
+          </dl>
+        </CardContent>
+      </Card>
     );
   }
   return (
@@ -513,53 +516,36 @@ export function ResearchRunProgressView({
 export function ResearchRunFacts({ run }: { run: ResearchRun }) {
   const { t } = useTranslation("runs");
   const input = run.input;
-  return (
-    <div
-      aria-label={t("conditions")}
-      className="grid min-w-0 gap-4 text-sm sm:grid-cols-2 xl:grid-cols-3 [&_p]:m-0 [&_strong]:block [&_strong]:font-medium [&_strong]:text-muted-foreground"
-      role="group"
-    >
-      <p><strong>{t("status")}</strong> {t(`statuses.${run.status}`)}</p>
-      <p><strong>{i18n.t("research:kind")}</strong> {researchKindLabel(run.research_kind)}</p>
-      <p className="[overflow-wrap:anywhere]"><strong>{t("name")}</strong> {run.name}</p>
-      {(input === undefined || "formula" in input) && <p className="col-span-full [overflow-wrap:anywhere]">
-        <strong>{t("formula")}</strong> <code>{input?.formula ?? run.formula_summary}</code>
-      </p>}
-      <p className="min-w-0">
-        <strong>{t("period")}</strong> {t("dateRange", { start: run.start_date, end: run.end_date })}
-      </p>
-      {input !== undefined ? (
-        <>
-          <p >
-            <strong>{i18n.t("research:universe")}</strong> {universeLabel(input.universe)}
-          </p>
-          {"neutralization" in input && input.neutralization !== undefined && <p >
-            <strong>{i18n.t("research:neutralization")}</strong> {neutralizationLabel(input.neutralization)}
-          </p>}
-          {input.research_kind === "strategy_backtest" ? (
-            <>
-              <p><strong>{t("strategyMode")}</strong> {t(input.strategy_mode === "direct" ? "directMode" : "frameworkMode")}</p>
-              <p><strong>{i18n.t("research:initialCash")}</strong> {input.initial_cash_cny}</p>
-              <FrozenSimulationCosts costs={input.costs} />
-              {input.strategy_mode === "direct" ? <FrozenPythonProgram program={input.program} /> : <>
-              <FrozenFrameworkModules modules={input.modules} />
-              {input.selection_every_sessions !== undefined && <>
-              <p><strong>{i18n.t("research:holdings")}</strong> {formatNumber(input.holdings_count!)}</p>
-              {input.weighting === "inverse_volatility" && <p><strong>{t("volatilityWindow")}</strong> {formatNumber(input.volatility_window!)} {t("sessions")}</p>}
-              {input.weighting !== undefined && <p><strong>{i18n.t("research:weighting")}</strong> {i18n.t(`research:weightings.${input.weighting}`)}</p>}
-              <p><strong>{t("exposureExpression")}</strong> <code>{input.exposure_expression}</code></p>
-              <p>
-                <strong>{t("selection")}</strong>{" "}
-                {selectionLabel(input.selection_every_sessions)}
-              </p>
-              </>}
-              </>}
-            </>
-          ) : null}
-        </>
-      ) : null}
+  const strategy = input?.research_kind === "strategy_backtest" ? input : undefined;
+  return <div role="group" aria-label={t("conditions")} className={cn("grid min-w-0 items-start gap-6 text-sm", strategy && "xl:grid-cols-[minmax(0,1fr)_320px]")}>
+    <div className="grid min-w-0 gap-6">
+      <Card role="region" aria-label={t("configuration.conditions")}>
+        <CardHeader><CardTitle role="heading" aria-level={2}>{t("configuration.conditions")}</CardTitle></CardHeader>
+        <CardContent>
+          <dl className="m-0 grid min-w-0 gap-x-8 gap-y-5 lg:grid-cols-2">
+            <FrozenFact label={t("period")}>{t("dateRange", { start: run.start_date, end: run.end_date })}</FrozenFact>
+            {input && <FrozenFact label={i18n.t("research:universe")}>{universeLabel(input.universe)}</FrozenFact>}
+            {strategy && <>
+              <FrozenFact label={i18n.t("research:initialCash")}><span title={strategy.initial_cash_cny}>{formatDecimalString(strategy.initial_cash_cny, 2)}</span></FrozenFact>
+              <FrozenFact label={t("strategyMode")}>{t(strategy.strategy_mode === "direct" ? "directMode" : "frameworkMode")}</FrozenFact>
+            </>}
+          </dl>
+        </CardContent>
+      </Card>
+      <Card role="region" aria-label={t(strategy ? "configuration.strategy" : "configuration.signal")}>
+        <CardHeader><CardTitle role="heading" aria-level={2}>{t(strategy ? "configuration.strategy" : "configuration.signal")}</CardTitle></CardHeader>
+        <CardContent>
+          {strategy?.strategy_mode === "framework" ? <FrozenFrameworkModules input={strategy} />
+            : strategy?.strategy_mode === "direct" ? <FrozenPythonProgram program={strategy.program} />
+            : <dl className="m-0 grid min-w-0 gap-5">
+              <FrozenFact label={t("formula")}><code>{input?.research_kind === "factor_evaluation" ? input.formula : run.formula_summary}</code></FrozenFact>
+              {input?.research_kind === "factor_evaluation" && <FrozenFact label={i18n.t("research:neutralization")}>{neutralizationLabel(input.neutralization)}</FrozenFact>}
+            </dl>}
+        </CardContent>
+      </Card>
     </div>
-  );
+    {strategy && <FrozenSimulationCosts costs={strategy.costs} />}
+  </div>;
 }
 
 function progressLabel(status: ResearchRun["status"], phase: ResearchRunProgress["phase"]): string {
@@ -687,8 +673,7 @@ export function ResearchOrganizationPanel({
   }
 
   return (
-    <section aria-label={t("organization.title")} className="grid min-w-0 gap-4 rounded-lg border border-border bg-card p-6">
-      <h2 className="m-0 text-base font-semibold">{t("organization.title")}</h2>
+    <section aria-label={t("organization.title")} className="grid min-w-0 gap-4 rounded-lg border border-border bg-card p-4">
       <FieldGroup className="grid min-w-0 gap-4 sm:grid-cols-2">
         <Field><FieldLabel htmlFor="run-organization-name" className="text-sm font-medium">{i18n.t("research:name")}</FieldLabel>
           <Input id="run-organization-name" aria-label={i18n.t("research:name")} disabled={submitting} maxLength={200}
@@ -735,8 +720,4 @@ export function universeLabel(value: FrozenResearchAuthorableInput["universe"]):
 
 export function neutralizationLabel(value: "none" | "industry"): string {
   return i18n.t(`research:${value}`);
-}
-
-function selectionLabel(sessions: number): string {
-  return sessions === 1 ? i18n.t("runs:everySession") : i18n.t("runs:everySessions", { sessions: formatNumber(sessions) });
 }

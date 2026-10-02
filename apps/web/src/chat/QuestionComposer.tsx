@@ -1,53 +1,60 @@
-import { cn } from "cn";
-import { chatLayout } from "./chatLayout";
-import { ArrowUp, PencilSimple, X } from "@phosphor-icons/react";
-import { useId, type KeyboardEvent } from "react";
+import { Sender } from "@ant-design/x";
+import { Button, Card, Checkbox, Flex, Radio, Typography } from "antd";
+import { X } from "@phosphor-icons/react";
+import { useId } from "react";
 import { useTranslation } from "react-i18next";
-import { Button } from "../components/ui/button";
-import { Textarea } from "../components/ui/textarea";
-import { Checkbox } from "../components/ui/checkbox";
-import { RadioGroup, RadioGroupItem } from "../components/ui/radio-group";
-import { FieldLabel, FieldSet, FieldLegend, FieldGroup, Field } from "../components/ui/field";
 import type { ChatQuestion } from "./chatProtocol";
 import type { ChatConversationController } from "./useChatConversation";
 
-export function QuestionComposer({ controller, question, locked, tooLarge, onKeyDown }: {
+/** The product maps answer values; Ant Design owns choices, input and actions. */
+export function QuestionComposer({ controller, question, locked, tooLarge }: {
   controller: ChatConversationController;
   question: ChatQuestion;
   locked: boolean;
   tooLarge: boolean;
-  onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
 }) {
   const { t } = useTranslation("chat");
   const optionId = useId();
   const multiple = question.selection_mode === "multi_select";
   const hasSelection = controller.answerSelections.length > 0;
-  const choices = question.options?.map((option, index) => <FieldLabel key={option.label} className="chat-question-choice flex min-h-11 w-full items-start gap-3 rounded-md border border-border has-data-checked:border-primary has-data-checked:bg-muted">
-    <Field orientation="horizontal" data-disabled={locked || undefined}>
-    {multiple ? <Checkbox aria-labelledby={`${optionId}-${index}`} aria-describedby={option.description ? `${optionId}-${index}-description` : undefined} disabled={locked} checked={controller.answerSelections.includes(option.label)}
-      onCheckedChange={checked => controller.setAnswerSelections(checked ? [...controller.answerSelections, option.label] : controller.answerSelections.filter(label => label !== option.label))} />
-      : <RadioGroupItem aria-labelledby={`${optionId}-${index}`} aria-describedby={option.description ? `${optionId}-${index}-description` : undefined} disabled={locked} value={option.label} />}
-    <span className="flex min-w-0 flex-col gap-1 [overflow-wrap:anywhere]"><strong id={`${optionId}-${index}`} className="text-sm font-medium">{option.label}</strong>{option.description ? <span id={`${optionId}-${index}-description`} className="text-xs font-normal text-muted-foreground">{option.description}</span> : null}</span>
-    </Field>
-  </FieldLabel>);
-  return <section aria-labelledby="chat-question-title" className={cn("chat-question-composer flex min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-card", chatLayout.surface, chatLayout.question)}>
-    <div className="chat-question-body min-h-0 overflow-y-auto p-4">
-      <header className="flex items-start justify-between gap-4"><h2 id="chat-question-title" className="m-0 text-base font-semibold [overflow-wrap:anywhere]">{question.question}</h2>
-        <Button aria-label={t("stop")} variant="ghost" size="icon" disabled={locked} onClick={() => void controller.stopTurn()} title={t("stopTurn")} type="button"><X aria-hidden="true" /></Button>
-      </header>
+  const choices = question.options?.map((option, index) => {
+    const label = <Flex vertical gap={4}>
+      <Typography.Text>{option.label}</Typography.Text>
+      {option.description ? <Typography.Text type="secondary" id={`${optionId}-${index}`}>{option.description}</Typography.Text> : null}
+    </Flex>;
+    const props = { "aria-label": option.label,
+      "aria-describedby": option.description ? `${optionId}-${index}` : undefined,
+      value: option.label };
+    return multiple ? <Checkbox {...props} key={option.label}>{label}</Checkbox>
+      : <Radio {...props} key={option.label}>{label}</Radio>;
+  });
+  return <Card size="small" className="chat-question-composer" aria-labelledby="chat-question-title"
+    style={{ display: "flex", flexDirection: "column", maxHeight: "min(560px, 65dvh)" }}
+    styles={{ header: { flexShrink: 0, paddingBlock: 12 }, title: { whiteSpace: "normal" }, body: { display: "flex", flexDirection: "column", minHeight: 0, padding: 0, overflow: "hidden" } }}
+    title={<Typography.Title level={5} id="chat-question-title" style={{ margin: 0 }}>{question.question}</Typography.Title>}
+    extra={<Button aria-label={t("stop")} type="text" disabled={locked} icon={<X />} title={t("stopTurn")} onClick={() => void controller.stopTurn()} />}>
+    <Flex vertical gap={12} className="chat-question-body" style={{ minHeight: 0, overflowY: "auto", padding: 16 }}>
       {choices ? <>
-        <div className="my-3 flex items-center justify-between gap-3 text-xs text-muted-foreground"><span id="chat-question-choice-help">{t(multiple ? "choiceMultiple" : "choiceSingle")}</span>{hasSelection ? <Button variant="ghost" disabled={locked} onClick={() => controller.setAnswerSelections([])} type="button">{t("clear")}</Button> : null}</div>
-        <FieldSet disabled={locked} aria-describedby="chat-question-choice-help" className="m-0 min-w-0 border-0 p-0"><FieldLegend className="sr-only">{t(multiple ? "selectAll" : "selectOne")}</FieldLegend>
-        {multiple ? <FieldGroup className="gap-2">{choices}</FieldGroup>
-          : <RadioGroup aria-label={t("selectOne")} aria-describedby="chat-question-choice-help" value={controller.answerSelections[0] ?? ""} onValueChange={value => controller.setAnswerSelections([String(value)])}>{choices}</RadioGroup>}</FieldSet>
+        <Flex align="center" justify="space-between" gap={12}>
+          <Typography.Text type="secondary" id="chat-question-choice-help">{t(multiple ? "choiceMultiple" : "choiceSingle")}</Typography.Text>
+          {hasSelection ? <Button type="text" size="small" disabled={locked} onClick={() => controller.setAnswerSelections([])}>{t("clear")}</Button> : null}
+        </Flex>
+        {multiple ? <Checkbox.Group aria-label={t("selectAll")} aria-describedby="chat-question-choice-help" disabled={locked}
+          value={[...controller.answerSelections]} onChange={values => controller.setAnswerSelections(values.map(String))}>
+          <Flex vertical gap={8}>{choices}</Flex>
+        </Checkbox.Group> : <Radio.Group aria-label={t("selectOne")} aria-describedby="chat-question-choice-help" disabled={locked}
+          value={controller.answerSelections[0] ?? ""} onChange={event => controller.setAnswerSelections([String(event.target.value)])}>
+          <Flex vertical gap={8}>{choices}</Flex>
+        </Radio.Group>}
       </> : null}
-    </div>
-    <div className="chat-question-answer-row flex shrink-0 items-end gap-3 border-t border-border p-3">
-      <PencilSimple aria-hidden="true" className="mb-3 shrink-0 text-muted-foreground" size={17} />
-      <Textarea aria-label={t("answerLabel")} className={cn("min-h-11 min-w-0 flex-1 resize-none border-0 bg-transparent p-2 shadow-none focus-visible:ring-0", chatLayout.questionInput)} aria-describedby={tooLarge ? "chat-composer-guidance chat-composer-validation" : "chat-composer-guidance"}
-        aria-invalid={tooLarge || undefined} disabled={locked} onChange={event => controller.setDraft(event.target.value)} onKeyDown={onKeyDown}
-        placeholder={t(hasSelection ? "answerNote" : "answerPlaceholder")} ref={controller.textareaRef} rows={1} value={controller.draft} />
-      <Button aria-label={t("answer")} size="icon" type="submit" disabled={locked || controller.action.kind !== "answer" || !controller.action.enabled}><ArrowUp aria-hidden="true" weight="bold" /></Button>
-    </div>
-  </section>;
+    </Flex>
+    <Sender className="chat-question-answer-row" value={controller.draft} disabled={locked}
+      style={{ flexShrink: 0 }} autoSize={{ minRows: 1, maxRows: 4 }}
+      ref={instance => { controller.textareaRef.current = instance?.inputElement as HTMLTextAreaElement | null; }}
+      aria-label={t("answerLabel")} aria-invalid={tooLarge || undefined}
+      aria-describedby={tooLarge ? "chat-composer-guidance chat-composer-validation" : "chat-composer-guidance"}
+      placeholder={t(hasSelection ? "answerNote" : "answerPlaceholder")} onChange={controller.setDraft}
+      onSubmit={() => { if (!locked && !tooLarge && controller.action.kind === "answer" && controller.action.enabled) void controller.executeMainAction(); }}
+      suffix={(_, { components: { SendButton } }) => <SendButton aria-label={t("answer")} disabled={locked || tooLarge || controller.action.kind !== "answer" || !controller.action.enabled} />} />
+  </Card>;
 }

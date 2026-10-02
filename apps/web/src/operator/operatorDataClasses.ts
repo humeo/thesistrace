@@ -2,11 +2,11 @@
 export const operatorDataClasses = {
   page: "flex min-w-0 flex-col gap-8",
   section: "grid min-w-0 gap-4",
-  sectionHeader: "flex flex-wrap items-end justify-between gap-4 [&_h2]:m-0 [&_h2]:text-2xl [&_h2]:leading-8 [&_h2]:font-semibold",
+  sectionHeader: "flex flex-wrap items-end justify-between gap-4 [&_h2]:m-0 [&_h2]:text-xl [&_h2]:leading-7 [&_h2]:font-semibold",
   marketForm: "grid max-w-[520px] gap-4",
   confirmationForm: "grid min-w-0 gap-4",
-  eyebrow: "m-0 text-xs leading-[18px] text-muted-foreground",
-  dangerEyebrow: "m-0 text-xs leading-[18px] text-destructive",
+  eyebrow: "m-0 text-xs text-muted-foreground",
+  dangerEyebrow: "m-0 text-xs text-destructive",
   target: "m-0 grid gap-3 [&>div]:grid [&>div]:grid-cols-[minmax(100px,1fr)_minmax(0,2fr)] [&>div]:gap-3 max-[480px]:[&>div]:grid-cols-1 [&_dt]:text-xs [&_dt]:leading-[18px] [&_dt]:text-muted-foreground [&_dd]:m-0 [&_dd]:min-w-0 [&_dd]:break-words [&_dd]:text-sm [&_dd]:leading-[22px] [&_code]:break-all",
   datasetStatus: "grid min-w-0 gap-[22px]",
   loadState: "flex min-h-10 flex-wrap items-center justify-between gap-3 text-muted-foreground [&_p]:m-0",
@@ -20,6 +20,6 @@ export const operatorDataClasses = {
   operationPhase: "grid gap-0.5 [&_small]:text-xs [&_small]:leading-[18px] [&_small]:text-muted-foreground",
   details: "m-0 grid px-4 pt-1 pb-6 [&>div]:min-w-0 [&>div]:border-b [&>div]:border-border [&>div]:py-3 [&_dt]:text-xs [&_dt]:leading-[18px] [&_dt]:text-muted-foreground [&_dd]:m-0 [&_dd]:mt-1 [&_dd]:min-w-0 [&_dd]:break-all [&_dd]:text-sm [&_dd]:leading-[22px] [&_code]:font-mono",
   telemetry: "m-4",
-  receipt: "grid min-w-0 gap-4 rounded-lg border border-border border-l-[3px] border-l-primary bg-card p-5 data-[tone=published]:border-l-[var(--success)] data-[tone=failed]:border-l-destructive data-[tone=warning]:border-l-[var(--warning)] [&>header]:flex [&>header]:flex-wrap [&>header]:items-center [&>header]:justify-between [&>header]:gap-3 [&_h2]:m-0 [&_h2]:text-2xl [&_h2]:leading-8 [&_h2]:font-semibold [&>p]:m-0 [&>p]:text-sm [&>p]:leading-[22px] [&>p]:text-muted-foreground [&>dl]:m-0 [&>dl]:grid [&>dl]:grid-cols-3 [&>dl]:gap-4 max-[640px]:[&>dl]:grid-cols-1 [&>dl>div]:min-w-0 [&_dt]:text-xs [&_dt]:leading-[18px] [&_dt]:text-muted-foreground [&_dd]:m-0 [&_dd]:mt-1 [&_dd]:break-all [&_dd]:text-sm [&_dd]:leading-[22px] [&_code]:font-mono [&_time]:font-mono",
+  receipt: "grid min-w-0 gap-4 rounded-lg border border-border border-l-[3px] border-l-primary bg-card p-5 data-[tone=published]:border-l-[var(--success)] data-[tone=failed]:border-l-destructive data-[tone=warning]:border-l-[var(--warning)] [&>header]:flex [&>header]:flex-wrap [&>header]:items-center [&>header]:justify-between [&>header]:gap-3 [&_h2]:m-0 [&_h2]:text-xl [&_h2]:leading-7 [&_h2]:font-semibold [&>p]:m-0 [&>p]:text-sm [&>p]:leading-[22px] [&>p]:text-muted-foreground [&>dl]:m-0 [&>dl]:grid [&>dl]:grid-cols-3 [&>dl]:gap-4 max-[640px]:[&>dl]:grid-cols-1 [&>dl>div]:min-w-0 [&_dt]:text-xs [&_dt]:leading-[18px] [&_dt]:text-muted-foreground [&_dd]:m-0 [&_dd]:mt-1 [&_dd]:break-all [&_dd]:text-sm [&_dd]:leading-[22px] [&_code]:font-mono [&_time]:font-mono",
   receiptActions: "flex flex-wrap justify-end gap-2",
 } as const;

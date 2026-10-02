@@ -3,7 +3,7 @@ from uuid import UUID, uuid4
 
 from psycopg.errors import ForeignKeyViolation
 
-from thesistrace._postgres import PostgresDatabase
+from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.research_folder.models import (
     CreateResearchFolder,
     RenameResearchFolder,
@@ -18,6 +18,7 @@ BATCH_RESEARCH_FOLDER_ID = "folder_batch_research"
 class ResearchFolderConflict(RuntimeError):
     def __init__(self, code: Literal[
         "SYSTEM_FOLDER_RENAME_FORBIDDEN", "SYSTEM_FOLDER_DELETE_FORBIDDEN", "FOLDER_NOT_EMPTY",
+        "FOLDER_NAME_EXISTS",
     ]) -> None:
         self.code = code
         super().__init__(code)
@@ -49,6 +50,7 @@ class ResearchFolderService:
     ) -> ResearchFolderSummary:
         folder_id = f"folder_{uuid4().hex[:20]}"
         with self._database.transaction() as transaction:
+            _require_available_name(transaction, researcher_id, folder_id, command.name)
             row = transaction.execute(
                 """
                 INSERT INTO research_folders.folders (
@@ -81,6 +83,7 @@ class ResearchFolderService:
                 return None
             if current["is_default"] or folder_id == BATCH_RESEARCH_FOLDER_ID:
                 raise ResearchFolderConflict("SYSTEM_FOLDER_RENAME_FORBIDDEN")
+            _require_available_name(transaction, researcher_id, folder_id, command.name)
             row = transaction.execute(
                 """
                 UPDATE research_folders.folders
@@ -121,3 +124,26 @@ class ResearchFolderService:
         except ForeignKeyViolation as error:
             raise ResearchFolderConflict("FOLDER_NOT_EMPTY") from error
         return row is not None
+
+
+def _require_available_name(
+    transaction: PostgresTransaction,
+    researcher_id: UUID,
+    folder_id: str,
+    name: str,
+) -> None:
+    # Serialize name checks and writes across API processes for this Researcher.
+    transaction.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+        (f"research-folder-names:{researcher_id}",),
+    )
+    duplicate = transaction.execute(
+        """
+        SELECT 1 FROM research_folders.folders
+        WHERE researcher_id = %s AND id <> %s AND lower(name) = lower(%s)
+        LIMIT 1
+        """,
+        (researcher_id, folder_id, name),
+    ).fetchone()
+    if duplicate is not None:
+        raise ResearchFolderConflict("FOLDER_NAME_EXISTS")

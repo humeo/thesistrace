@@ -1,17 +1,21 @@
 import { useTranslation } from "react-i18next";
 import { useEffect, useRef, useState } from "react";
+import { ArrowClockwise } from "@phosphor-icons/react";
 
 import { coreFetch } from "../auth/coreFetch";
 import type { DailyTrackAnalysis } from "./DailyTrackAnalysisView";
 import type { DailyTrackObservation } from "./DailyTrackObservationView";
-import { DailyTrackListPanel, DailyTrackWorkspace } from "./DailyTrackWorkspace";
+import { DailyTrackWorkspace } from "./DailyTrackWorkspace";
+import { DailyTrackComparison } from "./DailyTrackComparison";
 import type { TerminalStrategyState } from "../research-runs/ResearchRunsPage";
 import { Page, PageHeader, PageContent } from "../components/layout/Page";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { Alert, AlertDescription } from "../components/ui/alert";
 import { Empty, EmptyHeader, EmptyTitle, EmptyDescription } from "../components/ui/empty";
-import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "../components/ui/dropdown-menu";
+import { Spinner } from "../components/ui/spinner";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../components/ui/tooltip";
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem } from "../components/ui/dropdown-menu";
 import { AlertDialog, AlertDialogContent, AlertDialogTitle, AlertDialogDescription, AlertDialogHeader, AlertDialogFooter } from "../components/ui/alert-dialog";
 
 export type DailyTrackSummary = {
@@ -91,6 +95,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
   const [items, setItems] = useState<DailyTrackSummary[] | null>(null);
   const [listError, setListError] = useState(false);
   const [error, setError] = useState(false);
+  const [detailNotFound, setDetailNotFound] = useState(false);
   const [actionError, setActionError] = useState<ActionError | null>(null);
   const [confirmStop, setConfirmStop] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -121,6 +126,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
     setItems(null);
     setListError(false);
     setLoadState("loading");
+    setDetailNotFound(false);
   }, [trackId]);
 
   useEffect(() => () => {
@@ -134,12 +140,16 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
     const generation = ++loadGeneration.current;
     let timeout: number | undefined;
     setError(false);
+    setDetailNotFound(false);
     const path = trackId ? `/api/daily-tracks/${trackId}` : "/api/daily-tracks";
 
     async function load(polling = false) {
       try {
         const response = await coreFetch(path, { signal: controller.signal });
-        if (!response.ok) throw new Error("DailyTrack unavailable");
+        if (!response.ok) {
+          if (trackId && response.status === 404 && generation === loadGeneration.current) setDetailNotFound(true);
+          throw new Error("DailyTrack unavailable");
+        }
         if (trackId) {
           const nextTrack = (await response.json()) as DailyTrackDetail;
           if (generation !== loadGeneration.current) return;
@@ -309,24 +319,33 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
   }
 
   const submitting = advanceState === "submitting" || retryState === "submitting" || stopState === "submitting" || deleting;
-  if (error && track === null && items === null) {
+  const reloadAction = <TooltipProvider><Tooltip>
+    <TooltipTrigger render={<Button variant="ghost" size="icon-lg" ref={reloadTrigger} aria-label={t("reloadStatus")}
+      aria-busy={loadState === "reloading"} disabled={loadState !== null || submitting} onClick={reloadStatus} />}>
+      {loadState === "reloading" ? <Spinner /> : <ArrowClockwise aria-hidden="true" />}
+    </TooltipTrigger>
+    <TooltipContent side="bottom">{t("reloadStatus")}</TooltipContent>
+  </Tooltip></TooltipProvider>;
+  if (error && track === null && (trackId || items === null)) {
     return <Page className="console-workspace" aria-label={t("title")}><PageContent><PageHeader variant="console" title={t("title")} />
-      <Alert variant="destructive"><AlertDescription>{t("unavailable")}<Button variant="outline" onClick={reloadStatus}>{t("retry")}</Button></AlertDescription></Alert>
+      {detailNotFound
+        ? <Alert><AlertDescription>{t("notFound")}<Button nativeButton={false} role="link" render={<a href="/daily-tracks" />}>{t("backToList")}</Button></AlertDescription></Alert>
+        : <Alert variant="destructive"><AlertDescription>{t("unavailable")}<Button variant="outline" onClick={reloadStatus}>{t("retry")}</Button></AlertDescription></Alert>}
     </PageContent></Page>;
   }
   if (trackId && track === null) return <TrackLoading detail />;
   if (!trackId && items === null) return <TrackLoading detail={false} />;
   if (trackId && track) {
     return <>
-      <DailyTrackWorkspace key={track.id} track={track} items={items} listError={listError} onReloadList={reloadStatus} reloadAction={<Button size="xl" ref={reloadTrigger} variant="outline" disabled={loadState !== null || submitting} onClick={reloadStatus}>{t("reloadStatus")}</Button>} actions={<>
+      <DailyTrackWorkspace key={track.id} track={track} items={items} listError={listError} onReloadList={reloadStatus} reloadAction={reloadAction} actions={<>
         {track.status === "active" ? <Button disabled={!dailyTrackCanRefresh(track) || advanceState !== null || submitting}
           onClick={() => void refreshToLatestData()}>{t(advanceState === "submitting" ? "queuing" : dailyTrackNeedsPolling(track) ? "updating" : "refresh")}</Button> : null}
         {track.status === "blocked" ? <Button disabled={retryState !== null || submitting} onClick={() => void retryBlockedTrack()}>{t("retryBlocked")}</Button> : null}
         <DropdownMenu><DropdownMenuTrigger render={<Button variant="outline" ref={manageTrigger} />} disabled={submitting || track.status === "stopping"}>{t("manage")}</DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="min-w-56">
+          <DropdownMenuContent align="end" className="min-w-56"><DropdownMenuGroup>
             {track.status === "active" || track.status === "blocked" ? <DropdownMenuItem variant="destructive" onClick={() => { setActionError(null); setConfirmStop(true); }} disabled={stopState !== null}>{t("stop")}</DropdownMenuItem> : null}
             {track.status === "stopped" ? <DropdownMenuItem variant="destructive" onClick={() => { setDeleteError(null); setConfirmDelete(true); }}>{t("delete")}</DropdownMenuItem> : null}
-          </DropdownMenuContent>
+          </DropdownMenuGroup></DropdownMenuContent>
         </DropdownMenu>
       </>} notices={<>
         {error ? <Alert variant="destructive"><AlertDescription>{t("reloadFailed")}</AlertDescription></Alert> : null}
@@ -346,11 +365,11 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
     </>;
   }
   return <Page className="console-workspace" aria-label={t("title")}><PageContent className="flex flex-col gap-6">
-    <PageHeader variant="console" title={t("title")} className="mb-0" actions={<Button variant="outline" disabled={loadState !== null} onClick={reloadStatus}>{t("reloadStatus")}</Button>} />
+    <PageHeader variant="console" title={t("title")} className="mb-0" actions={reloadAction} />
     {error ? <Alert variant="destructive"><AlertDescription>{t("listReloadFailed")}</AlertDescription></Alert> : null}
-    {items?.length === 0 ? <Empty><EmptyHeader><EmptyTitle role="heading" aria-level={2}>{t("emptyTitle")}</EmptyTitle><EmptyDescription>{t("emptyDescription")}</EmptyDescription></EmptyHeader>
+    {items?.length === 0 ? <Empty variant="page"><EmptyHeader><EmptyTitle role="heading" aria-level={2}>{t("emptyTitle")}</EmptyTitle><EmptyDescription>{t("emptyDescription")}</EmptyDescription></EmptyHeader>
       <Button nativeButton={false} role="link" render={<a href="/research-runs" />}>{t("browseRuns")}</Button>
-    </Empty> : <div className="grid min-w-0 gap-6 lg:grid-cols-[280px_minmax(0,1fr)]"><DailyTrackListPanel items={items ?? []} /><div className="flex min-h-80 items-center justify-center rounded-xl border border-border bg-card p-8 text-center text-muted-foreground">{t("selectTrack")}</div></div>}
+    </Empty> : <DailyTrackComparison items={items ?? []} revision={refreshGeneration} />}
   </PageContent></Page>;
 }
 

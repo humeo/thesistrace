@@ -16,7 +16,7 @@ let failCheck: boolean;
 let failRevoke: boolean;
 const copied = vi.fn(async () => undefined);
 const requested: string[] = [];
-const button = (text: string) => [...host.querySelectorAll("button")].find(element => element.textContent === text)!;
+const button = (text: string) => [...host.querySelectorAll("button")].find(element => (element.getAttribute("aria-label") ?? element.textContent) === text)!;
 async function click(element: HTMLElement) { await act(async () => { element.click(); }); }
 beforeEach(async () => {
   await i18n.changeLanguage("en");
@@ -46,31 +46,30 @@ describe("MCP product page", () => {
     expect(host.textContent).toContain("1 tool");
     expect(host.textContent).not.toContain("Browse daily tracks");
     expect(host.textContent).not.toContain("Built into Quantgrove chat");
-    await click(button("Copy setup prompt"));
+    await click(button("Copy"));
     expect(copied).toHaveBeenLastCalledWith(expect.stringContaining(`Add Quantgrove MCP to Codex using ${endpoint}.`));
     expect(host.textContent).toContain("No authorized apps yet");
     await click(button("Claude Code"));
-    await click(button("Copy setup prompt"));
+    await click(button("Copy"));
     expect(copied).toHaveBeenLastCalledWith(expect.stringContaining("Add Quantgrove MCP to Claude Code"));
     await click(button("Other client"));
-    await click(button("Add the server manually"));
     await click(button("Copy URL"));
     expect(copied).toHaveBeenLastCalledWith(endpoint);
     expect(requested.every(path => !path.includes("revoke") && !path.includes("consent"))).toBe(true);
   });
   it("uses the Quantgrove server alias in client setup and login instructions", async () => {
     await mount();
-    await click(button("Add with a command"));
-    const details = button("Add with a command").closest('[data-slot="collapsible"]')!;
-    expect(details.textContent).toContain(`codex mcp add quantgrove --url '${endpoint}'`);
-    expect(details.textContent).toContain("codex mcp login quantgrove");
+    expect(host.querySelector('pre[aria-label="Codex add command"] code')?.textContent).toBe(`codex mcp add quantgrove --url '${endpoint}'`);
+    expect(host.textContent).toContain("codex mcp login quantgrove");
+    await click(button("Copy command"));
+    expect(copied).toHaveBeenLastCalledWith(`codex mcp add quantgrove --url '${endpoint}'`);
     await click(button("Copy login command"));
     expect(copied).toHaveBeenLastCalledWith("codex mcp login quantgrove");
     await click(button("Claude Code"));
-    await click(button("Add with a command"));
-    const claudeDetails = button("Add with a command").closest('[data-slot="collapsible"]')!;
-    expect(claudeDetails.textContent).toContain(`claude mcp add --transport http --scope user quantgrove '${endpoint}'`);
-    expect(claudeDetails.textContent).toContain("Select quantgrove");
+    expect(host.querySelector('pre[aria-label="Claude Code add command"] code')?.textContent).toBe(`claude mcp add --transport http --scope user quantgrove '${endpoint}'`);
+    expect(host.textContent).toContain("Select quantgrove");
+    await click(button("Copy login command"));
+    expect(copied).toHaveBeenLastCalledWith("/mcp");
   });
   it("localizes expanded tool instructions while preserving discovery and protocol identifiers", async () => {
     await mount();
@@ -122,7 +121,7 @@ describe("MCP product page", () => {
     expect(host.querySelector("article")?.textContent).toContain("读取研究上下文、运行和结果");
     expect(host.textContent).toContain("检查研究准备情况");
     await click(document.querySelector('[role="alertdialog"] button')!);
-    await click(button("复制设置提示"));
+    await click(button("复制"));
     expect(copied).toHaveBeenLastCalledWith(expect.stringContaining(endpoint));
     await click(button("Claude Code"));
     const command = [...host.querySelectorAll("pre code")].find(element => element.textContent?.startsWith("claude mcp add"));

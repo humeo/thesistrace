@@ -98,7 +98,7 @@ describe("ThesisTrace Better Auth configuration", () => {
       );
       expect(auth.options.rateLimit).toMatchObject({
         enabled: true,
-        storage: "database",
+        customStorage: { consume: expect.any(Function) },
       });
       expect(auth.options.advanced).toMatchObject({
         backgroundTasks: { handler: dependencies.backgroundTask },

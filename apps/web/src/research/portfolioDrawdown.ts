@@ -6,8 +6,8 @@ export type DrawdownInputs = Record<DrawdownField, string>;
 export type PortfolioDrawdownPolicy = { drawdown_threshold: number; maximum_stock_exposure: number; cooldown_sessions: number };
 export const emptyDrawdownInputs = (): DrawdownInputs => ({ drawdownThreshold: "", drawdownMaximumExposure: "", drawdownCooldownSessions: "" });
 export function drawdownEnabled(inputs: DrawdownInputs) { return drawdownFields.some(field => inputs[field] !== ""); }
-export function drawdownIssues(inputs: DrawdownInputs): { field: DrawdownField; code: "drawdownCooldown" | "drawdownThreshold" | "drawdownExposure" }[] {
-  if (!drawdownEnabled(inputs)) return [];
+export function drawdownIssues(inputs: DrawdownInputs, enabled = drawdownEnabled(inputs)): { field: DrawdownField; code: "drawdownCooldown" | "drawdownThreshold" | "drawdownExposure" }[] {
+  if (!enabled) return [];
   return drawdownFields.flatMap<{ field: DrawdownField; code: "drawdownCooldown" | "drawdownThreshold" | "drawdownExposure" }>(field => {
     const value = inputs[field];
     if (field === "drawdownCooldownSessions") {

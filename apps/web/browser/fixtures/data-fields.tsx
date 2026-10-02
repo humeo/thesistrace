@@ -13,7 +13,7 @@ function DataFieldsFixture() {
   const [formula, setFormula] = useState("");
   const [selection, setSelection] = useState({ anchor: 0, head: 0 });
   const [diagnostics, setDiagnostics] = useState<FormulaDiagnostic[]>([]);
-  return <>
+  return <div className="app-shell">
     <nav aria-label="Fixture language">
       <button type="button" onClick={() => changeInterfaceLanguage("en")}>English</button>
       <button type="button" onClick={() => changeInterfaceLanguage("zh-CN")}>简体中文</button>
@@ -44,7 +44,7 @@ function DataFieldsFixture() {
         }} />
       <output aria-label="Editor selection">{selection.anchor}:{selection.head}</output>
     </section>
-  </>;
+  </div>;
 }
 
 createRoot(document.getElementById("root")!).render(<DataFieldsFixture />);

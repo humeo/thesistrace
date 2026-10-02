@@ -22,8 +22,8 @@ import {
 
 import {
   projectResearchA2UIContent,
-  RESEARCH_A2UI_CATALOG_ID,
-  RESEARCH_A2UI_PROTOCOL_VERSION,
+  createResearchA2UIView,
+  type ResearchA2UIViewInput,
 } from "@thesistrace/contracts/research-a2ui";
 
 export const SCRIPTED_FACTOR_IDEA_PROMPT =
@@ -53,12 +53,7 @@ const LOW_VOLATILITY_HYPOTHESIS =
   "Stocks with smaller recent absolute returns should exhibit more stable near-term performance.";
 const CATALOG_IDENTIFIERS = ["abs", "close", "pct_change", "rank"] as const;
 const A2UI_TOOL_NAME = "render_a2ui";
-const A2UI_SURFACE_IDS = Object.freeze({
-  progress: "research-run-progress",
-  proposal: "alpha-proposal",
-  result: "research-result",
-  status: "research-run-status",
-});
+type A2UIStage = "proposal" | "status" | "progress" | "result";
 
 export function scriptedResearchDecision(
   options: LanguageModelV3CallOptions,
@@ -381,7 +376,7 @@ export function scriptedResearchDecision(
 
 function renderResearchSurface(
   options: LanguageModelV3CallOptions,
-  stage: keyof typeof A2UI_SURFACE_IDS,
+  stage: A2UIStage,
   payload: JsonRecord,
 ): ScriptedResearchDecision {
   const input = stage === "proposal"
@@ -390,18 +385,7 @@ function renderResearchSurface(
       ? resultSurface(payload)
       : statusSurface(stage, payload);
   if (input === null) return invalidResearchSurface();
-  const projected = projectResearchA2UIContent({
-    a2ui_operations: [{
-      createSurface: {
-        catalogId: RESEARCH_A2UI_CATALOG_ID,
-        surfaceId: input.surfaceId,
-      },
-      version: RESEARCH_A2UI_PROTOCOL_VERSION,
-    }, {
-      updateComponents: { components: input.components, surfaceId: input.surfaceId },
-      version: RESEARCH_A2UI_PROTOCOL_VERSION,
-    }],
-  });
+  const projected = projectResearchA2UIContent(createResearchA2UIView(input as ResearchA2UIViewInput, "scripted-preview"));
   return projected.valid && projected.kind === "ready"
     ? requiredTool(options, A2UI_TOOL_NAME, input)
     : invalidResearchSurface();
@@ -416,43 +400,30 @@ function invalidResearchSurface(): ScriptedResearchDecision {
 
 function hasA2UIStage(
   observations: readonly ToolObservation[],
-  stage: keyof typeof A2UI_SURFACE_IDS,
+  stage: A2UIStage,
 ): boolean {
-  return observations.some((observation) => (
-    observation.name === A2UI_TOOL_NAME
-    && observation.input.surfaceId === A2UI_SURFACE_IDS[stage]
-  ));
+  if (stage === "proposal") return observations.some(item => item.name === A2UI_TOOL_NAME && item.input.view === "alpha_proposal");
+  const anchor = stage === "progress"
+    ? observations.find(item => item.name === "get_research_run" && item.output.status === "running")?.promptIndex
+    : stage === "result"
+      ? observations.filter(item => item.name === "get_research_run_result").at(-1)?.promptIndex
+      : observations.find(item => item.name === "submit_research_run" && item.output.outcome === "accepted")?.promptIndex;
+  return anchor !== undefined && observations.some(item => item.name === A2UI_TOOL_NAME
+    && item.input.view === "research_runs" && item.promptIndex > anchor);
 }
 
 function proposalSurface(payload: JsonRecord): JsonRecord {
-  return {
-    components: [
-      { component: "Column", gap: "normal", id: "root", children: ["proposal", "formula"] },
-      {
-        component: "AlphaProposal",
-        explanation: payload.explanation,
-        formula: payload.formula,
-        hypothesis: payload.hypothesis,
-        id: "proposal",
-        period: payload.period,
-        researchType: payload.researchType,
-        strategy: payload.strategy,
-        title: payload.title,
-        universe: payload.universe,
-      },
-      { component: "Formula", expression: payload.formula, id: "formula", label: "Proposed formula" },
-    ],
-    data: {},
-    surfaceId: A2UI_SURFACE_IDS.proposal,
-  };
+  return { view: "alpha_proposal", proposal: {
+    explanation: payload.explanation, formula: payload.formula, hypothesis: payload.hypothesis,
+    period: payload.period, researchType: payload.researchType, strategy: payload.strategy,
+    title: payload.title, universe: payload.universe,
+  } };
 }
-
-function statusSurface(stage: "progress" | "status", payload: JsonRecord): JsonRecord | null {
-  return typeof payload.runId === "string" ? { surfaceId: A2UI_SURFACE_IDS[stage], data: {}, components: [{ component: "ResearchRun", id: "root", runId: payload.runId }] } : null;
+function statusSurface(_stage: "progress" | "status", payload: JsonRecord): JsonRecord | null {
+  return typeof payload.runId === "string" ? { view: "research_runs", runIds: [payload.runId] } : null;
 }
-
 function resultSurface(payload: JsonRecord): JsonRecord | null {
-  return typeof payload.runId === "string" ? { surfaceId: A2UI_SURFACE_IDS.result, data: {}, components: [{ component: "ResearchRun", id: "root", runId: payload.runId }] } : null;
+  return typeof payload.runId === "string" ? { view: "research_runs", runIds: [payload.runId] } : null;
 }
 
 function hasFunctionTool(options: LanguageModelV3CallOptions, name: string): boolean {

@@ -2,8 +2,7 @@ import type { LanguageModelV3CallOptions } from "@ai-sdk/provider";
 
 import {
   projectResearchA2UIContent,
-  RESEARCH_A2UI_CATALOG_ID,
-  RESEARCH_A2UI_PROTOCOL_VERSION,
+  createResearchA2UIView,
 } from "@thesistrace/contracts/research-a2ui";
 import {
   effectRequestId, isRecord, latestUnresolvedTransportFailure, latestUserText,
@@ -175,18 +174,14 @@ function currentResult(
     || summary.strategy_session !== detail.progress.head_session
     || provenance.tracking_strategy_session !== summary.strategy_session
     || (complete && latest?.session !== summary.strategy_session)) return incomplete();
-  const surfaceId = `daily-track-${poll.toolCallId}`;
   const note = `DailyTrack ${detail.id} is ${detail.status} (${detail.progress.phase}). The current view can advance; it is not a new immutable Research Result. Core Tracking Worker continues independently of this Chat.`
     + (ineligibleAction === null ? "" : ` The current lifecycle is not eligible for ${ineligibleAction}; no ${ineligibleAction} was submitted.`)
     + (complete ? "" : " More Observation pages remain; the displayed row is only the latest retrieved, not the current latest Observation.");
-  if (current.some((item) => item.name === "render_a2ui" && item.input.surfaceId === surfaceId)) return text(note);
-  const components = [{ component: "DailyTrack", id: "root", trackId: detail.id }];
-  const projection = projectResearchA2UIContent({ a2ui_operations: [
-    { version: RESEARCH_A2UI_PROTOCOL_VERSION, createSurface: { catalogId: RESEARCH_A2UI_CATALOG_ID, surfaceId } },
-    { version: RESEARCH_A2UI_PROTOCOL_VERSION, updateComponents: { components, surfaceId } },
-  ] });
+  if (current.some((item) => item.name === "render_a2ui" && item.input.view === "daily_track" && item.promptIndex > poll.promptIndex)) return text(note);
+  const input = { view: "daily_track" as const, trackId: detail.id };
+  const projection = projectResearchA2UIContent(createResearchA2UIView(input, "scripted-preview"));
   return projection.valid && projection.kind === "ready"
-    ? requiredTool(options, "render_a2ui", { components, surfaceId, data: {} }) : incomplete();
+    ? requiredTool(options, "render_a2ui", input) : incomplete();
 }
 
 function validDetail(value: JsonRecord, id: string): value is TrackDetail {

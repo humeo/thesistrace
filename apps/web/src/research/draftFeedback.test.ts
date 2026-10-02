@@ -16,8 +16,10 @@ describe("current Browser Draft feedback", () => {
     });
     expect(feedback.admissionIssues).toEqual([]);
     expect(feedback.configuration).toBeNull();
+    expect(feedback.configurationChanged).toBe(true);
     expect(feedback.fieldIssue("programSource")).toBeUndefined();
     expect(feedback.programErrorLine()).toBeNull();
+    expect(researchDraftFeedback(base).configurationChanged).toBe(false);
   });
   it("keeps local, admission and configuration priority within the exact input", () => {
     const admission = issue("modules.alpha.program.source");

@@ -14,7 +14,7 @@ async function select(page: Page, control: Locator, value: keyof typeof optionNa
 }
 
 async function formulaAllocation(page: Page) {
-  await page.getByRole("combobox", { name: "How is stock allocation set?", exact: true }).click();
+  await page.getByRole("combobox", { name: "How is total stock exposure set?", exact: true }).click();
   await page.getByRole("option", { name: "Formula based", exact: true }).click();
 }
 
@@ -37,14 +37,28 @@ for (const width of [1280, 1440]) {
       await page.addScriptTag({ content: script });
     };
     await mount();
-    await page.getByRole("button", { name: "Fees and slippage", exact: true }).click();
+    const costs = page.getByRole("region", { name: "Fees and slippage", exact: true });
+    await expect(costs.getByRole("heading", { name: "Fees and slippage", exact: true })).toHaveCount(1);
+    const toggle = costs.getByRole("button", { name: "Fees and slippage", exact: true });
     const slippage = page.getByLabel("Price slippage (basis points)", { exact: true });
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(slippage).not.toBeVisible();
+    await toggle.click();
+    await expect(slippage).toBeVisible();
     await expect(slippage).toHaveValue("0");
     await expect(page.getByLabel("Buy/sell commission rate", { exact: true })).toHaveValue("0.0003");
     await expect(page.getByLabel("Minimum commission per child order (CNY)", { exact: true })).toHaveValue("5");
+    for (const [first, second] of [["Buy/sell commission rate", "Minimum commission per child order (CNY)"], ["Sell stamp duty rate", "Buy/sell transfer fee rate"]]) {
+      const firstBox = (await costs.getByLabel(first, { exact: true }).boundingBox())!;
+      const secondBox = (await costs.getByLabel(second, { exact: true }).boundingBox())!;
+      expect(firstBox.y).toBe(secondBox.y);
+      expect(secondBox.x).toBeGreaterThan(firstBox.x + firstBox.width);
+    }
     await slippage.fill("10000");
-    await page.getByRole("button", { name: "Fees and slippage", exact: true }).click();
+    await toggle.click();
+    await expect(slippage).not.toBeVisible();
     await page.getByRole("button", { name: "Run backtest", exact: true }).click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
     await expect(slippage).toBeFocused();
     await expect(slippage).toHaveAttribute("aria-invalid", "true");
     await expect(page.locator("#cost-slippage_bps-error")).toContainText("below 10,000");
@@ -52,10 +66,15 @@ for (const width of [1280, 1440]) {
     await slippage.fill("15");
     await page.getByLabel("Minimum commission per child order (CNY)", { exact: true }).fill("2");
     await mount();
-    await page.getByRole("radio", { name: "Complete Python strategy", exact: true }).check();
-    await page.getByRole("button", { name: "Fees and slippage", exact: true }).click();
+    await page.getByRole("radio", { name: "Python authoring", exact: true }).check();
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await toggle.click();
     await expect(slippage).toHaveValue("15");
     await expect(page.getByLabel("Minimum commission per child order (CNY)", { exact: true })).toHaveValue("2");
+    await toggle.click();
+    await expect(slippage).not.toBeVisible();
+    await toggle.click();
+    await expect(slippage).toHaveValue("15");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await page.screenshot({ path: `../../.local/browser-tests/simulation-costs-${width}.png`, fullPage: true });
     await page.getByRole("button", { name: "Run backtest", exact: true }).click();
@@ -123,19 +142,17 @@ for (const width of [1280, 1440]) {
       await page.addScriptTag({ content: script });
     };
     await mount();
-    await page.getByRole("tab", { name: /Signals/ }).click();
-    await page.getByRole("button", { name: "Customize Alpha / Signals with Python", exact: true }).click();
-    await page.getByRole("tab", { name: /Portfolio/ }).click();
-    await page.getByRole("button", { name: "Customize Portfolio Construction with Python", exact: true }).click();
     const alpha = page.locator("#research-stage-panel-alpha");
     const portfolio = page.locator("#research-stage-panel-portfolio_construction");
+    await page.getByRole("tab", { name: /Signals/ }).click();
+    await alpha.getByRole("radio", { name: "Code", exact: true }).check();
+    await page.getByRole("tab", { name: /Portfolio/ }).click();
+    await portfolio.getByRole("radio", { name: "Code", exact: true }).check();
     await expect(alpha.locator("#alpha-python-source")).toContainText("MomentumSignals");
     await expect(portfolio.getByRole("textbox", { name: "Python source", exact: true })).toContainText("BestSignal");
     await expect(page.getByLabel("Alpha formula", { exact: true })).not.toBeVisible();
     await expect(page.getByLabel("Holdings count", { exact: true })).not.toBeVisible();
     await portfolio.getByRole("textbox", { name: "Python source", exact: true }).fill("");
-    await page.getByRole("tab", { name: /Signals/ }).click();
-    await expect(portfolio.getByRole("textbox", { name: "Python source", exact: true })).not.toBeVisible();
     await page.getByRole("button", { name: "Run backtest", exact: true }).click();
     await expect(portfolio.getByRole("textbox", { name: "Python source", exact: true })).toBeFocused();
     expect(submissions).toHaveLength(0);
@@ -196,7 +213,7 @@ for (const width of [1280, 1440]) {
       await page.addScriptTag({ content: script });
     };
     await mount();
-    await page.getByRole("radio", { name: "Complete Python strategy", exact: true }).check();
+    await page.getByRole("radio", { name: "Python authoring", exact: true }).check();
     await expect(page.getByRole("textbox", { name: "Python source", exact: true })).toContainText("class Momentum(Strategy)");
     await expect(page.getByLabel("Alpha formula", { exact: true })).not.toBeVisible();
     await expect(page.getByLabel("Holdings count", { exact: true })).not.toBeVisible();
@@ -239,15 +256,15 @@ test("switching back to built-in Framework retains the inactive Python draft", a
   await page.goto("https://exposure.test/");
   await page.addStyleTag({ content: styles });
   await page.addScriptTag({ content: script });
-  await page.getByRole("radio", { name: "Complete Python strategy", exact: true }).check();
+  await page.getByRole("radio", { name: "Python authoring", exact: true }).check();
   await page.getByRole("textbox", { name: "Python source", exact: true }).fill("private draft");
-  await page.getByRole("radio", { name: "Configure trading rules", exact: true }).check();
+  await page.getByRole("radio", { name: "Modular authoring", exact: true }).check();
   await expect(page.getByRole("textbox", { name: "Python source", exact: true })).toHaveCount(0);
   await page.getByRole("tab", { name: /Signals/ }).click();
   await expect(page.getByLabel("Alpha formula", { exact: true })).toBeVisible();
   const draft = await page.evaluate(() => JSON.parse(localStorage.getItem("thesistrace.research-draft.exposure-test.folder_default")!));
   expect(draft.programSource).toBe("private draft");
-  await page.getByRole("radio", { name: "Complete Python strategy", exact: true }).check();
+  await page.getByRole("radio", { name: "Python authoring", exact: true }).check();
   await expect(page.getByRole("textbox", { name: "Python source", exact: true })).toHaveText("private draft");
 });
 test("Python editors keep completion, selection and undo across module, language and width changes", async ({ page }) => {
@@ -259,8 +276,9 @@ test("Python editors keep completion, selection and undo across module, language
   await page.addStyleTag({ content: styles });
   await page.addScriptTag({ content: script });
   await page.getByRole("tab", { name: /Signals/ }).click();
-  const module = page.getByRole("button", { name: "Customize Alpha / Signals with Python", exact: true });
-  await module.click();
+  const modes = page.getByRole("radiogroup", { name: "Selection signals authoring mode", exact: true });
+  const code = modes.getByRole("radio", { name: "Code", exact: true });
+  await code.check();
   const source = page.locator("#alpha-python-source");
   await source.fill("pri");
   await source.press("Control+Space");
@@ -278,9 +296,9 @@ test("Python editors keep completion, selection and undo across module, language
   await expect(source).toBeFocused();
   await expect.poll(selectedText).toBe("threshold");
   await page.getByRole("button", { name: "English", exact: true }).dispatchEvent("click");
-  await page.getByRole("button", { name: "Use built-in Alpha / Signals rules", exact: true }).click();
+  await modes.getByRole("radio", { name: "Configure", exact: true }).check();
   await expect(source).not.toBeVisible();
-  await module.click();
+  await code.check();
   await source.focus();
   await expect.poll(selectedText).toBe("threshold");
   await page.keyboard.insertText("limit");
@@ -303,7 +321,9 @@ test("a malformed local draft is shown as a new draft", async ({ page }) => {
   await page.goto("https://exposure.test/?factor");
   await page.addStyleTag({ content: styles });
   await page.addScriptTag({ content: script });
-  await expect(page.getByText("New draft · stored in this browser when edited")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Choose a research type", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Factor Evaluation", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Strategy Backtest", exact: true })).toBeVisible();
   await expect(page.getByText("Draft saved in this browser")).toHaveCount(0);
 });
 
@@ -586,9 +606,8 @@ for (const width of [1280, 1440]) {
     await page.evaluate(() => document.fonts.ready);
     const settings = page.getByRole("complementary", { name: "Run settings", exact: true });
     await expect(settings).toBeVisible();
-    await expect(settings.getByRole("heading", { name: "Backtest conditions", exact: true })).toHaveCSS("font-size", "20px");
-    await page.getByRole("button", { name: "Research notes (optional)", exact: true }).click();
-    const notes = page.getByLabel("Notes", { exact: true });
+    await expect(settings.getByRole("heading", { name: "Backtest conditions", exact: true })).toHaveCSS("font-size", "16px");
+    const notes = page.getByLabel("Research notes (optional)", { exact: true });
     await expect(notes).toBeVisible();
     const help = page.getByRole("button", { name: "Cash requirements" });
     await help.click();
@@ -626,11 +645,12 @@ for (const width of [1280, 1440]) {
     await expect(page.getByLabel("Initial cash (CNY)", { exact: false })).toHaveValue("250000");
     await page.getByRole("tab", { name: /Signals/ }).click();
     await expect(page.getByRole("textbox", { name: "Alpha formula", exact: true })).toBeVisible();
-    await page.getByRole("radio", { name: "Factor Evaluation" }).check();
+    await page.getByRole("button", { name: "Back to research types", exact: true }).click();
+    await page.getByRole("button", { name: "Factor Evaluation", exact: true }).click();
     await expect(page.getByRole("button", { name: "Run evaluation" })).toBeVisible();
     await expect(page.getByRole("complementary", { name: "Run settings" })).toBeVisible();
     await expect(page.getByLabel("Portfolio weighting", { exact: false })).not.toBeVisible();
-    await page.getByLabel("Notes", { exact: true }).fill("Compare the signal across market regimes.");
+    await page.getByLabel("Research notes (optional)", { exact: true }).fill("Compare the signal across market regimes.");
     const browse = page.getByRole("button", { name: "Browse fields", exact: true });
     const controlledPanelId = await browse.getAttribute("aria-controls");
     expect(controlledPanelId).toBe("research-fields-panel");
@@ -724,20 +744,21 @@ for (const width of [1280, 1440]) {
     await page.addStyleTag({ content: styles });
     await page.addScriptTag({ content: script });
     await page.evaluate(() => document.fonts.ready);
+    await page.getByRole("tab", { name: "Portfolio", exact: true }).click();
     await expect(page.getByLabel("Holdings count", { exact: true })).toBeVisible();
     await expect(page.getByLabel("Selection interval (trading days)", { exact: true })).toHaveValue("5");
 
     await page.getByLabel("Initial cash (CNY)", { exact: true }).fill("");
 
     await page.getByRole("button", { name: "Run backtest", exact: true }).click();
-    await expect(page.getByRole("alert", { name: "Complete these settings to continue:", exact: true })).toContainText("Initial cash");
+    await expect(page.getByRole("list", { name: "Complete these settings to continue:", exact: true })).toContainText("Initial cash");
     await expect(page.getByLabel("Initial cash (CNY)", { exact: true })).toBeFocused();
     expect(submissions).toBe(0);
     await page.getByLabel("Initial cash (CNY)", { exact: true }).fill("100000");
     await formulaAllocation(page);
     await page.getByLabel("Exposure expression", { exact: true }).fill("1.1");
     await page.getByRole("button", { name: "Run backtest", exact: true }).click();
-    await expect(page.getByRole("alert", { name: "Complete these settings to continue:", exact: true })).toContainText("between 0 and 1");
+    await expect(page.getByRole("list", { name: "Complete these settings to continue:", exact: true })).toContainText("between 0 and 1");
     await expect(page.getByLabel("Exposure expression", { exact: true })).toBeFocused();
     await expect(page.getByLabel("Exposure expression", { exact: true })).toHaveAttribute("aria-invalid", "true");
     await expect(page.getByLabel("Exposure expression", { exact: true })).toHaveAccessibleDescription(/between 0 and 1/);
@@ -776,12 +797,12 @@ for (const width of [1280, 1440]) {
     };
     await mount();
     await page.getByRole("tab", { name: /Risk/ }).click();
-    await page.getByRole("button", { name: "Stop loss and holding limits", exact: true }).click();
     const threshold = page.getByRole("textbox", { name: "Stop loss (%)", exact: true });
+    await page.getByRole("switch", { name: "Stop loss", exact: true }).check();
     await expect(threshold).toHaveValue("");
-    await page.getByRole("button", { name: "About Stop loss (%)" }).hover();
-    await expect(page.getByRole("dialog", { name: "Stop loss (%)" })).toContainText("next Open");
-    await page.getByRole("button", { name: "About Stop loss (%)" }).press("Escape");
+    await page.getByRole("button", { name: "About Stop loss", exact: true }).hover();
+    await expect(page.getByRole("dialog", { name: "Stop loss", exact: true })).toContainText("next Open");
+    await page.getByRole("button", { name: "About Stop loss", exact: true }).press("Escape");
     await threshold.fill("100");
     await page.getByRole("button", { name: "Run backtest", exact: true }).click();
     await expect(threshold).toBeFocused();
@@ -821,8 +842,8 @@ for (const width of [1280, 1440]) {
     };
     await mount();
     await page.getByRole("tab", { name: /Risk/ }).click();
-    await page.getByRole("button", { name: "Limit portfolio drawdown", exact: true }).click();
     const threshold = page.getByLabel("Drawdown threshold (%)", { exact: true });
+    await page.getByRole("switch", { name: "Portfolio drawdown limit", exact: true }).check();
     const cap = page.getByLabel("Maximum stock exposure (%)", { exact: true });
     const cooldown = page.getByLabel("Cooldown (trading sessions)", { exact: true });
     for (const input of [threshold, cap, cooldown]) await expect(input).toHaveValue("");
@@ -855,7 +876,7 @@ test("Direct field browser inserts history at the selection and preserves undo",
   await page.goto("https://exposure.test/");
   await page.addStyleTag({ content: styles });
   await page.addScriptTag({ content: script });
-  await page.getByRole("radio", { name: "Complete Python strategy", exact: true }).check();
+  await page.getByRole("radio", { name: "Python authoring", exact: true }).check();
   const source = page.locator("#python-source");
   await source.fill("prices = ");
   await source.press("ControlOrMeta+End");
@@ -876,7 +897,7 @@ test("Direct field browser inserts history at the selection and preserves undo",
   await expect(trigger).toBeFocused();
 });
 
-test("rule configuration creates an exact strategy without requiring code", async ({ page }) => {
+test("formula configuration creates an exact strategy and preserves the draft", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 960 });
   const submissions: Record<string, unknown>[] = [];
   await page.route("https://exposure.test/**", route => {
@@ -897,19 +918,19 @@ test("rule configuration creates an exact strategy without requiring code", asyn
   await expect(page.getByLabel("Alpha formula", { exact: true })).not.toBeVisible();
   await expect(page.getByRole("textbox", { name: "Python source", exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "Run backtest", exact: true }).click();
-  await expect(page.getByRole("combobox", { name: "How should stocks be ranked?", exact: true })).toBeFocused();
+  const formula = page.getByRole("textbox", { name: "Alpha formula", exact: true });
+  await expect(formula).toBeVisible();
+  await expect(formula).toBeFocused();
+  await expect(page.getByRole("combobox", { name: "How should stocks be ranked?", exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("Measure over trading days", { exact: true })).toHaveCount(0);
   expect(submissions).toHaveLength(0);
-  await page.getByRole("tab", { name: /Signals/ }).click();
-  await page.getByRole("combobox", { name: "How should stocks be ranked?", exact: true }).click();
-  await page.getByRole("option", { name: "Strongest recent returns", exact: true }).click();
-  const window = page.getByLabel("Measure over trading days", { exact: true });
-  await window.fill("0");
+  await formula.fill("close / lag(close, 0) - 1");
   await page.getByRole("button", { name: "Run backtest", exact: true }).click();
-  await expect(window).toBeFocused();
+  await expect(formula).toBeFocused();
   expect(submissions).toHaveLength(0);
-  await window.fill("20");
+  await formula.fill("close / lag(close, 20) - 1");
   await page.getByRole("tab", { name: /Portfolio/ }).click();
-  const allocation = page.getByLabel("Stock allocation (%)", { exact: true });
+  const allocation = page.getByLabel("Total stock exposure (%)", { exact: true });
   await allocation.fill("150");
   await expect(allocation).toHaveValue("150");
   await page.getByRole("button", { name: "Run backtest", exact: true }).click();
@@ -917,22 +938,19 @@ test("rule configuration creates an exact strategy without requiring code", asyn
   expect(submissions).toHaveLength(0);
   await allocation.fill("60");
   await page.getByRole("tab", { name: /Risk/ }).click();
-  await page.getByRole("button", { name: "Stop loss and holding limits", exact: true }).click();
+  await page.getByRole("switch", { name: "Stop loss", exact: true }).check();
   await page.getByLabel("Stop loss (%)", { exact: true }).fill("10");
-  await page.getByRole("button", { name: "Strategy summary", exact: true }).click();
-  const summary = page.getByRole("region", { name: "Strategy summary", exact: true });
-  await expect(summary).toContainText("Highest 20-day returns first");
-  await expect(summary).toContainText("60%");
-  await expect(summary).toContainText("Stop loss 10%");
+  await expect(page.getByRole("button", { name: "Strategy summary", exact: true })).toHaveCount(0);
   await mount();
   await page.getByRole("tab", { name: /Signals/ }).click();
-  await expect(window).toHaveValue("20");
+  await expect(formula).toHaveText("close / lag(close, 20) - 1");
   await page.getByRole("tab", { name: /Portfolio/ }).click();
   await expect(allocation).toHaveValue("60");
   await page.getByRole("tab", { name: /Risk/ }).click();
   await expect(page.getByLabel("Stop loss (%)", { exact: true })).toHaveValue("10");
   await page.getByRole("button", { name: "简体中文", exact: true }).click();
-  await expect(page.getByRole("radio", { name: "策略回测", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "返回类型选择", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "策略摘要", exact: true })).toHaveCount(0);
   await page.screenshot({ path: test.info().outputPath("strategy-rules-zh.png"), fullPage: true });
   await page.getByRole("button", { name: "运行回测", exact: true }).click();
   await expect.poll(() => submissions.length).toBe(1);

@@ -6,7 +6,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { expect, test, vi } from "vitest";
 
 import { AuthProvider } from "../auth/AuthProvider";
-import { AssistantMarkdown, ChatContent } from "./ChatPage";
+import { ChatTestProvider } from "./chatTestProvider";
+import { ChatContent } from "./ChatPage";
 import { chatSessionHref, readBrowserChatThread } from "./chatNavigation";
 import { SessionHistoryList, sessionDialogErrorMessage } from "./SessionHistoryList";
 import {
@@ -88,14 +89,37 @@ test("keeps loading and Not Found states in the chat canvas without a top bar", 
   const loading = renderToStaticMarkup(
     <TestWorkspace><ChatContent {...common} preferenceState={{ status: "loading" }} selectedSessionState={{ status: "loading" }} /></TestWorkspace>,
   );
-  expect(loading).toContain("Loading Session settings…");
+  expect(loading).toContain('aria-busy="true"');
+  expect(loading).toMatch(/<textarea[^>]*disabled=""/);
   expect(loading).not.toContain('class="context-bar"');
+  expect(loading).not.toMatch(/<main[^>]*>\s*<header/);
 
   const missing = renderToStaticMarkup(
     <TestWorkspace><ChatContent {...common} preferenceState={{ status: "not-found" }} selectedSessionState={{ status: "not-found" }} /></TestWorkspace>,
   );
   expect(missing).toMatch(/<h1[^>]*>Chat not found<\/h1>/);
   expect(missing).not.toContain('class="context-bar"');
+});
+
+test("opening a history session never renders the New Chat landing screen", () => {
+  const selected = session({ title: "Greeting" });
+  const markup = renderToStaticMarkup(
+    <ChatTestProvider><ChatContent
+      catalogState={catalogState}
+      navigateChat={vi.fn()}
+      preferenceState={{ status: "loading" }}
+      researcherId={researcherId}
+      reloadCatalog={vi.fn()}
+      selectedSessionState={{ status: "ready", session: selected }}
+      sessionHistory={{ ...sessionHistory, sessions: [selected] }}
+      thread={{ id: selected.id, kind: "session" }}
+    /></ChatTestProvider>,
+  );
+  const canvas = document.createElement("div");
+  canvas.innerHTML = markup;
+  expect(canvas.querySelector(".chat-new-chat-start")).toBeNull();
+  expect(canvas.querySelector("main > header")).toBeNull();
+  expect(canvas.querySelector("main")?.getAttribute("aria-label")).toBe("Greeting");
 });
 
 test("keeps New Chat ephemeral until a canonical opaque session is present", () => {
@@ -128,21 +152,6 @@ test.each([
   );
   expect(markup).toContain(`class="${className}"`);
   expect(markup).not.toMatch(/chat-session-run-(?:full|compact)/);
-});
-
-test("renders research Markdown while disabling raw HTML, images, and non-Run links", () => {
-  const markup = renderToStaticMarkup(<AssistantMarkdown content={`### Research completed
-
-**Formula:** \`rank(-abs(pct_change(close, 1)))\`
-
-[Open ResearchRun](/research-runs/run_0123456789abcdef0123)
-[External](https://example.com/private)
-![remote](https://example.com/pixel.png)
-<script>alert("unsafe")</script>`} />);
-  expect(markup).toContain("Research completed");
-  expect(markup).toContain('href="/research-runs/run_0123456789abcdef0123"');
-  expect(markup).toContain("External");
-  expect(markup).not.toMatch(/https:\/\/example\.com\/private|<img|<script|pixel\.png/);
 });
 
 test("keeps rename validation copy distinct from malformed server responses", () => {
@@ -187,11 +196,11 @@ function turn(status: "running" | "waiting_for_user"): NonNullable<AgentSessionS
 
 function TestWorkspace({ children }: { children: ReactNode }) {
   return (
-    <AuthProvider>
+    <ChatTestProvider><AuthProvider>
       <AppShell currentPath="/chat" currentSessionId={null} isNewChat isOperator={false}
         navigate={vi.fn()} sessionHistory={sessionHistory}>
         {children}
       </AppShell>
-    </AuthProvider>
+    </AuthProvider></ChatTestProvider>
   );
 }

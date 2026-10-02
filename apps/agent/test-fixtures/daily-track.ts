@@ -50,7 +50,7 @@ export function dailyTrackFixtureOutput(call: RecordedToolCall, session = "2024-
       }),
       private_checkpoint: "private-daily-track-provenance",
     };
-    case "render_a2ui": return { rendered: call.input.surfaceId, a2ui_operations: [] };
+    case "render_a2ui": return { rendered: true, a2ui_operations: [] };
     default: throw new Error(`Unexpected DailyTrack fixture Tool: ${call.name}`);
   }
 }

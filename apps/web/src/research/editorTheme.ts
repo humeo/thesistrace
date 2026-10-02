@@ -1,33 +1,35 @@
 import { EditorView } from "@codemirror/view";
 
-/** Shared light treatment for formula and Python CodeMirror surfaces. */
+/** Project colors and font; CodeMirror owns line-number sizing. */
 export const researchEditorTheme = EditorView.theme({
   "&": {
     height: "100%",
     minHeight: "0",
     color: "var(--ink)",
     backgroundColor: "var(--surface-1)",
-    font: "14px/1.65 var(--mono)",
+    font: "var(--text-sm)/var(--text-sm--line-height) var(--mono)",
   },
   "&.cm-focused": { outline: "0" },
   ".cm-scroller": {
     height: "100%",
     overflow: "auto",
     fontFamily: "var(--mono)",
-    fontSize: "14px",
-    lineHeight: "1.65",
+    fontSize: "var(--text-sm)",
+    lineHeight: "var(--text-sm--line-height)",
   },
-  ".cm-content": { padding: "14px 12px", caretColor: "var(--ink)" },
+  ".cm-content": {
+    padding: "12px 8px",
+    caretColor: "var(--ink)",
+  },
   ".cm-cursor": { borderLeftColor: "var(--primary)" },
   ".cm-gutters": {
-    minWidth: "36px",
     color: "var(--ink-soft)",
-    backgroundColor: "var(--surface-2)",
-    borderRightColor: "var(--line)",
+    backgroundColor: "var(--surface-1)",
+    border: "0",
   },
-  ".cm-lineNumbers .cm-gutterElement": { padding: "0 8px 0 6px" },
+  ".cm-lineNumbers .cm-gutterElement": { textAlign: "center" },
   ".cm-activeLine": { backgroundColor: "color-mix(in srgb, var(--primary) 5%, var(--surface-1))" },
-  ".cm-activeLineGutter": { color: "var(--ink-muted)", backgroundColor: "var(--surface-2)" },
+  ".cm-activeLineGutter": { color: "var(--ink-muted)", backgroundColor: "var(--surface-1)" },
   ".cm-placeholder": { color: "var(--ink-soft)", fontStyle: "normal" },
   ".cm-selectionBackground, &.cm-focused .cm-selectionBackground, ::selection": {
     backgroundColor: "color-mix(in srgb, var(--primary) 22%, var(--surface-1)) !important",

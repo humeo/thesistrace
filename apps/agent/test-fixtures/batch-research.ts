@@ -56,7 +56,7 @@ export function batchFixtureOutput(
           }),
           private_provenance: "private-batch-core-provenance",
         };
-    case "render_a2ui": return { rendered: call.input.surfaceId, a2ui_operations: [] };
+    case "render_a2ui": return { rendered: true, a2ui_operations: [] };
     default: throw new Error(`Unexpected Batch fixture Tool: ${call.name}`);
   }
 }

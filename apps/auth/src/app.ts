@@ -283,6 +283,7 @@ export function createAuthApp(dependencies: AuthAppDependencies, mcpRoutes?: Ret
       method: context.req.method,
       path: context.req.path,
       status: context.res.status,
+      retryAfter: context.res.headers.get("retry-after"),
     });
   });
   app.onError((_error, context) =>
@@ -669,7 +670,16 @@ export function createAuthApp(dependencies: AuthAppDependencies, mcpRoutes?: Ret
     if (context.req.path === "/api/auth/sign-in/email-otp" && context.req.header("origin") !== dependencies.publicOrigin) {
       return context.json({code: "ORIGIN_NOT_ALLOWED"}, 403);
     }
-    return dependencies.authHandler(normalizedRequest);
+    const response = await dependencies.authHandler(normalizedRequest);
+    if (response.status !== 429) return response;
+    const retryAfter = response.headers.get("x-retry-after");
+    if (retryAfter === null || !/^[1-9][0-9]*$/.test(retryAfter) || !Number.isSafeInteger(Number(retryAfter))) {
+      return context.json({ code: "AUTH_SERVICE_UNAVAILABLE" }, 503);
+    }
+    const headers = new Headers(response.headers);
+    headers.set("Retry-After", retryAfter);
+    headers.set("Content-Type", "application/json");
+    return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
   });
 
   return app;

@@ -13,6 +13,96 @@ test.beforeAll(async () => {
 
 // Shared deterministic result facts; request behavior remains local to each test.
 
+test("configuration groups accepted research settings, strategy stages and readable fees", async ({ page }) => {
+  await page.setViewportSize({ width: 1492, height: 954 });
+  const input = { research_kind: "strategy_backtest", strategy_mode: "framework", initial_cash_cny: "1000000",
+    costs: { ...defaultSimulationCosts(), commission_min_cny: "2", slippage_bps: "15" }, hypothesis: null,
+    start_date: run.start_date, end_date: run.end_date, universe: "top300", formula: "rank(roe)", neutralization: "industry",
+    holdings_count: 20, selection_every_sessions: 5, weighting: "equal_weight", exposure_expression: "1",
+    modules: { ...builtinFrameworkModules,
+      portfolio_construction: { kind: "periodic_top_n/v1", minimum_holding_sessions: 5 },
+      risk_management: { kind: "builtin_risk/v1", stop_loss_threshold: 0.1, maximum_holding_sessions: 20 } } };
+  await page.route("https://research-evidence.test/**", route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    if (path === "/api/research-folders") return route.fulfill({ json: { items: [], next_cursor: null } });
+    return route.fulfill({ json: { ...run, input,
+      progress: { phase: "succeeded", completed_warmup_sessions: 0, total_warmup_sessions: 0,
+        completed_research_sessions: 2, total_research_sessions: 2, committed_chunk_count: 1,
+        last_completed_warmup_session: null, last_completed_research_session: run.end_date,
+        remaining_duration_estimate_seconds: null, duration_is_estimate: false },
+      execution_timing: { started_at: "2026-09-15T01:00:00Z", finished_at: "2026-09-15T01:01:06Z", elapsed_seconds: 66, is_final: true },
+    } });
+  });
+  await page.goto("https://research-evidence.test/");
+  await page.addStyleTag({ content: styles });
+  await page.addScriptTag({ content: script });
+  await page.getByRole("tab", { name: "Configuration", exact: true }).click();
+  const conditions = page.getByRole("region", { name: "Research conditions", exact: true });
+  const fees = page.getByRole("region", { name: "Fees and slippage", exact: true });
+  const strategy = page.getByRole("region", { name: "Strategy rules", exact: true });
+  await expect(conditions).toContainText("1,000,000.00");
+  await expect(conditions).toContainText("Top 300");
+  await expect(strategy.getByRole("region", { name: "Alpha / Signals", exact: true })).toContainText("rank(roe)");
+  await expect(strategy.getByRole("region", { name: "Portfolio Construction", exact: true })).toContainText("Minimum holding (trading sessions)5");
+  await expect(strategy.getByRole("region", { name: "Risk Management", exact: true })).toContainText("10%");
+  await expect(strategy.getByRole("region", { name: "Risk Management", exact: true })).not.toContainText("No additional exit rules");
+  await expect(fees).toContainText("0.03%");
+  await expect(fees).toContainText("0.05%");
+  await expect(fees).toContainText("0.001%");
+  await expect(fees).toContainText("2.00");
+  await expect(fees.getByText("15", { exact: true })).toHaveAttribute("title", "15");
+  const execution = page.getByRole("region", { name: "ResearchRun progress", exact: true });
+  await expect(execution.getByRole("heading", { name: "Execution details", exact: true })).toBeVisible();
+  await expect(execution.getByText("Execution complete", { exact: true })).toBeVisible();
+  await expect(execution.getByText("1m 6s", { exact: true })).toBeVisible();
+  await expect(execution.getByText("2026-09-15 01:00:00 UTC", { exact: true })).toBeVisible();
+  await expect(execution.getByText("2026-09-15 01:01:06 UTC", { exact: true })).toBeVisible();
+  await expect(execution.getByRole("button")).toHaveCount(0);
+  const positions = await page.getByRole("group", { name: "Research execution conditions", exact: true }).evaluate(element => {
+    const panels = [...element.querySelectorAll('[role="region"]')];
+    return panels.map(panel => ({ label: panel.getAttribute("aria-label"), left: panel.getBoundingClientRect().left, top: panel.getBoundingClientRect().top }));
+  });
+  const research = positions.find(panel => panel.label === "Research conditions")!;
+  const costs = positions.find(panel => panel.label === "Fees and slippage")!;
+  expect(costs.left).toBeGreaterThan(research.left);
+  expect(Math.abs(costs.top - research.top)).toBeLessThan(2);
+});
+
+test("ResearchRun trading event dates cannot query outside its backtest", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const queries: Record<string, unknown>[] = [];
+  await page.route("https://research-evidence.test/**", route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    if (path === "/api/research-folders") return route.fulfill({ json: { items: [], next_cursor: null } });
+    if (path.endsWith("/events/query")) {
+      const query = route.request().postDataJSON() as Record<string, unknown>;
+      queries.push(query);
+      return route.fulfill({ json: { section: query.section, status: "recorded", rows: [], next_cursor: null } });
+    }
+    return route.fulfill({ json: run });
+  });
+  await page.goto("https://research-evidence.test/");
+  await page.addStyleTag({ content: styles });
+  await page.addScriptTag({ content: script });
+  await page.getByRole("tab", { name: "Trading events", exact: true }).click();
+  await expect(page.getByText("No matching Orders records.")).toBeVisible();
+  await page.getByRole("textbox", { name: "From date", exact: true }).fill("2026-08-02");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await expect(page.getByRole("alert")).toHaveText("Choose a date from 2026-08-03 through 2026-08-04.");
+  expect(queries).toHaveLength(1);
+  await page.getByRole("textbox", { name: "From date", exact: true }).fill("2026-08-03");
+  await page.getByRole("textbox", { name: "Through date", exact: true }).fill("2026-08-05");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await expect(page.getByRole("alert")).toHaveText("Choose a date from 2026-08-03 through 2026-08-04.");
+  expect(queries).toHaveLength(1);
+  await page.getByRole("textbox", { name: "Through date", exact: true }).fill("2026-08-04");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await expect.poll(() => queries.length).toBe(2);
+  expect(queries.at(-1)).toMatchObject({ start_session: run.start_date, end_session: run.end_date });
+});
+
 
 test("ResearchRun updates preserve one working events and holdings section", async ({ page }) => {
   await page.route("https://research-evidence.test/**", route => {

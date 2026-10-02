@@ -12,6 +12,7 @@ import {
   type DailyTrackAnalysis,
 } from "./DailyTrackAnalysisView";
 import { CurrentHoldings, ObservationSummary, SelectionSchedule, TrackingReturnChart, type DailyTrackObservation } from "./DailyTrackObservationView";
+import { AccountAllocation } from "./DailyTrackPresentation";
 
 const observation: DailyTrackObservation = {
   session: "2026-08-18", net_asset_value_cny: "1100", cash_cny: "200",
@@ -27,10 +28,13 @@ const observation: DailyTrackObservation = {
 describe("Daily observation presentation", () => {
   it("shows the current Close risk facts alongside Open holdings", () => {
     const markup = renderToStaticMarkup(<CurrentHoldings observation={observation} />);
-    expect(markup).toContain("Close Risk NAV (CNY): <strong>1000</strong>");
+    expect(markup).toContain("Close Risk NAV");
+    expect(markup).toContain('title="1000">1,000.00');
     expect(markup).toContain("2026-08-18");
-    expect(markup).toContain("Remaining acquisition cost (CNY)</dt><dd>910");
-    expect(markup).toContain("Holding age (trading sessions)</dt><dd>12");
+    expect(markup).toContain("Remaining acquisition cost (CNY)");
+    expect(markup).toContain('title="910">910.00');
+    expect(markup).toContain("Holding age (trading sessions)");
+    expect(markup).toMatch(/<td[^>]*>12<\/td>/);
   });
   it("renders custom Framework holdings without inventing a built-in Selection or target", () => {
     const markup = renderToStaticMarkup(<CurrentHoldings observation={{ ...observation, decision_state: {
@@ -52,8 +56,13 @@ describe("Daily observation presentation", () => {
     expect(markup).toContain("2.50%");
     expect(markup).toContain("Since 2026-08-17");
     expect(markup).toContain("CN¥1,100.00");
-    expect(markup).toContain("CN¥200.00");
-    expect(markup).toContain("As of 2026-08-18");
+    expect(markup).toContain("Observed sessions");
+    const allocation = renderToStaticMarkup(<AccountAllocation observation={observation} />);
+    expect(allocation).toContain("CN¥200.00");
+    expect(allocation).toContain("18.18%");
+    expect(allocation).toContain("CN¥900.00");
+    expect(allocation).toContain("81.82%");
+    expect(allocation).toContain("As of 2026-08-18");
   });
 
   it("renders actual shares separately from adjusted market value and cash", () => {

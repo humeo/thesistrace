@@ -1,7 +1,7 @@
 import type { LanguageModelV3CallOptions } from "@ai-sdk/provider";
 import { expect, test } from "vitest";
 
-import { projectResearchA2UIContent, RESEARCH_A2UI_CATALOG_ID, RESEARCH_A2UI_PROTOCOL_VERSION } from "@thesistrace/contracts/research-a2ui";
+import { projectResearchA2UIContent, createResearchA2UIView, type ResearchA2UIViewInput } from "@thesistrace/contracts/research-a2ui";
 import { DAILY_TRACK_TOOL_NAMES, ORIGIN_RUN_ID, TRACK_ID, dailyTrackDetail, dailyTrackFixtureOutput } from "../test-fixtures/daily-track.js";
 import { appendExchange, runScriptedTrajectory, scriptedCallOptions, type RecordedToolCall } from "../test-fixtures/scripted-trajectory.js";
 import {
@@ -31,7 +31,7 @@ test.each([false, true])("the model verifies the %s Origin and presents current 
   });
   const surface = output.calls.find((call) => call.name === "render_a2ui")!;
   expect(validSurface(surface.input)).toMatchObject({ valid: true, kind: "ready" });
-  expect(surface.input.components).toEqual([{ component: "DailyTrack", id: "root", trackId: TRACK_ID }]);
+  expect(surface.input).toEqual({ view: "daily_track", trackId: TRACK_ID });
   expect(JSON.stringify(surface)).not.toContain(ORIGIN_RUN_ID);
   expect(JSON.stringify(surface)).not.toContain("1.2300");
   expect(JSON.stringify(surface)).not.toContain("1.17");
@@ -181,7 +181,7 @@ test("reloading creates a new read-only current surface without rewriting prior 
   followUp(request, SCRIPTED_RELOAD_DAILY_TRACK_PROMPT);
   const refreshed = await runScriptedTrajectory(request, (call) => dailyTrackFixtureOutput(call, "2024-02-01"));
   expect(refreshed.calls.map((call) => call.name)).toEqual(["get_daily_track", "get_daily_track_result", "get_daily_track_result", "get_daily_track_result", "render_a2ui"]);
-  expect(refreshed.calls.at(-1)?.input.components).toEqual([{ component: "DailyTrack", id: "root", trackId: TRACK_ID }]);
+  expect(refreshed.calls.at(-1)?.input).toEqual({ view: "daily_track", trackId: TRACK_ID });
   expect(JSON.stringify(originalSurface)).not.toContain("2024-01-31");
   expect(JSON.stringify(request.prompt).startsWith(prior.slice(0, -1))).toBe(true);
 });
@@ -200,7 +200,7 @@ test.each([false, true])("Observation pagination distinguishes a latest row from
     { track_id: TRACK_ID, section: "strategy_observations", limit: 50, cursor: "first" },
     { track_id: TRACK_ID, section: "strategy_observations", limit: 50, cursor: "second" },
   ]);
-  expect(output.calls.at(-1)?.input.components).toEqual([{ component: "DailyTrack", id: "root", trackId: TRACK_ID }]);
+  expect(output.calls.at(-1)?.input).toEqual({ view: "daily_track", trackId: TRACK_ID });
 });
 
 test.each(["wrong-track", "missing-summary", "changed-head", "private-section", "bad-observation"])("inconsistent %s data never becomes a surface fact", async (scenario) => {
@@ -250,8 +250,5 @@ function followUp(request: LanguageModelV3CallOptions, prompt: string): void {
 }
 
 function validSurface(input: Record<string, unknown>) {
-  return projectResearchA2UIContent({ a2ui_operations: [
-    { version: RESEARCH_A2UI_PROTOCOL_VERSION, createSurface: { catalogId: RESEARCH_A2UI_CATALOG_ID, surfaceId: input.surfaceId } },
-    { version: RESEARCH_A2UI_PROTOCOL_VERSION, updateComponents: { surfaceId: input.surfaceId, components: input.components } },
-  ] });
+  return projectResearchA2UIContent(createResearchA2UIView(input as ResearchA2UIViewInput, "scripted-preview"));
 }

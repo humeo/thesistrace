@@ -59,7 +59,7 @@ export function FactorEvidence({ runId, embedded = false }: { runId: string; emb
   const invalidStart = filters.view === "daily" && filters.start !== "" && !isIsoCalendarDate(filters.start);
   const invalidEnd = filters.view === "daily" && filters.end !== "" && !isIsoCalendarDate(filters.end);
   const invalidRange = filters.view === "daily" && !invalidStart && !invalidEnd && filters.start !== "" && filters.end !== "" && filters.start > filters.end;
-  const content = <div className="[&>p]:max-w-[90ch] [&>p]:text-[13px] [&>p]:leading-[1.6] [&>p]:text-muted-foreground">
+  const content = <div className="[&>p]:max-w-[90ch] [&>p]:text-sm [&>p]:text-muted-foreground">
       <p>{t("factor.explanation")}</p>
       <FieldGroup className="my-5 grid grid-cols-[repeat(auto-fit,minmax(min(100%,180px),1fr))] gap-4">
         <Field><FieldLabel htmlFor={`${id}-horizon`}>{t("factor.horizon")}</FieldLabel>

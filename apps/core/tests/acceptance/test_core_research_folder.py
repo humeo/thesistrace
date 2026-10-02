@@ -1,5 +1,8 @@
 import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
+from threading import Barrier
+from uuid import uuid4
 
 import pytest
 from core_runtime import TEST_RESEARCHER, drop_product_schemas
@@ -13,9 +16,103 @@ from thesistrace.data import DatasetAdmissionSnapshot
 from thesistrace.data.models import DatasetCoverage
 from thesistrace.entrypoints.quota_policy import quota_policy_lookup
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
-from thesistrace.research_folder import BATCH_RESEARCH_FOLDER_ID, DEFAULT_FOLDER_ID
+from thesistrace.research_folder import (
+    BATCH_RESEARCH_FOLDER_ID,
+    DEFAULT_FOLDER_ID,
+    CreateResearchFolder,
+    ResearchFolderService,
+)
 from thesistrace.research_run import ImmutableRunInput, ResearchRunService
 from thesistrace.research_run.models import ResearchRunAdmissionCommand
+from thesistrace.researcher import ResearcherService
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_folder_names_are_unique_per_researcher_after_trimming_and_ignoring_case() -> None:
+    settings = CoreSettings.from_environment()
+    drop_product_schemas(settings)
+
+    with TestClient(create_app(settings)) as client:
+        created = client.post("/api/research-folders", json={"name": "Signals"})
+        assert created.status_code == 201
+        before = client.get("/api/research-folders").json()
+
+        for name in ("Signals", "  Signals  ", "signals"):
+            duplicate = client.post("/api/research-folders", json={"name": name})
+            assert duplicate.status_code == 409
+            assert duplicate.json() == {"detail": {"code": "FOLDER_NAME_EXISTS"}}
+            assert client.get("/api/research-folders").json() == before
+
+        second = client.post("/api/research-folders", json={"name": "Momentum"}).json()
+        before_rename = client.get("/api/research-folders").json()
+        duplicate_rename = client.patch(
+            f"/api/research-folders/{second['id']}", json={"name": "  SIGNALS  "},
+        )
+        assert duplicate_rename.status_code == 409
+        assert duplicate_rename.json() == {"detail": {"code": "FOLDER_NAME_EXISTS"}}
+        assert client.get("/api/research-folders").json() == before_rename
+        unchanged = client.patch(
+            f"/api/research-folders/{created.json()['id']}", json={"name": "Signals"},
+        )
+        assert unchanged.status_code == 200
+        assert unchanged.json() == created.json()
+
+        for system_name in ("default", "Batch Research"):
+            duplicate = client.post("/api/research-folders", json={"name": system_name})
+            assert duplicate.status_code == 409
+            assert duplicate.json() == {"detail": {"code": "FOLDER_NAME_EXISTS"}}
+
+        database = client.app.state.core_runtime.database
+        other = TEST_RESEARCHER.model_copy(update={"researcher_id": uuid4()})
+        ResearcherService(database).bootstrap(other)
+        service = ResearchFolderService(database)
+        other_folder = service.create(other.researcher_id, CreateResearchFolder(name="Signals"))
+        assert other_folder.name == "Signals"
+        assert other_folder.id != created.json()["id"]
+        assert client.get("/api/research-folders").json() == before_rename
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+@pytest.mark.parametrize(
+    "operations", [("create", "create"), ("rename", "rename"), ("create", "rename")],
+)
+def test_concurrent_folder_mutations_accept_only_one_owner_of_a_name(operations) -> None:
+    settings = CoreSettings.from_environment()
+    drop_product_schemas(settings)
+
+    with TestClient(create_app(settings)) as client:
+        originals = [
+            client.post("/api/research-folders", json={"name": name}).json()
+            for name in ("First", "Second")
+        ]
+        barrier = Barrier(2, timeout=10)
+
+        def submit(index):
+            barrier.wait()
+            name = "Concurrent Signals" if index == 0 else "  concurrent signals  "
+            if operations[index] == "create":
+                return client.post("/api/research-folders", json={"name": name})
+            return client.patch(
+                f"/api/research-folders/{originals[index]['id']}", json={"name": name},
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            pending = [executor.submit(submit, index) for index in range(2)]
+            responses = [future.result(timeout=20) for future in pending]
+        assert sum(response.status_code in {200, 201} for response in responses) == 1
+        rejection = next(response for response in responses if response.status_code == 409)
+        assert rejection.json() == {"detail": {"code": "FOLDER_NAME_EXISTS"}}
+        stored = client.get("/api/research-folders").json()["items"]
+        assert sum(folder["name"].lower() == "concurrent signals" for folder in stored) == 1
+        for original, operation, response in zip(originals, operations, responses, strict=True):
+            if operation == "create" or response.status_code == 409:
+                assert original in stored
 
 
 @pytest.mark.skipif(

@@ -7,8 +7,18 @@ import { Calendar } from "../ui/calendar";
 import { Field, FieldDescription, FieldError, FieldLabel } from "../ui/field";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "../ui/input-group";
 import { Popover, PopoverClose, PopoverContent, PopoverTitle, PopoverTrigger } from "../ui/popover";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { interfaceLocale } from "../../i18n";
 import { calendarDateFromIso, isoFromCalendarDate } from "./calendarDate";
+
+function boundedMonth(value: Date, start?: Date, end?: Date): Date {
+  const month = new Date(value.getFullYear(), value.getMonth(), 1);
+  const first = start && new Date(start.getFullYear(), start.getMonth(), 1);
+  const last = end && new Date(end.getFullYear(), end.getMonth(), 1);
+  if (first && month < first) return first;
+  if (last && month > last) return last;
+  return month;
+}
 
 export function CalendarDateField({
   id,
@@ -47,14 +57,33 @@ export function CalendarDateField({
   const [yearPage, setYearPage] = useState(0);
   // Switching views unmounts the focused button, so focus the popup first.
   const popoverContentRef = useRef<HTMLDivElement>(null);
-  const selected = calendarDateFromIso(value);
+  const inputDate = calendarDateFromIso(value);
   const start = minimum === null ? undefined : calendarDateFromIso(minimum);
   const end = maximum === null ? undefined : calendarDateFromIso(maximum);
-  const displayMonth = month ?? selected ?? end ?? start ?? new Date();
+  const selected = inputDate && (!start || inputDate >= start) && (!end || inputDate <= end) ? inputDate : undefined;
+  const displayMonth = boundedMonth(month ?? inputDate ?? end ?? start ?? new Date(), start, end);
   const showAllYears = start !== undefined && end !== undefined && end.getFullYear() - start.getFullYear() <= 23;
   const firstYear = showAllYears ? start.getFullYear() : yearPage;
   const lastYear = showAllYears ? end.getFullYear() : yearPage + 11;
   const isChinese = interfaceLocale() === "zh-CN";
+  // Keep the existing open-ended year navigation; DayPicker's year dropdown adds implicit year bounds.
+  const monthOptions = Array.from({ length: 12 }, (_, value) => {
+    const date = new Date(displayMonth.getFullYear(), value, 1);
+    return {
+      value,
+      label: date.toLocaleString(isChinese ? "zh-CN" : "en-US", { month: "long" }),
+      disabled: date.getTime() !== boundedMonth(date, start, end).getTime(),
+    };
+  });
+  const yearControl = <Button type="button" variant="ghost" size="sm" className="h-8 gap-1 px-1.5 text-sm font-medium"
+    aria-label={isChinese ? "选择年份" : "Choose year"}
+    onClick={() => {
+      popoverContentRef.current?.focus();
+      setYearPage(Math.floor(displayMonth.getFullYear() / 12) * 12);
+      setYearPickerOpen(true);
+    }}>
+    {displayMonth.getFullYear()}{isChinese ? "年" : ""}<CaretDown aria-hidden="true" className="size-3" />
+  </Button>;
 
   return (
     <Field className="min-w-0 text-sm" data-invalid={Boolean(error)}>
@@ -77,7 +106,7 @@ export function CalendarDateField({
         <InputGroupAddon align="inline-end">
           <Popover open={open} modal="trap-focus" onOpenChange={(next) => {
             if (next) {
-              setMonth(selected ?? end ?? start);
+              setMonth(boundedMonth(inputDate ?? end ?? start ?? new Date(), start, end));
               setYearPickerOpen(false);
             }
             setOpen(next);
@@ -122,12 +151,7 @@ export function CalendarDateField({
                         disabled={(start !== undefined && year < start.getFullYear()) || (end !== undefined && year > end.getFullYear())}
                         onClick={() => {
                           popoverContentRef.current?.focus();
-                          let nextMonth = new Date(year, displayMonth.getMonth(), 1);
-                          const firstMonth = start && new Date(start.getFullYear(), start.getMonth(), 1);
-                          const lastMonth = end && new Date(end.getFullYear(), end.getMonth(), 1);
-                          if (firstMonth && nextMonth < firstMonth) nextMonth = firstMonth;
-                          if (lastMonth && nextMonth > lastMonth) nextMonth = lastMonth;
-                          setMonth(nextMonth);
+                          setMonth(boundedMonth(new Date(year, displayMonth.getMonth(), 1), start, end));
                           setYearPickerOpen(false);
                         }}>
                         {year}
@@ -147,17 +171,24 @@ export function CalendarDateField({
                   startMonth={start}
                   endMonth={end}
                   components={{
-                    CaptionLabel: ({ children }) => (
-                      <Button type="button" variant="ghost" size="sm" className="h-8 gap-1 px-2 text-sm font-medium"
-                        aria-label={isChinese ? "选择年份" : "Choose year"}
-                        onClick={() => {
+                    CaptionLabel: () => <div className="flex items-center gap-0.5">
+                      {isChinese && yearControl}
+                      <Select value={displayMonth.getMonth()} items={monthOptions}
+                        onValueChange={next => {
+                          if (next === null) return;
                           popoverContentRef.current?.focus();
-                          setYearPage(Math.floor(displayMonth.getFullYear() / 12) * 12);
-                          setYearPickerOpen(true);
+                          setMonth(new Date(displayMonth.getFullYear(), next, 1));
                         }}>
-                        {children}<CaretDown aria-hidden="true" className="size-3" />
-                      </Button>
-                    ),
+                        <SelectTrigger aria-label={isChinese ? "选择月份" : "Choose month"} size="sm"
+                          className="h-8 border-0 bg-transparent px-1.5 shadow-none">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="max-h-72 min-w-32"><SelectGroup>
+                          {monthOptions.map(option => <SelectItem key={option.value} value={option.value} disabled={option.disabled}>{option.label}</SelectItem>)}
+                        </SelectGroup></SelectContent>
+                      </Select>
+                      {!isChinese && yearControl}
+                    </div>,
                   }}
                   disabled={[
                     ...(start ? [{ before: start }] : []),

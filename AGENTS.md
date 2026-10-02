@@ -1,4 +1,5 @@
 ## rulers
+- 有现成且满足需求的组件或库时必须直接复用，禁止自行重写通用组件。优先使用项目已有依赖和官方接口；自有代码只连接业务数据、状态和产品契约。
 - Do not add runtime fallbacks or multi-version compatibility paths. Applications use only the current contract.
 - 允许显式、版本化、可验证且保留数据的数据库迁移；每次迁移必须限定起止版本、记录执行结果，并验证失败回滚。迁移前备份，禁止自动清库或仅修改 schema 指纹绕过校验。
 
@@ -11,6 +12,8 @@
 ## Browser Operations
 
 For interactive browser inspection and acceptance, prefer the available in-app browser tools. Use the repository's Playwright tests for repeatable browser regression checks.
+
+前端界面检查和浏览器验收只使用桌面视口；不要进行窄屏、手机视口或响应式断点检查。
 
 ## Frontend Design
 

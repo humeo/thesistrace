@@ -10,6 +10,7 @@ import {
   assertNoAmbientBetterAuthOverrides,
   type AuthSettings,
 } from "./config.js";
+import { createBetterAuthRateLimitStorage } from "./auth-rate-limit.js";
 import { canonicalizeEmail } from "./identity.js";
 import { InvitationAdmission } from "./invitation-admission.js";
 import {
@@ -234,13 +235,16 @@ export function createThesisTraceAuth(
     ],
     rateLimit: {
       customRules: {
+        // Automatic Session checks must stay available during continuous activity.
+        // Session verification remains mandatory; this is only an HTTP quota exemption.
+        "/get-session": false,
         "/sign-in/email-otp": { max: 5, window: 60 },
         "/sign-in/email": { max: 5, window: 60 },
         "/sign-up/email": { max: 1, window: 60 },
       },
       enabled: true,
       max: 60,
-      storage: "database",
+      customStorage: createBetterAuthRateLimitStorage({ pool }),
       window: 60,
     },
     secret: settings.secret,

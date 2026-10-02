@@ -544,7 +544,7 @@ export function OperatorDataStatusDrawer({
         <SheetHeader className="sticky top-0 z-10 flex-row items-center justify-between gap-4 border-b border-border bg-popover">
           <div>
             <p className={styles.eyebrow}>{kindText(operation.kind)}</p>
-            <SheetTitle id="operator-data-operation-drawer-title" className="text-xl leading-7 font-semibold">{t("data.status.detailsTitle")}</SheetTitle>
+            <SheetTitle id="operator-data-operation-drawer-title" className="text-base leading-6 font-semibold">{t("data.status.detailsTitle")}</SheetTitle>
           </div>
           <Button variant="outline" aria-label={t("data.status.closeDetails")} onClick={onDismiss} ref={initialFocus} type="button">{t("data.status.close")}</Button>
         </SheetHeader>

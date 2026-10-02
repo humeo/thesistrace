@@ -268,7 +268,7 @@ describe("DataOverviewView", () => {
   });
 });
 
-it("explains the research Universe scope and formal industry choices for common inputs", () => {
+it("exposes separate catalog entries for fields, aggregate functions, and industry codes", () => {
   const markup = renderToStaticMarkup(createElement(DataOverviewView, {
     overview,
     onRefresh: vi.fn(),
@@ -286,12 +286,11 @@ it("explains the research Universe scope and formal industry choices for common 
       }],
     },
   }));
-  expect(markup).toContain("Common market inputs");
-  expect(markup).toContain("not a full industry or official index");
-  expect(markup).toContain("does not change the stock selection Universe");
-  expect(markup).toContain("801010");
-  expect(markup).toContain("Agriculture, forestry, livestock &amp; fisheries");
-  expect(markup).toContain("data coverage is checked for the chosen research period");
+  expect(markup).toContain("Data directory");
+  expect(markup).toContain("Aggregate functions");
+  expect(markup).toContain("Industry codes");
+  expect(markup).not.toContain("Common market inputs");
+  expect(markup).not.toContain("Field pages");
 });
 
 it("groups fields by research category across different source families", () => {
