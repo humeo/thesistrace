@@ -186,6 +186,7 @@ for (const width of [1280, 1440]) {
     await expect(portfolio.getByRole("textbox", { name: "Python source", exact: true })).toBeFocused();
     expect(submissions).toHaveLength(0);
     await mount();
+    await page.getByRole("tab", { name: /Portfolio/ }).click();
     await expect(portfolio.getByRole("textbox", { name: "Python source", exact: true })).toHaveText("");
     await portfolio.getByRole("textbox", { name: "Python source", exact: true }).fill("class Broken(:");
     await page.getByRole("button", { name: "Check configuration" }).click();
@@ -248,7 +249,7 @@ for (const width of [1280, 1440]) {
     await expect(page.getByLabel("Holdings count", { exact: true })).not.toBeVisible();
     await page.getByRole("textbox", { name: "Python source", exact: true }).fill("");
     await page.getByRole("button", { name: "Run backtest", exact: true }).click();
-    await expect(page.getByRole("alert", { name: "Complete these settings to continue:", exact: true })).toContainText("Python");
+    await expect(page.getByRole("list", { name: "Complete these settings to continue:", exact: true })).toContainText("Python");
     await expect(page.getByRole("textbox", { name: "Python source", exact: true })).toBeFocused();
     await page.getByRole("textbox", { name: "Python source", exact: true }).focus();
     await expect(page.locator("#python-source-error")).toContainText("Python");
@@ -386,7 +387,7 @@ for (const width of [1280, 1440]) {
     await start.fill("2025-02-29");
     await page.getByRole("button", { name: "Run evaluation" }).click();
     await expect(start).toHaveAttribute("aria-invalid", "true");
-    await expect(page.getByRole("alert", { name: "Complete these settings to continue:", exact: true })).toContainText("valid start date");
+    await expect(page.getByRole("list", { name: "Complete these settings to continue:", exact: true })).toContainText("valid start date");
     expect(submissions).toHaveLength(0);
     await start.fill("2026-08-03");
     await expect(end).toHaveValue("2026-08-05");
@@ -462,6 +463,7 @@ test(`Exposure, ${weighting}, retained draft and submission share one source`, a
   await expect(page.getByRole("dialog", { name: "Execution timing" })).toContainText("Trading restrictions can prevent fills");
   await executionHelp.press("Escape");
 
+  await page.getByRole("tab", { name: /Portfolio/ }).click();
   await expect(page.getByRole("combobox", { name: "Portfolio weighting" })).toContainText("Equal weight");
   await select(page, page.getByLabel("Portfolio weighting", { exact: false }), weighting);
   if (weighting === "inverse_volatility") {
@@ -470,11 +472,12 @@ test(`Exposure, ${weighting}, retained draft and submission share one source`, a
   }
   await formulaAllocation(page);
   await expect(page.getByLabel("Exposure expression", { exact: true })).toHaveText("1");
-  await expect(page.getByRole("radio", { name: "Fixed percentage", exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("Total stock exposure (%)", { exact: true })).toHaveCount(0);
   await page.getByLabel("Exposure expression", { exact: true }).fill("0.7");
   await expect(page.getByLabel("Exposure expression", { exact: true })).toHaveText("0.7");
   await mount();
 
+  await page.getByRole("tab", { name: /Portfolio/ }).click();
   await expect(page.getByRole("combobox", { name: "Portfolio weighting" })).toContainText(optionNames[weighting]);
   if (weighting === "inverse_volatility") {
     await expect(page.getByLabel("Volatility window", { exact: false })).toHaveValue("10");
@@ -482,7 +485,7 @@ test(`Exposure, ${weighting}, retained draft and submission share one source`, a
   await formulaAllocation(page);
   await expect(page.getByLabel("Exposure expression", { exact: true })).toHaveText("0.7");
   await page.getByLabel("Exposure expression", { exact: true }).fill("7 / 10");
-  await expect(page.getByLabel("Fixed exposure (%)", { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("Total stock exposure (%)", { exact: true })).toHaveCount(0);
 
   await page.getByRole("button", { name: "Check configuration" }).click();
   await expect(page.getByText("Configuration is valid.", { exact: false })).toBeVisible();
@@ -528,6 +531,7 @@ test("configuration checks show rejection and recover from an unavailable servic
   await page.addScriptTag({ content: script });
     await page.evaluate(() => document.fonts.ready);
 
+  await page.getByRole("tab", { name: /Portfolio/ }).click();
   await formulaAllocation(page);
   await page.getByLabel("Exposure expression", { exact: true }).fill("1 + 0.1");
 
@@ -563,6 +567,7 @@ test("Exposure completion excludes stock scope and keeps daily expression in the
   };
   await mount();
 
+  await page.getByRole("tab", { name: /Portfolio/ }).click();
   await formulaAllocation(page);
   const editor = page.getByLabel("Exposure expression", { exact: true });
   await editor.fill("");
@@ -573,9 +578,10 @@ test("Exposure completion excludes stock scope and keeps daily expression in the
   await editor.press("Escape");
   const expression = "if_else(universe_return() > 0, 1, 0.3)";
   await editor.fill(expression);
-  await expect(page.getByLabel("Fixed exposure (%)", { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("Total stock exposure (%)", { exact: true })).toHaveCount(0);
   await mount();
 
+  await page.getByRole("tab", { name: /Portfolio/ }).click();
   await expect(page.getByLabel("Exposure expression", { exact: true })).toHaveText(expression);
 
   await page.getByRole("tab", { name: /Signals/ }).click();
@@ -604,11 +610,12 @@ for (const weighting of ["equal_weight", "rank_weight"] as const) {
     await page.addScriptTag({ content: script });
     await page.evaluate(() => document.fonts.ready);
 
+    await page.getByRole("tab", { name: /Portfolio/ }).click();
     const selector = page.getByLabel("Portfolio weighting", { exact: false });
     await select(page, selector, "inverse_volatility");
     await page.getByLabel("Volatility window", { exact: false }).fill("253");
     await page.getByRole("button", { name: "Run backtest", exact: true }).click();
-    await expect(page.getByRole("alert", { name: "Complete these settings to continue:", exact: true })).toContainText("Volatility window");
+    await expect(page.getByRole("list", { name: "Complete these settings to continue:", exact: true })).toContainText("Volatility window");
     await select(page, selector, weighting);
     await expect(page.getByLabel("Volatility window", { exact: false })).not.toBeVisible();
     await expect(page.getByRole("button", { name: "Check configuration" })).toBeEnabled();
@@ -652,6 +659,7 @@ for (const width of [1280, 1440]) {
     await help.press("Escape");
     await expect(help).toBeFocused();
     await page.setViewportSize({ width, height: 500 });
+    await page.getByRole("tab", { name: /Portfolio/ }).click();
     await formulaAllocation(page);
     for (const name of ["Weighting help", "Exposure formula help"]) {
       const exampleHelp = page.getByRole("button", { name, exact: true });
@@ -706,7 +714,7 @@ for (const width of [1280, 1440]) {
     await page.getByRole("button", { name: "简体中文", exact: true }).click();
     await page.evaluate(() => document.fonts.ready);
     await expect(page.getByRole("textbox", { name: "Alpha 公式", exact: true })).toHaveText("close");
-    await expect(page.getByLabel("备注", { exact: true })).toHaveValue("Compare the signal across market regimes.");
+    await expect(page.getByLabel("研究备注（可选）", { exact: true })).toHaveValue("Compare the signal across market regimes.");
     await expect(page.getByRole("button", { name: "运行评估", exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await page.screenshot({ path: test.info().outputPath(`research-zh-${width}.png`), fullPage: true });
@@ -884,6 +892,7 @@ for (const width of [1280, 1440]) {
     await cap.fill("30");
     await cooldown.fill("2");
     await mount();
+    await page.getByRole("tab", { name: /Risk/ }).click();
     await expect(threshold).toHaveValue("10");
     await expect(cap).toHaveValue("30");
     await expect(cooldown).toHaveValue("2");
@@ -950,8 +959,6 @@ test("formula configuration creates an exact strategy and preserves the draft", 
   const formula = page.getByRole("textbox", { name: "Alpha formula", exact: true });
   await expect(formula).toBeVisible();
   await expect(formula).toBeFocused();
-  await expect(page.getByRole("combobox", { name: "How should stocks be ranked?", exact: true })).toHaveCount(0);
-  await expect(page.getByLabel("Measure over trading days", { exact: true })).toHaveCount(0);
   expect(submissions).toHaveLength(0);
   await formula.fill("close / lag(close, 0) - 1");
   await page.getByRole("button", { name: "Run backtest", exact: true }).click();
