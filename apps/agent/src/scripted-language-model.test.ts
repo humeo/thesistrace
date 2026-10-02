@@ -16,7 +16,7 @@ import {
   SCRIPTED_INVALID_A2UI_PROMPT,
   SCRIPTED_INVALID_A2UI_TOP_LEVEL_PROMPT,
   SCRIPTED_INVALID_A2UI_DATA_PROMPT,
-  SCRIPTED_LARGE_A2UI_TABLE_PROMPT,
+  SCRIPTED_A2UI_PROPOSAL_PROMPT,
   SCRIPTED_RETRY_INTERRUPTED_PROMPT,
   SCRIPTED_RESUME_RESEARCH_PROMPT,
   SCRIPTED_STRATEGY_IDEA_PROMPT,
@@ -214,7 +214,7 @@ test("drives deterministic proposal, status, and result surfaces through direct 
         case "get_research_context": return researchContext();
         case "get_alpha_catalog": return alphaCatalog();
         case "diagnose_alpha_formula": return { diagnostics: [], valid: true };
-        case "render_a2ui": return { a2ui_operations: [], rendered: input.surfaceId };
+        case "render_a2ui": return { a2ui_operations: [], rendered: true };
         case "submit_research_run": return acceptedRun();
         case "get_research_run": return occurrence === 1
           ? pollingDetail(input, "running", [])
@@ -227,42 +227,24 @@ test("drives deterministic proposal, status, and result surfaces through direct 
   );
 
   const surfaces = trajectory.calls.filter((call) => call.name === "render_a2ui");
-  expect(surfaces.map((call) => call.input.surfaceId)).toEqual([
-    "alpha-proposal",
-    "research-run-status",
-    "research-run-progress",
-    "research-result",
-  ]);
-  expect(surfaceComponentNames(surfaces[0]?.input)).toEqual([
-    "Column",
-    "AlphaProposal",
-    "Formula",
-  ]);
+  expect(surfaces.map(call => call.input.view)).toEqual(["alpha_proposal", "research_runs", "research_runs", "research_runs"]);
+  expect(surfaces[0]?.input.proposal).toMatchObject({ formula: "rank(-abs(pct_change(close, 1)))" });
   for (const surface of surfaces.slice(1)) {
-    expect(surface.input.components).toEqual([{ component: "ResearchRun", id: "root", runId: "run_0123456789abcdef0123" }]);
+    expect(surface.input).toEqual({ view: "research_runs", runIds: ["run_0123456789abcdef0123"] });
   }
   expect(JSON.stringify(surfaces.slice(1))).not.toContain("0.1200");
   expect(JSON.stringify(surfaces.slice(1))).not.toContain("3.40%");
 });
 
-test("emits one explicitly non-research large table for renderer acceptance", async () => {
-  const trajectory = await runResearchTrajectory(SCRIPTED_LARGE_A2UI_TABLE_PROMPT, ({ name }) => {
+test("emits a supported display-only proposal and completes without redundant prose", async () => {
+  const trajectory = await runResearchTrajectory(SCRIPTED_A2UI_PROPOSAL_PROMPT, ({ name }) => {
     expect(name).toBe("render_a2ui");
     return { rendered: true };
   }, true);
   expect(trajectory.calls).toHaveLength(1);
-  expect(trajectory.calls[0]?.input.components).toEqual([expect.objectContaining({
-    caption: "Renderer acceptance sample — not research evidence",
-    columns: expect.any(Array),
-    component: "Table",
-    rows: expect.any(Array),
-  })]);
-  const table = (trajectory.calls[0]!.input.components as {
-    rows: string[][]; columns: string[];
-  }[])[0]!;
-  expect(table.rows).toHaveLength(100);
-  expect(table.columns).toHaveLength(12);
-  expect(table.rows.every((row) => row.length === 12)).toBe(true);
+  expect(trajectory.calls[0]?.input).toMatchObject({ view: "alpha_proposal", proposal: {
+    title: "Renderer acceptance sample — not research evidence", formula: "rank(close)",
+  } });
   expect(trajectory.text).toBe("");
 });
 
@@ -281,7 +263,7 @@ test.each([
     }
   }, true);
   const surfaces = trajectory.calls.filter((call) => call.name === "render_a2ui");
-  expect(surfaces.map((call) => call.input.surfaceId)).toEqual(["alpha-proposal", "research-run-status"]);
+  expect(surfaces.map((call) => call.input.view)).toEqual(["alpha_proposal", "research_runs"]);
   expect(trajectory.text).toContain("did not create a surface or invent replacement Research facts");
   expect(JSON.stringify(surfaces)).not.toContain("run_00000000000000000000");
 });
@@ -938,18 +920,6 @@ function researchTools(includeA2UI = false): NonNullable<LanguageModelV3CallOpti
     name,
     type: "function" as const,
   }));
-}
-
-function surfaceComponentNames(input: Record<string, unknown> | undefined): string[] {
-  if (!Array.isArray(input?.components)) return [];
-  return input.components.flatMap((component) => (
-    typeof component === "object"
-    && component !== null
-    && "component" in component
-    && typeof component.component === "string"
-      ? [component.component]
-      : []
-  ));
 }
 
 function appendMcpTextExchange(

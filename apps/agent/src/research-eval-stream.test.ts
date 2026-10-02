@@ -3,7 +3,6 @@ import { EventType } from "@ag-ui/core";
 
 import { observeResearchEvalStream, observeResearchEvalTurn, requestResearchEvalTurn, researchEvalConversationMeetsOutcome, researchEvalPolledRun, researchEvalToolRetryCount, unresolvedResearchEvalToolFailure } from "./research-eval-stream.js";
 import { projectSafeToolResult } from "./safe-tool-result.js";
-import { researchA2UITool } from "./research-a2ui-tool.js";
 import { ResearchA2UIEventProjector } from "./research-a2ui-events.js";
 import { RESEARCH_A2UI_ACTIVITY_TYPE, RESEARCH_A2UI_CATALOG_ID, RESEARCH_A2UI_PROTOCOL_VERSION } from "@thesistrace/contracts/research-a2ui";
 
@@ -57,9 +56,7 @@ afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 describe("real-model evaluator AG-UI transport", () => {
   it("evaluates the same visible explanation in a validated A2UI-only answer", async () => {
     const explanation = "run_0123456789abcdef0123: Rank IC is unavailable with one stock; coverage is not an estimated IC.";
-    const content = await researchA2UITool.execute?.({ surfaceId: "result-explanation",
-      components: [{ id: "root", component: "Text", text: explanation }],
-    }, { agent: { messages: [], toolCallId: "render-explanation" } } as never);
+    const content = surface([{ id: "root", component: "Text", text: explanation }]).content;
     const projector = new ResearchA2UIEventProjector();
     projector.project({ type: EventType.TOOL_CALL_START, toolCallId: "render-explanation", toolCallName: "render_a2ui", parentMessageId: "assistant" });
     const rendered = projector.project({ type: EventType.TOOL_CALL_RESULT, toolCallId: "render-explanation", content: JSON.stringify(content) });

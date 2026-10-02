@@ -2,8 +2,7 @@ import type { LanguageModelV3CallOptions } from "@ai-sdk/provider";
 
 import {
   projectResearchA2UIContent,
-  RESEARCH_A2UI_CATALOG_ID,
-  RESEARCH_A2UI_PROTOCOL_VERSION,
+  createResearchA2UIView,
 } from "@thesistrace/contracts/research-a2ui";
 import {
   boundedConstraintDefault,
@@ -119,9 +118,9 @@ export function scriptedBatchDecision(
   if (detail === null) return incomplete();
   if (inspectPages) return inspectObservations(options, detail, observations, latest.index);
   if (ACTIVE_STATUSES.has(detail.status)) {
-    const progressId = `batch-progress-${currentPolls[0]?.toolCallId ?? poll.toolCallId}`;
-    if (!hasSurface(observations, progressId)) {
-      return renderBatch(options, detail, [], progressId, false);
+    const firstPollIndex = currentPolls[0]?.promptIndex ?? poll.promptIndex;
+    if (!hasSurface(observations, firstPollIndex)) {
+      return renderBatch(options, detail);
     }
     const wait = readRetryAfter(detail);
     return currentPolls.length < MAX_POLLS && wait !== undefined
@@ -152,8 +151,7 @@ export function scriptedBatchDecision(
     if (metrics === null) return incomplete();
     rows.push([...row, metrics.map((metric) => `${String(metric.label)}: ${String(metric.value)}`).join("; ")]);
   }
-  const surfaceId = `batch-results-${poll.toolCallId}`;
-  if (!hasSurface(observations, surfaceId)) return renderBatch(options, detail, rows, surfaceId, true);
+  if (!hasSurface(observations, poll.promptIndex)) return renderBatch(options, detail);
   return text(`Research Batch ${batchId} is ${detail.status}. Each row refers to its own authoritative ResearchRun Result, not a combined Batch Result.\n\n`
     + rows.map((row) => `${row[0]}. ${row[1]} — [${row[2]}](/research-runs/${row[2]}): ${row[3]}. ${row[4]}`).join("\n")
     + (detail.status === "completed_with_failures" ? "\nSome children failed; their missing metrics are not zero and do not invalidate successful sibling Results." : ""));
@@ -234,22 +232,16 @@ function readBatchDetail(value: JsonRecord, id: string, mode: BatchMode): BatchD
 function renderBatch(
   options: LanguageModelV3CallOptions,
   detail: BatchDetail,
-  _resultRows: readonly string[][],
-  surfaceId: string,
-  _terminal: boolean,
 ): ScriptedResearchDecision {
   const progress = isRecord(detail.progress) ? detail.progress : undefined;
   const completed = detail.batch_kind === "factor_evaluation" ? progress?.completed_factor_tasks : progress?.completed_strategy_tasks;
   const total = detail.batch_kind === "factor_evaluation" ? progress?.total_factor_tasks : progress?.total_strategy_tasks;
   if (!Number.isSafeInteger(completed) || !Number.isSafeInteger(total)
     || typeof completed !== "number" || typeof total !== "number" || completed < 0 || total < 1 || completed > total) return incomplete();
-  const components = [{ component: "ResearchComparison", id: "root", runIds: detail.items.map((item) => item.research_run_id) }];
-  const projected = projectResearchA2UIContent({ a2ui_operations: [{
-    version: RESEARCH_A2UI_PROTOCOL_VERSION,
-    createSurface: { catalogId: RESEARCH_A2UI_CATALOG_ID, surfaceId },
-  }, { version: RESEARCH_A2UI_PROTOCOL_VERSION, updateComponents: { components, surfaceId } }] });
+  const input = { view: "research_runs" as const, runIds: detail.items.map(item => item.research_run_id) };
+  const projected = projectResearchA2UIContent(createResearchA2UIView(input, "scripted-preview"));
   return projected.valid && projected.kind === "ready"
-    ? requiredTool(options, "render_a2ui", { components, surfaceId, data: {} }) : incomplete();
+    ? requiredTool(options, "render_a2ui", input) : incomplete();
 }
 
 function inspectObservations(
@@ -284,8 +276,8 @@ function inspectObservations(
     + (next === null ? "The Result cursor confirms this section is complete." : "More pages remain. This inspection reached its bounded page limit and is not a complete series."));
 }
 
-function hasSurface(observations: readonly ToolObservation[], surfaceId: string): boolean {
-  return observations.some((item) => item.name === "render_a2ui" && item.input.surfaceId === surfaceId);
+function hasSurface(observations: readonly ToolObservation[], afterIndex: number): boolean {
+  return observations.some((item) => item.name === "render_a2ui" && item.input.view === "research_runs" && item.promptIndex > afterIndex);
 }
 
 function toolFailureDecision(

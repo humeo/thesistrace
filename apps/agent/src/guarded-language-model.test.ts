@@ -145,7 +145,7 @@ test("Mastra completes a rendered A2UI answer without requiring a redundant fina
     input.prompt.some((message) => message.role === "tool")
       ? [{ type: "text-start", id: "empty" }, { type: "text-end", id: "empty" }, finish]
       : [{ type: "tool-call", toolCallId: "render-result", toolName: "render_a2ui", input: JSON.stringify({
-        surfaceId: "research-result", components: [{ id: "root", component: "Text", text: "Research result available" }],
+        view: "research_runs", runIds: ["run_0123456789abcdef0123"],
       }) }, { ...finish, finishReason: { unified: "tool-calls", raw: "tool_calls" } }],
   )), observation, capacity(65_536));
   const agent = new Agent({ id: "render-completion", name: "Render completion", instructions: "Show the result.",

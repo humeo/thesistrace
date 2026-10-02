@@ -1,3 +1,6 @@
+import { z } from "zod";
+import { zodToJsonSchema } from "zod-to-json-schema";
+
 export const RESEARCH_A2UI_ACTIVITY_TYPE = "a2ui-surface";
 export const RESEARCH_A2UI_CATALOG_ID = "urn:thesistrace:a2ui:research:v0.9";
 export const RESEARCH_A2UI_PROTOCOL_VERSION = "v0.9";
@@ -5,176 +8,108 @@ const RESEARCH_A2UI_MAX_BYTES = 64 * 1024;
 export const RESEARCH_A2UI_MAX_COMPONENTS = 64;
 const RESEARCH_A2UI_MAX_DEPTH = 8;
 
-const string = (maxLength, description) => ({
-  description,
-  maxLength,
-  minLength: 1,
-  type: "string",
-});
-const stringArray = (maxItems, maxLength, description) => ({
-  description,
-  items: string(maxLength),
-  maxItems,
-  minItems: 1,
-  type: "array",
-});
-const objectArray = (maxItems, properties, required, description) => ({
-  description,
-  items: {
-    additionalProperties: false,
-    properties,
-    required,
-    type: "object",
-  },
-  maxItems,
-  minItems: 1,
-  type: "array",
-});
+const pairSchema = (labelLength, valueLength) => z.object({
+  label: z.string().min(1).max(labelLength),
+  value: z.string().min(1).max(valueLength),
+}).strict();
 
+export const RESEARCH_A2UI_DEFINITIONS = {
+  Text: {
+    description: "Bounded plain text.",
+    props: z.object({
+      text: z.string().min(1).max(4_000),
+      variant: z.enum(["body", "caption", "label", "title"]).optional(),
+    }).strict(),
+  },
+  Row: {
+    description: "Horizontal child layout.",
+    props: z.object({
+      align: z.enum(["start", "center", "end", "stretch"]).optional(),
+      children: z.array(z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,63}$/)).min(1).max(16),
+      gap: z.enum(["compact", "normal", "wide"]).optional(),
+    }).strict(),
+  },
+  Column: {
+    description: "Vertical child layout.",
+    props: z.object({
+      align: z.enum(["start", "center", "end", "stretch"]).optional(),
+      children: z.array(z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,63}$/)).min(1).max(16),
+      gap: z.enum(["compact", "normal", "wide"]).optional(),
+    }).strict(),
+  },
+  Divider: {
+    description: "Hairline divider.",
+    props: z.object({}).strict(),
+  },
+  Formula: {
+    description: "Read-only Alpha formula with local copy.",
+    props: z.object({
+      expression: z.string().min(1).max(8_192),
+      label: z.string().min(1).max(80).optional(),
+    }).strict(),
+  },
+  AlphaProposal: {
+    description: "Chat-owned Alpha proposal.",
+    props: z.object({
+      explanation: z.string().min(1).max(4_000),
+      formula: z.string().min(1).max(8_192),
+      hypothesis: z.string().min(1).max(2_000),
+      period: z.string().min(1).max(120),
+      researchType: z.string().min(1).max(80),
+      strategy: z.array(pairSchema(80, 240)).min(1).max(16),
+      title: z.string().min(1).max(160),
+      universe: z.string().min(1).max(160),
+    }).strict(),
+  },
+  ResearchRun: { description: "Current ResearchRun from Core.", props: z.object({ runId: z.string().regex(/^run_[a-f0-9]{20}$/) }).strict() },
+  ResearchComparison: { description: "Ordered authoritative ResearchRuns.", props: z.object({ runIds: z.array(z.string().regex(/^run_[a-f0-9]{20}$/)).min(1).max(20).refine(ids => new Set(ids).size === ids.length, "Resource IDs must be distinct") }).strict() },
+  DailyTrack: { description: "Current DailyTrack from Core.", props: z.object({ trackId: z.string().regex(/^track_[a-f0-9]{20}$/) }).strict() },
+  Table: {
+    description: "Bounded read-only result table.",
+    props: z.object({
+      caption: z.string().min(1).max(240),
+      columns: z.array(z.string().min(1).max(80)).min(1).max(12),
+      initiallyExpanded: z.boolean().optional(),
+      rows: z.array(z.array(z.string().max(320)).min(1).max(12)).max(100),
+      summary: z.string().min(1).max(160),
+    }).strict(),
+  },
+  Navigation: {
+    description: "Allowlisted same-origin product navigation.",
+    props: z.object({
+      href: z.string().min(1).max(240).refine(value => parseResearchA2UINavigationHref(value) !== null, "Use an allowlisted product route"),
+      label: z.string().min(1).max(120),
+    }).strict(),
+  },
+};
+
+// JSON Schema is derived for transport; Zod is the shared field validator for
+// the server projector and the official frontend catalog.
 export const RESEARCH_A2UI_INLINE_CATALOG = Object.freeze({
   catalogId: RESEARCH_A2UI_CATALOG_ID,
-  components: Object.freeze({
-    Text: {
-      additionalProperties: false,
-      description: "Bounded plain text. Never renders HTML.",
-      properties: {
-        text: string(4_000, "Literal display text."),
-        variant: {
-          enum: ["body", "caption", "label", "title"],
-          type: "string",
-        },
-      },
-      required: ["text"],
-      type: "object",
-    },
-    Row: {
-      additionalProperties: false,
-      description: "Horizontal layout for referenced child component IDs.",
-      properties: {
-        align: { enum: ["start", "center", "end", "stretch"], type: "string" },
-        children: stringArray(16, 64, "Child component IDs."),
-        gap: { enum: ["compact", "normal", "wide"], type: "string" },
-      },
-      required: ["children"],
-      type: "object",
-    },
-    Column: {
-      additionalProperties: false,
-      description: "Vertical layout for referenced child component IDs.",
-      properties: {
-        align: { enum: ["start", "center", "end", "stretch"], type: "string" },
-        children: stringArray(16, 64, "Child component IDs."),
-        gap: { enum: ["compact", "normal", "wide"], type: "string" },
-      },
-      required: ["children"],
-      type: "object",
-    },
-    Divider: {
-      additionalProperties: false,
-      description: "One hairline section divider.",
-      properties: {},
-      type: "object",
-    },
-    Formula: {
-      additionalProperties: false,
-      description: "A read-only Alpha formula with a local copy control.",
-      properties: {
-        expression: string(8_192, "Validated Alpha expression to display."),
-        label: string(80, "Short semantic label."),
-      },
-      required: ["expression"],
-      type: "object",
-    },
-    AlphaProposal: {
-      additionalProperties: false,
-      description: "Chat-owned Alpha proposal; never implies a persisted ResearchRun.",
-      properties: {
-        explanation: string(4_000, "Why the proposal tests the hypothesis."),
-        formula: string(8_192, "Proposed Alpha expression."),
-        hypothesis: string(2_000, "Testable investment hypothesis."),
-        period: string(120, "Proposed research period."),
-        researchType: string(80, "Proposed Research type."),
-        strategy: objectArray(16, {
-          label: string(80, "Strategy parameter name."),
-          value: string(240, "Strategy parameter display value."),
-        }, ["label", "value"], "Proposed strategy parameters."),
-        title: string(160, "Proposal title."),
-        universe: string(160, "Proposed security universe."),
-      },
-      required: [
-        "title",
-        "hypothesis",
-        "formula",
-        "universe",
-        "period",
-        "researchType",
-        "strategy",
-        "explanation",
-      ],
-      type: "object",
-    },
-    ResearchRun: {
-      additionalProperties: false,
-      description: "Show a ResearchRun by ID. The client reads current authoritative status, formula and results; never supply those facts.",
-      properties: { runId: { type: "string", pattern: "^run_[a-f0-9]{20}$" } },
-      required: ["runId"], type: "object",
-    },
-    ResearchComparison: {
-      additionalProperties: false,
-      description: "Compare up to 20 ResearchRuns in the supplied order using client-fetched authoritative results.",
-      properties: { runIds: { type: "array", minItems: 1, maxItems: 20, uniqueItems: true, items: { type: "string", pattern: "^run_[a-f0-9]{20}$" } } },
-      required: ["runIds"], type: "object",
-    },
-    DailyTrack: {
-      additionalProperties: false,
-      description: "Show the current DailyTrack by ID, loaded by the authenticated client. This is a live view, not a historical snapshot.",
-      properties: { trackId: { type: "string", pattern: "^track_[a-f0-9]{20}$" } },
-      required: ["trackId"], type: "object",
-    },
-    Table: {
-      additionalProperties: false,
-      description: "Non-authoritative explanatory table. For research metrics use ResearchComparison; never copy Result values into this table.",
-      properties: {
-        caption: string(240, "Accessible table caption."),
-        columns: stringArray(12, 80, "Column headings."),
-        initiallyExpanded: { type: "boolean" },
-        rows: {
-          items: {
-            items: { maxLength: 320, type: "string" },
-            maxItems: 12,
-            minItems: 1,
-            type: "array",
-          },
-          maxItems: 100,
-          type: "array",
-        },
-        summary: string(160, "Disclosure label."),
-      },
-      required: ["caption", "columns", "rows", "summary"],
-      type: "object",
-    },
-    Navigation: {
-      additionalProperties: false,
-      description: "Link to an allowlisted same-origin ThesisTrace product route.",
-      properties: {
-        href: string(240, "Known same-origin product route."),
-        label: string(120, "Accessible navigation label."),
-      },
-      required: ["label", "href"],
-      type: "object",
-    },
-  }),
+  components: Object.freeze(Object.fromEntries(Object.entries(RESEARCH_A2UI_DEFINITIONS)
+    .map(([name, definition]) => [name, { ...zodToJsonSchema(definition.props, { $refStrategy: "none" }), description: definition.description }]))),
 });
+
+const viewFields = { research_runs: "runIds", alpha_proposal: "proposal", daily_track: "trackId" };
+export const RESEARCH_A2UI_VIEW_SCHEMA = z.object({
+  view: z.enum(["research_runs", "alpha_proposal", "daily_track"]),
+  runIds: RESEARCH_A2UI_DEFINITIONS.ResearchComparison.props.shape.runIds.optional(),
+  proposal: RESEARCH_A2UI_DEFINITIONS.AlphaProposal.props.optional(),
+  trackId: RESEARCH_A2UI_DEFINITIONS.DailyTrack.props.shape.trackId.optional(),
+}).strict().superRefine((input, context) => {
+  const required = viewFields[input.view];
+  if (input[required] === undefined) context.addIssue({ code: "custom", path: [required], message: `Required for ${input.view}` });
+  for (const field of Object.values(viewFields)) {
+    if (field !== required && input[field] !== undefined) context.addIssue({ code: "custom", path: [field], message: `Not allowed for ${input.view}` });
+  }
+});
+export const RESEARCH_A2UI_VIEW_JSON_SCHEMA = zodToJsonSchema(RESEARCH_A2UI_VIEW_SCHEMA, { $refStrategy: "none" });
 
 const COMPONENT_ID = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const MESSAGE_ID = /^a2ui-surface-[A-Za-z0-9._:-]{1,200}$/;
 const SURFACE_ID = /^[a-z][a-z0-9-]{0,63}$/;
 const RESEARCH_RUN_ID = /^run_[a-f0-9]{20}$/;
-
-const TEXT_VARIANTS = new Set(["body", "caption", "label", "title"]);
-const LAYOUT_ALIGNS = new Set(["start", "center", "end", "stretch"]);
-const LAYOUT_GAPS = new Set(["compact", "normal", "wide"]);
-const COMPONENT_NAMES = new Set(Object.keys(RESEARCH_A2UI_INLINE_CATALOG.components));
 
 const ERROR_CODES = new Set(["GENERATION_FAILED", "INVALID_PAYLOAD", "INVALID_ENVELOPE", "INVALID_OPERATIONS", "INVALID_LIFECYCLE", "TOOL_RESULT_MISSING", "TOOL_RESULT_INVALID_JSON"]);
 export function safeResearchA2UIErrorContent(errorCode = "GENERATION_FAILED") {
@@ -214,6 +149,19 @@ export function projectResearchA2UIContent(value) {
       : { content: { a2ui_operations: projected }, kind: "ready", valid: true };
   }
   return projectLifecycle(value);
+}
+
+/** Application-owned templates. The model supplies business fields only. */
+export function createResearchA2UIView(input, surfaceId) {
+  const component = input.view === "research_runs"
+    ? { component: "ResearchComparison", runIds: input.runIds }
+    : input.view === "daily_track"
+      ? { component: "DailyTrack", trackId: input.trackId }
+      : { component: "AlphaProposal", ...input.proposal };
+  return { a2ui_operations: [
+    { version: RESEARCH_A2UI_PROTOCOL_VERSION, createSurface: { catalogId: RESEARCH_A2UI_CATALOG_ID, surfaceId } },
+    { version: RESEARCH_A2UI_PROTOCOL_VERSION, updateComponents: { surfaceId, components: [{ ...component, id: "root" }] } },
+  ] };
 }
 
 function projectLifecycle(value) {
@@ -340,102 +288,14 @@ function projectComponents(values) {
 
 function projectComponent(value) {
   if (!isRecord(value) || typeof value.id !== "string" || !COMPONENT_ID.test(value.id)) return null;
-  if (typeof value.component !== "string" || !COMPONENT_NAMES.has(value.component)) return null;
-  const base = { component: value.component, id: value.id };
-  switch (value.component) {
-    case "Text":
-      if (!exactKeys(value, ["component", "id", "text", "variant"]) || !validString(value.text, 4_000)) return null;
-      if (value.variant !== undefined && !TEXT_VARIANTS.has(value.variant)) return null;
-      return { ...base, text: value.text, ...(value.variant === undefined ? {} : { variant: value.variant }) };
-    case "Row":
-    case "Column": {
-      if (!exactKeys(value, ["align", "children", "component", "gap", "id"])) return null;
-      if (!validStringArray(value.children, 16, 64, COMPONENT_ID)) return null;
-      if (value.align !== undefined && !LAYOUT_ALIGNS.has(value.align)) return null;
-      if (value.gap !== undefined && !LAYOUT_GAPS.has(value.gap)) return null;
-      return {
-        ...base,
-        children: [...value.children],
-        ...(value.align === undefined ? {} : { align: value.align }),
-        ...(value.gap === undefined ? {} : { gap: value.gap }),
-      };
-    }
-    case "Divider":
-      return exactKeys(value, ["component", "id"]) ? base : null;
-    case "Formula":
-      if (!exactKeys(value, ["component", "expression", "id", "label"]) || !validString(value.expression, 8_192)) return null;
-      if (value.label !== undefined && !validString(value.label, 80)) return null;
-      return { ...base, expression: value.expression, ...(value.label === undefined ? {} : { label: value.label }) };
-    case "AlphaProposal":
-      return projectAlphaProposal(value, base);
-    case "ResearchRun":
-      return exactKeys(value, ["component", "id", "runId"]) && typeof value.runId === "string" && RESEARCH_RUN_ID.test(value.runId) ? { ...base, runId: value.runId } : null;
-    case "ResearchComparison":
-      return exactKeys(value, ["component", "id", "runIds"]) && validStringArray(value.runIds, 20, 24, RESEARCH_RUN_ID) && new Set(value.runIds).size === value.runIds.length ? { ...base, runIds: [...value.runIds] } : null;
-    case "DailyTrack":
-      return exactKeys(value, ["component", "id", "trackId"]) && typeof value.trackId === "string" && /^track_[a-f0-9]{20}$/.test(value.trackId) ? { ...base, trackId: value.trackId } : null;
-    case "Table":
-      return projectTable(value, base);
-    case "Navigation": {
-      if (!exactKeys(value, ["component", "href", "id", "label"]) || !validString(value.label, 120)) return null;
-      const href = parseResearchA2UINavigationHref(value.href);
-      return href === null ? null : { ...base, href, label: value.label };
-    }
-    default:
-      return null;
-  }
-}
-
-function projectAlphaProposal(value, base) {
-  const keys = ["component", "explanation", "formula", "hypothesis", "id", "period", "researchType", "strategy", "title", "universe"];
-  if (!exactKeys(value, keys)) return null;
-  const limits = { explanation: 4_000, formula: 8_192, hypothesis: 2_000, period: 120, researchType: 80, title: 160, universe: 160 };
-  for (const [key, limit] of Object.entries(limits)) {
-    if (!validString(value[key], limit)) return null;
-  }
-  const strategy = projectPairs(value.strategy, 16, 80, 240);
-  return strategy === null ? null : {
-    ...base,
-    explanation: value.explanation,
-    formula: value.formula,
-    hypothesis: value.hypothesis,
-    period: value.period,
-    researchType: value.researchType,
-    strategy,
-    title: value.title,
-    universe: value.universe,
-  };
-}
-
-function projectTable(value, base) {
-  if (!exactKeys(value, ["caption", "columns", "component", "id", "initiallyExpanded", "rows", "summary"])) return null;
-  if (!validString(value.caption, 240) || !validString(value.summary, 160)) return null;
-  if (!validStringArray(value.columns, 12, 80) || !Array.isArray(value.rows) || value.rows.length > 100) return null;
-  if (value.initiallyExpanded !== undefined && typeof value.initiallyExpanded !== "boolean") return null;
-  const rows = [];
-  for (const row of value.rows) {
-    if (!Array.isArray(row) || row.length !== value.columns.length || !validStringArray(row, 12, 320, undefined, true)) return null;
-    rows.push([...row]);
-  }
-  return {
-    ...base,
-    caption: value.caption,
-    columns: [...value.columns],
-    rows,
-    summary: value.summary,
-    ...(value.initiallyExpanded === undefined ? {} : { initiallyExpanded: value.initiallyExpanded }),
-  };
-}
-
-function projectPairs(value, maxItems, labelLimit, valueLimit) {
-  if (!Array.isArray(value) || value.length === 0 || value.length > maxItems) return null;
-  const result = [];
-  for (const entry of value) {
-    if (!isRecord(entry) || !exactKeys(entry, ["label", "value"])) return null;
-    if (!validString(entry.label, labelLimit) || !validString(entry.value, valueLimit)) return null;
-    result.push({ label: entry.label, value: entry.value });
-  }
-  return result;
+  if (!Object.hasOwn(RESEARCH_A2UI_DEFINITIONS, value.component)) return null;
+  const definition = RESEARCH_A2UI_DEFINITIONS[value.component];
+  const { id, component, ...props } = value;
+  const result = definition.props.safeParse(props);
+  if (!result.success) return null;
+  // Cross-field table integrity cannot be represented by a property schema.
+  if (component === "Table" && result.data.rows.some(row => row.length !== result.data.columns.length)) return null;
+  return { component, id, ...result.data };
 }
 
 function invalid(reason) {
@@ -462,17 +322,6 @@ function exactKeys(value, allowed) {
 
 function isSurfaceId(value) {
   return typeof value === "string" && SURFACE_ID.test(value);
-}
-
-function validString(value, maxLength, allowEmpty = false) {
-  return typeof value === "string" && value.length <= maxLength && (allowEmpty || value.length > 0);
-}
-
-function validStringArray(value, maxItems, maxLength, pattern, allowEmpty = false) {
-  return Array.isArray(value)
-    && value.length > 0
-    && value.length <= maxItems
-    && value.every((item) => validString(item, maxLength, allowEmpty) && (pattern === undefined || pattern.test(item)));
 }
 
 function isBoundedInteger(value, min, max) {

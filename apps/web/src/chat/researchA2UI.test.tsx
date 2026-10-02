@@ -8,7 +8,7 @@ import {
 } from "@copilotkit/react-core/v2/context";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   RESEARCH_A2UI_ACTIVITY_TYPE,
@@ -27,8 +27,12 @@ const RUN_ID = "run_0123456789abcdef0123";
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true;
 
+beforeEach(() => {
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ code: "NOT_FOUND" }), { status: 404 })));
+});
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   document.body.replaceChildren();
 });
 
@@ -50,6 +54,7 @@ describe("Research A2UI renderer", () => {
     for (const definition of Object.values(researchA2UICatalogDefinitions)) {
       expect(definition.props.safeParse({ unsafeExtraProp: true }).success).toBe(false);
     }
+    expect(researchA2UICatalogDefinitions.ResearchComparison.props.safeParse({ runIds: [RUN_ID, RUN_ID] }).success).toBe(false);
   });
 
   it("renders the reviewed components through CopilotKit and keeps interactions local", async () => {

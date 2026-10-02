@@ -43,8 +43,8 @@ const scriptedResumeResearchPrompt =
   "Resume the accepted ResearchRun from this Chat and explain its authoritative Result when available.";
 const scriptedStrategyPrompt =
   "Backtest a low-volatility Alpha strategy using reliable ThesisTrace defaults.";
-const scriptedLargeA2UITablePrompt =
-  "[scripted-a2ui-table] Show a large renderer acceptance sample, not research evidence.";
+const scriptedA2UIProposalPrompt =
+  "[scripted-a2ui-proposal] Show a proposal renderer acceptance sample, not research evidence.";
 
 function agentRunStatus(page: Page) {
   return page.locator("[data-chat-status]");
@@ -956,11 +956,11 @@ test("A2UI shows real running state and supports keyboard and narrow-screen resu
   }
 });
 
-test("an A2UI-only answer completes, replays and preserves large table layout on a narrow screen", async ({ page }, testInfo) => {
+test("a fixed A2UI proposal completes and replays on desktop", async ({ page }, testInfo) => {
   await page.goto("/chat");
   const admission = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/agent/copilotkit/agent/research/run"
     && response.request().method() === "POST");
-  const tableTurnId = await submitChatPrompt(page, scriptedLargeA2UITablePrompt);
+  const proposalTurnId = await submitChatPrompt(page, scriptedA2UIProposalPrompt);
   const admitted = await admission;
   if (admitted.status() !== 200) {
     const body: unknown = await admitted.json().catch(() => null);
@@ -970,24 +970,15 @@ test("an A2UI-only answer completes, replays and preserves large table layout on
       body: Buffer.from(JSON.stringify({ status: admitted.status(), code })) });
   }
   expect(admitted.status(), "Chat must be admitted before testing A2UI completion").toBe(200);
-  await waitForChatTurn(page, tableTurnId);
+  await waitForChatTurn(page, proposalTurnId);
   await expect(agentRunStatus(page)).toHaveText("Run complete");
-  const disclosure = page.getByRole("button", { name: "Inspect 100 sample rows" });
-  await keyboardFocus(page, disclosure);
-  await page.keyboard.press("Enter");
-  const table = page.getByRole("table", { name: "Renderer acceptance sample — not research evidence" });
-  await expect(table.getByRole("row")).toHaveCount(101);
-  await expect(table.getByRole("cell")).toHaveCount(1200);
-  await page.setViewportSize({ width: 320, height: 720 });
-  await expectAccessibleNarrowTable(table, 12);
-  await table.getByRole("cell").last().scrollIntoViewIfNeeded();
-  await expect(table.getByRole("cell").last()).toContainText("Sample 100:12");
-  await testInfo.attach("a2ui-large-table-mobile.png", { body: await page.screenshot(), contentType: "image/png" });
+  const proposal = page.getByRole("region", { name: "Alpha proposal: Renderer acceptance sample — not research evidence" });
+  await expect(proposal).toContainText("rank(close)");
+  await expect(proposal).toContainText("No ResearchRun has been submitted.");
+  await testInfo.attach("a2ui-proposal-desktop.png", { body: await page.screenshot(), contentType: "image/png" });
   await page.reload();
   await expect(agentRunStatus(page)).toHaveText("Run complete");
-  await disclosure.click();
-  await expect(table.getByRole("cell")).toHaveCount(1200);
-  await expectAccessibleNarrowTable(table, 12);
+  await expect(proposal).toContainText("No ResearchRun has been submitted.");
 });
 
 async function keyboardFocus(page: Page, target: Locator): Promise<void> {

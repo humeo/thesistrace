@@ -30,10 +30,9 @@ export function scriptedPrivacyDecision(options: LanguageModelV3CallOptions): Sc
     input.hypothesis = PRIVACY_CANARIES.hypothesis;
     input.name = PRIVACY_CANARIES.mcp_argument;
   }
-  if (decision.name === "render_a2ui" && Array.isArray(input.components)) {
-    input.components = input.components.map((component) => component.component === "AlphaProposal" ? {
-      ...component, formula: PRIVACY_CANARIES.formula, hypothesis: PRIVACY_CANARIES.hypothesis, explanation: PRIVACY_CANARIES.a2ui,
-    } : component.component === "Formula" ? { ...component, expression: PRIVACY_CANARIES.formula } : component);
+  if (decision.name === "render_a2ui" && input.view === "alpha_proposal") {
+    input.proposal = { ...input.proposal as Record<string, unknown>, formula: PRIVACY_CANARIES.formula,
+      hypothesis: PRIVACY_CANARIES.hypothesis, explanation: PRIVACY_CANARIES.a2ui };
   }
   return { ...decision, input };
 }

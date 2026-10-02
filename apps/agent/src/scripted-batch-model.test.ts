@@ -11,7 +11,7 @@ import {
   SCRIPTED_RESUME_BATCH_PROMPT,
   SCRIPTED_STRATEGY_SWEEP_PROMPT,
 } from "./scripted-language-model.js";
-import { projectResearchA2UIContent, RESEARCH_A2UI_CATALOG_ID, RESEARCH_A2UI_PROTOCOL_VERSION } from "@thesistrace/contracts/research-a2ui";
+import { projectResearchA2UIContent, createResearchA2UIView, type ResearchA2UIViewInput } from "@thesistrace/contracts/research-a2ui";
 
 test.each([
   ["factor_evaluation", SCRIPTED_FACTOR_BATCH_PROMPT],
@@ -37,7 +37,7 @@ test.each([
   const surfaces = output.calls.filter((call) => call.name === "render_a2ui");
   expect(surfaces).toHaveLength(1);
   for (const surface of surfaces) expect(validSurface(surface.input)).toMatchObject({ kind: "ready", valid: true });
-  const comparison = (surfaces.at(-1)?.input.components as Record<string, unknown>[]).find(component => component.component === "ResearchComparison");
+  const comparison = surfaces.at(-1)?.input;
   expect(comparison?.runIds).toEqual(CHILD_IDS);
   expect(comparison).not.toHaveProperty("metrics");
   expect(output.text).toContain(BATCH_ID);
@@ -51,7 +51,7 @@ test("partial child failure preserves the successful sibling evidence without in
     ? batchDetail("factor_evaluation", "completed_with_failures") : batchFixtureOutput("factor_evaluation", call));
   expect(output.calls.filter((call) => call.name === "get_research_run_result").map((call) => call.input.run_id)).toEqual([CHILD_IDS[0]]);
   const surfaces = output.calls.filter((call) => call.name === "render_a2ui");
-  const comparison = (surfaces.at(-1)?.input.components as Record<string, unknown>[]).find(component => component.component === "ResearchComparison");
+  const comparison = surfaces.at(-1)?.input;
   expect(comparison?.runIds).toEqual(CHILD_IDS);
   expect(comparison).not.toHaveProperty("metrics");
   expect(output.text).toContain("Some children failed");
@@ -64,7 +64,7 @@ test.each(["queued", "running"])("the model follows retry guidance for %s then e
   expect(output.waits).toEqual([2, 2]);
   expect(output.calls.filter((call) => call.name === "get_research_batch")).toHaveLength(3);
   expect(output.calls.filter((call) => call.name === "render_a2ui"
-    && String(call.input.surfaceId).startsWith("batch-progress-"))).toHaveLength(1);
+    && call.input.view === "research_runs")).toHaveLength(1);
   expect(output.calls.some((call) => call.name === "get_research_run_result")).toBe(false);
   expect(output.text).toContain(`is ${status}`);
   expect(output.text).toContain("Core continues independently");
@@ -80,12 +80,11 @@ test("a terminal Resume skips stale progress and reads each authoritative Child 
   const resumed = await runScriptedTrajectory(request, (call) => batchFixtureOutput("factor_evaluation", call));
 
   expect(resumed.calls[0]?.name).toBe("get_research_batch");
-  expect(resumed.calls.filter((call) => call.name === "render_a2ui"
-    && String(call.input.surfaceId).startsWith("batch-progress-"))).toEqual([]);
+  expect(resumed.calls.findIndex(call => call.name === "render_a2ui")).toBeGreaterThan(resumed.calls.findIndex(call => call.name === "get_research_run_result"));
   expect(resumed.calls.filter((call) => call.name === "get_research_run_result")
     .map((call) => call.input.run_id)).toEqual(CHILD_IDS);
   expect(resumed.calls.filter((call) => call.name === "render_a2ui"
-    && String(call.input.surfaceId).startsWith("batch-results-"))).toHaveLength(1);
+    && call.input.view === "research_runs")).toHaveLength(1);
   expect(resumed.text).toContain("not a combined Batch Result");
   expect(resumed.calls.length + 1).toBeLessThanOrEqual(9);
 });
@@ -184,7 +183,7 @@ test.each(["missing-child", "mismatched-result", "missing-metric", "duplicate-or
     return value;
   });
   expect(output.text).toContain("incomplete");
-  expect(output.calls.filter((call) => call.name === "render_a2ui").some((call) => String(call.input.surfaceId).startsWith("batch-results"))).toBe(false);
+  expect(output.calls.filter((call) => call.name === "render_a2ui").some(call => call.input.view === "research_runs")).toBe(false);
 });
 
 test.each([false, true])("opaque Result pagination stays on the same child and reports bounded completeness: %s", async (morePages) => {
@@ -242,8 +241,5 @@ function followUp(request: LanguageModelV3CallOptions, prompt: string): void {
 }
 
 function validSurface(input: Record<string, unknown>) {
-  return projectResearchA2UIContent({ a2ui_operations: [
-    { version: RESEARCH_A2UI_PROTOCOL_VERSION, createSurface: { catalogId: RESEARCH_A2UI_CATALOG_ID, surfaceId: input.surfaceId } },
-    { version: RESEARCH_A2UI_PROTOCOL_VERSION, updateComponents: { surfaceId: input.surfaceId, components: input.components } },
-  ] });
+  return projectResearchA2UIContent(createResearchA2UIView(input as ResearchA2UIViewInput, "scripted-preview"));
 }

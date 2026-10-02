@@ -3,7 +3,6 @@ import {
   A2UIProvider,
   A2UIRenderer,
   createCatalog,
-  type CatalogDefinitions,
   useA2UI,
 } from "@copilotkit/a2ui-renderer";
 import { useEffect, useId, useMemo, useState } from "react";
@@ -16,85 +15,13 @@ import {
   projectResearchA2UIContent,
   RESEARCH_A2UI_ACTIVITY_TYPE,
   RESEARCH_A2UI_CATALOG_ID,
+  RESEARCH_A2UI_DEFINITIONS,
 } from "@thesistrace/contracts/research-a2ui";
 
 import { Alert, App, Card, Collapse, Descriptions, Divider, Flex, Spin, Table, Tag, Typography } from "antd";
 import { ResearchResourceList } from "./ResearchResourceList";
 
-const pairSchema = (labelLength: number, valueLength: number) => z.object({
-  label: z.string().min(1).max(labelLength),
-  value: z.string().min(1).max(valueLength),
-}).strict();
-
-export const researchA2UICatalogDefinitions = {
-  Text: {
-    description: "Bounded plain text.",
-    props: z.object({
-      text: z.string().min(1).max(4_000),
-      variant: z.enum(["body", "caption", "label", "title"]).optional(),
-    }).strict(),
-  },
-  Row: {
-    description: "Horizontal child layout.",
-    props: z.object({
-      align: z.enum(["start", "center", "end", "stretch"]).optional(),
-      children: z.array(z.string().min(1).max(64)).min(1).max(16),
-      gap: z.enum(["compact", "normal", "wide"]).optional(),
-    }).strict(),
-  },
-  Column: {
-    description: "Vertical child layout.",
-    props: z.object({
-      align: z.enum(["start", "center", "end", "stretch"]).optional(),
-      children: z.array(z.string().min(1).max(64)).min(1).max(16),
-      gap: z.enum(["compact", "normal", "wide"]).optional(),
-    }).strict(),
-  },
-  Divider: {
-    description: "Hairline divider.",
-    props: z.object({}).strict(),
-  },
-  Formula: {
-    description: "Read-only Alpha formula with local copy.",
-    props: z.object({
-      expression: z.string().min(1).max(8_192),
-      label: z.string().min(1).max(80).optional(),
-    }).strict(),
-  },
-  AlphaProposal: {
-    description: "Chat-owned Alpha proposal.",
-    props: z.object({
-      explanation: z.string().min(1).max(4_000),
-      formula: z.string().min(1).max(8_192),
-      hypothesis: z.string().min(1).max(2_000),
-      period: z.string().min(1).max(120),
-      researchType: z.string().min(1).max(80),
-      strategy: z.array(pairSchema(80, 240)).min(1).max(16),
-      title: z.string().min(1).max(160),
-      universe: z.string().min(1).max(160),
-    }).strict(),
-  },
-  ResearchRun: { description: "Current ResearchRun from Core.", props: z.object({ runId: z.string().regex(/^run_[a-f0-9]{20}$/) }).strict() },
-  ResearchComparison: { description: "Ordered authoritative ResearchRuns.", props: z.object({ runIds: z.array(z.string().regex(/^run_[a-f0-9]{20}$/)).min(1).max(20) }).strict() },
-  DailyTrack: { description: "Current DailyTrack from Core.", props: z.object({ trackId: z.string().regex(/^track_[a-f0-9]{20}$/) }).strict() },
-  Table: {
-    description: "Bounded read-only result table.",
-    props: z.object({
-      caption: z.string().min(1).max(240),
-      columns: z.array(z.string().min(1).max(80)).min(1).max(12),
-      initiallyExpanded: z.boolean().optional(),
-      rows: z.array(z.array(z.string().max(320)).min(1).max(12)).max(100),
-      summary: z.string().min(1).max(160),
-    }).strict(),
-  },
-  Navigation: {
-    description: "Allowlisted same-origin product navigation.",
-    props: z.object({
-      href: z.string().min(1).max(240),
-      label: z.string().min(1).max(120),
-    }).strict(),
-  },
-} satisfies CatalogDefinitions;
+export const researchA2UICatalogDefinitions = RESEARCH_A2UI_DEFINITIONS;
 
 const researchA2UICatalog = createCatalog(
   researchA2UICatalogDefinitions,
@@ -104,12 +31,12 @@ const researchA2UICatalog = createCatalog(
       : <Typography.Text type={props.variant === "caption" ? "secondary" : undefined}
         strong={props.variant === "label"}>{props.text}</Typography.Text>,
     Row: ({ children, props }) => (
-      <Flex wrap gap={layoutGap(props.gap)} align={layoutAlign(props.align)}>
+      <Flex wrap gap={16} align="stretch">
         {props.children.map((id) => <Flex vertical style={{ flex: 1, minWidth: 0 }} key={id}>{children(id)}</Flex>)}
       </Flex>
     ),
     Column: ({ children, props }) => (
-      <Flex vertical gap={layoutGap(props.gap)} align={layoutAlign(props.align)}>
+      <Flex vertical gap={16} align="stretch">
         {props.children.map((id) => <Flex vertical style={{ minWidth: 0, maxWidth: "100%" }} key={id}>{children(id)}</Flex>)}
       </Flex>
     ),
@@ -127,14 +54,6 @@ const researchA2UICatalog = createCatalog(
     includeBasicCatalog: false,
   },
 );
-
-function layoutGap(gap: "compact" | "normal" | "wide" = "normal") {
-  return { compact: 8, normal: 16, wide: 24 }[gap];
-}
-
-function layoutAlign(align: "start" | "center" | "end" | "stretch" = "stretch") {
-  return align === "start" ? "flex-start" : align === "end" ? "flex-end" : align;
-}
 
 function AlphaProposalSurface({ props }: { props: z.infer<typeof researchA2UICatalogDefinitions.AlphaProposal.props> }) {
   const { t } = useTranslation("chat");

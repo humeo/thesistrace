@@ -56,8 +56,8 @@ export const SCRIPTED_INVALID_A2UI_TOP_LEVEL_PROMPT =
   "[scripted-invalid-a2ui-top-level] Attempt an unknown top-level render field.";
 export const SCRIPTED_INVALID_A2UI_DATA_PROMPT =
   "[scripted-invalid-a2ui-data] Attempt non-empty render data.";
-export const SCRIPTED_LARGE_A2UI_TABLE_PROMPT =
-  "[scripted-a2ui-table] Show a large renderer acceptance sample, not research evidence.";
+export const SCRIPTED_A2UI_PROPOSAL_PROMPT =
+  "[scripted-a2ui-proposal] Show a proposal renderer acceptance sample, not research evidence.";
 
 export type ScriptedGuidanceWait = (
   seconds: number,
@@ -236,7 +236,7 @@ function scriptedResponse(options: LanguageModelV3CallOptions): ScriptedResponse
   }
   const invalidA2UI = scriptedInvalidA2UI(options);
   if (invalidA2UI !== null) return invalidA2UI;
-  const tableA2UI = scriptedLargeA2UITable(options);
+  const tableA2UI = scriptedA2UIProposal(options);
   if (tableA2UI !== null) return tableA2UI;
   const tool = scriptedTool(options);
   if (tool !== null) {
@@ -334,8 +334,8 @@ function scriptedInvalidA2UI(
   };
 }
 
-function scriptedLargeA2UITable(options: LanguageModelV3CallOptions): ScriptedResponse | null {
-  const promptIndex = latestExactUserPromptIndex(options, SCRIPTED_LARGE_A2UI_TABLE_PROMPT);
+function scriptedA2UIProposal(options: LanguageModelV3CallOptions): ScriptedResponse | null {
+  const promptIndex = latestExactUserPromptIndex(options, SCRIPTED_A2UI_PROPOSAL_PROMPT);
   if (promptIndex < 0) return null;
   const rendered = options.prompt.slice(promptIndex + 1).some((message) => (
     message.role === "tool" && message.content.some((part) => (
@@ -345,7 +345,7 @@ function scriptedLargeA2UITable(options: LanguageModelV3CallOptions): ScriptedRe
   const available = options.tools?.some((tool) => (
     tool.type === "function" && tool.name === "render_a2ui"
   )) === true;
-  // The rendered table is the complete answer; exercise the native empty-stop
+  // The rendered proposal is the complete answer; exercise the native empty-stop
   // continuation instead of requiring an additional prose message.
   if (rendered) return { chunks: [], text: "", tool: null };
   if (!available) {
@@ -357,21 +357,13 @@ function scriptedLargeA2UITable(options: LanguageModelV3CallOptions): ScriptedRe
     text: "",
     tool: {
       name: "render_a2ui",
-      input: {
-        components: [{
-          caption: "Renderer acceptance sample — not research evidence",
-          columns: Array.from({ length: 12 }, (_, index) => `Field ${index + 1}`),
-          component: "Table",
-          id: "root",
-          rows: Array.from({ length: 100 }, (_, row) => (
-            Array.from({ length: 12 }, (_, column) => (
-              `Sample ${row + 1}:${column + 1} ${"x".repeat(36)}`
-            ))
-          )),
-          summary: "Inspect 100 sample rows",
-        }],
-        data: {},
-        surfaceId: "large-table-acceptance-sample",
+      input: { view: "alpha_proposal", proposal: {
+        title: "Renderer acceptance sample — not research evidence",
+        hypothesis: "A hypothetical signal to demonstrate the proposal view.",
+        formula: "rank(close)", universe: "top1000", period: "2026-01-01 to 2026-09-30",
+        researchType: "Factor Evaluation", strategy: [{ label: "Neutralization", value: "none" }],
+        explanation: "Display-only sample. No ResearchRun has been submitted.",
+      }
       },
     },
   };
