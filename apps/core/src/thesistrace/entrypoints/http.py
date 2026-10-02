@@ -59,6 +59,7 @@ from thesistrace.data import (
     DatasetOperationalStatus,
     DatasetOperationalStatusService,
     DatasetOverviewService,
+    DatasetOverviewTemporarilyUnavailable,
     FinancialRefreshProgress,
     RefreshOutcome,
     validate_financial_refresh_request,
@@ -110,6 +111,7 @@ from thesistrace.research_folder import (
     ResearchFolderConflict,
     ResearchFolderList,
     ResearchFolderSummary,
+    ResearchFolderTemporarilyUnavailable,
 )
 from thesistrace.research_run import (
     OrganizeResearchRunCommand,
@@ -345,6 +347,16 @@ def create_app(
                 if research_agent_transport is None:
                     yield
                 else:
+                    app.state.research_agent_modules = ResearchAgentModules(
+                        pagination=ResearchAgentPagination.from_database(runtime.database),
+                        data_overview=runtime.data_overview,
+                        research_folders=runtime.research_folders,
+                        alpha_language=alpha_language,
+                        research_authoring=runtime.research_authoring,
+                        research_runs=runtime.research_runs,
+                        research_batches=runtime.research_batches,
+                        daily_tracks=runtime.daily_tracks,
+                    )
                     async with research_agent_transport.session_manager.run():
                         yield
         finally:
@@ -415,17 +427,7 @@ def create_app(
     if research_agent_http is not None:
 
         def research_agent_modules() -> ResearchAgentModules:
-            runtime = app.state.core_runtime
-            return ResearchAgentModules(
-                pagination=ResearchAgentPagination.from_database(runtime.database),
-                data_overview=runtime.data_overview,
-                research_folders=runtime.research_folders,
-                alpha_language=alpha_language,
-                research_authoring=runtime.research_authoring,
-                research_runs=runtime.research_runs,
-                research_batches=runtime.research_batches,
-                daily_tracks=runtime.daily_tracks,
-            )
+            return app.state.research_agent_modules
 
         research_agent_transport = create_research_agent_http_transport(
             research_agent_http,
@@ -515,6 +517,15 @@ def create_app(
                 content=rejection.model_dump(mode="json"),
             )
         return await request_validation_exception_handler(request, error)
+
+    @app.exception_handler(DatasetOverviewTemporarilyUnavailable)
+    @app.exception_handler(ResearchFolderTemporarilyUnavailable)
+    async def discovery_temporarily_unavailable(
+        _request: Request, _error: RuntimeError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=503, content={"detail": "Research discovery is unavailable"},
+        )
 
     def catalog_snapshot(request: Request) -> AlphaAuthoringCatalog:
         overview = _data_overview(request).overview()

@@ -16,10 +16,14 @@ from test_core_research_agent_mcp_runs import _mcp_client
 from test_python_direct_strategy import SESSIONS, SOURCE
 
 from thesistrace.daily_track import DailyTrackProgressionFailed
-from thesistrace.daily_track.models import DailyTrackOriginResultSectionInput
+from thesistrace.daily_track.models import (
+    DailyTrackOriginResultSectionInput,
+    TrackStrategyFrameworkInput,
+)
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.research_definition import default_simulation_costs
+from thesistrace.research_run.models import RunStrategyFrameworkInput
 
 pytestmark = pytest.mark.skipif(
     not core_environment_is_configured(),
@@ -123,6 +127,113 @@ def command(request_id, *, end=SESSIONS[2], builtin_alpha=False, fail_session=No
         "modules": modules,
         **({"formula": "-close", "neutralization": "none"} if builtin_alpha else {}),
     }
+
+
+def test_risk_only_instrument_events_survive_run_and_track_filtered_pagination(tmp_path):
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    head = _publish_head(settings, sessions=SESSIONS[:2], price_offset=0)
+    submitted = command("risk-only-seed", end=SESSIONS[1])
+    submitted["modules"]["universe_selection"]["program"]["source"] = """
+from quantgrove import UniverseSelection, Decision
+
+class Fixture(UniverseSelection):
+    def on_close(self, data, account):
+        self.state["count"] = self.state.get("count", 0) + 1
+        return Decision({"reason": "entry_only", "instrument_ids":
+                         list(data.candidates) if self.state["count"] == 1 else []})
+"""
+    submitted["modules"]["portfolio_construction"]["program"]["source"] = """
+from quantgrove import PortfolioConstruction, Decision
+
+class Fixture(PortfolioConstruction):
+    def on_close(self, data, account):
+        self.state["count"] = self.state.get("count", 0) + 1
+        if self.state["count"] > 2:
+            return None
+        ids = list(data.candidates) if self.state["count"] == 1 else []
+        return Decision({"reason": "enter_then_exit", "allocation": {
+            "mode": "rebalance", "instrument_ids": ids,
+            "relative_weights": {item: "1" for item in ids},
+            "exposure": 1.0 if ids else 0.0}, "position_limits": {}})
+"""
+    submitted["modules"]["risk_management"] = {
+        "kind": "builtin_risk/v1",
+        "take_profit_tiers": [{"profit_threshold": 0.01, "cumulative_reduction": 0.3}],
+    }
+    submitted["modules"]["alpha"]["program"]["source"] = SIGNALS.replace(
+        "Strategy", "Alpha",
+    ).replace('"valid_for_sessions": 2', '"valid_for_sessions": 1')
+    try:
+        with TestClient(create_app(settings)) as client:
+            runtime = client.app.state.core_runtime
+            seed = client.post("/api/research-runs", json=submitted)
+            assert seed.status_code == 202, seed.text
+            assert runtime.research_runs.process_next()
+            tracked = client.post(f"/api/research-runs/{seed.json()['id']}/daily-tracks",
+                                  json={"request_id": "risk-only-track"})
+            assert tracked.status_code == 201, tracked.text
+            track_id = tracked.json()["id"]
+            _publish_head(settings, sessions=SESSIONS[:3], price_offset=0, expected_manifest=head)
+            refreshed = client.post(f"/api/daily-tracks/{track_id}/refresh",
+                                    json={"request_id": "risk-only-advance"})
+            assert refreshed.status_code == 202, refreshed.text
+            assert runtime.daily_tracks.process_next()
+            full = client.post("/api/research-runs", json={
+                **submitted, "request_id": "risk-only-full", "end_date": SESSIONS[2],
+            })
+            assert full.status_code == 202, full.text
+            assert runtime.research_runs.process_next()
+            run_id = full.json()["id"]
+            paths = (f"/api/research-runs/{run_id}/events/query",
+                     f"/api/daily-tracks/{track_id}/events/query")
+            for path in paths:
+                all_events = client.post(path, json={"section": "strategy_framework", "limit": 50})
+                assert all_events.status_code == 200, all_events.text
+                risk_only = all_events.json()["rows"][1:]
+                assert len(risk_only) == 2
+                instrument_id = risk_only[0]["risk_adjustment"]["observations"][0]["instrument_id"]
+                ended = [
+                    row["risk_adjustment"]["observations"][0]["cycle_ended"] for row in risk_only
+                ]
+                assert ended == [False, True]
+                assert all(row["universe"]["instrument_ids"] == [] for row in risk_only)
+                assert risk_only[-1]["alpha"]["signals"] == []
+                assert risk_only[-1]["alpha"]["expired_signals"] == []
+                assert risk_only[-1]["alpha"]["removed_signals"] == []
+                assert risk_only[-1]["proposal"] is None
+                assert risk_only[-1]["risk_adjustment"]["position_limits"] == {}
+                query = {
+                    "section": "strategy_framework", "instrument_id": instrument_id, "limit": 1,
+                }
+                first = client.post(path, json=query)
+                assert first.status_code == 200, first.text
+                assert first.json()["rows"] == [all_events.json()["rows"][0]]
+                rows = first.json()["rows"]
+                cursor = first.json()["next_cursor"]
+                while cursor is not None:
+                    page = client.post(path, json={**query, "cursor": cursor})
+                    assert page.status_code == 200, page.text
+                    rows.extend(page.json()["rows"])
+                    cursor = page.json()["next_cursor"]
+                assert rows == all_events.json()["rows"]
+                unrelated = client.post(path, json={**query, "instrument_id": "equity:600003.SH"})
+                assert unrelated.status_code == 200, unrelated.text
+                assert unrelated.json()["rows"] == []
+                assert unrelated.json()["next_cursor"] is None
+            assert runtime.research_runs.get_result_section(
+                UUID(int=1234), RunStrategyFrameworkInput(
+                    run_id=run_id, section="strategy_framework", instrument_id=instrument_id,
+                ),
+            ) is None
+            assert runtime.daily_tracks.get_result_section(
+                UUID(int=1234), TrackStrategyFrameworkInput(
+                    track_id=track_id, section="strategy_framework", instrument_id=instrument_id,
+                ),
+            ) is None
+    finally:
+        drop_product_schemas(settings)
 
 
 def test_framework_track_origin_keeps_a_large_legal_module_state(tmp_path):

@@ -151,8 +151,15 @@ class FrameworkEvidence(TerminalStateModel):
             result.update(row.instrument_id for row in self.alpha.values)
         if self.proposal:
             result.update(self.proposal.instrument_ids)
+        result.update(row.instrument_id for row in self.portfolio_retentions)
         if isinstance(self.risk_adjustment, (PositionLimitEvidence, BuiltinRiskEvidence)):
             result.update(self.risk_adjustment.position_limits)
+            if isinstance(self.risk_adjustment, BuiltinRiskEvidence):
+                result.update(
+                    row.instrument_id for row in self.risk_adjustment.observations
+                    if isinstance(row, (StopLossObservation, HoldingExpiryObservation,
+                                        TakeProfitObservation))
+                )
         elif isinstance(self.risk_adjustment, ReplacementEvidence) and self.risk_adjustment.target:
             result.update(self.risk_adjustment.target.instrument_ids)
         return frozenset(result)

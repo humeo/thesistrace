@@ -7,6 +7,7 @@ from typing import Any
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
+import anyio
 from mcp.server.auth.middleware.auth_context import AuthContextMiddleware, get_access_token
 from mcp.server.auth.middleware.bearer_auth import BearerAuthBackend, RequireAuthMiddleware
 from mcp.server.auth.provider import AccessToken, TokenVerifier
@@ -31,7 +32,7 @@ from thesistrace.research_agent.registry import (
     ResearchAgentModules,
 )
 
-RESEARCH_AGENT_MAX_HTTP_BODY_FRAMES = 256
+RESEARCH_AGENT_HTTP_BODY_TIMEOUT_SECONDS = 60
 
 
 @dataclass(frozen=True)
@@ -118,26 +119,43 @@ class _BoundedMCPRequestBody:
             return
         content_length = _content_length(scope)
         if content_length is not None and content_length > RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES:
-            await _request_too_large_response(scope, receive, send)
+            await _request_body_error_response(
+                scope, receive, send, status_code=413, message="Request exceeds server limit",
+            )
             return
 
         body = bytearray()
-        frames = 0
-        while True:
-            message = await receive()
-            if message["type"] != "http.request":
-                await self._app(scope, _replay_once(message, receive), send)
-                return
-            frames += 1
-            body.extend(message.get("body", b""))
-            if (
-                len(body) > RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES
-                or frames > RESEARCH_AGENT_MAX_HTTP_BODY_FRAMES
-            ):
-                await _request_too_large_response(scope, receive, send)
-                return
-            if not message.get("more_body", False):
-                break
+        too_large = False
+        try:
+            with anyio.fail_after(RESEARCH_AGENT_HTTP_BODY_TIMEOUT_SECONDS):
+                while True:
+                    await anyio.lowlevel.checkpoint()
+                    message = await receive()
+                    if message["type"] != "http.request":
+                        break
+                    chunk = message.get("body", b"")
+                    if len(body) + len(chunk) > RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES:
+                        too_large = True
+                        break
+                    body.extend(chunk)
+                    if not message.get("more_body", False):
+                        break
+        except TimeoutError:
+            body.clear()
+            await _request_body_error_response(
+                scope, receive, send, status_code=408, message="Request body read timed out",
+            )
+            return
+        if too_large:
+            body.clear()
+            await _request_body_error_response(
+                scope, receive, send, status_code=413, message="Request exceeds server limit",
+            )
+            return
+        if message["type"] != "http.request":
+            body.clear()
+            await self._app(scope, _replay_once(message, receive), send)
+            return
         await self._app(
             scope,
             _replay_once(
@@ -205,6 +223,7 @@ def create_research_agent_http_transport(
         server,
         json_response=True,
         stateless=True,
+        max_request_body_size=RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES,
         security_settings=TransportSecuritySettings(
             enable_dns_rebinding_protection=True,
             allowed_hosts=list(configuration.allowed_hosts),
@@ -292,10 +311,13 @@ def _replay_once(message: Message, receive: Receive) -> Receive:
     return replay
 
 
-async def _request_too_large_response(
+async def _request_body_error_response(
     scope: Scope,
     receive: Receive,
     send: Send,
+    *,
+    status_code: int,
+    message: str,
 ) -> None:
     response = JSONResponse(
         {
@@ -303,9 +325,9 @@ async def _request_too_large_response(
             "id": None,
             "error": {
                 "code": -32600,
-                "message": "Request exceeds server limit",
+                "message": message,
             },
         },
-        status_code=413,
+        status_code=status_code,
     )
     await response(scope, receive, send)

@@ -4,6 +4,9 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
+from psycopg import OperationalError
+from psycopg_pool import PoolTimeout
+
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.benchmark import (
     BenchmarkSnapshot,
@@ -33,6 +36,10 @@ class DatasetOverviewSnapshot:
     indicator_coverage: dict[str, object] | None = None
 
 
+class DatasetOverviewTemporarilyUnavailable(RuntimeError):
+    pass
+
+
 class DatasetOverviewService:
     """Read the ordinary overview and validated internal Dataset Head snapshot."""
 
@@ -53,7 +60,10 @@ class DatasetOverviewService:
         self.overview()
 
     def overview(self) -> DataOverview:
-        return self.snapshot().overview
+        try:
+            return self.snapshot().overview
+        except (OperationalError, PoolTimeout) as error:
+            raise DatasetOverviewTemporarilyUnavailable("Data Overview is unavailable") from error
 
     def snapshot(self) -> DatasetOverviewSnapshot:
         with self._database.transaction() as transaction:

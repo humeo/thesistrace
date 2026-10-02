@@ -8,6 +8,8 @@ from pydantic import TypeAdapter, ValidationError
 from thesistrace.daily_track.models import DailyTrackResultSectionInput
 from thesistrace.publication.serialization import parquet_bytes
 from thesistrace.research_kernel.builtin_framework import BUILTIN_FRAMEWORK_MODULES
+from thesistrace.research_kernel.builtin_risk import BuiltinRiskModule
+from thesistrace.research_kernel.take_profit import take_profit_decision
 from thesistrace.research_run.models import ResearchRunResultSectionInput
 from thesistrace.strategy_event_wire import EventMessageAssembler, strategy_event_messages
 from thesistrace.strategy_evidence import (
@@ -55,6 +57,41 @@ def test_framework_no_update_retains_lifecycle_evidence_through_storage_and_filt
         assert parsed.section == 'strategy_framework'
         with pytest.raises(ValidationError):
             TypeAdapter(model).validate_python({**query, key: "id", "order_id": "invalid"})
+
+
+@pytest.mark.parametrize("fills", [
+    [{"side": "sell", "instrument_id": "equity:600003.SH", "quantity": 100}],
+    [],
+], ids=["sold", "written_off"])
+def test_framework_filter_preserves_take_profit_cycle_end_after_position_disappears(fills):
+    risk = BuiltinRiskModule.model_validate({
+        "kind": "builtin_risk/v1",
+        "take_profit_tiers": [{"profit_threshold": 0.1, "cumulative_reduction": 1.0}],
+    })
+    _, limits, observations = take_profit_decision(
+        tiers=risk.take_profit_tiers, account={"positions": []},
+        previous={"take_profit_cycles": {"equity:600003.SH": {
+            "holding_cycle_started_session": "2026-08-31", "baseline_adjusted_units": "1e+2",
+            "baseline_execution_shares": 100, "highest_triggered_tier": 0,
+            "executed_reduction_units": "0", "last_adjusted_units": "1e+2",
+            "last_execution_shares": 100,
+        }}}, fills=fills,
+    )
+    assert limits == {}
+    assert observations[0]["cycle_ended"] is True
+    row = event()
+    row["alpha"]["expired_signals"] = []
+    row["risk_adjustment"] = {
+        "mode": "builtin_risk", "reason": "take_profit", "position_limits": limits,
+        "observations": observations,
+    }
+    payload = strategy_event_payload("strategy_framework", [row])
+    restored = read_strategy_event_partition(
+        "strategy_framework", parquet_bytes(payload.rows, payload.contract),
+    )[0]
+    assert event_matches(restored, "strategy_framework", {})
+    assert event_matches(restored, "strategy_framework", {"instrument_id": "equity:600003.SH"})
+    assert not event_matches(restored, "strategy_framework", {"instrument_id": "equity:600004.SH"})
 
 
 def test_received_large_framework_events_publish_as_byte_bounded_partitions():

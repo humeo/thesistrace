@@ -53,11 +53,51 @@ from thesistrace.research_run.models import (
     RESEARCH_UNIVERSES,
 )
 
+DIRECT_SOURCE_TEMPLATE = """from quantgrove import Strategy
+
+class FirstCandidate(Strategy):
+    def on_close(self, data, account):
+        if not data.candidates:
+            return None
+        return self.target_weights({data.candidates[0]: 1.0})
+"""
+
+FRAMEWORK_SOURCE_TEMPLATES = {
+    "universe_selection": """from quantgrove import UniverseSelection
+
+class SelectCandidates(UniverseSelection):
+    def on_close(self, data, account):
+        return self.select(data.candidates)
+""",
+    "alpha": """from quantgrove import Alpha
+
+class CandidateSignals(Alpha):
+    def on_close(self, data, account):
+        return self.signals({stock: 1.0 for stock in data.candidates}, valid_for_sessions=1)
+""",
+    "portfolio_construction": """from quantgrove import PortfolioConstruction
+
+class FirstSignal(PortfolioConstruction):
+    def on_close(self, data, account):
+        signals = data.framework["signals"]
+        if not signals:
+            return None
+        return self.target_weights({signals[0]["instrument_id"]: 1.0})
+""",
+    "risk_management": """from quantgrove import RiskManagement
+
+class PassProposal(RiskManagement):
+    def on_close(self, data, account):
+        return None
+""",
+}
+
 CURRENT_RESEARCH_AUTHORING_CONSTRAINTS = ResearchAuthoringConstraints(
     research_kinds=RESEARCH_KINDS,
     strategy_modes=("framework", "direct"),
     simulation_cost_defaults=default_simulation_costs(),
     python_program=PythonProgramConstraints(
+        source_template=DIRECT_SOURCE_TEMPLATE,
         maximum_source_bytes=SOURCE_BYTES,
         maximum_state_bytes=STATE_BYTES, maximum_input_bytes=INPUT_BYTES,
         maximum_output_bytes=OUTPUT_BYTES, maximum_memory_bytes=MEMORY_BYTES,
@@ -68,7 +108,9 @@ CURRENT_RESEARCH_AUTHORING_CONSTRAINTS = ResearchAuthoringConstraints(
     ),
     framework=FrameworkAuthoringConstraints(
         stages=tuple(FrameworkStageConstraints(
-            stage=stage, builtin_identity=identity, output_contract={
+            stage=stage, builtin_identity=identity,
+            source_template=FRAMEWORK_SOURCE_TEMPLATES[stage],
+            output_contract={
                 "universe_selection": (
                     "Subclass UniverseSelection. Return self.select(instruments) to replace "
                     "selected candidates; None retains the prior selection."

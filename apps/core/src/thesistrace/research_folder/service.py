@@ -1,7 +1,9 @@
 from typing import Literal
 from uuid import UUID, uuid4
 
+from psycopg import OperationalError
 from psycopg.errors import ForeignKeyViolation
+from psycopg_pool import PoolTimeout
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.research_folder.models import (
@@ -24,21 +26,30 @@ class ResearchFolderConflict(RuntimeError):
         super().__init__(code)
 
 
+class ResearchFolderTemporarilyUnavailable(RuntimeError):
+    pass
+
+
 class ResearchFolderService:
     def __init__(self, database: PostgresDatabase) -> None:
         self._database = database
 
     def list(self, researcher_id: UUID) -> ResearchFolderList:
-        with self._database.transaction() as transaction:
-            rows = transaction.execute(
-                """
-                SELECT id, name, is_default, created_at
-                FROM research_folders.folders
-                WHERE researcher_id = %s
-                ORDER BY is_default DESC, created_at, id
-                """,
-                (researcher_id,),
-            ).fetchall()
+        try:
+            with self._database.transaction() as transaction:
+                rows = transaction.execute(
+                    """
+                    SELECT id, name, is_default, created_at
+                    FROM research_folders.folders
+                    WHERE researcher_id = %s
+                    ORDER BY is_default DESC, created_at, id
+                    """,
+                    (researcher_id,),
+                ).fetchall()
+        except (OperationalError, PoolTimeout) as error:
+            raise ResearchFolderTemporarilyUnavailable(
+                "Research Folders are unavailable",
+            ) from error
         return ResearchFolderList(
             items=[ResearchFolderSummary.model_validate(row) for row in rows]
         )

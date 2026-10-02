@@ -61,6 +61,8 @@ class PythonProgramConstraints(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     callback: str = "Strategy.on_close(self, data, account)"
+    sdk_module: Literal["quantgrove"] = "quantgrove"
+    source_template: str
     decision_time: Literal["session_close"] = "session_close"
     execution_time: Literal["next_session_open"] = "next_session_open"
     maximum_source_bytes: int
@@ -90,6 +92,7 @@ class FrameworkStageConstraints(BaseModel):
         "universe_selection", "alpha", "portfolio_construction", "risk_management",
     ]
     builtin_identity: str
+    source_template: str
     output_contract: str
 
 

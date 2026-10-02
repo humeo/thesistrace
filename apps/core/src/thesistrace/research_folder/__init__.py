@@ -9,6 +9,7 @@ from thesistrace.research_folder.service import (
     DEFAULT_FOLDER_ID,
     ResearchFolderConflict,
     ResearchFolderService,
+    ResearchFolderTemporarilyUnavailable,
 )
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "ResearchFolderList",
     "ResearchFolderService",
     "ResearchFolderSummary",
+    "ResearchFolderTemporarilyUnavailable",
 ]
