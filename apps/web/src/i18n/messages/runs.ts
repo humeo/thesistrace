@@ -65,7 +65,7 @@ export const runsEn = {
   "executionComplete": "Execution complete",
   "executionTime": "Execution time",
   "elapsed": "Elapsed",
-  "timingDetails": "Timing details",
+  "executionInfo": "Execution details",
   "sessions": "sessions",
   "executionProgress": "Execution progress",
   "progressAria": "Research execution progress",
@@ -74,6 +74,11 @@ export const runsEn = {
   "remaining": "About {{duration}} remaining",
   "estimate": " (estimate may change)",
   "conditions": "Research execution conditions",
+  "configuration": {
+    "conditions": "Research conditions",
+    "strategy": "Strategy rules",
+    "signal": "Signal definition"
+  },
   "strategyMode": "Strategy",
   "directMode": "Direct · Python",
   "frameworkMode": "Framework · Decision modules",
@@ -226,7 +231,7 @@ export const runsEn = {
 export const runsZh = {
   "trackingNotCompleted": "开始跟踪需要已完成的研究运行。",
   "trackingStrategy": "开始跟踪需要策略回测结果。",
-  "title": "研究运行",
+  "title": "研究记录",
   "run": "研究运行",
   "history": "研究历史",
   "runs": "运行",
@@ -290,7 +295,7 @@ export const runsZh = {
   "executionComplete": "执行完成",
   "executionTime": "执行用时",
   "elapsed": "已用时间",
-  "timingDetails": "时间详情",
+  "executionInfo": "执行信息",
   "sessions": "个交易日",
   "executionProgress": "执行进度",
   "progressAria": "研究执行进度",
@@ -299,6 +304,11 @@ export const runsZh = {
   "remaining": "预计还需 {{duration}}",
   "estimate": "（预计时间可能变化）",
   "conditions": "研究执行条件",
+  "configuration": {
+    "conditions": "研究条件",
+    "strategy": "策略规则",
+    "signal": "信号定义"
+  },
   "strategyMode": "策略",
   "directMode": "Direct · Python",
   "frameworkMode": "Framework · 决策模块",

@@ -5,6 +5,7 @@ import { defaultSimulationCosts } from "../research/simulationCosts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { builtinFrameworkModules } from "../research/frameworkModules";
+import { Window } from "happy-dom";
 
 import {
   ResearchOrganizationPanel,
@@ -55,15 +56,29 @@ const STRATEGY_RUN: ResearchRun = {
   },
 };
 
+function configurationFacts(markup: string): Record<string, string> {
+  const document = new Window().document;
+  document.body.innerHTML = markup;
+  return Object.fromEntries([...document.querySelectorAll("dt")].map(term => [
+    term.textContent, term.nextElementSibling?.textContent ?? "",
+  ]));
+}
+
 describe("ResearchRunFacts", () => {
   it("shows accepted custom fees and slippage instead of current defaults", () => {
     if (STRATEGY_RUN.input?.research_kind !== "strategy_backtest") throw new Error("Invalid fixture");
     const markup = renderToStaticMarkup(<ResearchRunFacts run={{ ...STRATEGY_RUN, input: {
       ...STRATEGY_RUN.input, costs: { ...defaultSimulationCosts(), commission_min_cny: "2", slippage_bps: "15" },
     } }} />);
-    expect(markup).toContain("Frozen fees and slippage");
-    expect(markup).toContain("<strong>Minimum commission per child order (CNY)</strong> 2");
-    expect(markup).toContain("<strong>Price slippage (basis points)</strong> 15");
+    expect(markup).toContain("Fees and slippage");
+    expect(configurationFacts(markup)).toMatchObject({
+      "Minimum commission per child order (CNY)": "2.00",
+      "Price slippage (basis points)": "15",
+      "Buy/sell commission rate": "0.03%",
+      "Sell stamp duty rate": "0.05%",
+      "Buy/sell transfer fee rate": "0.001%",
+    });
+    expect(markup).toContain('title="2"');
     expect(markup).toContain("not charged again as a fee");
   });
   it("shows each frozen Framework module without inactive Alpha or Portfolio fields", () => {
@@ -95,7 +110,7 @@ describe("ResearchRunFacts", () => {
     expect(markup).toContain("from quantgrove import Strategy");
     expect(markup).toContain("improvement");
     expect(markup).not.toContain("Framework");
-    expect(markup).not.toContain("<strong>Formula</strong>");
+    expect(configurationFacts(markup)).not.toHaveProperty("Formula");
     expect(markup).not.toContain("Neutralization");
     expect(markup).not.toContain("Holdings count");
   });
@@ -108,11 +123,11 @@ describe("ResearchRunFacts", () => {
     const markup = renderToStaticMarkup(<ResearchRunFacts run={{
       ...STRATEGY_RUN, input: { ...input, weighting },
     }} />);
-    expect(markup).toContain(`<strong>Portfolio weighting</strong> ${label}`);
-    expect(markup).not.toContain("<strong>Weighting</strong>");
+    expect(configurationFacts(markup)["Portfolio weighting"]).toBe(label);
+    expect(configurationFacts(markup)).not.toHaveProperty("Weighting");
     if (weighting !== "equal_weight") expect(markup).not.toContain("Equal weight");
     if (weighting === "inverse_volatility") {
-      expect(markup).toContain("<strong>Volatility window</strong> 20 sessions");
+      expect(configurationFacts(markup)["Volatility window"]).toBe("20 sessions");
     }
   });
 
@@ -120,11 +135,9 @@ describe("ResearchRunFacts", () => {
     const markup = renderToStaticMarkup(<ResearchRunFacts run={STRATEGY_RUN} />);
 
     expect(markup).toContain('aria-label="Research execution conditions"');
-    expect(markup).toContain("<strong>Universe</strong> Top 300");
-    expect(markup).toContain("<strong>Neutralization</strong> Industry");
-    expect(markup).toContain("<strong>Holdings count</strong> 10");
-    expect(markup).toContain("<strong>Exposure expression</strong> <code>1</code>");
-    expect(markup).toContain("<strong>Selection</strong> Every 2 sessions");
+    expect(configurationFacts(markup)).toMatchObject({ Universe: "Top 300", Neutralization: "Industry",
+      "Holdings count": "10", "Exposure expression": "1", Selection: "Every 2 sessions",
+      "Initial cash (CNY)": "100,000.00" });
   });
 
   it("omits Strategy-only conditions from a Factor Evaluation", () => {
@@ -146,8 +159,7 @@ describe("ResearchRunFacts", () => {
       />,
     );
 
-    expect(markup).toContain("<strong>Universe</strong> Top 1000");
-    expect(markup).toContain("<strong>Neutralization</strong> None");
+    expect(configurationFacts(markup)).toMatchObject({ Universe: "Top 1000", Neutralization: "None" });
     expect(markup).not.toContain("Holdings count");
     expect(markup).not.toContain("Rebalance");
   });
@@ -227,7 +239,7 @@ describe("ResearchRunProgressView", () => {
     expect(markup).not.toMatch(/checkpoint|staged|payload|alpha value/i);
   });
 
-  it("keeps final timing available in a closed disclosure until requested", () => {
+  it("shows completed execution facts and UTC timestamps without a disclosure", () => {
     const markup = renderToStaticMarkup(
       <ResearchRunProgressView
         progress={{
@@ -255,12 +267,14 @@ describe("ResearchRunProgressView", () => {
     expect(markup).toContain("Execution time");
     expect(markup).toContain("Execution complete");
     expect(markup).toContain("875 / 875");
-    expect(markup).toContain("Timing details");
+    expect(markup).toContain("Execution details");
     expect(markup).not.toContain("<progress");
     expect(markup).not.toContain("100%");
     expect(markup).toContain("2m 46s");
-    expect(markup).toContain('aria-expanded="false"');
-    expect(markup).not.toContain("2026-08-13 01:00:00 UTC");
+    expect(markup).not.toContain("aria-expanded");
+    expect(markup).not.toContain("<button");
+    expect(markup).toContain("2026-08-13 01:00:00 UTC");
+    expect(markup).toContain("2026-08-13 01:02:46 UTC");
   });
 });
 

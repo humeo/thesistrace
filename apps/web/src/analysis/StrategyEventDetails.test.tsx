@@ -20,7 +20,7 @@ test("shows actual Python history reads separately from portfolio and execution 
   expect(markup).toMatch(/<td[^>]*>6<\/td>/);
 });
 
-test("expands a fill into exact prices and separate fees without charging slippage twice", async () => {
+test("expands a fill into readable prices and separate fees while retaining exact source values", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const host = document.createElement("div");
   document.body.append(host);
@@ -45,10 +45,12 @@ test("expands a fill into exact prices and separate fees without charging slippa
       item.querySelector("dt")!.textContent, item.querySelector("dd")!.textContent,
     ]));
     expect(values).toEqual({
-      "原始 Open（元）": "100", "模拟成交价（元）": "100.1", "每股滑点价差（元）": "0.1",
-      "研究结算金额（元）": "10010", "佣金（元）": "5", "卖出印花税（元）": "0",
-      "过户费（元）": "0.1001", "显式费用合计（元）": "5.1001", "现金舍入残差（元）": "0",
+      "原始 Open（元）": "100.0000", "模拟成交价（元）": "100.1000", "每股滑点价差（元）": "0.1000",
+      "研究结算金额（元）": "10,010.00", "佣金（元）": "5.00", "卖出印花税（元）": "0.00",
+      "过户费（元）": "0.10", "显式费用合计（元）": "5.10", "现金舍入残差（元）": "0.000000",
     });
+    expect(Array.from(detail.querySelectorAll("dd"), value => value.title)).toContain("5.1001");
+    expect(host.querySelector("pre")!.textContent).toContain('"cost": "5.1001"');
     expect(detail.textContent).toContain("滑点已计入模拟成交价");
   } finally {
     await act(async () => { await i18n.changeLanguage("en"); });

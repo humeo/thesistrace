@@ -6,9 +6,8 @@ import { Alert, AlertDescription } from "../components/ui/alert";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import type { ParseKeys } from "i18next";
 import { i18n, useTranslation } from "../i18n";
-import { formatNumber, formatPercent } from "../i18n/format";
+import { formatDecimalString, formatNumber, formatPercent } from "../i18n/format";
 import { Fragment, useId, useState } from "react";
-import Decimal from "decimal.js";
 import { FrameworkDecisionDetails, type FrameworkRecord } from "./FrameworkDecisionDetails";
 
 export const eventSections = [
@@ -104,9 +103,7 @@ function cellValue(path: string, row: EventRow) {
   if (key === "exposure") return formatPercent(Number(value));
   if (["side", "mode", "reason", "rejection_reason", "type"].includes(key)) return labels[String(value) as keyof typeof labels] ?? String(value);
   if (key.endsWith("quantity")) return formatNumber(Number(value));
-  if (["raw_open", "execution_price", "cost", "valuation_delta"].includes(key)) return formatNumber(Number(value), {
-    minimumFractionDigits: 2, maximumFractionDigits: ["raw_open", "execution_price"].includes(key) ? 6 : 2,
-  });
+  if (["raw_open", "execution_price", "cost", "valuation_delta"].includes(key)) return formatDecimalString(String(value), ["raw_open", "execution_price"].includes(key) ? 4 : 2);
   return String(value);
 }
 
@@ -137,7 +134,8 @@ function EventRecord({ row, section, navigate }: { row: EventRow; section: Event
         ["transfer_fee_cny", "transferFee"], ["cost", "cost"],
         ["cash_rounding_delta", "cashRounding"],
       ] as const).map(([key, label]) => <div key={key}><dt>{t(`events.fillDetails.${label}`)}</dt>
-        <dd>{row[key] == null ? "—" : new Decimal(String(row[key])).toString()}</dd></div>)}</dl>
+        <dd title={row[key] == null ? undefined : String(row[key])}>{row[key] == null ? "—" : formatDecimalString(String(row[key]),
+          key === "cash_rounding_delta" ? 6 : ["raw_open", "execution_price", "price_slippage"].includes(key) ? 4 : 2)}</dd></div>)}</dl>
     </section>}
     <div className="flex flex-wrap items-center justify-between gap-2"><span>{t("events.raw")}</span>
       <Button variant="outline" type="button" onClick={async () => {
@@ -186,7 +184,7 @@ export function StrategyEventTable({ rows, section, navigate }: {
               column.numeric && "text-right font-mono",
               (column.key.endsWith("session") || column.key === "instrument_id") && "font-mono",
               column.key === "rejection_reason" && row[column.key] && "text-warning-foreground",
-            )}>{cellValue(column.key, row)}</TableCell>)}
+            )} title={column.numeric && row[column.key] != null ? String(row[column.key]) : undefined}>{cellValue(column.key, row)}</TableCell>)}
             <TableCell className="w-12 p-1"><Button variant="ghost" size="icon" type="button" aria-label={t("events.viewRaw", { label })}
               aria-expanded={open} aria-controls={open ? detailId : undefined} onClick={event => { event.stopPropagation(); toggle(); }}>
               {open ? <CaretDown aria-hidden="true" /> : <CaretRight aria-hidden="true" />}

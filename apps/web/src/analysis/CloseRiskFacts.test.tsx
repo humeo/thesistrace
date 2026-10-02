@@ -8,14 +8,18 @@ beforeEach(async () => { await i18n.changeLanguage("zh-CN"); });
 afterEach(async () => { await i18n.changeLanguage("en"); });
 
 test("shows authoritative Close facts separately from Open performance", () => {
-  const markup = renderToStaticMarkup(<CloseRiskFacts session="2026-08-05" nav="9994.9" positions={[{
+  const markup = renderToStaticMarkup(<CloseRiskFacts session="2026-08-05" nav="9994.91234567890123456789" positions={[{
     instrument_id: "equity:600001.SH", execution_shares: 1000, adjusted_units: "500",
-    remaining_acquisition_cost_cny: "10005.1", holding_age: 2,
-    holding_cycle_started_session: "2026-08-04", last_close_adjusted_price: "18",
+    remaining_acquisition_cost_cny: "100051e-1", holding_age: 2,
+    holding_cycle_started_session: "2026-08-04", last_close_adjusted_price: "18.123456",
   }]} />);
-  for (const text of ["收盘风险净值", "9994.9", "开盘后净值", "10005.1", "2026-08-04", "持有时长（交易日）"]) {
+  for (const text of ["收盘风险净值", "9,994.91", "开盘后净值", "10,005.10", "18.1235", "1,000", "2026-08-04", "持有时长（交易日）"]) {
     expect(markup).toContain(text);
   }
+  expect(markup).toContain('aria-label="收盘持仓"');
+  expect(markup).toContain('title="9994.91234567890123456789"');
+  expect(markup).toContain('title="10005.1"');
+  expect(markup).toContain('title="18.123456"');
 });
 
 test("shows frozen stop-loss observations and preserves the execution distinction", () => {
@@ -29,7 +33,7 @@ test("shows frozen stop-loss observations and preserves the execution distinctio
         execution_shares: 1000, holding_age: 1 }] },
   };
   const markup = renderToStaticMarkup(<FrameworkDecisionDetails row={row} />);
-  for (const text of ["风险判断依据", "10000", "8900", "-11", "10", "下一开盘尝试退出", "实际成交或拒绝"]) {
+  for (const text of ["风险判断依据", "10,000.00", "8,900.00", "-11.00", "10.00", "下一开盘尝试退出", "实际成交或拒绝"]) {
     expect(markup).toContain(text);
   }
 });
@@ -77,7 +81,7 @@ test("shows cumulative intent separately from actual take-profit fills", () => {
         baseline_execution_shares: 1000, baseline_adjusted_units: "500", target_adjusted_units: "200",
         executed_reduction_units: "150", remaining_reduction_units: "150", execution_shares: 700, position_limit: 400 }] },
   }} />);
-  for (const text of ["累计减仓 60%", "首次基准 1000 股", "实际卖出 150", "待减 150", "禁止普通补仓"]) expect(markup).toContain(text);
+  for (const text of ["累计减仓 60.00%", "首次基准 1000 股", "实际卖出 150.0000", "待减 150.0000", "禁止普通补仓"]) expect(markup).toContain(text);
   expect(markup).not.toContain("下一开盘尝试退出");
 });
 
@@ -93,5 +97,5 @@ test("shows portfolio cooldown and recovery separately from actual exposure and 
         cooldown_sessions: 2, completed_cooldown_sessions: 2, triggered_session: "2026-08-03" }] },
   };
   const markup = renderToStaticMarkup(<FrameworkDecisionDetails row={row} />);
-  for (const text of ["冷却结束，等待新的组合决策", "120000", "108000", "30%", "不表示实际仓位已恢复", "历史最大回撤不重置"]) expect(markup).toContain(text);
+  for (const text of ["冷却结束，等待新的组合决策", "120,000.00", "108,000.00", "30.00%", "不表示实际仓位已恢复", "历史最大回撤不重置"]) expect(markup).toContain(text);
 });

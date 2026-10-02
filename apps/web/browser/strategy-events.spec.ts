@@ -74,7 +74,7 @@ test("long rational weights remain exact in optional raw records without widenin
   await table.getByRole("button", { name: /View raw record/ }).click();
   const raw = JSON.parse(await page.locator("pre").innerText());
   expect(raw.allocation.relative_weights["equity:600000.SH"]).toBe(weight);
-  await page.setViewportSize({ width: 390, height: 844 });
+  await page.setViewportSize({ width: 1280, height: 900 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await table.getByRole("button", { name: /View raw record/ }).click();
   await expect(page.locator("pre")).toHaveCount(0);
@@ -98,6 +98,15 @@ test("trading evidence pages and follows target, order, child and fill relations
   await page.getByRole("combobox", { name: "Event type" }).click();
   await page.getByRole("option", { name: "Rebalance targets", exact: true }).click();
   await expect(page.getByText("70.00%", { exact: true })).toBeVisible();
+  const description = page.getByText("Selection and exposure targets formed at Close, dated by decision session.", { exact: true });
+  const retention = page.getByText("Trading details are retained for 7 days and renewed after a successful read; expiry does not affect performance reports or final positions.", { exact: true });
+  await expect(description).not.toBeVisible();
+  await expect(retention).not.toBeVisible();
+  await page.getByRole("button", { name: "About Rebalance targets", exact: true }).click();
+  await expect(description).toBeVisible();
+  await expect(retention).toBeVisible();
+  await page.getByRole("button", { name: "Close explanation", exact: true }).click();
+  await expect(description).not.toBeVisible();
   await page.getByRole("button", { name: "Next", exact: true }).click();
   await expect(page.getByRole("button", { name: "Next", exact: true })).toBeDisabled();
   expect(reads.at(-1)?.cursor).toBe("page-2");
@@ -155,7 +164,7 @@ test("trading evidence pages and follows target, order, child and fill relations
   await expect(page.getByText("All dates · All instruments", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: /View raw record/ }).click();
   await page.screenshot({ path: "../../.local/browser-tests/strategy-events-desktop.png", fullPage: true });
-  await page.setViewportSize({ width: 390, height: 844 });
+  await page.setViewportSize({ width: 1280, height: 900 });
   await page.screenshot({ path: "../../.local/browser-tests/strategy-events.png", fullPage: true });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
@@ -273,7 +282,7 @@ test("Framework evidence separates signal expiry, proposal, cancellation and fin
   await expect(page.getByRole("button", { name: "查看目标", exact: true })).toHaveCount(0);
   expect(JSON.parse(await page.locator("pre").innerText())).toEqual(records[0]);
   await page.screenshot({ path: "../../.local/browser-tests/framework-stage-evidence.png", fullPage: true });
-  await page.setViewportSize({ width: 390, height: 844 });
+  await page.setViewportSize({ width: 1280, height: 900 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await table.getByRole("button", { name: /查看原始记录/ }).nth(1).click();
   await expect(page.getByRole("region", { name: "信号", exact: true })).toContainText("本日公式计算值");

@@ -1,5 +1,6 @@
 import Decimal from "decimal.js";
 import { useTranslation } from "../i18n";
+import { formatDecimal, formatDecimalString } from "../i18n/format";
 
 export type TakeProfitObservation = {
   reason: "take_profit"; instrument_id: string; cycle_ended: boolean;
@@ -8,8 +9,8 @@ export type TakeProfitObservation = {
   executed_reduction_units: string; remaining_reduction_units: string;
   execution_shares: number; position_limit: number | null;
 };
-const number = (value: string) => new Decimal(value).toString();
-const percent = (value: string) => new Decimal(value).mul(100).toString();
+const number = (value: string) => formatDecimalString(value, 4);
+const percent = (value: string) => formatDecimal(new Decimal(value).mul(100).toNumber(), 2);
 
 export function TakeProfitFacts({ item }: { item: TakeProfitObservation }) {
   const { t } = useTranslation("strategy");
