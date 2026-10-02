@@ -487,7 +487,11 @@ test(`Exposure, ${weighting}, retained draft and submission share one source`, a
   await page.getByLabel("Exposure expression", { exact: true }).fill("7 / 10");
   await expect(page.getByLabel("Total stock exposure (%)", { exact: true })).toHaveCount(0);
 
-  await page.getByRole("button", { name: "Check configuration" }).click();
+  await page.getByLabel("Exposure expression", { exact: true }).press("Escape");
+  const check = page.getByRole("button", { name: "Check configuration" });
+  await check.focus();
+  await expect(page.getByRole("listbox", { name: "Completions", exact: true })).not.toBeVisible();
+  await check.click();
   await expect(page.getByText("Configuration is valid.", { exact: false })).toBeVisible();
   expect(diagnostics).toHaveLength(1);
   expect(diagnostics[0]).toMatchObject({ exposure_expression: "7 / 10", weighting, volatility_window: weighting === "inverse_volatility" ? 10 : 20, selection_every_sessions: 5, initial_cash_cny: "100000" });
@@ -500,7 +504,11 @@ test(`Exposure, ${weighting}, retained draft and submission share one source`, a
   await expect.poll(() => localContexts.includes("exposure")).toBe(true);
   await page.screenshot({ path: `../../.local/browser-tests/selection-${weighting}.png`, fullPage: true });
 
-  await page.getByRole("button", { name: "Run backtest", exact: true }).click();
+  await page.getByLabel("Exposure expression", { exact: true }).press("Escape");
+  const run = page.getByRole("button", { name: "Run backtest", exact: true });
+  await run.focus();
+  await expect(page.getByRole("listbox", { name: "Completions", exact: true })).not.toBeVisible();
+  await run.click();
   await expect.poll(() => submissions.length).toBe(1);
   expect(submissions[0]).toMatchObject({ exposure_expression: "0", weighting, volatility_window: weighting === "inverse_volatility" ? 10 : 20, selection_every_sessions: 5, initial_cash_cny: "100000" });
   expect(submissions[0]).toHaveProperty("request_id");
