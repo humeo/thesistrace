@@ -102,6 +102,7 @@ export const chatEn = {
   },
   phaseLabels: { new: "Ready for a new Chat", opening: "Opening Turn", complete: "Run complete", failed: "Run failed", stopped: "Turn stopped", ready: "Ready", active: "Research Agent is working", waiting: "Waiting for your answer", stopping: "Stopping Turn", recovering: "Confirming command acceptance" },
   a2ui: {
+    researchLink: "View research: {{id}}", trackLink: "View tracking: {{id}}",
     hypothesis: "Hypothesis", universe: "Universe", period: "Period", researchType: "Research type", proposal: "Alpha proposal", chatOwned: "Chat-owned", formulaWord: "Formula",
     alphaProposal: "Alpha proposal: {{title}}", formula: "Alpha formula", formulaCopied: "Formula copied", formulaCopyFailed: "Formula could not be copied",
     preparing: "Research surface is being prepared", rebuilding: "Rebuilding research view…", building: "Building research view…",
@@ -220,6 +221,7 @@ export const chatZh = {
   },
   phaseLabels: { new: "已准备好新聊天", opening: "正在开启轮次", complete: "运行已完成", failed: "运行失败", stopped: "轮次已停止", ready: "已就绪", active: "Research Agent 正在工作", waiting: "等待你的回答", stopping: "正在停止轮次", recovering: "正在确认命令是否接收" },
   a2ui: {
+    researchLink: "查看研究：{{id}}", trackLink: "查看跟踪：{{id}}",
     hypothesis: "假设", universe: "投资范围", period: "研究区间", researchType: "研究类型", proposal: "Alpha 提案", chatOwned: "聊天生成", formulaWord: "公式",
     alphaProposal: "Alpha 提案：{{title}}", formula: "Alpha 公式", formulaCopied: "公式已复制", formulaCopyFailed: "无法复制公式",
     preparing: "正在准备研究界面", rebuilding: "正在重建研究视图…", building: "正在构建研究视图…",

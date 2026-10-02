@@ -21,6 +21,7 @@ import {
 } from "./researchA2UI";
 
 import { ChatUiProvider } from "./ChatUiProvider";
+import { ResearchResourceProvider } from "./ResearchResourceProvider";
 
 const RUN_ID = "run_0123456789abcdef0123";
 
@@ -188,7 +189,7 @@ async function mount(message: ActivityMessage): Promise<Root> {
   await act(async () => {
     root.render(
       <CopilotKitContext.Provider value={{ copilotkit, executingToolCallIds: EMPTY_SET }}>
-        <ChatUiProvider><ResearchA2UIActivity message={message} /></ChatUiProvider>
+        <ChatUiProvider><ResearchResourceProvider><ResearchA2UIActivity message={message} /></ResearchResourceProvider></ChatUiProvider>
       </CopilotKitContext.Provider>,
     );
     await Promise.resolve();

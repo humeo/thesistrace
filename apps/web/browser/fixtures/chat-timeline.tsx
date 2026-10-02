@@ -114,4 +114,37 @@ function RecoveryFixture() {
     </nav><ChatTestProvider controller={controller}><ChatTimeline controller={controller} /></ChatTestProvider>
   </main>;
 }
-createRoot(document.getElementById("root")!).render(new URLSearchParams(location.search).get("mode") === "recovery" ? <RecoveryFixture /> : <TimelineFixture />);
+function ResearchHistoryFixture() {
+  const older = "run_00000000000000000000";
+  const other = "run_11111111111111111111";
+  const shared = "run_22222222222222222222";
+  const makeTurn = (id: string, runId: string | string[]): TimelineTurn => ({ id, started_at: time, completed_at: time, status: "completed", entries: [
+    { ...surface(`research-${id}`, "succeeded", shared), turn_id: id, payload: { activityType: "a2ui-surface", status: "ready", content: { a2ui_operations: [
+      { version: "v0.9", createSurface: { catalogId: "urn:thesistrace:a2ui:research:v0.9", surfaceId: `research-${id}` } },
+      { version: "v0.9", updateComponents: { surfaceId: `research-${id}`, components: [Array.isArray(runId)
+        ? { component: "ResearchComparison", id: "root", runIds: runId }
+        : { component: "ResearchRun", id: "root", runId }] } },
+    ] } } },
+    { ...text(`answer-${id}`, `Answer ${id}`), turn_id: id },
+  ] });
+  const [turns, setTurns] = useState(() => [
+    ...[older, other, shared].map((id, index) => makeTurn(`turn-${index}`, id)),
+    { ...makeTurn("latest", shared), entries: [
+      ...makeTurn("first-view", [shared, ...[3, 4, 5].map(value => `run_${String(value).repeat(20)}`)]).entries,
+      ...makeTurn("last-view", [shared, ...[6, 7, 8].map(value => `run_${String(value).repeat(20)}`)]).entries,
+    ].map(entry => ({ ...entry, turn_id: "latest" })) },
+  ]);
+  const [open, setOpen] = useState(0);
+  const controller = { turns, phase: "idle", question: null, loadOlder: async () => false,
+    retryTimeline: async () => undefined } as unknown as ChatConversationController;
+  return <main style={{ height: "100vh", maxWidth: 1000, margin: "auto", display: "flex", flexDirection: "column" }}>
+    <nav aria-label="Research history fixture">
+      <button onClick={() => setTurns(previous => [...previous, makeTurn(`next-${previous.length}`, shared)])}>Next research turn</button>
+      <button onClick={() => setTurns(previous => [makeTurn("earlier", older), ...previous])}>Load older research</button>
+      <button onClick={() => setOpen(value => value + 1)}>Reopen conversation</button>
+    </nav>
+    <ChatTestProvider><ChatTimeline key={open} controller={controller} /></ChatTestProvider>
+  </main>;
+}
+const mode = new URLSearchParams(location.search).get("mode");
+createRoot(document.getElementById("root")!).render(mode === "recovery" ? <RecoveryFixture /> : mode === "research-history" ? <ResearchHistoryFixture /> : <TimelineFixture />);

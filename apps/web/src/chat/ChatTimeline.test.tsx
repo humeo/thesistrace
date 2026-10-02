@@ -1,18 +1,22 @@
 // @vitest-environment happy-dom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { notifyManager } from "@tanstack/react-query";
 import { ChatTimeline } from "./ChatTimeline";
 import { ChatTestProvider } from "./chatTestProvider";
 import { ChatConversationView } from "./ChatConversation";
 import { changeInterfaceLanguage } from "../i18n";
 import type { TimelineEntry, TimelineTurn } from "./chatProtocol";
 import type { ChatConversationController } from "./useChatConversation";
+import * as core from "../auth/coreFetch";
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let root: Root | undefined;
+beforeEach(() => notifyManager.setNotifyFunction(callback => { act(callback); }));
 afterEach(async () => {
   await act(async () => root?.unmount()); root = undefined;
   await changeInterfaceLanguage("en"); document.body.replaceChildren(); vi.restoreAllMocks();
+  notifyManager.setNotifyFunction(callback => callback());
 });
 async function mount(value: ChatConversationController, full = false) {
   const container = document.createElement("div"); document.body.append(container); root = createRoot(container);
@@ -20,6 +24,126 @@ async function mount(value: ChatConversationController, full = false) {
     ? <ChatConversationView controller={value} existingSession agentId="default" threadId="test" modelControls={null} />
     : <ChatTimeline controller={value} />}</ChatTestProvider>));
 }
+test("only the latest turn reads its last five distinct research resources by their latest occurrence", async () => {
+  const requested: string[] = [];
+  vi.spyOn(core, "coreFetch").mockImplementation(async input => {
+    const id = String(input).split("/").at(-1)!;
+    requested.push(id);
+    if (id === "run_44444444444444444444") return new Response("", { status: 503 });
+    return new Response(JSON.stringify({ id, name: `Research ${id}`, status: "running", research_kind: "factor_evaluation",
+      formula_summary: "rank(close)", start_date: "2026-01-01", end_date: "2026-09-01" }));
+  });
+  const ids = Array.from({ length: 8 }, (_, index) => `run_${String(index).repeat(20)}`);
+  const latest = timelineTurn([
+    ...researchTurn("first-view", ids.slice(0, 4)).entries,
+    ...researchTurn("repeat-view", ids[0]!).entries,
+    ...researchTurn("last-view", ids.slice(4)).entries,
+  ].map(value => ({ ...value, turn_id: "latest" })), { id: "latest" });
+  const turns = [researchTurn("older", ids[0]!), latest];
+  await mount(controller({ turns }));
+  await vi.waitFor(() => expect(document.querySelectorAll('section[aria-label^="ResearchRun "] time')).toHaveLength(5));
+  const eligible = [ids[0], ...ids.slice(4)];
+  expect(requested).toEqual(eligible);
+  expect(document.querySelectorAll('section[aria-label^="ResearchRun "]')).toHaveLength(6);
+  expect(document.querySelectorAll('[role="alert"]')).toHaveLength(1);
+  const overflow = document.querySelector('[data-entry-id="research:first-view"]')!;
+  expect([...overflow.querySelectorAll("a")].slice(1).map(a => a.getAttribute("href")))
+    .toEqual(ids.slice(1, 4).map(id => `/research-runs/${id}`));
+  expect(document.querySelectorAll('[data-entry-id="research:last-view"] section')).toHaveLength(4);
+  const older = document.querySelector(`[data-entry-id="research:older"]`)!;
+  expect(older.querySelector("a")?.getAttribute("href")).toBe(`/research-runs/${ids[0]}`);
+  expect(older.querySelector("button, [role=status], [role=alert]")).toBeNull();
+  expect(document.body.textContent).toContain("Answer older");
+
+  const next = controller({ turns: [researchTurn("older-turn", "run_99999999999999999999"), ...turns, timelineTurn([
+    entry("user_input", "new-prompt", { content: "Next question", inputId: INPUT_ID, source: "prompt" }, "new-turn"),
+  ], { id: "new-turn", status: "running", completed_at: null })] });
+  await act(async () => root?.render(<ChatTestProvider controller={next}><ChatTimeline controller={next} /></ChatTestProvider>));
+  await vi.waitFor(() => expect(document.querySelectorAll('section[aria-label^="ResearchRun "]')).toHaveLength(0));
+  expect(requested).toEqual(eligible);
+  expect(document.querySelector('[data-entry-id="research:first-view"] button')).toBeNull();
+});
+
+function researchTurn(id: string, runId: string | string[]): TimelineTurn {
+  return timelineTurn([
+    entry("a2ui", `research:${id}`, { activityType: "a2ui-surface", status: "ready", content: { a2ui_operations: [
+      { version: "v0.9", createSurface: { catalogId: "urn:thesistrace:a2ui:research:v0.9", surfaceId: id } },
+      { version: "v0.9", updateComponents: { surfaceId: id, components: [Array.isArray(runId)
+        ? { component: "ResearchComparison", id: "root", runIds: runId }
+        : { component: "ResearchRun", id: "root", runId }] } },
+    ] } }, id),
+    entry("assistant_message", `answer:${id}`, { content: `Answer ${id}`, status: "complete" }, id),
+  ], { id });
+}
+test("the last-five budget follows layout display order and includes tracking references", async () => {
+  const runs = Array.from({ length: 5 }, (_, index) => `run_${String(index).repeat(20)}`);
+  const trackId = "track_11111111111111111111";
+  const requested: string[] = [];
+  vi.spyOn(core, "coreFetch").mockImplementation(async input => {
+    requested.push(String(input));
+    return new Response("", { status: 503 });
+  });
+  await mount(controller({ turns: [timelineTurn([
+    entry("a2ui", "ordered-resources", { activityType: "a2ui-surface", status: "ready", content: { a2ui_operations: [
+      { version: "v0.9", createSurface: { catalogId: "urn:thesistrace:a2ui:research:v0.9", surfaceId: "ordered-resources" } },
+      { version: "v0.9", updateComponents: { surfaceId: "ordered-resources", components: [
+        { component: "ResearchRun", id: "overflow", runId: runs[4] },
+        { component: "DailyTrack", id: "tracking", trackId },
+        { component: "ResearchComparison", id: "research", runIds: runs.slice(0, 4) },
+        { component: "Column", id: "root", children: ["research", "tracking", "overflow"] },
+      ] } },
+    ] } }),
+  ])] }));
+  await vi.waitFor(() => expect(document.querySelectorAll('[role="alert"]')).toHaveLength(5));
+  expect(requested).toEqual([...runs.slice(1, 4).map(id => `/api/research-runs/${id}`), `/api/daily-tracks/${trackId}`, `/api/research-runs/${runs[4]}`]);
+  expect(document.querySelector(`a[href="/research-runs/${runs[0]}"]`)?.textContent).toBe(`View research: ${runs[0]}`);
+});
+test("repeated references in the latest turn share reads and refresh together, then read again on reopening", async () => {
+  const runId = "run_11111111111111111111";
+  let finish!: (response: Response) => void;
+  const response = (name: string) => new Response(JSON.stringify({ id: runId, name, status: "running", research_kind: "factor_evaluation",
+    formula_summary: "rank(close)", start_date: "2026-01-01", end_date: "2026-09-01" }));
+  const request = vi.spyOn(core, "coreFetch").mockImplementation(input => String(input).endsWith(runId)
+    ? new Promise<Response>(resolve => { finish = resolve; })
+    : Promise.resolve(new Response(JSON.stringify({ id: String(input).split("/").at(-1), name: "Other research", status: "cancelled",
+      research_kind: "factor_evaluation", formula_summary: "rank(close)", start_date: "2026-01-01", end_date: "2026-09-01" }))));
+  const value = controller({ turns: [timelineTurn([
+    ...researchTurn("first", runId).entries,
+    ...researchTurn("second", [runId, "run_22222222222222222222"]).entries,
+    ...researchTurn("third", [runId, "run_33333333333333333333"]).entries,
+  ].map(value => ({ ...value, turn_id: "latest" })), { id: "latest" })] });
+  await mount(value);
+  expect(request.mock.calls.filter(([input]) => String(input).endsWith(runId))).toHaveLength(1);
+  await act(async () => finish(response("Shared research")));
+  await vi.waitFor(() => expect([...document.querySelectorAll(`a[href="/research-runs/${runId}"]`)].map(a => a.textContent))
+    .toEqual(["Shared research", "Shared research", "Shared research"]));
+
+  request.mockResolvedValueOnce(response("Refreshed research"));
+  await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Reload view: Shared research"]')!.click());
+  await vi.waitFor(() => expect([...document.querySelectorAll(`a[href="/research-runs/${runId}"]`)].map(a => a.textContent))
+    .toEqual(["Refreshed research", "Refreshed research", "Refreshed research"]));
+  expect(request.mock.calls.filter(([input]) => String(input).endsWith(runId))).toHaveLength(2);
+  await act(async () => root?.unmount());
+  await mount(value);
+  await act(async () => finish(response("Reopened research")));
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Reopened research"));
+  expect(request.mock.calls.filter(([input]) => String(input).endsWith(runId))).toHaveLength(3);
+});
+test("a new turn revalidates unfinished research and turns the earlier reference into a link", async () => {
+  const runId = "run_11111111111111111111";
+  const request = vi.spyOn(core, "coreFetch").mockResolvedValueOnce(new Response(JSON.stringify({ id: runId, name: "Running research",
+    status: "running", research_kind: "factor_evaluation", formula_summary: "rank(close)", start_date: "2026-01-01", end_date: "2026-09-01" })))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ id: runId, name: "Finished research", status: "cancelled", research_kind: "factor_evaluation",
+      formula_summary: "rank(close)", start_date: "2026-01-01", end_date: "2026-09-01" })));
+  const first = researchTurn("first", runId);
+  await mount(controller({ turns: [first] }));
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Running research"));
+  const next = controller({ turns: [first, researchTurn("second", runId)] });
+  await act(async () => root?.render(<ChatTestProvider controller={next}><ChatTimeline controller={next} /></ChatTestProvider>));
+  await vi.waitFor(() => expect([...document.querySelectorAll(`a[href="/research-runs/${runId}"]`)].map(a => a.textContent))
+    .toEqual([`View research: ${runId}`, "Finished research"]));
+  expect(request).toHaveBeenCalledTimes(2);
+});
 test("uses native message Copy controls and server timestamps across languages", async () => {
   const writeText = vi.fn(async () => undefined);
   Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });

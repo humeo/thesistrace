@@ -14,6 +14,50 @@ test.beforeEach(async ({ page }) => {
   });
   await page.goto("https://chat.fixture/");
 });
+test("only the latest turn reads its last five distinct resources, shares duplicates and keeps earlier links", async ({ page }) => {
+  const requested: string[] = [];
+  let name = "Shared research";
+  await page.route("https://chat.fixture/api/research-runs/*", route => {
+    const id = route.request().url().split("/").at(-1)!;
+    requested.push(id);
+    return route.fulfill({ json: { id, name, status: "succeeded", research_kind: "factor_evaluation",
+      formula_summary: "rank(close)", start_date: "2026-01-01", end_date: "2026-09-01",
+      result: { factor: { horizons: Object.fromEntries(["1", "5", "20"].map(h => [h, { summary: { rank_ic: { mean: 0.125 } } }])) } },
+    } });
+  });
+  await page.goto("https://chat.fixture/?mode=research-history");
+  const oldId = "run_00000000000000000000", otherId = "run_11111111111111111111", sharedId = "run_22222222222222222222";
+  const cards = page.locator('section[aria-label^="ResearchRun "]');
+  await expect(cards.locator("time")).toHaveCount(6);
+  const eligible = [sharedId, ...[5, 6, 7, 8].map(value => `run_${String(value).repeat(20)}`)];
+  expect(requested.sort()).toEqual(eligible);
+  await expect(page.getByRole("link", { name: `View research: ${oldId}`, exact: true })).toHaveAttribute("href", `/research-runs/${oldId}`);
+  await expect(page.getByRole("link", { name: `View research: ${otherId}`, exact: true })).toHaveCount(1);
+  await expect(page.getByRole("link", { name: "View research: run_33333333333333333333", exact: true })).toHaveAttribute("href", "/research-runs/run_33333333333333333333");
+  await expect(page.getByRole("link", { name: "View research: run_44444444444444444444", exact: true })).toHaveAttribute("href", "/research-runs/run_44444444444444444444");
+  const lastView = page.locator('[data-entry-id="research-last-view"]');
+  await expect(lastView.locator('section[aria-label^="ResearchRun "]')).toHaveCount(4);
+  await expect(lastView.getByRole("link", { name: /^View research:/ })).toHaveCount(0);
+  await expect(page.getByText("Answer turn-0", { exact: true })).toHaveCount(1);
+  name = "Refreshed research";
+  await page.getByRole("region", { name: `ResearchRun ${sharedId}`, exact: true }).last().getByRole("button", { name: "Reload view: Shared research", exact: true }).click();
+  await expect(page.getByRole("link", { name, exact: true })).toHaveCount(2);
+  expect(requested.filter(id => id === sharedId)).toHaveLength(2);
+  await page.getByRole("button", { name: "Load older research", exact: true }).click();
+  await expect(page.getByRole("link", { name: `View research: ${oldId}`, exact: true })).toHaveCount(2);
+  expect(requested).toHaveLength(6);
+  await page.getByRole("button", { name: "Reopen conversation", exact: true }).click();
+  await expect(cards.locator("time")).toHaveCount(6);
+  expect(requested.slice(6).sort()).toEqual(eligible);
+  expect(requested.filter(id => id === sharedId)).toHaveLength(3);
+  expect(requested).not.toContain(oldId);
+  expect(requested).not.toContain(otherId);
+  await page.getByRole("button", { name: "Next research turn", exact: true }).click();
+  await expect(cards.locator("time")).toHaveCount(1);
+  await expect(page.getByRole("link", { name: `View research: ${sharedId}`, exact: true })).toHaveCount(3);
+  await expect(page.getByRole("link", { name, exact: true })).toHaveCount(1);
+  expect(requested).toHaveLength(11);
+});
 test("desktop messages match ChatGPT's reading width while the native scroll viewport reaches the page edge", async ({ page }) => {
   await page.setViewportSize({ width: 1552, height: 942 });
   await page.getByRole("button", { name: "Complete", exact: true }).click();

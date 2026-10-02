@@ -10,7 +10,8 @@ import markedCjkFriendly from "marked-cjk-friendly";
 import { i18n } from "../i18n";
 import { formatNumber, formatTimestamp } from "../i18n/format";
 import { parseResearchRunHref } from "./toolResult";
-import { ResearchA2UIActivity } from "./researchA2UI";
+import { ResearchA2UIActivity, researchResourceIds } from "./researchA2UI";
+import { ResearchResourceProvider } from "./ResearchResourceProvider";
 import { chatViewMessages, projectChatEntries, WORK_ACTIVITY, ENTRY_ACTIVITY, type ChatViewMessage, type WorkContent, type EntryContent } from "./chatViewMessages";
 import type { TimelineEntry, TimelineTurn, ChatQuestion } from "./chatProtocol";
 import type { ChatConversationController } from "./useChatConversation";
@@ -84,7 +85,7 @@ export function ChatTimeline({ controller }: { controller: ChatConversationContr
   }, [anchoredPrompt]);
 
   const items = bubbleItems(messages, controller);
-  return <div className="relative flex min-h-0 flex-1 flex-col">
+  return <ResearchResourceProvider><div className="relative flex min-h-0 flex-1 flex-col">
     <Bubble.List ref={list} className="min-h-0 flex-1"
       styles={{ scroll: { height: "100%", scrollbarGutter: "stable both-edges", scrollPaddingBlockStart: "20%" } }}
       items={items.map((item, index) => ({ ...item,
@@ -93,10 +94,16 @@ export function ChatTimeline({ controller }: { controller: ChatConversationContr
       }))} autoScroll
       onScroll={() => setReadingOlder((list.current?.scrollBoxNativeElement.scrollTop ?? 0) < -80)} />
     {readingOlder ? <Button shape="round" className="absolute bottom-3 self-center" icon={<ArrowDown />} onClick={() => list.current?.scrollTo({ top: "bottom" })}>{t("backToLatest")}</Button> : null}
-  </div>;
+  </div></ResearchResourceProvider>;
 }
 
 function bubbleItems(messages: readonly ChatViewMessage[], controller?: ChatConversationController): ListItems {
+  const latestTurnId = controller?.turns.at(-1)?.id;
+  const references = messages.flatMap(message => message.role === "activity" && message.entry?.kind === "a2ui"
+    && message.entry.turn_id === latestTurnId ? researchResourceIds(message.content) : []);
+  // Count from the end so a repeated reference is ranked by its latest occurrence.
+  const detailIds = new Set([...new Set([...references].reverse())].slice(0, 5));
+  const linksOnly = new Set<string>();
   return messages.flatMap((message): ListItems => {
     if (message.role === "tool") return [];
     const base = { key: message.id, role: "ai", variant: "borderless" as const, style: { paddingInline: 0 },
@@ -106,7 +113,7 @@ function bubbleItems(messages: readonly ChatViewMessage[], controller?: ChatConv
     if (message.role === "activity") return [{ ...base, role: "activity", content:
       message.activityType === WORK_ACTIVITY ? <WorkActivity content={message.content as WorkContent} controller={controller} />
       : message.activityType === ENTRY_ACTIVITY ? <EntryActivity content={message.content as EntryContent} controller={controller} />
-      : <ResearchA2UIActivity message={message} /> }];
+      : <ResearchA2UIActivity message={message} detailIds={message.entry?.turn_id === latestTurnId ? detailIds : linksOnly} /> }];
     if (message.role === "user") return [{ ...base, role: "user", placement: "end", variant: "filled", className: "chat-message-user group/message",
       styles: { body: { maxWidth: "85%" }, content: { whiteSpace: "pre-wrap" }, footer: base.styles.footer }, content: message.content,
       footerPlacement: "outer-end", footer: <MessageFooter message={message} user /> }];

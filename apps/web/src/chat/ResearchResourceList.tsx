@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { createContext, useContext } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Trans, useTranslation } from "react-i18next";
 import { z } from "zod";
 import { ArrowClockwiseIcon } from "@phosphor-icons/react";
@@ -40,64 +41,82 @@ const trackSchema = z.object({
 });
 type Resource = { kind: "run"; value: z.infer<typeof runSchema> } | { kind: "track"; value: z.infer<typeof trackSchema> };
 type ResourceErrorCode = "unavailable" | "loadFailed" | "identityMismatch" | "resultUnavailable" | "invalidResponse";
-type State = { id: string; resource: Resource; loadedAt: string; errorCode?: ResourceErrorCode } | { id: string; errorCode: ResourceErrorCode };
+type ResourceRead = { snapshot: { resource: Resource; loadedAt: string } | null; errorCode?: ResourceErrorCode };
 class ResourceLoadError extends Error { constructor(readonly code: ResourceErrorCode) { super(code); } }
+export const ResearchResourceDetailsContext = createContext<ReadonlySet<string> | null>(null);
 
 export function ResearchResourceList({ kind, ids }: { kind: "run" | "track"; ids: string[] }) {
+  const details = useContext(ResearchResourceDetailsContext);
+  const { t } = useTranslation("chat");
   return <div role="list"><Listy items={ids} rowKey={id => `${kind}:${id}`} virtual={false}
     classNames={{ item: "chat-research-list-row" }}
-    itemRender={id => <div role="listitem"><ResourceRow kind={kind} id={id} /></div>} /></div>;
+    itemRender={id => <div role="listitem">{details === null || details.has(id) ? <ResourceRow kind={kind} id={id} />
+      : <Typography.Link href={resourceHref(kind, id)}>{t(kind === "run" ? "a2ui.researchLink" : "a2ui.trackLink", { id })}</Typography.Link>}
+    </div>} /></div>;
+}
+
+function resourceHref(kind: "run" | "track", id: string) { return kind === "run" ? `/research-runs/${id}` : `/daily-tracks/${id}`; }
+
+async function readResource(kind: "run" | "track", id: string, signal: AbortSignal): Promise<Resource> {
+  const timeoutController = new AbortController();
+  const requestSignal = AbortSignal.any([signal, timeoutController.signal]);
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let removeAbortListener: (() => void) | undefined;
+  try {
+    return await Promise.race([
+      (async (): Promise<Resource> => {
+        const response = await coreFetch(`/api${resourceHref(kind, id)}`, { signal: requestSignal });
+        if (!response.ok) throw new ResourceLoadError(response.status === 404 || response.status === 403 ? "unavailable" : "loadFailed");
+        const body: unknown = await response.json();
+        const resource: Resource = kind === "run" ? { kind, value: runSchema.parse(body) } : { kind, value: trackSchema.parse(body) };
+        if (resource.value.id !== id) throw new ResourceLoadError("identityMismatch");
+        if (resource.kind === "run" && resource.value.status === "succeeded" && !resource.value.result) throw new ResourceLoadError("resultUnavailable");
+        return resource;
+      })(),
+      new Promise<never>((_, reject) => {
+        const abort = () => reject(new ResourceLoadError("loadFailed"));
+        if (requestSignal.aborted) { abort(); return; }
+        requestSignal.addEventListener("abort", abort, { once: true });
+        removeAbortListener = () => requestSignal.removeEventListener("abort", abort);
+        // Bound headers and body together; a late response cannot replace a retry.
+        timeout = setTimeout(() => timeoutController.abort(), 15_000);
+      }),
+    ]);
+  } catch (error) {
+    throw new ResourceLoadError(error instanceof z.ZodError || error instanceof SyntaxError ? "invalidResponse" : error instanceof ResourceLoadError ? error.code : "loadFailed");
+  } finally {
+    clearTimeout(timeout);
+    removeAbortListener?.();
+  }
 }
 
 function ResourceRow({ kind, id }: { kind: "run" | "track"; id: string }) {
   const { t } = useTranslation("chat");
-  const [state, setState] = useState<State | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [revision, setRevision] = useState(0);
-  const href = kind === "run" ? `/research-runs/${id}` : `/daily-tracks/${id}`;
-  useEffect(() => {
-    const controller = new AbortController();
-    let active = true;
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    setLoading(true);
-    setState(previous => previous?.id === id && "resource" in previous ? { id, resource: previous.resource, loadedAt: previous.loadedAt } : null);
-    void (async () => {
+  const href = resourceHref(kind, id);
+  const client = useQueryClient();
+  const queryKey = ["chat-research", kind, id] as const;
+  const { data, error, isFetching: loading, refetch } = useQuery<ResourceRead, ResourceLoadError>({
+    queryKey,
+    queryFn: async ({ signal }) => {
       try {
-        const resource = await Promise.race([
-          (async (): Promise<Resource> => {
-            const response = await coreFetch(`/api${href}`, { signal: controller.signal });
-            if (!response.ok) throw new ResourceLoadError(response.status === 404 || response.status === 403 ? "unavailable" : "loadFailed");
-            const body: unknown = await response.json();
-            const resource: Resource = kind === "run" ? { kind, value: runSchema.parse(body) } : { kind, value: trackSchema.parse(body) };
-            if (resource.value.id !== id) throw new ResourceLoadError("identityMismatch");
-            if (resource.kind === "run" && resource.value.status === "succeeded" && !resource.value.result) throw new ResourceLoadError("resultUnavailable");
-            return resource;
-          })(),
-          new Promise<never>((_, reject) => {
-            // Bound the whole read, including the response body. A late result
-            // cannot replace this attempt's error or a newer manual reload.
-            timeout = setTimeout(() => {
-              controller.abort();
-              reject(new ResourceLoadError("loadFailed"));
-            }, 5_000);
-          }),
-        ]);
-        if (active) setState({ id, resource, loadedAt: new Date().toISOString() });
+        const resource = await readResource(kind, id, signal);
+        return { snapshot: { resource, loadedAt: new Date().toISOString() } };
       } catch (error) {
-        if (active) {
-          const errorCode = error instanceof z.ZodError || error instanceof SyntaxError ? "invalidResponse" : error instanceof ResourceLoadError ? error.code : "loadFailed";
-          setState(previous => errorCode === "loadFailed" && previous?.id === id && "resource" in previous
-            ? { ...previous, errorCode } : { id, errorCode });
-        }
-      } finally {
-        clearTimeout(timeout);
-        if (active) setLoading(false);
+        if (signal.aborted) throw error;
+        const errorCode = error instanceof ResourceLoadError ? error.code : "loadFailed";
+        // Clear inaccessible or invalid facts in the shared result itself, so
+        // a later transient failure cannot revive them in another occurrence.
+        return { errorCode, snapshot: errorCode === "loadFailed" ? client.getQueryData<ResourceRead>(queryKey)?.snapshot ?? null : null };
       }
-    })();
-    return () => { active = false; clearTimeout(timeout); controller.abort(); };
-  }, [href, id, kind, revision]);
-  const current = state?.id === id ? state : null;
-  const snapshot = current && "resource" in current ? current : null;
+    },
+    staleTime: query => {
+      const resource = query.state.data?.snapshot?.resource;
+      // A new reference to ongoing work must be able to observe its completion.
+      return resource && !["succeeded", "failed", "cancelled", "stopped"].includes(resource.value.status) ? 0 : Infinity;
+    },
+  });
+  const snapshot = data?.snapshot;
+  const errorCode = data?.errorCode ?? error?.code;
   const resource = snapshot?.resource;
   const title = resource?.kind === "run" ? resource.value.name : resource?.kind === "track" ? i18n.t("daily:track") : id;
   return <section aria-label={`${kind === "run" ? "ResearchRun" : "DailyTrack"} ${id}`}>
@@ -113,11 +132,11 @@ function ResourceRow({ kind, id }: { kind: "run" | "track"; id: string }) {
             </Tooltip> : null}
             <Tooltip title={t("a2ui.reload")}><Button type="text" size="small" loading={loading}
               icon={<ArrowClockwiseIcon size={16} />} aria-label={`${t("a2ui.reload")}: ${title}`}
-              onClick={() => { setLoading(true); setRevision(value => value + 1); }} /></Tooltip>
+              onClick={() => { void refetch({ cancelRefetch: false }); }} /></Tooltip>
           </Space>
         </Flex>
         {loading ? <Flex gap={8} align="center" role="status"><Spin size="small" /><Typography.Text>{t("a2ui.loadingData")}</Typography.Text></Flex> : null}
-        {current?.errorCode ? <Alert type="error" role="alert" title={t(`a2ui.${current.errorCode}`)} /> : null}
+        {errorCode ? <Alert type="error" role="alert" title={t(`a2ui.${errorCode}`)} /> : null}
         {resource ? <ResourceFacts resource={resource} /> : null}
       </Flex>
   </section>;

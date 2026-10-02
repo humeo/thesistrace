@@ -9,12 +9,25 @@ graphs, surface identities, spacing, alignment, bindings or actions. Explanation
 headings and ordinary tables use the normal Markdown response. Accepted
 ResearchRun, comparison and DailyTrack components carry resource IDs only. The authenticated client reads their facts from Core,
 preserves comparison order, and shows the read time with an explicit reload.
-Reopening a conversation therefore displays current resource state, not an
-immutable historical snapshot of model-authored status or metrics. Deleted or
-inaccessible resources remain explicit per-resource errors. This costs a Core
-read when a resource row mounts, in exchange for keeping research truth out of generated
-UI payloads. Obsolete model-authored status, metrics, and provenance components
-are rejected rather than translated.
+Only references in the latest Turn load research details, for the last five
+distinct resources across all its views, ranked by their latest occurrence in
+display order. Original reference order is preserved. Earlier Turns and
+references outside that selection render ordinary detail links without reading Core.
+Failed reads still occupy the limit; a new Turn without research references does
+not load an earlier Turn. Loading older history does not extend the window.
+Within the window, references to the same
+resource share an authenticated read through a conversation-scoped TanStack
+Query client, and an explicit reload updates all its visible occurrences.
+New references to ongoing research or tracking revalidate its shared state, so
+completion can appear without retaining a previous running snapshot.
+The client is discarded on conversation unmount, and resources with no remaining
+detail views are removed. Reopening the conversation reads current resource state;
+the UI never persists research snapshots or puts research truth into generated
+payloads. Deleted or inaccessible resources remain explicit per-resource errors.
+Reads have a 15-second deadline covering headers and body, retain previous facts
+only on transient failure, and cannot replace a newer attempt after cancellation.
+Obsolete model-authored status, metrics, and provenance components are rejected
+rather than translated.
 
 Failed presentation snapshots retain an allowlisted diagnostic code and their
 activity identity across persistence and replay. Provider error text and private

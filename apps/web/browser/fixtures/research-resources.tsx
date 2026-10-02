@@ -2,6 +2,7 @@ import "../../src/styles.css";
 import { createRoot } from "react-dom/client";
 import { CopilotKitContext, CopilotKitCoreReact, EMPTY_SET } from "@copilotkit/react-core/v2/context";
 import { ResearchA2UIActivity } from "../../src/chat/researchA2UI";
+import { ResearchResourceProvider } from "../../src/chat/ResearchResourceProvider";
 import { Toaster } from "../../src/components/ui/toast";
 import { LanguageControls } from "./language-controls";
 const copilotkit = new CopilotKitCoreReact({ deferInitialConnection: true, runtimeTransport: "rest", runtimeUrl: "/api/agent/copilotkit" });
@@ -15,9 +16,9 @@ const components = catalog ? [
 createRoot(document.getElementById("root")!).render(<CopilotKitContext.Provider value={{ copilotkit, executingToolCallIds: EMPTY_SET }}>
   <LanguageControls />
   <main style={{ maxWidth: 800, margin: "auto", padding: 16, minWidth: 0 }}>
-    <ResearchA2UIActivity message={{ id: "a2ui-surface-test", role: "activity", activityType: "a2ui-surface", content: { a2ui_operations: [
+    <ResearchResourceProvider><ResearchA2UIActivity message={{ id: "a2ui-surface-test", role: "activity", activityType: "a2ui-surface", content: { a2ui_operations: [
       { version: "v0.9", createSurface: { catalogId: "urn:thesistrace:a2ui:research:v0.9", surfaceId: "resources" } },
       { version: "v0.9", updateComponents: { surfaceId: "resources", components } },
-    ] } }} />
+    ] } }} /></ResearchResourceProvider>
   </main><Toaster />
 </CopilotKitContext.Provider>);

@@ -1,16 +1,19 @@
 // @vitest-environment happy-dom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { notifyManager } from "@tanstack/react-query";
 import { ResearchResourceList } from "./ResearchResourceList";
+import { ResearchResourceProvider } from "./ResearchResourceProvider";
 const request = vi.hoisted(() => vi.fn());
 vi.mock("../auth/coreFetch", () => ({ coreFetch: request }));
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let root: Root;
-afterEach(async () => { if (root) await act(async () => root.unmount()); document.body.replaceChildren(); vi.useRealTimers(); vi.resetAllMocks(); });
+beforeEach(() => notifyManager.setNotifyFunction(callback => { act(callback); }));
+afterEach(async () => { if (root) await act(async () => root.unmount()); notifyManager.setNotifyFunction(callback => callback()); document.body.replaceChildren(); vi.useRealTimers(); vi.resetAllMocks(); });
 const first = "run_0123456789abcdef0123", second = "run_1123456789abcdef0123";
 function run(id = first) { return { id, name: "Authoritative name", status: "succeeded", formula_summary: "rank(close)", start_date: "2026-01-01", end_date: "2026-08-27", research_kind: "factor_evaluation", result: { factor: { horizons: Object.fromEntries(["1", "5", "20"].map(h => [h, { summary: { rank_ic: { mean: 0.125 } } }])) } } }; }
-async function mount(ids: string[]) { root = createRoot(document.body.appendChild(document.createElement("div"))); await act(async () => root.render(<ResearchResourceList kind="run" ids={ids} />)); }
+async function mount(ids: string[]) { root = createRoot(document.body.appendChild(document.createElement("div"))); await act(async () => root.render(<ResearchResourceProvider><ResearchResourceList kind="run" ids={ids} /></ResearchResourceProvider>)); }
 test("loads authoritative metrics and keeps ordered failures isolated", async () => {
   request.mockImplementation((url: string) => Promise.resolve(url.endsWith(first) ? new Response(JSON.stringify(run())) : new Response(null, { status: 404 })));
   await mount([second, first]);
@@ -33,7 +36,7 @@ test("changing resource aborts the old load and cannot show its late response", 
   request.mockImplementationOnce(() => new Promise<Response>(r => { resolve = r; })).mockResolvedValueOnce(new Response(JSON.stringify({ ...run(second), name: "Second research" })));
   await mount([first]);
   const signal = request.mock.calls[0][1].signal as AbortSignal;
-  await act(async () => root.render(<ResearchResourceList kind="run" ids={[second]} />));
+  await act(async () => root.render(<ResearchResourceProvider><ResearchResourceList kind="run" ids={[second]} /></ResearchResourceProvider>));
   expect(signal.aborted).toBe(true);
   await act(async () => resolve(new Response(JSON.stringify(run()))));
   await vi.waitFor(() => expect(document.body.textContent).toContain("Second research"));
@@ -43,8 +46,8 @@ test("reads DailyTrack observation and reports blocked state from Core", async (
   const id = "track_0123456789abcdef0123";
   request.mockResolvedValue(new Response(JSON.stringify({ id, status: "blocked", origin: { seed_run_id: first, strategy_session: "2026-08-20" }, strategy_session: "2026-08-27", data_through_session: "2026-08-26", blocked_reason: "Required data is pending", blocked_code: "FINANCIAL_COVERAGE_UNAVAILABLE", observation: { session: "2026-08-27", net_return: 0.125, maximum_drawdown: -0.025 } })));
   root = createRoot(document.body.appendChild(document.createElement("div")));
-  await act(async () => root.render(<ResearchResourceList kind="track" ids={[id]} />));
-  expect(document.body.textContent).toContain("Financial Coverage ends before the next Research Session.");
+  await act(async () => root.render(<ResearchResourceProvider><ResearchResourceList kind="track" ids={[id]} /></ResearchResourceProvider>));
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Financial Coverage ends before the next Research Session."));
   expect(document.body.textContent).not.toContain("Required data is pending");
   expect(document.body.textContent).toContain("12.50%");
   expect(document.body.textContent).toContain("-2.50%");
@@ -60,9 +63,9 @@ test("requires strategy results and renders them without Factor evidence", async
   request.mockResolvedValueOnce(new Response(JSON.stringify({ ...strategy, result: undefined })))
     .mockResolvedValueOnce(new Response(JSON.stringify(strategy)));
   await mount([first]);
-  expect(document.body.textContent).toContain("Completed research result is unavailable");
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Completed research result is unavailable"));
   await act(async () => document.querySelector('button')!.click());
-  expect(document.body.textContent).toContain("20.00%");
+  await vi.waitFor(() => expect(document.body.textContent).toContain("20.00%"));
   expect(document.body.textContent).toContain("-12.00%");
   expect(document.body.textContent).toContain("—");
   expect(document.querySelector('[aria-label="Not available"]')?.textContent).toBe("—");
@@ -73,9 +76,10 @@ test("transient refresh failure preserves prior facts and their read time", asyn
   request.mockResolvedValueOnce(new Response(JSON.stringify(run())))
     .mockResolvedValueOnce(new Response(null, { status: 503 }));
   await mount([first]);
+  await vi.waitFor(() => expect(document.querySelector("time")).not.toBeNull());
   const readTime = document.querySelector("time")?.getAttribute("datetime");
   await act(async () => document.querySelector('button')!.click());
-  expect(document.querySelector('[role="alert"]')).not.toBeNull();
+  await vi.waitFor(() => expect(document.querySelector('[role="alert"]')).not.toBeNull());
   expect(document.body.textContent).toContain("0.125");
   expect(document.querySelector("time")?.getAttribute("datetime")).toBe(readTime);
 });
@@ -83,8 +87,14 @@ test("transient refresh failure preserves prior facts and their read time", asyn
 test.each([403, 404])("refresh %s removes facts that are no longer accessible", async status => {
   request.mockResolvedValueOnce(new Response(JSON.stringify(run()))).mockResolvedValueOnce(new Response(null, { status }));
   await mount([first]);
+  await vi.waitFor(() => expect(document.body.textContent).toContain("0.125"));
   await act(async () => document.querySelector('button')!.click());
-  expect(document.body.textContent).toContain("Resource unavailable or access denied");
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Resource unavailable or access denied"));
+  expect(document.body.textContent).not.toContain("0.125");
+  expect(document.querySelector("time")).toBeNull();
+  request.mockResolvedValueOnce(new Response(null, { status: 503 }));
+  await act(async () => document.querySelector('button')!.click());
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Research data could not be loaded"));
   expect(document.body.textContent).not.toContain("0.125");
   expect(document.querySelector("time")).toBeNull();
 });
@@ -92,9 +102,23 @@ test.each([403, 404])("refresh %s removes facts that are no longer accessible", 
 test("malformed JSON on refresh clears the last facts as an invalid response", async () => {
   request.mockResolvedValueOnce(new Response(JSON.stringify(run()))).mockResolvedValueOnce(new Response("{broken"));
   await mount([first]);
+  await vi.waitFor(() => expect(document.body.textContent).toContain("0.125"));
   await act(async () => document.querySelector('button')!.click());
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Research response is invalid"));
   expect(document.body.textContent).not.toContain("0.125");
   expect(document.querySelector("time")).toBeNull();
+});
+
+test("a slow successful read can finish beyond five seconds", async () => {
+  vi.useFakeTimers();
+  let finish!: (response: Response) => void;
+  request.mockImplementationOnce(() => new Promise<Response>(resolve => { finish = resolve; }));
+  await mount([first]);
+  await act(async () => { await vi.advanceTimersByTimeAsync(7_000); });
+  expect(document.querySelector('[role="status"]')).not.toBeNull();
+  expect(document.querySelector('[role="alert"]')).toBeNull();
+  await act(async () => finish(new Response(JSON.stringify(run()))));
+  await vi.waitFor(() => expect(document.body.textContent).toContain("0.125"));
 });
 
 test.each(["headers", "body"])("a stalled %s request ends loading and allows a manual retry", async phase => {
@@ -105,17 +129,18 @@ test.each(["headers", "body"])("a stalled %s request ends loading and allows a m
     .mockImplementationOnce(() => phase === "headers" ? stalled : Promise.resolve({ ok: true, json: () => stalled }))
     .mockResolvedValueOnce(new Response(JSON.stringify({ ...run(), name: "Retried research" })));
   await mount([first]);
+  await vi.waitFor(() => expect(document.querySelector("time")).not.toBeNull());
   const readTime = document.querySelector("time")!.getAttribute("datetime");
   await act(async () => document.querySelector("button")!.click());
-  expect(document.querySelector('[role="status"]')).not.toBeNull();
-  await act(async () => { await vi.advanceTimersByTimeAsync(5_001); });
+  await vi.waitFor(() => expect(document.querySelector('[role="status"]')).not.toBeNull());
+  await act(async () => { await vi.advanceTimersByTimeAsync(15_001); });
   expect(document.querySelector('[role="status"]')).toBeNull();
   expect(document.body.textContent).toContain("Research data could not be loaded");
   expect(document.body.textContent).toContain("0.125");
   expect(document.querySelector("time")!.getAttribute("datetime")).toBe(readTime);
   expect((request.mock.calls[1][1].signal as AbortSignal).aborted).toBe(true);
   await act(async () => document.querySelector("button")!.click());
-  expect(document.body.textContent).toContain("Retried research");
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Retried research"));
   await act(async () => resolve(phase === "headers" ? new Response(JSON.stringify({ ...run(), name: "Late research" })) : { ...run(), name: "Late research" }));
   expect(document.body.textContent).not.toContain("Late research");
 });

@@ -19,9 +19,32 @@ import {
 } from "@thesistrace/contracts/research-a2ui";
 
 import { Alert, App, Card, Collapse, Descriptions, Divider, Flex, Spin, Table, Tag, Typography } from "antd";
-import { ResearchResourceList } from "./ResearchResourceList";
+import { ResearchResourceDetailsContext, ResearchResourceList } from "./ResearchResourceList";
 
 export const researchA2UICatalogDefinitions = RESEARCH_A2UI_DEFINITIONS;
+
+/** Read resource IDs in display order from the validated research surface. */
+export function researchResourceIds(content: unknown): string[] {
+  const projection = projectResearchA2UIContent(content);
+  if (projection.kind !== "ready") return [];
+  const operations = projection.content.a2ui_operations as readonly {
+    updateComponents?: { components: readonly Record<string, unknown>[] };
+  }[];
+  const components = new Map(operations.flatMap(operation => operation.updateComponents?.components ?? [])
+    .map(component => [component.id as string, component]));
+  const visit = (id: string): string[] => {
+    // The shared contract guarantees a bounded tree rooted at "root".
+    const component = components.get(id)!;
+    switch (component.component) {
+      case "Row": case "Column": return (component.children as string[]).flatMap(visit);
+      case "ResearchRun": return [component.runId as string];
+      case "ResearchComparison": return component.runIds as string[];
+      case "DailyTrack": return [component.trackId as string];
+      default: return [];
+    }
+  };
+  return visit("root");
+}
 
 const researchA2UICatalog = createCatalog(
   researchA2UICatalogDefinitions,
@@ -88,8 +111,10 @@ function ResearchNavigation({ href: sourceHref, label }: { href: string; label: 
 
 export function ResearchA2UIActivity({
   message,
+  detailIds = null,
 }: {
   message: ActivityMessage;
+  detailIds?: ReadonlySet<string> | null;
 }) {
   const { t } = useTranslation("chat");
   if (message.activityType !== RESEARCH_A2UI_ACTIVITY_TYPE) return null;
@@ -111,12 +136,14 @@ export function ResearchA2UIActivity({
   const operationsJson = JSON.stringify(projection.content.a2ui_operations);
   return (
     <article aria-label={t("a2ui.surface")} style={{ minWidth: 0 }}>
-      <A2UIProvider catalog={researchA2UICatalog} onAction={() => undefined}>
-        <ReadyA2UIRenderer
-          key={message.id}
-          operationsJson={operationsJson}
-        />
-      </A2UIProvider>
+      <ResearchResourceDetailsContext value={detailIds}>
+        <A2UIProvider catalog={researchA2UICatalog} onAction={() => undefined}>
+          <ReadyA2UIRenderer
+            key={message.id}
+            operationsJson={operationsJson}
+          />
+        </A2UIProvider>
+      </ResearchResourceDetailsContext>
     </article>
   );
 }

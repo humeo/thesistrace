@@ -52,7 +52,7 @@ export function projectChatEntries(entries: readonly TimelineEntry[]): ChatViewM
     if (entry.kind === "assistant_message") {
       return [{ id: entry.entry_id, role: "assistant", content: entry.payload.content, entry }];
     }
-    if (entry.kind === "a2ui") return [{ id: entry.entry_id, role: "activity", activityType: entry.payload.activityType, content: entry.payload.content }];
+    if (entry.kind === "a2ui") return [{ id: entry.entry_id, role: "activity", activityType: entry.payload.activityType, content: entry.payload.content, entry }];
     if (entry.kind === "turn_outcome" && entry.payload.status === "completed") return [];
     return [{ id: entry.entry_id, role: "activity", activityType: ENTRY_ACTIVITY, content: { entry, answer: entry.kind === "question" && answers.has(entry.entry_id) ? { content: answers.get(entry.entry_id) } : undefined } }];
   });
