@@ -45,12 +45,11 @@ export function ObservationSummary({ observation, originSession }: {
 }) {
   const { t } = useTranslation("daily");
   return (
-    <MetricGroup variant="observation" label={t("account")}>
+    <MetricGroup variant="observation" label={t("account")} className="grid-cols-4">
       <Metric variant="observation" label={t("returnSince")} value={formatReturn(observation.net_return)} help={<InfoHelp label={t("returnSince")}>{t("sinceDate", { date: originSession })}</InfoHelp>} />
       <Metric variant="observation" label={t("maximumDrawdown")} value={formatReturn(observation.maximum_drawdown)} help={<InfoHelp label={t("maximumDrawdown")}>{t("sinceDate", { date: originSession })}</InfoHelp>} />
       <Metric variant="observation" label={t("nav")} value={formatMoney(observation.net_asset_value_cny)} help={<InfoHelp label={t("nav")}>{t("changeSince", { amount: formatMoney(observation.net_change_cny) })}</InfoHelp>} />
-      <Metric variant="observation" label={t("cashAvailable")} value={formatMoney(observation.cash_cny)} help={<InfoHelp label={t("cashAvailable")}>{t("simulatedCny")}</InfoHelp>} />
-      <Metric variant="observation" label={t("holdings")} value={`${formatNumber(observation.holdings.length)}${t("securities")}`} help={<InfoHelp label={t("holdings")}>{t("asOf", { date: observation.session })}</InfoHelp>} />
+      <Metric variant="observation" label={t("observedSessions")} value={formatNumber(observation.session_count)} help={<InfoHelp label={t("observedSessions")}>{t("sinceDate", { date: originSession })}</InfoHelp>} />
     </MetricGroup>
   );
 }
