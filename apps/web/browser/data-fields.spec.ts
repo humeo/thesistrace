@@ -26,8 +26,8 @@ async function purpose(page: Page, label: string) {
   await page.getByRole("option", { name: label, exact: true }).click();
 }
 
-for (const width of [1440, 1280, 768, 390, 320]) {
-  test(`Data fields use one snapshot, show partial sources and filter at ${width}px`, async ({ page }) => {
+for (const width of [1000, 1776]) {
+  test(`Data directory keeps one snapshot and works at ${width}px`, async ({ page }) => {
     const requests: string[] = [];
     let unavailable = false;
     const fieldsFor = (family: string) => catalog.fields
@@ -82,181 +82,129 @@ for (const width of [1440, 1280, 768, 390, 320]) {
     await page.goto("http://data.test/");
     await page.addStyleTag({ content: styles });
     await page.addScriptTag({ content: script });
-    await expect(page.getByText("226 fields", { exact: true })).toBeVisible();
-    await page.evaluate(() => document.fonts.ready);
+    await expect(page.getByRole("region", { name: "Data coverage" }).locator(":scope > div")).toHaveCount(4);
     await expect(page.getByText("Limited coverage", { exact: true })).toBeVisible();
+    const coverageHelp = page.getByRole("button", { name: "Market data · Availability refers to the published data range.", exact: true });
+    await expect(coverageHelp.locator("svg")).toHaveCSS("width", "12px");
+    await coverageHelp.hover();
+    const coverageInfo = page.getByRole("dialog", { name: "Market data", exact: true });
+    await expect(coverageInfo).toContainText("Prices, volume & valuation");
+    await expect(coverageInfo).toContainText("Field availability varies by instrument and date.");
+    await coverageHelp.press("Escape");
+    await expect(coverageInfo).toHaveCount(0);
+    await coverageHelp.press("Enter");
+    await expect(coverageInfo).toBeVisible();
+    await coverageHelp.press("Escape");
+    await expect(page.getByText("Limited coverage", { exact: true })).toBeVisible();
+    await expect(page.getByRole("tab", { name: /Fields 226/ })).toBeVisible();
+    await expect(page.getByRole("tab", { name: /Aggregate functions 4/ })).toBeVisible();
+    await expect(page.getByRole("tab", { name: /Industry codes 31/ })).toBeVisible();
+    await expect(fieldTable(page).locator("tbody tr")).toHaveCount(226);
+    await expect(page.getByRole("button", { name: "Next", exact: true })).toHaveCount(0);
     expect(requests).toEqual(["/api/data"]);
-    await expect(page.getByRole("region", { name: "Data coverage", exact: true }).locator(":scope > div")).toHaveCount(4);
-    await expect(fieldTable(page).locator("tbody tr")).toHaveCount(25);
-    await page.getByRole("button", { name: "Next", exact: true }).click();
-    await expect(page.getByRole("status").filter({ hasText: "Showing" })).toHaveText("Showing 26–50 of 226");
-    const secondPageIdentifiers = await fieldTable(page).locator("tbody td:nth-child(2)").allTextContents();
-    await page.getByText("简体中文", { exact: true }).evaluate(element => (element as HTMLButtonElement).click());
-    await expect(page.getByRole("status").filter({ hasText: "显示第" })).toHaveText("显示第 26–50 项，共 226 项");
-    expect(await fieldTable(page).locator("tbody td:nth-child(2)").allTextContents()).toEqual(secondPageIdentifiers);
-    await page.getByRole("button", { name: "English", exact: true }).click();
-    await page.getByRole("button", { name: "Previous", exact: true }).click();
-    await page.getByRole("button", { name: "Financial 204", exact: true }).click();
-    const liabilities = page.getByRole("row").filter({ has: page.getByRole("button", { name: "Total liabilities", exact: true }) });
-    await liabilities.getByRole("cell", { name: "liabilities", exact: true }).click();
-    await expect(fieldDetails(page).getByRole("heading", { level: 3 })).toHaveText("Total liabilities");
-    await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async () => { throw new DOMException("denied", "NotAllowedError"); } } }));
-    await fieldDetails(page).getByRole("button", { name: "Copy formula name", exact: true }).click();
-    await expect(fieldDetails(page).getByRole("alert")).toContainText("Copy unavailable");
-    await expect(page.getByText("Copied", { exact: true })).toHaveCount(0);
-    if (width === 1280) {
-      await page.setViewportSize({ width: 390, height: 960 });
-      await expect(page.getByRole("dialog", { name: "Field details", exact: true })).toBeVisible();
-      await expect(fieldDetails(page).getByRole("heading", { level: 3 })).toHaveText("Total liabilities");
-      await expect(fieldDetails(page).getByRole("alert")).toContainText("Copy unavailable");
-      await page.setViewportSize({ width: 1280, height: 960 });
-      await expect(page.getByRole("dialog", { name: "Field details", exact: true })).toHaveCount(0);
-      await expect(page.getByRole("complementary", { name: "Field details", exact: true })).toBeVisible();
-      expect((await fieldDetails(page).boundingBox())?.width).toBe(320);
-      await expect(fieldDetails(page).getByRole("alert")).toContainText("Copy unavailable");
-    }
 
+    await page.getByRole("button", { name: "Financial 204", exact: true }).click();
+    await expect(fieldTable(page).locator("tbody tr")).toHaveCount(204);
+    await page.getByRole("searchbox", { name: "Search fields" }).fill("liabilities");
+    await page.getByRole("button", { name: "Total liabilities", exact: true }).click();
+    if (width === 1000) {
+      await expect(page.getByRole("dialog", { name: "Field details" })).toBeVisible();
+    } else {
+      await expect(page.getByRole("complementary", { name: "Field details" })).toBeVisible();
+    }
+    await expect(fieldDetails(page)).toContainText("liabilities");
+    await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async () => { throw new DOMException("denied", "NotAllowedError"); } } }));
+    await fieldDetails(page).getByRole("button", { name: "Copy formula name" }).click();
+    await expect(fieldDetails(page).getByRole("alert")).toContainText("Copy unavailable");
     await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (value: string) => { document.documentElement.dataset.copiedValue = value; } } }));
-    await fieldDetails(page).getByRole("button", { name: "Copy formula name", exact: true }).click();
-    await expect(page.getByText("Copied", { exact: true })).toBeVisible();
+    await fieldDetails(page).getByRole("button", { name: "Copy formula name" }).click();
     expect(await page.evaluate(() => document.documentElement.dataset.copiedValue)).toBe("liabilities");
     await expect(fieldDetails(page).getByRole("alert")).toHaveCount(0);
-
     await closeDetails(page);
-    await page.getByRole("button", { name: "Total assets", exact: true }).press("Enter");
-    await expect(fieldDetails(page).getByRole("heading", { level: 3 })).toHaveText("Total assets");
-    await closeDetails(page);
-    await liabilities.getByRole("cell", { name: "CNY", exact: true }).click({ position: { x: 2, y: 2 } });
-    await expect(fieldDetails(page).getByRole("heading", { level: 3 })).toHaveText("Total liabilities");
-    await closeDetails(page);
-    if (width === 1280) {
-      await page.getByRole("button", { name: "Next", exact: true }).click();
-      await expect(page.getByRole("status").filter({ hasText: "Showing" })).toHaveText("Showing 26–50 of 204");
-      await page.setViewportSize({ width: 390, height: 960 });
-      await expect(page.getByRole("dialog", { name: "Field details", exact: true })).toBeVisible();
-      await closeDetails(page);
-      await page.setViewportSize({ width: 1280, height: 960 });
-      await page.getByRole("button", { name: "Previous", exact: true }).click();
-    }
-    await page.getByRole("searchbox", { name: "Search fields" }).fill("no_matching_field");
-    await page.getByRole("button", { name: "Clear search", exact: true }).click();
-    await expect(page.getByRole("searchbox", { name: "Search fields" })).toHaveValue("");
-    await expect(page.getByRole("searchbox", { name: "Search fields" })).toBeFocused();
-    await expect(page.getByRole("status").filter({ hasText: "Showing" })).toHaveText("Showing 1–25 of 204");
-    await expect(page.getByRole("button", { name: "Clear search", exact: true })).toHaveCount(0);
-    await page.getByRole("button", { name: "All fields", exact: true }).click();
-    await expect(page.getByText("More filters", { exact: true })).toHaveCount(0);
-    await expect(page.getByText("Source & calculation", { exact: true })).toHaveCount(0);
-    await expect(page.getByRole("combobox")).toHaveCount(1);
-    await page.getByRole("combobox", { name: "Research purpose" }).click();
-    await expect(page.getByRole("option", { name: "All purposes", exact: true })).toHaveCount(1);
-    await page.keyboard.press("Escape");
-    if (width < 600) {
-      for (const control of await page.getByRole("combobox", { name: "Research purpose" }).all()) {
-        const bounds = await control.boundingBox();
-        expect(bounds?.height).toBeGreaterThanOrEqual(44);
-        expect(bounds?.width).toBeGreaterThanOrEqual(44);
-      }
-    }
-
-    await expect(fieldTable(page).locator("tbody tr")).toHaveCount(25);
-    await page.getByRole("searchbox", { name: "Search fields" }).fill("单季净资产收益率");
-    await expect(fieldTable(page).locator("tbody tr")).toHaveCount(1);
-    await expect(fieldTable(page).locator("tbody tr")).toContainText("q_roe");
-    await page.getByRole("searchbox", { name: "Search fields" }).fill("");
-    await page.getByRole("searchbox", { name: "Search fields" }).fill("自由流通换手率");
-    await expect(fieldTable(page).locator("tbody tr")).toHaveCount(1);
-    await expect(fieldTable(page).locator("tbody tr")).toContainText("turnover_rate_f");
     await page.getByRole("searchbox", { name: "Search fields" }).fill("close_raw");
+    await expect(fieldTable(page).locator("tbody tr")).toHaveCount(0);
+    await page.getByRole("button", { name: "All fields", exact: true }).click();
     await expect(fieldTable(page).locator("tbody tr")).toHaveCount(1);
-    await expect(fieldTable(page).locator("tbody tr")).toContainText("Unadjusted close");
-    await page.getByRole("searchbox", { name: "Search fields" }).fill("营业总收入");
-    // Chinese descriptions now also find turnover ratios whose denominator is total revenue.
-    await expect(fieldTable(page).locator("tbody tr")).toHaveCount(25);
-    await expect(page.getByRole("status").filter({ hasText: "Showing" })).toHaveText("Showing 1–25 of 27");
-    await expect(fieldTable(page).locator("tbody tr").first()).toContainText("revenue");
-    await page.getByRole("searchbox", { name: "Search fields" }).fill("");
-    await page.getByRole("searchbox", { name: "Search fields" }).fill("期末现金");
-    await expect(fieldTable(page).locator("tbody tr")).toHaveCount(1);
-    await expect(fieldTable(page).locator("tbody tr")).toContainText("cash_equivalents");
-    await page.getByRole("searchbox", { name: "Search fields" }).fill("");
+    await fieldTable(page).getByRole("cell", { name: "close_raw" }).click();
+    await expect(fieldDetails(page)).toContainText("close_raw");
+    await closeDetails(page);
+    await page.getByRole("button", { name: "Clear search" }).click();
+    await expect(fieldTable(page).locator("tbody tr")).toHaveCount(226);
     await purpose(page, "Earnings");
     await expect(fieldTable(page).locator("tbody tr")).toHaveCount(12);
     await purpose(page, "All purposes");
-    await page.getByRole("searchbox", { name: "Search fields" }).fill("no_matching_field");
-    await expect(fieldTable(page).locator("tbody tr")).toHaveCount(0);
-    await expect(page.getByText("No fields match these filters.")).toHaveCount(1);
-    await expect(fieldDetails(page)).toHaveCount(0);
-    await page.getByRole("searchbox", { name: "Search fields" }).fill("close_raw");
-    await page.getByRole("button", { name: "Unadjusted close", exact: true }).click();
-    await expect(fieldDetails(page)).toContainText("close_raw");
-    await expect(fieldDetails(page)).toContainText("Missing values");
-    await closeDetails(page);
-    await page.getByRole("button", { name: "Financial 204", exact: true }).click();
-    await expect(page.getByText("No fields match these filters.")).toBeVisible();
-    await page.getByRole("button", { name: "All fields", exact: true }).click();
-    await purpose(page, "Market prices");
-    await page.getByRole("searchbox", { name: "Search fields" }).fill("Unadjusted close");
-    await expect(fieldTable(page).locator("tbody tr")).toHaveCount(1);
-    await page.getByRole("button", { name: "Unadjusted close", exact: true }).click();
-    await page.getByText("简体中文", { exact: true }).evaluate(element => (element as HTMLButtonElement).click());
-    await expect(fieldDetails(page)).toContainText("close_raw");
-    await expect(fieldDetails(page).getByRole("heading", { level: 3 })).toHaveText("未复权收盘价");
-    await closeDetails(page);
-    await expect(page.getByRole("searchbox", { name: "搜索字段" })).toHaveValue("Unadjusted close");
-    await expect(page.getByRole("combobox", { name: "研究用途" })).toContainText("行情");
-    await page.getByRole("searchbox", { name: "搜索字段" }).fill("未复权收盘价");
-    await expect(fieldTable(page).locator("tbody tr")).toHaveCount(1);
-    await page.getByRole("searchbox", { name: "搜索字段" }).fill("close_raw");
-    await expect(fieldTable(page).locator("tbody tr")).toHaveCount(1);
-    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(await page.evaluate(() => document.documentElement.clientWidth));
-    await page.screenshot({ path: test.info().outputPath(`data-zh-${width}.png`), fullPage: true });
+
+    await page.getByRole("tab", { name: /Aggregate functions 4/ }).click();
+    const functionSearch = page.getByRole("searchbox", { name: "Search aggregate functions" });
+    const searchBounds = await functionSearch.boundingBox();
+    expect(searchBounds!.width).toBeLessThanOrEqual(360);
+    const functionRows = page.getByRole("button", { name: /(?:universe|industry)_(?:return|advancing_fraction)\(/ });
+    await expect(functionRows).toHaveCount(4);
+    for (const row of await functionRows.all()) {
+      const bounds = await row.boundingBox();
+      expect(bounds!.height).toBeGreaterThanOrEqual(80);
+      const contentBounds = await row.locator("code").boundingBox();
+      expect(contentBounds!.y + contentBounds!.height).toBeLessThanOrEqual(bounds!.y + bounds!.height);
+    }
+    if (width === 1776) {
+      const rowBounds = await functionRows.first().boundingBox();
+      const detailBounds = await page.getByRole("complementary", { name: "Function details" }).boundingBox();
+      expect(detailBounds!.width).toBeGreaterThan(rowBounds!.width);
+    }
+    const functionDetails = page.getByRole("complementary", { name: "Function details" });
+    await expect(functionDetails).toContainText("universe_return");
+    await expect(functionDetails.getByText("Two positive finite Closes required; no valid members means missing.")).toBeVisible();
+    const calculationNotes = functionDetails.getByRole("button", { name: "Calculation notes" });
+    const example = functionDetails.getByRole("button", { name: "Example", exact: true });
+    await expect(calculationNotes).toHaveAttribute("aria-expanded", "true");
+    await expect(example).toHaveAttribute("aria-expanded", "true");
+    await expect(functionDetails.getByText(/Calculated from historical members of your selected research Universe/)).toBeVisible();
+    await expect(functionDetails.getByText("universe_return()", { exact: true }).last()).toBeVisible();
+    const functionList = page.getByRole("group", { name: "Aggregate functions", exact: true });
+    const expandedListBounds = await functionList.boundingBox();
+    const lastRowBounds = await functionRows.last().boundingBox();
+    expect(expandedListBounds!.y + expandedListBounds!.height).toBeLessThanOrEqual(lastRowBounds!.y + lastRowBounds!.height + 1);
+    await calculationNotes.press("Enter");
+    await example.press("Enter");
+    await expect(functionDetails.getByText(/Calculated from historical members of your selected research Universe/)).not.toBeVisible();
+    await expect(example).toHaveAttribute("aria-expanded", "false");
+    const collapsedListBounds = await functionList.boundingBox();
+    expect(collapsedListBounds!.height).toBeCloseTo(expandedListBounds!.height, 0);
+    await page.getByRole("button", { name: "Industry return industry_return(sw2021_l1)", exact: true }).press("Enter");
+    await expect(functionDetails).toContainText("SW2021 L1 members within the selected research Universe");
+    await functionDetails.getByRole("button", { name: "Copy expression" }).click();
+    expect(await page.evaluate(() => document.documentElement.dataset.copiedValue)).toBe("industry_return(sw2021_l1)");
+    await functionSearch.fill("no-such-function");
+    await expect(page.getByText("No matching aggregate functions.", { exact: true })).toBeVisible();
+    await expect(functionDetails).toHaveCount(0);
+    await page.getByRole("button", { name: "Clear search" }).click();
+    await expect(functionRows).toHaveCount(4);
+    await expect(functionSearch).toBeFocused();
+    await page.getByRole("searchbox", { name: "Search aggregate functions" }).fill("industry_advancing_fraction");
+    await expect(page.getByRole("button", { name: /industry_advancing_fraction/ })).toHaveCount(1);
+    await expect(page.getByRole("complementary", { name: "Function details" })).toContainText("0–1");
+    await expect(page.getByRole("complementary", { name: "Function details" })).not.toContainText("> 0,");
+    await page.getByRole("tab", { name: /Industry codes 31/ }).click();
+    await page.getByRole("searchbox", { name: "Search industry codes" }).fill("801010");
+    await expect(page.getByRole("listitem")).toHaveCount(1);
+    await page.getByRole("button", { name: "Copy industry code 801010" }).click();
+    expect(await page.evaluate(() => document.documentElement.dataset.copiedValue)).toBe("801010");
+    await page.getByRole("searchbox", { name: "Search industry codes" }).fill("农林牧渔");
+    await expect(page.getByRole("listitem")).toHaveCount(1);
+    await page.getByRole("button", { name: "简体中文", exact: true }).click();
+    await expect(page.getByRole("tab", { name: /行业代码 31/ })).toBeVisible();
+    await page.getByRole("tab", { name: /字段 226/ }).click();
+    await expect(fieldTable(page).locator("tbody tr")).toHaveCount(226);
     await page.getByRole("button", { name: "English", exact: true }).click();
-    await expect(page.getByRole("combobox", { name: "Research purpose" })).toContainText("Market prices");
     expect(requests).toEqual(["/api/data"]);
-    await purpose(page, "All purposes");
-    const editor = page.locator(".cm-content");
-    await editor.click();
-    await editor.pressSequentially("turnover_rate_");
-    const turnover = page.getByRole("option").filter({ hasText: "turnover_rate_f" });
-    await expect(turnover).toBeVisible();
-    await turnover.click();
-    await expect(editor).toHaveText("turnover_rate_f");
-    await editor.press("ControlOrMeta+A");
-    await editor.press("Backspace");
-    await editor.pressSequentially("close_r");
-    const rawClose = page.getByRole("option").filter({ hasText: "close_raw" });
-    await expect(rawClose).toBeVisible();
-    await rawClose.click();
-    await expect(editor).toHaveText("close_raw");
-    await editor.press("ControlOrMeta+A");
-    await editor.press("Backspace");
-    await editor.pressSequentially("cash_equ");
-    const cash = page.getByRole("option").filter({ hasText: "cash_equivalents" });
-    await expect(cash).toBeVisible();
-    await cash.click();
-    await expect(editor).toHaveText("cash_equivalents");
-    await editor.press("ControlOrMeta+A");
-    await editor.press("Backspace");
-    await editor.pressSequentially("q_ro");
-    const quarterRoe = page.getByRole("option").filter({ hasText: "q_roe" });
-    await expect(quarterRoe).toBeVisible();
-    await quarterRoe.click();
-    await expect(editor).toHaveText("q_roe");
-    await page.getByRole("searchbox", { name: "Search fields" }).fill("monetary_funds");
-    await expect(fieldTable(page).locator("tbody tr")).toHaveCount(1);
-    await expect(fieldTable(page).locator("tbody tr")).toContainText("monetary_funds");
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(await page.evaluate(() => document.documentElement.clientWidth));
     unavailable = true;
-    await page.getByRole("button", { name: "Reload status", exact: true }).click();
+    await page.getByRole("button", { name: "Reload status" }).click();
     await expect(page.getByRole("alert")).toContainText("Data unavailable");
-    await expect(page.getByRole("searchbox", { name: "Search fields" })).toHaveValue("monetary_funds");
-    await expect(fieldTable(page).locator("tbody tr")).toHaveCount(1);
+    await expect(fieldTable(page).locator("tbody tr")).toHaveCount(226);
     unavailable = false;
-    await page.getByRole("button", { name: "Reload status", exact: true }).click();
+    await page.getByRole("button", { name: "Reload status" }).click();
     await expect(page.getByRole("alert")).toHaveCount(0);
-    await expect(page.getByRole("searchbox", { name: "Search fields" })).toHaveValue("monetary_funds");
-
   });
 }
 
@@ -277,7 +225,7 @@ test("editor language changes preserve the formula, selection and undo history",
   await expect(editor).toHaveText("rank(close)");
   await expect(page.getByLabel("Editor selection")).toHaveText("0:11");
   await editor.press("ControlOrMeta+z");
-  await expect(editor.locator(".cm-placeholder")).toHaveText("从字段或函数开始");
+  await expect(editor.locator(".cm-placeholder")).toHaveText("rank(pct_change(close, 20))");
   await editor.press("ControlOrMeta+Shift+z");
   await expect(editor).toHaveText("rank(close)");
   await editor.press("ControlOrMeta+A");

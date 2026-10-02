@@ -1,26 +1,17 @@
-import { cn } from "cn";
-import { Page, PageHeader, PageContent, Section } from "../components/layout/Page";
-import { PageNavigation } from "../components/layout/PageNavigation";
-import { Disclosure } from "../components/layout/Disclosure";
+import { Page, PageHeader, PageContent } from "../components/layout/Page";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { Alert, AlertDescription } from "../components/ui/alert";
-import { Empty, EmptyHeader, EmptyTitle } from "../components/ui/empty";
-import { Field, FieldGroup, FieldLabel } from "../components/ui/field";
-import { InputGroup, InputGroupInput, InputGroupAddon, InputGroupButton } from "../components/ui/input-group";
-import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group";
-import { Select, SelectTrigger, SelectValue, SelectContent, SelectGroup, SelectItem } from "../components/ui/select";
-import { Table, TableHeader, TableHead, TableRow, TableBody, TableCell, TableCaption } from "../components/ui/table";
-import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetClose } from "../components/ui/sheet";
-import { toast } from "../components/ui/toast";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../components/ui/tooltip";
-import { ArrowClockwise, Copy, Info, MagnifyingGlass, X } from "@phosphor-icons/react";
+import { InfoHelp } from "../components/product/InfoHelp";
+import { ArrowClockwise, ChartLineUp, Database, FileText, Stack } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { AlphaCatalog, AlphaCatalogField } from "../alphaCatalog";
+import type { AlphaCatalog } from "../alphaCatalog";
 import { coreFetch } from "../auth/coreFetch";
 import { useTranslation } from "../i18n";
-import { builtinDisplay, catalogLabel, compareResearchPurposes, fieldDisplay, matchesResearchField } from "../i18n/catalog";
+import { catalogLabel } from "../i18n/catalog";
+import { DataDirectory } from "./DataDirectory";
+export { ResearchFieldCatalog } from "./DataDirectory";
 
 type FinancialResearchReadiness =
   | "ready"
@@ -124,63 +115,46 @@ export function DataOverviewView({
   const industryState = overview.industry_research_readiness ? "ready"
     : overview.industry_coverage ? "partial" : "not_ready";
   const rows = [
-    { id: "market" as const, description: t("marketDescription"), detail: null, coverage: overview.market_coverage,
+    { id: "market" as const, icon: <ChartLineUp aria-hidden="true" />, description: t("marketDescription"), detail: null, coverage: overview.market_coverage,
       state: categoryReadiness(marketFamilies), families: marketFamilies },
-    { id: "financial" as const, description: t("financialDescription"),
+    { id: "financial" as const, icon: <FileText aria-hidden="true" />, description: t("financialDescription"),
       detail: null,
       coverage: financial ? { start: financial.start, end: financial.discovery_complete_through_session } : null,
       state: categoryReadiness(financialFamilies), families: financialFamilies },
-    { id: "industry" as const, description: t("industryDescription"),
+    { id: "industry" as const, icon: <Stack aria-hidden="true" />, description: t("industryDescription"),
       detail: overview.industry_coverage?.classification_version ?? null,
       coverage: overview.industry_coverage ? { start: overview.industry_coverage.start,
         end: overview.industry_coverage.observation_through_session } : null,
       state: industryState, families: [] },
-    { id: "benchmark" as const, description: catalogLabel("benchmarks", "csi300-price-index-open"),
+    { id: "benchmark" as const, icon: <Database aria-hidden="true" />, description: catalogLabel("benchmarks", "csi300-price-index-open"),
       detail: catalogLabel("benchmarks", "csi300-price-index-open"),
       coverage: overview.benchmark_coverage,
       state: overview.benchmark_research_readiness ? "ready" : "not_ready", families: [] },
   ];
-  return <Page className="console-workspace" aria-label={t("title")}><PageContent className="flex flex-col gap-6">
-    <PageHeader variant="console" className="mb-0" title={t("title")} actions={<Button size="xl" variant="outline" onClick={onRefresh} disabled={refreshing}><ArrowClockwise aria-hidden="true" data-icon="inline-start" />{t("reload")}</Button>} />
+  return <Page className="console-workspace" aria-label={t("title")}><PageContent className="flex flex-col gap-7">
+    <PageHeader variant="console" className="mb-0" title={t("title")} description={t("introduction")} actions={<Button variant="outline" onClick={onRefresh} disabled={refreshing}><ArrowClockwise aria-hidden="true" data-icon="inline-start" />{t("reload")}</Button>} />
     {error && <Alert variant="destructive"><AlertDescription>{t(error)}</AlertDescription></Alert>}
-    <TooltipProvider><section aria-label={t("coverage")} className="data-coverage-grid grid overflow-hidden rounded-xl border border-border bg-card md:grid-cols-2">
-      {rows.map(row => <div key={row.id} className="min-w-0 border-b border-border p-4 last:border-0">
-        <div className="flex items-center justify-between gap-2"><h2 className="m-0 text-xl leading-7 font-semibold">{t(`${row.id}Title`)}</h2><Badge variant={row.state === "ready" ? "success" : "outline"}>{t(row.state === "ready" ? "available" : row.state === "not_ready" ? "notAvailable" : "limitedCoverage")}</Badge></div>
-        <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground"><span>{t("availableRange")}</span><Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon-xs" aria-label={`${t(`${row.id}Title`)} · ${t("coverageHint")}`} aria-description={row.detail ?? undefined} />}><Info aria-hidden="true" /></TooltipTrigger><TooltipContent className="console-workspace">{row.description} {row.detail} {t("availabilityVaries")}</TooltipContent></Tooltip>
-        <span className="tabular-nums">{row.coverage ? `${row.coverage.start} — ${row.coverage.end}` : t("noCoverage")}</span></div>
+    <section aria-label={t("coverage")} className="data-coverage-grid grid gap-3">
+      {rows.map(row => <div key={row.id} className="flex min-h-20 min-w-0 items-center gap-3 rounded-xl border border-border bg-card p-4">
+        <span className="data-coverage-icon" aria-hidden="true">{row.icon}</span><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <div className="flex items-center gap-1">
+            <h2 className="m-0 text-sm font-semibold">{t(`${row.id}Title`)}</h2>
+            <InfoHelp label={t(`${row.id}Title`)} buttonLabel={`${t(`${row.id}Title`)} · ${t("coverageHint")}`}>
+              {[row.description, row.detail, t("availabilityVaries")].filter(Boolean).join(" ")}
+            </InfoHelp>
+          </div>
+          <Badge variant={row.state === "ready" ? "success" : "outline"}>{t(row.state === "ready" ? "available" : row.state === "not_ready" ? "notAvailable" : "limitedCoverage")}</Badge>
+        </div>
+        <div className="mt-1 text-sm text-muted-foreground tabular-nums">{row.coverage ? `${row.coverage.start} — ${row.coverage.end}` : t("noCoverage")}</div>
         {row.state !== "ready" && row.families.length > 0 && <p className="mb-0 mt-2 text-xs text-muted-foreground">
           {row.families.filter(family => family.readiness !== "ready").map(family =>
             t("familyAvailability", { available: family.available_field_ids.length, total: family.supported_field_ids.length }) + (family.coverage_end ? t("through", { date: family.coverage_end }) : "")).join("; ")}.{" "}
           {row.id === "financial" && financial && <>{t("financialPending", { pending: financial.pending_instrument_count, gaps: financial.discovery_gap_count })}{" "}{financial.earliest_unresolved_date && t("earliestGap", { date: financial.earliest_unresolved_date })}{" "}{t("incompleteValues")}</>}
-        </p>}
+        </p>}</div>
       </div>)}
-    </section></TooltipProvider>
-    <ResearchFieldCatalog catalog={catalog} />
-    <CommonInputCatalog catalog={catalog} />
-    <p className="m-0 text-right text-xs text-muted-foreground">{overview.data_through_session ? t("dataThrough", { date: overview.data_through_session }) : t("noDataDate")}</p>
+    </section>
+    <DataDirectory catalog={catalog} />
   </PageContent></Page>;
-}
-
-function CommonInputCatalog({ catalog }: { catalog: AlphaCatalog }) {
-  const { t } = useTranslation("data");
-  const inputs = catalog.builtins.filter((builtin) => builtin.result_type === "common_series");
-  if (inputs.length === 0) return null;
-  return <Disclosure variant="row" title={<>{t("commonInputs")} · {t("expressions", { total: inputs.length })}</>}>
-    <p>{t("commonInputHint")}</p>
-    <Table scrollLabel={t("commonExpressions")} className="min-w-[640px]">
-      <TableCaption className="sr-only">{t("commonExpressions")}</TableCaption>
-      <TableHeader><TableRow><TableHead>{t("expression")}</TableHead><TableHead>{t("meaning")}</TableHead><TableHead>{t("missingValues")}</TableHead></TableRow></TableHeader>
-      <TableBody>{inputs.map(input => <TableRow key={input.identifier}>
-        <TableCell><code>{input.identifier}({input.parameters.map(parameter => parameter.name).join(", ")})</code></TableCell>
-        <TableCell className="whitespace-normal">{builtinDisplay(input.identifier).description}<p className="m-0 text-xs text-muted-foreground">{input.examples.join(" · ")}</p></TableCell>
-        <TableCell className="whitespace-normal">{builtinDisplay(input.identifier).missing}</TableCell>
-      </TableRow>)}</TableBody>
-    </Table>
-    <Disclosure title={t("industryParameters", { total: catalog.industries.length })}>
-      <p>{t("industryHint")}</p>
-      <ul>{catalog.industries.map(industry => <li key={industry.code}><code>{industry.code}</code> {catalogLabel("industries", industry.code)}</li>)}</ul>
-    </Disclosure>
-  </Disclosure>;
 }
 
 function categoryReadiness(families: FieldFamilyAvailability[]): FieldFamilyAvailability["readiness"] {
@@ -190,124 +164,6 @@ function categoryReadiness(families: FieldFamilyAvailability[]): FieldFamilyAvai
   if (families.some((family) => family.readiness === "ready_with_pending")) return "ready_with_pending";
   return "ready";
 }
-
-const PAGE_SIZE = 25;
-
-export function ResearchFieldCatalog({ catalog }: { catalog: AlphaCatalog }) {
-  const { t } = useTranslation("data");
-  const [search, setSearch] = useState("");
-  const searchInput = useRef<HTMLInputElement>(null);
-  const [category, setCategory] = useState("");
-  const [purpose, setPurpose] = useState("");
-  const [page, setPage] = useState(1);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const visible = catalog.fields.filter((field) => (
-    (!category || field.research_category === category) &&
-    matchesResearchField(field, search) &&
-    (!purpose || field.research_purpose === purpose)
-  ));
-  const pageCount = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
-  const currentPage = Math.min(page, pageCount);
-  const pageFields = visible.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
-  const selected = pageFields.find((field) => field.field_id === selectedId) ?? pageFields[0];
-  const [detailsOpen, setDetailsOpen] = useState(false);
-  const [narrow, setNarrow] = useState(false);
-  const catalogContainer = useRef<HTMLDivElement>(null);
-  const [copyErrorFor, setCopyErrorFor] = useState<string | null>(null);
-  useEffect(() => {
-    const element = catalogContainer.current;
-    if (!element) return;
-    const observer = new ResizeObserver(([entry]) => setNarrow(entry.contentRect.width < 960));
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
-  async function copy(value: string) {
-    try { await navigator.clipboard.writeText(value); setCopyErrorFor(current => current === selected?.field_id ? null : current); toast.add({ title: <CopyConfirmation />, type: "success" }); }
-    catch { setCopyErrorFor(selected?.field_id ?? null); }
-  }
-  const selectedTrigger = useRef<HTMLButtonElement | null>(null);
-  const closeLabel = t("closeDetails");
-  function selectField(field: AlphaCatalogField) {
-    setSelectedId(field.field_id);
-    setDetailsOpen(true);
-    setCopyErrorFor(null);
-  }
-  return <div ref={catalogContainer} className="min-w-0"><Section variant="console" title={<>{t("researchFields")} <span className="ml-2 text-base font-normal text-muted-foreground">{t("fieldCount", { total: catalog.fields.length })}</span></>}>
-    <div className={cn("grid min-w-0 items-start gap-6", !narrow && "grid-cols-[minmax(0,1fr)_320px]")}><div className="flex min-w-0 flex-col gap-4"><div className="flex flex-wrap items-center gap-3">
-      <Field className="min-w-48 w-auto flex-[1_1_220px]">
-        <FieldLabel className="sr-only" htmlFor="data-field-search">{t("searchFields")}</FieldLabel>
-        <InputGroup>
-          <InputGroupAddon><MagnifyingGlass aria-hidden="true" /></InputGroupAddon>
-          <InputGroupInput id="data-field-search" ref={searchInput} value={search} role="searchbox" placeholder={t("searchPlaceholder")}
-            onChange={event => { setSearch(event.target.value); setPage(1); }} />
-          {search !== "" && <InputGroupAddon align="inline-end"><InputGroupButton aria-label={t("clearSearch")} size="icon-sm" onClick={() => { setSearch(""); setPage(1); searchInput.current?.focus(); }}><X aria-hidden="true" /></InputGroupButton></InputGroupAddon>}
-        </InputGroup>
-      </Field>
-      <div className="flex min-w-0 flex-wrap items-center gap-3">
-        <ToggleGroup value={[category || "all"]} onValueChange={values => { if (values.length) { setCategory(values[0] === "all" ? "" : values[0]); setPage(1); } }} variant="outline" aria-label={t("category")} className="flex-wrap">
-          {[{ value: "", label: t("allFields") }, { value: "market", label: t("market") }, { value: "financial", label: t("financial") }].map(item => <ToggleGroupItem key={item.value} value={item.value || "all"}>
-            {item.label}{item.value ? ` ${catalog.fields.filter(field => field.research_category === item.value).length}` : ""}
-          </ToggleGroupItem>)}
-        </ToggleGroup>
-        <Select value={purpose} onValueChange={value => { if (value !== null) { setPurpose(value); setPage(1); } }}>
-          <SelectTrigger className="w-36" aria-label={t("purpose")}><SelectValue>{purpose ? catalogLabel("purposes", purpose) : t("allPurposes")}</SelectValue></SelectTrigger>
-          <SelectContent className="console-workspace"><SelectGroup><SelectItem value="">{t("allPurposes")}</SelectItem>
-            {[...new Set(catalog.fields.map(field => field.research_purpose))].sort(compareResearchPurposes).map(value => <SelectItem key={value} value={value}>{catalogLabel("purposes", value)}</SelectItem>)}
-          </SelectGroup></SelectContent>
-        </Select>
-      </div>
-    </div>
-    {pageFields.length ? <div className="flex min-w-0 flex-col gap-4">
-        <div className="max-h-[408px] overflow-y-auto rounded-md border border-border">
-        <Table density="catalog" scrollLabel={t("researchFields")} className="min-w-[480px]">
-          <TableCaption className="sr-only">{t("researchFields")}</TableCaption>
-          <TableHeader><TableRow><TableHead>{t("field")}</TableHead><TableHead>{t("formulaName")}</TableHead><TableHead>{t("unit")}</TableHead></TableRow></TableHeader>
-          <TableBody>{pageFields.map(field => <TableRow key={field.field_id} onClick={event => { if (!(event.target as HTMLElement).closest("button")) selectField(field); }} data-state={selected?.field_id === field.field_id ? "selected" : undefined}>
-            <TableCell className="max-w-64 whitespace-normal"><Button variant="ghost" className="h-auto min-h-9 w-full justify-start whitespace-normal text-left" aria-pressed={selected?.field_id === field.field_id}
-              ref={selected?.field_id === field.field_id ? selectedTrigger : undefined} onClick={() => selectField(field)}>
-              {fieldDisplay(field.field_id).name}
-            </Button></TableCell>
-            <TableCell><code>{field.identifier}</code></TableCell><TableCell>{catalogLabel("units", field.unit)}</TableCell>
-          </TableRow>)}</TableBody>
-        </Table></div>
-        <PageNavigation label={t("pages")} previousLabel={t("previous")} nextLabel={t("next")} previousDisabled={currentPage === 1} nextDisabled={currentPage === pageCount}
-          onPrevious={() => setPage(currentPage - 1)} onNext={() => setPage(currentPage + 1)}>
-          <span role="status">{t("showing", { start: (currentPage - 1) * PAGE_SIZE + 1, end: Math.min(currentPage * PAGE_SIZE, visible.length), total: visible.length })}</span><span>{currentPage} / {pageCount}</span>
-        </PageNavigation>
-      </div> : <Empty><EmptyHeader><EmptyTitle>{t(catalog.fields.length ? "noMatches" : "noFields")}</EmptyTitle></EmptyHeader></Empty>}</div>
-      {selected && !narrow && <aside className="min-w-0 rounded-md border border-border bg-card p-6" aria-label={t("details")}><FieldDetail field={selected} copyError={copyErrorFor === selected.field_id} onCopy={copy} /></aside>}
-    </div>
-    <Sheet open={narrow && detailsOpen && !!selected} onOpenChange={setDetailsOpen}>
-      <SheetContent showCloseButton={false} className="w-[min(100%,440px)] max-w-full overflow-y-auto p-4 sm:max-w-[440px]" finalFocus={() => selectedTrigger.current?.isConnected ? selectedTrigger.current : searchInput.current}>
-        <SheetHeader className="p-0"><SheetTitle>{t("details")}</SheetTitle></SheetHeader>
-        <SheetClose render={<Button variant="outline" className="self-start" />}>{closeLabel}</SheetClose>
-        {selected && <FieldDetail field={selected} copyError={copyErrorFor === selected.field_id} onCopy={copy} />}
-      </SheetContent>
-    </Sheet>
-  </Section></div>;
-}
-
-function FieldDetail({ field, copyError, onCopy }: { field: AlphaCatalogField; copyError: boolean; onCopy: (value: string) => Promise<void> }) {
-  const { t } = useTranslation("data");
-  const display = fieldDisplay(field.field_id);
-  return <div className="flex min-w-0 flex-col gap-4 [overflow-wrap:anywhere]">
-    <h3 className="m-0 text-2xl leading-8 font-semibold">{display.name}</h3>
-    <div className="flex min-w-0 items-start justify-between gap-2"><code className="min-w-0">{field.identifier}</code><Button variant="outline" size="icon" aria-label={t("copyFormula")} onClick={() => void onCopy(field.identifier)}><Copy aria-hidden="true" /></Button></div>
-    <p className="m-0 text-base leading-6 text-muted-foreground">{display.description}</p>
-    <dl className="m-0 grid grid-cols-2 gap-4 border-b border-border pb-5 text-base">
-      <div><dt className="text-xs text-muted-foreground">{t("unit")}</dt><dd className="m-0">{catalogLabel("units", field.unit)}</dd></div>
-      <div><dt className="text-xs text-muted-foreground">{t("period")}</dt><dd className="m-0">{catalogLabel("reportPeriods", field.report_period_selection)}</dd></div>
-
-    </dl>
-    <div><Disclosure variant="row" title={t("availableAt")}><p>{catalogLabel("availability", field.availability)}</p><p>{t("appliesTo")}: {field.applicable_company_types.length ? t("companyTypes", { types: field.applicable_company_types.join(", ") }) : t("allInstruments")}</p></Disclosure>
-    <Disclosure variant="row" title={t("missingValues")}><p>{catalogLabel("missingness", field.missingness)}</p></Disclosure>
-    <Disclosure variant="row" title={t("formulaName")}><code>{field.field_id}</code></Disclosure></div>
-    {field.example && <div><p className="m-0 mb-2 text-sm text-muted-foreground">{t("example")}</p><div className="flex min-w-0 items-start justify-between gap-2"><code className="min-w-0">{field.example}</code><Button variant="outline" size="icon" aria-label={t("copyExample")} onClick={() => void onCopy(field.example)}><Copy aria-hidden="true" /></Button></div></div>}
-    {copyError && <Alert variant="destructive"><AlertDescription>{t("copyUnavailable")}</AlertDescription></Alert>}
-  </div>;
-}
-
-function CopyConfirmation() { const { t } = useTranslation("data"); return <>{t("copied")}</>; }
 
 export function DataPage() {
   const { t } = useTranslation("data");
