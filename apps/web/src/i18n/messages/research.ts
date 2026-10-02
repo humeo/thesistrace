@@ -113,6 +113,7 @@ export const researchEn = {
     "systemRename": "System Research Folder cannot be renamed",
     "systemDelete": "System Research Folder cannot be deleted",
     "nonempty": "A nonempty Folder cannot be deleted",
+    "nameExists": "A folder with this name already exists.",
     "notFound": "Research Folder not found",
     "invalid": "Enter a folder name of 1–120 characters."
   },
@@ -392,6 +393,7 @@ export const researchZh = {
     "systemRename": "系统研究文件夹不能重命名",
     "systemDelete": "系统研究文件夹不能删除",
     "nonempty": "不能删除非空文件夹",
+    "nameExists": "该文件夹名称已存在。",
     "notFound": "未找到研究文件夹",
     "invalid": "请输入 1–120 个字符的文件夹名称。"
   },

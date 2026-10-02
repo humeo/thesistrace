@@ -7,7 +7,7 @@ export function folderDisplayName(folder: { id: string; name: string }, locale: 
   return folder.name;
 }
 
-export type FolderError = "systemRename" | "systemDelete" | "nonempty" | "notFound" | "invalid" | "unavailable";
+export type FolderError = "systemRename" | "systemDelete" | "nonempty" | "nameExists" | "notFound" | "invalid" | "unavailable";
 
 export async function folderMutationError(response: Response): Promise<FolderError> {
   if (response.status === 404) return "notFound";
@@ -19,6 +19,7 @@ export async function folderMutationError(response: Response): Promise<FolderErr
       case "SYSTEM_FOLDER_RENAME_FORBIDDEN": return "systemRename";
       case "SYSTEM_FOLDER_DELETE_FORBIDDEN": return "systemDelete";
       case "FOLDER_NOT_EMPTY": return "nonempty";
+      case "FOLDER_NAME_EXISTS": return "nameExists";
       default: return "unavailable";
     }
   } catch { return "unavailable"; }

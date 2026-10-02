@@ -980,7 +980,10 @@ def create_app(
         request: Request,
         command: CreateResearchFolder,
     ) -> ResearchFolderSummary:
-        return _runtime(request).research_folders.create(_researcher_id(request), command)
+        try:
+            return _runtime(request).research_folders.create(_researcher_id(request), command)
+        except ResearchFolderConflict as error:
+            raise HTTPException(status_code=409, detail={"code": error.code}) from error
 
     @app.patch(
         "/api/research-folders/{folder_id}",
