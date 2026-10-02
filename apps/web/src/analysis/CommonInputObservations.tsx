@@ -42,7 +42,7 @@ export function CommonInputObservations({ endpoint, embedded = false }: { endpoi
     });
     return () => controller.abort();
   }, [open, endpoint, cursor, retry]);
-  const content = <div className="[&>p]:max-w-[90ch] [&>p]:text-[13px] [&>p]:leading-[1.6] [&>p]:text-muted-foreground">
+  const content = <div className="[&>p]:max-w-[90ch] [&>p]:text-sm [&>p]:text-muted-foreground">
       <p>{t("commonInputs.universe")}</p>
       <p>{t("commonInputs.returns")}</p>
       {error ? <div role="alert"><p>{t(error === "cursor" ? "commonInputs.cursorError" : "commonInputs.loadError")}</p><Button variant="outline" onClick={() => {

@@ -10,9 +10,11 @@ export function handleWorkspaceNavigation(event: MouseEvent<HTMLAnchorElement>, 
   navigate();
 }
 
-export function navigateCorePath(path: string): void {
+export function navigateCorePath(path: string, options?: Readonly<{ replace?: boolean }>): void {
   const destination = new URL(path, window.location.href);
-  window.history.pushState(null, "", `${destination.pathname}${destination.search}${destination.hash}`);
+  const href = `${destination.pathname}${destination.search}${destination.hash}`;
+  if (options?.replace) window.history.replaceState(null, "", href);
+  else window.history.pushState(null, "", href);
   window.dispatchEvent(new PopStateEvent("popstate"));
 }
 

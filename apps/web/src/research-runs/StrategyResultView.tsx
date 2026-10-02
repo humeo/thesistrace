@@ -32,7 +32,7 @@ export function StrategyResultView({ result }: { result: StrategyBacktestResearc
   return <section aria-label={t("result.strategy")} className="strategy-result flex min-w-0 flex-col gap-3">
     <MetricGroup label={t("result.strategy")} variant="result">
       {items.map(item => <Metric key={item.key} variant="result" label={item.label} value={item.value} tone={item.tone}
-        help={<MetricHelp hover label={item.label} content={item.help} />} />)}
+        help={<MetricHelp label={item.label} content={item.help} />} />)}
     </MetricGroup>
     <StrategyComparisonPanel comparison={result.strategy.comparison} variant="result" />
     <section aria-labelledby="result-ending-state" className="rounded-md border border-border bg-card px-4 py-2">
@@ -57,7 +57,7 @@ export function StrategyResultView({ result }: { result: StrategyBacktestResearc
       <CloseRiskFacts variant="row" session={state.session} nav={state.close_risk_nav_cny} positions={state.positions} />
       <FrameworkStateView variant="row" state={state.decision_state} />
       <Disclosure title={t("result.conventions")} variant="row">
-        <ul className="m-0 pl-4"><li>{t("result.nextOpen")}</li><li>{t("result.allocation")}</li></ul>
+        <ul className="m-0 grid gap-4 pl-4"><li>{t("result.nextOpen")}</li><li>{t("result.allocation")}</li></ul>
       </Disclosure>
     </div>
   </section>;

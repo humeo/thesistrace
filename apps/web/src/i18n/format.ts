@@ -1,4 +1,5 @@
 import { i18n, interfaceLocale } from "./index";
+import Decimal from "decimal.js";
 
 type MissingValue = "notAvailable" | "dash";
 const missingValue = (missing: MissingValue) => missing === "dash" ? "—" : i18n.t("common:notAvailable");
@@ -6,6 +7,13 @@ const missingValue = (missing: MissingValue) => missing === "dash" ? "—" : i18
 /** Presentation only: callers retain the original numeric value for requests and exports. */
 export function formatNumber(value: number, options: Intl.NumberFormatOptions = {}): string {
   return new Intl.NumberFormat(interfaceLocale(), options).format(value);
+}
+
+/** Round decimal API strings for display; retain the source string for inspection and copying. */
+export function formatDecimalString(value: string, digits: number): string {
+  return formatNumber(new Decimal(value).toDecimalPlaces(digits).toNumber(), {
+    minimumFractionDigits: digits, maximumFractionDigits: digits,
+  });
 }
 
 export function formatDecimal(value: number | null, digits = 3, missing: MissingValue = "notAvailable", signed = false): string {

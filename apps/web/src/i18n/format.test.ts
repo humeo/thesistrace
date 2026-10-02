@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { i18n } from "./index";
-import { formatCurrency, formatDecimal, formatNumber, formatPercent, formatSessionDate, formatTimestamp, formatUtcTimestamp } from "./format";
+import { formatCurrency, formatDecimal, formatDecimalString, formatNumber, formatPercent, formatSessionDate, formatTimestamp, formatUtcTimestamp } from "./format";
 
 afterEach(() => { void i18n.changeLanguage("en"); });
 
@@ -16,6 +16,9 @@ describe("interface formatting", () => {
       expect(formatPercent(0, { signed: true })).toBe("0.00%");
       expect(formatPercent(null, { missing: "dash" })).toBe("—");
       expect(formatNumber(12345)).toBe("12,345");
+      expect(formatDecimalString("5190299999999999999999999999e-23", 2)).toBe("51,903.00");
+      expect(formatDecimalString("1.005", 2)).toBe("1.01");
+      expect(formatDecimalString("-21.123456789123456789", 4)).toBe("-21.1235");
       expect(formatCurrency(1234.5, 2)).toContain("1,234.50");
       expect(formatCurrency(1234.5, 0)).toContain("1,235");
       expect(formatDecimal(null)).toBe(locale === "en" ? "Not available" : "不可用");

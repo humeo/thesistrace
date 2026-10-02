@@ -23,12 +23,12 @@ export function Metric({ label, value, help, detail, variant = "default", tone }
   tone?: "positive" | "negative" | "benchmark";
 }) {
   return <div className={cn("min-w-0 border-r border-border last:border-r-0", variant === "observation" ? "px-4 first:pl-0 last:pr-0" : variant === "result" ? "px-2" : "border-b p-4 sm:border-b-0")}>
-    <dt className={cn("flex min-w-0 items-center gap-1", variant === "result" ? "min-h-9 text-[13px] leading-[18px] font-medium text-muted-foreground" : variant === "observation" ? "min-h-7 text-base leading-6 text-foreground" : "text-xs leading-[18px] text-muted-foreground")}>
+    <dt className={cn("flex min-w-0 items-center gap-1", variant === "result" ? "min-h-9 text-xs font-medium text-muted-foreground" : variant === "observation" ? "min-h-7 text-sm text-foreground" : "text-xs text-muted-foreground")}>
       <span className="min-w-0 [overflow-wrap:anywhere]">{label}</span>{help}
     </dt>
-    <dd className={cn("m-0 tabular-nums", variant === "observation" ? "mt-1 font-sans text-[clamp(18px,2.6cqw,24px)] leading-8 font-medium whitespace-nowrap" : variant === "result" ? "mt-1 font-sans text-[clamp(24px,2.25cqw,28px)] leading-9 font-normal whitespace-nowrap" : "mt-2 font-mono text-xl leading-7 font-semibold [overflow-wrap:anywhere]",
+    <dd className={cn("m-0 tabular-nums", variant === "observation" ? "mt-1 font-sans text-[clamp(16px,2.6cqw,20px)] leading-7 font-medium whitespace-nowrap" : variant === "result" ? "mt-1 font-sans text-[clamp(20px,2.25cqw,24px)] leading-8 font-normal whitespace-nowrap" : "mt-2 font-mono text-xl leading-7 font-semibold [overflow-wrap:anywhere]",
       tone === "positive" ? "text-[var(--success)]" : tone === "negative" ? "text-destructive" : tone === "benchmark" ? "text-[var(--benchmark-foreground)]" : "text-foreground",
     )}>{value}</dd>
-    {detail ? <p className="m-0 mt-2 text-xs leading-[18px] text-muted-foreground">{detail}</p> : null}
+    {detail ? <p className="m-0 mt-2 text-xs text-muted-foreground">{detail}</p> : null}
   </div>;
 }
