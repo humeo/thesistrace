@@ -2763,6 +2763,64 @@ describe.sequential("durable Research Agent runtime", () => {
     } finally { await runtime.close(); }
   });
 
+  it("keeps render output for UI replay but excludes it from current and restarted model requests", async () => {
+    const coreRunId = "run_0123456789abcdef0123";
+    const provider = openAIToolProvider([
+      { name: "render_a2ui", arguments: { view: "research_runs", runIds: [coreRunId, coreRunId], proposal: null, trackId: null } },
+      { name: "render_a2ui", arguments: { view: "research_runs", runIds: [coreRunId], proposal: null, trackId: null } },
+      { name: "get_research_run", arguments: { run_id: coreRunId } },
+    ]);
+    vi.stubGlobal("fetch", provider.fetch);
+    const makeRuntime = () => createResearchRuntime(memoryConfiguration, { mcpRunFactory: async () => ({
+      close: async () => undefined, hasFatalToolFailure: () => false, toolFailure: () => undefined,
+      tools: { get_research_run: createTool({ id: "get_research_run", description: "Read the authoritative run",
+        inputSchema: z.object({ run_id: z.string() }).strict(),
+        execute: async () => ({ run_id: coreRunId, status: "succeeded", evidence: "AUTHORITATIVE_RESULT_CANARY" }),
+      }) },
+    }) });
+    let runtime = await makeRuntime();
+    const threadId = randomUUID();
+    try {
+      const invoke = (existing: boolean) => run(runtime, runInput({ threadId, runId: randomUUID(), messageId: randomUUID(),
+        modelKey: "luna", reasoningEffort: "high", sessionMode: existing ? "existing" : "new", content: "Show the research." }), primaryResearcher);
+      const events = await invoke(false);
+      expect(events.at(-1), JSON.stringify({ terminal: events.at(-1), schemaErrors: provider.schemaErrors, requests: provider.requests.length })).toMatchObject({ type: "RUN_FINISHED" });
+      const surfaces = a2uiMessages(events);
+      expect(surfaces).toHaveLength(2);
+      expect(surfaces[1]?.content).toHaveProperty("a2ui_operations");
+      expect(provider.requests).toHaveLength(4);
+      expect(JSON.stringify(provider.requests[1]?.input)).toContain("Resource IDs must be distinct");
+      expect(provider.requests[2]?.input.filter(item => item.type === "function_call_output")).toContainEqual(
+        expect.objectContaining({ call_id: "call_tool_fixture_2", output: "" }),
+      );
+      expect(JSON.stringify(provider.requests[3]?.input)).toContain("AUTHORITATIVE_RESULT_CANARY");
+      const stored = await owner.query<{ id: string; content: string }>(`
+        SELECT id, content FROM agent.mastra_messages WHERE thread_id = $1
+      `, [threadId]);
+      expect(JSON.stringify(stored.rows)).toContain("a2ui_operations");
+      // Existing display history has the same raw contract, without model-output metadata.
+      for (const row of stored.rows) {
+        const content = JSON.parse(row.content);
+        let changed = false;
+        for (const part of content.parts ?? []) if (part.toolInvocation?.toolName === "render_a2ui") {
+          if (part.providerMetadata?.mastra) delete part.providerMetadata.mastra.modelOutput;
+          changed = true;
+        }
+        if (changed) await owner.query("UPDATE agent.mastra_messages SET content = $2 WHERE id = $1", [row.id, JSON.stringify(content)]);
+      }
+      await runtime.close();
+      runtime = await makeRuntime();
+      expect(a2uiMessages(snapshotMessages(await connect(runtime, threadId, primaryResearcher)))).toEqual(surfaces);
+      expect((await invoke(true)).at(-1)).toMatchObject({ type: "RUN_FINISHED" });
+      expect(provider.requests).toHaveLength(5);
+      expect(JSON.stringify(provider.requests.at(-1)?.input)).toContain("AUTHORITATIVE_RESULT_CANARY");
+      expect(JSON.stringify(provider.requests.at(-1)?.input)).toContain("Resource IDs must be distinct");
+      expect(provider.requests.every(request => !/a2ui_operations|research-[a-f0-9]{32}/.test(JSON.stringify(request.input)))).toBe(true);
+      expect(provider.schemaErrors).toEqual([]);
+      expect(a2uiMessages(snapshotMessages(await connect(runtime, threadId, primaryResearcher)))).toEqual(surfaces);
+    } finally { await runtime.close(); vi.unstubAllGlobals(); }
+  });
+
   it("persists completed A2UI steps while a later MCP call is still running", async () => {
     const threadId = fixedUuid(491);
     const runId = fixedUuid(492);
@@ -2866,8 +2924,6 @@ describe.sequential("durable Research Agent runtime", () => {
           }),
         })]),
       });
-      expect(JSON.stringify(surfaces)).toContain("batch-results-");
-      expect(JSON.stringify(surfaces)).not.toContain("batch-progress-");
       const stored = await owner.query<{ content: unknown; lifecycle_status: string }>(`
         SELECT content, lifecycle_status FROM agent.a2ui_message
         WHERE thread_id = $1::uuid ORDER BY sequence

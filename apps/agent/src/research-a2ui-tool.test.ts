@@ -40,6 +40,12 @@ describe("researchA2UITool", () => {
     expect(projectResearchA2UIContent(result).content).toMatchObject({ debugExposure: "hidden", status: "failed" });
     expect(JSON.stringify(projectResearchA2UIContent(result).content)).not.toContain("Resource IDs must be distinct");
   });
+  it("accepts null for unused fields required by strict provider schemas", async () => {
+    const result = await researchA2UITool.execute?.({ view: "research_runs", runIds: [runId], proposal: null, trackId: null } as never, context);
+    expect(projectResearchA2UIContent(result)).toMatchObject({ valid: true, kind: "ready" });
+    const invalid = await researchA2UITool.execute?.({ view: "research_runs", runIds: null, proposal: null, trackId: null } as never, context);
+    expect(invalid).toMatchObject({ error: true, code: "INVALID_RESEARCH_VIEW", issues: [{ path: "runIds", message: "Required for research_runs" }] });
+  });
   it.each([
     { view: "research_runs", runIds: ["../../private"] },
     { view: "research_runs", runIds: [runId], components: [{ component: "Button" }] },

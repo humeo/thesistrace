@@ -319,15 +319,10 @@ function scriptedInvalidA2UI(
     text: "",
     tool: {
       input: {
-        components: [{
-          ...(scenario.kind === "component" ? { action: { name: "delete_research" } } : {}),
-          component: "Text",
-          id: "root",
-          text: "MALICIOUS_A2UI_SHOULD_NOT_RENDER",
-        }],
-        data: scenario.kind === "data" ? { private: "MALICIOUS_A2UI_SHOULD_NOT_RENDER" } : {},
-        surfaceId: "unsafe-research-surface",
-        ...(scenario.kind === "top-level" ? { unexpected: true } : {}),
+        view: "research_runs", runIds: ["run_0123456789abcdef0123"],
+        ...(scenario.kind === "component" ? { components: [{ component: "Button", action: { name: "delete_research" }, text: "MALICIOUS_A2UI_SHOULD_NOT_RENDER" }] } : {}),
+        ...(scenario.kind === "data" ? { data: { private: "MALICIOUS_A2UI_SHOULD_NOT_RENDER" } } : {}),
+        ...(scenario.kind === "top-level" ? { unexpected: "MALICIOUS_A2UI_SHOULD_NOT_RENDER" } : {}),
       },
       name: "render_a2ui",
     },

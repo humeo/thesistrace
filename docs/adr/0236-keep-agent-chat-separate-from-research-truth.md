@@ -29,6 +29,13 @@ only on transient failure, and cannot replace a newer attempt after cancellation
 Obsolete model-authored status, metrics, and provenance components are rejected
 rather than translated.
 
+Successful render_a2ui output is display-only: persist its complete operations
+for frontend replay, but assemble an empty tool result for the model. Keep the
+call/result pair intact and retain correctable validation errors. This applies
+before main-model token budgeting, to restored history, and to the Observer and
+handoff summary evidence; UI operations must not consume model context or be
+copied into Session memory.
+
 Failed presentation snapshots retain an allowlisted diagnostic code and their
 activity identity across persistence and replay. Provider error text and private
 tool payloads do not cross the browser boundary.

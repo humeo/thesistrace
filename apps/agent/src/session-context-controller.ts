@@ -10,6 +10,7 @@ import { restoreContextTail, selectContextHistory } from "./session-context-sele
 import { freezeContextSource, type SessionContextSnapshot } from "./session-context-state.js";
 import type { ResearchSessionRepository } from "./session-repository.js";
 import { AgentRunFailure, providerFailureCode } from "./run-failure.js";
+import { modelFacingResearchMessages, modelFacingResearchRequest } from "./research-a2ui-model-output.js";
 
 type GenerationOptions = Parameters<typeof generateSessionContext>[0];
 type Repository = Pick<ResearchSessionRepository, "contextInput" | "rawContextMessages" | "beginContextCycle" | "commitContextCycle" | "releaseContextCycle">;
@@ -55,7 +56,7 @@ export class SessionContextController {
     abortSignal.throwIfAborted();
     const { checkpoint, messages: raw, recoveries } = await repository.contextInput(threadId, researcherId);
     const excluded = invalidRecoveryMessageIds(recoveries);
-    let effective = checkpoint || excluded.length ? await this.withContext(request, raw, checkpoint?.snapshot, excluded) : request;
+    let effective = checkpoint || excluded.length ? await this.withContext(request, raw, checkpoint?.snapshot, excluded) : modelFacingResearchRequest(request);
     const before = modelRequestBudget(effective, selection.model, this.counter);
     const threshold = Math.floor(selection.model.contextWindow * 0.9);
     if (!recovery && (!selection.compactionEnabled || (before.inputTokens < threshold && before.outputTokens > 0))) {
@@ -74,12 +75,13 @@ export class SessionContextController {
       if (!selected.removed.length) throw new ModelRequestFailure("CONTEXT_TOO_LARGE", before);
       const requestPosition = raw.findIndex((message) => message.id === currentRequestId);
       const turnPrefixMessageIds = requestPosition < 0 ? [] : raw.slice(requestPosition + 1).map((message) => message.id);
-      const generated = await this.generate({ ...this.options, removed: selected.removed,
+      const evidence = modelFacingResearchMessages(selected.removed);
+      const generated = await this.generate({ ...this.options, removed: evidence,
         sourceParts: selected.removedParts,
         turnPrefixMessageIds,
         previous: checkpoint ? { memory: checkpoint.snapshot.memory, summary: checkpoint.snapshot.summary } : undefined,
         currentRequest: raw.find((message) => message.id === currentRequestId),
-        requiredReferences: continuationReferences(selected.removed) });
+        requiredReferences: continuationReferences(evidence) });
       abortSignal.throwIfAborted();
       const date = new Date().toISOString().slice(0, 10);
       const snapshot: SessionContextSnapshot = {
@@ -110,7 +112,7 @@ export class SessionContextController {
 
   private async withContext(request: LanguageModelV3CallOptions, raw: readonly MastraDBMessage[], snapshot: SessionContextSnapshot | undefined, excluded: readonly string[]): Promise<LanguageModelV3CallOptions> {
     const list = new MessageList({ threadId: this.options.threadId, resourceId: this.options.researcherId, logger: noopLogger });
-    list.add(snapshot ? restoreContextTail(raw, snapshot, excluded) : raw.filter((message) => !excluded.includes(message.id)), "memory");
+    list.add(modelFacingResearchMessages(snapshot ? restoreContextTail(raw, snapshot, excluded) : raw.filter((message) => !excluded.includes(message.id))), "memory");
     const tail = await list.get.all.aiV6.llmPrompt();
     const prefix = request.prompt.filter((message) => message.role === "system");
     if (snapshot?.renderedMemory) prefix.push({ role: "system", content: snapshot.renderedMemory });

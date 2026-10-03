@@ -8,13 +8,15 @@ import {
   projectResearchA2UIContent,
   type ResearchA2UIViewInput,
 } from "@thesistrace/contracts/research-a2ui";
+import { RESEARCH_A2UI_TOOL_NAME, researchA2UIModelOutput } from "./research-a2ui-model-output.js";
 
-export const RESEARCH_A2UI_TOOL_NAME = "render_a2ui";
+export { RESEARCH_A2UI_TOOL_NAME } from "./research-a2ui-model-output.js";
 const inputSchema = toStandardSchema<ResearchA2UIViewInput>(RESEARCH_A2UI_VIEW_JSON_SCHEMA);
 export const researchA2UITool = createTool({
   id: RESEARCH_A2UI_TOOL_NAME,
-  description: "Display a fixed research_runs list, unsubmitted alpha_proposal, or daily_track view. Supply authoritative resource IDs or proposal fields; the application owns layout. Write explanations and ordinary tables in the normal Markdown response.",
+  description: "Display a fixed research_runs list, unsubmitted alpha_proposal, or daily_track view. Supply authoritative resource IDs or proposal fields; the application owns layout. Write explanations and ordinary tables in the normal Markdown response. Successful UI output is display-only: an empty model result means success and must not cause a retry. Validation errors remain visible for correction.",
   inputSchema,
+  toModelOutput: researchA2UIModelOutput,
   execute: async input => {
     const validation = RESEARCH_A2UI_VIEW_SCHEMA.safeParse(input);
     if (!validation.success) {

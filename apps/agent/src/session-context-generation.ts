@@ -9,6 +9,7 @@ import { modelRequestBudget, ModelInputTokenCounter } from "./model-context.js";
 import type { ResolvedModelSelection } from "./model-runtime.js";
 import { ContextEvidenceBatches, groupContextEvidence } from "./session-context-batches.js";
 import type { ContextPartReference } from "./session-context-state.js";
+import { modelFacingResearchMessages } from "./research-a2ui-model-output.js";
 
 export class ContextCandidateError extends AgentRunFailure {
   constructor() { super("CONTEXT_COMPACTION_FAILED"); }
@@ -51,6 +52,7 @@ export async function generateSessionContext(options: Readonly<{
   const { selection, abortSignal } = options;
   abortSignal.throwIfAborted();
   if (!selection.compactionEnabled || !options.removed.length) throw new ContextCandidateError();
+  const evidence = modelFacingResearchMessages(options.removed);
   const threshold = Math.floor(selection.model.contextWindow * 0.9);
   const memoryBudget = Math.floor(threshold / 8);
   const target = Math.floor(threshold / 16);
@@ -85,7 +87,7 @@ export async function generateSessionContext(options: Readonly<{
     return budget.outputTokens >= minimumOutput;
   }
   let memoryText = options.previous?.memory ?? "";
-  const observations = new ContextEvidenceBatches(options.removed, options.sourceParts);
+  const observations = new ContextEvidenceBatches(evidence, options.sourceParts);
   for (;;) {
     const batch = await observations.next(async (source) => {
       const input = engine.observer.getCandidateInput(memoryText, source);
@@ -143,9 +145,9 @@ export async function generateSessionContext(options: Readonly<{
     return text;
   }
   const prefixIds = new Set(options.turnPrefixMessageIds);
-  const groups = groupContextEvidence(options.removed);
+  const groups = groupContextEvidence(evidence);
   const split = groups.findIndex((group) => group.some((message) => prefixIds.has(message.id)));
-  const history = split < 0 ? [...options.removed] : groups.slice(0, split).flat();
+  const history = split < 0 ? evidence : groups.slice(0, split).flat();
   const prefix = split < 0 ? [] : groups.slice(split).flat();
   const historySummary = await summarizeSource(history, options.previous?.summary ?? "", "Summarize earlier conversation history.");
   let summary = historySummary;

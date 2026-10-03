@@ -63,6 +63,12 @@ describe("Research A2UI contract", () => {
     expect(isResearchA2UIMessageId("provider-call-1")).toBe(false);
   });
 
+  it.each([{ discriminator: ["Text"] }, { discriminator: { toString: {} } }])("rejects a malformed component discriminator with a safe error", ({ discriminator }) => {
+    expect(projectResearchA2UIContent(envelope([{ id: "root", component: discriminator, text: "Example" }]))).toMatchObject({
+      valid: false, kind: "error", content: { errorCode: "INVALID_OPERATIONS", debugExposure: "hidden" },
+    });
+  });
+
   it("allows only enumerated same-origin product navigation", () => {
     expect(parseResearchA2UINavigationHref("/data")).toBe("/data");
     expect(parseResearchA2UINavigationHref("/research")).toBe("/research");

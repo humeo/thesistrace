@@ -93,7 +93,7 @@ export const RESEARCH_A2UI_INLINE_CATALOG = Object.freeze({
 
 const viewFields = { research_runs: "runIds", alpha_proposal: "proposal", daily_track: "trackId" };
 export const RESEARCH_A2UI_VIEW_SCHEMA = z.object({
-  view: z.enum(["research_runs", "alpha_proposal", "daily_track"]),
+  view: z.enum(["research_runs", "alpha_proposal", "daily_track"]).describe("research_runs requires only runIds; alpha_proposal requires only proposal; daily_track requires only trackId."),
   runIds: RESEARCH_A2UI_DEFINITIONS.ResearchComparison.props.shape.runIds.optional(),
   proposal: RESEARCH_A2UI_DEFINITIONS.AlphaProposal.props.optional(),
   trackId: RESEARCH_A2UI_DEFINITIONS.DailyTrack.props.shape.trackId.optional(),
@@ -288,7 +288,7 @@ function projectComponents(values) {
 
 function projectComponent(value) {
   if (!isRecord(value) || typeof value.id !== "string" || !COMPONENT_ID.test(value.id)) return null;
-  if (!Object.hasOwn(RESEARCH_A2UI_DEFINITIONS, value.component)) return null;
+  if (typeof value.component !== "string" || !Object.hasOwn(RESEARCH_A2UI_DEFINITIONS, value.component)) return null;
   const definition = RESEARCH_A2UI_DEFINITIONS[value.component];
   const { id, component, ...props } = value;
   const result = definition.props.safeParse(props);

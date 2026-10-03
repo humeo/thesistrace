@@ -60,6 +60,42 @@ async function fixture() {
 }
 const candidate = { memory: "A stable fact.", summary: "Continue the research using the retained request.", auxiliaryInputTokens: 100, auxiliaryOutputTokens: 20 };
 
+test("excludes successful render output before budgeting both fresh and restored model context", async () => {
+  const f = await fixture();
+  f.raw[0]!.content.parts = [{ type: "tool-invocation", toolInvocation: {
+    state: "result", toolCallId: "view", toolName: "render_a2ui", args: { view: "research_runs", runIds: ["run_exact"] },
+    result: { a2ui_operations: [{ updateComponents: { surfaceId: "UI_ONLY_SURFACE", data: "UI_ONLY_PAYLOAD ".repeat(40_000) } }] },
+  } }, { type: "tool-invocation", toolInvocation: {
+    state: "result", toolCallId: "invalid-view", toolName: "render_a2ui", args: { view: "research_runs", runIds: [] },
+    result: { error: true, code: "INVALID_RESEARCH_VIEW", issues: [{ path: "runIds", message: "Choose at least one run" }] },
+  } }, { type: "tool-invocation", toolInvocation: {
+    state: "result", toolCallId: "read", toolName: "get_research_run", args: { run_id: "run_exact" },
+    result: { status: "succeeded", evidence: "AUTHORITATIVE_FACT" },
+  } }];
+  const original = structuredClone(f.raw);
+  const list = new MessageList(); list.add(f.raw, "memory");
+  const request = { prompt: await list.get.all.aiV6.llmPrompt() };
+  const controller = new SessionContextController(f.options, async () => { throw new Error("UI output must not trigger compaction"); });
+  const fresh = await controller.prepare(request, "request");
+  const assertContext = (prepared: typeof request) => {
+    const json = JSON.stringify(prepared.prompt);
+    expect(json).not.toMatch(/UI_ONLY|a2ui_operations/);
+    expect(json).toContain("AUTHORITATIVE_FACT");
+    expect(json).toContain("Choose at least one run");
+    expect(prepared.prompt.flatMap(message => message.role === "tool" ? message.content : [])
+      .find(part => part.type === "tool-result" && part.toolCallId === "view")).toMatchObject({ output: { type: "text", value: "" } });
+    expect(modelRequestBudget(prepared, f.options.selection.model).inputTokens).toBeLessThan(1000);
+  };
+  assertContext(fresh);
+  const cycle = await f.options.repository.beginContextCycle();
+  await f.options.repository.commitContextCycle(cycle, { ...candidate, renderedMemory: "", renderedSummary: "Handoff",
+    retainedParts: f.raw.flatMap(message => message.content.parts.map((_, partIndex) => ({ messageId: message.id, partIndex }))),
+    sourceWatermark: freezeContextSource(f.raw), statistics: { inputTokensBefore: 1, inputTokensAfter: 1, outputTokensAfter: 1,
+      elapsedMs: 1, auxiliaryInputTokens: 0, auxiliaryOutputTokens: 0 } });
+  assertContext(await new SessionContextController(f.options).prepare(request, "request"));
+  expect(f.raw).toEqual(original);
+});
+
 test("publishes an affordable complete snapshot and reuses its exact prefix on the next request", async () => {
   const f = await fixture();
   // Keep a small recent tail: the oldest large message is outside it.

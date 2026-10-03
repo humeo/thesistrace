@@ -78,3 +78,18 @@ test("a completed last tool larger than the tail budget goes entirely into E", (
   expect(selected.retained).toEqual([request]);
   expect(selected.removed).toEqual([tool]);
 });
+
+test("UI output does not consume the model tail budget or change durable part references", () => {
+  const render = message("view", "assistant", "Display the results");
+  render.content.parts.push({ type: "tool-invocation", toolInvocation: {
+    state: "result", toolCallId: "view", toolName: "render_a2ui", args: { view: "research_runs", runIds: ["run_exact"] },
+    result: { a2ui_operations: [{ data: "UI output ".repeat(30_000) }] },
+  } });
+  const history = [message("old", "user", "Earlier evidence ".repeat(1000)), render, message("request", "user", "Continue")];
+  const original = structuredClone(history);
+  const selected = selectContextHistory(history, { recentTokens: 500, currentRequestId: "request" });
+  expect(selected.retained.map(message => message.id)).toEqual(["view", "request"]);
+  expect(selected.removed.map(message => message.id)).toEqual(["old"]);
+  expect(restoreContextTail(history, { retainedParts: selected.retainedParts, sourceWatermark: freezeContextSource(history) })).toEqual(selected.retained);
+  expect(history).toEqual(original);
+});

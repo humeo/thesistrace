@@ -1,5 +1,6 @@
 import type { MastraDBMessage } from "@mastra/core/agent";
 import { ModelInputTokenCounter } from "./model-context.js";
+import { modelFacingResearchPart } from "./research-a2ui-model-output.js";
 import { contextSourceMatches, freezeContextSource, type ContextPartReference, type ContextSourceStamp } from "./session-context-state.js";
 
 type Boundary = Readonly<{ sourceWatermark: readonly ContextSourceStamp[]; retainedParts: readonly ContextPartReference[] }>;
@@ -62,7 +63,7 @@ export function selectContextHistory(
     }
   }
   }
-  const costs = parts.map((item) => counter.estimateSerialized(item.message.content.parts[item.reference.partIndex]));
+  const costs = parts.map((item) => counter.estimateSerialized(modelFacingResearchPart(item.message.content.parts[item.reference.partIndex]!)));
   for (let index = parts.length - 1; index >= 0; index--) {
     if (retained.has(index)) continue;
     const candidate = new Set(retained); candidate.add(index); closeGroups(candidate);

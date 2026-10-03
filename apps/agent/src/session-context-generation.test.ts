@@ -19,6 +19,29 @@ const removed: MastraDBMessage[] = [{ id: "history", role: "assistant", createdA
     result: { next_cursor: "cursor_exact", evidence: "complete source" },
 } }] } }];
 
+test("Observer and summary receive render calls without UI output while raw replay evidence stays intact", async () => {
+  const { options, requests } = fixture([{ text: "<observations>Stable fact.</observations>" }, { text: summary }]);
+  const source = structuredClone(removed);
+  source[0]!.content.parts.push({ type: "tool-invocation", toolInvocation: {
+    state: "result", toolCallId: "view", toolName: "render_a2ui", args: { view: "research_runs", runIds: ["run_exact"] },
+    result: { a2ui_operations: [{ createSurface: { surfaceId: "UI_ONLY_SURFACE" } }] },
+  } }, { type: "tool-invocation", toolInvocation: {
+    state: "result", toolCallId: "invalid-view", toolName: "render_a2ui", args: { view: "research_runs", runIds: [] },
+    result: { error: true, code: "INVALID_RESEARCH_VIEW", issues: [{ path: "runIds", message: "Choose at least one run" }] },
+  } });
+  const original = structuredClone(source);
+  expect((await generateSessionContext({ ...options, removed: source })).summary).toBe(summary);
+  expect(requests).toHaveLength(2);
+  for (const request of requests) {
+    const prompt = JSON.stringify(request.prompt);
+    expect(prompt).not.toMatch(/UI_ONLY|a2ui_operations/);
+    expect(prompt).toContain("render_a2ui");
+    expect(prompt).toContain("complete source");
+    expect(prompt).toContain("Choose at least one run");
+  }
+  expect(source).toEqual(original);
+});
+
 test("incremental generation retains old M and updates S from new raw evidence", async () => {
   const previous = { memory: "Stable prior constraint: preserve PIT.", summary: summary.replace("comparison", "old pending comparison") };
   const { options, requests } = fixture([{ text: "<observations>New authoritative fact.</observations>" }, { text: summary }]);
