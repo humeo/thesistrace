@@ -1,4 +1,5 @@
 import Decimal from "decimal.js";
+import { cn } from "cn";
 import { Page, PageContent, PageHeader } from "../components/layout/Page";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -239,6 +240,7 @@ export function ResearchRunHistory({
               <TableHead className="text-right" scope="col">{t("resultSummary")}</TableHead>
             ) : metricColumns.map((column) => (
               <SortableResearchRunHeading
+                align="right"
                 direction={sort.direction}
                 isActive={sort.key === column.key}
                 key={column.key}
@@ -310,11 +312,13 @@ function defaultResearchRunSortDirection(
 }
 
 function SortableResearchRunHeading({
+  align = "left",
   direction,
   isActive,
   label,
   onSort,
 }: {
+  align?: "left" | "right";
   direction: ResearchRunSortDirection;
   isActive: boolean;
   label: string;
@@ -324,10 +328,10 @@ function SortableResearchRunHeading({
     ? direction === "ascending" ? CaretUp : CaretDown
     : CaretUpDown;
   return (
-    <TableHead aria-sort={isActive ? direction : "none"} scope="col">
-      <Button variant="ghost" className="-ml-3" onClick={onSort} type="button">
+    <TableHead className={cn(align === "right" && "text-right")} aria-sort={isActive ? direction : "none"} scope="col">
+      <Button variant="ghost" size="sm" className={cn("w-full justify-start border-0 px-0", align === "right" && "flex-row-reverse")} onClick={onSort} type="button">
         {label}
-        <Icon aria-hidden="true" data-icon="inline-end" />
+        <Icon aria-hidden="true" data-icon={align === "right" ? "inline-start" : "inline-end"} />
       </Button>
     </TableHead>
   );
