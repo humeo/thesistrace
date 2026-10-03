@@ -33,6 +33,7 @@ import {
 import type { VerifiedResearcher } from "./session-verifier.js";
 
 export type AgentAppDependencies = Readonly<{
+  contextWindow: (modelKey: string, threadId: string | undefined, researcher: VerifiedResearcher) => Promise<import("@thesistrace/contracts/context-window").ContextWindowSnapshot>;
   mcpConnection: (headers: Headers) => Promise<import("./mcp-connection.js").McpConnection>;
   commandReceipt: (
     threadId: string,
@@ -140,6 +141,21 @@ export function createAgentApp(dependencies: AgentAppDependencies): Hono<AgentAp
 
   app.get("/api/agent/models", (context) => {
     return context.json(dependencies.modelCatalog);
+  });
+
+  app.get("/api/agent/context-window", async (context) => {
+    const modelKey = context.req.query("model_key");
+    const threadId = context.req.query("thread_id");
+    if (!modelKey || !dependencies.modelCatalog.models.some(model => model.key === modelKey)
+      || (threadId !== undefined && !isChatThreadId(threadId))) {
+      return context.json({ code: "CONTEXT_WINDOW_INPUT_INVALID" }, 400);
+    }
+    try {
+      return context.json(await dependencies.contextWindow(modelKey, threadId, context.get("researcher")));
+    } catch (error) {
+      if (error instanceof SessionNotFoundError) return context.json({ code: "CHAT_SESSION_NOT_FOUND" }, 404);
+      throw error;
+    }
   });
 
   app.get("/api/agent/sessions", async (context) => {

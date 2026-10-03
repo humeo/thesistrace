@@ -14,6 +14,7 @@ async function main(): Promise<void> {
   const researchRuntime = await createResearchRuntime(settings);
   const mcpFactory = createMcpRunFactory(settings);
   const app = createAgentApp({
+    contextWindow: researchRuntime.contextWindow,
     mcpConnection: (headers) => checkMcpConnection(mcpFactory, headers),
     commandReceipt: researchRuntime.commandReceipt,
     deleteSession: researchRuntime.deleteSession,

@@ -41,11 +41,11 @@ export function ModelPicker({ catalog, onModelChange, onReasoningChange, onDefau
         tooltip={{ formatter: value => effortLabel(efforts[value!]) }} onChange={value => onReasoningChange(efforts[value])} />
         : selection === null ? <Typography.Text type="secondary">{t("chooseModel")}</Typography.Text> : null}
     </Flex></div>}>
-    <Button ref={triggerRef} type="text" aria-expanded={open} aria-haspopup="dialog"
+    <Button ref={triggerRef} type="text" style={{ paddingInline: 4, gap: 4 }} aria-expanded={open} aria-haspopup="dialog"
       aria-label={selection === null ? t("nextTurnModel") : t("selectedModel", { model: selection.model.display_name, reasoning: effortLabel(selection.reasoningEffort) })}
       onKeyDown={event => { if (!open && event.key === "ArrowDown") { event.preventDefault(); setOpen(true); } }}>
-      <Typography.Text type="secondary">{selection?.model.display_name ?? t("chooseModel")}</Typography.Text>
-      {selection ? <Typography.Text type="secondary">{effortLabel(selection.reasoningEffort)}</Typography.Text> : null}<CaretDown aria-hidden="true" />
+      <Typography.Text type="secondary">{selection?.model.display_name ?? t("chooseModel")}{selection ? ` ${effortLabel(selection.reasoningEffort)}` : ""}</Typography.Text>
+      <CaretDown aria-hidden="true" />
     </Button>
   </Popover>;
 }

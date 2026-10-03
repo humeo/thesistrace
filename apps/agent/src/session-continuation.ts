@@ -1,3 +1,4 @@
+import { modelRequestBudget } from "./model-context.js";
 import type { AgentConfig } from "@mastra/core/agent";
 import type { Mastra } from "@mastra/core/mastra";
 import type { RequestContext } from "@mastra/core/request-context";
@@ -85,7 +86,17 @@ export function createSessionContinuation(options: Readonly<{
     model: ({ requestContext }) => new ContextLanguageModel(options.selection(requestContext).languageModel, async request => {
       const state = stateFrom(requestContext);
       if (!state?.context) throw new Error("SESSION_CONTEXT_INPUT_NOT_PREPARED");
-      return state.context.prepare(request, state.currentRequestId);
+      const prepared = await state.context.prepare(request, state.currentRequestId);
+      const { selection, threadId, researcherId, runId } = state.identity;
+      // Optional UI observations must not fail or retry model execution.
+      try {
+        await repository.saveContextWindow(
+          threadId, researcherId, runId,
+          { model_key: selection.model.key, context_window: selection.model.contextWindow,
+            input_tokens: modelRequestBudget(prepared, selection.model).inputTokens, measured_at: new Date().toISOString() },
+        );
+      } catch { /* A failed observation write leaves the previous timestamped snapshot intact. */ }
+      return prepared;
     }),
   };
   return {

@@ -50,6 +50,7 @@ import {
   type SessionCursor,
 } from "./session-management.js";
 import type { PersistedTokenUsage } from "./usage-capture.js";
+import { contextWindowSnapshotSchema, type ContextWindowSnapshot } from "@thesistrace/contracts/context-window";
 import type { AgentFailureCode } from "@thesistrace/contracts/agent-failure";
 import type { RunSelection } from "@thesistrace/contracts/agent-run-selection";
 
@@ -566,6 +567,34 @@ export class ResearchSessionRepository {
         : encodeSessionCursor({ activityAt: last.activity_at, id: last.id }),
       sessions,
     };
+  }
+
+  async saveContextWindow(threadId: string, researcherId: string, runId: string, snapshot: ContextWindowSnapshot): Promise<void> {
+    const value = contextWindowSnapshotSchema.parse(snapshot);
+    await this.pool.query(`
+      UPDATE agent."mastra_threads" AS thread
+      SET metadata = pg_catalog.jsonb_set(
+        COALESCE(thread.metadata, '{}'::jsonb),
+        '{contextWindowUsage}', $4::jsonb
+      )
+      FROM agent.agent_run AS run
+      WHERE thread.id = $1 AND thread."resourceId" = $2
+        AND run.id = $3::uuid AND run.thread_id::text = thread.id
+        AND run.status = 'running'
+    `, [threadId, researcherId, runId, JSON.stringify(value)]);
+  }
+
+  async contextWindow(threadId: string, researcherId: string): Promise<ContextWindowSnapshot | null> {
+    const result = await this.pool.query<{ snapshot: unknown }>(`
+      SELECT thread.metadata -> 'contextWindowUsage' AS snapshot
+      FROM agent.chat_session AS session
+      JOIN agent."mastra_threads" AS thread ON thread.id = session.id::text
+        AND thread."resourceId" = session.researcher_id::text
+      WHERE session.id = $1::uuid AND session.researcher_id = $2::uuid
+    `, [threadId, researcherId]);
+    if (result.rowCount !== 1) throw new SessionNotFoundError();
+    const snapshot = result.rows[0]!.snapshot;
+    return snapshot === null ? null : contextWindowSnapshotSchema.parse(snapshot);
   }
 
   async session(threadId: string, researcherId: string): Promise<SessionSummary> {

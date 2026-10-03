@@ -61,7 +61,7 @@ export function ChatComposer({
         onSubmit={() => { if (controller.action.enabled) void controller.executeMainAction(); }}
         onChange={controller.setDraft} onCancel={() => void controller.executeMainAction()}
         autoSize={{ minRows: 2, maxRows: 8 }} suffix={false}
-        footer={(_, { components: { SendButton, LoadingButton } }) => <Flex align="center" justify="space-between">
+        footer={(_, { components: { SendButton, LoadingButton } }) => <Flex align="center" justify="space-between" gap={8}>
           {modelControls}
           {controller.action.kind === "stop" ? <LoadingButton aria-label={t("stop")} disabled={!controller.action.enabled} />
             : <SendButton aria-label={t(actionLabelKey(controller.action.kind, controller.phase))} disabled={!controller.action.enabled} />}

@@ -29,6 +29,7 @@ function dependencies(
   overrides: Partial<AgentAppDependencies> = {},
 ): AgentAppDependencies {
   return {
+    contextWindow: vi.fn(async (modelKey) => ({ model_key: modelKey, context_window: 258_000, input_tokens: null, measured_at: null })),
     mcpConnection: vi.fn(async () => ({ checked_at: new Date().toISOString(), tools: [] })),
     commandReceipt: vi.fn(async (_threadId, commandId) => ({
       commandId,
@@ -85,6 +86,25 @@ function dependencies(
 }
 
 describe("Agent Host HTTP boundary", () => {
+  it("serves context-window observations behind authentication and hides foreign sessions", async () => {
+    const contextWindow = vi.fn(async (modelKey: string) => ({ model_key: modelKey, context_window: 258_000, input_tokens: 92_000, measured_at: "2026-10-02T08:00:00.000Z" }));
+    const app = createAgentApp(dependencies({ contextWindow }));
+    const options = { headers: { "sec-fetch-site": "same-origin" } };
+    const threadId = "00000000-0000-4000-8000-000000000222";
+    const response = await app.request(`http://agent.test/api/agent/context-window?model_key=research-primary&thread_id=${threadId}`, options);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ input_tokens: 92_000, context_window: 258_000 });
+    expect(contextWindow).toHaveBeenCalledWith("research-primary", threadId, researcher);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect((await app.request("http://agent.test/api/agent/context-window?model_key=other", options)).status).toBe(400);
+    expect((await app.request("http://agent.test/api/agent/context-window?model_key=research-primary&thread_id=invalid", options)).status).toBe(400);
+    expect((await createAgentApp(dependencies({ verifySession: async () => null })).request("http://agent.test/api/agent/context-window?model_key=research-primary", options)).status).toBe(401);
+    const foreign = await createAgentApp(dependencies({ contextWindow: async () => { throw new SessionNotFoundError(); } }))
+      .request(`http://agent.test/api/agent/context-window?model_key=research-primary&thread_id=${threadId}`, options);
+    expect(foreign.status).toBe(404);
+    expect(await foreign.json()).toEqual({ code: "CHAT_SESSION_NOT_FOUND" });
+  });
+
   it("returns the safe Catalog only after same-origin Session verification", async () => {
     const appDependencies = dependencies();
     const response = await createAgentApp(appDependencies).request(

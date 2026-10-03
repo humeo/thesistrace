@@ -12,7 +12,11 @@ test("history navigation keeps the selected conversation canvas through delayed 
   const preferences = new Promise<void>(resolve => { releasePreferences = resolve; });
   const connection = new Promise<void>(resolve => { releaseConnection = resolve; });
   await page.route("https://workbench.fixture/api/agent/**", async route => {
-    const path = new URL(route.request().url()).pathname;
+    const url = new URL(route.request().url());
+    const path = url.pathname;
+    if (path === "/api/agent/context-window") return route.fulfill({ json: {
+      model_key: url.searchParams.get("model_key"), context_window: 258_000, input_tokens: null, measured_at: null,
+    } });
     if (path === "/api/agent/sessions") return route.fulfill({ json: { sessions: [session], next_cursor: null } });
     if (path === `/api/agent/sessions/${session.id}`) return route.fulfill({ json: session });
     if (path === "/api/agent/models") return route.fulfill({ json: {

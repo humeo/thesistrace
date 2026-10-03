@@ -1,4 +1,5 @@
-import { Alert, Button, Result, Typography } from "antd";
+import { Alert, Button, Flex, Result, Typography } from "antd";
+import { ContextWindowIndicator } from "./ContextWindowIndicator";
 import { ChatUiProvider } from "./ChatUiProvider";
 import { type MouseEvent, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -120,6 +121,7 @@ export function ChatContent({
 
   const modelControls = (
     <CatalogControls
+      contextThreadId={accepted ? thread?.id ?? null : null}
       catalogState={catalogState}
       onModelChange={(modelKey) => {
         if (catalogState.status !== "ready") return;
@@ -197,6 +199,7 @@ function ChatNotFoundMain({ navigate }: { navigate: () => void }) {
 }
 
 function CatalogControls({
+  contextThreadId,
   catalogState,
   onModelChange,
   onReasoningChange,
@@ -205,6 +208,7 @@ function CatalogControls({
   selection,
   selectionRequired,
 }: {
+  contextThreadId: string | null;
   catalogState: AgentCatalogState;
   onModelChange: (modelKey: string) => void;
   onReasoningChange: (reasoningEffort: import("./modelCatalog").ReasoningEffort) => void;
@@ -245,13 +249,16 @@ function CatalogControls({
     );
   }
   return (
-    <ModelPicker
-      catalog={catalogState.catalog}
-      onModelChange={onModelChange}
-      onReasoningChange={onReasoningChange}
-      onDefaultChange={onDefaultChange}
-      selection={selection}
-    />
+    <Flex align="center" gap={0} style={{ minWidth: 0 }}>
+      <ModelPicker
+        catalog={catalogState.catalog}
+        onModelChange={onModelChange}
+        onReasoningChange={onReasoningChange}
+        onDefaultChange={onDefaultChange}
+        selection={selection}
+      />
+      <ContextWindowIndicator modelKey={selection.model.key} threadId={contextThreadId} />
+    </Flex>
   );
 }
 

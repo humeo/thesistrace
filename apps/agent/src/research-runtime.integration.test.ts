@@ -618,9 +618,13 @@ describe.sequential("durable Research Agent runtime", () => {
       const checkpoint = await new ResearchSessionRepository(agentStore).contextCheckpoint(threadId, primaryResearcher.researcher_id);
       expect(checkpoint?.revision).toBe(1);
       expect(checkpoint?.snapshot.summary).toContain("INSUFFICIENT_HISTORY");
+      const window = await runtime.contextWindow("luna", threadId, primaryResearcher);
+      expect(window.input_tokens).toBeGreaterThan(0);
+      expect(window.input_tokens).toBeLessThan(232_200);
       const auxiliaryCalls = provider.requests.filter((request) => request.phase !== "answer").length;
       await runtime.close();
       runtime = await createResearchRuntime(configuration, dependencies);
+      expect(await runtime.contextWindow("luna", threadId, primaryResearcher)).toEqual(window);
       expect((await prompt(true)).at(-1)?.type).toBe("RUN_FINISHED");
       expect(provider.requests.at(-1)?.prompt).toContain("INSUFFICIENT_HISTORY");
       const previousInput = answer.body.input;
@@ -928,6 +932,36 @@ describe.sequential("durable Research Agent runtime", () => {
       ]);
       expect(discover).toHaveBeenCalledOnce();
     } finally { await restarted.close(); }
+  });
+
+  it("records context-window input snapshots, preserves thread metadata, and restores them after restart", async () => {
+    const threadId = randomUUID();
+    let runtime = await createIntegrationRuntime();
+    try {
+      expect(await runtime.contextWindow("scripted-research", undefined, primaryResearcher))
+        .toMatchObject({ input_tokens: null, measured_at: null });
+      const events = await run(runtime, runInput({ threadId, runId: randomUUID(), messageId: randomUUID() }), primaryResearcher);
+      expect(events.at(-1)?.type).toBe("RUN_FINISHED");
+      const first = await runtime.contextWindow("scripted-research", threadId, primaryResearcher);
+      expect(first.input_tokens).toBeGreaterThan(0);
+      expect(first.input_tokens).toBeLessThan(first.context_window);
+      expect(first.measured_at).toEqual(expect.any(String));
+      await owner.query(`UPDATE agent."mastra_threads" SET metadata = metadata || '{"unrelated":"preserved"}'::jsonb WHERE id = $1`, [threadId]);
+      const next = await run(runtime, runInput({ threadId, runId: randomUUID(), messageId: randomUUID(), sessionMode: "existing" }), primaryResearcher);
+      expect(next.at(-1)?.type).toBe("RUN_FINISHED");
+      const snapshot = await runtime.contextWindow("scripted-research", threadId, primaryResearcher);
+      expect(snapshot.input_tokens).toBeGreaterThan(first.input_tokens!);
+      expect((await owner.query(`SELECT metadata::jsonb ->> 'unrelated' AS unrelated FROM agent."mastra_threads" WHERE id = $1`, [threadId])).rows)
+        .toEqual([{ unrelated: "preserved" }]);
+      await expect(runtime.contextWindow("scripted-research", threadId, foreignResearcher)).rejects.toThrow(SessionNotFoundError);
+      expect(await runtime.contextWindow("scripted-failure", threadId, primaryResearcher)).toMatchObject({ input_tokens: null, measured_at: null });
+      await runtime.close();
+      runtime = await createIntegrationRuntime();
+      expect(await runtime.contextWindow("scripted-research", threadId, primaryResearcher)).toEqual(snapshot);
+      const repository = new ResearchSessionRepository(agentStore);
+      await repository.saveContextWindow(threadId, foreignResearcher.researcher_id, randomUUID(), { ...snapshot, input_tokens: 1 });
+      expect(await runtime.contextWindow("scripted-research", threadId, primaryResearcher)).toEqual(snapshot);
+    } finally { await runtime.close(); }
   });
 
   it("creates once, captures metadata, replays duplicates, and survives a host restart", async () => {

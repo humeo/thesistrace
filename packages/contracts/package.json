@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./context-window": {
+      "types": "./context-window.d.mts",
+      "import": "./context-window.mjs"
+    },
     "./agent-failure": {
       "types": "./agent-failure.d.mts",
       "import": "./agent-failure.mjs"
@@ -22,6 +26,8 @@
     }
   },
   "files": [
+    "context-window.mjs",
+    "context-window.d.mts",
     "agent-failure.mjs",
     "agent-failure.d.mts",
     "agent-run-selection.mjs",

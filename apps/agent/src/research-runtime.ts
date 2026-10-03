@@ -1,3 +1,4 @@
+import type { ContextWindowSnapshot } from "@thesistrace/contracts/context-window";
 import { createSessionContinuation, type SessionContinuation } from "./session-continuation.js";
 import { Agent } from "@mastra/core/agent";
 import { noopLogger } from "@mastra/core/logger";
@@ -87,6 +88,7 @@ For DailyTrack, verify a succeeded Strategy Backtest Origin and reuse an existin
 Use render_a2ui for only three business views: research_runs with ordered distinct runIds, alpha_proposal with proposal fields for an unsubmitted idea, or daily_track with trackId. Obtain persisted resource IDs from authoritative Tool results. The authenticated client reads status, formulas and metrics; never supply or duplicate those facts in model-authored display fields. The application owns component structure, surface identity, layout and spacing. Write explanations, headings and ordinary tables in the normal Markdown response, alongside the view. Intermediate progress uses concise ordinary text and Tool activity, not progress-only surfaces. A proposal is Chat-owned and must never imply persistence. Follow the current tool schema; do not supply component arrays, surfaceId, layout, bindings, actions, HTML, CSS or JavaScript. Correct validation errors using their field paths and reasons.`;
 
 export type ResearchRuntime = Readonly<{
+  contextWindow: (modelKey: string, threadId: string | undefined, researcher: VerifiedResearcher) => Promise<ContextWindowSnapshot>;
   close: () => Promise<void>;
   deleteSession: (threadId: string, researcher: VerifiedResearcher) => Promise<void>;
   handle: (request: Request, researcher: VerifiedResearcher) => Promise<Response>;
@@ -383,6 +385,14 @@ export async function createResearchRuntime(
       runtimeHandler,
       settings,
     }),
+    contextWindow: async (modelKey, threadId, researcher) => {
+      const model = settings.modelRegistry.models.find(candidate => candidate.enabled && candidate.key === modelKey);
+      if (!model) throw new ChatRequestError("INVALID_MODEL", 400);
+      const snapshot = threadId === undefined ? null : await repository.contextWindow(threadId, researcher.researcher_id);
+      return { model_key: model.key, context_window: model.contextWindow,
+        input_tokens: snapshot?.model_key === model.key ? snapshot.input_tokens : null,
+        measured_at: snapshot?.model_key === model.key ? snapshot.measured_at : null };
+    },
     preference: async (threadId, researcher) => {
       if (!isChatThreadId(threadId)) return null;
       const preference = await repository.threadPreference(
