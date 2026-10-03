@@ -413,7 +413,7 @@ def test_development_and_test_origins_are_exact_before_compose_rendering() -> No
     assert json.loads(values["THESISTRACE_MCP_SIGNING_PRIVATE_JWK"])["kty"] == "OKP"
 
 
-def test_development_agent_uses_the_configured_gpt6_models() -> None:
+def test_development_agent_uses_only_configured_gpt61_sol() -> None:
     development = (DEPLOY / "compose.dev.yaml").read_text()
     agent = _service(development, "agent", "research-worker")
     environment = dict(
@@ -438,42 +438,24 @@ def test_development_agent_uses_the_configured_gpt6_models() -> None:
     assert "THESISTRACE_AGENT_MODEL_REGISTRY" not in environment
     registry = json.loads((ROOT / "apps/agent" / "config" / "model-registry.json").read_text())
     assert registry == {
-        "default_model_key": "gpt-6-luna",
+        "default_model_key": "gpt-6.1-sol",
         "min_compaction_context_window": 65536,
         "models": [
             {
                 "default_reasoning_effort": "high",
-                "display_name": "GPT-6 Sol",
+                "display_name": "GPT-6.1 Sol",
                 "enabled": True,
-                "key": "gpt-6-sol",
+                "key": "gpt-6.1-sol",
                 "provider_adapter": "openai",
-                "provider_model_id": "gpt-6-sol",
+                "provider_model_id": "gpt-6.1-sol",
                 "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
                 "context_window": 258000,
                 "max_output_tokens": 32000,
                 "pricing_usd_per_million_tokens": {
                     "input": 2,
-                    "cache_read": 0.2,
+                    "cache_read": 0.1,
                     "cache_write": 2.5,
                     "output": 10,
-                },
-                "secret_env": "THESISTRACE_AGENT_OPENAI_API_KEY",
-            },
-            {
-                "default_reasoning_effort": "high",
-                "display_name": "GPT-6 Luna",
-                "enabled": True,
-                "key": "gpt-6-luna",
-                "provider_adapter": "openai",
-                "provider_model_id": "gpt-6-luna",
-                "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
-                "context_window": 258000,
-                "max_output_tokens": 128000,
-                "pricing_usd_per_million_tokens": {
-                    "input": 0.1,
-                    "cache_read": 0.01,
-                    "cache_write": 0.125,
-                    "output": 0.5,
                 },
                 "secret_env": "THESISTRACE_AGENT_OPENAI_API_KEY",
             }

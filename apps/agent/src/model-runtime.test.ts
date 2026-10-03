@@ -56,8 +56,8 @@ test("rejects a model or effort not enabled by the startup registry", () => {
   expect(() => runtime.resolve("anthropic", "minimal")).toThrow();
 });
 
-test.each((["gpt-6-sol", "gpt-6-luna"] as const).flatMap((modelId) =>
-  (["none", "low", "medium", "high", "xhigh", "max"] as const).map((effort) => [modelId, effort] as const)))(
+test.each((["gpt-6.1-sol"] as const).flatMap((modelId) =>
+  (["low", "medium", "high", "xhigh", "max"] as const).map((effort) => [modelId, effort] as const)))(
   "sends %s with %s reasoning and continues OpenAI tool results without stored items", async (modelId, effort) => {
   const modelRegistry = readModelRegistry(JSON.stringify({
     min_compaction_context_window: 65_536, default_model_key: "selected",

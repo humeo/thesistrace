@@ -23,7 +23,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-test("maps the configured Luna range to supported efforts and selects Max", async () => {
+test("offers only the configured GPT-6.1 Sol and maps its supported efforts to Max", async () => {
   const configured = JSON.parse(readFileSync(
     resolve(dirname(fileURLToPath(import.meta.url)), "../../../agent/config/model-registry.json"), "utf8",
   ));
@@ -38,6 +38,9 @@ test("maps the configured Luna range to supported efforts and selects Max", asyn
     onReasoningChange={onReasoningChange}
     selection={resolveModelSelection(current, current.default_model_key, null)} />);
   await act(async () => document.querySelector<HTMLButtonElement>('button[aria-haspopup="dialog"]')!.click());
+  const choices = [...document.querySelectorAll<HTMLInputElement>('input[type="radio"]')];
+  expect(choices.map((choice) => choice.getAttribute("aria-label"))).toEqual(["GPT-6.1 Sol"]);
+  expect(choices[0]?.checked).toBe(true);
   const slider = document.querySelector<HTMLInputElement>('[role="slider"]')!;
   expect(slider.getAttribute("aria-valuemin")).toBe("0");
   expect(slider.getAttribute("aria-valuemax")).toBe("4");

@@ -87,15 +87,17 @@ describe("model Registry", () => {
       }), environment)).toThrow("Agent configuration is invalid");
     }
   });
-  it("publishes only the GPT-6 models within the short-context pricing and daily reservation limits", () => {
+  it("publishes only GPT-6.1 Sol within the short-context pricing and daily reservation limits", () => {
     const registry = readModelRegistry(
       readFileSync(new URL("../config/model-registry.json", import.meta.url), "utf8"),
       environment,
     );
-    expect(registry.safeCatalog.default_model_key).toBe("gpt-6-luna");
-    expect(registry.safeCatalog.models.map((model) => model.key)).toEqual(["gpt-6-sol", "gpt-6-luna"]);
-    expect(registry.models.map((model) => model.providerModelId)).toEqual(["gpt-6-sol", "gpt-6-luna"]);
-    expect(registry.models.find((model) => model.key === "gpt-6-sol")?.contextWindow).toBe(258_000);
+    expect(registry.safeCatalog.default_model_key).toBe("gpt-6.1-sol");
+    expect(registry.safeCatalog.models.map((model) => ({ key: model.key, name: model.display_name })))
+      .toEqual([{ key: "gpt-6.1-sol", name: "GPT-6.1 Sol" }]);
+    expect(registry.models.map((model) => model.providerModelId)).toEqual(["gpt-6.1-sol"]);
+    expect(registry.models[0]?.contextWindow).toBe(258_000);
+    expect(registry.models[0]?.pricing).toEqual({ input: 2000, cacheRead: 100, cacheWrite: 2500, output: 10000 });
     for (const model of registry.models) {
       expect(model.defaultReasoningEffort).toBe("high");
       expect(model.reasoningEfforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
