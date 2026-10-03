@@ -21,8 +21,7 @@ function surface(id: string, status: string, runId = "run_0123456789abcdef0123")
     activityType: "a2ui-surface", status: "ready", content: { a2ui_operations: [
       { version: "v0.9", createSurface: { catalogId: "urn:thesistrace:a2ui:research:v0.9", surfaceId: id } },
       { version: "v0.9", updateComponents: { surfaceId: id, components: [
-        { id: "root", component: "Column", children: ["run"] },
-        { component: "ResearchRun", id: "run", runId },
+        { component: "ResearchRun", id: "root", runId },
       ] } },
     ] },
   } };
@@ -31,18 +30,21 @@ function surface(id: string, status: string, runId = "run_0123456789abcdef0123")
 // Production timeline, deterministic local state; no Auth, Agent or network effects.
 function TimelineFixture() {
   const initial = new URLSearchParams(location.search).get("initial");
-  const [historyLoaded, setHistoryLoaded] = useState(initial !== "history");
+  const history = initial === "history" || initial === "single-history";
+  const [historyLoaded, setHistoryLoaded] = useState(!history);
   const [state, setState] = useState("running");
   const [toolRunning, setToolRunning] = useState(false);
-  const [sentTurns, setSentTurns] = useState<TimelineTurn[]>(() => initial ? [{
-    id: "sent-1", started_at: time, completed_at: initial === "history" ? time : null,
-    status: initial === "history" ? "completed" : "running", entries: [
-      { entry_id: "sent-1-prompt", turn_id: "sent-1", created_at: time, kind: "user_input", payload: { source: "prompt", content: "Hi", inputId: "sent-1" } },
-      ...(initial === "history" ? [{ ...text("sent-1-response", "Hello. How can I help?"), turn_id: "sent-1" }] : []),
+  const [sentTurns, setSentTurns] = useState<TimelineTurn[]>(() => (initial === "history" ? ["sent-1", "sent-2"] : initial ? ["sent-1"] : []).map(id => ({
+    id, started_at: time, completed_at: history ? time : null,
+    status: history ? "completed" : "running", entries: [
+      { entry_id: `${id}-prompt`, turn_id: id, created_at: time, kind: "user_input", payload: { source: "prompt", content: "Hi", inputId: id } },
+      ...(history ? [{ ...text(`${id}-response`, "Hello. How can I help?"), turn_id: id }] : []),
     ],
-  }] : []);
+  })));
   const streamedParagraphs = useRef(60);
-  const entries = [text("before", "Checking the research context."), tool("first-tool"),
+  const entries = [{ entry_id: "initial-prompt", turn_id: turnId, created_at: time, kind: "user_input" as const,
+    payload: { source: "prompt" as const, content: "Check the research results.", inputId: turnId } },
+    text("before", "Checking the research context."), tool("first-tool"),
     text("between", "The context is ready. Checking the results."), surface("progress", "running"), tool("second-tool"),
     { entry_id: "question", turn_id: turnId, created_at: time, kind: "question" as const, payload: {
       interrupt_id: turnId + "::ask", status: "answered" as const, question: "Which approach?", options: null, selection_mode: "free_text" as const,
@@ -56,11 +58,29 @@ function TimelineFixture() {
     surface("other-result", "succeeded", "run_abcdef0123456789abcd"), text("final", "Both research tasks finished."), { entry_id: "outcome", turn_id: turnId, created_at: time, kind: "turn_outcome", payload: { status: "completed" } });
   const turn: TimelineTurn = { id: turnId, started_at: time, completed_at: state === "running" ? null : time,
     status: state as TimelineTurn["status"], entries };
+  const questionEntry = sentTurns.at(-1)?.entries.find(entry => entry.kind === "question" && entry.payload.status === "pending");
   const controller = {
     turns: historyLoaded ? [...(initial ? [] : [turn]), ...sentTurns] : [], phase: (sentTurns.at(-1)?.status ?? state) === "running" ? "active" : "idle", currentTurnId: sentTurns.at(-1)?.id ?? turnId,
     hasFirstAssistantText: true, nextCursor: null, loadingOlder: false, timelineError: false,
-    question: null, loadOlder: async () => false, retryTimeline: async () => undefined,
+    question: questionEntry?.kind === "question" ? questionEntry.payload : null,
+    answerSelections: [], setAnswerSelections: () => {}, focusComposer: () => {},
+    stopTurn: async () => setSentTurns(turns => turns.map((item, index) => index === turns.length - 1 ? {
+      ...item, status: "stopped", completed_at: time, entries: [
+        ...item.entries.map(entry => entry.kind === "question" ? { ...entry, payload: { ...entry.payload, status: "stopped" as const } } : entry),
+        { entry_id: `${item.id}-outcome`, turn_id: item.id, created_at: time, kind: "turn_outcome", payload: { status: "stopped" } },
+      ],
+    } : item)),
+    loadOlder: async () => false, retryTimeline: async () => undefined,
   } as unknown as ChatConversationController;
+  function askQuestion() {
+    setSentTurns(turns => turns.map((item, index) => index === turns.length - 1 ? {
+      ...item, status: "waiting_for_user", entries: [...item.entries, {
+        entry_id: `${item.id}-question`, turn_id: item.id, created_at: time, kind: "question", payload: {
+          interrupt_id: `${item.id}::ask`, status: "pending", question: "Which objective?", options: null, selection_mode: "free_text",
+        },
+      }],
+    } : item));
+  }
   function sendNext() {
     const id = `sent-${sentTurns.length + 1}`;
     setSentTurns([...sentTurns, { id, started_at: time, completed_at: null, status: "running", entries: [
@@ -81,6 +101,7 @@ function TimelineFixture() {
       <button onClick={() => setToolRunning(false)}>Finish tool</button>
       <button onClick={() => setState("failed")}>Fail</button>
       <button onClick={sendNext}>Send next</button>
+      <button onClick={askQuestion}>Ask question</button>
       <button onClick={() => respond("Hello. How can I help?")}>Short reply</button>
       <button onClick={() => respond("**数据截至：**2026-08-27\n\n`**原文：**保持`", true)}>CJK reply</button>
       <button onClick={() => respond("Hello. How can I help?", true)}>Finish reply</button>

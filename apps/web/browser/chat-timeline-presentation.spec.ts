@@ -94,14 +94,20 @@ test("desktop messages match ChatGPT's reading width while the native scroll vie
   });
   expect(gaps).toEqual({ paragraph: 16, headingBefore: 16, headingAfter: 4, list: 0 });
 });
-test("native work disclosure folds process while preserving final research views", async ({ page }) => {
+test("native work disclosure opens during execution and folds when finished while preserving final research views", async ({ page }) => {
+  const details = page.locator(".ant-think-content").first();
+  await expect(details).toBeVisible();
+  await expect(page.locator('[data-entry-id="before"]')).toBeVisible();
+  await page.getByRole("button", { name: "Start tool", exact: true }).click();
+  await expect(details.getByText("Using 1 tool", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Finish tool", exact: true }).click();
+  await expect(details).toBeVisible();
   await page.getByRole("button", { name: "Complete", exact: true }).click();
   await expect(page.locator('[data-entry-id="progress"]')).toHaveCount(0);
   await expect(page.locator('[data-entry-id="result"]')).toBeVisible();
   await expect(page.locator('[data-entry-id="other-result"]')).toBeVisible();
   await expect(page.locator('[data-entry-id="final"]')).toHaveText(/Both research tasks finished/);
   const work = page.locator(".ant-think-status-text").filter({ hasText: /^Worked for/ });
-  const details = page.locator(".ant-think-content").first();
   await expect(details).toBeHidden();
   await work.click();
   await expect(page.locator('[data-entry-id="before"]')).toBeVisible();
@@ -122,6 +128,8 @@ test("work steps fill the reading width with native titles, content and disclosu
   expect(card.width).toBeGreaterThan(reply.width - 20);
   await expect(process.locator("button, .ant-bubble, .ant-thought-chain-node-footer, .ant-bubble-list")).toHaveCount(0);
   await expect(process.getByRole("listitem", { name: "Tool get_research_context: Completed", exact: true })).toHaveCount(1);
+  const operation = (await process.getByRole("listitem", { name: "Tool get_research_context: Completed", exact: true }).boundingBox())!;
+  expect(operation.height).toBeLessThanOrEqual(24);
   const toolStep = process.getByText("Used 1 tool", { exact: true }).first();
   await toolStep.click();
   await expect(process.getByRole("listitem")).toHaveCount(0);
@@ -139,6 +147,9 @@ test("work steps fill the reading width with native titles, content and disclosu
   await question.click();
   await expect(process.getByText("Which approach?", { exact: true })).toBeVisible();
   await expect(process.getByText("Default approach", { exact: true })).toBeVisible();
+  const answer = (await process.getByText("Default approach", { exact: true }).boundingBox())!;
+  const expandedCard = (await process.locator(".ant-card").boundingBox())!;
+  expect(expandedCard.y + expandedCard.height - answer.y - answer.height).toBeLessThanOrEqual(20);
   await question.click();
   await expect(process.getByText("Which approach?", { exact: true })).toBeHidden();
   await expect(process.getByText("Default approach", { exact: true })).toBeHidden();
@@ -226,19 +237,71 @@ test("new prompts sit near the top with reply space and stay there through short
   await expect.poll(relativePosition).toBeLessThanOrEqual(0.25);
   await page.screenshot({ path: new URL("../../../.local/ant-design-x-chat/turn-position/new-prompt.png", import.meta.url).pathname });
 });
-test("the first accepted prompt reserves reply space when the timeline mounts", async ({ page }) => {
+test("the first accepted prompt stays at the top before output and through a short reply", async ({ page }) => {
+  await page.clock.setFixedTime(new Date("2026-09-06T00:00:05Z"));
   await page.goto("https://chat.fixture/?initial=prompt");
+  const work = page.locator(".ant-think-status-text");
+  await expect(work).toHaveText("Working for 5s");
+  await expect(page.locator(".chat-message-assistant")).toHaveCount(0);
+  await page.clock.setFixedTime(new Date("2026-09-06T00:00:07Z"));
+  await expect(work).toHaveText("Working for 7s");
   const scroll = page.locator(".ant-bubble-list-scroll-box").first();
   const prompt = page.locator('.chat-message-user .ant-bubble-content').last();
-  const relativePosition = async () => ((await prompt.boundingBox())!.y - (await scroll.boundingBox())!.y) / (await scroll.boundingBox())!.height;
-  await expect.poll(relativePosition).toBeGreaterThanOrEqual(0.18);
-  await expect.poll(relativePosition).toBeLessThanOrEqual(0.25);
+  const topGap = async () => (await prompt.boundingBox())!.y - (await scroll.boundingBox())!.y;
+  await expect.poll(topGap).toBeGreaterThanOrEqual(0);
+  await expect.poll(topGap).toBeLessThanOrEqual(12);
+  await page.screenshot({ path: new URL("../../../.local/ant-design-x-chat/work-elapsed/before-output.png", import.meta.url).pathname });
+  await page.getByRole("button", { name: "Short reply", exact: true }).click();
+  await expect(work).toHaveText("Working for 7s");
+  await expect.poll(topGap).toBeLessThanOrEqual(12);
+  await page.getByRole("button", { name: "Finish reply", exact: true }).click();
+  await expect.poll(topGap).toBeLessThanOrEqual(12);
+  await page.setViewportSize({ width: 1552, height: 942 });
+  await expect.poll(topGap).toBeLessThanOrEqual(12);
 });
-test("loading completed history retains the latest position without a reply spacer", async ({ page }) => {
+test("the first prompt stays at the top while waiting for an answer and after stopping", async ({ page }) => {
+  await page.goto("https://chat.fixture/?initial=prompt");
+  const scroll = page.locator(".ant-bubble-list-scroll-box").first();
+  const prompt = page.locator('.chat-message-user .ant-bubble-content');
+  const topGap = async () => (await prompt.boundingBox())!.y - (await scroll.boundingBox())!.y;
+  await page.getByRole("button", { name: "Ask question", exact: true }).click();
+  await expect(page.locator(".chat-question-composer")).toBeVisible();
+  await expect.poll(topGap).toBeLessThanOrEqual(12);
+  await page.getByRole("button", { name: "Stop", exact: true }).click();
+  await expect(page.locator('[data-turn-outcome="stopped"]')).toBeVisible();
+  await expect.poll(topGap).toBeLessThanOrEqual(12);
+});
+test("loading and reopening a short first conversation keeps its prompt at the top", async ({ page }) => {
+  await page.goto("https://chat.fixture/?initial=single-history");
+  const scroll = page.locator(".ant-bubble-list-scroll-box").first();
+  const prompt = page.locator('.chat-message-user .ant-bubble-content');
+  const topGap = async () => (await prompt.boundingBox())!.y - (await scroll.boundingBox())!.y;
+  await page.getByRole("button", { name: "Load history", exact: true }).click();
+  await expect(page.locator('[data-entry-id="sent-1-response"]')).toBeVisible();
+  await expect.poll(topGap).toBeLessThanOrEqual(12);
+  await page.reload();
+  await page.getByRole("button", { name: "Load history", exact: true }).click();
+  await expect.poll(topGap).toBeLessThanOrEqual(12);
+});
+test("the first long reply keeps native scrolling and preserves upward reading while streaming", async ({ page }) => {
+  await page.goto("https://chat.fixture/?initial=prompt");
+  await page.getByRole("button", { name: "Long reply", exact: true }).click();
+  const scroll = page.locator(".ant-bubble-list-scroll-box").first();
+  const paragraphs = page.locator('[data-entry-id="sent-1-response"] .x-markdown p');
+  await expect(paragraphs.last()).toBeInViewport();
+  await scroll.hover();
+  await page.mouse.wheel(0, -800);
+  await expect.poll(() => scroll.evaluate(element => -element.scrollTop)).toBeGreaterThan(100);
+  const anchor = paragraphs.first();
+  const position = (await anchor.boundingBox())!.y;
+  await page.getByRole("button", { name: "Long reply", exact: true }).click();
+  await expect.poll(async () => (await anchor.boundingBox())!.y).toBeCloseTo(position, 0);
+});
+test("loading completed multi-turn history retains the latest position without a reply spacer", async ({ page }) => {
   await page.goto("https://chat.fixture/?initial=history");
   await page.getByRole("button", { name: "Load history", exact: true }).click();
   const scroll = page.locator(".ant-bubble-list-scroll-box").first();
-  const reply = page.locator('[data-entry-id="sent-1-response"]');
+  const reply = page.locator('[data-entry-id="sent-2-response"]');
   await expect(reply).toBeVisible();
   const bottomGap = async () => {
     const viewport = (await scroll.boundingBox())!;

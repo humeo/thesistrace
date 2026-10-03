@@ -27,7 +27,7 @@ export function chatViewMessages(turns: readonly TimelineTurn[]): ChatViewMessag
     const work: ActivityMessage = { id: `work:${turn.id}`, role: "activity", activityType: WORK_ACTIVITY, content: { turn, entries: process } };
     return [
       ...projectChatEntries(result.slice(0, split)),
-      ...(process.length > 0 || firstResponse !== -1 ? [work] : []),
+      ...(!ended || process.length > 0 || firstResponse !== -1 ? [work] : []),
       ...projectChatEntries(result.slice(split)).map(message => message.id === finalAssistant?.entry_id
         ? { ...message, timestamp: turn.completed_at ?? undefined } : message),
     ];

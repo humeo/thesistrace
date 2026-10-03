@@ -33,11 +33,15 @@ export function ChatTimeline({ controller }: { controller: ChatConversationContr
   const list = useRef<ListRef>(null);
   const [readingOlder, setReadingOlder] = useState(false);
   const messages = chatViewMessages(controller.turns);
-  const promptId = messages.filter(message => message.role === "user").at(-1)?.id;
+  const prompts = messages.filter(message => message.role === "user");
+  const promptId = prompts.at(-1)?.id;
+  const firstPrompt = prompts.length === 1;
   const running = controller.turns.at(-1)?.status === "running";
   const previousPrompt = useRef(promptId);
   const [anchoredPrompt, setAnchoredPrompt] = useState(running ? promptId : undefined);
   const [replySpace, setReplySpace] = useState(0);
+  // Short first conversations also need reply space when reopened from history.
+  const layoutPrompt = anchoredPrompt ?? (firstPrompt ? promptId : undefined);
 
   useLayoutEffect(() => {
     if (promptId !== previousPrompt.current) {
@@ -48,7 +52,7 @@ export function ChatTimeline({ controller }: { controller: ChatConversationContr
   }, [promptId, running]);
 
   useLayoutEffect(() => {
-    if (!anchoredPrompt) {
+    if (!layoutPrompt) {
       setReplySpace(0);
       return;
     }
@@ -58,7 +62,7 @@ export function ChatTimeline({ controller }: { controller: ChatConversationContr
     const setupFrame = requestAnimationFrame(() => {
       const viewport = list.current?.scrollBoxNativeElement;
       const prompt = Array.from(list.current?.nativeElement.querySelectorAll<HTMLElement>("[data-entry-id]") ?? [])
-        .find(element => element.dataset.entryId === anchoredPrompt);
+        .find(element => element.dataset.entryId === layoutPrompt);
       const content = prompt?.parentElement;
       if (!viewport || !prompt || !content) return;
       const measureReplySpace = () => {
@@ -69,25 +73,26 @@ export function ChatTimeline({ controller }: { controller: ChatConversationContr
           .filter(element => element !== content)
           .reduce((height, element) => height + element.getBoundingClientRect().height, 0);
         // Reserve only the room below this turn; streaming gradually uses it up.
-        setReplySpace(Math.max(0, Math.round(viewport.clientHeight * 0.8 - viewportInsets - turnHeight)));
+        setReplySpace(Math.max(0, Math.round(viewport.clientHeight * (firstPrompt ? 1 : 0.8) - viewportInsets - turnHeight)));
       };
       observer = new ResizeObserver(measureReplySpace);
       observer.observe(viewport);
       observer.observe(content);
       measureReplySpace();
-      scrollFrame = requestAnimationFrame(() => list.current?.scrollTo({ key: anchoredPrompt, block: "start", behavior: "instant" }));
+      if (anchoredPrompt) scrollFrame = requestAnimationFrame(() => list.current?.scrollTo({ key: anchoredPrompt, block: "start", behavior: "instant" }));
     });
     return () => {
       cancelAnimationFrame(setupFrame);
       cancelAnimationFrame(scrollFrame);
       observer?.disconnect();
     };
-  }, [anchoredPrompt]);
+  }, [anchoredPrompt, firstPrompt, layoutPrompt]);
 
   const items = bubbleItems(messages, controller);
   return <ResearchResourceProvider><div className="relative flex min-h-0 flex-1 flex-col">
     <Bubble.List ref={list} className="min-h-0 flex-1"
-      styles={{ scroll: { height: "100%", scrollbarGutter: "stable both-edges", scrollPaddingBlockStart: "20%" } }}
+      styles={{ scroll: { height: "100%", scrollbarGutter: "stable both-edges",
+        scrollPaddingBlockStart: firstPrompt ? "0" : "20%" } }}
       items={items.map((item, index) => ({ ...item,
         style: { maxWidth: 808, marginInline: "auto", paddingInline: 20, paddingBlock: 8,
           marginBlockEnd: index === items.length - 1 ? replySpace : 0 },
@@ -145,8 +150,12 @@ function RecoveryNotice({ entry }: { entry?: TimelineEntry }) {
 
 function WorkActivity({ content, controller }: { content: WorkContent; controller?: ChatConversationController }) {
   const label = useWorkedFor({ turn: content.turn });
+  const active = !["completed", "failed", "stopped"].includes(content.turn.status);
+  const [expanded, setExpanded] = useState(active);
+  useEffect(() => setExpanded(active), [active]);
   return <Flex vertical gap={8}>
-    <Think title={label} loading={content.turn.status === "running"} defaultExpanded={false}>
+    <Think title={label} loading={content.turn.status === "running"}
+      expanded={expanded && content.entries.length > 0} onExpand={setExpanded}>
       {content.entries.length > 0 ? <WorkHistory entries={content.entries} controller={controller} /> : null}
     </Think>
     <Divider style={{ margin: 0 }} />
@@ -184,7 +193,7 @@ function WorkHistory({ entries, controller }: { entries: readonly TimelineEntry[
         : running ? "loading" : tools.some(tool => tool.payload.status === "stopped") ? "abort" : "success";
       items.push({ key: entry.entry_id, status, collapsible: true,
         title: t(running ? "usingTools" : "usedTools", { count: tools.length }),
-        content: <Flex vertical gap="small" role="list">
+        content: <Flex vertical gap={4} role="list">
           {tools.map(tool => <ToolOperation key={tool.entry_id} entry={tool} />)}
         </Flex>,
       });
@@ -202,14 +211,15 @@ function WorkHistory({ entries, controller }: { entries: readonly TimelineEntry[
     }
   }
   const firstStep = items.find(item => item.collapsible)?.key;
-  return <Card><ThoughtChain items={items}
+  return <Card size="small"><ThoughtChain items={items}
+    styles={{ root: { gap: 12 }, itemContent: { marginBottom: 0 } }}
     defaultExpandedKeys={firstStep === undefined ? [] : [firstStep]} /></Card>;
 }
 
 function ToolOperation({ entry }: { entry: ToolActivity }) {
   const { t } = useTranslation("chat");
   const statusLabel = t(`toolStatus.${entry.payload.status}`);
-  return <ThoughtChain.Item variant="solid" status={TOOL_STATUS[entry.payload.status]}
+  return <ThoughtChain.Item variant="text" style={{ paddingBlock: 0 }} status={TOOL_STATUS[entry.payload.status]}
     title={entry.payload.name} description={statusLabel} role="listitem" data-entry-id={entry.entry_id}
     aria-label={t("toolAria", { name: entry.payload.name, status: statusLabel })} />;
 }

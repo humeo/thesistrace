@@ -15,7 +15,7 @@ let root: Root | undefined;
 beforeEach(() => notifyManager.setNotifyFunction(callback => { act(callback); }));
 afterEach(async () => {
   await act(async () => root?.unmount()); root = undefined;
-  await changeInterfaceLanguage("en"); document.body.replaceChildren(); vi.restoreAllMocks();
+  await changeInterfaceLanguage("en"); document.body.replaceChildren(); vi.restoreAllMocks(); vi.useRealTimers();
   notifyManager.setNotifyFunction(callback => callback());
 });
 async function mount(value: ChatConversationController, full = false) {
@@ -161,6 +161,23 @@ test("uses native message Copy controls and server timestamps across languages",
   expect(document.querySelector('[aria-label="Copy message"]')).not.toBeNull();
   expect(document.body.textContent).toContain("My idea");
 });
+test("shows elapsed work immediately after a running prompt before any model output", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+  vi.setSystemTime(new Date("2026-09-02T00:00:05Z"));
+  const prompt = entry("user_input", "user", { content: "Check the latest research", inputId: INPUT_ID, source: "prompt" });
+  await mount(controller({ phase: "active", currentTurnId: TURN_ID, hasFirstAssistantText: false,
+    turns: [timelineTurn([prompt], { status: "running", completed_at: null })] }));
+  expect(document.body.textContent).toContain("Working for 5s");
+  await act(async () => vi.advanceTimersByTime(2_000));
+  expect(document.body.textContent).toContain("Working for 7s");
+  await act(async () => changeInterfaceLanguage("zh-CN"));
+  expect(document.body.textContent).toContain("已工作 7 秒");
+  const next = controller({ turns: [timelineTurn([prompt,
+    entry("assistant_message", "reply", { content: "Finished", status: "complete" }),
+  ], { completed_at: "2026-09-02T00:00:12Z" })] });
+  await act(async () => root?.render(<ChatTestProvider controller={next}><ChatTimeline controller={next} /></ChatTestProvider>));
+  expect(document.body.textContent).toContain("工作耗时 12 秒");
+});
 test("native work disclosure retains process text and successful tool results", async () => {
   await mount(controller({ turns: [timelineTurn([
     entry("assistant_message", "process", { content: "Checking quality", status: "complete" }),
@@ -172,6 +189,22 @@ test("native work disclosure retains process text and successful tool results", 
   expect(work.querySelector("button")).toBeNull();
   await act(async () => work.click());
   expect(document.body.textContent).toContain("Checking quality");
+  expect(document.body.textContent).toContain("run_factor");
+});
+test.each(["completed", "failed", "stopped"] as const)("keeps process expanded while executing, folds on %s and can reopen", async status => {
+  const entries = [entry("tool_activity", "tool", { name: "run_factor", status: "complete" })];
+  await mount(controller({ phase: "active", turns: [timelineTurn(entries, { status: "running", completed_at: null })] }));
+  expect(document.body.textContent).toContain("run_factor");
+  const stopping = controller({ phase: "stopping", turns: [timelineTurn(entries, { status: "stopping", completed_at: null })] });
+  await act(async () => root?.render(<ChatTestProvider controller={stopping}><ChatTimeline controller={stopping} /></ChatTestProvider>));
+  expect(document.body.textContent).toContain("run_factor");
+  const finished = controller({ turns: [timelineTurn(entries, { status })] });
+  await act(async () => root?.render(<ChatTestProvider controller={finished}><ChatTimeline controller={finished} /></ChatTestProvider>));
+  await vi.waitFor(async () => {
+    await act(async () => {});
+    expect(document.body.textContent).not.toContain("run_factor");
+  });
+  await act(async () => document.querySelector<HTMLElement>(".ant-think-status-wrapper")!.click());
   expect(document.body.textContent).toContain("run_factor");
 });
 test("work history is one connected chain with compact tool operations and retained answers", async () => {
@@ -208,7 +241,6 @@ test("tool operations distinguish running, failed and stopped states without mar
     entry("tool_activity", "stopped", { name: "stopped_operation", status: "stopped" }),
     entry("tool_activity", "running", { name: "running_operation", status: "running" }),
   ], { status: "running", completed_at: null })] }));
-  await act(async () => document.querySelector<HTMLElement>(".ant-think-status-wrapper")!.click());
   for (const [name, status] of [["completed", "Completed"], ["failed", "Failed"], ["stopped", "Stopped"], ["running", "Running"]]) {
     const operation = document.querySelector(`[aria-label="Tool ${name}_operation: ${status}"]`)!;
     expect(operation).not.toBeNull();

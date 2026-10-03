@@ -133,7 +133,11 @@ export async function waitForChatTurn(
     }, { timeout: timeoutMs, message: `Turn ${turnId} reaches ${expectedStatus}` }).toBe(expectedStatus);
     if (expectedStatus !== "waiting_for_user") {
       phase = "presentation";
-      await expect(page.locator(`[data-turn-id="${turnId}"] .chat-response-footer time`)).toBeVisible({ timeout: 5000 });
+      // Native Bubble.List can complete with an A2UI view and no text footer.
+      // Wait for the client to project the same authoritative Turn outcome.
+      const outcome = { completed: "Run complete", failed: "Run failed", stopped: "Turn stopped" }[expectedStatus];
+      await expect(page.locator(`main[data-agent-run-id="${turnId}"] [data-chat-status]`))
+        .toHaveText(outcome, { timeout: 5000 });
     }
   } catch {
     throw new Error(`CHAT_TURN_WAIT_FAILED turn=${turnId} expected=${expectedStatus} last=${lastStatus} phase=${phase} elapsed_ms=${Date.now() - started}`);
