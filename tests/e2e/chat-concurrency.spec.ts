@@ -195,7 +195,7 @@ function observeRunRequests(page: Page): Array<{ messageId: string; runId: strin
 function requestInput(threadId: string) {
   return {
     context: [],
-    forwardedProps: { thesistrace: { command: "prompt", modelKey: "scripted-research", reasoningEffort: "medium", sessionMode: "existing" } },
+    forwardedProps: { thesistrace: { command: "prompt", selectionMode: "manual", modelKey: "scripted-research", reasoningEffort: "medium", sessionMode: "existing" } },
     messages: [{ content: "Competing turn must not be admitted.", id: "00000000-0000-4000-8000-000000009411", role: "user" }],
     runId: "00000000-0000-4000-8000-000000009412", state: {}, threadId, tools: [],
   };

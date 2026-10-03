@@ -8,9 +8,11 @@ import {
 describe("Agent Session preference", () => {
   it("accepts only the closed browser-safe preference shape", () => {
     expect(decodeAgentSessionPreference({
+      selection_mode: "manual" as const,
       model_key: "research-primary",
       reasoning_effort: "high",
     })).toEqual({
+      selection_mode: "manual" as const,
       model_key: "research-primary",
       reasoning_effort: "high",
     });
@@ -20,6 +22,7 @@ describe("Agent Session preference", () => {
       reasoning_effort: "high",
     })).toThrow(AgentSessionPreferenceInvalidError);
     expect(() => decodeAgentSessionPreference({
+      selection_mode: "manual" as const,
       model_key: "research-primary",
       reasoning_effort: "provider-specific",
     })).toThrow(AgentSessionPreferenceInvalidError);

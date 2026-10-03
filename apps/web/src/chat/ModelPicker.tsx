@@ -1,4 +1,4 @@
-import { Button, Divider, Flex, Popover, Radio, Slider, Typography } from "antd";
+import { Button, Checkbox, Divider, Flex, Popover, Radio, Slider, Typography } from "antd";
 import { CaretDown } from "@phosphor-icons/react";
 import { useRef, useState, type ComponentRef } from "react";
 import { useTranslation } from "react-i18next";
@@ -6,10 +6,11 @@ import "../i18n";
 import type { ResolvedModelSelection } from "./chatState";
 import { supportedReasoningEfforts, type AgentModelCatalog, type ReasoningEffort } from "./modelCatalog";
 
-export function ModelPicker({ catalog, onModelChange, onReasoningChange, selection }: {
+export function ModelPicker({ catalog, onModelChange, onReasoningChange, onDefaultChange, selection }: {
   catalog: AgentModelCatalog;
   onModelChange: (modelKey: string) => void;
-  onReasoningChange: (reasoningEffort: string) => void;
+  onReasoningChange: (reasoningEffort: ReasoningEffort) => void;
+  onDefaultChange: (followDefault: boolean) => void;
   selection: ResolvedModelSelection | null;
 }) {
   const { t } = useTranslation("chat");
@@ -22,6 +23,8 @@ export function ModelPicker({ catalog, onModelChange, onReasoningChange, selecti
       if (event.key === "Escape") { event.stopPropagation(); setOpen(false); triggerRef.current?.focus(); }
     }}><Flex vertical gap={8} style={{ width: 256 }}>
       <Typography.Text strong>{t("model")}</Typography.Text>
+      <Checkbox checked={selection?.selectionMode === "default"} disabled={selection === null}
+        onChange={event => onDefaultChange(event.target.checked)}>{t("followDefault")}</Checkbox>
       <Radio.Group aria-label={t("model")} orientation="vertical" value={selection?.model.key}
         onChange={event => onModelChange(String(event.target.value))}>
         {catalog.models.map((model, index) => <Radio value={model.key} key={model.key} aria-label={model.display_name}

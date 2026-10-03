@@ -80,6 +80,7 @@ export type TerminalRun = Readonly<{
 export type ThreadPreference = Readonly<{
   modelKey: string;
   reasoningEffort: import("./model-registry.js").ReasoningEffort;
+  selectionMode: "default" | "manual";
 }>;
 export type SessionSummary = Readonly<{
   activityAt: string;
@@ -451,15 +452,22 @@ export class ResearchSessionRepository {
     const result = await this.pool.query<{
       selected_model_key: string;
       selected_reasoning_effort: ThreadPreference["reasoningEffort"];
+      selection_mode: string;
     }>(`
-      SELECT selected_model_key, selected_reasoning_effort
-      FROM agent.chat_session
-      WHERE id = $1::uuid AND researcher_id = $2::uuid
+      SELECT selected_model_key, selected_reasoning_effort,
+             COALESCE(thread.metadata ->> 'modelSelectionMode', 'default') AS selection_mode
+      FROM agent.chat_session AS session
+      JOIN agent."mastra_threads" AS thread ON thread.id = session.id::text
+      WHERE session.id = $1::uuid AND session.researcher_id = $2::uuid
     `, [threadId, researcherId]);
     const preference = result.rows[0];
+    if (preference !== undefined && preference.selection_mode !== "default" && preference.selection_mode !== "manual") {
+      throw new Error("INVALID_SESSION_MODEL_SELECTION_MODE");
+    }
     return preference === undefined ? null : {
       modelKey: preference.selected_model_key,
       reasoningEffort: preference.selected_reasoning_effort,
+      selectionMode: preference.selection_mode as ThreadPreference["selectionMode"],
     };
   }
 
@@ -908,6 +916,16 @@ export class ResearchSessionRepository {
           options.run.reasoningEffort,
         ]);
       }
+
+      // Intent belongs to mutable Session settings. The accepted Run below
+      // retains its actual model identity regardless of later default changes.
+      await client.query(`
+        UPDATE agent."mastra_threads"
+        SET metadata = pg_catalog.jsonb_set(
+          COALESCE(metadata, '{}'::jsonb), '{modelSelectionMode}', $2::jsonb
+        )
+        WHERE id = $1 AND "resourceId" = $3
+      `, [options.run.input.threadId, JSON.stringify(options.run.selectionMode), options.researcherId]);
 
       if (acceptedUserMessage !== null) {
         // The accepted Prompt is durable before any provider call. Mastra

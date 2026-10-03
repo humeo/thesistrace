@@ -95,7 +95,8 @@ function ComposerFixture() {
     <ChatTestProvider controller={controller}><ChatConversationView
       controller={controller} existingSession={false} agentId="default" threadId="fixture"
       modelControls={<ModelPicker catalog={catalog} selection={resolveModelSelection(catalog, modelKey, effort)}
-        onModelChange={key => { setModelKey(key); setEffort(null); }} onReasoningChange={setEffort} />}
+        onModelChange={key => { setModelKey(key); setEffort(null); }} onReasoningChange={setEffort}
+        onDefaultChange={follow => { if (follow) { setModelKey(catalog.default_model_key); setEffort(null); } }} />}
     /></ChatTestProvider>
     </main>
     </>

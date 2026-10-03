@@ -197,7 +197,7 @@ async function evaluate({ candidate, candidateBytes, repetitions, effort, regist
           } : {
             threadId, runId, state: {}, context: [], tools: [],
             messages: [{ id: inputId, role: "user", content: text }],
-            forwardedProps: { thesistrace: { command: "prompt", modelKey: candidate.key, reasoningEffort: effort, sessionMode: turn === 0 ? "new" : "existing" } },
+            forwardedProps: { thesistrace: { command: "prompt", selectionMode: "manual", modelKey: candidate.key, reasoningEffort: effort, sessionMode: turn === 0 ? "new" : "existing" } },
           };
           if (!answering) {
             currentRunId = runId;

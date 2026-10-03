@@ -1,9 +1,11 @@
 import type { ChatTurn } from "./chatProtocol";
 import type { AgentModel, AgentModelCatalog, ReasoningEffort } from "./modelCatalog";
+import type { AgentSessionPreference } from "./sessionPreference";
 
 export type ResolvedModelSelection = Readonly<{
   model: AgentModel;
   reasoningEffort: ReasoningEffort;
+  selectionMode: "default" | "manual";
 }>;
 
 export function resolveModelSelection(
@@ -22,7 +24,18 @@ export function resolveModelSelection(
     ? model.default_reasoning_effort
     : model.reasoning_efforts.find((candidate) => candidate === requestedReasoningEffort);
   if (reasoningEffort === undefined) return null;
-  return { model, reasoningEffort };
+  return { model, reasoningEffort, selectionMode: requestedModelKey === null && requestedReasoningEffort === null ? "default" : "manual" };
+}
+
+// Initialize the next Turn before rendering its controls. A retired saved
+// choice follows the current default; an explicit request still validates strictly.
+export function resolveSessionModelSelection(
+  catalog: AgentModelCatalog,
+  preference: AgentSessionPreference | null,
+): ResolvedModelSelection {
+  const manual = preference?.selection_mode === "manual"
+    ? resolveModelSelection(catalog, preference.model_key, preference.reasoning_effort) : null;
+  return manual ?? resolveModelSelection(catalog, null, null)!;
 }
 
 export type ChatPhase =

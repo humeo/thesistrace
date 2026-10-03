@@ -21,7 +21,7 @@ test("Chat saturation rejects an unaccepted Session and preserves an explicit br
             signal: AbortSignal.timeout(90_000), body: JSON.stringify({
               threadId: randomUUID(), runId: randomUUID(), state: {}, context: [], tools: [],
               messages: [{ id: randomUUID(), role: "user", content: prompt }],
-              forwardedProps: { thesistrace: { command: "prompt", modelKey: "scripted-research", reasoningEffort: "medium", sessionMode: "new" } },
+              forwardedProps: { thesistrace: { command: "prompt", selectionMode: "manual", modelKey: "scripted-research", reasoningEffort: "medium", sessionMode: "new" } },
             }),
           });
           const body = await response.text();

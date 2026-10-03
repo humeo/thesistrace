@@ -75,6 +75,7 @@ function dependencies(
     })),
     timeline: vi.fn(async () => ({ nextCursor: null, turns: [] })),
     sessionPreference: vi.fn(async () => ({
+      selection_mode: "manual" as const,
       model_key: "research-primary",
       reasoning_effort: "medium",
     })),
@@ -190,6 +191,7 @@ describe("Agent Host HTTP boundary", () => {
     );
     expect(owned.status).toBe(200);
     expect(await owned.json()).toEqual({
+      selection_mode: "manual" as const,
       model_key: "research-primary",
       reasoning_effort: "medium",
     });

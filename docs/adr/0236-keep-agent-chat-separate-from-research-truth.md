@@ -2,6 +2,18 @@
 
 A Researcher-owned Agent Chat Session can reference multiple Research resources but never owns their inputs, lifecycle, or Results. Deleting the conversation removes its interaction history without changing accepted research, and model conversation context remains confined to that Session, accepting explicit research lookup instead of cross-conversation recall.
 
+Session model settings record selection intent separately from the actual model
+identity on each accepted Run. `modelSelectionMode` in the existing thread metadata
+is `default` or `manual`, persisted atomically at Prompt/Continue acceptance.
+Sessions without recorded intent follow the registered default; opening them does
+not rewrite stored model keys. The composer initializes default mode from the
+current catalog and retains valid manual choices. Retired saved models or efforts
+initialize the complete current default before sending. The picker can explicitly
+return to default mode. Every new request carries its displayed model, effort and
+intent; a default request that no longer matches the catalog is rejected before
+execution. Accepted and resumed Runs retain their pinned model identity. Updating
+the default catalog requires no per-model preference migration.
+
 Research presentation follows the same boundary. The model-facing render_a2ui Tool accepts only three semantic views: an ordered
 research_runs list, an unsubmitted alpha_proposal, or a daily_track. The
 application constructs the A2UI operations; the model cannot choose component

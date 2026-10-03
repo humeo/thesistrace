@@ -76,6 +76,20 @@ test("renders Chat within the shared workspace hierarchy and integrated model pi
   expect(markup).not.toMatch(/temperature|top-p|endpoint|byok/i);
 });
 
+test.each([
+  [{ selection_mode: "manual", model_key: "retired", reasoning_effort: "high" }, "Medium"],
+  [{ selection_mode: "default", model_key: "research-primary", reasoning_effort: "high" }, "Medium"],
+  [{ selection_mode: "manual", model_key: "research-primary", reasoning_effort: "high" }, "High"],
+] as const)("initializes next-Turn settings from selection intent %#", (preference, effort) => {
+  const markup = renderToStaticMarkup(<TestWorkspace><ChatContent
+    catalogState={catalogState} navigateChat={vi.fn()}
+    preferenceState={{ status: "ready", preference }} researcherId={researcherId}
+    reloadCatalog={vi.fn()} selectedSessionState={{ status: "not-required" }} sessionHistory={sessionHistory}
+  /></TestWorkspace>);
+  expect(markup).toContain(`aria-label="Model Research Primary, reasoning ${effort}"`);
+  expect(markup).not.toContain("Choose model</span>");
+});
+
 test("keeps loading and Not Found states in the chat canvas without a top bar", () => {
   const thread = { id: "00000000-0000-4000-8000-000000000111", kind: "session" as const };
   const common = {

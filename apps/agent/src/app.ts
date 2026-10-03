@@ -83,7 +83,7 @@ export type AgentAppDependencies = Readonly<{
   sessionPreference: (
     threadId: string,
     researcher: VerifiedResearcher,
-  ) => Promise<Readonly<{ model_key: string; reasoning_effort: string }> | null>;
+  ) => Promise<Readonly<{ model_key: string; reasoning_effort: string; selection_mode: "default" | "manual" }> | null>;
   verifySession: (headers: Headers) => Promise<VerifiedResearcher | null>;
 }>;
 

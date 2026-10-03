@@ -6,6 +6,7 @@ import {
 export type AgentSessionPreference = Readonly<{
   model_key: string;
   reasoning_effort: ReasoningEffort;
+  selection_mode: "default" | "manual";
 }>;
 
 export class AgentSessionPreferenceNotFoundError extends Error {
@@ -56,7 +57,8 @@ export async function loadAgentSessionPreference(
 
 export function decodeAgentSessionPreference(value: unknown): AgentSessionPreference {
   if (
-    !isExactRecord(value, ["model_key", "reasoning_effort"])
+    !isExactRecord(value, ["model_key", "reasoning_effort", "selection_mode"])
+    || (value.selection_mode !== "default" && value.selection_mode !== "manual")
     || typeof value.model_key !== "string"
     || !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(value.model_key)
     || typeof value.reasoning_effort !== "string"
@@ -69,6 +71,7 @@ export function decodeAgentSessionPreference(value: unknown): AgentSessionPrefer
   return {
     model_key: value.model_key,
     reasoning_effort: value.reasoning_effort as ReasoningEffort,
+    selection_mode: value.selection_mode,
   };
 }
 

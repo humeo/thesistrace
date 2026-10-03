@@ -4,6 +4,7 @@ import {
   deriveChatPhase,
   deriveMainAction,
   resolveModelSelection,
+  resolveSessionModelSelection,
   shouldSubmitFromEnter,
 } from "./chatState";
 import type { ChatTurn } from "./chatProtocol";
@@ -39,6 +40,26 @@ describe("Chat model selection", () => {
       model: { key: "deep" },
       reasoningEffort: "xhigh",
     });
+  });
+});
+
+describe("Session selection intent", () => {
+  it("follows changed defaults even while the previous model remains available", () => {
+    const changed = { ...catalog, default_model_key: "deep" };
+    expect(resolveSessionModelSelection(changed, {
+      selection_mode: "default", model_key: "primary", reasoning_effort: "low",
+    })).toMatchObject({ model: { key: "deep" }, reasoningEffort: "high", selectionMode: "default" });
+    expect(resolveSessionModelSelection(changed, {
+      selection_mode: "manual", model_key: "primary", reasoning_effort: "low",
+    })).toMatchObject({ model: { key: "primary" }, reasoningEffort: "low", selectionMode: "manual" });
+  });
+
+  it("initializes retired models and retired efforts to the complete current default", () => {
+    for (const preference of [
+      { selection_mode: "manual", model_key: "removed", reasoning_effort: "high" },
+      { selection_mode: "manual", model_key: "deep", reasoning_effort: "medium" },
+    ] as const) expect(resolveSessionModelSelection(catalog, preference))
+      .toMatchObject({ model: { key: "primary" }, reasoningEffort: "medium", selectionMode: "default" });
   });
 });
 

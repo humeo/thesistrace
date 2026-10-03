@@ -439,6 +439,7 @@ function ConversationHarness({
         reasoning_efforts: ["medium"],
       },
       reasoningEffort: "medium",
+      selectionMode: "manual",
     },
     threadId,
     titleMaySettle: false,

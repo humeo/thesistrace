@@ -14,6 +14,7 @@ const promptSelectionSchema = z.object({
   command: z.literal("prompt"),
   modelKey: z.string(),
   reasoningEffort: z.string(),
+  selectionMode: z.enum(["default", "manual"]),
   sessionMode: z.enum(["new", "existing"]),
 }).strict();
 
@@ -21,6 +22,7 @@ const continueSelectionSchema = z.object({
   command: z.literal("continue"),
   modelKey: z.string(),
   reasoningEffort: z.string(),
+  selectionMode: z.enum(["default", "manual"]),
   sessionMode: z.literal("existing"),
 }).strict();
 
@@ -44,6 +46,7 @@ export type ValidatedPromptRun = Readonly<{
   input: RunAgentInput;
   modelKey: string;
   reasoningEffort: ReasoningEffort;
+  selectionMode: "default" | "manual";
   sessionMode: "new" | "existing";
   userMessage: Readonly<{ content: string; id: string; role: "user" }>;
 }>;
@@ -54,6 +57,7 @@ type ValidatedContinueRun = Readonly<{
   input: RunAgentInput;
   modelKey: string;
   reasoningEffort: ReasoningEffort;
+  selectionMode: "default" | "manual";
   sessionMode: "existing";
 }>;
 
@@ -115,6 +119,11 @@ export async function readValidatedChatRun(
 
   if (input.resume !== undefined) throw invalidRequest();
   const selection = resolveSelection(registry, command.modelKey, command.reasoningEffort);
+  if (command.selectionMode === "default") {
+    if (selection.modelKey !== registry.defaultModelKey) throw new ChatRequestError("INVALID_MODEL", 400);
+    const model = registry.models.find(candidate => candidate.key === selection.modelKey)!;
+    if (selection.reasoningEffort !== model.defaultReasoningEffort) throw new ChatRequestError("UNSUPPORTED_REASONING", 400);
+  }
 
   if (command.command === "continue") {
     if (input.messages.length !== 0) throw invalidRequest();
@@ -124,6 +133,7 @@ export async function readValidatedChatRun(
       input,
       modelKey: selection.modelKey,
       reasoningEffort: selection.reasoningEffort,
+      selectionMode: command.selectionMode,
       sessionMode: "existing",
     };
   }
@@ -147,6 +157,7 @@ export async function readValidatedChatRun(
     input,
     modelKey: selection.modelKey,
     reasoningEffort: selection.reasoningEffort,
+    selectionMode: command.selectionMode,
     sessionMode: command.sessionMode,
     userMessage: { content: message.content, id: message.id, role: "user" },
   };
@@ -181,6 +192,7 @@ export function chatRunFingerprint(run: ValidatedChatRun): Buffer {
       ...common,
       modelKey: run.modelKey,
       reasoningEffort: run.reasoningEffort,
+      selectionMode: run.selectionMode,
     });
   }
   return chatCommandFingerprint({
@@ -189,6 +201,7 @@ export function chatRunFingerprint(run: ValidatedChatRun): Buffer {
     inputId: run.userMessage.id,
     modelKey: run.modelKey,
     reasoningEffort: run.reasoningEffort,
+    selectionMode: run.selectionMode,
     sessionMode: run.sessionMode,
   });
 }

@@ -98,7 +98,7 @@ export type ResearchRuntime = Readonly<{
   preference: (
     threadId: string,
     researcher: VerifiedResearcher,
-  ) => Promise<Readonly<{ model_key: string; reasoning_effort: string }> | null>;
+  ) => Promise<Readonly<{ model_key: string; reasoning_effort: string; selection_mode: "default" | "manual" }> | null>;
   renameSession: (
     threadId: string,
     researcher: VerifiedResearcher,
@@ -392,6 +392,7 @@ export async function createResearchRuntime(
       return preference === null ? null : {
         model_key: preference.modelKey,
         reasoning_effort: preference.reasoningEffort,
+        selection_mode: preference.selectionMode,
       };
     },
     renameSession: (threadId, researcher, title, expectedVersion) => (

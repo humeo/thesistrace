@@ -489,6 +489,7 @@ function testAgent(options: Readonly<{
     },
     modelKey: "scripted",
     reasoningEffort: "medium",
+    selectionMode: "manual",
     sessionMode: "new",
   };
   const repository = {

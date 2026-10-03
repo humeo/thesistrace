@@ -11,7 +11,7 @@ import {
 } from "./ChatConversation";
 export { AssistantMarkdown } from "./ChatTimeline";
 import { chatSessionHref, type BrowserChatThread } from "./chatNavigation";
-import { resolveModelSelection } from "./chatState";
+import { resolveModelSelection, resolveSessionModelSelection } from "./chatState";
 import {
   AgentCatalogAuthenticationRequiredError, AgentCatalogInvalidError, loadAgentModelCatalog,
   type AgentModelCatalog,
@@ -89,26 +89,26 @@ export function ChatContent({
   thread?: BrowserChatThread;
 }) {
   const { t } = useTranslation("chat");
-  const [requestedModelKey, setRequestedModelKey] = useState<string | null>(null);
-  const [requestedReasoning, setRequestedReasoning] = useState<string | null>(null);
+  const [requestedPreference, setRequestedPreference] = useState<AgentSessionPreference | null>(null);
   const [acceptedThreadId, setAcceptedThreadId] = useState<string | null>(null);
   const accepted = thread?.kind === "session"
     || (thread?.kind === "new" && thread.id === acceptedThreadId);
   const storedPreference = preferenceState.status === "ready" ? preferenceState.preference : null;
-  const effectiveModelKey = requestedModelKey ?? storedPreference?.model_key ?? null;
-  const effectiveReasoning = requestedModelKey === null
-    ? requestedReasoning ?? storedPreference?.reasoning_effort ?? null : requestedReasoning;
   const preferenceReady = thread?.kind !== "session" || preferenceState.status === "ready";
   const currentSession = thread?.id === null || thread?.id === undefined
     ? undefined
     : sessionHistory.sessions.find((session) => session.id === thread.id)
       ?? (selectedSessionState.status === "ready" ? selectedSessionState.session : undefined);
   const selection = catalogState.status === "ready" && preferenceReady
-    ? resolveModelSelection(catalogState.catalog, effectiveModelKey, effectiveReasoning) : null;
+    ? requestedPreference === null
+      ? resolveSessionModelSelection(catalogState.catalog, storedPreference)
+      : resolveModelSelection(catalogState.catalog,
+          requestedPreference.selection_mode === "default" ? null : requestedPreference.model_key,
+          requestedPreference.selection_mode === "default" ? null : requestedPreference.reasoning_effort)
+    : null;
 
   useEffect(() => {
-    setRequestedModelKey(null);
-    setRequestedReasoning(null);
+    setRequestedPreference(null);
   }, [thread?.id, thread?.kind]);
 
   function acceptThread(): void {
@@ -122,10 +122,16 @@ export function ChatContent({
     <CatalogControls
       catalogState={catalogState}
       onModelChange={(modelKey) => {
-        setRequestedModelKey(modelKey);
-        setRequestedReasoning(null);
+        if (catalogState.status !== "ready") return;
+        const model = catalogState.catalog.models.find(candidate => candidate.key === modelKey);
+        if (model) setRequestedPreference({ model_key: model.key, reasoning_effort: model.default_reasoning_effort, selection_mode: "manual" });
       }}
-      onReasoningChange={setRequestedReasoning}
+      onReasoningChange={(reasoningEffort) => {
+        if (selection) setRequestedPreference({ model_key: selection.model.key, reasoning_effort: reasoningEffort, selection_mode: "manual" });
+      }}
+      onDefaultChange={(followDefault) => {
+        if (selection) setRequestedPreference({ model_key: selection.model.key, reasoning_effort: selection.reasoningEffort, selection_mode: followDefault ? "default" : "manual" });
+      }}
       reloadCatalog={reloadCatalog}
       selection={selection}
       selectionRequired={catalogState.status === "ready"
@@ -194,13 +200,15 @@ function CatalogControls({
   catalogState,
   onModelChange,
   onReasoningChange,
+  onDefaultChange,
   reloadCatalog,
   selection,
   selectionRequired,
 }: {
   catalogState: AgentCatalogState;
   onModelChange: (modelKey: string) => void;
-  onReasoningChange: (reasoningEffort: string) => void;
+  onReasoningChange: (reasoningEffort: import("./modelCatalog").ReasoningEffort) => void;
+  onDefaultChange: (followDefault: boolean) => void;
   reloadCatalog: () => void;
   selection: ReturnType<typeof resolveModelSelection> | null;
   selectionRequired: boolean;
@@ -219,6 +227,7 @@ function CatalogControls({
           catalog={catalogState.catalog}
           onModelChange={onModelChange}
           onReasoningChange={onReasoningChange}
+          onDefaultChange={onDefaultChange}
           selection={null}
         />
       </div>
@@ -240,6 +249,7 @@ function CatalogControls({
       catalog={catalogState.catalog}
       onModelChange={onModelChange}
       onReasoningChange={onReasoningChange}
+      onDefaultChange={onDefaultChange}
       selection={selection}
     />
   );

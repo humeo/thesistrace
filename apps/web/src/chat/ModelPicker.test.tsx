@@ -34,7 +34,7 @@ test("offers only the configured GPT-6.1 Sol and maps its supported efforts to M
         ({ key, display_name, default_reasoning_effort, reasoning_efforts })),
   });
   const onReasoningChange = vi.fn();
-  await mount(<ModelPicker catalog={current} onModelChange={vi.fn()}
+  await mount(<ModelPicker onDefaultChange={vi.fn()} catalog={current} onModelChange={vi.fn()}
     onReasoningChange={onReasoningChange}
     selection={resolveModelSelection(current, current.default_model_key, null)} />);
   await act(async () => document.querySelector<HTMLButtonElement>('button[aria-haspopup="dialog"]')!.click());
@@ -98,7 +98,7 @@ test("shows a fixed effort without an adjustable range when the model supports o
     models: [{ key: "fixed", display_name: "Fixed model", default_reasoning_effort: "medium", reasoning_efforts: ["medium"] }],
   };
   const onReasoningChange = vi.fn();
-  await mount(<ModelPicker catalog={fixedCatalog} onModelChange={vi.fn()} onReasoningChange={onReasoningChange}
+  await mount(<ModelPicker onDefaultChange={vi.fn()} catalog={fixedCatalog} onModelChange={vi.fn()} onReasoningChange={onReasoningChange}
     selection={resolveModelSelection(fixedCatalog, "fixed", null)} />);
   await act(async () => document.querySelector<HTMLButtonElement>('button[aria-haspopup="dialog"]')!.click());
   expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Medium");
@@ -108,7 +108,7 @@ test("shows a fixed effort without an adjustable range when the model supports o
 
 test("focuses the first Model when a removed selection must be replaced", async () => {
   await mount(
-    <ModelPicker
+    <ModelPicker onDefaultChange={vi.fn()}
       catalog={catalog}
       onModelChange={vi.fn()}
       onReasoningChange={vi.fn()}
@@ -135,7 +135,7 @@ function Harness() {
   const [reasoning, setReasoning] = useState<string | null>("high");
   const selection = resolveModelSelection(catalog, modelKey, reasoning);
   return (
-    <ModelPicker
+    <ModelPicker onDefaultChange={vi.fn()}
       catalog={catalog}
       onModelChange={(model) => {
         setModelKey(model);

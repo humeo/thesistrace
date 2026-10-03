@@ -2,6 +2,7 @@ import { expect, test } from "vitest";
 
 import {
   ChatRequestError,
+  chatRunFingerprint,
   MAX_CHAT_MESSAGE_BYTES,
   readThreadId,
   readValidatedChatRun,
@@ -40,12 +41,28 @@ test("accepts one strict Prompt containing only the new User input", async () =>
   await expect(readThreadId(request)).resolves.toBe(THREAD_ID);
 });
 
+test("accepts follow-default intent with the displayed registered selection", async () => {
+  await expect(readValidatedChatRun(runRequest({ forwardedProps: { thesistrace: {
+    command: "prompt", modelKey: "scripted", reasoningEffort: "medium", selectionMode: "default", sessionMode: "new",
+  } } }), registry)).resolves.toMatchObject({ modelKey: "scripted", reasoningEffort: "medium", selectionMode: "default" });
+});
+
+test("rejects a stale displayed default before execution and distinguishes manual intent", async () => {
+  const body = { command: "prompt", modelKey: "scripted", reasoningEffort: "none", selectionMode: "default", sessionMode: "new" };
+  await expect(readValidatedChatRun(runRequest({ forwardedProps: { thesistrace: body } }), registry))
+    .rejects.toMatchObject({ code: "UNSUPPORTED_REASONING" });
+  const manual = await readValidatedChatRun(runRequest(), registry);
+  const defaults = await readValidatedChatRun(runRequest({ forwardedProps: { thesistrace: { ...body, reasoningEffort: "medium" } } }), registry);
+  expect(chatRunFingerprint(manual).equals(chatRunFingerprint(defaults))).toBe(false);
+});
+
 test("accepts Continue only as an empty-message new Run", async () => {
   await expect(readValidatedChatRun(runRequest({
     messages: [],
     forwardedProps: {
       thesistrace: {
         command: "continue",
+        selectionMode: "manual",
         modelKey: "scripted",
         reasoningEffort: "medium",
         sessionMode: "existing",
@@ -107,7 +124,7 @@ test.each([
 ])("distinguishes rejected next-Turn settings %s / %s", async (modelKey, reasoningEffort, code) => {
   await expect(readValidatedChatRun(runRequest({
     forwardedProps: {
-      thesistrace: { command: "prompt", modelKey, reasoningEffort, sessionMode: "new" },
+      thesistrace: { command: "prompt", selectionMode: "manual", modelKey, reasoningEffort, sessionMode: "new" },
     },
   }), registry)).rejects.toMatchObject({ code, status: 400 });
 });
@@ -158,7 +175,7 @@ test.each([
   },
   {
     forwardedProps: {
-      thesistrace: { command: "continue", modelKey: "scripted", reasoningEffort: "medium", sessionMode: "existing" },
+      thesistrace: { command: "continue", selectionMode: "manual", modelKey: "scripted", reasoningEffort: "medium", sessionMode: "existing" },
     },
     messages: [userMessage()],
   },
@@ -196,6 +213,7 @@ function runRequest(override: Record<string, unknown> = {}): Request {
     forwardedProps: {
       thesistrace: {
         command: "prompt",
+        selectionMode: "manual",
         modelKey: "scripted",
         reasoningEffort: "medium",
         sessionMode: "new",

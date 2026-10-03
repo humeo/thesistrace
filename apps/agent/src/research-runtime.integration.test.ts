@@ -914,12 +914,12 @@ describe.sequential("durable Research Agent runtime", () => {
       expect(invalid.status).toBe(400);
       expect(await invalid.json()).toEqual({ code: "INVALID_MODEL" });
       expect(discover).not.toHaveBeenCalled();
-      const unsupported = { ...next, forwardedProps: { thesistrace: { command: "prompt", modelKey: "scripted-next", reasoningEffort: "medium", sessionMode: "existing" } } };
+      const unsupported = { ...next, forwardedProps: { thesistrace: { command: "prompt", selectionMode: "manual", modelKey: "scripted-next", reasoningEffort: "medium", sessionMode: "existing" } } };
       const badEffort = await restarted.handle(runRequest(unsupported), primaryResearcher);
       expect(badEffort.status).toBe(400);
       expect(await badEffort.json()).toEqual({ code: "UNSUPPORTED_REASONING" });
       expect(discover).not.toHaveBeenCalled();
-      const accepted = await run(restarted, { ...next, forwardedProps: { thesistrace: { command: "prompt", modelKey: "scripted-next", reasoningEffort: "high", sessionMode: "existing" } } }, primaryResearcher);
+      const accepted = await run(restarted, { ...next, forwardedProps: { thesistrace: { command: "prompt", selectionMode: "manual", modelKey: "scripted-next", reasoningEffort: "high", sessionMode: "existing" } } }, primaryResearcher);
       expect(accepted.at(-1)?.type).toBe("RUN_FINISHED");
       const identities = await owner.query("SELECT model_key, provider_model_id, reasoning_effort FROM agent.agent_run ORDER BY started_at");
       expect(identities.rows).toEqual([
@@ -2439,6 +2439,50 @@ describe.sequential("durable Research Agent runtime", () => {
     expect(recreated.rows).toEqual([{ count: "0" }]);
   });
 
+  it("preserves Session selection intent across execution and restart without changing accepted Run identities", async () => {
+    const threadId = randomUUID();
+    let runtime = await createIntegrationRuntime();
+    try {
+      for (const selectionMode of ["default", "manual", "default"] as const) {
+        const reasoningEffort = selectionMode === "manual" ? "max" : "medium";
+        const events = await run(runtime, runInput({
+          threadId, runId: randomUUID(), messageId: randomUUID(),
+          sessionMode: selectionMode === "default" && (await runtime.preference(threadId, primaryResearcher)) === null ? "new" : "existing",
+          selectionMode, reasoningEffort,
+        }), primaryResearcher);
+        expect(events.at(-1)?.type).toBe("RUN_FINISHED");
+        await runtime.close();
+        runtime = await createIntegrationRuntime();
+        await expect(runtime.preference(threadId, primaryResearcher)).resolves.toEqual({
+          model_key: "scripted-research", reasoning_effort: reasoningEffort, selection_mode: selectionMode,
+        });
+        // Context-window updates and Mastra persistence must preserve the mode.
+        const snapshot = await runtime.contextWindow("scripted-research", threadId, primaryResearcher);
+        expect(snapshot.input_tokens).toBeGreaterThan(0);
+      }
+      const runs = await owner.query(`SELECT model_key, provider_model_id, reasoning_effort
+        FROM agent.agent_run WHERE thread_id = $1 ORDER BY started_at`, [threadId]);
+      expect(runs.rows).toEqual(["medium", "max", "medium"].map(reasoning_effort => ({
+        model_key: "scripted-research", provider_model_id: "scripted-v1", reasoning_effort,
+      })));
+      await expect(runtime.preference(threadId, foreignResearcher)).resolves.toBeNull();
+    } finally { await runtime.close(); }
+  });
+
+  it("opens sessions without recorded selection intent as follow-default without rewriting their saved model", async () => {
+    const threadId = randomUUID();
+    await seedSession({ id: threadId, researcherId: primaryResearcher.researcher_id, title: "Existing session" });
+    await owner.query(`UPDATE agent.chat_session SET selected_model_key = 'retired-model', selected_reasoning_effort = 'high' WHERE id = $1`, [threadId]);
+    const before = (await owner.query(`SELECT to_jsonb(session) AS value FROM agent.chat_session AS session WHERE id = $1`, [threadId])).rows;
+    const runtime = await createIntegrationRuntime();
+    try {
+      await expect(runtime.preference(threadId, primaryResearcher)).resolves.toEqual({
+        model_key: "retired-model", reasoning_effort: "high", selection_mode: "default",
+      });
+      expect((await owner.query(`SELECT to_jsonb(session) AS value FROM agent.chat_session AS session WHERE id = $1`, [threadId])).rows).toEqual(before);
+    } finally { await runtime.close(); }
+  });
+
   it.each(["none", "max"] as const)("keeps transcript order and applies %s only to the next run", async (effort) => {
     const runtime = await createIntegrationRuntime();
     try {
@@ -2486,6 +2530,7 @@ describe.sequential("durable Research Agent runtime", () => {
       await expect(runtime.preference(threadId, primaryResearcher)).resolves.toEqual({
         model_key: "scripted-research",
         reasoning_effort: effort,
+        selection_mode: "manual",
       });
     } finally {
       await runtime.close();
@@ -4225,6 +4270,7 @@ function runInput(options: Readonly<{
   messages?: Message[];
   modelKey?: string;
   reasoningEffort?: "medium" | "none" | "high" | "max";
+  selectionMode?: "default" | "manual";
   sessionMode?: "new" | "existing";
   runId: string;
   threadId: string;
@@ -4243,6 +4289,7 @@ function runInput(options: Readonly<{
     forwardedProps: {
       thesistrace: {
         command: "prompt",
+        selectionMode: options.selectionMode ?? "manual",
         modelKey: options.modelKey ?? "scripted-research",
         reasoningEffort: options.reasoningEffort ?? "medium",
         sessionMode: options.sessionMode ?? (options.messages === undefined ? "new" : "existing"),
@@ -4285,6 +4332,7 @@ function continueInput(options: Readonly<{
   threadId: string;
   modelKey?: string;
   reasoningEffort?: string;
+  selectionMode?: "default" | "manual";
 }>): RunAgentInput {
   return {
     threadId: options.threadId,
@@ -4296,6 +4344,7 @@ function continueInput(options: Readonly<{
     forwardedProps: {
       thesistrace: {
         command: "continue",
+        selectionMode: options.selectionMode ?? "manual",
         modelKey: options.modelKey ?? "scripted-research",
         reasoningEffort: options.reasoningEffort ?? "medium",
         sessionMode: "existing",

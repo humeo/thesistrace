@@ -21,7 +21,7 @@ test("history navigation keeps the selected conversation canvas through delayed 
     } });
     if (path === `/api/agent/sessions/${session.id}/preferences`) {
       await preferences;
-      return route.fulfill({ json: { model_key: "research-primary", reasoning_effort: "medium" } });
+      return route.fulfill({ json: { model_key: "research-primary", reasoning_effort: "medium", selection_mode: "manual" } });
     }
     if (path.startsWith("/api/agent/copilotkit")) {
       await connection;
