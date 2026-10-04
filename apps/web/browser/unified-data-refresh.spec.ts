@@ -1,8 +1,13 @@
 import { expect, test } from "@playwright/test";
 import { buildProductFixture } from "./build-product-fixture";
 
+let fixture: Awaited<ReturnType<typeof buildProductFixture>>;
+test.beforeAll(async () => {
+  test.setTimeout(90_000);
+  fixture = await buildProductFixture(new URL("./fixtures/unified-data-refresh.tsx", import.meta.url), "UnifiedRefreshFixture");
+});
+
 test("one date drives the complete refresh and failed preparation can be retried", async ({ page }) => {
-  const fixture = await buildProductFixture(new URL("./fixtures/unified-data-refresh.tsx", import.meta.url), "UnifiedRefreshFixture");
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.route("http://127.0.0.1:5179/**", route => route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' }));
   await page.goto("http://127.0.0.1:5179/");
