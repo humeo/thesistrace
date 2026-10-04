@@ -194,7 +194,7 @@ async def _exercise_batches(
         assert strategy.structured_content["outcome"] == "accepted"
         assert factor.structured_content["replayed"] is False
         assert strategy.structured_content["replayed"] is False
-        assert rejected.is_error is False
+        assert rejected.is_error is True
         assert rejected.structured_content["outcome"] == "rejected"
         assert rejected.structured_content["issues"][0]["item_key"] == "invalid"
 
@@ -221,7 +221,7 @@ async def _exercise_batches(
             "submit_research_batch",
             transient_rejected_command,
         )
-        assert retried_rejection.is_error is False
+        assert retried_rejection.is_error is True
         assert retried_rejection.structured_content["outcome"] == "rejected"
         assert retried_rejection.structured_content["replayed"] is False
 

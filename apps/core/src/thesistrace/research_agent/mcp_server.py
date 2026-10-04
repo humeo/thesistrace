@@ -9,6 +9,7 @@ import anyio
 from anyio.lowlevel import checkpoint_if_cancelled
 from mcp.server.context import ServerRequestContext
 from mcp.server.lowlevel import Server
+from mcp.shared.exceptions import MCPError
 from mcp.types import (
     CallToolRequestParams,
     CallToolResult,
@@ -17,7 +18,7 @@ from mcp.types import (
     TextContent,
     Tool,
 )
-from mcp_types import JSONRPCResponse
+from mcp_types import INVALID_PARAMS, JSONRPCResponse
 from mcp_types.methods import serialize_server_result
 from pydantic import BaseModel
 
@@ -30,6 +31,8 @@ from thesistrace.research_agent.models import (
     ResearchAgentErrorCode,
     ResearchAgentToolError,
     ResearchAgentToolErrorContext,
+    SubmitResearchBatchRejected,
+    SubmitResearchRunRejected,
 )
 from thesistrace.research_agent.registry import (
     RESEARCH_AGENT_TOOL_NAMES,
@@ -55,6 +58,23 @@ RESEARCH_AGENT_RATE_WINDOW_SECONDS = 60
 RESEARCH_AGENT_MAX_CALLS_PER_WINDOW = 120
 RESEARCH_AGENT_MAX_CONCURRENT_CALLS = 4
 RESEARCH_AGENT_TOOL_OUTCOME_META_KEY = "thesistrace/tool-outcome"
+RESEARCH_AGENT_INSTRUCTIONS = (
+    "ThesisTrace performs researcher-owned research and simulated Daily Tracking. "
+    "For new research, use available get_research_context/get_alpha_catalog information, "
+    "then diagnose_research_spec before submit_research_run or submit_research_batch. "
+    "Use only tools exposed to this caller. Reuse request_id with identical arguments when "
+    "retrying an uncertain submission; use a new request_id for changed research or a new action. "
+    "Acceptance is not completion: follow next_tool and retry_after_seconds until terminal, "
+    "then read only the Result sections needed. Tool errors and rejected submissions contain "
+    "issues to correct; do not treat them as accepted work. Diagnostic valid=false means "
+    "the diagnosis completed and found problems. Large Result sections return section=result_page. "
+    "Continue the same result tool with section=result_page, query set to the original section "
+    "arguments, and result_cursor=next_result_cursor. Concatenate json_fragment values in offset "
+    "order, verify total_bytes/checksum_sha256, then parse JSON. If the cursor is invalid, restart "
+    "the original query; never join different results. After reconstructing a collection page, "
+    "its own next_cursor continues the collection. Refresh, retry, cancellation and stop require "
+    "explicit user intent and the corresponding authority; reading never starts a rerun."
+)
 
 
 class ResearchAgentWireResponseTooLarge(RuntimeError):
@@ -209,6 +229,19 @@ def create_research_agent_mcp_server(
                 transport=transport,
             )
         try:
+            if params.name not in RESEARCH_AGENT_TOOL_NAMES:
+                _emit_completion(
+                    event_sink,
+                    duration_ms=(monotonic_ns() - started) // 1_000_000,
+                    outcome="failed",
+                    failure_code="UNKNOWN_TOOL",
+                    call_context=_safe_call_context(params),
+                    response=None,
+                    subject=subject,
+                    trace_id=trace_id,
+                    transport=transport,
+                )
+                raise MCPError(INVALID_PARAMS, "Unknown tool")
             return await _invoke_admitted_tool(
                 context,
                 params,
@@ -227,6 +260,7 @@ def create_research_agent_mcp_server(
     return Server(
         name="ThesisTrace Research Agent",
         version="0.1.0",
+        instructions=RESEARCH_AGENT_INSTRUCTIONS,
         on_list_tools=list_tools,
         on_call_tool=call_tool,
     )
@@ -294,10 +328,15 @@ async def _invoke_admitted_tool(
         )
     assert invocation.result is not None
     structured_result = invocation.result.model_dump(mode="json")
+    rejected = isinstance(
+        invocation.result, (SubmitResearchRunRejected, SubmitResearchBatchRejected),
+    )
+    outcome = "failed" if rejected else "succeeded"
     result = CallToolResult(
         content=[TextContent(type="text", text=_model_result_text(structured_result))],
         structured_content=structured_result,
-        meta={RESEARCH_AGENT_TOOL_OUTCOME_META_KEY: "succeeded"},
+        is_error=rejected,
+        meta={RESEARCH_AGENT_TOOL_OUTCOME_META_KEY: outcome},
     )
     wire_bytes = _wire_response_bytes(context, method="tools/call", result=result)
     if wire_bytes > RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES:
@@ -320,7 +359,8 @@ async def _invoke_admitted_tool(
     _emit_completion(
         event_sink,
         duration_ms=(monotonic_ns() - started) // 1_000_000,
-        outcome="succeeded",
+        outcome=outcome,
+        failure_code=ResearchAgentErrorCode.INVALID_INPUT.value if rejected else None,
         call_context=_safe_call_context(params, response=result),
         response=result,
         subject=subject,

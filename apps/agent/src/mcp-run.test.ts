@@ -97,6 +97,20 @@ describe("per-Run MCP lifecycle", () => {
     expect(JSON.stringify(result)).not.toContain("private");
   });
 
+  it("keeps admission issues available as a recoverable Tool rejection", async () => {
+    const issues = [{ field: "formula", code: "UNKNOWN_IDENTIFIER", message: "Unknown Alpha identifier" }];
+    const run = await fixtureRun(async () => adaptedCoreResult({
+      _meta: { [TOOL_OUTCOME_META_KEY]: "failed" }, content: [], isError: true,
+      structuredContent: { outcome: "rejected", issues, replayed: false },
+    }));
+    await expect(run.tools.fixture.execute?.({}, toolOptions("rejected"))).resolves.toMatchObject({
+      outcome: "rejected", issues, replayed: false,
+      [DURABLE_TOOL_OUTCOME_FIELD]: DURABLE_TOOL_FAILURE,
+    });
+    expect(run.toolFailure("rejected")).toEqual({ code: "TOOL_REJECTION", fatal: false });
+    expect(run.hasFatalToolFailure()).toBe(false);
+  });
+
   it("pins the modern protocol and tracks failures for every discovered Core Tool", async () => {
     let clientOptions: Record<string, unknown> | undefined;
     const disconnect = vi.fn(async () => undefined);
@@ -168,7 +182,8 @@ describe("per-Run MCP lifecycle", () => {
       allowedHosts: ["api:8100"],
       connectTimeout: 5_000,
       enableServerLogs: false,
-      forwardInstructions: false,
+      forwardInstructions: true,
+      instructionsMaxLength: 4096,
       onToolError: "return",
       protocolVersion: "2026-07-28",
       url: new URL("http://api:8100/mcp"),

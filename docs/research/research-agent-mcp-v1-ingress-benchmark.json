@@ -21,8 +21,8 @@
     "cursor_characters": 1024
   },
   "deterministic_payloads": {
-    "v1_contract_sha256": "809fcca2a6d3cde87eb208e137e7f5f22b31bad346a207191a1e92f724882105",
-    "v1_contract_bytes": 309613,
+    "v1_contract_sha256": "040a00ebf9ce36f3fcb4325e8690465b5103baa7e2df1360e7cca88597fef7fc",
+    "v1_contract_bytes": 336922,
     "maximum_factor_batch_call_bytes": 84536,
     "maximum_framework_batch_call_bytes": 31420694
   },
@@ -38,10 +38,10 @@
     "swaps": 0
   },
   "measurement_context": {
-    "date": "2026-10-02",
+    "date": "2026-10-04",
     "transport": "in-process deterministic MCP client",
     "network_access": false,
     "real_model": false,
-    "note": "Deterministic contract sizes refreshed for SDK discovery fields and bounded submission receipt descriptions. Observed performance remains the 2026-09-07 measurement; this is not a new performance qualification. Request and complete event-page wire envelopes have independent deterministic regressions in test_research_agent_mcp_contract.py."
+    "note": "Deterministic contract sizes refreshed for conditional Framework inputs, safe validation issues, business rejection semantics and bounded Result pages. Observed performance remains the 2026-09-07 measurement; this is not a new performance qualification. Request and complete event-page wire envelopes have independent deterministic regressions in test_research_agent_mcp_contract.py."
   }
 }

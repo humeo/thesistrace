@@ -69,6 +69,7 @@ from thesistrace.research_agent.models import (
     RefreshDailyTrackOutcome,
     ResearchAgentAuthority,
     ResearchAgentErrorCode,
+    ResearchAgentInputIssue,
     ResearchAgentScope,
     ResearchAgentToolError,
     ResearchContext,
@@ -87,7 +88,16 @@ from thesistrace.research_agent.models import (
     SubmitResearchRunRejected,
 )
 from thesistrace.research_agent.pagination import InvalidPageCursor, ResearchAgentPagination
+from thesistrace.research_agent.result_pages import (
+    DailyTrackResultPageInput,
+    GetDailyTrackResultInput,
+    GetDailyTrackResultOutput,
+    GetResearchRunResultInput,
+    GetResearchRunResultOutput,
+    ResearchRunResultPageInput,
+)
 from thesistrace.research_agent.safe_context import safe_tool_call_context
+from thesistrace.research_agent.validation import input_issues
 from thesistrace.research_authoring.models import ResearchAuthoringConstraints
 from thesistrace.research_batch import (
     ResearchBatchAdmissionAccepted,
@@ -339,11 +349,13 @@ class ResearchAgentExpectedFailure(RuntimeError):
         *,
         retryable: bool = False,
         retry_after_seconds: int | None = None,
+        issues: list[ResearchAgentInputIssue] | None = None,
     ) -> None:
         super().__init__(code.value)
         self.code = code
         self.retryable = retryable
         self.retry_after_seconds = retry_after_seconds
+        self.issues = issues or []
 
 
 # Context repeats the complete Dataset families and current authoring constraints
@@ -513,11 +525,15 @@ class ResearchAgentCapabilityRegistry:
                     "next_cursor has not finished scanning. Each successful detail read renews "
                     "only that unit for seven days. "
                     "Expired/not_recorded differs from a recorded empty account; no automatic "
-                    "rerun occurs. Holdings cursors remain on their original source."
+                    "rerun occurs. Holdings cursors remain on their original source. "
+                    "Large sections return result_page: continue this tool with "
+                    "section=result_page, query=original arguments and "
+                    "result_cursor=next_result_cursor. Concatenate json_fragment in offset "
+                    "order and verify checksum_sha256 before parsing the complete JSON."
                 ),
                 required_scope=ResearchAgentScope.RESEARCH_READ,
-                input_model=ResearchRunResultSectionInput,
-                output_model=ResearchRunResultSectionResponse,
+                input_model=GetResearchRunResultInput,
+                output_model=GetResearchRunResultOutput,
                 annotations=DETAIL_READ_TOOL_ANNOTATIONS,
                 handler=self.get_research_run_result,
             ),
@@ -562,11 +578,15 @@ class ResearchAgentCapabilityRegistry:
                     "next_cursor has not finished scanning. Each successful detail read renews "
                     "only that unit for seven days. "
                     "Expired/not_recorded differs from a recorded empty account; no automatic "
-                    "rerun occurs. Holdings cursors remain on their original source."
+                    "rerun occurs. Holdings cursors remain on their original source. "
+                    "Large sections return result_page: continue this tool with "
+                    "section=result_page, query=original arguments and "
+                    "result_cursor=next_result_cursor. Concatenate json_fragment in offset "
+                    "order and verify checksum_sha256 before parsing the complete JSON."
                 ),
                 required_scope=ResearchAgentScope.TRACKING_READ,
-                input_model=DailyTrackResultSectionInput,
-                output_model=DailyTrackResultSectionResponse,
+                input_model=GetDailyTrackResultInput,
+                output_model=GetDailyTrackResultOutput,
                 annotations=DETAIL_READ_TOOL_ANNOTATIONS,
                 handler=self.get_daily_track_result,
             ),
@@ -674,7 +694,8 @@ class ResearchAgentCapabilityRegistry:
                     "Atomically submit a fully specified Factor Evaluation Batch or Strategy "
                     "Sweep with 1 to 20 caller-keyed items; requires research:execute, is "
                     "non-destructive, and is idempotent by request_id. Invalid research is a "
-                    "successful structured rejected outcome; after acceptance, poll "
+                    "structured rejected outcome with isError=true and actionable issues; "
+                    "after acceptance, poll "
                     "get_research_batch using retry_after_seconds until terminal."
                 ),
                 required_scope=ResearchAgentScope.RESEARCH_EXECUTE,
@@ -711,7 +732,8 @@ class ResearchAgentCapabilityRegistry:
                     "research:read (Run) or tracking:read (Track). Reading expired holdings does "
                     "not submit a rerun. All submissions require "
                     "research:execute, is non-destructive, and is idempotent by request_id. "
-                    "Invalid research is a successful structured rejected outcome; after "
+                    "Invalid research returns a structured rejected outcome with isError=true "
+                    "and actionable issues; after "
                     "acceptance, poll get_research_run using retry_after_seconds until terminal. "
                     "The accepted receipt is bounded; get_research_run returns the normalized "
                     "frozen input."
@@ -780,13 +802,14 @@ class ResearchAgentCapabilityRegistry:
             )
         try:
             validated = TypeAdapter(capability.input_model).validate_python(arguments)
-        except ValidationError:
+        except ValidationError as error:
             return ResearchAgentInvocation(
                 error=self._tool_error(
                     ResearchAgentErrorCode.INVALID_INPUT,
                     arguments=arguments,
                     trace_id=trace_id,
                     tool_name=capability.name,
+                    issues=input_issues(error, capability.input_schema()),
                 )
             )
         if not isinstance(validated, BaseModel):
@@ -815,6 +838,7 @@ class ResearchAgentCapabilityRegistry:
                     tool_name=capability.name,
                     retryable=error.retryable,
                     retry_after_seconds=error.retry_after_seconds,
+                    issues=error.issues,
                 )
             )
         except Exception as exception:
@@ -837,6 +861,7 @@ class ResearchAgentCapabilityRegistry:
         tool_name: str,
         retryable: bool = False,
         retry_after_seconds: int | None = None,
+        issues: list[ResearchAgentInputIssue] | None = None,
     ) -> ResearchAgentToolError:
         messages = {
             ResearchAgentErrorCode.INVALID_INPUT: "Tool input is invalid",
@@ -856,6 +881,7 @@ class ResearchAgentCapabilityRegistry:
             retryable=retryable,
             trace_id=trace_id,
             retry_after_seconds=retry_after_seconds,
+            issues=issues or [],
             context=safe_tool_call_context(
                 tool_name,
                 arguments,
@@ -1003,7 +1029,9 @@ class ResearchAgentCapabilityRegistry:
 
     def get_research_run_result(self, **query_fields: object) -> BaseModel:
         self._require(ResearchAgentScope.RESEARCH_READ)
-        query = TypeAdapter(ResearchRunResultSectionInput).validate_python(query_fields)
+        request = TypeAdapter(GetResearchRunResultInput).validate_python(query_fields)
+        query = request.query if isinstance(request, ResearchRunResultPageInput) else request
+        cursor = request.result_cursor if isinstance(request, ResearchRunResultPageInput) else None
         try:
             result = self._modules.research_runs.get_result_section(
                 self._authority.researcher_id,
@@ -1022,7 +1050,8 @@ class ResearchAgentCapabilityRegistry:
             raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.NOT_FOUND)
         if not isinstance(result, BaseModel):
             raise TypeError("ResearchRun Result module returned an invalid section")
-        return result
+        result = TypeAdapter(ResearchRunResultSectionResponse).validate_python(result)
+        return self._page_result(result, query=query, cursor=cursor, kind="research_run")
 
     def list_daily_tracks(
         self,
@@ -1056,7 +1085,9 @@ class ResearchAgentCapabilityRegistry:
 
     def get_daily_track_result(self, **query_fields: object) -> BaseModel:
         self._require(ResearchAgentScope.TRACKING_READ)
-        query = TypeAdapter(DailyTrackResultSectionInput).validate_python(query_fields)
+        request = TypeAdapter(GetDailyTrackResultInput).validate_python(query_fields)
+        query = request.query if isinstance(request, DailyTrackResultPageInput) else request
+        cursor = request.result_cursor if isinstance(request, DailyTrackResultPageInput) else None
         try:
             result = self._modules.daily_tracks.get_result_section(
                 self._authority.researcher_id,
@@ -1072,7 +1103,26 @@ class ResearchAgentCapabilityRegistry:
             raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.NOT_FOUND)
         if not isinstance(result, BaseModel):
             raise TypeError("DailyTrack Result module returned an invalid section")
-        return result
+        result = TypeAdapter(DailyTrackResultSectionResponse).validate_python(result)
+        return self._page_result(result, query=query, cursor=cursor, kind="daily_track")
+
+    def _page_result(
+        self, result: BaseModel, *, query: BaseModel, cursor: str | None, kind: str,
+    ) -> BaseModel:
+        try:
+            return self._modules.pagination.result_page(
+                result, query=query, cursor=cursor,
+                identity=f"{kind}:{self._authority.researcher_id}",
+            )
+        except InvalidPageCursor as error:
+            raise ResearchAgentExpectedFailure(
+                ResearchAgentErrorCode.INVALID_INPUT,
+                issues=[ResearchAgentInputIssue(
+                    path=["result_cursor"], code="invalid_cursor",
+                    message="Result cursor does not match this caller, query or result; "
+                            "restart the original section query without result_cursor.",
+                )],
+            ) from error
 
     def start_daily_track(
         self,

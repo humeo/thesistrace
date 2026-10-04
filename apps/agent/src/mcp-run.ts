@@ -64,10 +64,11 @@ export function createMcpRunFactory(
           allowedHosts: [mcpUrl.host],
           connectTimeout: MCP_DISCOVERY_TIMEOUT_MS,
           enableServerLogs: false,
-          forwardInstructions: false,
+          forwardInstructions: true,
+          instructionsMaxLength: 4096,
           jsonSchemaValidator,
-          // Core business rejections are ordinary MCP results that the model
-          // must be able to inspect and act on. Transport/protocol failures
+          // Core tool errors retain actionable structured results for the model.
+          // Transport/protocol failures
           // still reject from the MCP client and are tracked below as fatal.
           onToolError: "return",
           protocolVersion: "2026-07-28",
@@ -129,6 +130,10 @@ function trackToolFailures(tools: DiscoveredMcpTools): Readonly<{
     if (execute === undefined) throw new McpRunPreparationError();
     const wrapped = new Proxy(tool, {
       get(target, property, receiver) {
+        // Core owns the complete JSON Schema, including conditional subschemas.
+        // Mastra's strict-schema conversion drops those constraints and fields.
+        // Its supported opt-out preserves the schema; SDK/Core validation stays on.
+        if (property === "strict") return false;
         if (property !== "execute") return Reflect.get(target, property, receiver);
         return async (...args: unknown[]) => {
           const toolCallId = requiredToolCallId(args[1]);
@@ -184,6 +189,9 @@ function safeFatalToolResult(code: AgentFailureCode) {
 }
 
 function coreToolFailureCode(result: unknown): AgentFailureCode {
+  if (result !== null && typeof result === "object" && "outcome" in result && result.outcome === "rejected") {
+    return "TOOL_REJECTION";
+  }
   const code = result !== null && typeof result === "object" && "code" in result ? result.code : undefined;
   return toolFailureCode(code);
 }

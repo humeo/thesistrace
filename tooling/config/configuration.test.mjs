@@ -30,6 +30,15 @@ function run(env, ...args) {
   return spawnSync(process.execPath, [cli, ...args], { env, encoding: 'utf8' });
 }
 
+test('default MCP deployment includes whole-spec diagnosis without destructive permissions', t => {
+  const f = fixture(t);
+  const tools = JSON.parse(f.values.THESISTRACE_MCP_DEPLOYMENT_TOOLS);
+  assert.ok(tools.includes('diagnose_research_spec'));
+  for (const name of ['cancel_research_run', 'cancel_research_batch', 'stop_daily_track']) {
+    assert.ok(!tools.includes(name));
+  }
+});
+
 test('production init creates independent private credentials and requires explicit deployment inputs', t => {
   const f = fixture(t);
   const file = resolve(f.dir, 'production.env');

@@ -97,7 +97,7 @@ async def _exercise_research_runs(
         rejected = await client.call_tool("submit_research_run", rejected_command)
         assert factor.is_error is False
         assert strategy.is_error is False
-        assert rejected.is_error is False
+        assert rejected.is_error is True
         assert factor.structured_content == {
             "next_tool": "get_research_run",
             "outcome": "accepted",

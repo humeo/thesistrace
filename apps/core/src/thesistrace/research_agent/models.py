@@ -64,6 +64,16 @@ class ResearchAgentToolErrorContext(BaseModel):
     request_id: ResearchAgentSafeContextId | None = None
 
 
+class ResearchAgentInputIssue(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    path: Annotated[list[str | int], Field(max_length=16, description=(
+        "Input field path; '*' denotes a union branch or an unrecognized field name."
+    ))]
+    code: Annotated[str, Field(max_length=100)]
+    message: Annotated[str, Field(min_length=1, max_length=200)]
+
+
 class ResearchAgentToolError(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
@@ -76,6 +86,10 @@ class ResearchAgentToolError(BaseModel):
     ]
     retry_after_seconds: Annotated[int, Field(ge=1, le=60)] | None = None
     context: ResearchAgentToolErrorContext
+    issues: list[ResearchAgentInputIssue] = Field(
+        default_factory=list, max_length=20, exclude_if=lambda value: not value,
+        description="Up to 20 safe input diagnostics; values and unknown field names are omitted.",
+    )
 
     @model_validator(mode="after")
     def validate_retry_contract(self) -> ResearchAgentToolError:

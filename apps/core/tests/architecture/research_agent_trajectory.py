@@ -69,6 +69,7 @@ def public_tools(tools: Iterable[Tool]) -> dict[str, Tool]:
 
 def tool_result(outcome: Mapping[str, object]) -> CallToolResult:
     structured = dict(outcome)
+    is_error = "code" in structured or structured.get("outcome") == "rejected"
     return CallToolResult(
         content=[
             TextContent(
@@ -82,10 +83,10 @@ def tool_result(outcome: Mapping[str, object]) -> CallToolResult:
             )
         ],
         structured_content=structured,
-        is_error="code" in structured,
+        is_error=is_error,
         meta={
             "thesistrace/tool-outcome": (
-                "failed" if "code" in structured else "succeeded"
+                "failed" if is_error else "succeeded"
             )
         },
     )
@@ -206,7 +207,8 @@ class ScriptedPublicMCP:
             raise AssertionError("scripted exchange did not produce a CallToolResult")
         if result.structured_content is None:
             raise AssertionError("public CallToolResult omitted structuredContent")
-        if result.is_error != ("code" in result.structured_content):
+        rejected = result.structured_content.get("outcome") == "rejected"
+        if result.is_error != ("code" in result.structured_content or rejected):
             raise AssertionError("public CallToolResult isError disagrees with structuredContent")
         text_blocks = [block for block in result.content if isinstance(block, TextContent)]
         if len(text_blocks) != 1:

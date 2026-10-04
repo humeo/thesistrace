@@ -12,8 +12,9 @@ from uuid import UUID
 
 import anyio
 import pytest
-from jsonschema import validate
+from jsonschema import Draft202012Validator, validate
 from mcp.client import Client
+from mcp.shared.exceptions import MCPError
 from mcp.types import CallToolRequestParams, CallToolResult, ListToolsResult, TextContent
 from mcp_types.methods import serialize_server_result
 from mcp_types.version import LATEST_HANDSHAKE_VERSION
@@ -124,6 +125,7 @@ from thesistrace.research_run.models import (
     ResearchRunStartTrackingOutcome,
     ResearchRunSummary,
     StartTrackingCommand,
+    TerminalStrategyStateResultSection,
 )
 from thesistrace.research_run.service import (
     ResearchRunAdmissionConflict,
@@ -140,6 +142,142 @@ from thesistrace.research_run.service import (
 )
 
 TEST_RESEARCHER_ID = UUID("018f6f7e-8342-7c9a-a4df-9a86147d2e01")
+
+
+@pytest.mark.parametrize("tool_name", ["submit_research_run", "diagnose_research_spec"])
+@pytest.mark.parametrize("missing", [
+    "holdings_count", "selection_every_sessions", "formula", "neutralization",
+])
+def test_discovered_framework_schema_expresses_builtin_required_settings(tool_name, missing):
+    spec = {
+        "research_kind": "strategy_backtest", "start_date": "2026-01-01",
+        "end_date": "2026-02-01", "universe": "top300", "initial_cash_cny": "100000",
+        "holdings_count": 10, "selection_every_sessions": 5,
+        "formula": "close", "neutralization": "none",
+    }
+    capability = next(c for c in _registry().accessible_capabilities() if c.name == tool_name)
+    schema = Draft202012Validator(capability.input_schema())
+
+    def arguments(value):
+        return ({"spec": value} if tool_name == "diagnose_research_spec" else {
+            "request_id": "schema_contract", "folder_id": "folder_test", **value,
+        })
+
+    assert schema.is_valid(arguments(spec))
+    assert not schema.is_valid(arguments({k: v for k, v in spec.items() if k != missing}))
+    assert not schema.is_valid(arguments({**spec, missing: None}))
+
+
+@pytest.mark.parametrize("tool,arguments,path,code,hint", [
+    ("diagnose_alpha_formula", {}, ["source"], "missing", "required"),
+    ("diagnose_alpha_formula", {"source": 123}, ["source"], "string_type", "string"),
+    ("list_research_runs", {"limit": 51}, ["limit"], "less_than_equal", "50"),
+])
+def test_tool_validation_errors_explain_the_field_and_constraint(tool, arguments, path, code, hint):
+    result = _registry().invoke(tool, arguments, trace_id="trace_validation")
+    issue = result.error.model_dump(mode="json")["issues"][0]
+    assert issue["path"] == path
+    assert issue["code"] == code
+    assert hint in issue["message"].lower()
+
+
+def test_tool_validation_guidance_does_not_echo_input_or_unknown_field_names():
+    result = _registry().invoke("diagnose_alpha_formula", {
+        "source": {"private-input": "private-value"}, "private-field": "private-value",
+    }, trace_id="trace_validation")
+    payload = result.error.model_dump(mode="json")
+    assert payload["issues"]
+    assert "private" not in json.dumps(payload)
+
+
+@pytest.mark.parametrize("missing", [
+    ("holdings_count", "selection_every_sessions"), ("formula", "neutralization"),
+])
+def test_tool_validation_explains_missing_builtin_settings(missing):
+    spec = {
+        "research_kind": "strategy_backtest", "start_date": "2026-01-01",
+        "end_date": "2026-02-01", "universe": "top300", "initial_cash_cny": "100000",
+        "formula": "close", "neutralization": "none",
+        "holdings_count": 10, "selection_every_sessions": 5,
+    }
+    result = _registry().invoke("diagnose_research_spec", {"spec": {
+        key: value for key, value in spec.items() if key not in missing
+    }}, trace_id="trace_validation")
+    issues = result.error.model_dump(mode="json")["issues"]
+    assert {(issue["path"][-1], issue["code"]) for issue in issues} == {
+        (field, "missing") for field in missing
+    }
+
+
+def test_framework_schema_keeps_python_and_configured_builtin_modules_authorable():
+    from pydantic import TypeAdapter
+
+    from thesistrace.research_kernel.builtin_framework import BUILTIN_FRAMEWORK_MODULES
+
+    capability = next(c for c in _registry().accessible_capabilities()
+                      if c.name == "submit_research_run")
+    schema = Draft202012Validator(capability.input_schema())
+    spec = {
+        "request_id": "module_contract", "folder_id": "folder_test",
+        "research_kind": "strategy_backtest", "start_date": "2026-01-01",
+        "end_date": "2026-02-01", "universe": "top300", "initial_cash_cny": "100000",
+    }
+    python_module = {"kind": "python", "program": {"source": "class Example: pass"}}
+    python = {**spec, "modules": {**BUILTIN_FRAMEWORK_MODULES,
+                                 "alpha": python_module,
+                                 "portfolio_construction": python_module}}
+    builtin = {**spec, "formula": "close", "neutralization": "none",
+               "holdings_count": 10, "selection_every_sessions": 5,
+               "modules": {**BUILTIN_FRAMEWORK_MODULES, "portfolio_construction": {
+                   "kind": "periodic_top_n/v1", "minimum_holding_sessions": 3,
+               }}}
+    for arguments in (python, builtin):
+        schema.validate(arguments)
+        TypeAdapter(capability.input_model).validate_python(arguments)
+    for field, value in {"formula": "close", "neutralization": "none",
+                         "holdings_count": 10, "selection_every_sessions": 5}.items():
+        assert not schema.is_valid({**python, field: value})
+        with pytest.raises(ValidationError):
+            TypeAdapter(capability.input_model).validate_python({**python, field: value})
+        assert not schema.is_valid({k: v for k, v in builtin.items() if k != field})
+
+
+def test_sweep_schema_matches_shared_alpha_and_single_mode_constraints():
+    from pydantic import TypeAdapter
+
+    from thesistrace.research_kernel.builtin_framework import BUILTIN_FRAMEWORK_MODULES
+
+    tool = next(c for c in _registry().accessible_capabilities()
+                if c.name == "submit_research_batch")
+    schema = Draft202012Validator(tool.input_schema())
+    common = {
+        "request_id": "sweep_contract", "batch_kind": "strategy_sweep",
+        "start_date": "2026-01-01", "end_date": "2026-02-01", "universe": "top300",
+    }
+    program = {"source": "class Example: pass"}
+    builtin = {"item_key": "builtin", "initial_cash_cny": "100000",
+               "holdings_count": 10, "selection_every_sessions": 5}
+    python = {**builtin, "item_key": "python", "modules": {**BUILTIN_FRAMEWORK_MODULES,
+              "alpha": {"kind": "python", "program": program}}}
+    direct = {"item_key": "direct", "strategy_mode": "direct",
+              "initial_cash_cny": "100000", "program": program}
+    for strategy in (builtin, python, direct):
+        command = {**common, "strategies": [strategy]}
+        if strategy is builtin:
+            command.update(alpha={"formula": "close"}, neutralization="none")
+        schema.validate(command)
+        TypeAdapter(tool.input_model).validate_python(command)
+        invalid = ({**command, "alpha": None} if strategy is builtin else
+                   {**command, "alpha": {"formula": "close"}, "neutralization": "none"})
+        with pytest.raises(ValidationError):
+            TypeAdapter(tool.input_model).validate_python(invalid)
+        assert not schema.is_valid(invalid)
+    for strategies in ([builtin, python], [builtin, direct], [python, direct]):
+        mixed = {**common, "alpha": {"formula": "close"}, "neutralization": "none",
+                 "strategies": strategies}
+        with pytest.raises(ValidationError):
+            TypeAdapter(tool.input_model).validate_python(mixed)
+        assert not schema.is_valid(mixed)
 
 
 @pytest.mark.parametrize("tool,dependency", [
@@ -1068,6 +1206,22 @@ def test_registry_intersects_deployment_allowlist_and_rechecks_it_on_invocation(
     assert denied.error.code == "FORBIDDEN"
 
 
+def test_unknown_tool_is_a_protocol_error_without_echoing_untrusted_input() -> None:
+    async def exercise() -> None:
+        events: list[OperationalEvent] = []
+        async with Client(_server(_registry(), events=events)) as client:
+            with pytest.raises(MCPError) as failure:
+                await client.call_tool("unknown-private-name", {"secret": "private-value"})
+            assert failure.value.code == -32602
+            assert failure.value.message == "Unknown tool"
+            valid = await client.call_tool("diagnose_alpha_formula", {"source": "close"})
+            assert valid.is_error is False
+        assert events[0].context["outcome"] == "failed"
+        assert "private" not in json.dumps([dict(event.context) for event in events])
+
+    anyio.run(exercise)
+
+
 def test_in_memory_protocol_exposes_exact_tool_contract() -> None:
     anyio.run(_exercise_in_memory_protocol)
 
@@ -1941,9 +2095,9 @@ def test_v1_inventory_scopes_descriptions_annotations_and_schemas_are_exact() ->
     canonical = _canonical_v1_contract()
 
     assert sha256(canonical).hexdigest() == (
-        "809fcca2a6d3cde87eb208e137e7f5f22b31bad346a207191a1e92f724882105"
+        "040a00ebf9ce36f3fcb4325e8690465b5103baa7e2df1360e7cca88597fef7fc"
     )
-    assert len(canonical) == 309613
+    assert len(canonical) == 336922
 
 
 def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None:
@@ -2085,7 +2239,7 @@ def test_wire_envelope_carries_twenty_frameworks_with_four_maximum_programs():
     assert size <= RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES
 
 
-def test_mcp_origin_result_preserves_large_legal_framework_state_and_pending_target():
+def _large_origin_result(payload="x" * 240_000):
     checksum = "a" * 64
     target = {
         "decision_session": "2026-08-03",
@@ -2111,7 +2265,7 @@ def test_mcp_origin_result_preserves_large_legal_framework_state_and_pending_tar
                 "mode": "framework", "contract_checksum": checksum,
                 "selection_interval": None,
                 "module_states": {
-                    stage: {"payload": "x" * 240_000}
+                    stage: {"payload": payload}
                     for stage in (
                         "universe_selection", "alpha",
                         "portfolio_construction", "risk_management",
@@ -2125,22 +2279,123 @@ def test_mcp_origin_result_preserves_large_legal_framework_state_and_pending_tar
         "positions": [],
         "next_cursor": None,
     })
+    return origin
+
+
+@pytest.mark.parametrize("kind", ["research_run", "daily_track"])
+@pytest.mark.parametrize("payload", ["x" * 240_000, '中😀\\\n' * 10_000], ids=["ascii", "unicode"])
+def test_mcp_result_pages_preserve_large_legal_state_without_data_loss(kind, payload):
+    origin = _large_origin_result(payload)
+    if kind == "daily_track":
+        reader = _DailyTrackReader()
+        reader.result_section = origin
+        registry = _registry(daily_tracks=reader)
+        query = {"track_id": "track_test", "section": "origin"}
+    else:
+        reader = _ResearchRunReader()
+        reader.result_section = TerminalStrategyStateResultSection.model_validate({
+            **origin.terminal_account.model_dump(mode="json"), "run_id": "run_test",
+        })
+        registry = _registry(research_runs=reader)
+        query = {"run_id": "run_test", "section": "terminal_strategy_state"}
+    anyio.run(
+        _read_large_result_through_mcp, registry, f"get_{kind}_result", query,
+        reader.result_section,
+    )
+
+
+def test_result_cursor_rejects_changed_query_and_result_with_restart_guidance():
     reader = _DailyTrackReader()
-    reader.result_section = origin
-    anyio.run(_read_large_origin_through_mcp, reader, origin)
+    reader.result_section = _large_origin_result()
+    registry = _registry(daily_tracks=reader)
+    query = {"track_id": "track_test", "section": "origin"}
+    first = registry.invoke("get_daily_track_result", query, trace_id="first").result
+    continuation = {
+        "section": "result_page", "query": query, "result_cursor": first.next_result_cursor,
+    }
+    for arguments in (
+        {**continuation, "query": {**query, "limit": 1}},
+        {**continuation, "result_cursor": "tampered"},
+    ):
+        outcome = registry.invoke("get_daily_track_result", arguments, trace_id="changed")
+        assert outcome.error.code == "INVALID_INPUT"
+        assert outcome.error.issues[0].path == ["result_cursor"]
+        assert "restart" in outcome.error.issues[0].message.lower()
+    reader.result_section = reader.result_section.model_copy(
+        update={"seed_research_available": False},
+    )
+    outcome = registry.invoke("get_daily_track_result", continuation, trace_id="changed_result")
+    assert outcome.error.code == "INVALID_INPUT"
+    denied = _registry(ResearchAgentAuthority(
+        subject="denied", researcher_id=TEST_RESEARCHER_ID, scopes=frozenset(),
+    ), daily_tracks=reader)
+    denial = denied.invoke("get_daily_track_result", continuation, trace_id="denied")
+    assert denial.error.code == "FORBIDDEN"
 
 
-async def _read_large_origin_through_mcp(
-    reader: _DailyTrackReader, origin: DailyTrackOriginResultSection,
-) -> None:
-    async with Client(_server(_registry(daily_tracks=reader), events=[])) as client:
-        response = await client.call_tool(
-            "get_daily_track_result", {"track_id": "track_test", "section": "origin"},
+def test_result_fragments_survive_randomized_collection_cursors():
+    from thesistrace.daily_track.service import _next_daily_track_result_cursor
+
+    def cursor():
+        return _next_daily_track_result_cursor(
+            "equity:600001.SH", secret=b"c" * 32, researcher_id=TEST_RESEARCHER_ID,
+            track_id="track_test", section="origin", order="instrument_id_asc",
+            snapshot_identity="a" * 64,
         )
-    assert not response.is_error
-    assert response.structured_content == origin.model_dump(mode="json")
-    assert json.loads(response.content[0].text) == response.structured_content
-    assert len(response.content[0].text.encode()) > 900_000
+
+    first = _large_origin_result().model_copy(update={"next_cursor": cursor()})
+
+    class RenewingReader(_DailyTrackReader):
+        def __init__(self):
+            super().__init__()
+            self.result_section = first
+
+        def get_result_section(self, researcher_id, query):
+            result = super().get_result_section(researcher_id, query)
+            self.result_section = first.model_copy(update={"next_cursor": cursor()})
+            return result
+
+    anyio.run(
+        _read_large_result_through_mcp, _registry(daily_tracks=RenewingReader()),
+        "get_daily_track_result", {"track_id": "track_test", "section": "origin"}, first,
+    )
+
+
+async def _read_large_result_through_mcp(registry, tool, query, expected) -> None:
+    fragments = []
+    checksum = None
+    offset = 0
+    async with Client(_server(registry, events=[])) as client:
+        discovered = {item.name: item for item in (await client.list_tools()).tools}
+        input_validator = Draft202012Validator(discovered[tool].input_schema)
+        output_validator = Draft202012Validator(discovered[tool].output_schema)
+        arguments = query
+        while True:
+            input_validator.validate(arguments)
+            response = await client.call_tool(tool, arguments)
+            assert not response.is_error
+            page = response.structured_content
+            assert len(json.dumps(page).encode()) < 128 * 1024
+            assert page["section"] == "result_page"
+            assert page["result_section"] == query["section"]
+            output_validator.validate(page)
+            assert page["offset"] == offset
+            checksum = checksum or page["checksum_sha256"]
+            assert page["checksum_sha256"] == checksum
+            assert json.loads(response.content[0].text) == page
+            fragments.append(page["json_fragment"])
+            offset += len(page["json_fragment"].encode("ascii"))
+            if page["next_result_cursor"] is None:
+                assert offset == page["total_bytes"]
+                break
+            arguments = {
+                "section": "result_page", "query": query,
+                "result_cursor": page["next_result_cursor"],
+            }
+    encoded = "".join(fragments).encode("ascii")
+    assert sha256(encoded).hexdigest() == checksum
+    assert json.loads(encoded) == expected.model_dump(mode="json")
+    assert len(fragments) > 1
 
 
 @pytest.mark.parametrize("page_mebibytes", [2, 4])
@@ -2363,6 +2618,10 @@ async def _exercise_in_memory_protocol() -> None:
             "submit_research_run",
         }
         assert client.server_capabilities is not None
+        assert client.instructions
+        assert len(client.instructions) <= 4096
+        assert "request_id" in client.instructions
+        assert "result_page" in client.instructions
         assert client.server_capabilities.prompts is None
         assert client.server_capabilities.resources is None
         assert client.server_capabilities.completions is None
@@ -2434,9 +2693,12 @@ async def _exercise_in_memory_protocol() -> None:
                 assert tool.annotations.read_only_hint is False
                 assert tool.annotations.idempotent_hint is False
                 assert tool.input_schema["discriminator"]["propertyName"] == "section"
-                expected_section_count = 19 if tool.name == "get_research_run_result" else 15
-                assert len(tool.input_schema["oneOf"]) == expected_section_count
-                for branch in tool.input_schema["oneOf"]:
+                expected_section_count = 20 if tool.name == "get_research_run_result" else 16
+                assert len(tool.input_schema["discriminator"]["mapping"]) == expected_section_count
+                sections_name = ("ResearchRunResultSectionInput"
+                                 if tool.name == "get_research_run_result"
+                                 else "DailyTrackResultSectionInput")
+                for branch in tool.input_schema["$defs"][sections_name]["oneOf"]:
                     definition = tool.input_schema["$defs"][branch["$ref"].rsplit("/", 1)[-1]]
                     assert definition["additionalProperties"] is False
             else:
@@ -2513,7 +2775,7 @@ async def _exercise_in_memory_protocol() -> None:
         result_schema = tools["get_research_run_result"].input_schema
         collection_schemas = [
             result_schema["$defs"][branch["$ref"].rsplit("/", 1)[-1]]
-            for branch in result_schema["oneOf"]
+            for branch in result_schema["$defs"]["ResearchRunResultSectionInput"]["oneOf"]
             if any(name in branch["$ref"] for name in ("Observations", "Positions", "Periods"))
         ]
         assert len(collection_schemas) == 5
@@ -2526,7 +2788,7 @@ async def _exercise_in_memory_protocol() -> None:
         track_result_schema = tools["get_daily_track_result"].input_schema
         track_collection_schemas = [
             track_result_schema["$defs"][branch["$ref"].rsplit("/", 1)[-1]]
-            for branch in track_result_schema["oneOf"]
+            for branch in track_result_schema["$defs"]["DailyTrackResultSectionInput"]["oneOf"]
             if "Observations" in branch["$ref"] or "Origin" in branch["$ref"]
         ]
         assert len(track_collection_schemas) == 3
@@ -2769,7 +3031,7 @@ async def _exercise_destructive_cancel_protocol() -> None:
         assert "ResearchBatchLiveProgress" not in batch_cancel_output_schema
         assert "task_attempt_count" not in batch_cancel_output_schema
         assert "attempt_number" not in batch_cancel_output_schema
-        assert "diagnostic" not in batch_cancel_output_schema
+        assert "'diagnostic':" not in batch_cancel_output_schema
         assert "next_tool" in batch_cancel_output_schema
 
         batch_result = await client.call_tool(
@@ -3042,10 +3304,17 @@ async def _exercise_transport_business_outcomes() -> None:
         ],
         replayed=False,
     )
-    successful_outcomes = []
+    batch_reader = _ResearchBatchReader()
+    batch_reader.admission_outcome = ResearchBatchAdmissionRejectedOutcome(
+        issues=[ResearchBatchAdmissionIssue(
+            code="UNKNOWN_IDENTIFIER", field="formula", message="Unknown Alpha identifier",
+            item_key="value",
+        )], replayed=True,
+    )
+    transport_outcomes = []
     for transport in ("stdio", "streamable_http"):
         server = create_research_agent_mcp_server(
-            lambda _context: _registry(research_runs=reader),
+            lambda _context: _registry(research_runs=reader, research_batches=batch_reader),
             event_sink=lambda _event: None,
             monotonic_ns=lambda: 0,
             subject_factory=lambda _context: "local_operator",
@@ -3061,14 +3330,24 @@ async def _exercise_transport_business_outcomes() -> None:
                 "submit_research_run",
                 _factor_command("domain_rejection_parity"),
             )
+            batch_rejected = await client.call_tool(
+                "submit_research_batch", _factor_batch_command("batch_rejection_parity"),
+            )
         assert diagnostic.is_error is False
         assert diagnostic.structured_content["valid"] is False
-        assert rejected.is_error is False
+        assert rejected.is_error is True
+        assert rejected.meta[RESEARCH_AGENT_TOOL_OUTCOME_META_KEY] == "failed"
         assert rejected.structured_content["outcome"] == "rejected"
-        successful_outcomes.append(
-            (diagnostic.structured_content, rejected.structured_content)
+        assert batch_rejected.is_error is True
+        assert batch_rejected.meta[RESEARCH_AGENT_TOOL_OUTCOME_META_KEY] == "failed"
+        assert batch_rejected.structured_content["outcome"] == "rejected"
+        assert batch_rejected.structured_content["replayed"] is True
+        assert batch_rejected.structured_content["issues"][0]["item_key"] == "value"
+        transport_outcomes.append(
+            (diagnostic.structured_content, rejected.structured_content,
+             batch_rejected.structured_content)
         )
-    assert successful_outcomes[0] == successful_outcomes[1]
+    assert transport_outcomes[0] == transport_outcomes[1]
 
 
 def _missing_run_case():

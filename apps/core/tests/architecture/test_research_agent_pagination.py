@@ -1,3 +1,5 @@
+import json
+from hashlib import sha256
 from uuid import UUID
 
 import pytest
@@ -15,6 +17,53 @@ class Item(BaseModel):
 class Page(BaseModel):
     items: list[Item]
     next_cursor: str | None
+
+
+def test_result_pages_preserve_first_read_metadata_but_reject_changed_data_or_owner():
+    class Query(BaseModel):
+        section: str = "daily_holdings"
+
+    class Result(BaseModel):
+        section: str = "daily_holdings"
+        next_cursor: str
+        expires_at: str
+        unit: dict[str, str]
+        state: dict[str, str]
+
+    initial = Result(
+        next_cursor="c" * 8192, expires_at="2026-10-11T00:00:00Z",
+        unit={"last_read_at": "2026-10-04T00:00:00Z", "expires_at": "2026-10-11T00:00:00Z"},
+        state={"payload": "x" * 200_000, "expires_at": "user-owned-state"},
+    )
+    args = {"query": Query(), "identity": "owner"}
+    pages = ResearchAgentPagination(b"p" * 32)
+    first = pages.result_page(initial, cursor=None, **args)
+    renewed = initial.model_copy(update={
+        "next_cursor": "d" * 8192, "expires_at": "2026-10-11T00:01:00Z",
+        "unit": {"last_read_at": "2026-10-04T00:01:00Z", "expires_at": "2026-10-11T00:01:00Z"},
+    })
+    # Restarting the pager does not lose a result snapshot; the cursor carries only
+    # its authenticated position and first-read metadata, not the large state.
+    resumed = ResearchAgentPagination(b"p" * 32)
+    fragments = [first.json_fragment]
+    cursor = first.next_result_cursor
+    while cursor:
+        assert len(cursor) <= 16 * 1024
+        page = resumed.result_page(renewed, cursor=cursor, **args)
+        assert len(page.model_dump_json().encode()) < 128 * 1024
+        assert page.checksum_sha256 == first.checksum_sha256
+        fragments.append(page.json_fragment)
+        cursor = page.next_result_cursor
+    encoded = "".join(fragments)
+    assert json.loads(encoded) == initial.model_dump(mode="json")
+    assert sha256(encoded.encode("ascii")).hexdigest() == first.checksum_sha256
+    with pytest.raises(InvalidPageCursor):
+        resumed.result_page(
+            renewed, cursor=first.next_result_cursor, **(args | {"identity": "other"}),
+        )
+    changed = renewed.model_copy(update={"state": {**renewed.state, "expires_at": "changed"}})
+    with pytest.raises(InvalidPageCursor):
+        resumed.result_page(changed, cursor=first.next_result_cursor, **args)
 
 
 def test_authenticated_pages_cover_every_complete_utf8_record() -> None:

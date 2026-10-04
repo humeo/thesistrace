@@ -23,7 +23,7 @@ export const fixtureValues = {
   "mcp_agent_scopes": "[\"research:read\",\"research:execute\",\"tracking:read\",\"tracking:execute\"]",
   "mcp_client_id": "thesistrace-agent",
   "mcp_clock_skew_seconds": "30",
-  "mcp_deployment_tools": "[\"diagnose_alpha_formula\",\"get_alpha_catalog\",\"get_daily_track\",\"get_daily_track_result\",\"get_research_batch\",\"get_research_context\",\"get_research_run\",\"get_research_run_result\",\"list_daily_tracks\",\"list_research_batches\",\"list_research_runs\",\"refresh_daily_track\",\"retry_daily_track\",\"start_daily_track\",\"submit_research_batch\",\"submit_research_run\"]",
+  "mcp_deployment_tools": fields.THESISTRACE_MCP_DEPLOYMENT_TOOLS.default,
   "mcp_issuer_url": "",
   "mcp_resource_url": "",
   "mcp_signing_private_jwk": "{\"alg\":\"EdDSA\",\"crv\":\"Ed25519\",\"d\":\"2SCCVM_DYKEJvq18KV1M4UNFhxTHLKtdXxQFXLGlEBs\",\"kid\":\"test-signing-key-01\",\"kty\":\"OKP\",\"use\":\"sig\",\"x\":\"3d8K_V0qubfzURRlfRFt44Yk4LeNW6HkQMaeiPIhJA8\"}",

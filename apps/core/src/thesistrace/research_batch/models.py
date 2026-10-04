@@ -8,6 +8,7 @@ from pydantic import (
     BeforeValidator,
     ConfigDict,
     Field,
+    ValidationError,
     model_validator,
 )
 
@@ -16,6 +17,7 @@ from thesistrace.research_definition import (
     FrameworkConfiguration,
     SimulationCosts,
     default_simulation_costs,
+    python_module_selection_schema,
 )
 from thesistrace.research_kernel.direct_strategy import PythonProgram
 from thesistrace.research_run.models import (
@@ -117,8 +119,44 @@ class DirectStrategySweepItem(BaseModel):
 
 
 class StrategySweepBatchAdmissionCommand(_ResearchBatchAdmissionBase):
+    model_config = ConfigDict(json_schema_extra={"oneOf": [
+        {
+            "properties": {
+                "strategies": {"items": {
+                    "required": ["strategy_mode"],
+                    "properties": {"strategy_mode": {"const": "direct"}},
+                }},
+                "alpha": {"type": "null"}, "neutralization": {"type": "null"},
+            },
+        },
+        {
+            "required": ["alpha", "neutralization"],
+            "properties": {
+                "strategies": {"items": {
+                    "properties": {"strategy_mode": {"const": "framework"}},
+                    "not": python_module_selection_schema("alpha"),
+                }},
+                "alpha": {"not": {"type": "null"}},
+                "neutralization": {"not": {"type": "null"}},
+            },
+        },
+        {
+            "properties": {
+                "strategies": {"items": {"allOf": [
+                    {"properties": {"strategy_mode": {"const": "framework"}}},
+                    python_module_selection_schema("alpha"),
+                ]}},
+                "alpha": {"type": "null"}, "neutralization": {"type": "null"},
+            },
+        },
+    ]})
+
     batch_kind: Literal["strategy_sweep"]
-    alpha: StrategySweepAlpha | None = None
+    alpha: StrategySweepAlpha | None = Field(default=None, description=(
+        "Required with neutralization when every item uses builtin Alpha; "
+        "omit both for Python Signal or direct strategies. All items must use one strategy "
+        "mode and one Alpha mode."
+    ))
     strategies: list[StrategySweepItem | DirectStrategySweepItem] = Field(
         min_length=MIN_RESEARCH_BATCH_ITEMS,
         max_length=MAX_RESEARCH_BATCH_ITEMS,
@@ -137,8 +175,12 @@ class StrategySweepBatchAdmissionCommand(_ResearchBatchAdmissionBase):
             if len(alpha_modes) != 1:
                 raise ValueError("A Strategy Sweep must use one Alpha mode")
             if True in alpha_modes:
-                if self.alpha is None or self.neutralization is None:
-                    raise ValueError("Builtin Alpha Sweep requires shared Alpha settings")
+                missing = [name for name in ("alpha", "neutralization")
+                           if getattr(self, name) is None]
+                if missing:
+                    raise ValidationError.from_exception_data(type(self).__name__, [
+                        {"type": "missing", "loc": (name,), "input": None} for name in missing
+                    ])
             elif self.alpha is not None or self.neutralization is not None:
                 raise ValueError("Python Signal Sweep cannot contain shared Alpha settings")
         return self

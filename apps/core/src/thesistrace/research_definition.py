@@ -16,6 +16,7 @@ from pydantic import (
     Discriminator,
     Field,
     Tag,
+    ValidationError,
     model_validator,
 )
 
@@ -163,10 +164,53 @@ class FactorEvaluationSpec(_ResearchSpecBase):
         return True
 
 
+def python_module_selection_schema(stage: str) -> dict[str, object]:
+    """JSON Schema predicate shared by single and batch Framework authoring."""
+    return {
+        "required": ["modules"],
+        "properties": {"modules": {
+            "required": [stage],
+            "properties": {stage: {
+                "type": "object", "required": ["kind"],
+                "properties": {"kind": {"const": "python"}},
+            }},
+        }},
+    }
+
+
+def _module_settings_schema(
+    stage: str, *, required: tuple[str, ...], settings: tuple[str, ...],
+) -> dict[str, object]:
+    # Omitted modules select the builtins. Python modules must not receive
+    # builtin settings; required builtin settings cannot be null.
+    return {
+        "if": python_module_selection_schema(stage),
+        "then": {"properties": {name: {"type": "null"} for name in settings}},
+        "else": {
+            "required": list(required),
+            "properties": {name: {"not": {"type": "null"}} for name in required},
+        },
+    }
+
+
+_PORTFOLIO_SETTINGS_SCHEMA = _module_settings_schema(
+    "portfolio_construction",
+    required=("holdings_count", "selection_every_sessions"),
+    settings=("holdings_count", "selection_every_sessions", "exposure_expression",
+              "weighting", "volatility_window"),
+)
+_ALPHA_SETTINGS_SCHEMA = _module_settings_schema(
+    "alpha", required=("formula", "neutralization"), settings=("formula", "neutralization"),
+)
+
+
 class FrameworkConfiguration(BaseModel):
     """Active Framework modules and only the settings owned by builtin Portfolio."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(
+        extra="forbid", frozen=True, strict=True,
+        json_schema_extra={"allOf": [_PORTFOLIO_SETTINGS_SCHEMA]},
+    )
 
     strategy_mode: Literal["framework"] = "framework"
     modules: FrameworkModules = Field(default_factory=lambda: FrameworkModules.model_validate(
@@ -174,8 +218,12 @@ class FrameworkConfiguration(BaseModel):
     ))
     initial_cash_cny: InitialCash
     costs: SimulationCosts = Field(default_factory=default_simulation_costs)
-    holdings_count: HoldingsCount | None = None
-    selection_every_sessions: SelectionInterval | None = None
+    holdings_count: HoldingsCount | None = Field(default=None, description=(
+        "Required for the builtin Portfolio (including default modules); omit for Python Portfolio."
+    ))
+    selection_every_sessions: SelectionInterval | None = Field(default=None, description=(
+        "Required for the builtin Portfolio (including default modules); omit for Python Portfolio."
+    ))
     exposure_expression: Formula | None = None
     weighting: PortfolioWeighting | None = None
     volatility_window: VolatilityWindow | None = None
@@ -188,8 +236,12 @@ class FrameworkConfiguration(BaseModel):
             if any(value is not None for value in values):
                 raise ValueError("Python Portfolio cannot contain builtin Portfolio settings")
         else:
-            if self.holdings_count is None or self.selection_every_sessions is None:
-                raise ValueError("Builtin Portfolio requires Holdings Count and Selection Interval")
+            missing = [name for name in ("holdings_count", "selection_every_sessions")
+                       if getattr(self, name) is None]
+            if missing:
+                raise ValidationError.from_exception_data(type(self).__name__, [
+                    {"type": "missing", "loc": (name,), "input": None} for name in missing
+                ])
             for name, default in (
                 ("exposure_expression", "1"), ("weighting", "equal_weight"),
                 ("volatility_window", 20),
@@ -208,15 +260,27 @@ class FrameworkConfiguration(BaseModel):
 
 
 class StrategyBacktestSpec(_ResearchSpecBase, FrameworkConfiguration):
+    model_config = ConfigDict(json_schema_extra={
+        "allOf": [_PORTFOLIO_SETTINGS_SCHEMA, _ALPHA_SETTINGS_SCHEMA],
+    })
+
     research_kind: Literal["strategy_backtest"]
-    formula: Formula | None = None
-    neutralization: ResearchNeutralization | None = None
+    formula: Formula | None = Field(default=None, description=(
+        "Required for builtin Alpha (including default modules); omit for Python Signal."
+    ))
+    neutralization: ResearchNeutralization | None = Field(default=None, description=(
+        "Required for builtin Alpha (including default modules); omit for Python Signal."
+    ))
 
     @model_validator(mode="after")
     def only_active_alpha_settings(self):
         if self.has_alpha:
-            if self.formula is None or self.neutralization is None:
-                raise ValueError("Builtin Alpha requires a Formula and neutralization")
+            missing = [name for name in ("formula", "neutralization")
+                       if getattr(self, name) is None]
+            if missing:
+                raise ValidationError.from_exception_data(type(self).__name__, [
+                    {"type": "missing", "loc": (name,), "input": None} for name in missing
+                ])
         elif self.formula is not None or self.neutralization is not None:
             raise ValueError("Python Signal cannot contain builtin Alpha settings")
         return self
