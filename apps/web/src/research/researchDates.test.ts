@@ -38,7 +38,7 @@ describe("research dates", () => {
     const key = researchDraftKey("owner", "folder");
     const storage = { getItem: (requested: string) => requested === key ? "{broken" : null };
     expect(loadResearchDraftState(storage, "owner", "folder")).toEqual({
-      draft: emptyResearchDraft(), restored: false,
+      draft: emptyResearchDraft(), restored: false, view: "types",
     });
   });
 });

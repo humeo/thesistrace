@@ -70,3 +70,33 @@ test("choosing an otherwise empty strategy persists the selection for reload", a
   await expect(page.getByRole("button", { name: "Run backtest", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Choose a research type", exact: true })).toHaveCount(0);
 });
+
+test("returning through Research Runs keeps the type chooser and the saved strategy draft", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await page.route("**/api/research-runs?*", route => route.fulfill({ json: { items: [], total_count: 0 } }));
+  await page.goto("/research");
+  await page.getByRole("button", { name: "Strategy Backtest", exact: true }).click();
+  const cash = page.getByLabel("Initial cash (CNY)", { exact: true });
+  await cash.fill("250000");
+  await page.getByRole("button", { name: "Back to research types", exact: true }).click();
+  const chooser = page.getByRole("heading", { name: "Choose a research type", exact: true });
+  await expect(chooser).toBeVisible();
+
+  await page.getByRole("link", { name: "Research Runs", exact: true }).click();
+  await expect(page).toHaveURL(/\/research-runs$/);
+  await expect(page.getByRole("heading", { name: "Research Runs", exact: true })).toBeVisible();
+  await page.getByRole("link", { name: "Research", exact: true }).click();
+  await expect(page).toHaveURL(/\/research$/);
+  await expect(chooser).toBeVisible();
+  await expect(page.locator(".research-workbench, .research-action-dock")).toHaveCount(0);
+  await page.reload();
+  await expect(chooser).toBeVisible();
+  await page.getByRole("button", { name: "Strategy Backtest", exact: true }).click();
+  await expect(cash).toHaveValue("250000");
+
+  await page.getByRole("link", { name: "Research Runs", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Research Runs", exact: true })).toBeVisible();
+  await page.getByRole("link", { name: "Research", exact: true }).click();
+  await expect(cash).toHaveValue("250000");
+  await expect(chooser).toHaveCount(0);
+});

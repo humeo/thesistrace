@@ -31,16 +31,16 @@ export function useResearchDraftController({
     try {
       const loaded = loadResearchDraftState(storage, researcherId, folderId);
       if (loaded.upgradedExample) {
-        try { persistResearchDraft(storage, researcherId, folderId, loaded.draft); }
+        try { persistResearchDraft(storage, researcherId, folderId, loaded.draft, loaded.view); }
         catch { return { ...loaded, failed: true }; }
       }
       return { ...loaded, failed: false };
     }
-    catch { return { draft: emptyResearchDraft(), restored: false, failed: true }; }
+    catch { return { draft: emptyResearchDraft(), restored: false, view: "types" as const, failed: true }; }
   });
   const [draft, setDraft] = useState<ResearchDraft>(initial.draft);
   const [hasStoredDraft, setHasStoredDraft] = useState(initial.restored);
-  const [choosingType, setChoosingType] = useState(!initial.restored);
+  const [choosingType, setChoosingType] = useState(initial.view === "types");
   const [storageError, setStorageError] = useState<"failed" | "accepted" | null>(initial.failed ? "failed" : null);
   const [diagnosticState, setDiagnosticState] = useState<DiagnosticState>({ kind: "idle", result: null });
   const [exposureDiagnosticState, setExposureDiagnosticState] = useState<DiagnosticState>({ kind: "idle", result: null });
@@ -130,6 +130,17 @@ export function useResearchDraftController({
   function chooseResearchKind(kind: ResearchDraft["researchKind"]): void {
     updateDraft(current => selectResearchKind(current, kind));
     setChoosingType(false);
+  }
+
+  function showResearchTypes(): void {
+    try {
+      persistResearchDraft(storage, researcherId, folderId, draft, "types");
+      setStorageError(null);
+      setHasStoredDraft(true);
+    } catch {
+      setStorageError("failed");
+    }
+    setChoosingType(true);
   }
 
   function validateInputs(): boolean {
@@ -232,6 +243,6 @@ export function useResearchDraftController({
   return {
     draft, hasStoredDraft, choosingType, storageError, diagnosticState, exposureDiagnosticState,
     feedback, submitting, validationAttempted,
-    updateDraft, chooseResearchKind, showResearchTypes: () => setChoosingType(true), startNewResearch, checkConfiguration, runResearch,
+    updateDraft, chooseResearchKind, showResearchTypes, startNewResearch, checkConfiguration, runResearch,
   };
 }

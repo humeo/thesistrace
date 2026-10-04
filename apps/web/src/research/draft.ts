@@ -103,6 +103,8 @@ export type ResearchDraft = ResearchInputs & {
   pendingAdmission: PendingResearchRun | null;
 };
 
+export type ResearchWorkspaceView = "types" | "editor";
+
 const MAX_DRAFT_BYTES = 2 * 1024 * 1024;
 const DRAFT_STORAGE_SCHEMA = "research-draft/v7";
 const MAX_FORMULA_LENGTH = 4_096;
@@ -181,22 +183,24 @@ export function loadResearchDraftState(
   storage: Pick<Storage, "getItem">,
   researcherId: string,
   folderId: string,
-): { draft: ResearchDraft; restored: boolean; upgradedExample?: true } {
+): { draft: ResearchDraft; restored: boolean; view: ResearchWorkspaceView; upgradedExample?: true } {
   const stored = storage.getItem(researchDraftKey(researcherId, folderId));
   if (stored === null || new TextEncoder().encode(stored).byteLength > MAX_DRAFT_BYTES) {
-    return { draft: emptyResearchDraft(), restored: false };
+    return { draft: emptyResearchDraft(), restored: false, view: "types" };
   }
   try {
     const value: unknown = JSON.parse(stored);
     const draft = readDraft(value);
-    if (draft === null) return { draft: emptyResearchDraft(), restored: false };
+    if (draft === null) return { draft: emptyResearchDraft(), restored: false, view: "types" };
+    // Optional browser navigation metadata is separate from authorable Research inputs.
+    const view = isRecord(value) && value.workspaceView === "types" ? "types" : "editor";
     if (draft.programSource.trimEnd() === PREVIOUS_DIRECT_EXAMPLE.trimEnd()
       && draft.lastAdmittedBaseline === null && draft.pendingAdmission === null) {
-      return { draft: { ...draft, programSource: DIRECT_EXAMPLE }, restored: true, upgradedExample: true };
+      return { draft: { ...draft, programSource: DIRECT_EXAMPLE }, restored: true, view, upgradedExample: true };
     }
-    return { draft, restored: true };
+    return { draft, restored: true, view };
   } catch {
-    return { draft: emptyResearchDraft(), restored: false };
+    return { draft: emptyResearchDraft(), restored: false, view: "types" };
   }
 }
 
@@ -205,12 +209,13 @@ export function persistResearchDraft(
   researcherId: string,
   folderId: string,
   draft: ResearchDraft,
+  view: ResearchWorkspaceView = "editor",
 ): void {
   // Keep one copy of unchanged source/parameters. Snapshots are differences
   // from the visible inputs, so later edits still preserve accepted/pending input.
   const current = researchInputs(draft);
   const encoded = JSON.stringify({
-    ...draft, riskPolicySelection: current.riskPolicySelection, storageSchema: DRAFT_STORAGE_SCHEMA,
+    ...draft, workspaceView: view, riskPolicySelection: current.riskPolicySelection, storageSchema: DRAFT_STORAGE_SCHEMA,
     lastAdmittedBaseline: draft.lastAdmittedBaseline === null ? null : inputChanges(draft.lastAdmittedBaseline, current),
     pendingAdmission: draft.pendingAdmission === null ? null : { ...draft.pendingAdmission,
       inputs: inputChanges(draft.pendingAdmission.inputs, current),

@@ -14,6 +14,7 @@ import {
   isCompleteResearchInputs,
   isValidInitialCash,
   loadResearchDraft,
+  loadResearchDraftState,
   persistResearchDraft,
   researchDraftKey,
   researchInputs,
@@ -469,6 +470,26 @@ describe("browser Research Draft", () => {
     expect(storage.length).toBe(1);
     expect(storage.key(0)).toBe(researchDraftKey(researcherId, folder.id));
     expect(researchInputs(loadResearchDraft(storage, researcherId, folder.id))).toEqual(researchInputs(draft));
+  });
+
+  it("remembers the type chooser independently of authorable values and opens reused research in the editor", () => {
+    const storage = new MemoryStorage();
+    const draft = { ...emptyResearchDraft(), researchKind: "strategy_backtest" as const, initialCashCny: "250000" };
+    persistResearchDraft(storage, researcherId, folder.id, draft, "types");
+    expect(loadResearchDraftState(storage, researcherId, folder.id)).toMatchObject({
+      view: "types", restored: true, draft: { researchKind: "strategy_backtest", initialCashCny: "250000" },
+    });
+    expect(researchInputs(loadResearchDraft(storage, researcherId, folder.id))).toEqual(researchInputs(draft));
+    expect(loadResearchDraftState(storage, researcherId, "folder_other").view).toBe("types");
+    expect(loadResearchDraftState(storage, "another-owner", folder.id).restored).toBe(false);
+
+    expect(useResearchAsDraft(storage, researcherId, folder.id, {
+      research_kind: "factor_evaluation", formula: "rank(close)", hypothesis: "Reused idea",
+      start_date: "2026-01-01", end_date: "2026-08-13", universe: "top300", neutralization: "none",
+    }, () => true)).toBe(true);
+    expect(loadResearchDraftState(storage, researcherId, folder.id)).toMatchObject({
+      view: "editor", draft: { researchKind: "factor_evaluation", formula: "rank(close)" },
+    });
   });
 
   it("keeps independent Draft values under distinct Folder keys", () => {
