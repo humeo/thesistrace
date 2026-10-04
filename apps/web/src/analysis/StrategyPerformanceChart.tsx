@@ -258,7 +258,6 @@ export function StrategyPerformanceChart({
           </>
         )}
       </div>
-      {compact ? attribution : null}
       </div>
       {!compact ? <div className="flex justify-end">{attribution}</div> : null}
     </figure>
