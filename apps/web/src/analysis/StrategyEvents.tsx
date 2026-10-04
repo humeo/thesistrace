@@ -79,7 +79,7 @@ export function StrategyEvents({ endpoint, embedded = false, dateRange, initialQ
   }, [open, endpoint, section, filters, cursor, revision]);
   const content = <div className="flex min-w-0 flex-col gap-4">
       <header className="flex items-center justify-between gap-4">
-        <h3 className="m-0 text-base font-semibold" ref={heading} tabIndex={-1}>{eventSectionLabel(section)}</h3>
+        <h3 className="m-0 text-base font-semibold outline-none" ref={heading} tabIndex={-1}>{eventSectionLabel(section)}</h3>
         <InfoHelp label={eventSectionLabel(section)} buttonLabel={t("help.about", { label: eventSectionLabel(section) })} closeLabel={t("help.close")}>
           <div className="flex flex-col gap-2 [&_p]:m-0">
             <p>{t(`events.descriptions.${section}`)}</p>

@@ -138,8 +138,9 @@ test("long authorization target stays readable and successful revoke focuses a s
   const dialog = page.getByRole("alertdialog");
   const dialogTitle = dialog.locator('[data-slot="alert-dialog-title"]');
   expect.soft(await dialogTitle.evaluate(el => el.scrollWidth <= el.clientWidth && el.getBoundingClientRect().right <= el.closest('[role="alertdialog"]')!.getBoundingClientRect().right)).toBe(true);
-  await dialog.getByRole("button", { name: "Revoke access", exact: true }).click();
+  await dialog.getByRole("button", { name: "Revoke access", exact: true }).press("Enter");
   await expect(page.getByRole("heading", { name: "Authorized apps" })).toBeFocused();
+  await expect(page.getByRole("heading", { name: "Authorized apps" })).toHaveCSS("outline-style", "none");
 });
 
 test("MCP discovery state has no black dashed frame", async ({ page }) => {

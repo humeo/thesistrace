@@ -20,7 +20,7 @@ export function ResearchTypeChooser({ onChoose, storageError, folderNavigation }
         <PageHeader title={t("newResearch")} actions={folderNavigation} />
         <div className="mx-auto mt-24 grid w-full max-w-[880px] gap-8" aria-labelledby="research-type-heading">
           <div className="grid gap-2">
-            <h2 ref={heading} id="research-type-heading" tabIndex={-1} className="m-0 text-xl leading-7 font-semibold">{t("entry.title")}</h2>
+            <h2 ref={heading} id="research-type-heading" tabIndex={-1} className="m-0 text-xl leading-7 font-semibold outline-none">{t("entry.title")}</h2>
             <p className="m-0 text-sm text-muted-foreground">{t("entry.description")}</p>
           </div>
           <div className="grid grid-cols-2 gap-6">

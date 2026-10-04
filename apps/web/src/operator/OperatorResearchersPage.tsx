@@ -105,7 +105,7 @@ export function OperatorResearchersPage({ operatorResearcherId }: Readonly<{
     return (
       <section
         aria-label={t("researchers.directory.notFound")}
-        className="page-section state-section"
+        className="page-section state-section outline-none"
         id={operatorPageFallbackId}
         tabIndex={-1}
       >
@@ -311,7 +311,7 @@ export function OperatorResearchersView({
     <section
       aria-busy={busy}
       aria-label={t("researchers.directory.pageLabel")}
-      className={operatorAccessLayout.page}
+      className={`${operatorAccessLayout.page} outline-none`}
       id={operatorPageFallbackId}
       tabIndex={-1}
     >

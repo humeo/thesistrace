@@ -69,7 +69,7 @@ export function McpPage() {
     {catalog ? <McpSetup endpoint={catalog.server_url} /> : <Skeleton className="h-64 w-full" />}
     <Separator />
     <section className="grid min-w-0 grid-cols-[200px_minmax(0,1fr)] items-start gap-6" aria-labelledby="mcp-apps-heading">
-        <div className={mcpLayout.row}><h2 ref={appsHeading} tabIndex={-1} id="mcp-apps-heading" className={mcpLayout.sectionTitle}>{t("authorizedApps")}</h2>{catalog && !catalogError ? <span className="text-sm text-muted-foreground">{formatNumber(catalog.apps.length)}</span> : null}</div>
+        <div className={mcpLayout.row}><h2 ref={appsHeading} tabIndex={-1} id="mcp-apps-heading" className={`${mcpLayout.sectionTitle} outline-none`}>{t("authorizedApps")}</h2>{catalog && !catalogError ? <span className="text-sm text-muted-foreground">{formatNumber(catalog.apps.length)}</span> : null}</div>
         <div className="flex min-w-0 flex-col gap-3">
         {catalog && catalog.apps.length > 0 ? <p className="m-0 text-sm text-muted-foreground">{t("appDescription")}</p> : null}
         {notice ? <p role="status" className="m-0 text-sm text-muted-foreground">{t("revoked", notice)}</p> : null}

@@ -137,9 +137,10 @@ test("trading evidence pages and follows target, order, child and fill relations
   await page.getByRole("button", { name: /View raw record/ }).click();
   await expect(page.getByRole("button", { name: "View fills" })).toBeVisible();
   expect(reads.at(-1)?.order_id).toBe("order_a");
-  await page.getByRole("button", { name: "View fills" }).click();
+  await page.getByRole("button", { name: "View fills" }).press("Enter");
   await expect(page.getByRole("combobox", { name: "Event type" }).locator('[data-slot="select-value"]')).toHaveText("Fills");
   await expect(page.getByRole("heading", { name: "Fills", exact: true })).toBeFocused();
+  await expect(page.getByRole("heading", { name: "Fills", exact: true })).toHaveCSS("outline-style", "none");
   await expect(page.getByRole("cell", { name: "5.00", exact: true })).toBeVisible();
   await page.getByRole("button", { name: /View raw record/ }).click();
   expect(JSON.parse(await page.locator("pre").innerText()).net_cash_delta).toBe("-1006");
