@@ -41,7 +41,8 @@ def mounted_data_mutation_lock(
 ) -> Iterator[None]:
     """Let operators coexist while excluding Reset and collection."""
     with database.session_advisory_lock_shared(
-        MOUNTED_DATA_MUTATION_LOCK, exclusive_name=exclusive_name,
+        MOUNTED_DATA_MUTATION_LOCK,
+        exclusive_name=exclusive_name,
     ):
         yield
 
@@ -108,7 +109,8 @@ class DatasetLifecycle:
         raise DataLifecycleError("Dataset Head changed repeatedly during inspection")
 
     def current_admission_in_transaction(
-        self, transaction: PostgresTransaction,
+        self,
+        transaction: PostgresTransaction,
     ) -> MountedGenerationAdmission | None:
         """Keep the admission calendar stable through a caller's short read snapshot."""
         lock_data_lifecycle(transaction)
@@ -299,6 +301,7 @@ class DatasetLifecycle:
         expected_generation_manifest_sha256: str | None,
         candidate: ProtectedRefreshCandidate,
         prepared_at: datetime | None = None,
+        benchmark_snapshot_sha256: str | None = None,
         publication_guard: (
             Callable[[PostgresTransaction], AbstractContextManager[None]] | None
         ) = None,
@@ -327,6 +330,7 @@ class DatasetLifecycle:
                     expected_generation_manifest_sha256=(expected_generation_manifest_sha256),
                     candidate=candidate.resolved_candidate,  # type: ignore[arg-type]
                     prepared_at=prepared_at,
+                    benchmark_snapshot_sha256=benchmark_snapshot_sha256,
                 )
                 transaction.execute(
                     """
@@ -345,6 +349,7 @@ class DatasetLifecycle:
         candidate_generation_manifest_sha256: str,
         operation_id: str,
         prepared_at: datetime | None = None,
+        benchmark_snapshot_sha256: str | None = None,
         financial_publication_key: str | None = None,
         daily_financial_publication_key: str | None = None,
         industry_publication_key: str | None = None,
@@ -383,6 +388,7 @@ class DatasetLifecycle:
                         expected_generation_manifest_sha256=(expected_generation_manifest_sha256),
                         candidate=resolved,
                         prepared_at=prepared_at,
+                        benchmark_snapshot_sha256=benchmark_snapshot_sha256,
                     )
                     if financial_publication_key is not None:
                         receipt = transaction.execute(

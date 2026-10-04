@@ -169,6 +169,38 @@ post-commit rollback, stop writers and restore the verified backup with its
 matching application images. Start the target Core services only after the
 migration succeeds. Do not reset the database or alter its fingerprint manually.
 
+## 0006: Unified Data Refresh and Dataset Head v2
+
+- Core source: `5c82cb46665a54816e186fe74105c25ef287cc661e43fcdc8a58e4d94450ee8c`
+- Core target: `84827a4b8a6c9bb9d0171e4a7aa42cfefb061216a98295a1e7d784632c237070`
+- Core preflight: `python -m thesistrace.migrations.unified_refresh_0006 --data-root <dataset-mount> --benchmark-root <benchmark-mount> --backup-directory <restricted-backup>`.
+- Auth source: `479089ee38d20700e10a0f955ee153eb2644e6925d4cb671009a728a161b1d5e`
+- Auth target: `d64b69665b7454cd602a81295df4deb99b5f336a6df58a6cb66dc3b35aa3a4eb`
+- Auth preflight: `node apps/auth/dist/migrate-unified-refresh.js --backup-directory <restricted-backup>` with the target build and owner database URL.
+- Apply: run each preflight command with `--apply` after saving a verified PostgreSQL backup as `<restricted-backup>/database.dump`.
+
+Drain all queued/running refreshes and stop Core, Data Operator and Auth writers.
+Back up the database, Dataset mount, Benchmark mount and referenced objects before
+application. Keep the three directory arguments independent. Neither initializer
+performs an upgrade or accepts the previous contract at runtime.
+
+Core adds durable preparation checkpoints and retry lineage, retains historical
+family receipts, and permits financial candidates to be prepared without publication.
+The database DDL, fingerprint and migration history commit in one transaction;
+a failed step rolls them all back. The explicit Head conversion then imports the
+existing Benchmark bytes into an immutable Snapshot, backs up Head v1, and replaces
+Head atomically with v2 containing the Snapshot reference. The Generation and data
+identity are preserved. If interrupted after the database commit, repeat the same
+command to finish the Head conversion before starting services. Repeated application
+verifies the current schema, Head and selected Snapshot without rewriting history.
+Auth adds the unified submission Proof operation while preserving old audit records;
+its constraint, fingerprint and receipt commit together and roll back together.
+
+Only start the target release after both receipts succeed. A post-commit rollback
+requires stopping writers and restoring the verified database and both mounts with
+the matching old release. Do not run the old application against the upgraded state
+or change fingerprints manually. Verification follows [AGENTS.md](../AGENTS.md#testing).
+
 ## Explicit research-contract retirement
 
 `python -m thesistrace.migrations.research_contract_cutover` is an operator-only

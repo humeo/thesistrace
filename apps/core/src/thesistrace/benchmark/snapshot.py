@@ -145,37 +145,7 @@ class BenchmarkSnapshotStore:
             current = self._read_locked()
             if current is not None:
                 _require_append_only_publication(current.levels, normalized_levels)
-            timestamp = published_at.astimezone(UTC).isoformat().replace("+00:00", "Z")
-            payload = {
-                "format": BENCHMARK_SNAPSHOT_FORMAT,
-                "version": BENCHMARK_SNAPSHOT_VERSION,
-                "contract_version": BENCHMARK_CONTRACT_VERSION,
-                "benchmark": {
-                    "id": BENCHMARK_ID,
-                    "display_name": BENCHMARK_DISPLAY_NAME,
-                    "ts_code": BENCHMARK_TS_CODE,
-                    "kind": BENCHMARK_KIND,
-                    "coordinate": BENCHMARK_COORDINATE,
-                },
-                "source": {
-                    "provider": BENCHMARK_SOURCE_PROVIDER,
-                    "api_name": BENCHMARK_SOURCE_API_NAME,
-                    "field": BENCHMARK_SOURCE_FIELD,
-                },
-                "published_at": timestamp,
-                "coverage": {
-                    "start_session": normalized_levels[0].session,
-                    "end_session": normalized_levels[-1].session,
-                    "session_count": len(normalized_levels),
-                },
-                "levels": [
-                    {"session": level.session, "open_level": level.open_level}
-                    for level in normalized_levels
-                ],
-            }
-            content = _canonical_json_bytes(payload)
-            if len(content) > _SNAPSHOT_MAX_BYTES:
-                raise BenchmarkSnapshotError("BENCHMARK_SNAPSHOT_TOO_LARGE")
+            content = encode_benchmark_snapshot(normalized_levels, published_at=published_at)
             snapshot = _decode_snapshot(content)
             self._atomic_replace(content)
             return snapshot
@@ -185,10 +155,7 @@ class BenchmarkSnapshotStore:
         self._root.mkdir(parents=True, exist_ok=True)
         descriptor = os.open(
             self._root / _SNAPSHOT_LOCK_FILENAME,
-            os.O_CREAT
-            | os.O_RDWR
-            | getattr(os, "O_CLOEXEC", 0)
-            | getattr(os, "O_NOFOLLOW", 0),
+            os.O_CREAT | os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
             0o600,
         )
         try:
@@ -360,6 +327,45 @@ class BenchmarkSnapshotUpdater:
         with self._publication_guard():
             snapshot = self._store.publish(combined, published_at=selected_publication_time)
         return BenchmarkSnapshotUpdate(snapshot=snapshot, published=True)
+
+
+def encode_benchmark_snapshot(levels: Sequence[BenchmarkLevel], *, published_at: datetime) -> bytes:
+    if published_at.tzinfo is None:
+        raise BenchmarkSnapshotError("BENCHMARK_PUBLICATION_TIME_INVALID")
+    normalized_levels = _validate_levels(tuple(levels))
+    timestamp = published_at.astimezone(UTC).isoformat().replace("+00:00", "Z")
+    payload = {
+        "format": BENCHMARK_SNAPSHOT_FORMAT,
+        "version": BENCHMARK_SNAPSHOT_VERSION,
+        "contract_version": BENCHMARK_CONTRACT_VERSION,
+        "benchmark": {
+            "id": BENCHMARK_ID,
+            "display_name": BENCHMARK_DISPLAY_NAME,
+            "ts_code": BENCHMARK_TS_CODE,
+            "kind": BENCHMARK_KIND,
+            "coordinate": BENCHMARK_COORDINATE,
+        },
+        "source": {
+            "provider": BENCHMARK_SOURCE_PROVIDER,
+            "api_name": BENCHMARK_SOURCE_API_NAME,
+            "field": BENCHMARK_SOURCE_FIELD,
+        },
+        "published_at": timestamp,
+        "coverage": {
+            "start_session": normalized_levels[0].session,
+            "end_session": normalized_levels[-1].session,
+            "session_count": len(normalized_levels),
+        },
+        "levels": [
+            {"session": level.session, "open_level": level.open_level}
+            for level in normalized_levels
+        ],
+    }
+    content = _canonical_json_bytes(payload)
+    if len(content) > _SNAPSHOT_MAX_BYTES:
+        raise BenchmarkSnapshotError("BENCHMARK_SNAPSHOT_TOO_LARGE")
+    _decode_snapshot(content)
+    return content
 
 
 def _decode_snapshot(content: bytes) -> BenchmarkSnapshot:

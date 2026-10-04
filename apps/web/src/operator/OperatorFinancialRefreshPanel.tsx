@@ -16,7 +16,7 @@ import {
   type FinancialRefreshOperation,
   type FinancialRefreshRequest,
   isIsoResearchSession,
-  isMarketRefreshIdempotencyKey,
+  isDatasetRefreshIdempotencyKey,
   OperatorMutationError,
 } from "./operatorMutationClient";
 
@@ -36,7 +36,7 @@ export function OperatorFinancialRefreshPanel({
   const { confirmation, pendingRequest: pending, operation, pollError, submissionFailure } = refresh;
   const wasBusy = useRef(false);
   const rejected = submissionFailure?.kind === "rejected" ? submissionFailure : null;
-  const invalidTarget = rejected?.code === "request-invalid" && isMarketRefreshIdempotencyKey(rejected.request.idempotencyKey);
+  const invalidTarget = rejected?.code === "request-invalid" && isDatasetRefreshIdempotencyKey(rejected.request.idempotencyKey);
   const submissionError = rejected && !invalidTarget ? "data.common.rejectedRequest"
     : submissionFailure?.kind === "stopped" ? "data.common.stopped"
     : submissionFailure?.kind === "failed" ? financialMutationMessage(submissionFailure.reason) : null;

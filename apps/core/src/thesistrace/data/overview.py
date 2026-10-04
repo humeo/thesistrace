@@ -11,9 +11,8 @@ from thesistrace._postgres import PostgresDatabase
 from thesistrace.benchmark import (
     BenchmarkSnapshot,
     BenchmarkSnapshotError,
-    BenchmarkSnapshotStore,
-    validate_independent_benchmark_mount,
 )
+from thesistrace.data.benchmark_snapshot import PublishedBenchmarkSnapshots
 from thesistrace.data.fields import alpha_field_catalog
 from thesistrace.data.financial_disclosures import DISCOVERY_COVERAGE_KINDS
 from thesistrace.data.generation_family import MountedFamilyGenerationDescriptor
@@ -51,9 +50,7 @@ class DatasetOverviewService:
     ) -> None:
         self._database = database
         self._heads = MountedDatasetHeadStore(mount_root)
-        self._benchmark = BenchmarkSnapshotStore(
-            validate_independent_benchmark_mount(mount_root, benchmark_mount_root)
-        )
+        self._benchmark = PublishedBenchmarkSnapshots(benchmark_mount_root, mount_root)
         self._validated_pointer: DatasetHeadPointer | None = None
 
     def validate_startup(self) -> None:

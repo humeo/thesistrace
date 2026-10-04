@@ -25,14 +25,16 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter } from "../co
 import { operatorDataClasses as styles } from "./operatorDataClasses";
 
 const pollIntervalMilliseconds = 5_000;
-const refreshKinds = ["market", "financial", "industry"] as const;
+const refreshKinds = ["dataset"] as const;
 
 export function OperatorDatasetStatus({
   onAccessNotFound,
   reloadGeneration,
+  onActionCompleted,
 }: Readonly<{
   onAccessNotFound: () => void;
   reloadGeneration: number;
+  onActionCompleted?: (receipt: import("./operatorMutationClient").DataRefreshActionReceipt) => void;
 }>) {
   useTranslation("operator");
   const [data, setData] = useState<DatasetOperationalStatus | null>(null);
@@ -196,7 +198,8 @@ export function OperatorDatasetStatus({
           onAccessNotFound={onAccessNotFound}
           onDismiss={dismissAction}
           onStateChanged={reloadAfterAction}
-          onSucceeded={() => {
+          onSucceeded={(receipt) => {
+            onActionCompleted?.(receipt);
             setAction(null);
             reloadAfterAction();
             window.requestAnimationFrame(() => actionTrigger.current?.focus());
@@ -589,6 +592,7 @@ function OperationActionButton({
   operation: DataRefreshOperationalStatus;
 }>) {
   const { t } = useTranslation("operator");
+  if (operation.kind !== "dataset") return null;
   const action = operation.status === "accepted"
     ? "cancel"
     : operation.status === "failed" || operation.status === "cancelled"
@@ -639,6 +643,7 @@ function operationStateText(operation: DataRefreshOperationalStatus): string {
 }
 
 function kindText(kind: DataRefreshKind): string {
+  if (kind === "dataset") return i18n.t("operator:data.dataset.title");
   if (kind === "market") return i18n.t("operator:data.market.title");
   if (kind === "financial") return i18n.t("operator:data.financial.title");
   return i18n.t("operator:data.industry.title");

@@ -15,7 +15,7 @@ from thesistrace.data.overview import DatasetOverviewService, DatasetOverviewSna
 DATA_REFRESH_OPERATION_PAGE_SIZE = 50
 _MAX_CURSOR_LENGTH = 1_024
 
-DataRefreshKind = Literal["market", "financial", "industry"]
+DataRefreshKind = Literal["market", "financial", "industry", "dataset"]
 DataRefreshStatus = Literal["accepted", "running", "succeeded", "failed", "cancelled"]
 DataRefreshOutcome = Literal[
     "published",
@@ -137,6 +137,7 @@ class DatasetOperationalStatusService:
                     ORDER BY kind, created_at DESC, idempotency_key DESC
                 ) AS latest
                 ORDER BY CASE latest.kind
+                    WHEN 'dataset' THEN 0
                     WHEN 'market' THEN 1
                     WHEN 'financial' THEN 2
                     WHEN 'industry' THEN 3

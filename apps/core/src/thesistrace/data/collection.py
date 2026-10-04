@@ -114,15 +114,32 @@ class DataGarbageCollector:
                             days=_REFRESH_RECEIPT_RETENTION_DAYS
                         )
                     targets = tuple(sorted(inventory - retained))
+                    # A retry family expires together: removing its parent or successful
+                    # sibling alone would let a retained failed attempt publish again.
+                    # The cleanup limit counts families; unrelated receipts are singletons.
                     receipt_rows = transaction.execute(
                         """
-                        SELECT idempotency_key
-                        FROM data.refresh_operations
-                        WHERE status IN ('succeeded', 'failed', 'cancelled')
-                          AND finished_at < %s
-                        ORDER BY finished_at, idempotency_key
-                        LIMIT %s
-                        FOR UPDATE
+                        WITH RECURSIVE families AS (
+                            SELECT idempotency_key AS root, idempotency_key, status, finished_at
+                            FROM data.refresh_operations WHERE retry_of IS NULL
+                            UNION ALL
+                            SELECT f.root, r.idempotency_key, r.status, r.finished_at
+                            FROM data.refresh_operations r
+                            JOIN families f ON r.retry_of = f.idempotency_key
+                        ), expired AS (
+                            SELECT root FROM families
+                            GROUP BY root
+                            HAVING bool_and(status IN ('succeeded', 'failed', 'cancelled'))
+                               AND max(finished_at) < %s
+                            ORDER BY max(finished_at), root
+                            LIMIT %s
+                        )
+                        SELECT r.idempotency_key
+                        FROM data.refresh_operations r
+                        JOIN families f ON f.idempotency_key = r.idempotency_key
+                        JOIN expired e ON e.root = f.root
+                        ORDER BY r.finished_at, r.idempotency_key
+                        FOR UPDATE OF r
                         """,
                         (receipt_cutoff, self._receipt_cleanup_limit),
                     ).fetchall()
@@ -426,6 +443,21 @@ def _retention_snapshot(
     transaction: PostgresTransaction,
 ) -> tuple[tuple[str, ...], tuple[GenerationFileRef, ...]]:
     roots = lifecycle.retention_root_ids_in_transaction(transaction)
+    preparations = transaction.execute(
+        "SELECT preparation FROM data.refresh_operations WHERE kind='dataset' "
+        "AND status IN ('accepted', 'running', 'failed', 'cancelled')"
+    ).fetchall()
+    roots = tuple(
+        sorted(
+            set(roots)
+            | {
+                str(row["preparation"][stage])
+                for row in preparations
+                for stage in ("base", "market", "financial", "industry")
+                if stage in row["preparation"]
+            }
+        )
+    )
     retained: set[GenerationFileRef] = set()
     candidate_rows = transaction.execute(
         """
@@ -479,8 +511,7 @@ def _retention_snapshot(
         """
     ).fetchall()
     retained.update(
-        GenerationFileRef("raw_financial", str(row["batch_sha256"]))
-        for row in daily_raw_rows
+        GenerationFileRef("raw_financial", str(row["batch_sha256"])) for row in daily_raw_rows
     )
     indicator_rows = transaction.execute(
         """
@@ -502,8 +533,7 @@ def _retention_snapshot(
         """
     ).fetchall()
     retained.update(
-        GenerationFileRef("indicator_collection", str(row["digest"]))
-        for row in indicator_rows
+        GenerationFileRef("indicator_collection", str(row["digest"])) for row in indicator_rows
     )
     indicator_candidate_rows = transaction.execute(
         """SELECT indicator_candidate_manifest_sha256 AS digest

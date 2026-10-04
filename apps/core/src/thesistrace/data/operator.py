@@ -14,9 +14,9 @@ from thesistrace._postgres import PostgresDatabase
 from thesistrace.benchmark import (
     BenchmarkLevelSource,
     BenchmarkSnapshotError,
-    BenchmarkSnapshotStore,
     BenchmarkSnapshotUpdater,
 )
+from thesistrace.data.benchmark_snapshot import BenchmarkSnapshotPreparation
 from thesistrace.data.canonical_mapping import liquidity_universes
 from thesistrace.data.generation_store import GenerationStoreError, MountedGenerationStore
 from thesistrace.data.head_store import DatasetHeadConflict, DatasetHeadPointer
@@ -96,7 +96,7 @@ class DataOperator:
         self._lifecycle = DatasetLifecycle(database, mount_root)
         self._generations = MountedGenerationStore(mount_root)
         self._benchmark = BenchmarkSnapshotUpdater(
-            BenchmarkSnapshotStore(benchmark_mount_root),
+            BenchmarkSnapshotPreparation(benchmark_mount_root, mount_root),
             benchmark_source,
             clock=self._operator_time,
         )
@@ -128,7 +128,9 @@ class DataOperator:
         key = _identity(idempotency_key, "Bootstrap idempotency key")
         try:
             plan = bootstrap_collection_plan(
-                as_of, collection_key=f"bootstrap:{key}", start_date=start_date,
+                as_of,
+                collection_key=f"bootstrap:{key}",
+                start_date=start_date,
             )
         except ValueError as error:
             raise DataOperatorError("INVALID_BOOTSTRAP_WINDOW") from error
@@ -232,9 +234,7 @@ class DataOperator:
                         "phase": "benchmark",
                         "status": "completed",
                         "published": benchmark_update.published,
-                        "coverage_end_session": (
-                            benchmark_update.snapshot.coverage_end_session
-                        ),
+                        "coverage_end_session": (benchmark_update.snapshot.coverage_end_session),
                         "snapshot_sha256": benchmark_update.snapshot.sha256,
                     }
                 )
@@ -256,6 +256,7 @@ class DataOperator:
                         candidate_generation_manifest_sha256=candidate_manifest,
                         operation_id=operation_id,
                         prepared_at=completed_at,
+                        benchmark_snapshot_sha256=benchmark_update.snapshot.sha256,
                     )
                     candidate_live = False
                 except DatasetHeadConflict as error:

@@ -1,0 +1,33 @@
+import { expect, test } from "@playwright/test";
+import { buildProductFixture } from "./build-product-fixture";
+
+test("one date drives the complete refresh and failed preparation can be retried", async ({ page }) => {
+  const fixture = await buildProductFixture(new URL("./fixtures/unified-data-refresh.tsx", import.meta.url), "UnifiedRefreshFixture");
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.route("http://127.0.0.1:5179/**", route => route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' }));
+  await page.goto("http://127.0.0.1:5179/");
+  await page.addStyleTag({ content: fixture.styles });
+  await page.addScriptTag({ content: fixture.script });
+  await expect(page.getByRole("textbox")).toHaveCount(1);
+  await page.getByRole("textbox", { name: "As-of", exact: true }).fill("2026-08-14");
+  await page.getByRole("button", { name: "Review Refresh", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Refresh all data?" });
+  await expect(dialog).toContainText("2026-08-14T18:00:00+08:00");
+  await dialog.getByRole("button", { name: "Submit Refresh", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Refresh failed", exact: true })).toBeVisible();
+  const stages = page.getByRole("list", { name: "Refresh stages" });
+  await expect(stages).toContainText("MarketPrepared");
+  await expect(stages).toContainText("FinancialFailed");
+  await expect(stages).toContainText("IndustryWaiting");
+  const history = page.getByRole("table", { name: "Data Refresh operation history" });
+  await history.getByRole("button", { name: /^Retry operation / }).click();
+  const retry = page.getByRole("alertdialog");
+  await expect(retry).toContainText("2026-08-14T18:00:00+08:00");
+  await retry.getByRole("button", { name: "Create Retry", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Dataset published", exact: true })).toBeVisible({ timeout: 15_000 });
+  await expect(stages).toContainText("MarketPrepared");
+  await expect(stages).toContainText("FinancialPrepared");
+  await expect(stages).toContainText("IndustryPrepared");
+  await expect(stages).toContainText("Unified publicationPublished");
+  await expect(history.getByRole("row")).toHaveCount(3);
+});

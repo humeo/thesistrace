@@ -86,6 +86,13 @@ def financial_indicator_target_schemas():
 
 
 @pytest.fixture
+def financial_disclosures_target_schemas():
+    from thesistrace.migrations.unified_refresh_0006 import SOURCE
+
+    return _migration_release_schemas("financial-disclosures-target.zip", SOURCE)
+
+
+@pytest.fixture
 def payload_retention_target_schemas():
     from thesistrace.migrations.payload_retention_0003 import TARGET
 

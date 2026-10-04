@@ -20,7 +20,7 @@ from thesistrace.publication.serialization import canonical_json_bytes
 
 HEAD_MANIFEST_MAX_BYTES = 65_536
 _HEAD_FORMAT = "thesistrace-dataset-head"
-_HEAD_VERSION = 1
+_HEAD_VERSION = 2
 _HEAD_NAME = "HEAD.json"
 _LOCK_NAME = ".head.lock"
 
@@ -40,6 +40,7 @@ class DatasetHeadPointer:
     dataset_coverage: dict[str, object]
     data_through_session: str
     prepared_at: str
+    benchmark_snapshot_sha256: str | None = None
 
 
 class _ResolvedHeadPointerCandidate:
@@ -77,6 +78,7 @@ class MountedDatasetHeadStore:
         expected = _pointer_from_generation(
             generation,
             prepared_at=datetime.fromisoformat(pointer.prepared_at),
+            benchmark_snapshot_sha256=pointer.benchmark_snapshot_sha256,
         )
         if pointer != expected:
             raise DatasetHeadError("Dataset Head projection is incompatible")
@@ -96,6 +98,7 @@ class MountedDatasetHeadStore:
         expected = _pointer_from_generation(
             admission.generation,
             prepared_at=datetime.fromisoformat(pointer.prepared_at),
+            benchmark_snapshot_sha256=pointer.benchmark_snapshot_sha256,
         )
         if pointer != expected:
             raise DatasetHeadError("Dataset Head projection is incompatible")
@@ -133,12 +136,11 @@ class MountedDatasetHeadStore:
         expected_generation_manifest_sha256: str | None,
         candidate: _ResolvedHeadPointerCandidate,
         prepared_at: datetime | None = None,
+        benchmark_snapshot_sha256: str | None = None,
     ) -> DatasetHeadPointer:
         generation = self._resolved_pointer_candidates.pop(candidate, None)
         if generation is None:
             raise DatasetHeadError("Dataset Head candidate belongs to another mounted store")
-        candidate_head = _pointer_from_generation(generation, prepared_at=prepared_at)
-        content = _head_bytes(candidate_head)
         root_fd = self._open_root()
         lock_fd: int | None = None
         try:
@@ -153,6 +155,14 @@ class MountedDatasetHeadStore:
             current_identity = None if current is None else current.generation_manifest_sha256
             if current_identity != expected_generation_manifest_sha256:
                 raise DatasetHeadConflict("Dataset Head changed before compare-and-swap")
+            candidate_head = _pointer_from_generation(
+                generation, prepared_at=prepared_at,
+                benchmark_snapshot_sha256=(
+                    benchmark_snapshot_sha256 if benchmark_snapshot_sha256 is not None
+                    else None if current is None else current.benchmark_snapshot_sha256
+                ),
+            )
+            content = _head_bytes(candidate_head)
             _replace_entry(root_fd, _HEAD_NAME, content)
             return candidate_head
         except DatasetHeadError:
@@ -176,7 +186,10 @@ def _pointer_from_generation(
     generation: MountedFamilyGenerationDescriptor,
     *,
     prepared_at: datetime | None = None,
+    benchmark_snapshot_sha256: str | None = None,
 ) -> DatasetHeadPointer:
+    if benchmark_snapshot_sha256 is not None:
+        _require_sha256(benchmark_snapshot_sha256)
     if prepared_at is None:
         prepared_at_value = generation.preparation.get("prepared_at", "")
     elif prepared_at.tzinfo is None:
@@ -191,6 +204,7 @@ def _pointer_from_generation(
         dataset_coverage=_market_coverage(generation),
         data_through_session=generation.data_through_session,
         prepared_at=prepared_at_value,
+        benchmark_snapshot_sha256=benchmark_snapshot_sha256,
     )
 
 
@@ -221,6 +235,8 @@ def _pointer_from_manifest(manifest: dict[str, object]) -> DatasetHeadPointer:
         prepared_at = datetime.fromisoformat(str(manifest["prepared_at"]))
         _require_sha256(str(manifest["generation_manifest_sha256"]))
         _require_sha256(str(manifest["data_identity"]))
+        if manifest["benchmark_snapshot_sha256"] is not None:
+            _require_sha256(str(manifest["benchmark_snapshot_sha256"]))
     except ValueError as error:
         raise DatasetHeadError("Dataset Head projection is incompatible") from error
     if (
@@ -235,6 +251,7 @@ def _pointer_from_manifest(manifest: dict[str, object]) -> DatasetHeadPointer:
         dataset_coverage=dict(coverage),
         data_through_session=str(manifest["data_through_session"]),
         prepared_at=str(manifest["prepared_at"]),
+        benchmark_snapshot_sha256=manifest["benchmark_snapshot_sha256"],
     )
 
 
@@ -252,6 +269,7 @@ def _head_projection(head: DatasetHeadPointer) -> dict[str, object]:
         "dataset_coverage": head.dataset_coverage,
         "data_through_session": head.data_through_session,
         "prepared_at": head.prepared_at,
+        "benchmark_snapshot_sha256": head.benchmark_snapshot_sha256,
     }
 
 
@@ -280,6 +298,7 @@ def _parse_head(content: bytes) -> dict[str, object]:
             "dataset_coverage",
             "data_through_session",
             "prepared_at",
+            "benchmark_snapshot_sha256",
         }
         or value.get("format") != _HEAD_FORMAT
         or value.get("version") != _HEAD_VERSION

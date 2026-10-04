@@ -80,7 +80,7 @@ describe.sequential("Auth Operator Proof", () => {
       verifyCode: async () => { throw new OperatorCodeInvalidError(); },
     });
     const requests = [
-      { operation: "data.refresh.market.submit", asOf: "2026-08-11T18:00:00+08:00", idempotencyKey: "market-no-email" },
+      { operation: "data.refresh.dataset.submit", asOf: "2026-08-11T18:00:00+08:00", idempotencyKey: "market-no-email" },
       { operation: "data.refresh.financial.submit", observationThroughSession: "2026-08-11", idempotencyKey: "financial-no-email" },
       { operation: "data.refresh.industry.submit", observationThroughSession: "2026-08-11", idempotencyKey: "industry-no-email" },
       { operation: "data.refresh.cancel", kind: "market", sourceIdempotencyKey: "market-cancel-no-email", target: "2026-08-11T10:00:00+00:00" },
@@ -179,7 +179,7 @@ describe.sequential("Auth Operator Proof", () => {
     const request = {
       asOf: "2026-08-11T18:00:00+08:00",
       idempotencyKey: "market-20260811T180000+0800",
-      operation: "data.refresh.market.submit" as const,
+      operation: "data.refresh.dataset.submit" as const,
     };
     const confirmed = await proofService.confirm(principal(), {
       ...request,
@@ -216,7 +216,7 @@ describe.sequential("Auth Operator Proof", () => {
         "SELECT operation, state FROM auth.operator_proof",
       ),
     ).toMatchObject({
-      rows: [{ operation: "data.refresh.market.submit", state: "consumed" }],
+      rows: [{ operation: "data.refresh.dataset.submit", state: "consumed" }],
     });
 
     now = new Date("2026-08-29T06:01:00.000Z");

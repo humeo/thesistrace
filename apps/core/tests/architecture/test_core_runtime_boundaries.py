@@ -205,7 +205,14 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
         "operational_events": set(),
         # Versioned migration CLIs may inspect the target schema; application
         # packages above deliberately cannot import migrations at runtime.
-        "migrations": {"_postgres", "entrypoints", "publication", "research_run"},
+        "migrations": {
+            "_postgres",
+            "benchmark",
+            "data",
+            "entrypoints",
+            "publication",
+            "research_run",
+        },
     }
 
     graph: dict[str, set[str]] = {}
@@ -453,11 +460,9 @@ def test_http_route_and_action_inventory_is_exactly_the_core_resources() -> None
         ("get", "/api/operator/data/status"),
         ("post", "/api/operator/data/refreshes/cancel"),
         ("get", "/api/operator/data/refreshes/financial"),
-        ("post", "/api/operator/data/refreshes/financial"),
         ("get", "/api/operator/data/refreshes/industry"),
-        ("post", "/api/operator/data/refreshes/industry"),
-        ("get", "/api/operator/data/refreshes/market"),
-        ("post", "/api/operator/data/refreshes/market"),
+        ("get", "/api/operator/data/refreshes/dataset"),
+        ("post", "/api/operator/data/refreshes/dataset"),
         ("post", "/api/operator/data/refreshes/retry"),
         ("post", "/api/researcher/bootstrap"),
         ("get", "/api/research-folders"),

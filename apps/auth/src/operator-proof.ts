@@ -55,13 +55,13 @@ export type OperatorInvitationProofOperation =
 type OperatorProofOperation =
   | OperatorInvitationProofOperation
   | "researcher.sessions.revoke"
-  | "data.refresh.market.submit"
+  | "data.refresh.dataset.submit"
   | "data.refresh.financial.submit"
   | "data.refresh.industry.submit"
   | "data.refresh.cancel"
   | "data.refresh.retry";
 
-export type DataRefreshKind = "market" | "financial" | "industry";
+export type DataRefreshKind = "market" | "financial" | "industry" | "dataset";
 
 export type OperatorProofRequest =
   | Readonly<{
@@ -78,7 +78,7 @@ export type OperatorProofRequest =
       asOf: string;
       email?: never;
       idempotencyKey: string;
-      operation: "data.refresh.market.submit";
+      operation: "data.refresh.dataset.submit";
       researcherId?: never;
     }>
   | Readonly<{
@@ -111,7 +111,7 @@ export type OperatorProofRequest =
 
 type DataRefreshRequest = Extract<OperatorProofRequest, {
   operation:
-    | "data.refresh.market.submit"
+    | "data.refresh.dataset.submit"
     | "data.refresh.financial.submit"
     | "data.refresh.industry.submit"
     | "data.refresh.cancel"
@@ -552,7 +552,7 @@ function operatorRequestHash(request: OperatorProofRequest): Buffer {
         version: 1,
       }));
   }
-  if (request.operation === "data.refresh.market.submit") {
+  if (request.operation === "data.refresh.dataset.submit") {
     return sha256(JSON.stringify({
       as_of: request.asOf,
       idempotency_key: request.idempotencyKey,
@@ -603,7 +603,7 @@ function normalizeProofRequest(request: OperatorProofRequest): OperatorProofRequ
     if (!researcherId.success) throw new OperatorProofInvalidError();
     return { operation: request.operation, researcherId: researcherId.data };
   }
-  if (request.operation === "data.refresh.market.submit") {
+  if (request.operation === "data.refresh.dataset.submit") {
     if (
       request.asOf.length === 0
       || request.asOf.length > 128
@@ -676,7 +676,7 @@ export function isIsoResearchSession(value: string): boolean {
 }
 
 export function isRefreshActionTarget(kind: DataRefreshKind, value: string): boolean {
-  if (kind !== "market") return isIsoResearchSession(value);
+  if (kind !== "market" && kind !== "dataset") return isIsoResearchSession(value);
   return value.length > 0
     && value.length <= 128
     && value === value.trim()

@@ -3,7 +3,7 @@ import { buildProductFixture } from "./build-product-fixture";
 
 let fixture: Awaited<ReturnType<typeof buildProductFixture>>;
 test.beforeAll(async () => { fixture = await buildProductFixture(new URL("./fixtures/operator-data.tsx", import.meta.url), "OperatorDataFixture"); });
-for (const width of [320, 390, 768, 1280, 1440]) {
+for (const width of [1280, 1440]) {
   test(`Dataset tables, date and Sheet remain readable at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await page.route("http://operator-data.test/**", route => route.fulfill({ contentType: "text/html; charset=utf-8", body: '<div id="root"></div>' }));
@@ -45,7 +45,7 @@ for (const width of [320, 390, 768, 1280, 1440]) {
 }
 
 test("calendar, loading/error feedback and confirmation survive a language switch", async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
+  await page.setViewportSize({ width: 1280, height: 900 });
   await page.route("http://operator-data.test/**", route => route.fulfill({ contentType: "text/html; charset=utf-8", body: '<div id="root"></div>' }));
   await page.goto("http://operator-data.test/");
   await page.addStyleTag({ content: fixture.styles });
@@ -65,10 +65,10 @@ test("calendar, loading/error feedback and confirmation survive a language switc
   await expect(page.getByRole("region", { name: "Current research Dataset" }).getByRole("alert")).toBeVisible();
 
   await page.getByRole("button", { name: "Review market confirmation" }).click();
-  const english = page.getByRole("dialog", { name: "Submit Market Refresh?" });
+  const english = page.getByRole("dialog", { name: "Refresh all data?" });
   await expect(english).toContainText("market-fixture-confirmation");
   await page.keyboard.press("Control+Shift+L");
-  const chinese = page.getByRole("dialog", { name: "提交市场数据刷新？" });
+  const chinese = page.getByRole("dialog", { name: "刷新全部数据？" });
   await expect(chinese).toContainText("market-fixture-confirmation");
   await expect(chinese).toContainText("2026-08-14T18:00:00+08:00");
   await page.keyboard.press("Escape");

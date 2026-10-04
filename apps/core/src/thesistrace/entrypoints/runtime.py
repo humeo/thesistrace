@@ -13,7 +13,6 @@ from thesistrace._postgres import PostgresDatabase
 from thesistrace.alpha_language import alpha_language
 from thesistrace.benchmark import (
     AnnualizedExcessCalculator,
-    BenchmarkSnapshotStore,
     RemoteAnnualizedExcessCalculator,
     StrategyComparisonService,
     validate_independent_benchmark_mount,
@@ -28,6 +27,7 @@ from thesistrace.data import (
     DatasetOverviewService,
     MountedGenerationStore,
 )
+from thesistrace.data.benchmark_snapshot import PublishedBenchmarkSnapshots
 from thesistrace.entrypoints.quota_policy import quota_policy_lookup
 from thesistrace.entrypoints.readiness import CoreReadiness
 from thesistrace.entrypoints.schema import verify_core_schema
@@ -111,9 +111,12 @@ class CoreSettings:
         )
         if research_execution_memory_bytes <= 0:
             raise RuntimeError("Research execution memory must be positive")
-        research_max_chunk_sessions = int(os.environ.get(
-            "THESISTRACE_RESEARCH_WORKER_MAX_CHUNK_SESSIONS", str(DEFAULT_MAX_CHUNK_SESSIONS),
-        ))
+        research_max_chunk_sessions = int(
+            os.environ.get(
+                "THESISTRACE_RESEARCH_WORKER_MAX_CHUNK_SESSIONS",
+                str(DEFAULT_MAX_CHUNK_SESSIONS),
+            )
+        )
         if research_max_chunk_sessions <= 0:
             raise RuntimeError("Research Chunk maximum must be positive")
         tracking_execution_memory_bytes = int(
@@ -184,7 +187,9 @@ def open_core_runtime(
     *,
     auth_readiness_origin: str | None = None,
 ) -> Iterator[CoreRuntime]:
-    comparison = StrategyComparisonService(BenchmarkSnapshotStore(settings.benchmark_mount))
+    comparison = StrategyComparisonService(
+        PublishedBenchmarkSnapshots(settings.benchmark_mount, settings.data_mount)
+    )
     with _open_runtime(
         settings,
         annualized_excess_calculator=comparison,

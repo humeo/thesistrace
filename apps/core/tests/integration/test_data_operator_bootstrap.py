@@ -21,7 +21,6 @@ from thesistrace._postgres import PostgresDatabase
 from thesistrace.benchmark import (
     BenchmarkLevel,
     BenchmarkLevelSource,
-    BenchmarkSnapshotStore,
 )
 from thesistrace.data import (
     BootstrapCollectionPlan,
@@ -32,6 +31,7 @@ from thesistrace.data import (
     DataSourceError,
     MountedGenerationStore,
 )
+from thesistrace.data.benchmark_snapshot import PublishedBenchmarkSnapshots
 from thesistrace.entrypoints.runtime import CoreSettings
 from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.fixture import build_minimal_canonical_fixture
@@ -121,8 +121,8 @@ def test_private_operator_bootstraps_once_and_reopens_idempotently(
             == build_minimal_canonical_fixture()
         )
         assert head.prepared_at == COMPLETED_AT.isoformat()
-        snapshot = BenchmarkSnapshotStore(
-            benchmark_mount_for_data_mount(tmp_path)
+        snapshot = PublishedBenchmarkSnapshots(
+            benchmark_mount_for_data_mount(tmp_path), tmp_path
         ).read()
         assert snapshot is not None
         assert snapshot.coverage_start_session == "2010-01-04"
@@ -139,7 +139,7 @@ def test_private_operator_bootstraps_once_and_reopens_idempotently(
         database.close()
 
 
-def test_bootstrap_snapshot_remains_published_when_competing_head_wins(
+def test_bootstrap_snapshot_stays_invisible_when_competing_head_wins(
     core_settings: CoreSettings,
     tmp_path: Path,
 ) -> None:
@@ -158,11 +158,10 @@ def test_bootstrap_snapshot_remains_published_when_competing_head_wins(
             nonlocal winner_published
             if event.get("phase") != "benchmark" or event.get("status") != "completed":
                 return
-            snapshot = BenchmarkSnapshotStore(
-                benchmark_mount_for_data_mount(tmp_path)
+            snapshot = PublishedBenchmarkSnapshots(
+                benchmark_mount_for_data_mount(tmp_path), tmp_path
             ).read()
-            assert snapshot is not None
-            assert snapshot.coverage_end_session == "2026-08-07"
+            assert snapshot is None
             lifecycle = DatasetLifecycle(database, tmp_path)
             lifecycle.protect_candidate(
                 operation_id="competing-bootstrap",
@@ -181,22 +180,24 @@ def test_bootstrap_snapshot_remains_published_when_competing_head_wins(
                 database,
                 tmp_path,
                 RecordingBootstrapSource(),
-                clock=iter(
-                    (PREPARED_AT, BENCHMARK_PUBLISHED_AT, COMPLETED_AT)
-                ).__next__,
+                clock=iter((PREPARED_AT, BENCHMARK_PUBLISHED_AT, COMPLETED_AT)).__next__,
                 progress=publish_competing_head_after_benchmark,
             ).bootstrap(idempotency_key="benchmark-before-head", as_of=AS_OF)
 
         assert winner_published is True
-        snapshot = BenchmarkSnapshotStore(benchmark_mount_for_data_mount(tmp_path)).read()
-        assert snapshot is not None
-        assert snapshot.coverage_end_session == "2026-08-07"
+        snapshot = PublishedBenchmarkSnapshots(
+            benchmark_mount_for_data_mount(tmp_path), tmp_path
+        ).read()
+        assert snapshot is None
         head = DatasetLifecycle(database, tmp_path).current_pointer()
         assert head is not None
         assert head.generation_manifest_sha256 == winner.manifest_sha256
-        assert open_complete_refresh_basis(
-            MountedGenerationStore(tmp_path), head.generation_manifest_sha256
-        ) == winner_canonical
+        assert (
+            open_complete_refresh_basis(
+                MountedGenerationStore(tmp_path), head.generation_manifest_sha256
+            )
+            == winner_canonical
+        )
     finally:
         database.close()
 
@@ -230,7 +231,7 @@ def test_bootstrap_rejects_incomplete_benchmark_without_publishing_head(
         assert failure.value.code == "BENCHMARK_COVERAGE_INSUFFICIENT"
         assert DatasetLifecycle(database, tmp_path).current_pointer() is None
         assert (
-            BenchmarkSnapshotStore(benchmark_mount_for_data_mount(tmp_path)).read()
+            PublishedBenchmarkSnapshots(benchmark_mount_for_data_mount(tmp_path), tmp_path).read()
             is None
         )
     finally:
@@ -724,9 +725,7 @@ def test_real_private_command_bootstraps_from_tushare_replay(
         **os.environ,
         "THESISTRACE_DATABASE_URL": core_settings.database_url,
         "THESISTRACE_DATA_MOUNT": str(mount),
-        "THESISTRACE_BENCHMARK_MOUNT": str(
-            mount.parent / f"{mount.name}-benchmark-data"
-        ),
+        "THESISTRACE_BENCHMARK_MOUNT": str(mount.parent / f"{mount.name}-benchmark-data"),
     }
     command = (
         sys.executable,
@@ -767,9 +766,7 @@ def test_real_private_command_bootstraps_from_tushare_replay(
         "status": "completed",
     }
     published = dict(progress[-1])
-    published_timestamp = datetime.fromisoformat(
-        published.pop("timestamp").replace("Z", "+00:00")
-    )
+    published_timestamp = datetime.fromisoformat(published.pop("timestamp").replace("Z", "+00:00"))
     assert published_timestamp.tzinfo is not None
     assert published == {
         "component": "data_operator",
@@ -786,6 +783,7 @@ def test_real_private_command_bootstraps_from_tushare_replay(
         assert head.generation_manifest_sha256 == outcome["generation_manifest_sha256"]
         assert head.data_through_session == "2026-08-03"
         assert set(json.loads((mount / "HEAD.json").read_text())) == {
+            "benchmark_snapshot_sha256",
             "format",
             "version",
             "generation_manifest_sha256",
@@ -825,11 +823,15 @@ def test_real_private_financial_command_uses_product_replay(
     tmp_path: Path,
     request: pytest.FixtureRequest,
 ) -> None:
-    replay = Path(__file__).resolve().parents[4] / "tests/fixtures" / (
-        "tushare-financial-product-replay.json"
+    replay = (
+        Path(__file__).resolve().parents[4]
+        / "tests/fixtures"
+        / ("tushare-financial-product-replay.json")
     )
-    capability = Path(__file__).resolve().parents[4] / "tests/fixtures" / (
-        "tushare-financial-capability.json"
+    capability = (
+        Path(__file__).resolve().parents[4]
+        / "tests/fixtures"
+        / ("tushare-financial-capability.json")
     )
     mount = tmp_path / "financial-command-data"
     mount.mkdir()
@@ -837,10 +839,9 @@ def test_real_private_financial_command_uses_product_replay(
         **os.environ,
         "THESISTRACE_DATABASE_URL": core_settings.database_url,
         "THESISTRACE_DATA_MOUNT": str(mount),
-        "THESISTRACE_BENCHMARK_MOUNT": str(
-            mount.parent / f"{mount.name}-benchmark-data"
-        ),
+        "THESISTRACE_BENCHMARK_MOUNT": str(mount.parent / f"{mount.name}-benchmark-data"),
     }
+
     def cleanup() -> None:
         database = PostgresDatabase(core_settings.database_url)
         database.open()

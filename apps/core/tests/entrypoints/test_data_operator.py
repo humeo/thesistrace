@@ -4,7 +4,7 @@ import gc
 import json
 import signal
 import weakref
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -291,49 +291,6 @@ def test_market_refresh_rejects_a_key_over_the_shared_character_limit(
     }
 
 
-@pytest.mark.parametrize(
-    "value",
-    (
-        "2026-08-14T00:00:00Z",
-        "20260814",
-        "2026-8-14",
-        "2026-08-14 ",
-        "0000-01-01",
-        "not-a-session",
-    ),
-)
-def test_financial_refresh_rejects_non_iso_research_session_before_opening_storage(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    value: str,
-) -> None:
-    monkeypatch.setattr(
-        data_operator,
-        "PostgresDatabase",
-        lambda _url: (_ for _ in ()).throw(AssertionError("database opened")),
-    )
-    monkeypatch.setenv("THESISTRACE_DATABASE_URL", "postgresql://unused")
-    monkeypatch.setenv("THESISTRACE_DATA_MOUNT", "/unused")
-    monkeypatch.setenv("THESISTRACE_BENCHMARK_MOUNT", "/unused-benchmark")
-
-    with pytest.raises(SystemExit) as failure:
-        data_operator.main(
-            [
-                "refresh-financial",
-                "--idempotency-key",
-                "financial-20260814",
-                "--observation-through-session",
-                value,
-            ]
-        )
-
-    assert failure.value.code == 2
-    assert json.loads(capsys.readouterr().err) == {
-        "code": "INVALID_OBSERVATION_THROUGH_SESSION",
-        "status": "failed",
-    }
-
-
 def test_financial_refresh_request_preserves_the_exact_key_and_canonical_session() -> None:
     key, target = validate_financial_refresh_request(
         idempotency_key="financial-20260814-custom",
@@ -419,31 +376,7 @@ def test_private_financial_operator_exposes_explicit_contract_inputs(
         assert "--date-shard" not in output
 
 
-def test_private_daily_financial_operator_has_only_current_head_inputs(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    with pytest.raises(SystemExit) as refresh_exit:
-        data_operator.main(["refresh-financial", "--help"])
-
-    assert refresh_exit.value.code == 0
-    refresh_help = capsys.readouterr().out
-    assert "--idempotency-key" in refresh_help
-    assert "--observation-through-session" in refresh_help
-    assert "--generation-manifest-sha256" not in refresh_help
-    assert "--capability-report" not in refresh_help
-    assert "--prior-candidate-manifest-sha256" not in refresh_help
-    assert "--replay" not in refresh_help
-
-    with pytest.raises(SystemExit) as inspect_exit:
-        data_operator.main(["inspect-financial-refresh", "--help"])
-
-    assert inspect_exit.value.code == 0
-    inspect_help = capsys.readouterr().out
-    assert "--idempotency-key" in inspect_help
-    assert "--observation-through-session" not in inspect_help
-
-
-def test_daily_financial_operator_submits_and_returns_without_opening_sources(
+def test_unified_operator_submits_and_returns_without_opening_sources(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
@@ -474,13 +407,13 @@ def test_daily_financial_operator_submits_and_returns_without_opening_sources(
                 benchmark_mount_root=benchmark_mount_root,
             )
 
-        def submit_financial(self, **arguments: object) -> object:
+        def submit_dataset(self, **arguments: object) -> object:
             received.update(arguments)
             return SimpleNamespace(
                 idempotency_key="daily-live",
-                kind="financial",
-                as_of=None,
-                observation_through_session="2026-08-14",
+                kind="dataset",
+                as_of="2026-08-14T10:00:00+00:00",
+                observation_through_session=None,
                 status="accepted",
                 outcome=None,
                 data_through_session=None,
@@ -514,20 +447,20 @@ def test_daily_financial_operator_submits_and_returns_without_opening_sources(
 
     data_operator.main(
         [
-            "refresh-financial",
+            "refresh",
             "--idempotency-key",
             "daily-live",
-            "--observation-through-session",
-            "2026-08-14",
+            "--as-of",
+            "2026-08-14T18:00:00+08:00",
         ]
     )
 
     assert received["mount_root"] == tmp_path
     assert received["idempotency_key"] == "daily-live"
-    assert received["observation_through_session"] == "2026-08-14"
+    assert received["as_of"] == datetime(2026, 8, 14, 10, tzinfo=UTC)
     assert json.loads(capsys.readouterr().out) == {
         "accepted_instrument_count": None,
-        "as_of": None,
+        "as_of": "2026-08-14T10:00:00+00:00",
         "attempt_count": 0,
         "checked_no_structured_change_count": None,
         "data_through_session": None,
@@ -536,136 +469,11 @@ def test_daily_financial_operator_submits_and_returns_without_opening_sources(
         "failure_code": None,
         "financial_complete_through_session": None,
         "idempotency_key": "daily-live",
-        "kind": "financial",
+        "kind": "dataset",
         "last_failure_code": None,
         "last_refresh_at": None,
         "matched_trigger_count": None,
-        "observation_through_session": "2026-08-14",
-        "outcome": None,
-        "pending_instrument_count": None,
-        "status": "accepted",
-    }
-
-
-def test_private_industry_operator_exposes_refresh_and_inspection_contracts(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    with pytest.raises(SystemExit) as refresh_exit:
-        data_operator.main(["refresh-industry", "--help"])
-
-    assert refresh_exit.value.code == 0
-    refresh_help = capsys.readouterr().out
-    assert "--idempotency-key" in refresh_help
-    assert "--observation-through-session" in refresh_help
-    assert "--replay" not in refresh_help
-
-    with pytest.raises(SystemExit) as inspect_exit:
-        data_operator.main(["inspect-industry-refresh", "--help"])
-
-    assert inspect_exit.value.code == 0
-    inspect_help = capsys.readouterr().out
-    assert "--idempotency-key" in inspect_help
-    assert "--observation-through-session" not in inspect_help
-
-
-def test_industry_operator_submits_and_returns_without_opening_sources(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    tmp_path: Path,
-) -> None:
-    received: dict[str, object] = {}
-
-    class FakeDatabase:
-        def __init__(self, _url: str) -> None:
-            pass
-
-        def open(self) -> None:
-            pass
-
-        def close(self) -> None:
-            pass
-
-    class FakeService:
-        def __init__(
-            self,
-            database: object,
-            mount_root: Path,
-            *,
-            benchmark_mount_root: Path,
-        ) -> None:
-            received.update(
-                database=database,
-                mount_root=mount_root,
-                benchmark_mount_root=benchmark_mount_root,
-            )
-
-        def submit_industry(self, **arguments: object) -> object:
-            received.update(arguments)
-            return SimpleNamespace(
-                idempotency_key="industry-live",
-                kind="industry",
-                as_of=None,
-                observation_through_session="2026-08-14",
-                status="accepted",
-                outcome=None,
-                data_through_session=None,
-                last_refresh_at=None,
-                failure_code=None,
-                last_failure_code=None,
-                attempt_count=0,
-                financial_complete_through_session=None,
-                matched_trigger_count=None,
-                checked_no_structured_change_count=None,
-                accepted_instrument_count=None,
-                failed_instrument_count=None,
-                pending_instrument_count=None,
-                discovery_gap_count=None,
-            )
-
-    monkeypatch.setenv("THESISTRACE_DATABASE_URL", "postgresql://unused")
-    monkeypatch.setenv("THESISTRACE_DATA_MOUNT", str(tmp_path))
-    monkeypatch.setenv(
-        "THESISTRACE_BENCHMARK_MOUNT",
-        str(tmp_path.parent / f"{tmp_path.name}-benchmark-data"),
-    )
-    monkeypatch.setattr(data_operator, "PostgresDatabase", FakeDatabase)
-    monkeypatch.setattr(data_operator, "verify_core_schema", lambda _database: None)
-    monkeypatch.setattr(
-        data_operator,
-        "_create_live_tushare_provider",
-        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("source opened")),
-    )
-    monkeypatch.setattr(data_operator, "DataRefreshService", FakeService)
-
-    data_operator.main(
-        [
-            "refresh-industry",
-            "--idempotency-key",
-            "industry-live",
-            "--observation-through-session",
-            "2026-08-14",
-        ]
-    )
-
-    assert received["mount_root"] == tmp_path
-    assert received["idempotency_key"] == "industry-live"
-    assert received["observation_through_session"] == "2026-08-14"
-    assert json.loads(capsys.readouterr().out) == {
-        "accepted_instrument_count": None,
-        "as_of": None,
-        "attempt_count": 0,
-        "checked_no_structured_change_count": None,
-        "data_through_session": None,
-        "discovery_gap_count": None,
-        "failed_instrument_count": None,
-        "failure_code": None,
-        "financial_complete_through_session": None,
-        "idempotency_key": "industry-live",
-        "kind": "industry",
-        "last_failure_code": None,
-        "last_refresh_at": None,
-        "matched_trigger_count": None,
-        "observation_through_session": "2026-08-14",
+        "observation_through_session": None,
         "outcome": None,
         "pending_instrument_count": None,
         "status": "accepted",
@@ -839,3 +647,11 @@ def test_financial_operator_failure_identifies_only_the_failed_shard(
             "shard": "complete-history",
         },
     }
+
+
+@pytest.mark.parametrize("command", ["refresh-financial", "refresh-industry"])
+def test_retired_family_cli_cannot_publish_independently(command, capsys):
+    with pytest.raises(SystemExit) as failure:
+        data_operator.main([command, "--help"])
+    assert failure.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err

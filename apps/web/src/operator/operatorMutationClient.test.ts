@@ -6,19 +6,19 @@ import {
   confirmDataRefreshActionProof,
   confirmIndustryRefreshProof,
   confirmOperatorProof,
-  confirmMarketRefreshProof,
+  confirmDatasetRefreshProof,
   confirmSessionRevocationProof,
   isIsoResearchSession,
-  isMarketRefreshIdempotencyKey,
+  isDatasetRefreshIdempotencyKey,
   loadFinancialRefresh,
   loadIndustryRefresh,
-  loadMarketRefresh,
+  loadDatasetRefresh,
   OperatorMutationError,
   submitInvitationMutation,
   submitFinancialRefresh,
   submitDataRefreshAction,
   submitIndustryRefresh,
-  submitMarketRefresh,
+  submitDatasetRefresh,
   submitSessionRevocation,
 } from "./operatorMutationClient";
 
@@ -238,7 +238,7 @@ describe("Operator mutation client", () => {
         data_through_session: null,
         failure_code: null,
         idempotency_key: request.idempotencyKey,
-        kind: "market",
+        kind: "dataset", phase: null, completed_stages: [],
         last_failure_code: null,
         last_refresh_at: null,
         outcome: null,
@@ -247,11 +247,11 @@ describe("Operator mutation client", () => {
     vi.stubGlobal("fetch", fetchMock);
     const signal = new AbortController().signal;
 
-    const confirmation = await confirmMarketRefreshProof(
+    const confirmation = await confirmDatasetRefreshProof(
       request,
       signal,
     );
-    const operation = await submitMarketRefresh(
+    const operation = await submitDatasetRefresh(
       request,
       confirmation.proof,
       signal,
@@ -269,13 +269,13 @@ describe("Operator mutation client", () => {
         body: JSON.stringify({
           as_of: request.asOf,
           idempotency_key: request.idempotencyKey,
-          operation: "data.refresh.market.submit",
+          operation: "data.refresh.dataset.submit",
         }),
       }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
-      "/api/operator/data/refreshes/market",
+      "/api/operator/data/refreshes/dataset",
       expect.objectContaining({
         body: JSON.stringify({
           as_of: request.asOf,
@@ -437,11 +437,11 @@ describe("Operator mutation client", () => {
 
   it("round-trips a Python-valid boundary FEFF Market key", async () => {
     const idempotencyKey = "\uFEFFmarket-key";
-    expect(isMarketRefreshIdempotencyKey(idempotencyKey)).toBe(true);
-    expect(isMarketRefreshIdempotencyKey("\u0085market-key")).toBe(false);
-    expect(isMarketRefreshIdempotencyKey(`market-${"😀".repeat(253)}`)).toBe(true);
-    expect(isMarketRefreshIdempotencyKey(`market-${"😀".repeat(506)}`)).toBe(false);
-    expect(isMarketRefreshIdempotencyKey("market-\0-key")).toBe(false);
+    expect(isDatasetRefreshIdempotencyKey(idempotencyKey)).toBe(true);
+    expect(isDatasetRefreshIdempotencyKey("\u0085market-key")).toBe(false);
+    expect(isDatasetRefreshIdempotencyKey(`market-${"😀".repeat(253)}`)).toBe(true);
+    expect(isDatasetRefreshIdempotencyKey(`market-${"😀".repeat(506)}`)).toBe(false);
+    expect(isDatasetRefreshIdempotencyKey("market-\0-key")).toBe(false);
 
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(Response.json({
       as_of: "2026-08-11T10:00:00Z",
@@ -449,7 +449,7 @@ describe("Operator mutation client", () => {
       data_through_session: null,
       failure_code: null,
       idempotency_key: idempotencyKey,
-      kind: "market",
+      kind: "dataset", phase: null, completed_stages: [],
       last_failure_code: null,
       last_refresh_at: null,
       outcome: null,
@@ -458,13 +458,13 @@ describe("Operator mutation client", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(
-      loadMarketRefresh(
+      loadDatasetRefresh(
         { asOf: "2026-08-11T18:00:00+08:00", idempotencyKey },
         new AbortController().signal,
       ),
     ).resolves.toMatchObject({ idempotencyKey, status: "accepted" });
     expect(fetchMock).toHaveBeenCalledWith(
-      `/api/operator/data/refreshes/market?as_of=2026-08-11T18%3A00%3A00%2B08%3A00&idempotency_key=${encodeURIComponent(idempotencyKey)}`,
+      `/api/operator/data/refreshes/dataset?as_of=2026-08-11T18%3A00%3A00%2B08%3A00&idempotency_key=${encodeURIComponent(idempotencyKey)}`,
       expect.objectContaining({ method: "GET" }),
     );
   });
@@ -472,7 +472,7 @@ describe("Operator mutation client", () => {
   it("binds Cancel and Retry proofs to exact immutable receipt actions", async () => {
     const cancel = {
       action: "cancel" as const,
-      kind: "market" as const,
+      kind: "dataset" as const,
       sourceIdempotencyKey: "market-cancel-source",
       target: "2026-08-11T10:00:00Z",
     };
@@ -594,7 +594,7 @@ describe("Operator mutation client", () => {
       submitDataRefreshAction(
         {
           action: "cancel",
-          kind: "market",
+          kind: "dataset",
           sourceIdempotencyKey: "market-cancel-source",
           target: "2026-08-11T10:00:00Z",
         },

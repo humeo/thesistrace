@@ -155,7 +155,7 @@ def test_core_auth_verifier_authorizes_operator_and_consumes_exact_market_proof(
     try:
         asyncio.run(verifier.authorize_operator("thesistrace.session_token=opaque"))
         asyncio.run(
-            verifier.consume_market_refresh_proof(
+            verifier.consume_dataset_refresh_proof(
                 "thesistrace.session_token=opaque",
                 as_of="2026-08-11T18:00:00+08:00",
                 idempotency_key="market-20260811T180000+0800",
@@ -214,7 +214,7 @@ def test_core_auth_verifier_authorizes_operator_and_consumes_exact_market_proof(
     assert captured[1].content == (
         b'{"as_of":"2026-08-11T18:00:00+08:00",'
         b'"idempotency_key":"market-20260811T180000+0800",'
-        b'"operation":"data.refresh.market.submit","proof":"opaque-proof"}'
+        b'"operation":"data.refresh.dataset.submit","proof":"opaque-proof"}'
     )
     assert captured[2].content == (
         b'{"idempotency_key":"financial-20260814-custom",'
@@ -257,7 +257,7 @@ def test_core_auth_verifier_fails_closed_for_operator_rejection() -> None:
             asyncio.run(verifier.authorize_operator("cookie"))
         with pytest.raises(InvalidOperatorProof):
             asyncio.run(
-                verifier.consume_market_refresh_proof(
+                verifier.consume_dataset_refresh_proof(
                     "cookie",
                     as_of="2026-08-11T18:00:00+08:00",
                     idempotency_key="market-key",

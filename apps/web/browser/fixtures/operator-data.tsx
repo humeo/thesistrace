@@ -5,13 +5,13 @@ import { CalendarDateField } from "../../src/components/layout/CalendarDateField
 import { Button } from "../../src/components/ui/button";
 import { changeInterfaceLanguage, interfaceLocale, useTranslation } from "../../src/i18n";
 import { OperatorDatasetStatusView, OperatorDataStatusDrawer } from "../../src/operator/OperatorDatasetStatus";
-import { OperatorMarketRefreshDialog } from "../../src/operator/OperatorMarketRefreshDialog";
+import { OperatorDatasetRefreshDialog } from "../../src/operator/OperatorDatasetRefreshDialog";
 import type { DataRefreshOperationalStatus, DatasetOperationalStatus } from "../../src/operator/operatorDataStatusClient";
 import { LanguageControls } from "./language-controls";
 
 const key = `market-${"long".repeat(35)}`;
 const operation: DataRefreshOperationalStatus = {
-  idempotencyKey: key, kind: "market", status: "accepted", outcome: null,
+  idempotencyKey: key, kind: "dataset", status: "accepted", outcome: null,
   asOf: "2026-08-14T18:00:00+08:00", observationThroughSession: null, phase: null,
   attemptCount: 0, lastHeartbeatAt: null, dataThroughSession: null, lastRefreshAt: null,
   financialCompleteThroughSession: null, matchedTriggerCount: null,
@@ -68,11 +68,10 @@ function Fixture() {
       onAction={() => undefined} />
     {selected && <OperatorDataStatusDrawer operation={selected} onAction={() => undefined}
       onDismiss={() => { setSelected(null); requestAnimationFrame(() => trigger.current?.focus()); }} />}
-    {confirmation && <OperatorMarketRefreshDialog
+    {confirmation && <OperatorDatasetRefreshDialog
       request={{ asOf: "2026-08-14T18:00:00+08:00", idempotencyKey: "market-fixture-confirmation" }}
       onDismiss={() => { setConfirmation(false); requestAnimationFrame(() => confirmationTrigger.current?.focus()); }}
-      onRequestRejected={() => undefined} onSubmissionFailed={() => undefined}
-      onSubmissionUncertain={() => undefined} onSucceeded={() => undefined} />}
+      onSubmit={async () => setConfirmation(false)} submitting={false} error={null} />}
   </main></>;
 }
 createRoot(document.getElementById("root")!).render(<Fixture />);

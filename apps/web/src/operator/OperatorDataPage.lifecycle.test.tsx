@@ -15,16 +15,16 @@ test.each(["accepted", "reconciled"])("restores Market focus after the %s receip
   vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
   // A frame is allowed to precede the React commit that enables the trigger.
   vi.spyOn(window, "requestAnimationFrame").mockImplementation(callback => { callback(0); return 1; });
-  vi.spyOn(client, "confirmMarketRefreshProof").mockResolvedValue({ expiresAt: "2026-08-14T08:00:00Z", proof: "test-only" });
-  const receipt: client.MarketRefreshOperation = {
+  vi.spyOn(client, "confirmDatasetRefreshProof").mockResolvedValue({ expiresAt: "2026-08-14T08:00:00Z", proof: "test-only" });
+  const receipt: client.DatasetRefreshOperation = {
     asOf: "2026-08-14T18:00:00+08:00", attemptCount: 1, dataThroughSession: "2026-08-14",
-    failureCode: null, idempotencyKey: "market-test", kind: "market", lastFailureCode: null,
+    failureCode: null, idempotencyKey: "market-test", kind: "dataset", phase: null, completedStages: [], lastFailureCode: null,
     lastRefreshAt: "2026-08-14T10:00:00Z", outcome: "published", status: "succeeded",
   };
-  const submit = vi.spyOn(client, "submitMarketRefresh");
+  const submit = vi.spyOn(client, "submitDatasetRefresh");
   if (path === "accepted") submit.mockResolvedValue(receipt);
   else submit.mockRejectedValue(new TypeError("synthetic response loss"));
-  vi.spyOn(client, "loadMarketRefresh").mockResolvedValue(receipt);
+  vi.spyOn(client, "loadDatasetRefresh").mockResolvedValue(receipt);
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);

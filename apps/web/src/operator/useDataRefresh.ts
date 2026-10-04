@@ -3,7 +3,7 @@ import * as client from "./operatorMutationClient";
 import { OperatorPageNotFoundError } from "./operatorDirectoryClient";
 
 type Families = {
-  market: { request: client.MarketRefreshRequest; operation: client.MarketRefreshOperation };
+  dataset: { request: client.DatasetRefreshRequest; operation: client.DatasetRefreshOperation };
   financial: { request: client.FinancialRefreshRequest; operation: client.FinancialRefreshOperation };
   industry: { request: client.IndustryRefreshRequest; operation: client.IndustryRefreshOperation };
 };
@@ -18,9 +18,9 @@ type Transport<K extends Kind> = {
 };
 // Calls retain the checked client and its live functions (including test stand-ins).
 const transports: { [K in Kind]: Transport<K> } = {
-  market: {
-    proof: (...args) => client.confirmMarketRefreshProof(...args), submit: (...args) => client.submitMarketRefresh(...args),
-    load: (...args) => client.loadMarketRefresh(...args), request: operation => ({ asOf: operation.asOf, idempotencyKey: operation.idempotencyKey }),
+  dataset: {
+    proof: (...args) => client.confirmDatasetRefreshProof(...args), submit: (...args) => client.submitDatasetRefresh(...args),
+    load: (...args) => client.loadDatasetRefresh(...args), request: operation => ({ asOf: operation.asOf, idempotencyKey: operation.idempotencyKey }),
   },
   financial: {
     proof: (...args) => client.confirmFinancialRefreshProof(...args), submit: (...args) => client.submitFinancialRefresh(...args),
@@ -35,7 +35,7 @@ export type RefreshSubmissionFailure<K extends Kind> =
   | { kind: "rejected"; code: "conflict" | "request-invalid"; request: RefreshRequest<K> }
   | { kind: "failed"; reason: unknown }
   | { kind: "stopped" };
-const terminal = (operation: Families[Kind]["operation"]) => operation.status === "succeeded" || operation.status === "failed";
+const terminal = (operation: Families[Kind]["operation"]) => operation.status === "succeeded" || operation.status === "failed" || operation.status === "cancelled";
 function uncertain(reason: unknown): boolean {
   if (reason instanceof DOMException && reason.name === "AbortError") return true;
   if (reason instanceof OperatorPageNotFoundError) return false;
@@ -156,13 +156,13 @@ export function useDataRefresh<K extends Kind>(kind: K, {
       if (!current()) return;
       if (run.phase === "submission" && uncertain(reason)) {
         if (!run.dismissed) reconcile(selected.request, run.generation);
-        else if (kind === "market") setPollError(true);
+        else if (kind === "dataset") setPollError(true);
       } else if (reason instanceof DOMException && reason.name === "AbortError") {
         // Proof is read-only; dismissal already invalidated this completion.
       } else if (reason instanceof client.OperatorMutationError && (reason.code === "conflict" || reason.code === "request-invalid")) {
         reject(selected.request, reason.code);
       } else if (run.dismissed) {
-        if (kind === "market") setPollError(true);
+        if (kind === "dataset") setPollError(true);
         else { submissionGeneration.current++; setPending(null); setConfirmation(null); setPollError(false); setSubmissionFailure({ kind: "failed", reason }); }
       } else setConfirmation({ ...selected, submitting: false, error: reason });
     } finally {
@@ -193,5 +193,5 @@ export function useDataRefresh<K extends Kind>(kind: K, {
     setPending(null); setPollError(false); setSubmissionFailure({ kind: "stopped" });
   }
   return { confirmation, pendingRequest: pending?.request ?? null, operation: accepted?.operation ?? null,
-    pollError, submissionFailure, review, confirm, dismissConfirmation, retryExact, stopChecking };
+    pollError, submissionFailure, track: accept, review, confirm, dismissConfirmation, retryExact, stopChecking };
 }

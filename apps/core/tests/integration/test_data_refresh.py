@@ -27,7 +27,6 @@ from thesistrace.adapters.tushare_provider import TushareSourceError, normalize_
 from thesistrace.benchmark import (
     BenchmarkLevel,
     BenchmarkLevelSource,
-    BenchmarkSnapshotStore,
     BenchmarkSnapshotUpdater,
 )
 from thesistrace.data import (
@@ -41,6 +40,11 @@ from thesistrace.data import (
     DatasetOverviewService,
     MountedGenerationStore,
     RefreshOutcome,
+)
+from thesistrace.data.benchmark_snapshot import (
+    BenchmarkSnapshotPreparation,
+    PreparedBenchmarkSnapshots,
+    PublishedBenchmarkSnapshots,
 )
 from thesistrace.data.daily_basic_evidence import MARKET_SOURCE_RECEIPT_DIRECTORY
 from thesistrace.data.head_store import MountedDatasetHeadStore
@@ -179,15 +183,10 @@ def test_private_refresh_is_async_moves_head_and_records_successful_freshness(
             reject_revalidation,
         )
 
-        accepted = _operator_command(
-            core_settings,
-            tmp_path,
-            ["refresh", "--idempotency-key", "refresh-once", "--as-of", AS_OF.isoformat()],
-        )
-
-        assert accepted["status"] == "accepted"
+        accepted = refresh.submit(idempotency_key="refresh-once", as_of=AS_OF)
+        assert accepted.status == "accepted"
         assert source.plans == []
-        assert refresh.inspect("refresh-once").__dict__ == accepted
+        assert refresh.inspect("refresh-once") == accepted
         benchmark_source = FixtureBenchmarkSource()
         assert _process_next(refresh, source, benchmark_source) is True
 
@@ -209,7 +208,9 @@ def test_private_refresh_is_async_moves_head_and_records_successful_freshness(
             == candidate
         )
         assert head.prepared_at == FIRST_PREPARED_AT.isoformat()
-        snapshot = BenchmarkSnapshotStore(benchmark_mount_for_data_mount(tmp_path)).read()
+        snapshot = PublishedBenchmarkSnapshots(
+            benchmark_mount_for_data_mount(tmp_path), tmp_path
+        ).read()
         assert snapshot is not None
         assert snapshot.coverage_end_session == candidate["research_calendar"][-1]
         assert snapshot.published_at == "2026-09-07T09:45:00Z"
@@ -279,7 +280,7 @@ def test_data_overview_reports_a_lagging_benchmark_snapshot_as_not_ready(
         current = _twenty_session_canonical()
         _establish_head(database, tmp_path, current)
         prior_session = str(current["research_calendar"][-2])
-        snapshot = BenchmarkSnapshotStore(benchmark_mount_for_data_mount(tmp_path)).publish(
+        snapshot = PreparedBenchmarkSnapshots(benchmark_mount_for_data_mount(tmp_path)).prepare(
             (
                 BenchmarkLevel("2010-01-04", "1"),
                 BenchmarkLevel(prior_session, "2"),
@@ -287,6 +288,7 @@ def test_data_overview_reports_a_lagging_benchmark_snapshot_as_not_ready(
             published_at=FIRST_BENCHMARK_PUBLISHED_AT,
         )
 
+        _select_benchmark(tmp_path, snapshot.sha256)
         overview = _overview_service(database, tmp_path).overview()
 
         assert overview.benchmark_coverage is not None
@@ -468,12 +470,18 @@ def test_identical_refresh_keeps_generation_and_advances_last_refresh_time(
 
             sessions = current["research_calendar"]
             current["daily_basic_sessions"] = [{"session": session} for session in sessions]
-            current["daily_basic"] = [{
-                "session": session, "instrument_id": current["instruments"][0]["instrument_id"],
-                "source_close": "10",
-                **{field.source_column: "15" if field.alpha.identifier == "pe" else None
-                   for field in DAILY_BASIC_FIELDS},
-            } for session in sessions]
+            current["daily_basic"] = [
+                {
+                    "session": session,
+                    "instrument_id": current["instruments"][0]["instrument_id"],
+                    "source_close": "10",
+                    **{
+                        field.source_column: "15" if field.alpha.identifier == "pe" else None
+                        for field in DAILY_BASIC_FIELDS
+                    },
+                }
+                for session in sessions
+            ]
             current["field_catalog"].extend(daily_basic_field_catalog(sessions[0]))
             current["field_catalog"].sort(key=lambda row: row["field_id"])
         manifest = _establish_head(database, tmp_path, current)
@@ -500,7 +508,9 @@ def test_identical_refresh_keeps_generation_and_advances_last_refresh_time(
         head = DatasetLifecycle(database, tmp_path).current_pointer()
         assert head is not None
         assert head.generation_manifest_sha256 == manifest
-        snapshot = BenchmarkSnapshotStore(benchmark_mount_for_data_mount(tmp_path)).read()
+        snapshot = PublishedBenchmarkSnapshots(
+            benchmark_mount_for_data_mount(tmp_path), tmp_path
+        ).read()
         assert snapshot is not None
         assert snapshot.coverage_end_session == current["research_calendar"][-1]
         assert benchmark_source.requests == [("2010-01-04", current["research_calendar"][-1])]
@@ -582,12 +592,15 @@ def test_refresh_rejects_incomplete_benchmark_before_moving_head(
         head = DatasetLifecycle(database, tmp_path).current_pointer()
         assert head is not None
         assert head.generation_manifest_sha256 == original_manifest
-        assert BenchmarkSnapshotStore(benchmark_mount_for_data_mount(tmp_path)).read() is None
+        assert (
+            PublishedBenchmarkSnapshots(benchmark_mount_for_data_mount(tmp_path), tmp_path).read()
+            is None
+        )
     finally:
         database.close()
 
 
-def test_refresh_snapshot_can_lead_when_a_competing_head_wins(
+def test_refresh_snapshot_stays_invisible_when_a_competing_head_wins(
     core_settings: CoreSettings,
     tmp_path: Path,
 ) -> None:
@@ -615,9 +628,10 @@ def test_refresh_snapshot_can_lead_when_a_competing_head_wins(
             nonlocal winner_published
             if event.get("phase") != "benchmark" or event.get("outcome") != "completed":
                 return
-            snapshot = BenchmarkSnapshotStore(benchmark_mount_for_data_mount(tmp_path)).read()
-            assert snapshot is not None
-            assert snapshot.coverage_end_session == candidate["research_calendar"][-1]
+            snapshot = PublishedBenchmarkSnapshots(
+                benchmark_mount_for_data_mount(tmp_path), tmp_path
+            ).read()
+            assert snapshot is None
             lifecycle = DatasetLifecycle(database, tmp_path)
             lifecycle.protect_candidate(
                 operation_id="competing-refresh",
@@ -644,9 +658,10 @@ def test_refresh_snapshot_can_lead_when_a_competing_head_wins(
             _process_next(refresh, RecordingRefreshSource(candidate))
 
         assert winner_published is True
-        snapshot = BenchmarkSnapshotStore(benchmark_mount_for_data_mount(tmp_path)).read()
-        assert snapshot is not None
-        assert snapshot.coverage_end_session == candidate["research_calendar"][-1]
+        snapshot = PublishedBenchmarkSnapshots(
+            benchmark_mount_for_data_mount(tmp_path), tmp_path
+        ).read()
+        assert snapshot is None
         head = DatasetLifecycle(database, tmp_path).current_pointer()
         assert head is not None
         assert head.generation_manifest_sha256 == winner.manifest_sha256
@@ -730,16 +745,8 @@ def test_refresh_worker_command_processes_a_deterministic_replay(
         )
         refresh_replay = tmp_path / "refresh-replay.json"
         refresh_replay.write_text(json.dumps(replay, sort_keys=True, separators=(",", ":")))
-        _operator_command(
-            core_settings,
-            tmp_path,
-            [
-                "refresh",
-                "--idempotency-key",
-                "worker-replay",
-                "--as-of",
-                REPLAY_AS_OF.isoformat(),
-            ],
+        _refresh_service(database, tmp_path).submit(
+            idempotency_key="worker-replay", as_of=REPLAY_AS_OF
         )
 
         processed, operator_events = _operator_command_with_events(
@@ -752,12 +759,16 @@ def test_refresh_worker_command_processes_a_deterministic_replay(
         assert operator_events[0]["event"] == "data_refresh_started"
         assert operator_events[-1]["event"] == "data_refresh_succeeded"
         assert all(
-            event["event"] == "data_refresh_phase_completed"
-            for event in operator_events[1:-1]
+            event["event"] == "data_refresh_phase_completed" for event in operator_events[1:-1]
         )
         assert [event["phase"] for event in operator_events[1:-1]] == [
-            "current_head", "market", "validation", "materialization",
-            "benchmark", "candidate_validation", "publication",
+            "current_head",
+            "market",
+            "validation",
+            "materialization",
+            "benchmark",
+            "candidate_validation",
+            "publication",
         ]
         assert all(event["component"] == "data_operator" for event in operator_events)
         assert len({event["operation_id"] for event in operator_events}) == 1
@@ -1120,11 +1131,12 @@ def test_operational_status_has_safe_head_latest_kinds_and_stable_fifty_row_page
     try:
         current = _twenty_session_canonical()
         _establish_head(database, tmp_path, current)
-        BenchmarkSnapshotUpdater(
-            BenchmarkSnapshotStore(benchmark_mount_for_data_mount(tmp_path)),
+        prepared = BenchmarkSnapshotUpdater(
+            BenchmarkSnapshotPreparation(benchmark_mount_for_data_mount(tmp_path), tmp_path),
             FixtureBenchmarkSource(),
             clock=lambda: FIRST_BENCHMARK_PUBLISHED_AT,
         ).update(current["research_calendar"])
+        _select_benchmark(tmp_path, prepared.snapshot.sha256)
         pointer = MountedDatasetHeadStore(tmp_path).current_pointer()
         assert pointer is not None
         target = current["research_calendar"][-1]
@@ -2234,7 +2246,9 @@ def test_late_worker_cannot_renew_or_complete_after_recovery_takes_over(
         assert _overview_service(database, tmp_path).overview().last_market_refresh_at == (
             recovered_freshness
         )
-        snapshot = BenchmarkSnapshotStore(benchmark_mount_for_data_mount(tmp_path)).read()
+        snapshot = PublishedBenchmarkSnapshots(
+            benchmark_mount_for_data_mount(tmp_path), tmp_path
+        ).read()
         assert snapshot is not None
         assert snapshot.coverage_end_session == current["research_calendar"][-1]
         with database.transaction() as transaction:
@@ -2280,7 +2294,9 @@ def test_benchmark_publication_rechecks_lease_after_waiting_for_lifecycle_lock(
         manifest = _establish_head(database, tmp_path, current)
         candidate = copy.deepcopy(current)
         _append_session(candidate)
-        snapshot_store = BenchmarkSnapshotStore(benchmark_mount_for_data_mount(tmp_path))
+        snapshot_store = PublishedBenchmarkSnapshots(
+            benchmark_mount_for_data_mount(tmp_path), tmp_path
+        )
         assert snapshot_store.read() is None
         refresh = _refresh_service(
             database,
@@ -2537,9 +2553,13 @@ def test_daily_basic_worker_retry_reuses_prices_and_publishes_complete_family(
         first = InterruptedDailyProvider(interrupted=True)
         checkpoint_root = tmp_path / MARKET_SOURCE_RECEIPT_DIRECTORY
         with pytest.raises(DataRefreshError) as interrupted:
-            _process_next(refresh, TushareDataSource(
-                provider=first, checkpoint_root=checkpoint_root,
-            ))
+            _process_next(
+                refresh,
+                TushareDataSource(
+                    provider=first,
+                    checkpoint_root=checkpoint_root,
+                ),
+            )
         assert interrupted.value.code == "SOURCE_UNAVAILABLE"
         receipt = refresh.inspect("daily-source-retry")
         assert receipt.status == "accepted"
@@ -2555,9 +2575,13 @@ def test_daily_basic_worker_retry_reuses_prices_and_publishes_complete_family(
         # Recreate the worker-facing service and both sources, using only durable checkpoints.
         resumed = _refresh_service(database, tmp_path, max_attempts=2)
         second = InterruptedDailyProvider(interrupted=False)
-        assert _process_next(resumed, TushareDataSource(
-            provider=second, checkpoint_root=checkpoint_root,
-        ))
+        assert _process_next(
+            resumed,
+            TushareDataSource(
+                provider=second,
+                checkpoint_root=checkpoint_root,
+            ),
+        )
         receipt = resumed.inspect("daily-source-retry")
         assert receipt.status == "succeeded"
         assert receipt.outcome == "published"
@@ -2576,9 +2600,13 @@ def test_daily_basic_worker_retry_reuses_prices_and_publishes_complete_family(
         }
         assert published["prices"] == current["prices"]
         assert "daily_basic" not in open_complete_refresh_basis(store, original)
-        assert not _process_next(resumed, TushareDataSource(
-            provider=second, checkpoint_root=checkpoint_root,
-        ))
+        assert not _process_next(
+            resumed,
+            TushareDataSource(
+                provider=second,
+                checkpoint_root=checkpoint_root,
+            ),
+        )
         assert second.price_requests == 0
         assert second.daily_requests == sessions[1:]
     finally:
@@ -2975,10 +3003,8 @@ def test_financial_submission_failure_uses_the_normal_cli_error_channel(
 
     assert completed.returncode == 2
     assert completed.stdout == ""
-    assert json.loads(completed.stderr) == {
-        "status": "failed",
-        "code": "OPERATOR_FAILURE",
-    }
+    assert "invalid choice" in completed.stderr
+    assert "refresh-financial" in completed.stderr
     assert "diagnostic-canary-secret" not in completed.stdout + completed.stderr
 
 
@@ -3214,3 +3240,14 @@ def _operator_command_with_events(
     events = [json.loads(line) for line in completed.stderr.splitlines() if line]
     assert all({"timestamp", "level", "component", "event"} <= set(event) for event in events)
     return value, events
+
+
+def _select_benchmark(mount_root, digest):
+    heads = MountedDatasetHeadStore(mount_root)
+    pointer = heads.current_pointer()
+    with heads.resolved_descriptor_candidate(pointer.generation_manifest_sha256) as candidate:
+        heads.compare_and_swap_pointer_resolved(
+            expected_generation_manifest_sha256=pointer.generation_manifest_sha256,
+            candidate=candidate,
+            benchmark_snapshot_sha256=digest,
+        )

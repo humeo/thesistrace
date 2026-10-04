@@ -68,7 +68,7 @@ const operatorProofSchema = z.union([
     .object({
       as_of: z.string().min(1).max(128).refine((value) => value === value.trim()),
       idempotency_key: z.string().refine(isMarketRefreshIdempotencyKey),
-      operation: z.literal("data.refresh.market.submit"),
+      operation: z.literal("data.refresh.dataset.submit"),
     })
     .strict(),
   z
@@ -87,7 +87,7 @@ const operatorProofSchema = z.union([
     .strict(),
   z
     .object({
-      kind: z.enum(["market", "financial", "industry"]),
+      kind: z.enum(["market", "financial", "industry", "dataset"]),
       operation: z.literal("data.refresh.cancel"),
       source_idempotency_key: z.string().refine(isMarketRefreshIdempotencyKey),
       target: z.string().min(1).max(128),
@@ -96,7 +96,7 @@ const operatorProofSchema = z.union([
     .refine((value) => isRefreshActionTarget(value.kind, value.target)),
   z
     .object({
-      kind: z.enum(["market", "financial", "industry"]),
+      kind: z.enum(["market", "financial", "industry", "dataset"]),
       new_idempotency_key: z.string().refine(isMarketRefreshIdempotencyKey),
       operation: z.literal("data.refresh.retry"),
       source_idempotency_key: z.string().refine(isMarketRefreshIdempotencyKey),
@@ -113,7 +113,7 @@ const internalOperatorProofConsumptionSchema = z.union([
     .object({
       as_of: z.string().min(1).max(128).refine((value) => value === value.trim()),
       idempotency_key: z.string().refine(isMarketRefreshIdempotencyKey),
-      operation: z.literal("data.refresh.market.submit"),
+      operation: z.literal("data.refresh.dataset.submit"),
       proof: z.string().length(80),
     })
     .strict(),
@@ -135,7 +135,7 @@ const internalOperatorProofConsumptionSchema = z.union([
     .strict(),
   z
     .object({
-      kind: z.enum(["market", "financial", "industry"]),
+      kind: z.enum(["market", "financial", "industry", "dataset"]),
       operation: z.literal("data.refresh.cancel"),
       proof: z.string().length(80),
       source_idempotency_key: z.string().refine(isMarketRefreshIdempotencyKey),
@@ -145,7 +145,7 @@ const internalOperatorProofConsumptionSchema = z.union([
     .refine((value) => isRefreshActionTarget(value.kind, value.target)),
   z
     .object({
-      kind: z.enum(["market", "financial", "industry"]),
+      kind: z.enum(["market", "financial", "industry", "dataset"]),
       new_idempotency_key: z.string().refine(isMarketRefreshIdempotencyKey),
       operation: z.literal("data.refresh.retry"),
       proof: z.string().length(80),
@@ -357,7 +357,7 @@ export function createAuthApp(dependencies: AuthAppDependencies, mcpRoutes?: Ret
     try {
       await dependencies.consumeOperatorProof(
         principal,
-        body.operation === "data.refresh.market.submit"
+        body.operation === "data.refresh.dataset.submit"
           ? {
               asOf: body.as_of,
               idempotencyKey: body.idempotency_key,
@@ -510,7 +510,7 @@ export function createAuthApp(dependencies: AuthAppDependencies, mcpRoutes?: Ret
               otp: body.otp,
               researcherId: body.researcher_id,
             }
-          : body.operation === "data.refresh.market.submit"
+          : body.operation === "data.refresh.dataset.submit"
             ? {
                 asOf: body.as_of,
                 idempotencyKey: body.idempotency_key,

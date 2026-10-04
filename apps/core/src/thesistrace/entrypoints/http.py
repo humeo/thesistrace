@@ -171,7 +171,7 @@ class DataView(DataOverview):
     catalog: AlphaAuthoringCatalog
 
 
-class MarketRefreshSubmission(BaseModel):
+class DatasetRefreshSubmission(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     as_of: str = Field(min_length=1, max_length=128)
@@ -179,7 +179,7 @@ class MarketRefreshSubmission(BaseModel):
     proof: str = Field(min_length=80, max_length=80)
 
 
-class MarketRefreshOperation(BaseModel):
+class DatasetRefreshOperation(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     as_of: datetime
@@ -187,11 +187,13 @@ class MarketRefreshOperation(BaseModel):
     data_through_session: str | None
     failure_code: str | None
     idempotency_key: str
-    kind: Literal["market"]
+    kind: Literal["dataset"]
+    phase: str | None
+    completed_stages: tuple[str, ...]
     last_failure_code: str | None
     last_refresh_at: datetime | None
     outcome: Literal["published", "no_change"] | None
-    status: Literal["accepted", "running", "succeeded", "failed"]
+    status: Literal["accepted", "running", "succeeded", "failed", "cancelled"]
 
 
 class FinancialRefreshSubmission(BaseModel):
@@ -265,13 +267,13 @@ class IndustryRefreshOperation(BaseModel):
     status: Literal["accepted", "running", "succeeded", "failed"]
 
 
-DataRefreshKind = Literal["market", "financial", "industry"]
+DataRefreshKind = Literal["market", "financial", "industry", "dataset"]
 
 
 class DataRefreshCancelCommand(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    kind: DataRefreshKind
+    kind: Literal["dataset"]
     proof: str = Field(min_length=80, max_length=80)
     source_idempotency_key: str = Field(min_length=1, max_length=512)
     target: str = Field(min_length=1, max_length=128)
@@ -505,7 +507,7 @@ def create_app(
         error: RequestValidationError,
     ):
         if request.url.path in {
-            "/api/operator/data/refreshes/market",
+            "/api/operator/data/refreshes/dataset",
             "/api/operator/data/refreshes/financial",
         }:
             return JSONResponse(
@@ -525,10 +527,12 @@ def create_app(
     @app.exception_handler(DatasetOverviewTemporarilyUnavailable)
     @app.exception_handler(ResearchFolderTemporarilyUnavailable)
     async def discovery_temporarily_unavailable(
-        _request: Request, _error: RuntimeError,
+        _request: Request,
+        _error: RuntimeError,
     ) -> JSONResponse:
         return JSONResponse(
-            status_code=503, content={"detail": "Research discovery is unavailable"},
+            status_code=503,
+            content={"detail": "Research discovery is unavailable"},
         )
 
     def catalog_snapshot(request: Request) -> AlphaAuthoringCatalog:
@@ -720,14 +724,14 @@ def create_app(
         return _data_refresh_action_receipt(outcome)
 
     @app.post(
-        "/api/operator/data/refreshes/market",
-        response_model=MarketRefreshOperation,
+        "/api/operator/data/refreshes/dataset",
+        response_model=DatasetRefreshOperation,
         status_code=status.HTTP_202_ACCEPTED,
     )
-    async def submit_market_refresh(
+    async def submit_dataset_refresh(
         request: Request,
-        command: MarketRefreshSubmission,
-    ) -> MarketRefreshOperation | Response:
+        command: DatasetRefreshSubmission,
+    ) -> DatasetRefreshOperation | Response:
         try:
             idempotency_key, as_of = validate_market_refresh_request(
                 idempotency_key=command.idempotency_key,
@@ -742,7 +746,7 @@ def create_app(
         if authorizer is None:
             return _auth_unavailable_response()
         try:
-            await authorizer.consume_market_refresh_proof(
+            await authorizer.consume_dataset_refresh_proof(
                 request.headers.get("cookie"),
                 as_of=command.as_of,
                 idempotency_key=idempotency_key,
@@ -759,7 +763,7 @@ def create_app(
             return _auth_unavailable_response()
         try:
             outcome = await run_in_threadpool(
-                _runtime(request).data_refreshes.submit,
+                _runtime(request).data_refreshes.submit_dataset,
                 idempotency_key=idempotency_key,
                 as_of=as_of,
             )
@@ -778,17 +782,17 @@ def create_app(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 content={"code": "OPERATOR_REQUEST_INVALID"},
             )
-        return _market_refresh_operation(outcome)
+        return _dataset_refresh_operation(outcome)
 
     @app.get(
-        "/api/operator/data/refreshes/market",
-        response_model=MarketRefreshOperation,
+        "/api/operator/data/refreshes/dataset",
+        response_model=DatasetRefreshOperation,
     )
-    def inspect_market_refresh(
+    def inspect_dataset_refresh(
         request: Request,
         idempotency_key: str = Query(min_length=1, max_length=512),
         as_of: str = Query(min_length=1, max_length=128),
-    ) -> MarketRefreshOperation | Response:
+    ) -> DatasetRefreshOperation | Response:
         try:
             normalized_key, normalized_as_of = validate_market_refresh_request(
                 idempotency_key=idempotency_key,
@@ -802,68 +806,12 @@ def create_app(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 content={"code": "OPERATOR_REQUEST_INVALID"},
             )
-        if outcome.as_of != normalized_as_of.isoformat():
+        if outcome.kind != "dataset" or outcome.as_of != normalized_as_of.isoformat():
             return JSONResponse(
                 status_code=status.HTTP_409_CONFLICT,
                 content={"code": "IDEMPOTENCY_KEY_CONFLICT"},
             )
-        return _market_refresh_operation(outcome)
-
-    @app.post(
-        "/api/operator/data/refreshes/financial",
-        response_model=FinancialRefreshOperation,
-        status_code=status.HTTP_202_ACCEPTED,
-    )
-    async def submit_financial_refresh(
-        request: Request,
-        command: FinancialRefreshSubmission,
-    ) -> FinancialRefreshOperation | Response:
-        try:
-            idempotency_key, target = validate_financial_refresh_request(
-                idempotency_key=command.idempotency_key,
-                observation_through_session=command.observation_through_session,
-            )
-        except DataRefreshError:
-            return JSONResponse(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                content={"code": "OPERATOR_REQUEST_INVALID"},
-            )
-        authorizer = _operator_authorizer(request)
-        if authorizer is None:
-            return _auth_unavailable_response()
-        try:
-            await authorizer.consume_financial_refresh_proof(
-                request.headers.get("cookie"),
-                idempotency_key=idempotency_key,
-                observation_through_session=command.observation_through_session,
-                proof=command.proof,
-            )
-        except OperatorAccessNotFound:
-            return Response(status_code=status.HTTP_404_NOT_FOUND)
-        except InvalidOperatorProof:
-            return JSONResponse(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                content={"code": "OPERATOR_PROOF_INVALID"},
-            )
-        except AuthSessionUnavailable:
-            return _auth_unavailable_response()
-        try:
-            outcome = await run_in_threadpool(
-                _runtime(request).data_refreshes.submit_financial,
-                idempotency_key=idempotency_key,
-                observation_through_session=target,
-            )
-        except DataRefreshError as error:
-            if error.code in {"IDEMPOTENCY_KEY_CONFLICT", "DATA_NOT_READY"}:
-                return JSONResponse(
-                    status_code=status.HTTP_409_CONFLICT,
-                    content={"code": error.code},
-                )
-            return JSONResponse(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                content={"code": "OPERATOR_REQUEST_INVALID"},
-            )
-        return _financial_refresh_operation(outcome)
+        return _dataset_refresh_operation(outcome)
 
     @app.get(
         "/api/operator/data/refreshes/financial",
@@ -892,65 +840,11 @@ def create_app(
                 status_code=status.HTTP_409_CONFLICT,
                 content={"code": "IDEMPOTENCY_KEY_CONFLICT"},
             )
-        return _financial_refresh_operation(outcome).model_copy(update={
-            "progress": progress,
-        })
-
-    @app.post(
-        "/api/operator/data/refreshes/industry",
-        response_model=IndustryRefreshOperation,
-        status_code=status.HTTP_202_ACCEPTED,
-    )
-    async def submit_industry_refresh(
-        request: Request,
-        command: IndustryRefreshSubmission,
-    ) -> IndustryRefreshOperation | Response:
-        try:
-            idempotency_key, target = validate_industry_refresh_request(
-                idempotency_key=command.idempotency_key,
-                observation_through_session=command.observation_through_session,
-            )
-        except DataRefreshError:
-            return JSONResponse(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                content={"code": "OPERATOR_REQUEST_INVALID"},
-            )
-        authorizer = _operator_authorizer(request)
-        if authorizer is None:
-            return _auth_unavailable_response()
-        try:
-            await authorizer.consume_industry_refresh_proof(
-                request.headers.get("cookie"),
-                idempotency_key=idempotency_key,
-                observation_through_session=command.observation_through_session,
-                proof=command.proof,
-            )
-        except OperatorAccessNotFound:
-            return Response(status_code=status.HTTP_404_NOT_FOUND)
-        except InvalidOperatorProof:
-            return JSONResponse(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                content={"code": "OPERATOR_PROOF_INVALID"},
-            )
-        except AuthSessionUnavailable:
-            return _auth_unavailable_response()
-        try:
-            outcome = await run_in_threadpool(
-                _runtime(request).data_refreshes.submit_industry,
-                idempotency_key=idempotency_key,
-                observation_through_session=target,
-            )
-        except DataRefreshError as error:
-            if error.code in {"IDEMPOTENCY_KEY_CONFLICT", "DATA_NOT_READY"}:
-                return JSONResponse(
-                    status_code=status.HTTP_409_CONFLICT,
-                    content={"code": error.code},
-                )
-            return JSONResponse(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                content={"code": "OPERATOR_REQUEST_INVALID"},
-            )
-        return _industry_refresh_operation(outcome)
+        return _financial_refresh_operation(outcome).model_copy(
+            update={
+                "progress": progress,
+            }
+        )
 
     @app.get(
         "/api/operator/data/refreshes/industry",
@@ -1128,7 +1022,8 @@ def create_app(
             return _runtime(request).research_runs.diagnose_research_spec(spec)
         except ResearchRunTemporarilyUnavailable as error:
             raise HTTPException(
-                status_code=503, detail="Research specification diagnosis temporarily unavailable",
+                status_code=503,
+                detail="Research specification diagnosis temporarily unavailable",
             ) from error
 
     @app.post(
@@ -1168,8 +1063,11 @@ def create_app(
         metric_filters: str | None = Query(default=None, max_length=4096),
     ) -> ResearchRunPage:
         try:
-            filters = (TypeAdapter(ResearchRunMetricFilters).validate_json(metric_filters)
-                       if metric_filters is not None else [])
+            filters = (
+                TypeAdapter(ResearchRunMetricFilters).validate_json(metric_filters)
+                if metric_filters is not None
+                else []
+            )
         except ValidationError as error:
             raise HTTPException(
                 status_code=422, detail="Invalid Research metric filters"
@@ -1242,7 +1140,8 @@ def create_app(
                 FactorPeriodsResultSectionInput(
                     run_id=run_id,
                     section="factor_periods",
-                    horizon=horizon, granularity=granularity,
+                    horizon=horizon,
+                    granularity=granularity,
                     cursor=cursor,
                     limit=limit,
                 ),
@@ -1286,7 +1185,9 @@ def create_app(
                 FactorObservationsResultSectionInput(
                     run_id=run_id,
                     section="factor_observations",
-                    horizon=horizon, start_session=start_session, end_session=end_session,
+                    horizon=horizon,
+                    start_session=start_session,
+                    end_session=end_session,
                     cursor=cursor,
                     limit=limit,
                 ),
@@ -1312,19 +1213,25 @@ def create_app(
         return result
 
     @app.post(
-        "/api/research-runs/{run_id}/events/query", response_model=StrategyEventPageResponse,
+        "/api/research-runs/{run_id}/events/query",
+        response_model=StrategyEventPageResponse,
     )
     def query_run_events(request: Request, run_id: str, query: StrategyEventQueryInput):
-        owned = TypeAdapter(ResearchRunResultSectionInput).validate_python({
-            **query.model_dump(), "run_id": run_id,
-        })
+        owned = TypeAdapter(ResearchRunResultSectionInput).validate_python(
+            {
+                **query.model_dump(),
+                "run_id": run_id,
+            }
+        )
         try:
             result = _runtime(request).research_runs.get_result_section(
-                _researcher_id(request), owned,
+                _researcher_id(request),
+                owned,
             )
         except ResearchRunResultSectionIncompatible as error:
             raise HTTPException(
-                status_code=400, detail="Events require Strategy Backtest",
+                status_code=400,
+                detail="Events require Strategy Backtest",
             ) from error
         except ResearchRunInvalidCursor as error:
             raise HTTPException(status_code=400, detail="Invalid result cursor") from error
@@ -1337,19 +1244,25 @@ def create_app(
         return result
 
     @app.post(
-        "/api/research-runs/{run_id}/holdings/query", response_model=HoldingPageResponse,
+        "/api/research-runs/{run_id}/holdings/query",
+        response_model=HoldingPageResponse,
     )
     def query_run_holdings(request: Request, run_id: str, query: HoldingQueryInput):
-        owned = TypeAdapter(ResearchRunResultSectionInput).validate_python({
-            **query.model_dump(), "run_id": run_id,
-        })
+        owned = TypeAdapter(ResearchRunResultSectionInput).validate_python(
+            {
+                **query.model_dump(),
+                "run_id": run_id,
+            }
+        )
         try:
             result = _runtime(request).research_runs.get_result_section(
-                _researcher_id(request), owned,
+                _researcher_id(request),
+                owned,
             )
         except ResearchRunResultSectionIncompatible as error:
             raise HTTPException(
-                status_code=400, detail="Holdings require Strategy Backtest",
+                status_code=400,
+                detail="Holdings require Strategy Backtest",
             ) from error
         except ResearchRunInvalidCursor as error:
             raise HTTPException(status_code=400, detail="Invalid result cursor") from error
@@ -1448,7 +1361,8 @@ def create_app(
             raise HTTPException(status_code=409, detail={"code": error.code}) from error
         except ResearchRunTrackingUnavailable as error:
             raise HTTPException(
-                status_code=409, detail={"code": error.code, "limit": error.limit},
+                status_code=409,
+                detail={"code": error.code, "limit": error.limit},
             ) from error
         except ResearchRunTrackingTemporarilyUnavailable as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
@@ -1492,15 +1406,20 @@ def create_app(
         return track
 
     @app.post(
-        "/api/daily-tracks/{track_id}/events/query", response_model=StrategyEventPageResponse,
+        "/api/daily-tracks/{track_id}/events/query",
+        response_model=StrategyEventPageResponse,
     )
     def query_track_events(request: Request, track_id: str, query: StrategyEventQueryInput):
-        owned = TypeAdapter(DailyTrackResultSectionInput).validate_python({
-            **query.model_dump(), "track_id": track_id,
-        })
+        owned = TypeAdapter(DailyTrackResultSectionInput).validate_python(
+            {
+                **query.model_dump(),
+                "track_id": track_id,
+            }
+        )
         try:
             result = _runtime(request).daily_tracks.get_result_section(
-                _researcher_id(request), owned,
+                _researcher_id(request),
+                owned,
             )
         except DailyTrackInvalidCursor as error:
             raise HTTPException(status_code=400, detail="Invalid result cursor") from error
@@ -1513,15 +1432,20 @@ def create_app(
         return result
 
     @app.post(
-        "/api/daily-tracks/{track_id}/holdings/query", response_model=HoldingPageResponse,
+        "/api/daily-tracks/{track_id}/holdings/query",
+        response_model=HoldingPageResponse,
     )
     def query_track_holdings(request: Request, track_id: str, query: HoldingQueryInput):
-        owned = TypeAdapter(DailyTrackResultSectionInput).validate_python({
-            **query.model_dump(), "track_id": track_id,
-        })
+        owned = TypeAdapter(DailyTrackResultSectionInput).validate_python(
+            {
+                **query.model_dump(),
+                "track_id": track_id,
+            }
+        )
         try:
             result = _runtime(request).daily_tracks.get_result_section(
-                _researcher_id(request), owned,
+                _researcher_id(request),
+                owned,
             )
         except DailyTrackInvalidCursor as error:
             raise HTTPException(status_code=400, detail="Invalid result cursor") from error
@@ -1759,7 +1683,7 @@ def _data_refresh_action_error(error: DataRefreshError) -> JSONResponse:
 
 def _data_refresh_action_receipt(outcome: RefreshOutcome) -> DataRefreshActionReceipt:
     target_is_valid = (
-        outcome.kind == "market"
+        outcome.kind in {"market", "dataset"}
         and outcome.as_of is not None
         and outcome.observation_through_session is None
     ) or (
@@ -1768,7 +1692,7 @@ def _data_refresh_action_receipt(outcome: RefreshOutcome) -> DataRefreshActionRe
         and outcome.observation_through_session is not None
     )
     if (
-        outcome.kind not in {"market", "financial", "industry"}
+        outcome.kind not in {"market", "financial", "industry", "dataset"}
         or outcome.status not in {"accepted", "cancelled"}
         or not target_is_valid
     ):
@@ -1782,14 +1706,16 @@ def _data_refresh_action_receipt(outcome: RefreshOutcome) -> DataRefreshActionRe
     )
 
 
-def _market_refresh_operation(outcome: RefreshOutcome) -> MarketRefreshOperation:
-    return MarketRefreshOperation(
+def _dataset_refresh_operation(outcome: RefreshOutcome) -> DatasetRefreshOperation:
+    return DatasetRefreshOperation(
         as_of=outcome.as_of,
         attempt_count=outcome.attempt_count,
         data_through_session=outcome.data_through_session,
         failure_code=outcome.failure_code,
         idempotency_key=outcome.idempotency_key,
-        kind="market",
+        kind="dataset",
+        phase=outcome.phase,
+        completed_stages=outcome.completed_stages,
         last_failure_code=outcome.last_failure_code,
         last_refresh_at=outcome.last_refresh_at,
         outcome=outcome.outcome,  # type: ignore[arg-type]
@@ -1907,11 +1833,14 @@ def create_production_app() -> FastAPI:
 
     configuration = research_agent.http_configuration()
     http_settings = CoreHttpSettings.from_environment()
-    configuration = replace(configuration, token_verifier=McpTokenVerifier(
-        internal=configuration.token_verifier,
-        auth_origin=http_settings.auth_internal_origin,
-        resource=research_agent.resource_server_url,
-    ))
+    configuration = replace(
+        configuration,
+        token_verifier=McpTokenVerifier(
+            internal=configuration.token_verifier,
+            auth_origin=http_settings.auth_internal_origin,
+            resource=research_agent.resource_server_url,
+        ),
+    )
     return create_app(
         enable_research_agent_http=True,
         research_agent_http=configuration,

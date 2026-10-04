@@ -60,8 +60,6 @@ from thesistrace.data import (
     IndustryRefreshError,
     RefreshOutcome,
     probe_financial_capability,
-    validate_financial_refresh_request,
-    validate_industry_refresh_request,
     validate_market_refresh_request,
 )
 from thesistrace.data.daily_basic_evidence import MARKET_SOURCE_RECEIPT_DIRECTORY
@@ -153,9 +151,6 @@ def _run(
     financial_bootstrap.add_argument("--capability-report", type=Path, required=True)
     financial_bootstrap.add_argument("--observation-through-session", required=True)
     financial_bootstrap.add_argument("--replay", type=Path)
-    financial_refresh = subcommands.add_parser("refresh-financial")
-    financial_refresh.add_argument("--idempotency-key", required=True)
-    financial_refresh.add_argument("--observation-through-session", required=True)
     financial_reproject = subcommands.add_parser("reproject-financial")
     financial_reproject.add_argument("--idempotency-key", required=True)
     financial_reproject.add_argument(
@@ -164,9 +159,6 @@ def _run(
     )
     financial_inspect = subcommands.add_parser("inspect-financial-refresh")
     financial_inspect.add_argument("--idempotency-key", required=True)
-    industry_refresh = subcommands.add_parser("refresh-industry")
-    industry_refresh.add_argument("--idempotency-key", required=True)
-    industry_refresh.add_argument("--observation-through-session", required=True)
     industry_inspect = subcommands.add_parser("inspect-industry-refresh")
     industry_inspect.add_argument("--idempotency-key", required=True)
     parsed = parser.parse_args(arguments)
@@ -179,22 +171,10 @@ def _run(
         worker_tushare_token = _live_worker_tushare_token()
 
     market_request: tuple[str, datetime] | None = None
-    financial_request: tuple[str, str] | None = None
-    industry_request: tuple[str, str] | None = None
     if parsed.command == "refresh":
         market_request = validate_market_refresh_request(
             idempotency_key=parsed.idempotency_key,
             as_of=parsed.as_of,
-        )
-    elif parsed.command == "refresh-financial":
-        financial_request = validate_financial_refresh_request(
-            idempotency_key=parsed.idempotency_key,
-            observation_through_session=parsed.observation_through_session,
-        )
-    elif parsed.command == "refresh-industry":
-        industry_request = validate_industry_refresh_request(
-            idempotency_key=parsed.idempotency_key,
-            observation_through_session=parsed.observation_through_session,
         )
 
     transport: HttpTushareTransport | None = None
@@ -235,7 +215,7 @@ def _run(
                 database,
                 mount_root,
                 benchmark_mount_root=benchmark_mount,
-            ).submit(
+            ).submit_dataset(
                 idempotency_key=idempotency_key,
                 as_of=as_of,
             )
@@ -245,28 +225,6 @@ def _run(
                 mount_root,
                 benchmark_mount_root=benchmark_mount,
             ).inspect(parsed.idempotency_key)
-        if parsed.command == "refresh-financial":
-            assert financial_request is not None
-            idempotency_key, observation_through_session = financial_request
-            return DataRefreshService(
-                database,
-                mount_root,
-                benchmark_mount_root=benchmark_mount,
-            ).submit_financial(
-                idempotency_key=idempotency_key,
-                observation_through_session=observation_through_session,
-            )
-        if parsed.command == "refresh-industry":
-            assert industry_request is not None
-            idempotency_key, observation_through_session = industry_request
-            return DataRefreshService(
-                database,
-                mount_root,
-                benchmark_mount_root=benchmark_mount,
-            ).submit_industry(
-                idempotency_key=idempotency_key,
-                observation_through_session=observation_through_session,
-            )
         if parsed.command == "inspect-industry-refresh":
             return DataRefreshService(
                 database,
@@ -287,9 +245,7 @@ def _run(
                 lifecycle_event=_progress,
             ).reproject(
                 idempotency_key=parsed.idempotency_key,
-                expected_generation_manifest_sha256=(
-                    parsed.expected_generation_manifest_sha256
-                ),
+                expected_generation_manifest_sha256=(parsed.expected_generation_manifest_sha256),
             )
             return {
                 "idempotency_key": outcome.idempotency_key,
@@ -335,9 +291,7 @@ def _run(
             provider = live_provider
             financial_source = TushareFinancialSource(live_provider)
             financial_disclosure_source = (
-                TushareDisclosureSource(live_provider)
-                if parsed.command == "worker"
-                else None
+                TushareDisclosureSource(live_provider) if parsed.command == "worker" else None
             )
             industry_source = TushareIndustrySource(live_provider)
         if parsed.command in {"collect-financial", "bootstrap-financial"}:

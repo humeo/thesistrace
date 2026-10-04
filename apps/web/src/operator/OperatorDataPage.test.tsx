@@ -2,10 +2,10 @@ import { expect, test } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import {
-  MarketRefreshReceipt,
+  DatasetRefreshReceipt,
   OperatorDataPage,
-  marketRefreshAsOfForDate,
-  suggestMarketRefreshKey,
+  datasetRefreshAsOfForDate,
+  suggestDatasetRefreshKey,
 } from "./OperatorDataPage";
 
 test("renders the focused forms without redundant Operator copy", () => {
@@ -13,16 +13,17 @@ test("renders the focused forms without redundant Operator copy", () => {
 
   expect(markup).toContain('href="/operator/researchers"');
   expect(markup).toContain('aria-current="page" href="/operator/data"');
-  expect(markup).toContain("Market Refresh");
-  expect(markup).toContain("Financial Refresh");
-  expect(markup).toContain("Industry Refresh");
+  expect(markup).toContain("Data Refresh");
+  expect(markup.match(/<form /g)).toHaveLength(1);
+  expect(markup).not.toContain("Financial Refresh</h2>");
+  expect(markup).not.toContain("Industry Refresh</h2>");
   expect(markup).toContain(">As-of<");
-  expect(markup).toContain("Observation-through Research Session");
+  expect(markup).not.toContain("Observation-through Research Session");
   expect(markup).toContain('id="operator-market-as-of"');
   expect(markup).toContain('aria-label="Open As-of calendar"');
   expect(markup).not.toContain('type="datetime-local"');
   expect(markup).toContain('id="operator-market-as-of"');
-  expect(markup).toContain("Submitted at 18:00 Asia/Shanghai (+08:00)");
+  expect(markup).toContain("Uses 18:00 Asia/Shanghai");
   expect(markup).not.toContain(">Idempotency key<");
   expect(markup).not.toContain('<p class="eyebrow">Operator Console</p>');
   expect(markup).not.toContain(
@@ -39,32 +40,32 @@ test("renders the focused forms without redundant Operator copy", () => {
 });
 
 test("maps a calendar date to an explicit post-close Shanghai timestamp", () => {
-  expect(marketRefreshAsOfForDate("2026-08-14")).toBe(
+  expect(datasetRefreshAsOfForDate("2026-08-14")).toBe(
     "2026-08-14T18:00:00+08:00",
   );
-  expect(marketRefreshAsOfForDate("2026-02-30")).toBe("");
-  expect(marketRefreshAsOfForDate("")).toBe("");
+  expect(datasetRefreshAsOfForDate("2026-02-30")).toBe("");
+  expect(datasetRefreshAsOfForDate("")).toBe("");
 });
 
 test("generates a unique kind-and-time key without selecting an as-of target", () => {
   expect(
-    suggestMarketRefreshKey(new Date("2026-08-30T05:06:07.000Z")),
-  ).toEqual(expect.stringMatching(/^market-20260830T050607Z-[0-9a-f-]{36}$/));
+    suggestDatasetRefreshKey(new Date("2026-08-30T05:06:07.000Z")),
+  ).toEqual(expect.stringMatching(/^dataset-20260830T050607Z-[0-9a-f-]{36}$/));
   expect(
-    suggestMarketRefreshKey(new Date("2026-08-30T05:06:07.996Z")),
-  ).toEqual(expect.stringMatching(/^market-20260830T050607Z-[0-9a-f-]{36}$/));
+    suggestDatasetRefreshKey(new Date("2026-08-30T05:06:07.996Z")),
+  ).toEqual(expect.stringMatching(/^dataset-20260830T050607Z-[0-9a-f-]{36}$/));
 });
 
 test("keeps the last known running state honest when status polling fails", () => {
   const markup = renderToStaticMarkup(
-    <MarketRefreshReceipt
+    <DatasetRefreshReceipt
       operation={{
         asOf: "2026-08-11T10:00:00+00:00",
         attemptCount: 1,
         dataThroughSession: null,
         failureCode: null,
         idempotencyKey: "market-running",
-        kind: "market",
+        kind: "dataset", phase: null, completedStages: [],
         lastFailureCode: null,
         lastRefreshAt: null,
         outcome: null,

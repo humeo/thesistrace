@@ -94,6 +94,12 @@ class FinancialDailyRefreshOutcome:
     canonical_changed: bool
 
 
+@dataclass(frozen=True)
+class PreparedFinancialRefresh:
+    generation_manifest_sha256: str
+    complete_through_session: str
+
+
 class FinancialDailyRefreshStore:
     def __init__(self, database: PostgresDatabase) -> None:
         self._database = database
@@ -586,28 +592,20 @@ class FinancialDailyRefreshStore:
         gaps = evidence["gaps"]
         unresolved_dates = list(missing_since.values())
         if gaps:
-            unresolved_dates.append(
-                operation["prior_complete_through_session"] + timedelta(days=1)
-            )
+            unresolved_dates.append(operation["prior_complete_through_session"] + timedelta(days=1))
         if failures:
             unresolved_dates.append(operation["target_session"])
         return FinancialDiscoveryPublication(
             baseline_session=operation["discovery_baseline_session"].isoformat(),
             attempted_through_session=operation["target_session"].isoformat(),
             complete_through_session=(
-                operation["prior_complete_through_session"]
-                if gaps
-                else operation["target_session"]
+                operation["prior_complete_through_session"] if gaps else operation["target_session"]
             ).isoformat(),
             source_lineage_sha256=_sha(
                 {"discovery": operation["source_lineage_sha256"], "pending": sorted(pending_ids)}
             ),
             readiness_status=(
-                "ready_with_gaps"
-                if gaps
-                else "ready_with_pending"
-                if pending_ids
-                else "ready"
+                "ready_with_gaps" if gaps else "ready_with_pending" if pending_ids else "ready"
             ),
             pending_instrument_count=len(pending_ids),
             discovery_gap_count=len(gaps),
@@ -739,9 +737,17 @@ class FinancialDailyRefreshStore:
                      AND target.instrument_id=report.instrument_id
                      AND target.report_period=report.report_period
                      AND target.instrument_id=ANY(%s::text[]) AND target.actual_date<=%s""",
-                (digest, Jsonb([dict(instrument_id=instrument, report_period=period)
-                                for instrument, period in received_reports]),
-                 scope, changed["target_session"]),
+                (
+                    digest,
+                    Jsonb(
+                        [
+                            dict(instrument_id=instrument, report_period=period)
+                            for instrument, period in received_reports
+                        ]
+                    ),
+                    scope,
+                    changed["target_session"],
+                ),
             )
 
     def record_candidate(
@@ -1099,6 +1105,75 @@ class DailyFinancialRefreshService:
             }
         )
 
+    def prepare(
+        self,
+        *,
+        idempotency_key: str,
+        source_generation_manifest_sha256: str,
+        observation_through_session: str,
+    ) -> PreparedFinancialRefresh:
+        """Prepare against a pinned market candidate without moving Dataset Head."""
+        from thesistrace.data.financial_indicator_candidate import FinancialIndicatorCandidateStore
+
+        target = _iso_date(observation_through_session)
+        with self._database.session_advisory_lock("financial-daily-refresh"):
+            self._ownership_guard()
+            operation = self._operation_or_initialize(
+                idempotency_key, target, source_generation_manifest_sha256
+            )
+            if operation["status"] == "prepared":
+                digest = str(operation["composed_generation_manifest_sha256"])
+                self._generations.validate_generation(digest)
+                return PreparedFinancialRefresh(digest, target)
+            try:
+                indicators = FinancialIndicatorCandidateStore(self._root)
+                with indicators.validation_session():
+                    candidate = self._build_candidate(idempotency_key, operation, indicators)
+                    operation = self._store.operation(idempotency_key)
+                    collection = operation["indicator_collection"] or {}
+                    if (
+                        candidate.readiness_status != "ready"
+                        or candidate.discovery_complete_through_session != target
+                        or collection.get("failures")
+                        or collection.get("pending_instrument_ids")
+                    ):
+                        raise FinancialDailyRefreshError("FINANCIAL_PREPARATION_INCOMPLETE")
+                    indicator_digest = operation["indicator_candidate_manifest_sha256"]
+                    if indicator_digest is not None:
+                        coverage = indicators.family_reference(indicator_digest)["dataset_coverage"]
+                        if coverage["readiness_status"] != "ready":
+                            raise FinancialDailyRefreshError("FINANCIAL_PREPARATION_INCOMPLETE")
+                    composed = self._composition.compose(
+                        source_generation_manifest_sha256,
+                        candidate.manifest_sha256,
+                        financial_predecessor=operation["prior_financial_manifest_sha256"],
+                        prepared_at=self._validated_clock(),
+                        publication_coordinate=str(operation["fingerprint"]),
+                        indicator_manifest_sha256=indicator_digest,
+                        indicator_store=indicators,
+                    )
+                    self._ownership_guard()
+                    self._store.record_composed_generation(
+                        idempotency_key, composed.manifest_sha256, self._validated_clock()
+                    )
+                    with self._database.transaction() as transaction:
+                        transaction.execute(
+                            "UPDATE data.financial_daily_refresh_operations "
+                            "SET status='prepared', finished_at=now(), updated_at=now() "
+                            "WHERE idempotency_key=%s AND status='running'",
+                            (idempotency_key,),
+                        )
+                    return PreparedFinancialRefresh(composed.manifest_sha256, target)
+            except Exception as error:
+                self._store.fail(
+                    idempotency_key,
+                    getattr(error, "code", "FINANCIAL_PREPARATION_FAILED"),
+                    self._validated_clock(),
+                )
+                raise
+            finally:
+                self._candidates.close()
+
     def publish(
         self,
         *,
@@ -1116,9 +1191,14 @@ class DailyFinancialRefreshService:
             operation = self._operation_or_initialize(idempotency_key, target)
             try:
                 indicators = FinancialIndicatorCandidateStore(
-                    self._root, progress=lambda event: self._progress({
-                        "event": "financial_refresh", "idempotency_key": idempotency_key, **event,
-                    }),
+                    self._root,
+                    progress=lambda event: self._progress(
+                        {
+                            "event": "financial_refresh",
+                            "idempotency_key": idempotency_key,
+                            **event,
+                        }
+                    ),
                 )
                 with indicators.validation_session():
                     candidate = self._build_candidate(idempotency_key, operation, indicators)
@@ -1174,6 +1254,7 @@ class DailyFinancialRefreshService:
         self,
         idempotency_key: str,
         target: str,
+        source_generation_manifest_sha256: str | None = None,
     ) -> dict[str, object]:
         try:
             operation = self._store.operation(idempotency_key)
@@ -1183,13 +1264,19 @@ class DailyFinancialRefreshService:
         else:
             if operation["target_session"].isoformat() != target:
                 raise FinancialDailyRefreshError("IDEMPOTENCY_KEY_REUSED")
+            if source_generation_manifest_sha256 is not None and (
+                operation["source_generation_manifest_sha256"] != source_generation_manifest_sha256
+            ):
+                raise FinancialDailyRefreshError("IDEMPOTENCY_KEY_REUSED")
             if str(operation["status"]) == "failed":
                 raise FinancialDailyRefreshError(str(operation["failure_code"]))
             return operation
-        pointer = self._lifecycle.current_pointer()
-        if pointer is None:
-            raise FinancialDailyRefreshError("FINANCIAL_DATASET_NOT_READY")
-        generation = self._generations.inspect_root(pointer.generation_manifest_sha256)
+        if source_generation_manifest_sha256 is None:
+            pointer = self._lifecycle.current_pointer()
+            if pointer is None:
+                raise FinancialDailyRefreshError("FINANCIAL_DATASET_NOT_READY")
+            source_generation_manifest_sha256 = pointer.generation_manifest_sha256
+        generation = self._generations.inspect_root(source_generation_manifest_sha256)
         prior_manifest = generation.financial_candidate_manifest_sha256
         if prior_manifest is None:
             raise FinancialDailyRefreshError("FINANCIAL_DATASET_NOT_READY")
@@ -1202,7 +1289,7 @@ class DailyFinancialRefreshService:
         baseline = prior.discovery_baseline_session or prior.observation_through_session
         self._store.begin(
             idempotency_key=idempotency_key,
-            source_generation_manifest_sha256=pointer.generation_manifest_sha256,
+            source_generation_manifest_sha256=source_generation_manifest_sha256,
             prior_financial_manifest_sha256=prior_manifest,
             discovery_baseline_session=baseline,
             prior_attempted_through_session=prior.observation_through_session,
@@ -1382,9 +1469,7 @@ class DailyFinancialRefreshService:
         attempted = self._store.attempted_instrument_ids(idempotency_key)
         planned = self._store.planned_identities(idempotency_key)
         remaining = tuple(
-            identity
-            for identity in planned
-            if identity.instrument_id not in attempted
+            identity for identity in planned if identity.instrument_id not in attempted
         )
         loading_started = perf_counter()
         self._candidates.prepare_instruments(
@@ -1505,7 +1590,8 @@ class DailyFinancialRefreshService:
         finalize_started = perf_counter()
         candidate = self._candidates.finalize_daily(prepared, discovery=candidate_publication)
         received_reports = self._candidates.report_inventory(
-            candidate.manifest_sha256, through=target,
+            candidate.manifest_sha256,
+            through=target,
         )
         self._completed_stage(idempotency_key, "candidate_finalize", finalize_started)
         self._store.record_candidate(
@@ -1530,7 +1616,10 @@ class DailyFinancialRefreshService:
         return candidate
 
     def _build_indicator_candidate(
-        self, key: str, operation: Mapping[str, object], candidates,
+        self,
+        key: str,
+        operation: Mapping[str, object],
+        candidates,
     ) -> None:
         source = str(operation["source_generation_manifest_sha256"])
         descriptor = self._generations.inspect_root(source)
@@ -1603,8 +1692,10 @@ class DailyFinancialRefreshService:
                 return
             # Report readiness is derived from all retained disclosure and observation
             # evidence below; only failed source requests need an external pending marker.
-            unresolved = {instrument: target
-                          for instrument, _code in operation["indicator_collection"]["failures"]}
+            unresolved = {
+                instrument: target
+                for instrument, _code in operation["indicator_collection"]["failures"]
+            }
             build_started = perf_counter()
             digest = candidates.build(
                 collection_evidence_sha256s=sorted(evidence),
@@ -1624,7 +1715,9 @@ class DailyFinancialRefreshService:
                 }
             )
             self._store.record_indicator_candidate(
-                key, digest, self._validated_clock(),
+                key,
+                digest,
+                self._validated_clock(),
                 received_reports=sorted(candidates.report_inventory(digest, through=target)),
             )
 
@@ -1693,9 +1786,11 @@ class DailyFinancialRefreshService:
             with mounted_data_mutation_lock(self._database):
                 composition_started = perf_counter()
                 composed = self._composition.compose(
-                    current.generation_manifest_sha256, candidate.manifest_sha256,
+                    current.generation_manifest_sha256,
+                    candidate.manifest_sha256,
                     financial_predecessor=current_financial,
-                    prepared_at=prepared_at, publication_coordinate=fingerprint,
+                    prepared_at=prepared_at,
+                    publication_coordinate=fingerprint,
                     indicator_manifest_sha256=indicator_candidate,
                     indicator_store=indicators,
                 )

@@ -12,7 +12,7 @@ def test_data_refresh_exposes_only_queue_control_not_live_provider_access() -> N
     assert "thesistrace-data-operator-v" not in project
     assert "data_operator" not in http
     assert "data_operator" not in worker
-    assert '"/api/operator/data/refreshes/market"' in http
+    assert '"/api/operator/data/refreshes/dataset"' in http
     assert '"/api/operator/data/refreshes/financial"' in http
     assert "TushareDataSource" not in runtime
     assert "TushareAdapter" not in runtime

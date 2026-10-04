@@ -10,6 +10,18 @@ from thesistrace.entrypoints.schema import verify_core_schema
 from thesistrace.migrations.financial_disclosures_0005 import SOURCE, TARGET, migrate
 
 
+@pytest.fixture(autouse=True)
+def frozen_migration_target(monkeypatch, financial_disclosures_target_schemas):
+    monkeypatch.setattr(
+        "thesistrace.migrations.financial_disclosures_0005.CORE_SCHEMA_DEFINITIONS",
+        financial_disclosures_target_schemas,
+    )
+    monkeypatch.setattr(
+        "thesistrace.entrypoints.schema.CORE_SCHEMA_DEFINITIONS",
+        financial_disclosures_target_schemas,
+    )
+
+
 @pytest.fixture
 def source_database(core_settings, execution_opportunity_target_schemas):
     name = "disclosure_migration_" + uuid4().hex

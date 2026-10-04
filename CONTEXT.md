@@ -663,7 +663,7 @@ The official CSI 300 Price Index Open point for one Research Session.
 _避免混用_: Benchmark NAV, benchmark return, constituent average
 
 **Benchmark Snapshot**:
-The current accepted history of Benchmark Levels used for Strategy Comparison.
+The immutable history of Benchmark Levels selected by the accepted Dataset Head for Strategy Comparison. A prepared Snapshot becomes visible only with its complete Data Generation.
 _避免混用_: Data Generation, a ResearchRun-specific benchmark
 
 **Benchmark Relative Return**:
@@ -757,20 +757,23 @@ The initial preparation of Canonical Data that establishes the first Data Genera
 _避免混用_: Data Refresh, research admission
 
 **Data Refresh**:
-An Operator-requested update of shared Canonical Data that either publishes a validated Data Generation, confirms no change, or reports failure.
+An Operator-requested update that prepares Market, Financial and Industry data and publishes one complete validated Data Generation with its Benchmark Snapshot, confirms no change, or leaves the accepted version unchanged on failure.
 _避免混用_: DailyTrack Refresh, ResearchRun, completed publication on submission
 
 **Data Refresh Operation**:
-The accepted request and eventual outcome of one Market, Financial, or Industry Refresh.
+The accepted fixed-date request, preparation progress, attempts and eventual publication outcome of one complete Data Refresh.
 _避免混用_: Published Data Generation, an automatic recurring update
 
+**Data Refresh Retry**:
+A new attempt to complete a failed Data Refresh Operation with the same request, reusing only valid preparation from the same source Data Generation.
+_避免混用_: A changed target date, reopening published data, partial publication
+
 **Market Refresh**:
-A Data Refresh that advances end-of-day market families while retaining the
-current financial families.
+The Data Refresh preparation stage that advances end-of-day market families and the required Benchmark Snapshot.
 _避免混用_: Financial Refresh, independent Dataset Head
 
 **Financial Refresh**:
-A Data Refresh that checks actual structured disclosures, retries missing reports
+The Data Refresh preparation stage that checks actual structured disclosures, retries missing reports
 and rotates through financial histories for revisions. Statements and indicators
 retain independent coverage, and unsuccessful collection preserves accepted facts.
 _避免混用_: Market Refresh, complete Financial Coverage, publication on collection
@@ -781,8 +784,7 @@ identifies reports actually published by the observation boundary.
 _避免混用_: Financial statement values, completed Financial Refresh
 
 **Financial Discovery Attempted Through**:
-The latest Research Session through which a Financial Refresh published either
-complete structured disclosure checks or explicit discovery gaps.
+The latest Research Session checked by financial preparation, including any explicit discovery gaps. A complete Data Refresh can publish only when those gaps are resolved.
 _避免混用_: Financial Discovery Complete Through, implicit success
 
 **Financial Discovery Complete Through**:

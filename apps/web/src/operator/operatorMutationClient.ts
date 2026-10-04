@@ -5,22 +5,24 @@ const pythonBoundaryWhitespace = /^[\u0009-\u000D\u001C-\u0020\u0085\u00A0\u1680
 
 export type InvitationMutationOperation = "issue" | "reissue";
 
-export type MarketRefreshRequest = Readonly<{
+export type DatasetRefreshRequest = Readonly<{
   asOf: string;
   idempotencyKey: string;
 }>;
 
-export type MarketRefreshOperation = Readonly<{
+export type DatasetRefreshOperation = Readonly<{
   asOf: string;
   attemptCount: number;
   dataThroughSession: string | null;
   failureCode: string | null;
   idempotencyKey: string;
-  kind: "market";
+  kind: "dataset";
+  phase: string | null;
+  completedStages: readonly string[];
   lastFailureCode: string | null;
   lastRefreshAt: string | null;
   outcome: "published" | "no_change" | null;
-  status: "accepted" | "running" | "succeeded" | "failed";
+  status: "accepted" | "running" | "succeeded" | "failed" | "cancelled";
 }>;
 
 export type FinancialRefreshRequest = Readonly<{
@@ -67,7 +69,7 @@ export type IndustryRefreshOperation = Readonly<{
   status: "accepted" | "running" | "succeeded" | "failed";
 }>;
 
-export type DataRefreshKind = "market" | "financial" | "industry";
+export type DataRefreshKind = "market" | "financial" | "industry" | "dataset";
 
 type DataRefreshActionBase = Readonly<{
   kind: DataRefreshKind;
@@ -114,7 +116,7 @@ export class OperatorMutationError extends Error {
   }
 }
 
-export function isMarketRefreshIdempotencyKey(value: string): boolean {
+export function isDatasetRefreshIdempotencyKey(value: string): boolean {
   const characters = Array.from(value);
   return characters.length > 0
     && characters.length <= 512
@@ -208,8 +210,8 @@ export async function confirmSessionRevocationProof(
   return { expiresAt: value.expires_at, proof: value.proof };
 }
 
-export async function confirmMarketRefreshProof(
-  request: MarketRefreshRequest,
+export async function confirmDatasetRefreshProof(
+  request: DatasetRefreshRequest,
   signal: AbortSignal,
 ): Promise<Readonly<{ expiresAt: string; proof: string }>> {
   const value = await operatorPost(
@@ -217,7 +219,7 @@ export async function confirmMarketRefreshProof(
     {
       as_of: request.asOf,
       idempotency_key: request.idempotencyKey,
-      operation: "data.refresh.market.submit",
+      operation: "data.refresh.dataset.submit",
     },
     signal,
   );
@@ -232,13 +234,13 @@ export async function confirmMarketRefreshProof(
   return { expiresAt: value.expires_at, proof: value.proof };
 }
 
-export async function submitMarketRefresh(
-  request: MarketRefreshRequest,
+export async function submitDatasetRefresh(
+  request: DatasetRefreshRequest,
   proof: string,
   signal: AbortSignal,
-): Promise<MarketRefreshOperation> {
-  return marketRefreshOperation(await operatorPost(
-    "/api/operator/data/refreshes/market",
+): Promise<DatasetRefreshOperation> {
+  return datasetRefreshOperation(await operatorPost(
+    "/api/operator/data/refreshes/dataset",
     {
       as_of: request.asOf,
       idempotency_key: request.idempotencyKey,
@@ -248,16 +250,16 @@ export async function submitMarketRefresh(
   ));
 }
 
-export async function loadMarketRefresh(
-  request: MarketRefreshRequest,
+export async function loadDatasetRefresh(
+  request: DatasetRefreshRequest,
   signal: AbortSignal,
-): Promise<MarketRefreshOperation> {
+): Promise<DatasetRefreshOperation> {
   const query = new URLSearchParams({
     as_of: request.asOf,
     idempotency_key: request.idempotencyKey,
   });
-  return marketRefreshOperation(await operatorGet(
-    `/api/operator/data/refreshes/market?${query.toString()}`,
+  return datasetRefreshOperation(await operatorGet(
+    `/api/operator/data/refreshes/dataset?${query.toString()}`,
     signal,
   ));
 }
@@ -612,7 +614,7 @@ function dataRefreshActionReceipt(
 }
 
 function isDataRefreshKind(value: unknown): value is DataRefreshKind {
-  return value === "market" || value === "financial" || value === "industry";
+  return value === "dataset" || value === "market" || value === "financial" || value === "industry";
 }
 
 function actionTargetMatches(
@@ -620,7 +622,7 @@ function actionTargetMatches(
   asOf: unknown,
   observationThroughSession: unknown,
 ): asOf is string | null {
-  if (request.kind === "market") {
+  if ((request.kind === "market" || request.kind === "dataset")) {
     return isIsoTimestamp(asOf)
       && observationThroughSession === null
       && new Date(asOf).getTime() === new Date(request.target).getTime();
@@ -628,7 +630,7 @@ function actionTargetMatches(
   return asOf === null && observationThroughSession === request.target;
 }
 
-function marketRefreshOperation(value: unknown): MarketRefreshOperation {
+function datasetRefreshOperation(value: unknown): DatasetRefreshOperation {
   const keys = [
     "as_of",
     "attempt_count",
@@ -640,9 +642,14 @@ function marketRefreshOperation(value: unknown): MarketRefreshOperation {
     "last_refresh_at",
     "outcome",
     "status",
+    "phase",
+    "completed_stages",
   ] as const;
   if (
     !hasExactKeys(value, keys)
+    || (value.phase !== null && typeof value.phase !== "string")
+    || !Array.isArray(value.completed_stages)
+    || !value.completed_stages.every((stage) => ["market", "financial", "industry"].includes(String(stage)))
     || !isIsoTimestamp(value.as_of)
     || typeof value.attempt_count !== "number"
     || !Number.isSafeInteger(value.attempt_count)
@@ -652,8 +659,8 @@ function marketRefreshOperation(value: unknown): MarketRefreshOperation {
         || !/^\d{4}-\d{2}-\d{2}$/.test(value.data_through_session)))
     || (value.failure_code !== null && typeof value.failure_code !== "string")
     || typeof value.idempotency_key !== "string"
-    || !isMarketRefreshIdempotencyKey(value.idempotency_key)
-    || value.kind !== "market"
+    || !isDatasetRefreshIdempotencyKey(value.idempotency_key)
+    || value.kind !== "dataset"
     || (value.last_failure_code !== null
       && typeof value.last_failure_code !== "string")
     || (value.last_refresh_at !== null && !isIsoTimestamp(value.last_refresh_at))
@@ -663,7 +670,8 @@ function marketRefreshOperation(value: unknown): MarketRefreshOperation {
     || (value.status !== "accepted"
       && value.status !== "running"
       && value.status !== "succeeded"
-      && value.status !== "failed")
+      && value.status !== "failed"
+      && value.status !== "cancelled")
     || (value.status === "succeeded" && value.outcome === null)
     || (value.status !== "succeeded" && value.outcome !== null)
     || (value.status === "failed" && value.failure_code === null)
@@ -673,6 +681,8 @@ function marketRefreshOperation(value: unknown): MarketRefreshOperation {
   }
   return {
     asOf: value.as_of,
+    phase: value.phase,
+    completedStages: value.completed_stages as string[],
     attemptCount: value.attempt_count,
     dataThroughSession: value.data_through_session,
     failureCode: value.failure_code,
@@ -717,7 +727,7 @@ function financialRefreshOperation(value: unknown): FinancialRefreshOperation {
     || (value.failure_code !== null && typeof value.failure_code !== "string")
     || !isOptionalSession(value.financial_complete_through_session)
     || typeof value.idempotency_key !== "string"
-    || !isMarketRefreshIdempotencyKey(value.idempotency_key)
+    || !isDatasetRefreshIdempotencyKey(value.idempotency_key)
     || value.kind !== "financial"
     || (value.last_failure_code !== null && typeof value.last_failure_code !== "string")
     || (value.last_refresh_at !== null && !isIsoTimestamp(value.last_refresh_at))
@@ -793,7 +803,7 @@ function industryRefreshOperation(value: unknown): IndustryRefreshOperation {
     || !isOptionalSession(value.data_through_session)
     || (value.failure_code !== null && typeof value.failure_code !== "string")
     || typeof value.idempotency_key !== "string"
-    || !isMarketRefreshIdempotencyKey(value.idempotency_key)
+    || !isDatasetRefreshIdempotencyKey(value.idempotency_key)
     || value.kind !== "industry"
     || (value.last_failure_code !== null && typeof value.last_failure_code !== "string")
     || (value.last_refresh_at !== null && !isIsoTimestamp(value.last_refresh_at))

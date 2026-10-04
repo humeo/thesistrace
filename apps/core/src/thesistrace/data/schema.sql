@@ -227,9 +227,9 @@ CREATE TABLE data.financial_daily_refresh_operations (
     CONSTRAINT financial_daily_refresh_operations_published_generation_check CHECK (((published_generation_manifest_sha256 IS NULL) OR (published_generation_manifest_sha256 ~ '^[0-9a-f]{64}$'::text))),
     CONSTRAINT financial_daily_refresh_operations_coordinates_check CHECK ((discovery_baseline_session <= prior_complete_through_session) AND (prior_complete_through_session <= prior_attempted_through_session) AND (prior_attempted_through_session <= target_session)),
     CONSTRAINT financial_daily_refresh_operations_discovery_check CHECK (((discovery_evidence IS NULL) = (source_lineage_sha256 IS NULL)) AND ((discovery_evidence IS NULL) = (discovery_start_date IS NULL)) AND ((discovery_evidence IS NULL) = (discovery_end_date IS NULL)) AND ((discovery_start_date IS NULL) OR (discovery_start_date <= discovery_end_date))),
-    CONSTRAINT financial_daily_refresh_operations_status_check CHECK ((status = ANY (ARRAY['running'::text, 'succeeded'::text, 'succeeded_with_pending'::text, 'succeeded_with_gaps'::text, 'failed'::text]))),
+    CONSTRAINT financial_daily_refresh_operations_status_check CHECK ((status = ANY (ARRAY['running'::text, 'prepared'::text, 'succeeded'::text, 'succeeded_with_pending'::text, 'succeeded_with_gaps'::text, 'failed'::text]))),
     CONSTRAINT financial_daily_refresh_operations_publication_state_check CHECK (((composed_generation_manifest_sha256 IS NULL) = (publication_prepared_at IS NULL)) AND ((published_generation_manifest_sha256 IS NULL) = (published_at IS NULL)) AND ((published_generation_manifest_sha256 IS NULL) = (published_outcome IS NULL))),
-    CONSTRAINT financial_daily_refresh_operations_state_check CHECK ((((status = 'running'::text) AND (published_generation_manifest_sha256 IS NULL) AND (failure_code IS NULL) AND (finished_at IS NULL)) OR ((status = ANY (ARRAY['succeeded'::text, 'succeeded_with_pending'::text, 'succeeded_with_gaps'::text])) AND (candidate_manifest_sha256 IS NOT NULL) AND (composed_generation_manifest_sha256 IS NOT NULL) AND (publication_prepared_at IS NOT NULL) AND (publication_head_moved_at IS NOT NULL) AND (published_generation_manifest_sha256 IS NOT NULL) AND (failure_code IS NULL) AND (finished_at IS NOT NULL)) OR ((status = 'failed'::text) AND (published_generation_manifest_sha256 IS NULL) AND (failure_code IS NOT NULL) AND (finished_at IS NOT NULL))))
+    CONSTRAINT financial_daily_refresh_operations_state_check CHECK ((status='prepared' AND candidate_manifest_sha256 IS NOT NULL AND composed_generation_manifest_sha256 IS NOT NULL AND published_generation_manifest_sha256 IS NULL AND failure_code IS NULL AND finished_at IS NOT NULL) OR (((status = 'running'::text) AND (published_generation_manifest_sha256 IS NULL) AND (failure_code IS NULL) AND (finished_at IS NULL)) OR ((status = ANY (ARRAY['succeeded'::text, 'succeeded_with_pending'::text, 'succeeded_with_gaps'::text])) AND (candidate_manifest_sha256 IS NOT NULL) AND (composed_generation_manifest_sha256 IS NOT NULL) AND (publication_prepared_at IS NOT NULL) AND (publication_head_moved_at IS NOT NULL) AND (published_generation_manifest_sha256 IS NOT NULL) AND (failure_code IS NULL) AND (finished_at IS NOT NULL)) OR ((status = 'failed'::text) AND (published_generation_manifest_sha256 IS NULL) AND (failure_code IS NOT NULL) AND (finished_at IS NOT NULL))))
 );
 
 
@@ -446,6 +446,8 @@ CREATE TABLE data.refresh_operations (
     idempotency_key text NOT NULL,
     kind text NOT NULL,
     fingerprint text NOT NULL,
+    preparation jsonb DEFAULT '{}'::jsonb NOT NULL,
+    retry_of text,
     status text NOT NULL,
     owner_token text,
     lease_expires_at timestamp with time zone,
@@ -473,6 +475,7 @@ CREATE TABLE data.refresh_operations (
     started_at timestamp with time zone,
     finished_at timestamp with time zone,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT refresh_operations_preparation_check CHECK (jsonb_typeof(preparation)='object'),
     CONSTRAINT refresh_operations_attempt_count_check CHECK ((attempt_count >= 0)),
     CONSTRAINT refresh_operations_check CHECK (
         (
@@ -498,7 +501,7 @@ CREATE TABLE data.refresh_operations (
             status = 'succeeded'::text
             AND (
                 (
-                    kind = ANY (ARRAY['market'::text, 'industry'::text])
+                    kind = ANY (ARRAY['market'::text, 'industry'::text, 'dataset'::text])
                     AND outcome = ANY (ARRAY['published'::text, 'no_change'::text])
                 )
                 OR (
@@ -520,7 +523,7 @@ CREATE TABLE data.refresh_operations (
         OR (
             status = 'failed'::text
             AND (
-                (kind = 'market'::text AND outcome IS NULL)
+                (kind IN ('market'::text, 'dataset'::text) AND outcome IS NULL)
                 OR (
                     kind = ANY (ARRAY['financial'::text, 'industry'::text])
                     AND outcome = ANY (
@@ -547,7 +550,7 @@ CREATE TABLE data.refresh_operations (
     CONSTRAINT refresh_operations_fingerprint_check CHECK ((fingerprint ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT refresh_operations_financial_receipt_check CHECK (
         (
-            kind IN ('market', 'industry')
+            kind IN ('market', 'industry', 'dataset')
             AND financial_complete_through_session IS NULL
             AND matched_trigger_count IS NULL
             AND checked_no_structured_change_count IS NULL
@@ -617,7 +620,7 @@ CREATE TABLE data.refresh_operations (
     ),
     CONSTRAINT refresh_operations_generation_manifest_sha256_check CHECK (((generation_manifest_sha256 IS NULL) OR (generation_manifest_sha256 ~ '^[0-9a-f]{64}$'::text))),
     CONSTRAINT refresh_operations_idempotency_key_check CHECK (((idempotency_key <> ''::text) AND (idempotency_key = btrim(idempotency_key)))),
-    CONSTRAINT refresh_operations_kind_check CHECK ((kind = ANY (ARRAY['market'::text, 'financial'::text, 'industry'::text]))),
+    CONSTRAINT refresh_operations_kind_check CHECK ((kind = ANY (ARRAY['market'::text, 'financial'::text, 'industry'::text, 'dataset'::text]))),
     CONSTRAINT refresh_operations_outcome_check CHECK (((outcome IS NULL) OR (outcome = ANY (ARRAY['published'::text, 'no_change'::text, 'degraded'::text, 'business_rejected'::text, 'infrastructure_failed'::text])))),
     CONSTRAINT refresh_operations_owner_token_check CHECK (((owner_token IS NULL) OR ((owner_token <> ''::text) AND (owner_token = btrim(owner_token))))),
     CONSTRAINT refresh_operations_phase_check CHECK (
@@ -635,7 +638,7 @@ CREATE TABLE data.refresh_operations (
         ])
     ),
     CONSTRAINT refresh_operations_status_check CHECK ((status = ANY (ARRAY['accepted'::text, 'running'::text, 'succeeded'::text, 'failed'::text, 'cancelled'::text]))),
-    CONSTRAINT refresh_operations_target_check CHECK ((((kind = 'market'::text) AND (as_of IS NOT NULL) AND (observation_through_session IS NULL)) OR ((kind = ANY (ARRAY['financial'::text, 'industry'::text])) AND (as_of IS NULL) AND (observation_through_session IS NOT NULL))))
+    CONSTRAINT refresh_operations_target_check CHECK ((((kind IN ('market'::text, 'dataset'::text)) AND (as_of IS NOT NULL) AND (observation_through_session IS NULL)) OR ((kind = ANY (ARRAY['financial'::text, 'industry'::text])) AND (as_of IS NULL) AND (observation_through_session IS NOT NULL))))
 );
 
 

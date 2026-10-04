@@ -36,7 +36,7 @@ class SessionVerifier(Protocol):
 class OperatorAuthorizer(Protocol):
     async def authorize_operator(self, cookie: str | None) -> None: ...
 
-    async def consume_market_refresh_proof(
+    async def consume_dataset_refresh_proof(
         self,
         cookie: str | None,
         *,
@@ -179,7 +179,7 @@ class CoreAuthVerifier:
         if response.status_code != 204:
             raise AuthSessionUnavailable()
 
-    async def consume_market_refresh_proof(
+    async def consume_dataset_refresh_proof(
         self,
         cookie: str | None,
         *,
@@ -194,7 +194,7 @@ class CoreAuthVerifier:
                 json={
                     "as_of": as_of,
                     "idempotency_key": idempotency_key,
-                    "operation": "data.refresh.market.submit",
+                    "operation": "data.refresh.dataset.submit",
                     "proof": proof,
                 },
             )

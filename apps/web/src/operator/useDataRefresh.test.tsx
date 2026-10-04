@@ -6,9 +6,9 @@ import * as client from "./operatorMutationClient";
 import { useDataRefresh } from "./useDataRefresh";
 
 const request = { asOf: "2026-08-14T18:00:00+08:00", idempotencyKey: "market-exact" };
-const receipt: client.MarketRefreshOperation = { ...request, kind: "market", attemptCount: 0, status: "accepted", outcome: null,
+const receipt: client.DatasetRefreshOperation = { ...request, kind: "dataset", phase: null, completedStages: [], attemptCount: 0, status: "accepted", outcome: null,
   dataThroughSession: null, failureCode: null, lastFailureCode: null, lastRefreshAt: null };
-const complete: client.MarketRefreshOperation = { ...receipt, status: "succeeded", outcome: "published", dataThroughSession: "2026-08-14" };
+const complete: client.DatasetRefreshOperation = { ...receipt, status: "succeeded", outcome: "published", dataThroughSession: "2026-08-14" };
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>(done => { resolve = done; });
@@ -20,11 +20,11 @@ async function mount() {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
-  vi.spyOn(client, "confirmMarketRefreshProof").mockResolvedValue({ proof: "fresh-proof", expiresAt: "2026-08-14T10:00:00Z" });
+  vi.spyOn(client, "confirmDatasetRefreshProof").mockResolvedValue({ proof: "fresh-proof", expiresAt: "2026-08-14T10:00:00Z" });
   const accepted = vi.fn();
   const callbacks = { onAccessNotFound: vi.fn(), onOperationAccepted: accepted };
-  let current!: ReturnType<typeof useDataRefresh<"market">>;
-  function Harness() { current = useDataRefresh("market", callbacks); return null; }
+  let current!: ReturnType<typeof useDataRefresh<"dataset">>;
+  function Harness() { current = useDataRefresh("dataset", callbacks); return null; }
   const host = document.createElement("div"); const root = createRoot(host);
   await act(async () => root.render(<Harness />));
   let mounted = true;
@@ -40,8 +40,8 @@ async function mount() {
 test("dismissed proof cannot submit even when its ignored abort resolves late", async () => {
   const view = await mount();
   const proof = deferred<{ proof: string; expiresAt: string }>();
-  vi.mocked(client.confirmMarketRefreshProof).mockReturnValue(proof.promise);
-  const submit = vi.spyOn(client, "submitMarketRefresh");
+  vi.mocked(client.confirmDatasetRefreshProof).mockReturnValue(proof.promise);
+  const submit = vi.spyOn(client, "submitDatasetRefresh");
   await act(async () => view.state().review(request));
   await act(async () => { void view.state().confirm(); });
   await act(async () => view.state().dismissConfirmation());
@@ -52,9 +52,9 @@ test("dismissed proof cannot submit even when its ignored abort resolves late", 
 
 test("receipt reconciliation fences a late POST and allows another confirmation immediately", async () => {
   const view = await mount();
-  const post = deferred<client.MarketRefreshOperation>();
-  vi.spyOn(client, "submitMarketRefresh").mockReturnValue(post.promise);
-  vi.spyOn(client, "loadMarketRefresh").mockResolvedValue(complete);
+  const post = deferred<client.DatasetRefreshOperation>();
+  vi.spyOn(client, "submitDatasetRefresh").mockReturnValue(post.promise);
+  vi.spyOn(client, "loadDatasetRefresh").mockResolvedValue(complete);
   await act(async () => view.state().review(request));
   await act(async () => { void view.state().confirm(); });
   await act(async () => view.state().dismissConfirmation());
@@ -69,9 +69,9 @@ test("receipt reconciliation fences a late POST and allows another confirmation 
 
 test("reviewing a new request does not fence the previous accepted operation", async () => {
   const view = await mount();
-  vi.spyOn(client, "submitMarketRefresh").mockResolvedValue(receipt);
-  const poll = deferred<client.MarketRefreshOperation>();
-  vi.spyOn(client, "loadMarketRefresh").mockReturnValue(poll.promise);
+  vi.spyOn(client, "submitDatasetRefresh").mockResolvedValue(receipt);
+  const poll = deferred<client.DatasetRefreshOperation>();
+  vi.spyOn(client, "loadDatasetRefresh").mockReturnValue(poll.promise);
   await act(async () => view.state().review(request));
   await act(async () => view.state().confirm());
   await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
@@ -83,10 +83,10 @@ test("reviewing a new request does not fence the previous accepted operation", a
 
 test("exact retry takes fresh proof and stop checking isolates all earlier completions", async () => {
   const view = await mount();
-  const first = deferred<client.MarketRefreshOperation>();
-  vi.spyOn(client, "submitMarketRefresh").mockReturnValueOnce(first.promise).mockRejectedValueOnce(new TypeError("response lost"));
-  const poll = deferred<client.MarketRefreshOperation>();
-  vi.spyOn(client, "loadMarketRefresh").mockReturnValue(poll.promise);
+  const first = deferred<client.DatasetRefreshOperation>();
+  vi.spyOn(client, "submitDatasetRefresh").mockReturnValueOnce(first.promise).mockRejectedValueOnce(new TypeError("response lost"));
+  const poll = deferred<client.DatasetRefreshOperation>();
+  vi.spyOn(client, "loadDatasetRefresh").mockReturnValue(poll.promise);
   await act(async () => view.state().review(request));
   await act(async () => { void view.state().confirm(); });
   await act(async () => view.state().dismissConfirmation());
@@ -94,7 +94,7 @@ test("exact retry takes fresh proof and stop checking isolates all earlier compl
   await act(async () => view.state().retryExact());
   expect(view.state().confirmation?.request).toEqual(request);
   await act(async () => view.state().confirm());
-  expect(client.confirmMarketRefreshProof).toHaveBeenLastCalledWith(request, expect.any(AbortSignal));
+  expect(client.confirmDatasetRefreshProof).toHaveBeenLastCalledWith(request, expect.any(AbortSignal));
   expect(view.state().pendingRequest).toEqual(request);
   await act(async () => view.state().stopChecking());
   await act(async () => { first.resolve(receipt); poll.resolve(complete); });
@@ -106,9 +106,9 @@ test("exact retry takes fresh proof and stop checking isolates all earlier compl
 
 test.each(["stop", "retry"] as const)("%s receipt checks keeps an already submitted mutation alive and fences its receipt", async action => {
   const view = await mount();
-  const post = deferred<client.MarketRefreshOperation>();
+  const post = deferred<client.DatasetRefreshOperation>();
   let submittedSignal!: AbortSignal;
-  vi.spyOn(client, "submitMarketRefresh").mockImplementation((_request, _proof, signal) => {
+  vi.spyOn(client, "submitDatasetRefresh").mockImplementation((_request, _proof, signal) => {
     submittedSignal = signal!;
     return post.promise;
   });
@@ -126,9 +126,9 @@ test.each(["stop", "retry"] as const)("%s receipt checks keeps an already submit
 
 test("unmounting receipt checks leaves a dismissed submission alive without accepting its late receipt", async () => {
   const view = await mount();
-  const post = deferred<client.MarketRefreshOperation>();
+  const post = deferred<client.DatasetRefreshOperation>();
   let submittedSignal!: AbortSignal;
-  vi.spyOn(client, "submitMarketRefresh").mockImplementation((_request, _proof, signal) => {
+  vi.spyOn(client, "submitDatasetRefresh").mockImplementation((_request, _proof, signal) => {
     submittedSignal = signal!;
     return post.promise;
   });

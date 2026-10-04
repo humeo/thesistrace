@@ -7,16 +7,16 @@ import { Button } from "../components/ui/button";
 import { Alert, AlertDescription } from "../components/ui/alert";
 import { operatorDataClasses as styles } from "./operatorDataClasses";
 import {
-  type MarketRefreshRequest,
+  type DatasetRefreshRequest,
   OperatorMutationError,
 } from "./operatorMutationClient";
 
-export function OperatorMarketRefreshDialog({ onDismiss, onSubmit, submitting, error, request: refreshRequest }: Readonly<{
+export function OperatorDatasetRefreshDialog({ onDismiss, onSubmit, submitting, error, request: refreshRequest }: Readonly<{
   onDismiss: () => void;
   onSubmit: () => Promise<void>;
   submitting: boolean;
   error: unknown | null;
-  request: MarketRefreshRequest;
+  request: DatasetRefreshRequest;
 }>) {
   const { t } = useTranslation("operator");
   const initialFocus = useRef<HTMLButtonElement | null>(null);
@@ -27,16 +27,16 @@ export function OperatorMarketRefreshDialog({ onDismiss, onSubmit, submitting, e
         <form className={styles.confirmationForm} onSubmit={(event) => { event.preventDefault(); void onSubmit(); }}>
           <DialogHeader>
             <p className={styles.eyebrow}>{t("data.common.confirmUpdate")}</p>
-            <DialogTitle id="operator-market-refresh-title">{t("data.market.submitTitle")}</DialogTitle>
+            <DialogTitle id="operator-market-refresh-title">{t("data.dataset.submitTitle")}</DialogTitle>
           </DialogHeader>
-          <DialogDescription id="operator-market-refresh-description">{t("data.market.submitDescription")}</DialogDescription>
+          <DialogDescription id="operator-market-refresh-description">{t("data.dataset.submitDescription")}</DialogDescription>
           <dl className={styles.target}>
-            <div><dt>{t("data.common.kind")}</dt><dd><strong>{t("data.market.kind")}</strong></dd></div>
+            <div><dt>{t("data.common.kind")}</dt><dd><strong>{t("data.dataset.kind")}</strong></dd></div>
             <div><dt>{t("data.common.asOf")}</dt><dd><code>{refreshRequest.asOf}</code></dd></div>
             <div><dt>{t("data.common.idempotencyKey")}</dt><dd><code>{refreshRequest.idempotencyKey}</code></dd></div>
           </dl>
-          <Alert role="note"><AlertDescription><strong>{t("data.common.effect")}</strong><p>{t("data.market.effect")}</p></AlertDescription></Alert>
-          {error === null ? null : <Alert variant="destructive" role="alert"><AlertDescription>{t(marketRefreshMutationMessage(error))}</AlertDescription></Alert>}
+          <Alert role="note"><AlertDescription><strong>{t("data.common.effect")}</strong><p>{t("data.dataset.effect")}</p></AlertDescription></Alert>
+          {error === null ? null : <Alert variant="destructive" role="alert"><AlertDescription>{t(datasetRefreshMutationMessage(error))}</AlertDescription></Alert>}
           <DialogFooter>
             <Button variant="outline" onClick={onDismiss} ref={initialFocus} type="button">{t("data.common.cancel")}</Button>
             <Button disabled={submitting} type="submit">{submitting ? t("data.common.submitting") : t("data.common.submitRefresh")}</Button>
@@ -47,22 +47,22 @@ export function OperatorMarketRefreshDialog({ onDismiss, onSubmit, submitting, e
   );
 }
 
-function marketRefreshMutationMessage(reason: unknown) {
+function datasetRefreshMutationMessage(reason: unknown) {
   if (reason instanceof OperatorPageNotFoundError) {
     return "data.common.accessLost";
   }
   if (!(reason instanceof OperatorMutationError)) {
-    return "data.market.submitFailed";
+    return "data.dataset.submitFailed";
   }
   if (reason.code === "invalid-otp") return "data.common.invalidOtp";
   if (reason.code === "invalid-proof") {
     return "data.common.invalidProof";
   }
   if (reason.code === "data-not-ready") {
-    return "data.market.dataNotReady";
+    return "data.dataset.dataNotReady";
   }
   if (reason.code === "rate-limited") {
     return "data.common.rateLimited";
   }
-  return "data.market.unavailable";
+  return "data.dataset.unavailable";
 }

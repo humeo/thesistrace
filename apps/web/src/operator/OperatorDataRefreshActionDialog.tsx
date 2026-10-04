@@ -12,7 +12,7 @@ import {
   confirmDataRefreshActionProof,
   type DataRefreshActionReceipt,
   type DataRefreshActionRequest,
-  isMarketRefreshIdempotencyKey,
+  isDatasetRefreshIdempotencyKey,
   OperatorMutationError,
   submitDataRefreshAction,
 } from "./operatorMutationClient";
@@ -61,7 +61,7 @@ export function OperatorDataRefreshActionDialog({
     if (submitting || stale) return;
     if (
       action.action === "retry"
-      && (!isMarketRefreshIdempotencyKey(newKey)
+      && (!isDatasetRefreshIdempotencyKey(newKey)
         || newKey === action.operation.idempotencyKey)
     ) {
       setKeyError(
@@ -206,6 +206,7 @@ function operationTarget(operation: DataRefreshOperationalStatus): string {
 }
 
 function kindText(kind: DataRefreshOperationalStatus["kind"]): string {
+  if (kind === "dataset") return i18n.t("operator:data.dataset.title");
   if (kind === "market") return i18n.t("operator:data.market.title");
   if (kind === "financial") return i18n.t("operator:data.financial.title");
   return i18n.t("operator:data.industry.title");

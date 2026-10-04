@@ -2,10 +2,10 @@ import {
   OperatorPageNotFoundError,
   OperatorPageUnavailableError,
 } from "./operatorDirectoryClient";
-import { isIsoResearchSession, isMarketRefreshIdempotencyKey } from "./operatorMutationClient";
+import { isIsoResearchSession, isDatasetRefreshIdempotencyKey } from "./operatorMutationClient";
 import { decodeFinancialRefreshProgress, type FinancialRefreshProgress } from "./financialRefreshProgress";
 
-export type DataRefreshKind = "market" | "financial" | "industry";
+export type DataRefreshKind = "market" | "financial" | "industry" | "dataset";
 type DataRefreshStatus = "accepted" | "running" | "succeeded" | "failed" | "cancelled";
 type DataRefreshOutcome =
   | "published"
@@ -162,9 +162,9 @@ export function decodeDatasetOperationalStatus(value: unknown): DatasetOperation
   const worker = decodeWorker(value.worker);
   const latestByKind = value.latest_by_kind.map(decodeOperation);
   const operations = value.operations.map(decodeOperation);
-  const kindOrder: Record<DataRefreshKind, number> = { market: 0, financial: 1, industry: 2 };
+  const kindOrder: Record<DataRefreshKind, number> = { dataset: 0, market: 1, financial: 2, industry: 3 };
   if (
-    latestByKind.length > 3
+    latestByKind.length > 4
     || latestByKind.some((item, index) => (
       latestByKind.findIndex((candidate) => candidate.kind === item.kind) !== index
       || (index > 0 && kindOrder[latestByKind[index - 1]!.kind] >= kindOrder[item.kind])
@@ -284,7 +284,7 @@ function decodeOperation(value: unknown): DataRefreshOperationalStatus {
   if (
     !hasExactKeys(value, operationKeys)
     || typeof value.idempotency_key !== "string"
-    || !isMarketRefreshIdempotencyKey(value.idempotency_key)
+    || !isDatasetRefreshIdempotencyKey(value.idempotency_key)
     || !isKind(value.kind)
     || !isStatus(value.status)
     || !isOptionalOutcome(value.outcome)
@@ -361,7 +361,7 @@ function stateRelationshipIsValid(value: Record<string, unknown>): boolean {
     return value.phase !== null && value.last_heartbeat_at !== null
       && value.started_at !== null && value.finished_at !== null
       && value.failure_code !== null
-      && (kind === "market"
+      && ((kind === "market" || kind === "dataset")
         ? outcome === null
         : outcome === "business_rejected" || outcome === "infrastructure_failed");
   }
@@ -401,13 +401,13 @@ function targetMatchesKind(
   asOf: unknown,
   observationThroughSession: unknown,
 ): boolean {
-  return kind === "market"
+  return (kind === "market" || kind === "dataset")
     ? asOf !== null && observationThroughSession === null
     : asOf === null && observationThroughSession !== null;
 }
 
 function isKind(value: unknown): value is DataRefreshKind {
-  return value === "market" || value === "financial" || value === "industry";
+  return value === "dataset" || value === "market" || value === "financial" || value === "industry";
 }
 
 function isStatus(value: unknown): value is DataRefreshStatus {

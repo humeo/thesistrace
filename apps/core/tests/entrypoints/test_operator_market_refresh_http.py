@@ -52,7 +52,7 @@ class OperatorAuthorizer:
         if self.authorize_error is not None:
             raise self.authorize_error
 
-    async def consume_market_refresh_proof(
+    async def consume_dataset_refresh_proof(
         self,
         cookie: str | None,
         *,
@@ -160,7 +160,7 @@ class Refreshes:
         self.submissions: list[dict[str, object]] = []
         self.receipt = RefreshOutcome(
             idempotency_key="market-20260811T180000+0800",
-            kind="market",
+            kind="dataset",
             as_of="2026-08-11T10:00:00+00:00",
             status="accepted",
             outcome=None,
@@ -171,7 +171,7 @@ class Refreshes:
             attempt_count=0,
         )
 
-    def submit(self, **request: object) -> RefreshOutcome:
+    def submit_dataset(self, **request: object) -> RefreshOutcome:
         self.submissions.append(request)
         if self.submit_error is not None:
             raise self.submit_error
@@ -260,7 +260,7 @@ def test_operator_market_submission_consumes_proof_then_returns_safe_receipt() -
     client = _client(authorizer, refreshes)
 
     response = client.post(
-        "/api/operator/data/refreshes/market",
+        "/api/operator/data/refreshes/dataset",
         headers={"cookie": COOKIE, "origin": PUBLIC_ORIGIN},
         json={
             "as_of": "2026-08-11T18:00:00+08:00",
@@ -276,7 +276,9 @@ def test_operator_market_submission_consumes_proof_then_returns_safe_receipt() -
         "data_through_session": None,
         "failure_code": None,
         "idempotency_key": "market-20260811T180000+0800",
-        "kind": "market",
+        "kind": "dataset",
+        "phase": None,
+        "completed_stages": [],
         "last_failure_code": None,
         "last_refresh_at": None,
         "outcome": None,
@@ -299,102 +301,6 @@ def test_operator_market_submission_consumes_proof_then_returns_safe_receipt() -
     ]
 
 
-def test_operator_financial_submission_consumes_exact_proof_and_returns_safe_receipt() -> None:
-    authorizer = OperatorAuthorizer()
-    refreshes = FinancialRefreshes()
-    client = _client(authorizer, refreshes)
-
-    response = client.post(
-        "/api/operator/data/refreshes/financial",
-        headers={"cookie": COOKIE, "origin": PUBLIC_ORIGIN},
-        json={
-            "idempotency_key": "financial-20260814-custom",
-            "observation_through_session": "2026-08-14",
-            "proof": PROOF,
-        },
-    )
-
-    assert response.status_code == 202
-    assert response.json() == {
-        "accepted_instrument_count": None,
-        "progress": None,
-        "attempt_count": 0,
-        "checked_no_structured_change_count": None,
-        "data_through_session": None,
-        "discovery_gap_count": None,
-        "failed_instrument_count": None,
-        "failure_code": None,
-        "financial_complete_through_session": None,
-        "idempotency_key": "financial-20260814-custom",
-        "kind": "financial",
-        "last_failure_code": None,
-        "last_refresh_at": None,
-        "matched_trigger_count": None,
-        "observation_through_session": "2026-08-14",
-        "outcome": None,
-        "pending_instrument_count": None,
-        "status": "accepted",
-    }
-    assert authorizer.consumed == [
-        {
-            "cookie": COOKIE,
-            "idempotency_key": "financial-20260814-custom",
-            "observation_through_session": "2026-08-14",
-            "proof": PROOF,
-        }
-    ]
-    assert refreshes.submissions == [
-        {
-            "idempotency_key": "financial-20260814-custom",
-            "observation_through_session": "2026-08-14",
-        }
-    ]
-
-
-def test_operator_industry_submission_consumes_exact_proof_and_returns_safe_receipt() -> None:
-    authorizer = OperatorAuthorizer()
-    refreshes = IndustryRefreshes()
-    client = _client(authorizer, refreshes)
-
-    response = client.post(
-        "/api/operator/data/refreshes/industry",
-        headers={"cookie": COOKIE, "origin": PUBLIC_ORIGIN},
-        json={
-            "idempotency_key": "industry-20260814-custom",
-            "observation_through_session": "2026-08-14",
-            "proof": PROOF,
-        },
-    )
-
-    assert response.status_code == 202
-    assert response.json() == {
-        "attempt_count": 0,
-        "data_through_session": None,
-        "failure_code": None,
-        "idempotency_key": "industry-20260814-custom",
-        "kind": "industry",
-        "last_failure_code": None,
-        "last_refresh_at": None,
-        "observation_through_session": "2026-08-14",
-        "outcome": None,
-        "status": "accepted",
-    }
-    assert authorizer.consumed == [
-        {
-            "cookie": COOKIE,
-            "idempotency_key": "industry-20260814-custom",
-            "observation_through_session": "2026-08-14",
-            "proof": PROOF,
-        }
-    ]
-    assert refreshes.submissions == [
-        {
-            "idempotency_key": "industry-20260814-custom",
-            "observation_through_session": "2026-08-14",
-        }
-    ]
-
-
 def test_operator_cancel_consumes_exact_proof_then_returns_cancelled_source() -> None:
     authorizer = OperatorAuthorizer()
     refreshes = Refreshes()
@@ -404,7 +310,7 @@ def test_operator_cancel_consumes_exact_proof_then_returns_cancelled_source() ->
         "/api/operator/data/refreshes/cancel",
         headers={"cookie": COOKIE, "origin": PUBLIC_ORIGIN},
         json={
-            "kind": "market",
+            "kind": "dataset",
             "proof": PROOF,
             "source_idempotency_key": refreshes.receipt.idempotency_key,
             "target": refreshes.receipt.as_of,
@@ -415,27 +321,31 @@ def test_operator_cancel_consumes_exact_proof_then_returns_cancelled_source() ->
     assert response.json() == {
         "as_of": "2026-08-11T10:00:00Z",
         "idempotency_key": refreshes.receipt.idempotency_key,
-        "kind": "market",
+        "kind": "dataset",
         "observation_through_session": None,
         "status": "cancelled",
     }
-    assert authorizer.consumed == [{
-        "cookie": COOKIE,
-        "idempotency_key": refreshes.receipt.idempotency_key,
-        "kind": "market",
-        "proof": PROOF,
-        "target": refreshes.receipt.as_of,
-    }]
-    assert refreshes.submissions == [{
-        "idempotency_key": refreshes.receipt.idempotency_key,
-        "kind": "market",
-        "target": refreshes.receipt.as_of,
-    }]
+    assert authorizer.consumed == [
+        {
+            "cookie": COOKIE,
+            "idempotency_key": refreshes.receipt.idempotency_key,
+            "kind": "dataset",
+            "proof": PROOF,
+            "target": refreshes.receipt.as_of,
+        }
+    ]
+    assert refreshes.submissions == [
+        {
+            "idempotency_key": refreshes.receipt.idempotency_key,
+            "kind": "dataset",
+            "target": refreshes.receipt.as_of,
+        }
+    ]
 
 
 def test_operator_retry_consumes_exact_proof_then_returns_new_accepted_receipt() -> None:
     authorizer = OperatorAuthorizer()
-    refreshes = IndustryRefreshes()
+    refreshes = Refreshes()
     refreshes.receipt = RefreshOutcome(
         **{
             **refreshes.receipt.__dict__,
@@ -451,36 +361,40 @@ def test_operator_retry_consumes_exact_proof_then_returns_new_accepted_receipt()
         "/api/operator/data/refreshes/retry",
         headers={"cookie": COOKIE, "origin": PUBLIC_ORIGIN},
         json={
-            "kind": "industry",
-            "new_idempotency_key": "industry-retry-new",
+            "kind": "dataset",
+            "new_idempotency_key": "dataset-retry-new",
             "proof": PROOF,
             "source_idempotency_key": refreshes.receipt.idempotency_key,
-            "target": refreshes.receipt.observation_through_session,
+            "target": refreshes.receipt.as_of,
         },
     )
 
     assert response.status_code == 202
     assert response.json() == {
-        "as_of": None,
-        "idempotency_key": "industry-retry-new",
-        "kind": "industry",
-        "observation_through_session": "2026-08-14",
+        "as_of": "2026-08-11T10:00:00Z",
+        "idempotency_key": "dataset-retry-new",
+        "kind": "dataset",
+        "observation_through_session": None,
         "status": "accepted",
     }
-    assert authorizer.consumed == [{
-        "cookie": COOKIE,
-        "idempotency_key": refreshes.receipt.idempotency_key,
-        "kind": "industry",
-        "new_idempotency_key": "industry-retry-new",
-        "proof": PROOF,
-        "target": "2026-08-14",
-    }]
-    assert refreshes.submissions == [{
-        "idempotency_key": "industry-retry-new",
-        "kind": "industry",
-        "source_idempotency_key": refreshes.receipt.idempotency_key,
-        "target": "2026-08-14",
-    }]
+    assert authorizer.consumed == [
+        {
+            "cookie": COOKIE,
+            "idempotency_key": refreshes.receipt.idempotency_key,
+            "kind": "dataset",
+            "new_idempotency_key": "dataset-retry-new",
+            "proof": PROOF,
+            "target": refreshes.receipt.as_of,
+        }
+    ]
+    assert refreshes.submissions == [
+        {
+            "idempotency_key": "dataset-retry-new",
+            "kind": "dataset",
+            "source_idempotency_key": refreshes.receipt.idempotency_key,
+            "target": refreshes.receipt.as_of,
+        }
+    ]
 
 
 def test_operator_refresh_actions_validate_before_proof_and_map_conflicts() -> None:
@@ -492,7 +406,7 @@ def test_operator_refresh_actions_validate_before_proof_and_map_conflicts() -> N
         "/api/operator/data/refreshes/cancel",
         headers={"cookie": COOKIE, "origin": PUBLIC_ORIGIN},
         json={
-            "kind": "market",
+            "kind": "dataset",
             "proof": PROOF,
             "source_idempotency_key": refreshes.receipt.idempotency_key,
             "target": "2026-08-11",
@@ -507,7 +421,7 @@ def test_operator_refresh_actions_validate_before_proof_and_map_conflicts() -> N
         "/api/operator/data/refreshes/cancel",
         headers={"cookie": COOKIE, "origin": PUBLIC_ORIGIN},
         json={
-            "kind": "market",
+            "kind": "dataset",
             "proof": PROOF,
             "source_idempotency_key": refreshes.receipt.idempotency_key,
             "target": refreshes.receipt.as_of,
@@ -523,7 +437,7 @@ def test_operator_refresh_actions_validate_before_proof_and_map_conflicts() -> N
         "/api/operator/data/refreshes/cancel",
         headers={"cookie": COOKIE, "origin": PUBLIC_ORIGIN},
         json={
-            "kind": "market",
+            "kind": "dataset",
             "proof": PROOF,
             "source_idempotency_key": refreshes.receipt.idempotency_key,
             "target": refreshes.receipt.as_of,
@@ -537,7 +451,7 @@ def test_operator_refresh_actions_validate_before_proof_and_map_conflicts() -> N
         "/api/operator/data/refreshes/cancel",
         headers={"cookie": COOKIE, "origin": PUBLIC_ORIGIN},
         json={
-            "kind": "market",
+            "kind": "dataset",
             "proof": PROOF,
             "source_idempotency_key": refreshes.receipt.idempotency_key,
             "target": refreshes.receipt.as_of,
@@ -583,78 +497,6 @@ def test_operator_industry_inspection_is_bound_to_the_exact_target() -> None:
     assert conflict.status_code == 409
 
 
-@pytest.mark.parametrize("invalid_target", ("2026-8-14", "0000-01-01"))
-def test_operator_industry_validation_and_proof_failure_have_no_side_effect(
-    invalid_target: str,
-) -> None:
-    authorizer = OperatorAuthorizer()
-    refreshes = IndustryRefreshes()
-    client = _client(authorizer, refreshes)
-
-    invalid = client.post(
-        "/api/operator/data/refreshes/industry",
-        headers={"cookie": COOKIE, "origin": PUBLIC_ORIGIN},
-        json={
-            "idempotency_key": "industry-key",
-            "observation_through_session": invalid_target,
-            "proof": PROOF,
-        },
-    )
-    assert invalid.status_code == 422
-    assert authorizer.consumed == []
-    assert refreshes.submissions == []
-
-    authorizer.consume_error = InvalidOperatorProof()
-    rejected = client.post(
-        "/api/operator/data/refreshes/industry",
-        headers={"cookie": COOKIE, "origin": PUBLIC_ORIGIN},
-        json={
-            "idempotency_key": "industry-key",
-            "observation_through_session": "2026-08-14",
-            "proof": PROOF,
-        },
-    )
-    assert rejected.status_code == 400
-    assert rejected.json() == {"code": "OPERATOR_PROOF_INVALID"}
-    assert refreshes.submissions == []
-
-
-@pytest.mark.parametrize("invalid_target", ("2026-8-14", "0000-01-01"))
-def test_operator_financial_validation_and_proof_failure_have_no_side_effect(
-    invalid_target: str,
-) -> None:
-    authorizer = OperatorAuthorizer()
-    refreshes = FinancialRefreshes()
-    client = _client(authorizer, refreshes)
-
-    invalid = client.post(
-        "/api/operator/data/refreshes/financial",
-        headers={"cookie": COOKIE, "origin": PUBLIC_ORIGIN},
-        json={
-            "idempotency_key": "financial-key",
-            "observation_through_session": invalid_target,
-            "proof": PROOF,
-        },
-    )
-    assert invalid.status_code == 422
-    assert authorizer.consumed == []
-    assert refreshes.submissions == []
-
-    authorizer.consume_error = InvalidOperatorProof()
-    rejected = client.post(
-        "/api/operator/data/refreshes/financial",
-        headers={"cookie": COOKIE, "origin": PUBLIC_ORIGIN},
-        json={
-            "idempotency_key": "financial-key",
-            "observation_through_session": "2026-08-14",
-            "proof": PROOF,
-        },
-    )
-    assert rejected.status_code == 400
-    assert rejected.json() == {"code": "OPERATOR_PROOF_INVALID"}
-    assert refreshes.submissions == []
-
-
 def test_operator_financial_inspection_exposes_progress_before_publication() -> None:
     refreshes = FinancialRefreshes()
     refreshes.receipt = RefreshOutcome(
@@ -676,7 +518,8 @@ def test_operator_financial_inspection_exposes_progress_before_publication() -> 
         indicator_scheduled_count=65,
         indicator_collected_count=65,
         indicator_failed_count=0,
-        indicator_candidate_status="ready", indicator_retained_reason=None,
+        indicator_candidate_status="ready",
+        indicator_retained_reason=None,
         discovery_gaps=(),
     )
     response = _client(OperatorAuthorizer(), refreshes).get(
@@ -745,7 +588,7 @@ def test_operator_market_validation_and_proof_failure_have_no_operation_side_eff
     refreshes = Refreshes()
     client = _client(authorizer, refreshes)
     invalid = client.post(
-        "/api/operator/data/refreshes/market",
+        "/api/operator/data/refreshes/dataset",
         headers={"cookie": COOKIE, "origin": PUBLIC_ORIGIN},
         json={
             "as_of": "2026-08-11",
@@ -760,7 +603,7 @@ def test_operator_market_validation_and_proof_failure_have_no_operation_side_eff
 
     for incompatible_key in ("market-\0-key", f"market-{chr(0xD800)}-key"):
         incompatible = client.post(
-            "/api/operator/data/refreshes/market",
+            "/api/operator/data/refreshes/dataset",
             content=json.dumps(
                 {
                     "as_of": "2026-08-11T18:00:00+08:00",
@@ -781,7 +624,7 @@ def test_operator_market_validation_and_proof_failure_have_no_operation_side_eff
         assert refreshes.submissions == []
 
     malformed_proof = client.post(
-        "/api/operator/data/refreshes/market",
+        "/api/operator/data/refreshes/dataset",
         headers={"cookie": COOKIE, "origin": PUBLIC_ORIGIN},
         json={
             "as_of": "2026-08-11T18:00:00+08:00",
@@ -797,7 +640,7 @@ def test_operator_market_validation_and_proof_failure_have_no_operation_side_eff
 
     authorizer.consume_error = InvalidOperatorProof()
     rejected = client.post(
-        "/api/operator/data/refreshes/market",
+        "/api/operator/data/refreshes/dataset",
         headers={"cookie": COOKIE, "origin": PUBLIC_ORIGIN},
         json={
             "as_of": "2026-08-11T18:00:00+08:00",
@@ -816,7 +659,7 @@ def test_operator_market_read_and_mutation_hide_the_surface_or_fail_unavailable(
     client = _client(authorizer, refreshes)
     authorizer.authorize_error = OperatorAccessNotFound()
     hidden = client.get(
-        "/api/operator/data/refreshes/market",
+        "/api/operator/data/refreshes/dataset",
         headers={"cookie": COOKIE},
         params={"idempotency_key": refreshes.receipt.idempotency_key},
     )
@@ -824,7 +667,7 @@ def test_operator_market_read_and_mutation_hide_the_surface_or_fail_unavailable(
     assert hidden.text == ""
 
     hidden_invalid_mutation = client.post(
-        "/api/operator/data/refreshes/market",
+        "/api/operator/data/refreshes/dataset",
         headers={"cookie": COOKIE, "origin": PUBLIC_ORIGIN},
         json={"proof": "short"},
     )
@@ -835,7 +678,7 @@ def test_operator_market_read_and_mutation_hide_the_surface_or_fail_unavailable(
         "/api/operator/data/refreshes/cancel",
         headers={"cookie": COOKIE, "origin": PUBLIC_ORIGIN},
         json={
-            "kind": "market",
+            "kind": "dataset",
             "proof": PROOF,
             "source_idempotency_key": refreshes.receipt.idempotency_key,
             "target": refreshes.receipt.as_of,
@@ -847,7 +690,7 @@ def test_operator_market_read_and_mutation_hide_the_surface_or_fail_unavailable(
     authorizer.authorize_error = None
     authorizer.consume_error = OperatorAccessNotFound()
     hidden_mutation = client.post(
-        "/api/operator/data/refreshes/market",
+        "/api/operator/data/refreshes/dataset",
         headers={"cookie": COOKIE, "origin": PUBLIC_ORIGIN},
         json={
             "as_of": "2026-08-11T18:00:00+08:00",
@@ -860,7 +703,7 @@ def test_operator_market_read_and_mutation_hide_the_surface_or_fail_unavailable(
 
     authorizer.authorize_error = AuthSessionUnavailable()
     unavailable = client.get(
-        "/api/operator/data/refreshes/market",
+        "/api/operator/data/refreshes/dataset",
         headers={"cookie": COOKIE},
         params={"idempotency_key": refreshes.receipt.idempotency_key},
     )
@@ -873,7 +716,7 @@ def test_operator_market_inspection_is_bound_to_the_canonical_request() -> None:
     client = _client(authorizer, refreshes)
 
     matching = client.get(
-        "/api/operator/data/refreshes/market",
+        "/api/operator/data/refreshes/dataset",
         headers={"cookie": COOKIE},
         params={
             "as_of": "2026-08-11T18:00:00+08:00",
@@ -884,7 +727,7 @@ def test_operator_market_inspection_is_bound_to_the_canonical_request() -> None:
     assert matching.json()["idempotency_key"] == refreshes.receipt.idempotency_key
 
     conflict = client.get(
-        "/api/operator/data/refreshes/market",
+        "/api/operator/data/refreshes/dataset",
         headers={"cookie": COOKIE},
         params={
             "as_of": "2026-08-11T19:00:00+08:00",
@@ -904,10 +747,10 @@ async def _exercise_operator_market_persistence_event_loop_liveness() -> None:
     release = threading.Event()
 
     class BlockingRefreshes(Refreshes):
-        def submit(self, **request: object) -> RefreshOutcome:
+        def submit_dataset(self, **request: object) -> RefreshOutcome:
             entered.set()
             assert release.wait(timeout=3)
-            return super().submit(**request)
+            return super().submit_dataset(**request)
 
     app = create_app(
         auth_verifier=SessionVerifier(),
@@ -925,7 +768,7 @@ async def _exercise_operator_market_persistence_event_loop_liveness() -> None:
             async def submit() -> None:
                 submitted.append(
                     await client.post(
-                        "/api/operator/data/refreshes/market",
+                        "/api/operator/data/refreshes/dataset",
                         headers={"cookie": COOKIE, "origin": PUBLIC_ORIGIN},
                         json={
                             "as_of": "2026-08-11T18:00:00+08:00",
@@ -958,7 +801,7 @@ def test_anonymous_operator_api_is_hidden_before_the_ordinary_session_boundary()
     )
 
     response = client.post(
-        "/api/operator/data/refreshes/market",
+        "/api/operator/data/refreshes/dataset",
         headers={"origin": PUBLIC_ORIGIN},
         json={"proof": "short"},
     )
@@ -980,3 +823,16 @@ def _client(
     )
     app.state.core_runtime = SimpleNamespace(data_refreshes=refreshes)
     return TestClient(app)
+
+
+@pytest.mark.parametrize("kind", ["market", "financial", "industry"])
+def test_retired_family_submissions_cannot_publish_independently(kind):
+    refreshes = Refreshes()
+    client = _client(OperatorAuthorizer(), refreshes)
+    response = client.post(
+        f"/api/operator/data/refreshes/{kind}",
+        headers={"cookie": COOKIE, "origin": PUBLIC_ORIGIN},
+        json={},
+    )
+    assert response.status_code in {404, 405}
+    assert refreshes.submissions == []

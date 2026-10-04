@@ -91,7 +91,7 @@ describe("Operator Dataset status", () => {
 
     expect(markup).toContain('aria-label="Current data coverage"');
     expect(markup).toContain("CSI 300 Benchmark");
-    expect(markup).toContain("Updates with Market Refresh");
+    expect(markup).toContain("Published with the complete Dataset");
     expect(markup).toContain("2010-01-04");
     expect(markup).toContain("2026-08-31");
     expect(markup).toContain("Disclosure list checked through");
@@ -139,12 +139,12 @@ describe("Operator Dataset status", () => {
 
   it("leads with Head readiness and renders every lifecycle meaning as text", () => {
     const operations = [
-      operation({ idempotencyKey: "market-accepted", kind: "market", status: "accepted" }),
+      operation({ idempotencyKey: "market-accepted", kind: "dataset", status: "accepted" }),
       operation({ idempotencyKey: "financial-running", kind: "financial", status: "running", phase: "financial" }),
       operation({ idempotencyKey: "industry-published", kind: "industry", outcome: "published", status: "succeeded" }),
       operation({ idempotencyKey: "market-unchanged", kind: "market", outcome: "no_change", status: "succeeded" }),
       operation({ idempotencyKey: "financial-degraded", kind: "financial", outcome: "degraded", status: "succeeded" }),
-      operation({ idempotencyKey: "market-failed", failureCode: "RETRY_EXHAUSTED", kind: "market", status: "failed" }),
+      operation({ idempotencyKey: "market-failed", failureCode: "RETRY_EXHAUSTED", kind: "dataset", status: "failed" }),
       operation({ idempotencyKey: "industry-cancelled", kind: "industry", status: "cancelled" }),
     ];
     const markup = renderToStaticMarkup(
@@ -192,7 +192,7 @@ describe("Operator Dataset status", () => {
     );
     expect(markup).toContain('aria-label="Cancel operation market-accepted"');
     expect(markup).toContain('aria-label="Retry operation market-failed"');
-    expect(markup).toContain('aria-label="Retry operation industry-cancelled"');
+    expect(markup).not.toContain('aria-label="Retry operation industry-cancelled"');
     expect(markup).not.toContain('aria-label="Cancel operation financial-running"');
     expect(markup).not.toContain('aria-label="Retry operation industry-published"');
   });
@@ -314,7 +314,7 @@ describe("Operator Dataset status", () => {
   it("shows exact Cancel facts and effect without an email code", async () => {
     const target = operation({
       idempotencyKey: "market-cancel-source",
-      kind: "market",
+      kind: "dataset",
       status: "accepted",
     });
     const markup = await renderPortalMarkup(
@@ -328,7 +328,7 @@ describe("Operator Dataset status", () => {
     );
 
     expect(markup).toContain("Cancel queued Refresh?");
-    expect(markup).toContain("Market Refresh");
+    expect(markup).toContain("Data Refresh");
     expect(markup).toContain("2026-08-30T08:00:00Z");
     expect(markup).toContain("market-cancel-source");
     expect(markup).toContain("The Worker will never claim this queued receipt");
@@ -339,15 +339,15 @@ describe("Operator Dataset status", () => {
 
   it("makes Retry generate a new key automatically and preserves immutable source copy", async () => {
     const source = operation({
-      idempotencyKey: "industry-failed-source",
-      kind: "industry",
+      idempotencyKey: "dataset-failed-source",
+      kind: "dataset",
       status: "failed",
     });
     const now = new Date("2026-08-30T05:06:07.000Z");
-    expect(suggestDataRefreshRetryKey(source.kind, now)).toEqual(expect.stringMatching(/^industry-retry-20260830T050607Z-[0-9a-f-]{36}$/));
+    expect(suggestDataRefreshRetryKey(source.kind, now)).toEqual(expect.stringMatching(/^dataset-retry-20260830T050607Z-[0-9a-f-]{36}$/));
     expect(
       suggestDataRefreshRetryKey(source.kind, new Date("2026-08-30T05:06:07.987Z")),
-    ).toEqual(expect.stringMatching(/^industry-retry-20260830T050607Z-[0-9a-f-]{36}$/));
+    ).toEqual(expect.stringMatching(/^dataset-retry-20260830T050607Z-[0-9a-f-]{36}$/));
     const markup = await renderPortalMarkup(
       <OperatorDataRefreshActionDialog
         action={{ action: "retry", operation: source }}
@@ -360,10 +360,11 @@ describe("Operator Dataset status", () => {
     );
 
     expect(markup).toContain("Retry failed Refresh?");
-    expect(markup).toContain("industry-failed-source");
+    expect(markup).toContain("dataset-failed-source");
     expect(markup).not.toContain("New idempotency key");
     expect(markup).toContain("The original failed receipt remains unchanged and inspectable");
-    expect(markup).toContain("accepted into the FIFO as new queued work");
+    expect(markup).toContain("keeps the same date, reuses valid preparation");
+    expect(markup).toContain("publishes after all three stages pass");
     expect(markup).not.toContain("Verification code");
   });
 
@@ -439,7 +440,7 @@ function operation(
   overrides: Partial<DataRefreshOperationalStatus> = {},
 ): DataRefreshOperationalStatus {
   const status = overrides.status ?? "succeeded";
-  const kind = overrides.kind ?? "market";
+  const kind = overrides.kind ?? "dataset";
   const terminal = status === "succeeded" || status === "failed" || status === "cancelled";
   const running = status === "running";
   const financial = kind === "financial";
@@ -448,9 +449,9 @@ function operation(
     kind,
     status,
     outcome: status === "succeeded" ? "published" : null,
-    asOf: kind === "market" ? "2026-08-30T08:00:00Z" : null,
-    observationThroughSession: kind === "market" ? null : "2026-08-29",
-    phase: status === "accepted" ? null : kind === "market" ? "publication" : kind,
+    asOf: (kind === "market" || kind === "dataset") ? "2026-08-30T08:00:00Z" : null,
+    observationThroughSession: (kind === "market" || kind === "dataset") ? null : "2026-08-29",
+    phase: status === "accepted" ? null : (kind === "market" || kind === "dataset") ? "publication" : kind,
     attemptCount: status === "accepted" ? 0 : 1,
     lastHeartbeatAt: status === "accepted" ? null : "2026-08-30T08:01:00Z",
     dataThroughSession: status === "succeeded" ? "2026-08-29" : null,

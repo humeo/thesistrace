@@ -625,7 +625,7 @@ describe("Auth HTTP boundary", () => {
         body: JSON.stringify({
           as_of: "2026-08-11T18:00:00+08:00",
           idempotency_key: idempotencyKey,
-          operation: "data.refresh.market.submit",
+          operation: "data.refresh.dataset.submit",
         }),
         headers: {
           "content-type": "application/json",
@@ -823,7 +823,7 @@ describe("Auth HTTP boundary", () => {
     const request = {
       as_of: "2026-08-11T18:00:00+08:00",
       idempotency_key: "market-20260811T180000+0800",
-      operation: "data.refresh.market.submit",
+      operation: "data.refresh.dataset.submit",
     } as const;
     const confirmation = await app.request(
       "http://auth.test/api/auth/operator/proofs",
@@ -1170,7 +1170,7 @@ describe("Auth HTTP boundary", () => {
     const request = {
       as_of: "2026-08-11T18:00:00+08:00",
       idempotency_key: "market-刷新",
-      operation: "data.refresh.market.submit",
+      operation: "data.refresh.dataset.submit",
     } as const;
     const headers = {
       "content-type": "application/json",
@@ -1215,7 +1215,7 @@ describe("Auth HTTP boundary", () => {
         body: JSON.stringify({
           as_of: "2026-08-11T18:00:00+08:00",
           idempotency_key: key,
-          operation: "data.refresh.market.submit",
+          operation: "data.refresh.dataset.submit",
         }),
         headers: {
           "content-type": "application/json",
