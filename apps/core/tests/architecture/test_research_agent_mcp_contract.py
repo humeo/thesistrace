@@ -1105,6 +1105,45 @@ def test_registry_composes_context_with_frozen_data_and_without_folder_mutation(
     assert "delete_folder" not in serialized
 
 
+def test_mcp_can_discover_and_read_the_public_strategy_sdk_without_repository_access() -> None:
+    registry = _registry()
+    discovery = {tool.name: tool for tool in registry.accessible_capabilities()}
+    assert "get_authoring_reference" in discovery
+    tool = discovery["get_authoring_reference"]
+    assert tool.required_scope == ResearchAgentScope.RESEARCH_READ
+    assert tool.annotations.read_only_hint
+    index = registry.invoke("get_authoring_reference", {"topic": "python_sdk"}, trace_id="docs")
+    assert index.error is None
+    assert index.result.found
+    assert {"Strategy.increase_to_weights", "Strategy.with_limits", "Data.candidate_details",
+            "Data.history", "Account.positions", "History.sessions"} <= {
+        item.symbol for item in index.result.symbols
+    }
+    detail = registry.invoke("get_authoring_reference", {
+        "topic": "python_sdk", "symbol": "Strategy.increase_to_weights",
+    }, trace_id="docs")
+    assert detail.error is None
+    assert detail.result.entry.signature == (
+        "Strategy.increase_to_weights(self, weights, *, reason='increase_to_weights')"
+    )
+    assert "never sell" in detail.result.entry.description
+    assert detail.result.entry.parameters["weights"]
+    assert detail.result.entry.examples
+    validate(detail.result.model_dump(mode="json"), tool.output_schema())
+
+    missing = registry.invoke("get_authoring_reference", {
+        "topic": "python_sdk", "symbol": "Strategy.imaginary_method",
+    }, trace_id="docs")
+    assert missing.error is None
+    assert not missing.result.found
+    assert missing.result.entry is None
+    assert missing.result.symbols
+    context = registry.get_research_context()
+    assert {item.topic for item in context.authoring_guide.topics} == {
+        "workflow", "formula", "python_sdk", "examples",
+    }
+
+
 def test_registry_catalog_filter_is_bounded_sorted_and_reports_unknowns() -> None:
     catalog = _registry().get_alpha_catalog(identifiers=["ts_mean", "missing_identifier", "close"])
 
@@ -1113,6 +1152,30 @@ def test_registry_catalog_filter_is_bounded_sorted_and_reports_unknowns() -> Non
     assert catalog.unknown_identifiers == ["missing_identifier"]
     with pytest.raises(ValidationError):
         _registry().get_alpha_catalog(identifiers=["close"] * 51)
+
+
+def test_catalog_can_discover_functions_without_paging_through_fields() -> None:
+    registry = _registry()
+    functions = registry.get_alpha_catalog(kind="functions")
+    assert functions.fields == []
+    assert {"rank", "ts_mean", "if_else"} <= {item.identifier for item in functions.builtins}
+    assert functions.next_cursor is None
+
+    field = registry.get_alpha_catalog(kind="fields", query="price.close.adjusted")
+    assert [item.identifier for item in field.fields] == ["close"]
+    assert field.builtins == []
+    function = registry.get_alpha_catalog(kind="functions", query=" TS_MEAN ")
+    assert [item.identifier for item in function.builtins] == ["ts_mean"]
+    assert registry.get_alpha_catalog(query="not-a-real-field").fields == []
+
+    page = registry.get_alpha_catalog(kind="functions", limit=1)
+    assert page.next_cursor is not None
+    with pytest.raises(ResearchAgentExpectedFailure):
+        registry.get_alpha_catalog(kind="fields", limit=1, cursor=page.next_cursor)
+    with pytest.raises(ResearchAgentExpectedFailure):
+        registry.get_alpha_catalog(kind="functions", query="rank", cursor=page.next_cursor)
+    with pytest.raises(ValidationError):
+        registry.get_alpha_catalog(query="   ")
 
 
 def test_registry_catalog_paginates_fields_and_builtins_as_one_collection() -> None:
@@ -2072,6 +2135,7 @@ def test_v1_inventory_scopes_descriptions_annotations_and_schemas_are_exact() ->
     }
     assert RESEARCH_AGENT_TOOL_NAMES == {
         "get_research_context",
+        "get_authoring_reference",
         "get_alpha_catalog",
         "diagnose_alpha_formula",
         "diagnose_research_spec",
@@ -2095,9 +2159,9 @@ def test_v1_inventory_scopes_descriptions_annotations_and_schemas_are_exact() ->
     canonical = _canonical_v1_contract()
 
     assert sha256(canonical).hexdigest() == (
-        "040a00ebf9ce36f3fcb4325e8690465b5103baa7e2df1360e7cca88597fef7fc"
+        "ad4bb490c2e414232a840f2db5a2fef22fa0b3bf6791ab45d1c7a06118c5cdef"
     )
-    assert len(canonical) == 336922
+    assert len(canonical) == 344556
 
 
 def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None:
@@ -2600,6 +2664,7 @@ async def _exercise_in_memory_protocol() -> None:
 
         assert set(tools) == {
             "get_research_context",
+            "get_authoring_reference",
             "get_alpha_catalog",
             "diagnose_alpha_formula",
             "diagnose_research_spec",
@@ -2621,6 +2686,7 @@ async def _exercise_in_memory_protocol() -> None:
         assert client.instructions
         assert len(client.instructions) <= 4096
         assert "request_id" in client.instructions
+        assert "get_authoring_reference" in client.instructions
         assert "result_page" in client.instructions
         assert client.server_capabilities.prompts is None
         assert client.server_capabilities.resources is None

@@ -2,6 +2,14 @@ import toolDetails from "./mcp-tool-details.json";
 
 export const mcpEn = {
   toolDetails: toolDetails.en,
+  reference: {
+    title: "Authoring reference", shared: "Current reference shared with the AI assistant. Contract text and code are shown in their original English.",
+    topics: "Reference topics", topic: { workflow: "Workflow", formula: "Formula", python_sdk: "Python SDK", examples: "Examples" },
+    member: "Reference member", overview: "Overview and getting started", loading: "Loading reference…",
+    failed: "The authoring reference could not be loaded.", notFound: "This member was not found. Choose a member from the current index.",
+    parameters: "Parameters", parameter: "Parameter", meaning: "Meaning and constraints", returns: "Returns:",
+    constraints: "Current limits and configuration", objectFields: "Object fields and types", copyExample: "Copy example",
+  },
   unrecognizedTool: "Display instructions are unavailable for this discovered tool.",
   subtitle: "Use your Quantgrove research tools in the AI assistant you already work with.",
   checking: "Checking…", available: "Service available", unavailable: "Service unavailable",
@@ -42,6 +50,7 @@ export const mcpEn = {
     cancel_research_batch: { title: "Cancel a research batch", description: "Irreversibly cancel unfinished child work." },
     stop_daily_track: { title: "Stop a daily track", description: "Irreversibly stop an active or blocked track." },
     get_research_context: { title: "Check research readiness", description: "Read dataset readiness and available research folders." },
+    get_authoring_reference: { title: "Read the authoring reference", description: "Look up workflows, formula syntax, Python SDK and executable examples." },
     get_alpha_catalog: { title: "Explore formula building blocks", description: "Explore fields and operators for writing formulas." },
     diagnose_alpha_formula: { title: "Check an alpha formula", description: "Check a formula before submitting research." },
     list_research_runs: { title: "Browse research runs", description: "Browse your research runs." },
@@ -73,6 +82,14 @@ export const mcpEn = {
 
 export const mcpZh = {
   toolDetails: toolDetails["zh-CN"],
+  reference: {
+    title: "研究编写参考", shared: "与 AI 助手读取同一份当前参考。契约说明和代码保留英文原文。",
+    topics: "参考主题", topic: { workflow: "研究流程", formula: "公式语法", python_sdk: "Python SDK", examples: "可执行示例" },
+    member: "参考成员", overview: "概览与起步指引", loading: "正在加载参考…",
+    failed: "无法加载编写参考。", notFound: "未找到此成员，请从当前索引中选择。",
+    parameters: "参数", parameter: "参数", meaning: "含义与约束", returns: "返回值：",
+    constraints: "当前限制与配置", objectFields: "对象字段与类型", copyExample: "复制示例",
+  },
   unrecognizedTool: "此已发现工具暂无界面说明。",
   subtitle: "在常用的 AI 助手中使用 Quantgrove 研究工具。",
   checking: "正在检查…", available: "服务可用", unavailable: "服务不可用",
@@ -111,6 +128,7 @@ export const mcpZh = {
     cancel_research_batch: { title: "取消研究批次", description: "不可逆地取消未完成的子任务。" },
     stop_daily_track: { title: "停止每日跟踪", description: "不可逆地停止活动或已阻塞的跟踪。" },
     get_research_context: { title: "检查研究准备情况", description: "读取数据集准备状态和可用研究文件夹。" },
+    get_authoring_reference: { title: "查阅研究编写参考", description: "查询研究流程、公式语法、Python SDK 和可执行示例。" },
     get_alpha_catalog: { title: "探索公式构件", description: "查看编写公式可用的字段和运算符。" },
     diagnose_alpha_formula: { title: "检查 Alpha 公式", description: "提交研究前检查公式。" },
     list_research_runs: { title: "浏览研究运行", description: "浏览你的研究运行。" },

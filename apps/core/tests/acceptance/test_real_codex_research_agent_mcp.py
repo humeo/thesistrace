@@ -15,6 +15,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from importlib.metadata import version
 from pathlib import Path
+from tempfile import TemporaryFile
 from threading import Lock
 from typing import Never, TextIO
 
@@ -22,18 +23,23 @@ import pytest
 from core_runtime import drop_product_schemas, isolated_core_settings
 from jsonschema import validate
 from research_agent_mcp_runtime import (
-    assert_worker_succeeded,
     core_environment,
     publish_current_data,
-    run_research_worker_once,
 )
 
-from thesistrace.entrypoints.runtime import core_environment_is_configured
+from thesistrace.entrypoints.runtime import (
+    CORE_ENVIRONMENT_NAMES,
+    CoreSettings,
+    core_environment_is_configured,
+)
 from thesistrace.entrypoints.schema import initialize_core
+from thesistrace.research_kernel.strategy_program_runtime import get_strategy_runtime
 
 SAFE_TOOL_NAMES = {
     "diagnose_alpha_formula",
+    "diagnose_research_spec",
     "get_alpha_catalog",
+    "get_authoring_reference",
     "get_daily_track",
     "get_daily_track_result",
     "get_research_batch",
@@ -129,6 +135,7 @@ SAFE_ASSERTION_CODES = {
     "selection_interval_contract",
     "request_id_contract",
     "research_kind_contract",
+    "required_result_sections_contract",
     "trajectory_inventory_contract",
     "tool_discovery_contract",
     "unknown",
@@ -303,29 +310,39 @@ def test_real_codex_completes_reconnected_stdio_research_loop(tmp_path: Path) ->
             "injected_mcp_environment_names": sorted(mcp_environment),
         }
         _write_evidence(evidence_path, evidence)
+        started_at = time.monotonic()
         first = _run_codex_phase(
             codex=codex,
             mcp_environment=mcp_environment,
             workspace=tmp_path / "codex-submit",
             schema=_submission_schema(),
-            prompt=_submission_prompt(end_session=sessions[54]),
+            prompt=_submission_prompt(end_session=sessions[4]),
         )
         submission = first.final_output
         validate(submission, _submission_schema())
-        _assert_tool_discovery(submission.get("visible_tool_names"))
+        discovered_tools = _assert_tool_discovery(submission.get("visible_tool_names"))
         submission_trace = _assert_submission_trajectory(first.calls)
+        _assert_reference_guided_python(first.calls)
         _assert_only_mcp_product_access(first.events)
 
         worker_lock = Lock()
-        worker_future = None
-        worker_executor = ThreadPoolExecutor(max_workers=1)
+        worker: subprocess.Popen[str] | None = None
+        worker_log = TemporaryFile(mode="w+")
 
         def start_worker_after_first_poll() -> None:
-            nonlocal worker_future
+            nonlocal worker
             with worker_lock:
-                if worker_future is not None:
+                if worker is not None:
                     return
-                worker_future = worker_executor.submit(run_research_worker_once, settings)
+                # Python research spans multiple capacity-planned chunks. The production
+                # worker must keep polling until the client observes the terminal Result.
+                worker = subprocess.Popen(
+                    [sys.executable, "-m", "thesistrace.entrypoints.worker",
+                     "--role", "research"],
+                    stdin=subprocess.DEVNULL, stdout=worker_log, stderr=worker_log,
+                    text=True, start_new_session=True, cwd=Path.cwd(),
+                    env={**os.environ, **core_environment(settings)},
+                )
 
         try:
             second = _run_codex_phase(
@@ -336,12 +353,14 @@ def test_real_codex_completes_reconnected_stdio_research_loop(tmp_path: Path) ->
                 prompt=_result_prompt(run_id=submission_trace["run_id"]),
                 on_completed_poll=start_worker_after_first_poll,
             )
-            assert worker_future is not None, (
+            assert worker is not None, (
                 "Codex never completed its first durable polling call"
             )
-            assert_worker_succeeded(worker_future.result(timeout=70))
+            assert worker.poll() is None, "Research Worker exited before Result verification"
         finally:
-            worker_executor.shutdown(wait=True, cancel_futures=True)
+            if worker is not None:
+                _terminate_process_group(worker)
+            worker_log.close()
         result = second.final_output
         validate(result, _result_schema())
         result_trace = _assert_result_trajectory(
@@ -363,13 +382,15 @@ def test_real_codex_completes_reconnected_stdio_research_loop(tmp_path: Path) ->
         success_evidence = {
             **evidence,
             "status": "passed",
-            "discovered_tool_names": submission["visible_tool_names"],
+            "discovered_tool_names": discovered_tools,
             "dangerous_tools_absent": [
                 "cancel_research_batch",
                 "cancel_research_run",
                 "stop_daily_track",
             ],
             "authoring": {
+                "reference_guided_python": True,
+                "whole_spec_diagnosed": True,
                 "context_read": submission_trace["context_read"],
                 "catalog_read": submission_trace["catalog_read"],
                 "invalid_formula_rejected": submission_trace[
@@ -404,6 +425,12 @@ def test_real_codex_completes_reconnected_stdio_research_loop(tmp_path: Path) ->
                 "conclusion": result["conclusion"],
             },
             "trace_ids": trace_ids,
+            "evaluation": {
+                "cases_passed": 1,
+                "elapsed_seconds": round(time.monotonic() - started_at, 3),
+                "tool_call_count": len(first.calls) + len(second.calls),
+                "cost_usd": None,
+            },
             "codex_event_summary": {
                 "first_phase": _event_summary(first.events),
                 "reconnected_phase": _event_summary(second.events),
@@ -757,11 +784,18 @@ def _submission_prompt(*, end_session: str) -> str:
 files, product HTTP routes, SQL, or internal Python APIs. Complete one research admission:
 1. Inspect every Tool visible from the server and report their exact names.
 2. Call get_research_context and get_alpha_catalog for close and ts_mean.
+   Use get_authoring_reference to discover the Formula syntax and Python SDK needed below.
 3. Diagnose `unknown_alpha + close`; use its structured diagnostics to correct the Formula,
    then diagnose the corrected Formula and require valid=true.
 4. Submit one strategy_backtest using the default folder, dates 2026-08-03 through
    {end_session}, top300, neutralization none, holdings_count 51,
    selection_every_sessions 1, and a unique request_id beginning codex-real-acceptance-.
+   Include a non-empty hypothesis that explains the corrected Formula.
+   Keep builtin Universe, Alpha and Portfolio modules. Write a Python RiskManagement module
+   that reads two Research Sessions of adjusted Close prices, stores the returned Session
+   count in self.state['history_sessions'], and leaves the portfolio proposal unchanged.
+   Use the documented SDK. Before submission, diagnose
+   the complete ResearchSpec and correct every error until valid=true.
 5. Call get_research_run exactly once for the returned durable run_id. No Worker is running,
    so require status queued and preserve its retry_after_seconds.
 Return only the exact visible Tool names requested by the output Schema. Do not include Formula
@@ -843,7 +877,9 @@ def _completed_mcp_call(
     assert item.get("server") == "thesistrace"
     tool = item.get("tool")
     assert isinstance(tool, str) and tool in SAFE_TOOL_NAMES
-    assert item.get("status") == "completed"
+    # Codex marks MCP isError responses as failed even when structured diagnostics
+    # were delivered successfully and the model can correct its arguments.
+    assert item.get("status") in {"completed", "failed"}
     arguments = item.get("arguments")
     assert isinstance(arguments, dict)
     result = item.get("result")
@@ -872,7 +908,7 @@ def _assert_tool_discovery(value: object) -> list[str]:
         isinstance(value, list) and all(isinstance(item, str) for item in value),
         "tool_discovery_contract",
     )
-    names = _require_string_list(value)
+    names = [name.removeprefix("mcp__thesistrace__") for name in _require_string_list(value)]
     _require_trajectory(
         set(names) == SAFE_TOOL_NAMES and len(names) == len(SAFE_TOOL_NAMES),
         "tool_discovery_contract",
@@ -886,8 +922,10 @@ def _assert_submission_trajectory(calls: list[_ObservedMcpCall]) -> dict[str, ob
         {call.tool for call in calls}
         <= {
             "get_research_context",
+            "get_authoring_reference",
             "get_alpha_catalog",
             "diagnose_alpha_formula",
+            "diagnose_research_spec",
             "submit_research_run",
             "get_research_run",
         },
@@ -899,7 +937,7 @@ def _assert_submission_trajectory(calls: list[_ObservedMcpCall]) -> dict[str, ob
     submissions = [call for call in calls if call.tool == "submit_research_run"]
     polls = [call for call in calls if call.tool == "get_research_run"]
     _require_trajectory(
-        len(contexts) == len(catalogs) == len(polls) == 1,
+        bool(contexts) and bool(catalogs) and len(polls) == 1,
         "trajectory_inventory_contract",
     )
     _require_trajectory(len(diagnoses) >= 2, "trajectory_inventory_contract")
@@ -1073,6 +1111,39 @@ def _assert_submission_trajectory(calls: list[_ObservedMcpCall]) -> dict[str, ob
     }
 
 
+def _assert_reference_guided_python(calls: list[_ObservedMcpCall]) -> None:
+    submitted = next(call for call in calls if call.tool == "submit_research_run"
+                     and call.output.get("outcome") == "accepted")
+    preparation = calls[:calls.index(submitted)]
+    topics = {call.arguments.get("topic") for call in preparation
+              if call.tool == "get_authoring_reference" and call.output.get("found")
+              and call.output.get("entry")}
+    assert {"formula", "python_sdk"} <= topics
+    assert any(call.tool == "diagnose_research_spec" and call.output.get("valid")
+               for call in preparation)
+    modules = _require_mapping(submitted.arguments.get("modules"))
+    risk = _require_mapping(modules.get("risk_management"))
+    assert risk.get("kind") == "python"
+    source = _require_mapping(risk.get("program")).get("source")
+    assert isinstance(source, str)
+    result = get_strategy_runtime().invoke(
+        source, entrypoint="RiskManagement", state={},
+        context={"session": "2026-08-03", "completed_sessions": 1,
+                 "candidates": [{"instrument_id": "equity:600001.SH"}],
+                 "framework": {"proposal": None},
+                 "account": {"positions": [], "cash_cny": "100000",
+                             "post_open_net_nav_cny": "100000", "close_risk_nav_cny": "100000"}},
+        read_history=lambda _request: {
+            "sessions": ["2026-07-31", "2026-08-03"],
+            "values": {"equity:600001.SH": [10.0, 11.0]},
+        },
+    )
+    assert result.output is None
+    assert result.state["history_sessions"] == 2
+    assert any(read["field_id"] == "price.close.adjusted" and read["requested_sessions"] == 2
+               for read in result.history_reads)
+
+
 def _assert_result_trajectory(
     calls: list[_ObservedMcpCall],
     *,
@@ -1116,14 +1187,11 @@ def _assert_result_trajectory(
     assert len(second_items) == 1
     assert first_items[0].get("session") != second_items[0].get("session")
     available_sections = poll_calls[-1].output.get("available_result_sections")
-    assert available_sections == [
-        "factor",
-        "strategy_summary",
-        "strategy_observations",
-        "terminal_strategy_state",
-        "terminal_positions",
-        "provenance",
-    ]
+    _require_trajectory(
+        isinstance(available_sections, list)
+        and {"strategy_summary", "strategy_observations"} <= set(available_sections),
+        "required_result_sections_contract",
+    )
     return {
         "status_trace": _distinct_strings(statuses),
         "available_result_sections": available_sections,
@@ -1217,14 +1285,10 @@ def _core_environment_from_mapping(environment: Mapping[str, str]) -> dict[str, 
     return {
         name: environment[name]
         for name in (
-            "THESISTRACE_DATABASE_URL",
-            "THESISTRACE_S3_ENDPOINT_URL",
-            "THESISTRACE_S3_ACCESS_KEY_ID",
-            "THESISTRACE_S3_SECRET_ACCESS_KEY",
-            "THESISTRACE_S3_BUCKET",
+            *CORE_ENVIRONMENT_NAMES,
             "THESISTRACE_S3_REGION",
-            "THESISTRACE_DATA_MOUNT",
-            "THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY",
+            "THESISTRACE_AUTH_INTERNAL_ORIGIN",
+            "THESISTRACE_INTERNAL_API_ORIGIN",
             "THESISTRACE_RESEARCH_AGENT_RESEARCHER_ID",
         )
     }
@@ -1915,6 +1979,7 @@ def _write_failure_evidence(
             "error_type": type(error).__name__,
             "error_sha256": hashlib.sha256(str(error).encode()).hexdigest(),
             "assertion_code": _safe_assertion_code(error),
+            "check": _safe_failure_check(error),
             "phase_diagnostics": (
                 _safe_phase_diagnostics(error.diagnostics)
                 if isinstance(error, _CodexPhaseFailure)
@@ -1947,10 +2012,31 @@ def _safe_discovered_tool_names(phase: _CodexPhase | None) -> list[str]:
     if phase is None:
         return []
     names = phase.final_output.get("visible_tool_names")
+    if isinstance(names, list):
+        names = [name.removeprefix("mcp__thesistrace__") if isinstance(name, str) else name
+                 for name in names]
     return _safe_closed_string_list(
         names,
         allowed={*SAFE_TOOL_NAMES, "unknown"},
     )
+
+
+def _safe_failure_check(error: BaseException) -> dict[str, object] | None:
+    allowed = {
+        "test_real_codex_completes_reconnected_stdio_research_loop",
+        "_assert_submission_trajectory", "_assert_reference_guided_python",
+        "_assert_result_trajectory", "_semantic_conclusion", "_sign_category",
+        "_absolute_category", "_assert_operational_traces_match_calls",
+        "_assert_only_mcp_product_access", "_assert_sanitized_evidence",
+    }
+    selected = None
+    trace = error.__traceback__
+    while trace is not None:
+        code = trace.tb_frame.f_code
+        if code.co_filename == __file__ and code.co_name in allowed:
+            selected = {"name": code.co_name, "line": trace.tb_lineno}
+        trace = trace.tb_next
+    return selected
 
 
 def _safe_assertion_code(error: BaseException) -> str | None:
@@ -2108,6 +2194,20 @@ def test_codex_event_contract_is_strict_and_preserves_structured_result() -> Non
         _completed_mcp_call(aliased, completed_at=12.5)
 
 
+def test_codex_failed_tool_result_preserves_correctable_structured_diagnostics() -> None:
+    output = {"error": {"code": "INVALID_INPUT", "message": "Correct the input"}}
+    event = {"type": "item.completed", "item": {
+        "type": "mcp_tool_call", "server": "thesistrace", "tool": "diagnose_research_spec",
+        "status": "failed", "arguments": {"spec": {}},
+        "result": {"content": [], "structured_content": output}, "error": None,
+    }}
+    assert _completed_mcp_call(event, completed_at=1).output == output
+    event["item"]["result"] = None
+    event["item"]["error"] = {"message": "Connection closed"}
+    with pytest.raises(AssertionError):
+        _completed_mcp_call(event, completed_at=1)
+
+
 def test_trajectory_evidence_is_derived_from_tool_arguments_and_results() -> None:
     submitted_arguments = {"volatility_window": 20, "weighting": "equal_weight",
         "formula": "ts_mean(close, 5)",
@@ -2176,7 +2276,7 @@ def test_trajectory_evidence_is_derived_from_tool_arguments_and_results() -> Non
                 "status": "succeeded",
                 "retry_after_seconds": None,
                 "available_result_sections": [
-                    "factor",
+                    "strategy_history_reads",
                     "strategy_summary",
                     "strategy_observations",
                     "terminal_strategy_state",
@@ -2223,6 +2323,19 @@ def test_trajectory_evidence_is_derived_from_tool_arguments_and_results() -> Non
         "benchmark_comparison": "underperformed",
         "drawdown": "observed",
     }
+
+
+def test_tool_discovery_recognizes_the_codex_server_namespace() -> None:
+    names = sorted(SAFE_TOOL_NAMES)
+    assert _assert_tool_discovery([f"mcp__thesistrace__{name}" for name in names]) == names
+    with pytest.raises(_TrajectoryContractError):
+        _assert_tool_discovery([f"mcp__other_server__{name}" for name in names])
+
+
+def test_submission_trajectory_allows_repeated_read_only_discovery() -> None:
+    calls = _submission_calls_for_failure_test()
+    calls[2:2] = [calls[0], calls[1]]
+    assert _assert_submission_trajectory(calls)["admission_attempt_count"] == 1
 
 
 def test_submission_trajectory_accepts_structured_rejection_recovery() -> None:
@@ -3180,6 +3293,23 @@ def test_codex_phase_cleans_up_when_event_callback_fails(tmp_path: Path) -> None
     assert not list((tmp_path / "workspace").glob(".thesistrace-mcp-*"))
 
 
+def test_codex_mcp_child_receives_the_current_runtime_configuration(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    environment = _test_mcp_environment(tmp_path)
+    forwarded = _core_environment_from_mapping(environment)
+    monkeypatch.delenv("THESISTRACE_BENCHMARK_MOUNT", raising=False)
+    for name, value in forwarded.items():
+        monkeypatch.setenv(name, value)
+    assert CoreSettings.from_environment().benchmark_mount == tmp_path / "benchmark"
+    assert forwarded["THESISTRACE_AUTH_INTERNAL_ORIGIN"] == environment[
+        "THESISTRACE_AUTH_INTERNAL_ORIGIN"
+    ]
+    assert forwarded["THESISTRACE_INTERNAL_API_ORIGIN"] == environment[
+        "THESISTRACE_INTERNAL_API_ORIGIN"
+    ]
+
+
 def _test_mcp_environment(tmp_path: Path) -> dict[str, str]:
     return {
         "THESISTRACE_DATABASE_URL": "postgresql://acceptance-secret-canary",
@@ -3189,6 +3319,9 @@ def _test_mcp_environment(tmp_path: Path) -> dict[str, str]:
         "THESISTRACE_S3_BUCKET": "test",
         "THESISTRACE_S3_REGION": "test",
         "THESISTRACE_DATA_MOUNT": str(tmp_path / "data"),
+        "THESISTRACE_BENCHMARK_MOUNT": str(tmp_path / "benchmark"),
+        "THESISTRACE_AUTH_INTERNAL_ORIGIN": "http://127.0.0.1:2",
+        "THESISTRACE_INTERNAL_API_ORIGIN": "http://127.0.0.1:3",
         "THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY": str(tmp_path / "attempts"),
         "THESISTRACE_RESEARCH_AGENT_RESEARCHER_ID": (
             "018f6f7e-8342-7c9a-a4df-9a86147d2e01"

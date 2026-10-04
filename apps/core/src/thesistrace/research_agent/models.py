@@ -4,7 +4,7 @@ from enum import StrEnum
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from thesistrace.alpha_language.language import MAX_FORMULA_LENGTH
 from thesistrace.alpha_language.models import (
@@ -15,6 +15,7 @@ from thesistrace.alpha_language.models import (
 )
 from thesistrace.data.models import DataOverview
 from thesistrace.research_authoring.models import ResearchAuthoringConstraints
+from thesistrace.research_authoring.reference_models import AuthoringGuide
 from thesistrace.research_batch.models import (
     ResearchBatchAdmissionIssue,
     ResearchBatchStatus,
@@ -125,6 +126,7 @@ class ResearchContext(BaseModel):
     data_overview: DataOverview
     folders: ResearchContextFolders
     authoring_constraints: ResearchAuthoringConstraints
+    authoring_guide: AuthoringGuide
 
 
 AlphaCatalogIdentifier = Annotated[
@@ -135,6 +137,7 @@ AlphaCatalogIdentifiers = Annotated[
     list[AlphaCatalogIdentifier],
     Field(min_length=1, max_length=50),
 ]
+type AlphaCatalogKind = Literal["all", "fields", "functions"]
 FormulaSource = Annotated[str, Field(strict=True, max_length=MAX_FORMULA_LENGTH)]
 
 
@@ -149,8 +152,20 @@ class GetAlphaCatalogInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     identifiers: AlphaCatalogIdentifiers | None = None
+    kind: AlphaCatalogKind = "all"
+    query: Annotated[str, Field(strict=True, min_length=1, max_length=200)] | None = None
     cursor: Annotated[str, Field(strict=True, min_length=1, max_length=1024)] | None = None
     limit: Annotated[int, Field(strict=True, ge=1, le=50)] = 20
+
+    @field_validator("query")
+    @classmethod
+    def normalize_query(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip().casefold()
+        if not value:
+            raise ValueError("Catalog query must contain a search term")
+        return value
 
 
 class DiagnoseAlphaFormulaInput(BaseModel):

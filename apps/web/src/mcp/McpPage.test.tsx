@@ -79,7 +79,7 @@ describe("MCP product page", () => {
     const tool = toolTrigger.closest('[data-slot="collapsible"]')!;
     await act(async () => { await i18n.changeLanguage("zh-CN"); });
     expect(toolTrigger.getAttribute("aria-expanded")).toBe("true");
-    expect(tool.textContent).toContain("folder_limit 默认为 20，最多 50");
+    expect(tool.textContent).toContain("folder_limit 默认 20，最多 50");
     expect(tool.textContent).toContain("get_research_context");
     expect(tool.textContent).not.toContain("Live discovery description");
     expect(requested).toEqual(requestsBeforeSwitch);

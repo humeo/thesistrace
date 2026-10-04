@@ -19,6 +19,7 @@ from thesistrace.research_agent import (
 )
 from thesistrace.research_agent.models import AlphaCatalogView, ResearchContext
 from thesistrace.research_agent.pagination import ResearchAgentPagination
+from thesistrace.research_authoring.reference import AUTHORING_GUIDE
 from thesistrace.research_authoring.service import CURRENT_RESEARCH_AUTHORING_CONSTRAINTS
 from thesistrace.research_batch import research_batch_polling_detail
 from thesistrace.research_batch.models import (
@@ -165,6 +166,7 @@ def research_context_payload() -> dict[str, object]:
                 "next_cursor": None,
             },
             "authoring_constraints": CURRENT_RESEARCH_AUTHORING_CONSTRAINTS.model_dump(),
+            "authoring_guide": AUTHORING_GUIDE.model_dump(),
         }
     ).model_dump(mode="json")
 

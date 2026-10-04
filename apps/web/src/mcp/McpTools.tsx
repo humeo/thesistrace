@@ -10,6 +10,7 @@ import { Empty, EmptyHeader, EmptyTitle, EmptyDescription } from "../components/
 import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group";
 import { Separator } from "../components/ui/separator";
 import { mcpLayout } from "./mcpLayout";
+import { AuthoringReference } from "./AuthoringReference";
 type KnownToolName = keyof typeof mcpEn.toolNames;
 const groups = ["preparation", "runs", "batches", "tracks", "other"] as const;
 type Group = typeof groups[number];
@@ -23,6 +24,7 @@ function title(name: string): string { return name.replaceAll("_", " ").replace(
 export function McpTools({ tools, checking }: { tools: Connection["tools"] | null; checking: boolean }) {
   const { t } = useTranslation("mcp");
   const [selectedGroup, setSelectedGroup] = useState<Group>("preparation");
+  const [referenceOpen, setReferenceOpen] = useState(false);
   const toolCount = (count: number) => t("toolCount", { count, countLabel: formatNumber(count) });
   const discoveredGroups = groups.map(id => ({ id, members: tools?.filter(tool => group(tool.name) === id) ?? [] })).filter(entry => entry.members.length > 0);
   const activeGroup = discoveredGroups.find(entry => entry.id === selectedGroup) ?? discoveredGroups[0];
@@ -36,7 +38,7 @@ export function McpTools({ tools, checking }: { tools: Connection["tools"] | nul
         </ToggleGroup>
         <Separator orientation="vertical" />
         <div className="min-w-0" role="region" aria-label={t(`groups.${activeGroup.id}`)}>
-          {activeGroup.members.map(tool => <Disclosure variant="row" key={tool.name} title={toolPresentation[tool.name] ? <><span className={`${mcpLayout.toolLabel} py-3`}><span className="font-medium">{t(`toolNames.${tool.name}.title` as `toolNames.${KnownToolName}.title`)}</span><span className="font-normal text-muted-foreground">{t(`toolNames.${tool.name}.description` as `toolNames.${KnownToolName}.description`)}</span></span><Badge variant="secondary">{t(`effects.${toolPresentation[tool.name].effect}`)}</Badge></> : <span className="py-3">{title(tool.name)}</span>}><div className={`${mcpLayout.stack} [&_code]:[overflow-wrap:anywhere] [&_code]:text-sm`}><code>{tool.name}</code>{toolPresentation[tool.name] ? <p>{t("permission")} <code>{toolPresentation[tool.name].scope}</code></p> : null}<p>{toolPresentation[tool.name] ? t(`toolDetails.${tool.name}` as `toolDetails.${KnownToolName}`) : t("unrecognizedTool")}</p></div></Disclosure>)}
+          {activeGroup.members.map(tool => <Disclosure variant="row" key={tool.name} open={tool.name === "get_authoring_reference" ? referenceOpen : undefined} onOpenChange={tool.name === "get_authoring_reference" ? setReferenceOpen : undefined} title={toolPresentation[tool.name] ? <><span className={`${mcpLayout.toolLabel} py-3`}><span className="font-medium">{t(`toolNames.${tool.name}.title` as `toolNames.${KnownToolName}.title`)}</span><span className="font-normal text-muted-foreground">{t(`toolNames.${tool.name}.description` as `toolNames.${KnownToolName}.description`)}</span></span><Badge variant="secondary">{t(`effects.${toolPresentation[tool.name].effect}`)}</Badge></> : <span className="py-3">{title(tool.name)}</span>}><div className={`${mcpLayout.stack} [&_code]:[overflow-wrap:anywhere] [&_code]:text-sm`}><code>{tool.name}</code>{toolPresentation[tool.name] ? <p>{t("permission")} <code>{toolPresentation[tool.name].scope}</code></p> : null}<p>{toolPresentation[tool.name] ? t(`toolDetails.${tool.name}` as `toolDetails.${KnownToolName}`) : t("unrecognizedTool")}</p>{tool.name === "get_authoring_reference" && referenceOpen ? <AuthoringReference /> : null}</div></Disclosure>)}
         </div>
       </div>
       <Separator />

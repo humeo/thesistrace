@@ -6,6 +6,7 @@ export const toolPresentation: Record<string, { effect: "Read" | "Create" | "Upd
   cancel_research_batch: { effect: "Cancel", scope: "research:cancel" },
   stop_daily_track: { effect: "Stop", scope: "tracking:stop" },
   get_research_context: { effect: "Read", scope: "research:read" },
+  get_authoring_reference: { effect: "Read", scope: "research:read" },
   get_alpha_catalog: { effect: "Read", scope: "research:read" },
   diagnose_alpha_formula: { effect: "Read", scope: "research:read" },
   list_research_runs: { effect: "Read", scope: "research:read" },

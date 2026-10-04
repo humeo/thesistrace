@@ -42,11 +42,12 @@ def test_packaged_stdio_reads_real_core_context_and_exits_cleanly(
     try:
         anyio.run(_exercise_stdio, settings, stderr_path)
         events = [json.loads(line) for line in stderr_path.read_text().splitlines()]
-        assert len(events) == 6
+        assert len(events) == 7
         assert all(event["component"] == "research_agent_mcp" for event in events)
         assert all(event["transport"] == "stdio" for event in events)
         assert all(event["subject"] == "local_operator" for event in events)
         assert [event["outcome"] for event in events] == [
+            "succeeded",
             "succeeded",
             "succeeded",
             "succeeded",
@@ -79,6 +80,7 @@ async def _exercise_stdio(settings: CoreSettings, stderr_path: Path) -> None:
             tools = await client.list_tools()
             assert [tool.name for tool in tools.tools] == [
                 "get_research_context",
+                "get_authoring_reference",
                 "get_alpha_catalog",
                 "diagnose_alpha_formula",
                 "diagnose_research_spec",
@@ -97,6 +99,12 @@ async def _exercise_stdio(settings: CoreSettings, stderr_path: Path) -> None:
                 "submit_research_run",
             ]
 
+            reference = await client.call_tool("get_authoring_reference", {
+                "topic": "python_sdk", "symbol": "Data.history",
+            })
+            assert reference.is_error is False
+            assert reference.structured_content["found"] is True
+            assert "field_id" in reference.structured_content["entry"]["parameters"]
             context = await client.call_tool("get_research_context", {})
             assert context.is_error is False
             assert context.structured_content["data_overview"]["market_research_readiness"] is False
@@ -225,6 +233,7 @@ def _assert_raw_stdio_process_exits_cleanly(settings: CoreSettings) -> None:
         assert tools["id"] == 2
         assert [tool["name"] for tool in tools["result"]["tools"]] == [
             "get_research_context",
+            "get_authoring_reference",
             "get_alpha_catalog",
             "diagnose_alpha_formula",
             "diagnose_research_spec",
@@ -300,7 +309,7 @@ async def _exercise_official_client_oversize_disconnect_and_reconnect(
     with reconnected_stderr.open("w+") as errlog:
         async with Client(stdio_client(parameters, errlog=errlog)) as client:
             tools = await client.list_tools()
-    assert len(tools.tools) == 17
+    assert len(tools.tools) == 18
     assert reconnected_stderr.read_text() == ""
 
 

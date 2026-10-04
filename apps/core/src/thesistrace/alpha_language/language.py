@@ -21,6 +21,12 @@ from thesistrace.alpha_language.models import (
     SourceRange,
     ValueType,
 )
+from thesistrace.alpha_language.syntax import (
+    ARITHMETIC_OPERATORS,
+    BOOLEAN_OPERATORS,
+    COMPARISON_OPERATORS,
+    UNARY_OPERATORS,
+)
 from thesistrace.data.fields import FieldDefinition
 from thesistrace.research_kernel.alpha_builtins import (
     BUILTIN_DEFINITIONS,
@@ -374,7 +380,7 @@ class AlphaLanguage:
                 estimated_work=1,
             )
         if isinstance(node, ast.UnaryOp):
-            if not isinstance(node.op, (ast.USub, ast.Not)):
+            if type(node.op) not in UNARY_OPERATORS:
                 self._raise(
                     source,
                     "UNSUPPORTED_OPERATOR",
@@ -385,7 +391,7 @@ class AlphaLanguage:
                     ),
                 )
             operand = self._build(source, node.operand, depth=depth + 1)
-            operator = "not" if isinstance(node.op, ast.Not) else "negate"
+            operator = UNARY_OPERATORS[type(node.op)][1]
             try:
                 result_type = unary_result_type(operator, operand.value_type)
             except ValueError as error:
@@ -411,12 +417,7 @@ class AlphaLanguage:
                 estimated_work=operand.estimated_work + 1,
             )
         if isinstance(node, ast.BinOp):
-            operator = {
-                ast.Add: "add",
-                ast.Sub: "subtract",
-                ast.Mult: "multiply",
-                ast.Div: "divide",
-            }.get(type(node.op))
+            operator = ARITHMETIC_OPERATORS.get(type(node.op))
             if operator is None:
                 self._raise(
                     source, "UNSUPPORTED_OPERATOR", "Unsupported arithmetic operator", node,
@@ -428,7 +429,7 @@ class AlphaLanguage:
             return self._binary(
                 source,
                 node,
-                operator,
+                operator[1],
                 self._build(source, node.left, depth=depth + 1),
                 self._build(source, node.right, depth=depth + 1),
                 depth,
@@ -441,14 +442,7 @@ class AlphaLanguage:
                         kind="syntax", expected="single_comparison", actual="chained_comparison",
                     ),
                 )
-            operator = {
-                ast.Gt: "gt",
-                ast.GtE: "ge",
-                ast.Lt: "lt",
-                ast.LtE: "le",
-                ast.Eq: "eq",
-                ast.NotEq: "ne",
-            }.get(type(node.ops[0]))
+            operator = COMPARISON_OPERATORS.get(type(node.ops[0]))
             if operator is None:
                 self._raise(
                     source, "UNSUPPORTED_OPERATOR", "Unsupported comparison", node,
@@ -460,13 +454,13 @@ class AlphaLanguage:
             return self._binary(
                 source,
                 node,
-                operator,
+                operator[1],
                 self._build(source, node.left, depth=depth + 1),
                 self._build(source, node.comparators[0], depth=depth + 1),
                 depth,
             )
         if isinstance(node, ast.BoolOp):
-            operator = "and" if isinstance(node.op, ast.And) else "or"
+            operator = BOOLEAN_OPERATORS[type(node.op)][1]
             children = [
                 self._build(source, value, depth=depth + len(node.values) - 1)
                 for value in node.values

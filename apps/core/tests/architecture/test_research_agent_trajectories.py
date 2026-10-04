@@ -864,7 +864,7 @@ def test_schema_failures_and_model_strings_cannot_leak_or_bloat_diagnostics() ->
 def test_tool_discovery_uses_official_mcp_envelopes() -> None:
     tools = _discovered_tools(SAFE_SCOPES)
 
-    assert len(tools) == 17
+    assert len(tools) == 18
     assert {
         "cancel_research_batch",
         "cancel_research_run",

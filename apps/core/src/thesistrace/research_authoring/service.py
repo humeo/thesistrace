@@ -15,6 +15,13 @@ from thesistrace.research_authoring.models import (
     PythonProgramConstraints,
     ResearchAuthoringConstraints,
 )
+from thesistrace.research_authoring.reference import AUTHORING_GUIDE, authoring_reference
+from thesistrace.research_authoring.reference_models import (
+    AuthoringGuide,
+    AuthoringReference,
+    AuthoringReferenceQuery,
+    AuthoringTopic,
+)
 from thesistrace.research_batch.models import (
     MAX_RESEARCH_BATCH_ITEMS,
     MIN_RESEARCH_BATCH_ITEMS,
@@ -31,6 +38,8 @@ from thesistrace.research_kernel.strategy_program_assets import PYTHON_VERSION
 from thesistrace.research_kernel.strategy_program_guest import AVAILABLE_MODULES
 from thesistrace.research_kernel.strategy_program_runtime import (
     BOOTSTRAP_WALL_SECONDS,
+    HISTORY_REQUESTS,
+    HISTORY_SESSIONS,
     INPUT_BYTES,
     MEMORY_BYTES,
     OUTPUT_BYTES,
@@ -102,8 +111,9 @@ CURRENT_RESEARCH_AUTHORING_CONSTRAINTS = ResearchAuthoringConstraints(
         maximum_state_bytes=STATE_BYTES, maximum_input_bytes=INPUT_BYTES,
         maximum_output_bytes=OUTPUT_BYTES, maximum_memory_bytes=MEMORY_BYTES,
         maximum_wall_seconds=WALL_SECONDS,
-        maximum_bootstrap_wall_seconds=BOOTSTRAP_WALL_SECONDS, maximum_history_requests=64,
-        history_sessions=IntegerRange(minimum=1, maximum=253),
+        maximum_bootstrap_wall_seconds=BOOTSTRAP_WALL_SECONDS,
+        maximum_history_requests=HISTORY_REQUESTS,
+        history_sessions=IntegerRange(minimum=1, maximum=HISTORY_SESSIONS),
         python_version=PYTHON_VERSION, modules=AVAILABLE_MODULES,
     ),
     framework=FrameworkAuthoringConstraints(
@@ -185,3 +195,12 @@ CURRENT_RESEARCH_AUTHORING_CONSTRAINTS = ResearchAuthoringConstraints(
 class ResearchAuthoringService:
     def constraints(self) -> ResearchAuthoringConstraints:
         return CURRENT_RESEARCH_AUTHORING_CONSTRAINTS
+
+    def guide(self) -> AuthoringGuide:
+        return AUTHORING_GUIDE
+
+    def reference(
+        self, topic: AuthoringTopic = "workflow", symbol: str | None = None,
+    ) -> AuthoringReference:
+        return authoring_reference(AuthoringReferenceQuery(topic=topic, symbol=symbol),
+                                   self.constraints()).model_copy(deep=True)

@@ -1,5 +1,15 @@
 # Python strategy SDK
 
+The live **Research Authoring Reference** is available in Connections → MCP →
+Research preparation → Read the authoring reference. It reads the same contract
+as `get_authoring_reference(topic="python_sdk")`: omit `symbol` for the index,
+then select e.g. `symbol="Data.history"` for signatures, parameter constraints,
+return values and examples. Topics `workflow`, `formula` and `examples` cover the
+other authoring steps. `get_alpha_catalog(kind="fields", query="close")` finds
+currently available fields; `kind="functions"` browses Formula functions without
+paging through fields. Diagnose the complete configuration with
+`diagnose_research_spec` before submitting. These reads do not create research.
+
 The platform supplies data and the actual simulated account. Your class decides
 what should change. The platform then applies trading rules, costs and fills at
 the next research trading session's Open. A returned target is not a guaranteed

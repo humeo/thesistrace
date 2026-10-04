@@ -6,18 +6,22 @@ import { test, expect, sameOriginHeaders, emailCode } from "./auth-fixture";
 test("MCP product connects an external client through login, consent, discovery and revocation", async ({ page, researcher }, testInfo) => {
   test.setTimeout(90_000);
   const base = process.env.THESISTRACE_TEST_WEB_ORIGIN!;
+  await page.setViewportSize({ width: 1280, height: 960 });
   await page.goto("/connections/mcp");
   await expect(page.getByRole("heading", { name: "MCP", exact: true })).toBeVisible();
-  await expect(page.getByRole("region", { name: "Quantgrove MCP", exact: true }).getByRole("status")).toContainText("Service available");
+  await expect(page.getByText("Service available", { exact: true })).toBeVisible();
   await expect(page.getByText("No authorized apps yet")).toBeVisible();
-  await page.getByText("View setup prompt", { exact: true }).click();
-  await expect(page.locator("p[lang]")).toContainText(`Add Quantgrove MCP to Codex using ${base}/mcp`);
-  await expect(page.locator("p[lang]")).not.toContainText(".example");
+  await expect(page.getByRole("textbox", { name: "Setup prompt", exact: true })).toHaveValue(new RegExp(`Add Quantgrove MCP to Codex using ${base.replaceAll(".", "\\.")}/mcp`));
+  await page.getByRole("button", { name: /^Read the authoring reference/ }).click();
+  await page.getByRole("button", { name: "Python SDK", exact: true }).click();
+  await page.getByRole("combobox", { name: "Reference member" }).click();
+  await page.getByRole("option", { name: "Data.history", exact: true }).click();
+  await expect(page.getByText("Data.history(self, field_id, days, *, instruments=None)", { exact: true })).toBeVisible();
+  const consoleReference = await page.request.get(`${base}/api/research/authoring-reference?topic=python_sdk&symbol=Data.history`);
+  expect(consoleReference.status()).toBe(200);
+  const expectedReference: unknown = await consoleReference.json();
   await page.screenshot({ path: testInfo.outputPath("mcp-desktop.png"), fullPage: true, animations: "disabled" });
-  await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  await page.screenshot({ path: testInfo.outputPath("mcp-mobile.png"), fullPage: true, animations: "disabled" });
-  await page.setViewportSize({ width: 1280, height: 960 });
 
   let receive: (url: URL) => void = () => undefined;
   const received = new Promise<URL>(resolve => { receive = resolve; });
@@ -73,13 +77,21 @@ test("MCP product connects an external client through login, consent, discovery 
     expect(tools.status()).toBe(200);
     const listing = await tools.json() as { result: { tools: { name: string }[] } };
     expect(listing.result.tools.some(tool => tool.name === "get_research_context")).toBe(true);
+    expect(listing.result.tools.some(tool => tool.name === "get_authoring_reference")).toBe(true);
     expect(listing.result.tools.some(tool => tool.name === "submit_research_run")).toBe(false);
+    const reference = await external.post(`${base}/mcp`, { headers: { ...headers, "MCP-Protocol-Version": negotiated.result.protocolVersion }, data: {
+      jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "get_authoring_reference", arguments: { topic: "python_sdk", symbol: "Data.history" } },
+    } });
+    expect(reference.status()).toBe(200);
+    const read = await reference.json() as { result: { structuredContent: unknown; isError?: boolean } };
+    expect(read.result.isError).not.toBe(true);
+    expect(read.result.structuredContent).toEqual(expectedReference);
     await page.goto(`${base}/connections/mcp`);
     await expect(page.getByRole("article", { name: "MCP acceptance client" })).toContainText("MCP acceptance client");
     await page.getByRole("button", { name: "Revoke access for MCP acceptance client" }).click();
     await page.getByRole("alertdialog").getByRole("button", { name: "Revoke access", exact: true }).click();
     await expect(page.getByText("No authorized apps yet")).toBeVisible();
-    const rejected = await external.post(`${base}/mcp`, { headers, data: { jsonrpc: "2.0", id: 3, method: "tools/list", params: {} } });
+    const rejected = await external.post(`${base}/mcp`, { headers, data: { jsonrpc: "2.0", id: 4, method: "tools/list", params: {} } });
     expect(rejected.status()).toBe(401);
     expect((await page.request.get(`${base}/api/auth/mcp/connections`, { headers: sameOriginHeaders() })).status()).toBe(200);
   } finally { await external.dispose(); await new Promise<void>((resolve, reject) => callback.close(error => error ? reject(error) : resolve())); }

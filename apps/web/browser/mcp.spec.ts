@@ -2,6 +2,46 @@ import { expect, test } from "@playwright/test";
 import { buildProductFixture } from "./build-product-fixture";
 let fixture: Awaited<ReturnType<typeof buildProductFixture>>;
 test.beforeAll(async () => { fixture = await buildProductFixture(new URL("./fixtures/mcp.tsx", import.meta.url), "McpFixture"); });
+test("MCP authoring reference loads shared docs, recovers errors and preserves selection", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  let failDetail = true;
+  const reads: string[] = [];
+  await page.route("http://mcp.test/**", route => {
+    const url = new URL(route.request().url());
+    if (url.pathname === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    if (url.pathname.endsWith("/connections")) return route.fulfill({ json: { server_url: "https://quantgrove.test/mcp", apps: [] } });
+    if (url.pathname.endsWith("/connection")) return route.fulfill({ json: { checked_at: "2026-10-04T00:00:00Z", tools: [{ name: "get_authoring_reference", description: "Read current reference" }] } });
+    if (!url.pathname.endsWith("/authoring-reference")) return route.fulfill({ status: 404 });
+    expect(route.request().method()).toBe("GET");
+    reads.push(url.search);
+    const topic = url.searchParams.get("topic");
+    const symbol = url.searchParams.get("symbol");
+    if (symbol && failDetail) { failDetail = false; return route.fulfill({ status: 503 }); }
+    return route.fulfill({ json: {
+      topic, title: "Current reference", overview: ["Read the current data and diagnose before submission."], found: true,
+      symbols: topic === "python_sdk" && !symbol ? [{ symbol: "Data.history", description: "Read bounded history." }] : [],
+      entry: symbol ? { symbol, description: "Read through this Close.", signature: "Data.history(self, field_id, days, *, instruments=None)", parameters: { field_id: "Canonical field ID, not a formula identifier." }, returns: "History", notes: ["Missing observations are None."], constraints: {}, data_schema: null, examples: [{ title: "History example", language: "python", source: "prices = data.history('price.close.adjusted', 2)", entrypoint: "Strategy", context: null }] } : null,
+    } });
+  });
+  await page.goto("http://mcp.test/");
+  await page.addStyleTag({ content: fixture.styles });
+  await page.addScriptTag({ content: fixture.script });
+  expect(reads).toHaveLength(0);
+  await page.getByRole("button", { name: /Read the authoring reference/ }).click();
+  await expect(page.getByText("Read the current data and diagnose before submission.")).toBeVisible();
+  await page.getByRole("button", { name: "Python SDK", exact: true }).click();
+  await page.getByRole("combobox", { name: "Reference member" }).click();
+  await page.getByRole("option", { name: "Data.history", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("could not be loaded");
+  await page.getByRole("button", { name: "Retry", exact: true }).click();
+  await expect(page.getByText("Canonical field ID, not a formula identifier.")).toBeVisible();
+  await expect(page.getByText("prices = data.history('price.close.adjusted', 2)", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "简体中文", exact: true }).click();
+  await expect(page.getByRole("combobox", { name: "参考成员" })).toContainText("Data.history");
+  await expect(page.getByText("Missing observations are None.")).toBeVisible();
+  expect(reads.filter(read => read.includes("symbol=Data.history"))).toHaveLength(2);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
 for (const width of [1280, 1440]) {
   test(`MCP nested instructions, copy feedback and revoke recovery at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });

@@ -6,7 +6,7 @@ from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime
 from time import perf_counter_ns
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
 import uvicorn
@@ -92,6 +92,10 @@ from thesistrace.research_agent import (
     create_research_agent_http_transport,
 )
 from thesistrace.research_agent.pagination import ResearchAgentPagination
+from thesistrace.research_authoring.reference_models import (
+    AuthoringReference,
+    AuthoringReferenceQuery,
+)
 from thesistrace.research_batch import (
     ResearchBatchAdmissionCommand,
     ResearchBatchAdmissionConflict,
@@ -535,6 +539,12 @@ def create_app(
         )
 
     install_alpha_http(app, catalog_snapshot=catalog_snapshot)
+
+    @app.get("/api/research/authoring-reference", response_model=AuthoringReference)
+    def get_authoring_reference(
+        request: Request, query: Annotated[AuthoringReferenceQuery, Query()],
+    ) -> AuthoringReference:
+        return _runtime(request).research_authoring.reference(query.topic, query.symbol)
 
     @app.get("/health/live", include_in_schema=False)
     def liveness() -> dict[str, str]:

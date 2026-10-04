@@ -61,6 +61,7 @@ RESEARCH_AGENT_TOOL_OUTCOME_META_KEY = "thesistrace/tool-outcome"
 RESEARCH_AGENT_INSTRUCTIONS = (
     "ThesisTrace performs researcher-owned research and simulated Daily Tracking. "
     "For new research, use available get_research_context/get_alpha_catalog information, "
+    "read get_authoring_reference for unfamiliar Formula syntax or Python SDK members, "
     "then diagnose_research_spec before submit_research_run or submit_research_batch. "
     "Use only tools exposed to this caller. Reuse request_id with identical arguments when "
     "retrying an uncertain submission; use a new request_id for changed research or a new action. "

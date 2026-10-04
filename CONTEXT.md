@@ -90,6 +90,13 @@ _避免混用_: Time-series rank, whole-market rank, Industry Neutralization
 The supported research fields and mathematical operations available when writing an Alpha Formula.
 _避免混用_: All reported financial facts, a submitted Alpha
 
+**Research Authoring Reference**:
+The current, queryable contract for research workflows, Alpha syntax, Python SDK
+members and executable examples, shared by the Console and Research Agent.
+It describes supported authoring; the Alpha Authoring Catalog and Data Overview
+determine current data availability, and admission independently validates each submission.
+_避免混用_: Model training knowledge, data readiness, accepted ResearchRun
+
 **Alpha Identifier**:
 The unambiguous authoring name for a field or mathematical operation in an Alpha Formula.
 _避免混用_: Display label, source statement column

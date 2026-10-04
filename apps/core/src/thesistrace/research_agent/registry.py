@@ -49,6 +49,7 @@ from thesistrace.data.models import DataOverview
 from thesistrace.data.overview import DatasetOverviewTemporarilyUnavailable
 from thesistrace.research_agent.models import (
     AlphaCatalogIdentifiers,
+    AlphaCatalogKind,
     AlphaCatalogView,
     CancelResearchBatchInput,
     CancelResearchBatchOutcome,
@@ -99,6 +100,12 @@ from thesistrace.research_agent.result_pages import (
 from thesistrace.research_agent.safe_context import safe_tool_call_context
 from thesistrace.research_agent.validation import input_issues
 from thesistrace.research_authoring.models import ResearchAuthoringConstraints
+from thesistrace.research_authoring.reference_models import (
+    AuthoringGuide,
+    AuthoringReference,
+    AuthoringReferenceQuery,
+    AuthoringTopic,
+)
 from thesistrace.research_batch import (
     ResearchBatchAdmissionAccepted,
     ResearchBatchAdmissionCommand,
@@ -168,6 +175,12 @@ class AlphaAuthoringLanguage(Protocol):
 
 class ResearchAuthoringReader(Protocol):
     def constraints(self) -> ResearchAuthoringConstraints: ...
+
+    def guide(self) -> AuthoringGuide: ...
+
+    def reference(
+        self, topic: AuthoringTopic = "workflow", symbol: str | None = None,
+    ) -> AuthoringReference: ...
 
 
 class ResearchRunReader(Protocol):
@@ -390,6 +403,7 @@ DESTRUCTIVE_TOOL_ANNOTATIONS = ToolAnnotations(
 RESEARCH_AGENT_TOOL_NAMES = frozenset(
     {
         "get_research_context",
+        "get_authoring_reference",
         "get_alpha_catalog",
         "diagnose_alpha_formula",
         "diagnose_research_spec",
@@ -435,9 +449,12 @@ class ResearchAgentCapabilityRegistry:
             ResearchAgentCapability(
                 name="get_research_context",
                 description=(
-                    "Read Data Overview, authoring constraints, and one folder page. "
-                    "Authoring constraints include the Python SDK import and executable "
-                    "Direct/Framework source templates. "
+                    "Start here when creating or editing research. Read current data readiness, "
+                    "authoring constraints, a documentation guide and one folder page. "
+                    "Read get_authoring_reference for complete formula syntax and Python SDK "
+                    "semantics; use get_alpha_catalog for available fields and functions. "
+                    "Constraints include executable Direct/Framework templates. Diagnose the "
+                    "complete configuration with diagnose_research_spec before submitting. "
                     "Follow folders.next_cursor with folder_cursor; "
                     "folder_limit defaults to 20, at most 50."
                 ),
@@ -448,11 +465,35 @@ class ResearchAgentCapabilityRegistry:
                 handler=self.get_research_context,
             ),
             ResearchAgentCapability(
+                name="get_authoring_reference",
+                description=(
+                    "Read the current authoring contract without creating research or requiring "
+                    "a ready Dataset. topic selects workflow, formula, python_sdk or examples. "
+                    "Omit "
+                    "symbol for the topic overview and member index; pass an exact indexed symbol "
+                    "for its full signature, parameters, behavior, object fields and examples. "
+                    "Unknown symbols return found=false with the index, never guessed APIs. "
+                    "Read relevant entries before writing unfamiliar formulas or Python. "
+                    "Use get_alpha_catalog for currently available fields/functions, then "
+                    "diagnose_research_spec for the complete configuration."
+                ),
+                required_scope=ResearchAgentScope.RESEARCH_READ,
+                input_model=AuthoringReferenceQuery,
+                output_model=AuthoringReference,
+                annotations=READ_ONLY_TOOL_ANNOTATIONS,
+                handler=self.get_authoring_reference,
+            ),
+            ResearchAgentCapability(
                 name="get_alpha_catalog",
                 description=(
-                    "Read one page of Alpha fields then builtins in identifier order, "
-                    "optionally filtered. "
-                    "The combined limit defaults to 20, at most 50. Follow next_cursor with cursor."
+                    "Find available Alpha fields and functions before writing a formula or "
+                    "requesting Python history. Set kind=fields or functions to browse separately; "
+                    "query searches identifiers, field IDs and descriptions by case-insensitive "
+                    "substring. identifiers selects exact names; filters intersect. Fields precede "
+                    "functions in identifier order. The combined limit defaults to 20, at most 50. "
+                    "Follow next_cursor with cursor and unchanged filters. Use field.identifier "
+                    "in formulas and field.field_id in Data.history. Read get_authoring_reference "
+                    "for formula syntax and Python SDK semantics."
                 ),
                 required_scope=ResearchAgentScope.RESEARCH_READ,
                 input_model=GetAlphaCatalogInput,
@@ -919,20 +960,32 @@ class ResearchAgentCapabilityRegistry:
                 build=lambda kept, next_cursor: ResearchContext(
                     data_overview=overview,
                     authoring_constraints=constraints,
+                    authoring_guide=self._modules.research_authoring.guide(),
                     folders=ResearchContextFolders(items=kept, next_cursor=next_cursor),
                 ),
             )
         except InvalidPageCursor as error:
             raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.INVALID_INPUT) from error
 
+    def get_authoring_reference(
+        self, topic: AuthoringTopic = "workflow", symbol: str | None = None,
+    ) -> AuthoringReference:
+        self._require(ResearchAgentScope.RESEARCH_READ)
+        request = AuthoringReferenceQuery(topic=topic, symbol=symbol)
+        return self._modules.research_authoring.reference(request.topic, request.symbol)
+
     def get_alpha_catalog(
         self,
         identifiers: AlphaCatalogIdentifiers | None = None,
         cursor: str | None = None,
         limit: int = 20,
+        kind: AlphaCatalogKind = "all",
+        query: str | None = None,
     ) -> AlphaCatalogView:
         self._require(ResearchAgentScope.RESEARCH_READ)
-        request = GetAlphaCatalogInput(identifiers=identifiers, cursor=cursor, limit=limit)
+        request = GetAlphaCatalogInput(
+            identifiers=identifiers, kind=kind, query=query, cursor=cursor, limit=limit,
+        )
         try:
             overview = self._modules.data_overview.overview()
         except DatasetOverviewTemporarilyUnavailable as error:
@@ -947,11 +1000,16 @@ class ResearchAgentCapabilityRegistry:
         ]
         known = {item.identifier for item in entries}
         requested = None if request.identifiers is None else set(request.identifiers)
-        selected = (
-            entries
-            if requested is None
-            else [item for item in entries if item.identifier in requested]
-        )
+        selected = [
+            item for item in entries
+            if (requested is None or item.identifier in requested)
+            and (request.kind == "all"
+                 or (request.kind == "fields" and isinstance(item, AlphaFieldCatalogEntry))
+                 or (request.kind == "functions" and isinstance(item, AlphaBuiltinCatalogEntry)))
+            and (request.query is None or request.query in " ".join(
+                value for value in item.model_dump().values() if isinstance(value, str)
+            ).casefold())
+        ]
         unknown = [] if requested is None else sorted(requested - known)
         try:
             return self._modules.pagination.page(
@@ -960,6 +1018,8 @@ class ResearchAgentCapabilityRegistry:
                 query={
                     "tool": "get_alpha_catalog",
                     "identifiers": None if requested is None else sorted(requested),
+                    "kind": request.kind,
+                    "query": request.query,
                     "catalog": hashlib.sha256(
                         catalog.model_dump_json().encode("utf-8")
                     ).hexdigest(),

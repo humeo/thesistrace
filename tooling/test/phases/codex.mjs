@@ -5,9 +5,14 @@ export async function codex(run) {
     try { await run.exec('codex', ['--ask-for-approval', 'never', 'exec', '--help'], { quiet: true }); }
     catch (error) { throw new CommandError(error.code === 'ENOENT' ? 'real Codex acceptance requires the Codex CLI' : 'real Codex acceptance requires the supported noninteractive CLI contract', 1); }
   });
-  await run.phase('codex-mcp-infrastructure', () => run.compose(['up', '--detach', '--wait', '--wait-timeout', '300', 'postgres', 'rustfs']));
-  await run.updatePorts('postgres', 'rustfs');
-  run.record({ postgres_port: run.postgres_port, s3_port: run.s3_port });
+  await run.phase('codex-mcp-infrastructure', () => run.compose(['up', '--detach', '--wait', '--wait-timeout', '300', 'postgres', 'rustfs', 'resend-fake']));
+  await run.phase('codex-mcp-auth-initialization', () => run.compose(['up', '--detach', 'auth-initialize']));
+  await run.phase('codex-mcp-auth-initializer-exit', () => run.compose(['wait', 'auth-initialize']));
+  await run.phase('codex-mcp-auth', () => run.compose(['up', '--detach', '--wait', '--wait-timeout', '120', 'auth']));
+  await run.updatePorts('postgres', 'rustfs', 'auth', 'resend-fake');
+  run.auth_internal_origin = `http://127.0.0.1:${run.auth_port}`;
+  run.resend_test_origin = `http://127.0.0.1:${run.resend_port}`;
+  run.record({ postgres_port: run.postgres_port, s3_port: run.s3_port, auth_port: run.auth_port });
   await run.phase('codex-mcp-initialization', () => run.host(['uv', 'run', 'thesistrace-initialize']));
   const evidence = `${run.evidence_dir}/codex-stdio-acceptance.json`;
   await run.phase('codex-mcp-acceptance', () => run.host(['uv', 'run', 'pytest', '-c', `${run.repo_root}/apps/core/pyproject.toml`, '--rootdir', run.repo_root, '-q', 'apps/core/tests/acceptance/test_real_codex_research_agent_mcp.py', '-m', 'real_codex'], { env: { THESISTRACE_REAL_CODEX_EVIDENCE_PATH: evidence } }));
