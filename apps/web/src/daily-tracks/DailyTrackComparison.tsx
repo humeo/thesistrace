@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ColorType, LineSeries, createChart, type Time } from "lightweight-charts";
+import { ColorType, LineSeries, createChart, type IChartApi, type Time } from "lightweight-charts";
 import { coreFetch } from "../auth/coreFetch";
 import { chartTheme } from "../analysis/chartTheme";
 import { interfaceLocale } from "../i18n";
@@ -83,41 +83,54 @@ export function DailyTrackComparison({ items, revision }: { items: readonly Dail
 function ComparisonChart({ curves, loading }: { curves: Curve[]; loading: boolean }) {
   const { t, i18n } = useTranslation("daily");
   const container = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<IChartApi | null>(null);
   const [hidden, setHidden] = useState<string[]>([]);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<{ time: string; values: { id: string; value: number }[] } | null>(null);
   const plotted = curves.filter(curve => curve.points.length >= 2 && !hidden.includes(curve.id));
   const allHidden = plotted.length === 0 && curves.some(curve => curve.points.length >= 2);
-  const signature = JSON.stringify(plotted);
+  // Names are presentation, including translated fallback labels. Only chart
+  // data and series colors determine the lifetime of the canvas.
+  const signature = JSON.stringify(plotted.map(curve => ({
+    id: curve.id, points: curve.points, colorIndex: curves.findIndex(value => value.id === curve.id),
+  })));
   useEffect(() => {
     setSelected(null);
     if (!container.current || !plotted.length) return;
     const theme = chartTheme(container.current);
     const chart = createChart(container.current, { autoSize: true, height: 280, layout: { background: { type: ColorType.Solid, color: theme.background }, textColor: theme.text, attributionLogo: false }, grid: { vertLines: { color: theme.grid }, horzLines: { color: theme.grid } }, rightPriceScale: { borderColor: theme.border }, timeScale: { borderColor: theme.border }, localization: { locale: interfaceLocale(), priceFormatter: (value: number) => formatReturn(value) } });
+    chartRef.current = chart;
     const styles = getComputedStyle(container.current);
     const colors = Array.from({ length: 5 }, (_, index) => styles.getPropertyValue(`--chart-${index + 1}`).trim());
     const lines = plotted.map(curve => {
       const colorIndex = curves.findIndex(value => value.id === curve.id);
       const line = chart.addSeries(LineSeries, { color: colors[colorIndex % colors.length], lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
       line.setData(curve.points.map(point => ({ time: point.session as Time, value: point.value })));
-      return { line, name: curve.name };
+      return { line, id: curve.id };
     });
     chart.timeScale().fitContent();
     chart.subscribeCrosshairMove(event => {
       if (!event.time) { setSelected(null); return; }
-      const values = lines.flatMap(({ line, name }) => {
+      const values = lines.flatMap(({ line, id }) => {
         const row = event.seriesData.get(line);
-        return row && "value" in row ? [`${name} ${formatReturn(row.value)}`] : [];
+        return row && "value" in row ? [{ id, value: row.value }] : [];
       });
-      setSelected(`${event.time} · ${values.join(" · ")}`);
+      setSelected({ time: String(event.time), values });
     });
-    return () => chart.remove();
+    return () => { chart.remove(); chartRef.current = null; };
   // The serialized curves keep the canvas stable across unrelated state updates.
+  }, [signature]);
+  useEffect(() => {
+    chartRef.current?.applyOptions({ localization: {
+      locale: interfaceLocale(), priceFormatter: (value: number) => formatReturn(value),
+    } });
   }, [signature, i18n.language]);
+  const readout = selected ? `${selected.time} · ${selected.values.map(({ id, value }) =>
+    `${curves.find(curve => curve.id === id)?.name} ${formatReturn(value)}`).join(" · ")}` : t("comparisonHint");
   return <figure aria-label={t("comparisonChart")} className="m-0 grid min-w-0 gap-4">
     {plotted.length ? <div ref={container} className="min-w-0 overflow-hidden" /> : <Empty><EmptyHeader><EmptyTitle>{t(allHidden ? "curvesHidden" : "compareEmpty")}</EmptyTitle><EmptyDescription>{t(allHidden ? "showCurves" : loading ? "compareLoading" : "compareEmptyDescription")}</EmptyDescription></EmptyHeader></Empty>}
     <ToggleGroup variant="chart" multiple value={curves.filter(curve => !hidden.includes(curve.id)).map(curve => curve.id)} onValueChange={values => setHidden(curves.filter(curve => !values.includes(curve.id)).map(curve => curve.id))} aria-label={t("visibleStrategies")} className="flex-wrap justify-start">
       {curves.map((curve, index) => <ToggleGroupItem key={curve.id} value={curve.id}><span aria-hidden="true" className="size-2 rounded-full" style={{ background: `var(--chart-${index % 5 + 1})` }} />{curve.name}</ToggleGroupItem>)}
     </ToggleGroup>
-    <p aria-live="polite" className="m-0 min-h-5 text-xs text-muted-foreground">{selected ?? t("comparisonHint")}</p>
+    <p aria-live="polite" className="m-0 min-h-5 text-xs text-muted-foreground">{readout}</p>
   </figure>;
 }

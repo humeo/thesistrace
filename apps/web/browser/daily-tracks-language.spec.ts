@@ -9,6 +9,55 @@ test.beforeAll(async () => {
   ({ script, styles } = await buildProductFixture(new URL("./fixtures/daily-tracks-language.tsx", import.meta.url), "DailyLanguage"));
 });
 
+test("comparison language changes preserve zoom, canvas and translated fallback names without rereading data", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  const value = structuredClone(track);
+  value.observation.returns = Array.from({ length: 300 }, (_, index) => ({
+    session: new Date(Date.UTC(2025, 0, 1 + index)).toISOString().slice(0, 10),
+    net_return: index / 1000,
+  }));
+  let reads = 0;
+  await page.route("https://daily-compare-language.test/**", route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    reads += 1;
+    if (path === "/api/daily-tracks") return route.fulfill({ json: { items: [{ id: "track_ui", status: "active", seed_run_id: "run_origin", origin_session: "2025-01-01", strategy_session: "2025-10-27" }], next_cursor: null } });
+    if (path.startsWith("/api/research-runs/")) return route.fulfill({ status: 503 });
+    return route.fulfill({ json: value });
+  });
+  await page.goto("https://daily-compare-language.test/?list");
+  await page.addStyleTag({ content: styles });
+  await page.addScriptTag({ content: script });
+  const chart = page.getByRole("figure", { name: /Strategy comparison chart|策略比较曲线/ });
+  const canvases = chart.locator("canvas");
+  await expect(canvases.first()).toBeVisible();
+  const plot = canvases.nth(await canvases.evaluateAll(elements => elements.reduce((largest, element, index) => element.clientWidth > elements[largest].clientWidth ? index : largest, 0)));
+  const original = await plot.elementHandle();
+  await plot.scrollIntoViewIfNeeded();
+  async function observation(ratio: number) {
+    const bounds = (await plot.boundingBox())!;
+    await page.mouse.move(bounds.x + bounds.width * ratio - 3, bounds.y + 100);
+    await page.mouse.move(bounds.x + bounds.width * ratio, bounds.y + 100);
+    const footer = chart.locator("p[aria-live]");
+    await expect(footer).toContainText("%");
+    return (await footer.innerText()).match(/\d{4}-\d{2}-\d{2}|-?[\d.]+%/g);
+  }
+  const initial = await observation(0.7);
+  await observation(0.3);
+  await page.mouse.wheel(0, -600);
+  await expect.poll(() => observation(0.7)).not.toEqual(initial);
+  const before = [await observation(0.3), await observation(0.5), await observation(0.7)];
+  const readsBefore = reads;
+  await page.getByRole("button", { name: "简体中文", exact: true }).click();
+  await expect(chart).toHaveAttribute("aria-label", "策略比较曲线");
+  expect(await original!.evaluate(element => element.isConnected)).toBe(true);
+  expect([await observation(0.3), await observation(0.5), await observation(0.7)]).toEqual(before);
+  await expect(chart.locator("p[aria-live]")).toContainText("每日跟踪 ui");
+  await page.getByRole("button", { name: "English", exact: true }).click();
+  expect([await observation(0.3), await observation(0.5), await observation(0.7)]).toEqual(before);
+  expect(reads).toBe(readsBefore);
+});
+
 async function open(page: Page, value = track) {
   let reads = 0;
   let mutations = 0;
