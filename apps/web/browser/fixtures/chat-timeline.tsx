@@ -105,7 +105,7 @@ function TimelineFixture() {
       <button onClick={() => respond("Hello. How can I help?")}>Short reply</button>
       <button onClick={() => respond("**数据截至：**2026-08-27\n\n`**原文：**保持`", true)}>CJK reply</button>
       <button onClick={() => respond("Hello. How can I help?", true)}>Finish reply</button>
-      <button onClick={() => respond("First **paragraph**.\n\nSecond paragraph.\n\n### Section\n\nSection content.\n\n- First item\n- Second item\n\n## Summary\n\nSummary content.", true)}>Typography reply</button>
+      <button onClick={() => respond("First **paragraph** with `研究区间`.\n\nSecond paragraph.\n\n### Section\n\nSection content.\n\n- First item\n- Second item\n\n## Summary\n\nSummary content.\n\n| 阅读位置 | 核心问题 | 变化 |\n| --- | --- | ---: |\n| 方法与结果 | 证据是否支持假设？ | +12.5% |\n| 局限与结论 | 结论适用边界在哪？`research_reference_0123456789abcdefghijklmnopqrstuvwxyz` | -3.2% |", true)}>Typography reply</button>
       <button onClick={() => respond("[X](/research-runs/run_0123456789abcdef0123)", true)}>Run link reply</button>
       <button onClick={() => respond("A longer streamed paragraph.\n\n".repeat(++streamedParagraphs.current))}>Long reply</button></nav>
     <ChatTestProvider controller={controller}><ChatConversationView controller={{ ...controller, action: { enabled: false, kind: "send", label: "Send" }, queue: [], error: null, errorCode: null, draft: "", draftBytes: 0, textareaRef: { current: null }, setDraft: () => {} }} existingSession agentId="default" threadId="fixture" modelControls={null} /></ChatTestProvider><Toaster />

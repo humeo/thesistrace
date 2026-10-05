@@ -18,7 +18,9 @@ export function chatViewMessages(turns: readonly TimelineTurn[]): ChatViewMessag
     const process = entries.filter((entry, index) => entry.kind === "tool_activity"
       || entry.kind === "question" && entry.payload.status !== "pending"
       || entry.kind === "user_input" && entry.payload.source === "answer"
-      || entry.kind === "assistant_message" && !entry.payload.recovery && (index < lastTool || !ended && lastTool >= 0));
+      // Text after the latest tool is already the visible reply. Keep it in
+      // the same message while streaming and when the turn completes.
+      || entry.kind === "assistant_message" && !entry.payload.recovery && index < lastTool);
     const processIds = new Set(process.map(entry => entry.entry_id));
     const result = entries.filter(entry => !processIds.has(entry.entry_id));
     const firstResponse = result.findIndex(entry => entry.kind !== "user_input");

@@ -156,7 +156,7 @@ test.each([
   const currentTurn = turn(status);
   const markup = renderToStaticMarkup(
     <SessionHistoryList
-      controller={{ ...sessionHistory, sessions: [session({ current_turn: currentTurn, latest_turn: currentTurn })] }}
+      controller={{ ...sessionHistory, sessions: [session({ message_title: null, current_turn: currentTurn, latest_turn: currentTurn })] }}
       currentSessionId={null}
       navigate={vi.fn()}
       navigationInteractive
@@ -181,6 +181,7 @@ function session(overrides: Partial<AgentSessionSummary> = {}): AgentSessionSumm
   return {
     activity_at: "2026-08-30T04:00:00.000000Z",
     created_at: "2026-08-29T04:00:00.000000Z",
+    message_title: null,
     current_turn: null,
     id: "00000000-0000-4000-8000-000000000001",
     latest_turn: null,

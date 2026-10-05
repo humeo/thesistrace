@@ -5,14 +5,16 @@ import { i18n } from "../i18n";
 import type { ChatErrorKey } from "../i18n/messages/chat";
 
 import { formatChatAnswer, isChatAnswer, type ChatAnswer } from "@thesistrace/contracts/chat-answer";
+import { CHAT_TIMELINE_UPDATE } from "@thesistrace/contracts/chat-events";
 
 import type { AgentSessionSummary } from "./sessionHistory";
-import { loadAgentSession } from "./sessionHistory";
+import { decodeAgentSessionSummary, loadAgentSession } from "./sessionHistory";
 import {
   ChatApiError,
   ChatCommandAcceptanceUnknownError,
   loadCommandReceipt,
   loadTimelinePage,
+  decodeTimelinePage,
   steerChat,
   stopChat,
   type ChatCommandReceipt,
@@ -141,6 +143,8 @@ export function useChatConversation(options: Readonly<{
   const watchedTitlesRef = useRef(new Set<string>());
   const timelineInitializedRef = useRef(false);
   const timelineLoadRef = useRef<TimelineLoadState | null>(null);
+  const streamRevisionRef = useRef(0);
+  const streamedTurnsRef = useRef(new Map<string, number>());
   const tabIdRef = useRef(crypto.randomUUID());
   sessionRef.current = session;
   selectionRef.current = options.selection;
@@ -258,10 +262,13 @@ export function useChatConversation(options: Readonly<{
       let requestSignal = signal;
       do {
         load.rerun = false;
+        const revision = streamRevisionRef.current;
         try {
           const page = await loadTimelinePage(options.threadId, undefined, requestSignal);
           if (generationRef.current !== generation) return;
-          setTurns((current) => mergeLatestTurns(current, page.turns));
+          // An HTTP read started before a live update cannot roll that Turn back.
+          setTurns((current) => mergeLatestTurns(current, page.turns.filter(turn =>
+            (streamedTurnsRef.current.get(turn.id) ?? 0) <= revision)));
           if (!timelineInitializedRef.current) {
             timelineInitializedRef.current = true;
             setNextCursor(page.next_cursor);
@@ -415,18 +422,40 @@ export function useChatConversation(options: Readonly<{
 
   const refresh = useCallback(async () => {
     const generation = generationRef.current;
+    const revision = streamRevisionRef.current;
     if (!sessionEstablishedRef.current && !options.existingSession) return;
     try {
       const next = await loadAgentSession(options.threadId);
       await loadLatestTimeline();
       if (generationRef.current !== generation) return;
-      observeSession(next, generation);
+      if (streamRevisionRef.current === revision) observeSession(next, generation);
       setOpening(false);
     } catch (failure) {
       if (failure instanceof DOMException && failure.name === "AbortError") return;
       setError("stateRefresh");
     }
   }, [loadLatestTimeline, observeSession, options.existingSession, options.threadId]);
+
+  useEffect(() => {
+    const subscription = options.agent.subscribe({ onCustomEvent: ({ event }) => {
+      if (event.name === "session_recovery_changed") { void loadLatestTimeline(); return; }
+      if (event.name !== CHAT_TIMELINE_UPDATE) return;
+      try {
+        const value = event.value as { session?: unknown; timeline?: unknown };
+        const next = decodeAgentSessionSummary(value.session);
+        const page = decodeTimelinePage(value.timeline);
+        if (next.id !== options.threadId || page.next_cursor !== null || page.turns.length !== 1
+          || page.turns[0]!.id !== next.latest_turn?.id) throw new ChatApiError("INVALID_CHAT_RESPONSE", 500);
+        const revision = ++streamRevisionRef.current;
+        streamedTurnsRef.current.set(page.turns[0]!.id, revision);
+        setTurns(current => mergeLatestTurns(current, page.turns));
+        observeSession(next);
+        setOpening(false);
+        setLatestTimelineError(false);
+      } catch { setLatestTimelineError(true); }
+    } });
+    return () => subscription.unsubscribe();
+  }, [loadLatestTimeline, observeSession, options.agent, options.threadId]);
 
   async function settleAcceptedInput(
     commandId: string,
@@ -571,10 +600,6 @@ export function useChatConversation(options: Readonly<{
       },
       onRunFailed: () => { void loadLatestTimeline(); },
       onRunFinishedEvent: () => { void refresh(); },
-      onCustomEvent: ({ event }) => { if (event.name === "session_recovery_changed") void loadLatestTimeline(); },
-      onTextMessageContentEvent: () => { void loadLatestTimeline(); },
-      onToolCallStartEvent: () => { void loadLatestTimeline(); },
-      onToolCallResultEvent: () => { void loadLatestTimeline(); },
     };
     try {
       await options.agent.runAgent({
@@ -638,8 +663,6 @@ export function useChatConversation(options: Readonly<{
         },
         onRunFinishedEvent: () => { void refresh(); },
         onRunErrorEvent: () => { if (!accepted) authoritativeRejection = true; void refresh(); },
-        onCustomEvent: ({ event }) => { if (event.name === "session_recovery_changed") void loadLatestTimeline(); },
-        onTextMessageContentEvent: () => { void loadLatestTimeline(); },
       });
     } catch {
       // Reconcile by command id below.
@@ -694,9 +717,6 @@ export function useChatConversation(options: Readonly<{
         onRunStartedEvent: () => { reconcileOnce(); },
         onRunFinishedEvent: () => { reconcileOnce(true); void refresh(); },
         onRunErrorEvent: () => { reconcileOnce(true); void refresh(); },
-        onCustomEvent: ({ event }) => { if (event.name === "session_recovery_changed") void loadLatestTimeline(); },
-        onTextMessageContentEvent: () => { reconcileOnce(); void loadLatestTimeline(); },
-        onToolCallStartEvent: () => { reconcileOnce(); void loadLatestTimeline(); },
       });
     } catch {
       // Reconcile below.
@@ -925,6 +945,8 @@ export function useChatConversation(options: Readonly<{
     setSubmittingQuestion(null);
     stopInFlightRef.current = false;
     setTurns([]);
+    streamRevisionRef.current = 0;
+    streamedTurnsRef.current.clear();
     timelineInitializedRef.current = false;
     setNextCursor(null);
     setLatestTimelineError(false);
@@ -934,6 +956,7 @@ export function useChatConversation(options: Readonly<{
     setStageWriting(false);
     const controller = new AbortController();
     const generation = generationRef.current;
+    const revision = streamRevisionRef.current;
     void loadQueue();
     if (options.existingSession) {
       void Promise.all([
@@ -941,7 +964,7 @@ export function useChatConversation(options: Readonly<{
         loadLatestTimeline(controller.signal),
       ]).then(([next]) => {
         if (generationRef.current !== generation) return;
-        observeSession(next, generation);
+        if (streamRevisionRef.current === revision) observeSession(next, generation);
         setOpening(false);
       }).catch((failure: unknown) => {
         if (generationRef.current !== generation) return;
@@ -970,13 +993,14 @@ export function useChatConversation(options: Readonly<{
     const controller = new AbortController();
     let requestInFlight = false;
     const poll = () => {
-      if (requestInFlight || controller.signal.aborted) return;
+      if (requestInFlight || controller.signal.aborted || runInFlightRef.current || options.agent.isRunning) return;
       requestInFlight = true;
       const generation = generationRef.current;
+      const revision = streamRevisionRef.current;
       const previous = sessionRef.current;
       void loadAgentSession(options.threadId, controller.signal)
         .then(async (next) => {
-          if (generationRef.current !== generation) return;
+          if (generationRef.current !== generation || streamRevisionRef.current !== revision) return;
           const status = next.current_turn?.status;
           const timelineChanged = (
             status === "running"
@@ -1014,7 +1038,7 @@ export function useChatConversation(options: Readonly<{
       controller.abort();
       window.clearInterval(interval);
     };
-  }, [loadLatestTimeline, observeSession, options.threadId, session?.id]);
+  }, [loadLatestTimeline, observeSession, options.agent, options.threadId, session?.id]);
 
   const latestTurnStatus = session?.latest_turn?.status ?? null;
   const latestTurnId = session?.latest_turn?.id ?? null;
@@ -1060,9 +1084,12 @@ export function mergeLatestTurns(
   current: readonly TimelineTurn[],
   latest: readonly TimelineTurn[],
 ): readonly TimelineTurn[] {
-  const latestIds = new Set(latest.map((turn) => turn.id));
-  const older = current.filter((turn) => !latestIds.has(turn.id));
-  return [...older, ...latest];
+  const turns = new Map(current.map(turn => [turn.id, turn]));
+  for (const turn of latest) turns.set(turn.id, turn);
+  // Match the API's (started_at, id) order even when a delayed HTTP page
+  // omits the live turn. Canonical UTC strings retain database microseconds.
+  return [...turns.values()].sort((left, right) =>
+    left.started_at.localeCompare(right.started_at) || left.id.localeCompare(right.id));
 }
 
 export function prependOlderTurns(

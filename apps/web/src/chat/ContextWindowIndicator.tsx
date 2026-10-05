@@ -1,4 +1,4 @@
-import { Button, Flex, Progress, Tooltip } from "antd";
+import { Flex, Progress, Tooltip, Typography, theme } from "antd";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { contextWindowSnapshotSchema, type ContextWindowSnapshot } from "@thesistrace/contracts/context-window";
@@ -19,6 +19,7 @@ export async function loadContextWindow(modelKey: string, threadId: string | nul
 
 export function ContextWindowIndicator({ modelKey, threadId }: { modelKey: string; threadId: string | null }) {
   const { t } = useTranslation("chat");
+  const { token } = theme.useToken();
   const [open, setOpen] = useState(false);
   const identity = `${modelKey}:${threadId ?? "new"}`;
   const [state, setState] = useState<SnapshotState>({ identity, status: "loading" });
@@ -45,7 +46,7 @@ export function ContextWindowIndicator({ modelKey, threadId }: { modelKey: strin
     : current.status === "unavailable" ? "contextWindow.unavailable" : "contextWindow.unmeasured")
     : t("contextWindow.percent", { used: percent, left: Math.max(0, 100 - percent) });
   const compact = (value: number) => new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(value).replace("K", "k");
-  return <Tooltip placement="top" trigger={["hover", "focus", "click"]} open={open} onOpenChange={setOpen}
+  return <Tooltip placement="top" trigger={["hover", "focus"]} open={open} onOpenChange={setOpen}
     title={<Flex vertical align="center" gap={4} style={{ textAlign: "center" }}>
       <span>{t("contextWindow.title")}</span>
       <span>{summary}</span>
@@ -53,11 +54,12 @@ export function ContextWindowIndicator({ modelKey, threadId }: { modelKey: strin
       {percent !== null ? <><span style={{ fontSize: 12, opacity: .7 }}>{t("contextWindow.estimate")}</span>
         <span style={{ fontSize: 12, opacity: .7 }}>{new Date(snapshot!.measured_at!).toLocaleString()}</span></> : null}
     </Flex>}>
-    <Button type="text" aria-label={`${t("contextWindow.title")}：${summary}`}
+    <Typography.Text type="secondary" tabIndex={0} aria-label={`${t("contextWindow.title")}：${summary}`}
       onKeyDown={event => { if (event.key === "Escape") setOpen(false); }}
-      style={{ width: 28, height: 32, padding: 3 }}>
-      <Progress type="circle" size={20} strokeWidth={14} showInfo={false} status="normal"
-        percent={Math.min(100, percent ?? 0)} strokeColor="currentColor" aria-hidden="true" />
-    </Button>
+      style={{ display: "inline-flex", alignItems: "center", height: 32, paddingInline: 4 }}>
+      <Progress type="circle" size={14} strokeWidth={16} showInfo={false} status="normal"
+        percent={Math.min(100, percent ?? 0)} strokeColor={token.colorTextSecondary}
+        railColor={token.colorTextTertiary} aria-hidden="true" />
+    </Typography.Text>
   </Tooltip>;
 }

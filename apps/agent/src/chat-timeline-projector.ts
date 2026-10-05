@@ -21,9 +21,12 @@ type AssistantBuffer = {
  * enter this boundary.
  */
 export class ChatTimelineProjector {
+  private savedRevision = 0;
   private readonly assistants = new Map<string, AssistantBuffer>();
   private readonly persistedMessageIds = new Set<string>();
   private readonly tools = new Map<string, string>();
+
+  get revision(): number { return this.savedRevision; }
 
   constructor(
     private readonly repository: ResearchSessionRepository,
@@ -32,9 +35,6 @@ export class ChatTimelineProjector {
   ) {}
 
   async project(event: BaseEvent): Promise<void> {
-    if (
-      event.type === EventType.TEXT_MESSAGE_CHUNK
-      || event.type === EventType.TEXT_MESSAGE_CONTENT
     if (event.type === EventType.CUSTOM && event.name === "provider_retry") {
       const value = event.value as { runId?: unknown; messageId?: unknown } | undefined;
       if (value?.runId !== this.runId || typeof value.messageId !== "string") return;
@@ -47,6 +47,9 @@ export class ChatTimelineProjector {
       }
       return;
     }
+    if (
+      event.type === EventType.TEXT_MESSAGE_CHUNK
+      || event.type === EventType.TEXT_MESSAGE_CONTENT
     ) {
       if (typeof event.messageId !== "string" || typeof event.delta !== "string") return;
       const buffer = this.assistants.get(event.messageId) ?? {
@@ -96,6 +99,7 @@ export class ChatTimelineProjector {
         event.toolCallName,
         "running",
       );
+      this.savedRevision++;
       return;
     }
 
@@ -112,6 +116,7 @@ export class ChatTimelineProjector {
           name,
           result?.outcome === "failed" ? "failed" : "complete",
         );
+        this.savedRevision++;
         this.tools.delete(event.toolCallId);
       }
       return;
@@ -146,5 +151,6 @@ export class ChatTimelineProjector {
     );
     buffer.lastFlushAt = Date.now();
     buffer.persistedBytes = Buffer.byteLength(buffer.content, "utf8");
+    this.savedRevision++;
   }
 }

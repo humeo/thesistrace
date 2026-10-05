@@ -9,6 +9,7 @@ import {
 import { EventType, type BaseEvent } from "@ag-ui/core";
 import {
   Observable,
+  Subject,
   catchError,
   concat,
   concatMap,
@@ -27,6 +28,8 @@ import {
 import { safeBrowserMessages } from "./browser-message-safety.js";
 import { chatCommandFingerprint } from "./chat-request.js";
 import { ChatTimelineProjector } from "./chat-timeline-projector.js";
+import { CHAT_TIMELINE_UPDATE } from "@thesistrace/contracts/chat-events";
+import { sessionResponse, timelineResponse } from "./chat-state-response.js";
 import {
   SessionActiveRunError,
   type ResearchSessionRepository,
@@ -73,6 +76,11 @@ export class DurableResearchAgentRunner extends AgentRunner {
     if (this.active.size >= MAX_ACTIVE_AGENT_RUNS) {
       return of(runFailureEvent("AGENT_CAPACITY"));
     }
+    // CopilotKit forwards authenticated request headers onto its Agent clone.
+    // Capture identity before ResearchMastraAgent clears provider headers.
+    const researcherId = (request.agent as typeof request.agent & {
+      headers?: Record<string, string>;
+    }).headers?.[RESEARCHER_ID_HEADER];
 
     let accepted: Observable<BaseEvent>;
     try {
@@ -92,10 +100,15 @@ export class DurableResearchAgentRunner extends AgentRunner {
       request.input.runId,
     );
     let presentationFailed = false;
+    let runAccepted = false;
+    let latestState: BaseEvent | null = null;
+    const liveStates = new Subject<BaseEvent>();
     const source = accepted.pipe(
       concatMap((event) => defer(async () => {
         if (presentationFailed) return [];
+        const revision = timeline.revision;
         await timeline.project(event);
+        if (event.type === EventType.RUN_STARTED) runAccepted = true;
         const batch = a2ui.project(event);
         for (const activity of batch.activities) {
           await this.repository.persistA2UIActivity({
@@ -117,6 +130,20 @@ export class DurableResearchAgentRunner extends AgentRunner {
             type: EventType.MESSAGES_SNAPSHOT,
           });
         }
+        if (runAccepted && researcherId !== undefined && (
+          timeline.revision !== revision || batch.activities.length > 0
+          || event.type === EventType.RUN_STARTED || event.type === EventType.RUN_FINISHED || event.type === EventType.RUN_ERROR
+          || event.type === EventType.CUSTOM && event.name === "session_recovery_changed"
+        )) {
+          const [session, page] = await Promise.all([
+            this.repository.session(request.threadId, researcherId),
+            this.repository.timeline(request.threadId, researcherId, undefined, 1),
+          ]);
+          const savedState: BaseEvent = { type: EventType.CUSTOM, name: CHAT_TIMELINE_UPDATE,
+            value: { session: sessionResponse(session), timeline: timelineResponse({ ...page, nextCursor: null }) } };
+          if (event.type === EventType.RUN_FINISHED || event.type === EventType.RUN_ERROR) events.unshift(savedState);
+          else events.push(savedState);
+        }
         return events;
       }).pipe(
         catchError(() => {
@@ -130,13 +157,34 @@ export class DurableResearchAgentRunner extends AgentRunner {
       )),
       catchError(() => of(safeConnectionError())),
     );
-    const events = source.pipe(
+    const nativeEvents = source.pipe(
       tap({
+        next: (event) => {
+          if (event.type === EventType.CUSTOM && event.name === CHAT_TIMELINE_UPDATE) {
+            latestState = event;
+            liveStates.next(event);
+          }
+        },
         complete: () => this.removeActive(request.threadId, request.input.runId),
         error: () => this.removeActive(request.threadId, request.input.runId),
       }),
+      // Replaying every growing Turn snapshot would retain quadratic amounts
+      // of text. Cache native deltas and only the latest persisted UI state.
+      filter((event) => !(event.type === EventType.CUSTOM && event.name === CHAT_TIMELINE_UPDATE)),
       shareReplay({ bufferSize: Number.POSITIVE_INFINITY, refCount: false }),
     );
+    const events = new Observable<BaseEvent>((subscriber) => {
+      const states = liveStates.subscribe((event) => subscriber.next(event));
+      const native = nativeEvents.subscribe({
+        next: (event) => {
+          subscriber.next(event);
+          if (event.type === EventType.RUN_STARTED && latestState !== null) subscriber.next(latestState);
+        },
+        error: (error) => subscriber.error(error),
+        complete: () => subscriber.complete(),
+      });
+      return () => { states.unsubscribe(); native.unsubscribe(); };
+    });
     this.active.set(request.threadId, {
       events,
       fingerprint,

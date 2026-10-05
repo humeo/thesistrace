@@ -116,6 +116,7 @@ function ResourceRow({ kind, id }: { kind: "run" | "track"; id: string }) {
     },
   });
   const snapshot = data?.snapshot;
+  const readAt = snapshot ? formatTimestamp(snapshot.loadedAt, { year: "numeric", month: "2-digit", day: "2-digit", hour: "numeric", minute: "2-digit" }) : "";
   const errorCode = data?.errorCode ?? error?.code;
   const resource = snapshot?.resource;
   const title = resource?.kind === "run" ? resource.value.name : resource?.kind === "track" ? i18n.t("daily:track") : id;
@@ -127,8 +128,8 @@ function ResourceRow({ kind, id }: { kind: "run" | "track"; id: string }) {
             {resource ? <ResourceStatus resource={resource} /> : null}
           </Flex>
           <Space size="small">
-            {snapshot ? <Tooltip title={<Trans i18nKey="a2ui.readAt" ns="chat" values={{ time: formatTimestamp(snapshot.loadedAt, { hour: "numeric", minute: "2-digit" }) }} components={{ time: <span /> }} />}>
-              <Typography.Text type="secondary"><time dateTime={snapshot.loadedAt}>{formatTimestamp(snapshot.loadedAt, { hour: "numeric", minute: "2-digit" })}</time></Typography.Text>
+            {snapshot ? <Tooltip title={<Trans i18nKey="a2ui.readAt" ns="chat" values={{ time: readAt }} components={{ time: <span /> }} />}>
+              <Typography.Text type="secondary"><time dateTime={snapshot.loadedAt}>{t("a2ui.readTime", { time: readAt })}</time></Typography.Text>
             </Tooltip> : null}
             <Tooltip title={t("a2ui.reload")}><Button type="text" size="small" loading={loading}
               icon={<ArrowClockwiseIcon size={16} />} aria-label={`${t("a2ui.reload")}: ${title}`}

@@ -6,6 +6,7 @@ import type { ChatErrorKey } from "../i18n/messages/chat";
 import {
   AgentSessionInvalidError,
   AgentSessionNotFoundError,
+  AgentSessionUnavailableError,
   appendAgentSessionPage,
   deleteAgentSession,
   loadAgentSession,
@@ -394,7 +395,7 @@ function linkedAbortController(parentSignal?: AbortSignal): Readonly<{
 export type SelectedSessionState =
   | Readonly<{ status: "not-required" }>
   | Readonly<{ status: "loading" }>
-  | Readonly<{ session: AgentSessionSummary; status: "ready" }>
+  | Readonly<{ session: AgentSessionSummary; status: "ready"; refreshFailed?: boolean }>
   | Readonly<{ status: "not-found" }>
   | Readonly<{ status: "invalid" }>
   | Readonly<{ status: "unavailable" }>;
@@ -423,13 +424,13 @@ export function useSelectedSession(
       setOwned({ key: selectionKey, state: { session: listed, status: "ready" } });
       return;
     }
-    if (historyStatus === "loading") {
-      setOwned({ key: selectionKey, state: { status: "loading" } });
-      return;
-    }
+    // A background refresh must not unmount an already opened conversation.
+    // Changing identity still clears the old session immediately.
+    setOwned(current => current.key === selectionKey && current.state.status === "ready"
+      ? current : { key: selectionKey, state: { status: "loading" } });
+    if (historyStatus === "loading") return;
     const controller = new AbortController();
     let current = true;
-    setOwned({ key: selectionKey, state: { status: "loading" } });
     void loadAgentSession(threadId, controller.signal)
       .then((session) => {
         if (!current) return;
@@ -445,7 +446,11 @@ export function useSelectedSession(
         } else if (error instanceof AgentSessionInvalidError) {
           setOwned({ key: selectionKey, state: { status: "invalid" } });
         } else {
-          setOwned({ key: selectionKey, state: { status: "unavailable" } });
+          setOwned(previous => previous.key === selectionKey
+            && previous.state.status === "ready"
+            && error instanceof AgentSessionUnavailableError && error.transient
+            ? { key: selectionKey, state: { ...previous.state, refreshFailed: true } }
+            : { key: selectionKey, state: { status: "unavailable" } });
         }
       });
     return () => {

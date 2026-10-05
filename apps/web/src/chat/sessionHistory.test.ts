@@ -50,6 +50,9 @@ describe("Agent Chat Session history", () => {
       ],
     },
     { next_cursor: null, sessions: [session({ title: "\u200B" })] },
+    { next_cursor: null, sessions: [session({ message_title: "a".repeat(33) })] },
+    { next_cursor: null, sessions: [session({ message_title: "Research\nresults" })] },
+    { next_cursor: null, sessions: [session({ message_title: "" })] },
     { extra: true, next_cursor: null, sessions: [] },
   ])("rejects an unbounded, duplicate, unstable, or expanded page", (value) => {
     expect(() => decodeAgentSessionPage(value)).toThrow(AgentSessionInvalidError);
@@ -138,6 +141,21 @@ describe("Agent Chat Session history", () => {
     })).resolves.toBe("settled");
 
     expect(visibleTitle).toBe("Late quality title");
+  });
+
+  it("observes a generated title near the end of its one-minute default window", async () => {
+    vi.useFakeTimers();
+    const startedAt = Date.now();
+    const observation = watchGeneratedSessionTitle({
+      load: async () => session({ title: Date.now() - startedAt >= 55_000 ? "Late research title" : "Untitled" }),
+      onSettled: vi.fn(),
+      signal: new AbortController().signal,
+      threadId: session().id,
+    });
+
+    await vi.advanceTimersByTimeAsync(55_000);
+
+    await expect(observation).resolves.toBe("settled");
   });
 
   it("ends at its wall-clock deadline even when a request never resolves", async () => {
@@ -344,6 +362,7 @@ function session(
   return {
     activity_at: "2026-08-30T04:00:00.000000Z",
     created_at: "2026-08-29T04:00:00.000000Z",
+    message_title: null,
     current_turn: null,
     id: "00000000-0000-4000-8000-000000000001",
     latest_turn: null,

@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 
 import type { AgentSubscriber, HttpAgent } from "@ag-ui/client";
-import { act } from "react";
+import { EventType } from "@ag-ui/core";
+import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vitest";
 
@@ -17,6 +18,7 @@ vi.mock("./chatProtocol", async (importOriginal) => {
 
 import { ChatApiError, loadCommandReceipt, loadTimelinePage, type TimelineTurn } from "./chatProtocol";
 import { loadAgentSession, type AgentSessionSummary } from "./sessionHistory";
+import { CHAT_TIMELINE_UPDATE } from "@thesistrace/contracts/chat-events";
 import { StagedInputStore, StagedInputStoreError, type StagedInput } from "./stagedInputStore";
 import { changeInterfaceLanguage } from "../i18n";
 import {
@@ -43,6 +45,36 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
+test.each([false, true])("keeps streamed content and chronological order when stale history finishes (history: %s)", async (withHistory) => {
+  let live!: AgentSubscriber;
+  const agent = { isRunning: true, runAgent: vi.fn(), setMessages: vi.fn(),
+    subscribe: (subscriber: AgentSubscriber) => { live = subscriber; return { unsubscribe: vi.fn() }; },
+  } as unknown as HttpAgent;
+  const initial = timelineTurn(turnId, "Initial answer");
+  const history = withHistory ? [{ ...timelineTurn("00000000-0000-4000-8000-000000000910", "Earlier answer"), started_at: "2026-09-01T00:00:00.000000Z" }] : [];
+  const next = { ...initial, entries: [{ ...initial.entries[0]!, payload: { content: "New streamed answer", status: "streaming" as const } }],
+    completed_at: null, status: "running" as const } as TimelineTurn;
+  const publicSession = { ...session, version: "2026-09-02T00:00:00.000Z" };
+  vi.mocked(loadAgentSession).mockResolvedValue(publicSession);
+  vi.mocked(loadTimelinePage).mockResolvedValue({ next_cursor: null, turns: [...history, initial] });
+  vi.spyOn(StagedInputStore.prototype, "list").mockResolvedValue([]);
+  await mountConversation({ agent, existingSession: true, initialSession: publicSession });
+  await act(async () => latestController?.setDraft("Keep this draft"));
+  let finishHistory!: (page: { next_cursor: null; turns: TimelineTurn[] }) => void;
+  vi.mocked(loadTimelinePage).mockImplementationOnce(() => new Promise(resolve => { finishHistory = resolve; }));
+  let refreshing!: Promise<void>;
+  await act(async () => { refreshing = latestController!.refresh(); await Promise.resolve(); });
+  await act(async () => live.onCustomEvent?.({ agent, messages: [], state: {},
+    input: { threadId, runId: turnId, messages: [], state: {}, tools: [], context: [] },
+    event: { type: EventType.CUSTOM, name: CHAT_TIMELINE_UPDATE, value: { session: publicSession, timeline: { next_cursor: null, turns: [next] } } },
+  }));
+  expect(latestController?.turns).toEqual([...history, next]);
+  expect(latestController?.draft).toBe("Keep this draft");
+  await act(async () => { finishHistory({ next_cursor: null, turns: [...history, initial] }); await refreshing; });
+  expect(latestController?.turns).toEqual([...history, next]);
+  expect(latestController?.timelineError).toBe(false);
+});
+
 test("merges polling updates by whole Turn and keeps previously loaded history", () => {
   const older = timelineTurn("00000000-0000-4000-8000-000000000910", "older");
   const changing = timelineTurn("00000000-0000-4000-8000-000000000911", "streaming");
@@ -59,6 +91,8 @@ test("merges polling updates by whole Turn and keeps previously loaded history",
     replacement,
     newest,
   ]);
+  // The first history page can arrive after a live turn has already appeared.
+  expect(mergeLatestTurns([newest], [older, replacement])).toEqual([older, replacement, newest]);
 });
 
 test("retries a failed older page without mistaking it for a latest-page refresh", async () => {
@@ -423,8 +457,9 @@ function ConversationHarness({
   initialSession?: AgentSessionSummary;
   onSessionChanged?: () => void;
 }>) {
+  const [testAgent] = useState(() => Object.assign({ subscribe: vi.fn(() => ({ unsubscribe: vi.fn() })) }, agent) as HttpAgent);
   const controller = useChatConversation({
-    agent,
+    agent: testAgent,
     existingSession,
     initialSession: existingSession ? initialSession ?? session : undefined,
     onAccepted: vi.fn(),
@@ -492,6 +527,7 @@ const turn = {
 const session: AgentSessionSummary = {
   activity_at: "2026-09-02T00:00:00.000000Z",
   created_at: "2026-09-02T00:00:00.000000Z",
+  message_title: null,
   current_turn: turn,
   id: threadId,
   latest_turn: turn,

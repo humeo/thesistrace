@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./chat-events": {
+      "types": "./chat-events.d.mts",
+      "import": "./chat-events.mjs"
+    },
     "./context-window": {
       "types": "./context-window.d.mts",
       "import": "./context-window.mjs"
@@ -26,6 +30,8 @@
     }
   },
   "files": [
+    "chat-events.mjs",
+    "chat-events.d.mts",
     "context-window.mjs",
     "context-window.d.mts",
     "agent-failure.mjs",

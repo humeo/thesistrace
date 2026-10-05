@@ -153,10 +153,12 @@ test("uses native message Copy controls and server timestamps across languages",
   ])] }));
   expect(document.querySelector(".ant-bubble-list")).not.toBeNull();
   expect(document.body.textContent).toContain("Worked for 1m 0s");
-  expect(document.querySelector("time")?.textContent).toMatch(/^\d{1,2}:\d{2} (AM|PM)$/);
+  expect(document.querySelector("time")?.textContent).toMatch(/^\d{2}\/\d{2}\/2026 \d{1,2}:\d{2} (AM|PM)$/);
+  expect(document.querySelector("time")?.getAttribute("datetime")).toBe("2026-09-02T00:00:00.000000Z");
   await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Copy response"]')!.click());
   expect(writeText).toHaveBeenCalledWith("**完整原文**");
   await act(async () => changeInterfaceLanguage("zh-CN"));
+  expect(document.querySelector("time")?.textContent).toMatch(/^2026\/\d{2}\/\d{2} \d{1,2}:\d{2} (AM|PM)$/);
   expect(document.body.textContent).toContain("工作耗时 1 分 0 秒");
   expect(document.querySelector('[aria-label="Copy message"]')).not.toBeNull();
   expect(document.body.textContent).toContain("My idea");
@@ -190,6 +192,19 @@ test("native work disclosure retains process text and successful tool results", 
   await act(async () => work.click());
   expect(document.body.textContent).toContain("Checking quality");
   expect(document.body.textContent).toContain("run_factor");
+});
+test("completed replies without work records retain elapsed metadata without disclosure", async () => {
+  await mount(controller({ turns: [timelineTurn([
+    entry("user_input", "user", { content: "Hi", inputId: INPUT_ID, source: "prompt" }),
+    entry("assistant_message", "final", { content: "Hello", status: "complete" }),
+  ])] }));
+  const work = document.querySelector<HTMLElement>(`[data-entry-id="work:${TURN_ID}"]`)!;
+  expect(work.textContent).toContain("Worked for 1m 0s");
+  expect(work.querySelector('[aria-label="right"]')).toBeNull();
+  expect(work.querySelector('.ant-card, [role="button"], button')).toBeNull();
+  await act(async () => work.click());
+  expect(work.textContent).toBe("Worked for 1m 0s");
+  expect(document.body.textContent).toContain("Hello");
 });
 test.each(["completed", "failed", "stopped"] as const)("keeps process expanded while executing, folds on %s and can reopen", async status => {
   const entries = [entry("tool_activity", "tool", { name: "run_factor", status: "complete" })];
@@ -288,6 +303,33 @@ test("older history and retry use authoritative controller commands", async () =
   await act(async () => [...document.querySelectorAll("button")].find(button => button.textContent === "Load more")!.click());
   await act(async () => [...document.querySelectorAll("button")].find(button => button.textContent === "Retry")!.click());
   expect(loadOlder).toHaveBeenCalledOnce(); expect(retryTimeline).toHaveBeenCalledOnce();
+});
+test.each([
+  ["A finding with **readable partial emphasis", "**", "strong", "readable partial emphasis"],
+  ["A finding with `rank(close)", "`", "code", "rank(close)"],
+  ["A finding.\n\n- **readable partial list", "**", "li strong", "readable partial list"],
+])("received unfinished Markdown stays readable and converges to the final format: %s", async (partial, ending, selector, visible) => {
+  const value = (content: string, status: "streaming" | "complete") => controller({ turns: [timelineTurn([
+    entry("assistant_message", "answer", { content, status }),
+  ], { status: status === "streaming" ? "running" : "completed" })] });
+  await mount(value(partial, "streaming"));
+  await vi.waitFor(() => expect(document.querySelector(".chat-message-assistant")?.textContent).toContain(visible));
+  expect(document.querySelector(`.chat-message-assistant ${selector}`)?.textContent).toContain(visible);
+  await act(async () => root?.render(<ChatTestProvider><ChatTimeline controller={value(partial + ending, "complete")} /></ChatTestProvider>));
+  expect(document.querySelectorAll(`.chat-message-assistant ${selector}`)).toHaveLength(1);
+  expect(document.querySelector(`.chat-message-assistant ${selector}`)?.textContent).toBe(visible);
+  expect(document.querySelector("chat-markdown-preview")).toBeNull();
+});
+test("a post-tool reply stays in its message while streaming and completing", async () => {
+  const value = (complete: boolean) => controller({ turns: [timelineTurn([
+    entry("tool_activity", "read", { name: "get_research_context", status: "complete" }),
+    entry("assistant_message", "answer", { content: "Readable research answer", status: complete ? "complete" : "streaming" }),
+  ], { status: complete ? "completed" : "running", completed_at: complete ? "2026-09-02T00:01:00.000000Z" : null })] });
+  await mount(value(false));
+  await vi.waitFor(() => expect(document.querySelector(".chat-message-assistant .x-markdown")?.textContent?.trim()).toBe("Readable research answer"));
+  const reply = document.querySelector(".chat-message-assistant .x-markdown");
+  await act(async () => root?.render(<ChatTestProvider><ChatTimeline controller={value(true)} /></ChatTestProvider>));
+  expect(document.querySelector(".chat-message-assistant .x-markdown")).toBe(reply);
 });
 function controller(overrides: Partial<ChatConversationController> = {}): ChatConversationController {
   return {

@@ -3,6 +3,7 @@ import { bodyLimit } from "hono/body-limit";
 
 import { AgentAuthenticationUnavailableError } from "./failure.js";
 import { isChatThreadId } from "./chat-request.js";
+import { sessionResponse, timelineResponse } from "./chat-state-response.js";
 import {
   ChatControlError,
   MAX_CHAT_COMMAND_BODY_BYTES,
@@ -263,22 +264,7 @@ export function createAgentApp(dependencies: AgentAppDependencies): Hono<AgentAp
         query.before,
         query.limit,
       );
-      return context.json({
-        next_cursor: page.nextCursor,
-        turns: page.turns.map((turn) => ({
-          completed_at: turn.completedAt,
-          entries: turn.entries.map((entry) => ({
-            created_at: entry.createdAt,
-            entry_id: entry.entryId,
-            kind: entry.kind,
-            payload: timelinePayloadResponse(entry),
-            turn_id: entry.turnId,
-          })),
-          id: turn.id,
-          started_at: turn.startedAt,
-          status: turn.status,
-        })),
-      });
+      return context.json(timelineResponse(page));
     } catch (error) {
       return sessionErrorResponse(context, error);
     }
@@ -359,36 +345,6 @@ export function createAgentApp(dependencies: AgentAppDependencies): Hono<AgentAp
   return app;
 }
 
-function sessionResponse(session: SessionPage["sessions"][number]) {
-  return {
-    activity_at: session.activityAt,
-    created_at: session.createdAt,
-    current_turn: turnResponse(session.currentTurn),
-    id: session.id,
-    latest_turn: turnResponse(session.latestTurn),
-    title: session.title,
-    version: session.version,
-  };
-}
-
-function turnResponse(turn: SessionPage["sessions"][number]["latestTurn"]) {
-  return turn === null ? null : {
-    id: turn.id,
-    kind: turn.kind,
-    model_key: turn.modelKey,
-    question: turn.question === null ? null : {
-      interrupt_id: turn.question.interruptId,
-      options: turn.question.options,
-      question: turn.question.question,
-      selection_mode: turn.question.selectionMode,
-    },
-    reasoning_effort: turn.reasoningEffort,
-    started_at: turn.startedAt,
-    status: turn.status,
-    terminal_error_code: turn.terminalErrorCode,
-  };
-}
-
 function commandResponse(receipt: CommandReceipt) {
   return {
     command_id: receipt.commandId,
@@ -396,17 +352,6 @@ function commandResponse(receipt: CommandReceipt) {
     kind: receipt.kind,
     status: receipt.status,
     turn_id: receipt.turnId,
-  };
-}
-
-function timelinePayloadResponse(entry: TimelinePage["turns"][number]["entries"][number]) {
-  if (entry.kind !== "question") return entry.payload;
-  return {
-    interrupt_id: entry.payload.interruptId,
-    options: entry.payload.options,
-    question: entry.payload.question,
-    selection_mode: entry.payload.selectionMode,
-    status: entry.payload.status,
   };
 }
 

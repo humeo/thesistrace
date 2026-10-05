@@ -14,6 +14,15 @@ intent; a default request that no longer matches the catalog is rejected before
 execution. Accepted and resumed Runs retain their pinned model identity. Updating
 the default catalog requires no per-model preference migration.
 
+Automatic Session naming is independent of the Chat Turn and has a one-minute
+deadline. The browser observes the saved title for up to one minute without
+holding Chat execution open. Until a generated or manually renamed title exists,
+Session reads expose a message title from the first 32 Unicode characters of the
+first durable user message, with whitespace collapsed. The internal `Untitled`
+sentinel continues to control generation and retry; message titles are display
+data and never overwrite saved names. Existing Sessions use the same read-time
+presentation without model backfill or rewriting history.
+
 Research presentation follows the same boundary. The model-facing render_a2ui Tool accepts only three semantic views: an ordered
 research_runs list, an unsubmitted alpha_proposal, or a daily_track. The
 application constructs the A2UI operations; the model cannot choose component
@@ -51,6 +60,17 @@ copied into Session memory.
 Failed presentation snapshots retain an allowlisted diagnostic code and their
 activity identity across persistence and replay. Provider error text and private
 tool payloads do not cross the browser boundary.
+
+Live Chat display uses the persisted public timeline, including its canonical
+entry IDs, ordering and timestamps. The Host emits the current Turn and Session
+as `chat_timeline_update` through native AG-UI CUSTOM events after projection
+is saved, using the same browser-safe serializers as HTTP history. Text updates
+follow the projector's existing bounded flush cadence. The browser applies these
+updates directly; tokens do not trigger history requests. HTTP reads initialize
+and paginate history and reconcile command completion, and a read started before
+a live update cannot replace that newer Turn. A replaying Run caches native deltas
+and only its latest public Turn snapshot, avoiding retention of every growing
+copy of the answer. Model context and Research resource state remain separate.
 
 The shared contract owns the Zod component definitions. Transport JSON Schema,
 server field validation and the official frontend catalog use those definitions;

@@ -14,7 +14,7 @@ import { createAgentFetch } from "./agentTransport";
 import { ChatComposer } from "./ChatComposer";
 import { ChatTimeline } from "./ChatTimeline";
 import type { ResolvedModelSelection } from "./chatState";
-import type { AgentSessionSummary } from "./sessionHistory";
+import { sessionDisplayTitle, type AgentSessionSummary } from "./sessionHistory";
 import type { ChatConversationController } from "./useChatConversation";
 import { useChatConversation } from "./useChatConversation";
 
@@ -74,6 +74,7 @@ export function AgentConversation(props: Readonly<{
   onTitleMaySettle: (threadId: string) => void;
   researcherId: string;
   selection: ResolvedModelSelection | null;
+  sessionRefreshFailed?: boolean;
   titleMaySettle: boolean;
   threadId: string;
 }>) {
@@ -84,9 +85,8 @@ export function AgentConversation(props: Readonly<{
   }).unsubscribe, [copilotkit]);
   const snapshot = useCallback(() => copilotkit.runtimeConnectionStatus, [copilotkit]);
   const runtimeStatus = useSyncExternalStore(subscribe, snapshot, snapshot);
-  const title = props.initialSession?.title;
   const sessionTitle = props.existingSession
-    ? title && title !== "Untitled" ? title : t("session") : undefined;
+    ? sessionDisplayTitle(props.initialSession, t("session")) : undefined;
   const [hasConnected, setHasConnected] = useState(runtimeStatus === "connected");
   useEffect(() => {
     if (runtimeStatus === "connected") setHasConnected(true);
@@ -108,15 +108,14 @@ export function AgentConversation(props: Readonly<{
 
 function ConnectedAgentConversation(props: Parameters<typeof AgentConversation>[0]) {
   const { t } = useTranslation("chat");
-  const title = props.initialSession?.title;
   const sessionTitle = props.existingSession
-    ? title && title !== "Untitled" ? title : t("session") : undefined;
+    ? sessionDisplayTitle(props.initialSession, t("session")) : undefined;
   const { agent, isReady } = useAgent({
     agentId: `research-chat-${props.threadId}`,
     runtimeAgentId: RESEARCH_AGENT_ID,
     threadId: props.threadId,
     throttleMs: 16,
-    updates: [UseAgentUpdate.OnMessagesChanged, UseAgentUpdate.OnRunStatusChanged],
+    updates: [UseAgentUpdate.OnRunStatusChanged],
   });
   if (!isReady || !(agent instanceof HttpAgent)) {
     return <StaticChatMain modelControls={props.modelControls} opening sessionTitle={sessionTitle} />;
@@ -136,26 +135,33 @@ function AuthoritativeConversation({
   const controller = useChatConversation({ agent, ...props });
   return <ChatConversationView controller={controller} modelControls={props.modelControls}
     existingSession={props.existingSession} agentId={`research-chat-${props.threadId}`}
-    threadId={props.threadId} title={props.initialSession?.title} />;
+    threadId={props.threadId} title={props.initialSession?.title}
+    sessionRefreshFailed={props.sessionRefreshFailed} onRetrySession={props.onSessionChanged} />;
 }
 
-export function ChatConversationView({ controller, modelControls, existingSession, title }: {
+export function ChatConversationView({ controller, modelControls, existingSession, title, sessionRefreshFailed, onRetrySession }: {
   controller: ChatConversationController;
   modelControls: ReactNode;
   existingSession: boolean;
   agentId: string;
   threadId: string;
   title?: string;
+  sessionRefreshFailed?: boolean;
+  onRetrySession?: () => void;
 }) {
   const { t } = useTranslation("chat");
-  const newChat = !existingSession && controller.turns.length === 0;
+  // Acceptance can update the URL before the first timeline frame arrives.
+  // Replace the welcome screen only when its first prompt is ready to paint.
+  const [startedNew] = useState(!existingSession);
+  const newChat = startedNew && controller.turns.length === 0;
   return (
     <ChatUiProvider><main className={`quantgrove-chat flex h-full min-h-0 min-w-0 flex-col gap-4 py-6${newChat ? " justify-center" : ""}`} aria-label={title ?? t("session")}
       data-agent-run-id={controller.currentTurnId ?? controller.latestTurnId ?? undefined}
       data-current-turn-id={controller.currentTurnId ?? undefined}>
-      {controller.nextCursor || controller.timelineError ? <div className="mx-auto w-full max-w-[808px] shrink-0 px-5">
+      {controller.nextCursor || controller.timelineError || sessionRefreshFailed ? <div className="mx-auto w-full max-w-[808px] shrink-0 px-5">
         {controller.nextCursor ? <Button type="text" loading={controller.loadingOlder} disabled={controller.loadingOlder} onClick={() => void controller.loadOlder()}>{t(controller.loadingOlder ? "loadingEarlier" : "loadMore")}</Button> : null}
         {controller.timelineError ? <Alert type="error" title={t("timelineError")} action={<Button type="text" onClick={() => void controller.retryTimeline()}>{t("retry")}</Button>} /> : null}
+        {sessionRefreshFailed ? <Alert type="error" title={t("sessionRefreshFailed")} action={<Button type="text" onClick={onRetrySession}>{t("retry")}</Button>} /> : null}
       </div> : null}
       {newChat ? <div className="mx-auto mb-6 flex w-full max-w-[808px] shrink-0 justify-center px-5"><ChatWelcome /></div> : <ChatTimeline controller={controller} />}
       <div className="mx-auto w-full max-w-[808px] shrink-0 px-5">

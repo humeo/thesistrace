@@ -9,6 +9,7 @@ const threadId = "00000000-0000-4000-8000-000000009001";
 const session: AgentSessionSummary = {
   activity_at: "2026-08-30T04:00:00.000000Z",
   created_at: "2026-08-30T04:00:00.000000Z",
+  message_title: null,
   current_turn: null,
   id: threadId,
   latest_turn: null,
@@ -52,7 +53,7 @@ describe("selected Chat synchronization", () => {
       status: "running" as const,
       terminal_error_code: null,
     };
-    current = { ...session, current_turn: activeTurn, latest_turn: activeTurn, activity_at: "2026-08-30T04:00:01.000000Z" };
+    current = { ...session, message_title: null, current_turn: activeTurn, latest_turn: activeTurn, activity_at: "2026-08-30T04:00:01.000000Z" };
     await vi.advanceTimersByTimeAsync(2_000);
     expect(synchronize).toHaveBeenLastCalledWith(current);
     current = { ...current, current_turn: null, latest_turn: { ...activeTurn, status: "completed" as const } };

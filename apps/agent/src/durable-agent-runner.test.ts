@@ -25,6 +25,44 @@ class HoldingAgent extends AbstractAgent {
 }
 
 describe("DurableResearchAgentRunner", () => {
+  it("streams the saved current Turn and Session after projection without a browser history request", async () => {
+    const threadId = fixedUuid(501), runId = fixedUuid(502), researcherId = fixedUuid(503);
+    const time = "2026-10-04T00:00:00.000000Z";
+    const entries: { createdAt: string; entryId: string; turnId: string; kind: string; payload: object }[] = [];
+    const publicTurn = { id: runId, kind: "prompt", modelKey: "fixture", reasoningEffort: "low", startedAt: time,
+      status: "running", terminalErrorCode: null, question: null };
+    const repository = {
+      session: async () => ({ id: threadId, title: "Fixture", createdAt: time, activityAt: time, version: time,
+        messageTitle: null,
+        currentTurn: publicTurn, latestTurn: publicTurn }),
+      timeline: async () => ({ nextCursor: null, turns: [{ id: runId, startedAt: time, completedAt: null,
+        status: "running", entries: [...entries] }] }),
+      persistAssistantMessage: async (_thread: string, _run: string, id: string, content: string) => {
+        entries.push({ createdAt: time, entryId: `assistant:${id}`, turnId: runId, kind: "assistant_message",
+          payload: { content, status: "streaming" } });
+      },
+    } as unknown as ResearchSessionRepository;
+    const runner = new DurableResearchAgentRunner(repository);
+    const agent = Object.assign(new HoldingAgent(), { headers: { "x-thesistrace-agent-researcher-id": researcherId } });
+    const events: BaseEvent[] = [];
+    const stream = runner.run({ agent, input: input(threadId, runId), threadId });
+    const subscription = stream.subscribe(event => events.push(event));
+    try {
+      await vi.waitFor(() => expect(agent.events.observed).toBe(true));
+      agent.events.next({ type: EventType.RUN_STARTED, threadId, runId });
+      agent.events.next({ type: EventType.TEXT_MESSAGE_START, messageId: "reply", role: "assistant" });
+      agent.events.next({ type: EventType.TEXT_MESSAGE_CONTENT, messageId: "reply", delta: "Saved reply" });
+      await vi.waitFor(() => expect(events.some(event => event.type === "CUSTOM" && event.name === "chat_timeline_update"
+        && JSON.stringify(event.value).includes("Saved reply"))).toBe(true));
+      const update = [...events].reverse().find(event => event.type === "CUSTOM" && event.name === "chat_timeline_update")!;
+      expect(update.value).toMatchObject({ session: { id: threadId }, timeline: { next_cursor: null, turns: [{ id: runId,
+        entries: [{ entry_id: "assistant:reply", created_at: time, payload: { content: "Saved reply", status: "streaming" } }] }] } });
+      const replayed: BaseEvent[] = [];
+      const reconnected = stream.subscribe(event => replayed.push(event));
+      expect(replayed.filter(event => event.type === "CUSTOM" && event.name === "chat_timeline_update")).toEqual([update]);
+      reconnected.unsubscribe();
+    } finally { agent.events.complete(); subscription.unsubscribe(); }
+  });
   it("accepts 50 concurrent Threads, rejects overflow, preserves replay, and releases a terminal slot", async () => {
     const runner = new DurableResearchAgentRunner({} as ResearchSessionRepository);
     const accepted = Array.from({ length: 50 }, () => {

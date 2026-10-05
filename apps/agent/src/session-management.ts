@@ -4,9 +4,17 @@ export const SESSION_HISTORY_PAGE_SIZE = 30;
 export const MAX_SESSION_TITLE_CHARACTERS = 80;
 export const MAX_SESSION_RENAME_BODY_BYTES = 1_024;
 export const UNTITLED_SESSION_TITLE = "Untitled";
+const MESSAGE_SESSION_TITLE_CHARACTERS = 32;
 
 const SESSION_TITLE_DEFAULT_IGNORABLE = /\p{Default_Ignorable_Code_Point}/u;
 const SESSION_TITLE_VISIBLE_BASE = /[\p{L}\p{N}\p{S}]/u;
+
+export function messageSessionTitle(message: string | null): string | null {
+  if (message === null) return null;
+  const normalized = message.replace(/\s+/gu, " ")
+    .replace(/[\p{Default_Ignorable_Code_Point}\p{Cc}]/gu, "").trim();
+  return [...normalized].slice(0, MESSAGE_SESSION_TITLE_CHARACTERS).join("").trim() || null;
+}
 
 export type SessionCursor = Readonly<{
   activityAt: string;

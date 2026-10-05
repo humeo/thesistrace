@@ -27,6 +27,7 @@ import { chatSessionHref } from "./chatNavigation";
 import {
   AgentSessionActiveRunError, AgentSessionChangedError, AgentSessionInvalidError,
   AgentSessionNotFoundError, AgentSessionTitleInvalidError,
+  sessionDisplayTitle,
   type AgentSessionSummary,
 } from "./sessionHistory";
 import type { SessionHistoryController } from "./useSessionHistory";
@@ -45,7 +46,7 @@ export function SessionHistoryList({
 }) {
   const { t } = useTranslation("chat");
   const isMobile = useIsMobile();
-  const displayTitle = (title: string) => title === "Untitled" ? t("untitled") : title;
+  const displayTitle = (session: AgentSessionSummary) => sessionDisplayTitle(session, t("session"));
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const menuButtons = useRef(new Map<string, HTMLButtonElement>());
   const openMenuActivity = useRef<Readonly<{ activeRun: boolean; id: string }> | null>(null);
@@ -124,14 +125,14 @@ export function SessionHistoryList({
           >
             <a
               aria-current={session.id === currentSessionId ? "page" : undefined}
-              aria-label={`${displayTitle(session.title)}${session.current_turn === null ? "" : `, ${t(session.current_turn.status === "waiting_for_user" ? "waitingShort" : "runningShort")}`}`}
+              aria-label={`${displayTitle(session)}${session.current_turn === null ? "" : `, ${t(session.current_turn.status === "waiting_for_user" ? "waitingShort" : "runningShort")}`}`}
               href={chatSessionHref(session.id)}
               onClick={(event) => handleWorkspaceNavigation(event, () => {
                 if (session.id !== currentSessionId) navigate(chatSessionHref(session.id));
               })}
-              title={`${displayTitle(session.title)}${session.current_turn === null ? "" : ` — ${t(session.current_turn.status === "waiting_for_user" ? "waitingShort" : "runningShort")}`}`}
+              title={`${displayTitle(session)}${session.current_turn === null ? "" : ` — ${t(session.current_turn.status === "waiting_for_user" ? "waitingShort" : "runningShort")}`}`}
             >
-              <span>{displayTitle(session.title)}</span>
+              <span>{displayTitle(session)}</span>
               {session.current_turn === null ? null : (
                 <em aria-hidden="true" className="chat-session-turn-state">
                   {session.current_turn.status === "waiting_for_user"
@@ -146,7 +147,7 @@ export function SessionHistoryList({
               onOpenChange={(next) => setOpenMenu(next ? session.id : null)}
             >
               <DropdownMenuTrigger
-                aria-label={t("actionsFor", { name: displayTitle(session.title) })}
+                aria-label={t("actionsFor", { name: displayTitle(session) })}
                 render={<Button variant="ghost" size="icon-sm" className="chat-session-menu-trigger" type="button" />}
                 ref={(element) => {
                   if (element === null) menuButtons.current.delete(session.id);
@@ -156,7 +157,7 @@ export function SessionHistoryList({
                 <DotsThree aria-hidden="true" size={17} weight="bold" />
               </DropdownMenuTrigger>
               <DropdownMenuContent
-                aria-label={t("actionsFor", { name: displayTitle(session.title) })}
+                aria-label={t("actionsFor", { name: displayTitle(session) })}
                 className="chat-session-menu w-42"
                 id={`chat-session-menu-${session.id}`}
                 side="right"
@@ -217,7 +218,7 @@ export function SessionDecisionDialog({
   onDeleted: (sessionId: string) => void;
 }) {
   const { t } = useTranslation("chat");
-  const [title, setTitle] = useState(dialog.session.title);
+  const [title, setTitle] = useState(sessionDisplayTitle(dialog.session, t("session")));
   const [errorKey, setErrorKey] = useState<ChatErrorKey | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -261,7 +262,7 @@ export function SessionDecisionDialog({
           <AlertDialogHeader>
             <AlertDialogTitle>{t("deleteChatQuestion")}</AlertDialogTitle>
             <AlertDialogDescription>
-              <Trans i18nKey="deleteDescription" ns="chat" components={{ name: <strong>{dialog.session.title === "Untitled" ? t("untitled") : dialog.session.title}</strong> }} />
+              <Trans i18nKey="deleteDescription" ns="chat" components={{ name: <strong>{sessionDisplayTitle(dialog.session, t("session"))}</strong> }} />
             </AlertDialogDescription>
           </AlertDialogHeader>
           <form onSubmit={(event) => void submit(event)}>

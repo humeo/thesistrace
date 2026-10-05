@@ -50,6 +50,7 @@ function dependencies(
     session: vi.fn(async (threadId) => ({
       activityAt: "2026-08-30T02:03:04.000000Z",
       createdAt: "2026-08-29T02:03:04.000000Z",
+      messageTitle: null,
       currentTurn: null,
       id: threadId,
       latestTurn: null,
@@ -254,6 +255,7 @@ describe("Agent Host HTTP boundary", () => {
       sessions: [{
         activityAt: "2026-08-30T01:02:03.000000Z",
         createdAt: "2026-08-29T01:02:03.000000Z",
+        messageTitle: null,
         currentTurn: null,
         id: "00000000-0000-4000-8000-000000000222",
         latestTurn: null,
@@ -272,6 +274,7 @@ describe("Agent Host HTTP boundary", () => {
       sessions: [{
         activity_at: "2026-08-30T01:02:03.000000Z",
         created_at: "2026-08-29T01:02:03.000000Z",
+        message_title: null,
         current_turn: null,
         id: "00000000-0000-4000-8000-000000000222",
         latest_turn: null,
@@ -302,6 +305,7 @@ describe("Agent Host HTTP boundary", () => {
     expect(await response.json()).toEqual({
       activity_at: "2026-08-30T02:03:04.000000Z",
       created_at: "2026-08-29T02:03:04.000000Z",
+      message_title: null,
       current_turn: null,
       id: threadId,
       latest_turn: null,

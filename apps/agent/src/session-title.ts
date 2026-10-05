@@ -10,7 +10,7 @@ import {
   normalizeSessionTitle,
 } from "./session-management.js";
 
-const SESSION_TITLE_TIMEOUT_MS = 5_000;
+const SESSION_TITLE_TIMEOUT_MS = 60_000;
 // Generated titles use a deliberately small positive grammar instead of an
 // open-ended Markdown/HTML denylist. They must begin with a Unicode word
 // character, may contain only product-useful separators, and may end only in

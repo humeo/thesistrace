@@ -331,6 +331,12 @@ code:not(.quantgrove-chat code) { font-family: var(--mono); }
   flex: 1;
   padding: 17px 12px;
   overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.chat-session-region:hover,
+.chat-session-region:focus-within {
+  scrollbar-color: var(--ink-faint) transparent;
 }
 .chat-session-empty {
   display: flex;

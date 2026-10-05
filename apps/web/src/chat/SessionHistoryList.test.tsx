@@ -19,7 +19,7 @@ test("shows one newest-first history list with a new Chat action in its header",
     { id: "00000000-0000-4000-8000-000000000003", title: "Most recent", activity_at: "2026-09-29T10:00:00Z" },
     { id: "00000000-0000-4000-8000-000000000002", title: "Last week", activity_at: "2026-09-20T10:00:00Z" },
     { id: "00000000-0000-4000-8000-000000000001", title: "Older chat", activity_at: "2026-08-01T10:00:00Z" },
-  ].map((item) => ({ ...item, created_at: item.activity_at, version: "1", current_turn: null, latest_turn: null }));
+  ].map((item) => ({ ...item, created_at: item.activity_at, version: "1", message_title: null, current_turn: null, latest_turn: null }));
   const controller: SessionHistoryController = {
     sessions, status: "ready", error: null, nextCursor: null, loadingMore: false, refreshVersion: 0,
     deleteSession: vi.fn(), loadMore: vi.fn(), refresh: vi.fn(), renameSession: vi.fn(), watchGeneratedTitle: vi.fn(),
@@ -48,7 +48,7 @@ test("Chat scrolling preserves an open sidebar menu; scrolling its anchor dismis
   document.body.append(host, transcript);
   const root = createRoot(host);
   const session = { id: "00000000-0000-4000-8000-000000000001", title: "Research", version: "1",
-    activity_at: "2026-09-13T00:00:00Z", created_at: "2026-09-13T00:00:00Z", current_turn: null, latest_turn: null };
+    activity_at: "2026-09-13T00:00:00Z", created_at: "2026-09-13T00:00:00Z", message_title: null, current_turn: null, latest_turn: null };
   const controller: SessionHistoryController = {
     sessions: [session], status: "ready", error: null, nextCursor: null, loadingMore: false, refreshVersion: 0,
     deleteSession: vi.fn(), loadMore: vi.fn(), refresh: vi.fn(), renameSession: vi.fn(), watchGeneratedTitle: vi.fn(),
@@ -71,12 +71,12 @@ test("Chat scrolling preserves an open sidebar menu; scrolling its anchor dismis
   }
 });
 
-test("locale changes only the Untitled sentinel display and retains an open history menu", async () => {
+test("uses the first message while a title is pending and retains an open history menu across locales", async () => {
   const host = document.createElement("aside");
   document.body.append(host);
   const root = createRoot(host);
   const sessions = ["Untitled", "未命名"].map((title, index) => ({
-    id: `00000000-0000-4000-8000-00000000000${index + 1}`, title, version: "1",
+    id: `00000000-0000-4000-8000-00000000000${index + 1}`, title, message_title: index === 0 ? "查看最近的研究" : null, version: "1",
     activity_at: "2026-09-13T00:00:00Z", created_at: "2026-09-13T00:00:00Z", current_turn: null, latest_turn: null,
   }));
   const controller: SessionHistoryController = {
@@ -86,19 +86,19 @@ test("locale changes only the Untitled sentinel display and retains an open hist
   try {
     await act(async () => root.render(<SessionHistoryList controller={controller} currentSessionId={null}
       navigate={vi.fn()} navigationInteractive restoreFocus={vi.fn()} onDecision={vi.fn()} />));
-    expect(host.querySelector<HTMLAnchorElement>(`a[href="${chatSessionHref(sessions[0].id)}"]`)?.textContent).toBe("Untitled");
-    const trigger = host.querySelector<HTMLButtonElement>(`button[aria-label="Actions for Untitled"]`)!;
+    expect(host.querySelector<HTMLAnchorElement>(`a[href="${chatSessionHref(sessions[0].id)}"]`)?.textContent).toBe("查看最近的研究");
+    const trigger = host.querySelector<HTMLButtonElement>(`button[aria-label="Actions for 查看最近的研究"]`)!;
     await act(async () => trigger.click());
     expect(document.querySelector('[role="menu"]')).not.toBeNull();
     await act(async () => changeInterfaceLanguage("zh-CN"));
     expect(host.querySelector(".chat-session-heading h3")?.textContent).toBe("最近");
     expect(host.querySelector(".chat-session-new-chat")?.getAttribute("aria-label")).toBe("从历史记录新建对话");
-    expect(host.querySelector<HTMLAnchorElement>(`a[href="${chatSessionHref(sessions[0].id)}"]`)?.textContent).toBe("未命名");
+    expect(host.querySelector<HTMLAnchorElement>(`a[href="${chatSessionHref(sessions[0].id)}"]`)?.textContent).toBe("查看最近的研究");
     expect(host.querySelector<HTMLAnchorElement>(`a[href="${chatSessionHref(sessions[1].id)}"]`)?.textContent).toBe("未命名");
-    expect(document.querySelector('[role="menu"]')?.getAttribute("aria-label")).toBe("未命名 的操作");
+    expect(document.querySelector('[role="menu"]')?.getAttribute("aria-label")).toBe("查看最近的研究 的操作");
     expect(document.querySelector('[role="menuitem"]:focus')?.textContent).toContain("重命名");
     await act(async () => changeInterfaceLanguage("en"));
-    expect(host.querySelector<HTMLAnchorElement>(`a[href="${chatSessionHref(sessions[0].id)}"]`)?.textContent).toBe("Untitled");
+    expect(host.querySelector<HTMLAnchorElement>(`a[href="${chatSessionHref(sessions[0].id)}"]`)?.textContent).toBe("查看最近的研究");
     expect(host.querySelector<HTMLAnchorElement>(`a[href="${chatSessionHref(sessions[1].id)}"]`)?.textContent).toBe("未命名");
   } finally {
     await act(async () => changeInterfaceLanguage("en"));

@@ -3,9 +3,9 @@ import XMarkdown, { type ComponentProps } from "@ant-design/x-markdown";
 import "@ant-design/x-markdown/themes/dark.css";
 import "./chatTypography.css";
 import { Alert, Button, Card, Collapse, ConfigProvider, Divider, Flex, Typography } from "antd";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ArrowDown, ListChecks } from "@phosphor-icons/react";
+import { ArrowDown, Atom, ListChecks } from "@phosphor-icons/react";
 import markedCjkFriendly from "marked-cjk-friendly";
 import { i18n } from "../i18n";
 import { formatNumber, formatTimestamp } from "../i18n/format";
@@ -21,6 +21,11 @@ const MESSAGE_TIME_FORMAT = new Intl.DateTimeFormat("en-US", { hour: "numeric", 
 // Its separate strikethrough tokenizer requires a newer Marked grammar.
 const MARKDOWN_CONFIG = { tokenizer: { emStrong: markedCjkFriendly().tokenizer?.emStrong }, gfm: true, renderer: { html: () => "" } };
 const MARKDOWN_COMPONENTS = { a: SafeMarkdownLink, img: HiddenMarkdownImage };
+const STREAMING_COMPONENTS = { ...MARKDOWN_COMPONENTS, "chat-markdown-preview": IncompleteMarkdown };
+const STREAMING_CONFIG = { ...MARKDOWN_CONFIG, renderer: { html: ({ text }: { text: string }) =>
+  /^<chat-markdown-preview data-raw="[^"<>]*" \/>$/.test(text.trim()) ? text : "" } };
+const INCOMPLETE_COMPONENTS = { emphasis: "chat-markdown-preview", list: "chat-markdown-preview",
+  "inline-code": "chat-markdown-preview", table: "chat-markdown-preview" };
 type ListItems = React.ComponentProps<typeof Bubble.List>["items"];
 type ListRef = React.ComponentRef<typeof Bubble.List>;
 type ChainItems = NonNullable<React.ComponentProps<typeof ThoughtChain>["items"]>;
@@ -39,7 +44,7 @@ export function ChatTimeline({ controller }: { controller: ChatConversationContr
   const running = controller.turns.at(-1)?.status === "running";
   const previousPrompt = useRef(promptId);
   const [anchoredPrompt, setAnchoredPrompt] = useState(running ? promptId : undefined);
-  const [replySpace, setReplySpace] = useState(0);
+  const [replyMinHeight, setReplyMinHeight] = useState(0);
   // Short first conversations also need reply space when reopened from history.
   const layoutPrompt = anchoredPrompt ?? (firstPrompt ? promptId : undefined);
 
@@ -53,7 +58,7 @@ export function ChatTimeline({ controller }: { controller: ChatConversationContr
 
   useLayoutEffect(() => {
     if (!layoutPrompt) {
-      setReplySpace(0);
+      setReplyMinHeight(0);
       return;
     }
     let observer: ResizeObserver | undefined;
@@ -65,20 +70,22 @@ export function ChatTimeline({ controller }: { controller: ChatConversationContr
         .find(element => element.dataset.entryId === layoutPrompt);
       const content = prompt?.parentElement;
       if (!viewport || !prompt || !content) return;
-      const measureReplySpace = () => {
+      const measureReplyMinHeight = () => {
         const last = content.lastElementChild;
         if (!last) return;
-        const turnHeight = last.getBoundingClientRect().bottom - prompt.getBoundingClientRect().top;
+        const precedingHeight = last.getBoundingClientRect().top - prompt.getBoundingClientRect().top;
         const viewportInsets = Array.from(viewport.children)
           .filter(element => element !== content)
           .reduce((height, element) => height + element.getBoundingClientRect().height, 0);
-        // Reserve only the room below this turn; streaming gradually uses it up.
-        setReplySpace(Math.max(0, Math.round(viewport.clientHeight * (firstPrompt ? 1 : 0.8) - viewportInsets - turnHeight)));
+        // CSS absorbs text growth inside the reserved room in the same layout.
+        // A compensating margin would move the viewport for one frame before
+        // ResizeObserver + React could shrink that margin again.
+        setReplyMinHeight(Math.max(0, Math.round(viewport.clientHeight * (firstPrompt ? 1 : 0.8) - viewportInsets - precedingHeight)));
       };
-      observer = new ResizeObserver(measureReplySpace);
+      observer = new ResizeObserver(measureReplyMinHeight);
       observer.observe(viewport);
       observer.observe(content);
-      measureReplySpace();
+      measureReplyMinHeight();
       if (anchoredPrompt) scrollFrame = requestAnimationFrame(() => list.current?.scrollTo({ key: anchoredPrompt, block: "start", behavior: "instant" }));
     });
     return () => {
@@ -95,7 +102,7 @@ export function ChatTimeline({ controller }: { controller: ChatConversationContr
         scrollPaddingBlockStart: firstPrompt ? "0" : "20%" } }}
       items={items.map((item, index) => ({ ...item,
         style: { maxWidth: 808, marginInline: "auto", paddingInline: 20, paddingBlock: 8,
-          marginBlockEnd: index === items.length - 1 ? replySpace : 0 },
+          minHeight: index === items.length - 1 ? replyMinHeight : undefined },
       }))} autoScroll
       onScroll={() => setReadingOlder((list.current?.scrollBoxNativeElement.scrollTop ?? 0) < -80)} />
     {readingOlder ? <Button shape="round" className="absolute bottom-3 self-center" icon={<ArrowDown />} onClick={() => list.current?.scrollTo({ top: "bottom" })}>{t("backToLatest")}</Button> : null}
@@ -136,7 +143,9 @@ function MessageFooter({ message, user = false }: { message: ChatViewMessage; us
   const copy = <ConfigProvider locale={{ locale: "en", Text: { copy: label, copied: label } }}>
     <Actions.Copy text={typeof message.content === "string" ? message.content : ""} styles={{ root: { paddingInline: 0 } }} />
   </ConfigProvider>;
-  const time = message.timestamp ? <Typography.Text type="secondary"><time dateTime={message.timestamp} title={formatTimestamp(message.timestamp, { dateStyle: "medium", timeStyle: "medium" })}>{MESSAGE_TIME_FORMAT.format(new Date(message.timestamp))}</time></Typography.Text> : null;
+  const time = message.timestamp ? <Typography.Text type="secondary"><time dateTime={message.timestamp} title={formatTimestamp(message.timestamp, { dateStyle: "medium", timeStyle: "medium" })}>
+    {`${formatTimestamp(message.timestamp, { year: "numeric", month: "2-digit", day: "2-digit" })} ${MESSAGE_TIME_FORMAT.format(new Date(message.timestamp))}`}
+  </time></Typography.Text> : null;
   return <Flex align="center" gap={8}>{user ? <>{time}{copy}</> : <>{copy}{time}</>}</Flex>;
 }
 
@@ -154,10 +163,12 @@ function WorkActivity({ content, controller }: { content: WorkContent; controlle
   const [expanded, setExpanded] = useState(active);
   useEffect(() => setExpanded(active), [active]);
   return <Flex vertical gap={8}>
-    <Think title={label} loading={content.turn.status === "running"}
-      expanded={expanded && content.entries.length > 0} onExpand={setExpanded}>
-      {content.entries.length > 0 ? <WorkHistory entries={content.entries} controller={controller} /> : null}
-    </Think>
+    {content.entries.length > 0 ? <Think title={label} loading={content.turn.status === "running"}
+      expanded={expanded} onExpand={setExpanded}>
+      <WorkHistory entries={content.entries} controller={controller} />
+    </Think> : <ThoughtChain.Item variant="text" icon={<Atom size={16} />}
+      status={content.turn.status === "running" ? "loading" : undefined}
+      description={label} style={{ padding: 0 }} />}
     <Divider style={{ margin: 0 }} />
   </Flex>;
 }
@@ -304,9 +315,24 @@ function TurnOutcome({ entry }: { entry: Extract<TimelineEntry, { kind: "turn_ou
 }
 
 
-export function AssistantMarkdown({ content, streaming = false }: { content: string; streaming?: boolean }) {
-  return <XMarkdown content={content} config={MARKDOWN_CONFIG} components={MARKDOWN_COMPONENTS}
-    className="x-markdown-dark chat-markdown-reading" streaming={{ hasNextChunk: streaming }} />;
+export const AssistantMarkdown = memo(function AssistantMarkdown({ content, streaming = false }: { content: string; streaming?: boolean }) {
+  return <XMarkdown content={content} config={streaming ? STREAMING_CONFIG : MARKDOWN_CONFIG} components={STREAMING_COMPONENTS}
+    className="x-markdown-dark chat-markdown-reading" streaming={{ hasNextChunk: streaming,
+      incompleteMarkdownComponentMap: INCOMPLETE_COMPONENTS, enableAnimation: false }} />;
+});
+
+/** Keep received text readable while the official renderer waits for syntax to close. */
+function IncompleteMarkdown({ "data-raw": encoded, domNode }: ComponentProps) {
+  if (typeof encoded !== "string") return null;
+  let content: string;
+  try { content = decodeURIComponent(encoded); } catch { return null; }
+  const emphasis = content.match(/^(?:[-+*]\s{1,3})?([*_]{1,3})/)?.[1];
+  if (domNode.parent?.type !== "tag" || domNode.parent.name !== "p") {
+    return <XMarkdown content={content + (emphasis ?? (content.startsWith("`") ? "`" : ""))} config={MARKDOWN_CONFIG} components={MARKDOWN_COMPONENTS}
+      className="x-markdown-dark chat-markdown-reading" />;
+  }
+  if (emphasis) return <Typography.Text strong={emphasis.length > 1} italic={emphasis.length !== 2}>{content.slice(emphasis.length)}</Typography.Text>;
+  return content.startsWith("`") ? <Typography.Text code>{content.slice(1)}</Typography.Text> : <Typography.Text>{content}</Typography.Text>;
 }
 
 function SafeMarkdownLink({ children, href }: ComponentProps) {

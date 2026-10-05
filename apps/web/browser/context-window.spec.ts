@@ -12,37 +12,52 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-test("native context-window tooltip reads measured usage on hover, focus and reload", async ({ page }) => {
+test("context-window ring reads measured usage on hover, focus and reload without a button", async ({ page }) => {
   await page.route("**/api/agent/context-window?**", route => {
     const model = new URL(route.request().url()).searchParams.get("model_key");
     return route.fulfill({ json: { model_key: model, context_window: model === "luna" ? 258_000 : 128_000,
       input_tokens: model === "luna" ? 92_000 : null, measured_at: model === "luna" ? "2026-10-02T08:00:00.000Z" : null } });
   });
   await page.goto("https://context.fixture/");
-  const indicator = page.getByRole("button", { name: /Context window.*36% used/ });
+  const indicator = page.getByLabel(/Context window.*36% used/);
   await expect(indicator).toBeVisible();
+  await expect(page.getByRole("button", { name: /Context window/ })).toHaveCount(0);
+  await expect(indicator).toHaveText("");
+  await expect(indicator.locator("svg")).toBeVisible();
+  await expect(indicator.getByRole("progressbar", { includeHidden: true })).toHaveAttribute("aria-valuenow", "36");
   await indicator.hover();
   await expect(page.getByRole("tooltip")).toContainText("36% used (64% left)");
   await expect(page.getByRole("tooltip")).toContainText("92k / 258k tokens");
   await expect(page.getByRole("tooltip")).toContainText("Estimated input");
+  await indicator.click();
+  await expect(page.getByRole("tooltip")).toBeVisible();
+  await indicator.press("Escape");
+  await expect(page.getByRole("tooltip")).toBeHidden();
+  await indicator.press("Enter");
+  await expect(page.getByRole("tooltip")).toBeHidden();
   await page.getByRole("button", { name: "Switch model" }).click();
-  const unmeasured = page.getByRole("button", { name: /Context window.*Not measured yet/ });
+  const unmeasured = page.getByLabel(/Context window.*Not measured yet/);
+  await expect(unmeasured).toHaveText("");
+  await expect(unmeasured.locator("svg")).toBeVisible();
   await unmeasured.focus();
   await expect(page.getByRole("tooltip")).toContainText("— / 128k tokens");
   await expect(page.getByRole("tooltip")).not.toContainText("36%");
   await page.reload();
-  await expect(page.getByRole("button", { name: /Context window.*36% used/ })).toBeVisible();
+  await expect(page.getByLabel(/Context window.*36% used/)).toBeVisible();
   await page.getByRole("button", { name: "简体中文", exact: true }).click();
-  await page.getByRole("button", { name: /上下文窗口.*已用 36%/ }).focus();
+  await page.getByLabel(/上下文窗口.*已用 36%/).focus();
   await expect(page.getByRole("tooltip")).toContainText("剩余 64%");
-  await page.getByRole("button", { name: /上下文窗口.*已用 36%/ }).press("Escape");
+  await page.getByLabel(/上下文窗口.*已用 36%/).press("Escape");
   await expect(page.getByRole("tooltip")).toBeHidden();
 });
 
 test("unavailable context statistics stay unknown", async ({ page }) => {
   await page.route("**/api/agent/context-window?**", route => route.fulfill({ status: 503, json: { code: "AGENT_SERVICE_UNAVAILABLE" } }));
   await page.goto("https://context.fixture/");
-  await page.getByRole("button", { name: /Context window.*Statistics unavailable/ }).focus();
+  const indicator = page.getByLabel(/Context window.*Statistics unavailable/);
+  await expect(indicator).toHaveText("");
+  await expect(indicator.locator("svg")).toBeVisible();
+  await indicator.focus();
   await expect(page.getByRole("tooltip")).toContainText("Statistics unavailable");
   await expect(page.getByRole("tooltip")).not.toContainText("0%");
 });

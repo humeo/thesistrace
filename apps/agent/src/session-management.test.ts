@@ -9,6 +9,7 @@ import {
   encodeSessionCursor,
   normalizeReplacementSessionTitle,
   normalizeSessionTitle,
+  messageSessionTitle,
   readRenameSessionInput,
   readSessionCursor,
   parseSessionVersion,
@@ -20,6 +21,14 @@ const cursor = {
 };
 
 describe("Session management contract", () => {
+  it("uses the first 32 Unicode characters of a one-line user message as its title", () => {
+    expect(messageSessionTitle("  查看\n最近的研究\t结果  ")).toBe("查看 最近的研究 结果");
+    expect(messageSessionTitle("a".repeat(31) + "😀more text")).toBe("a".repeat(31) + "😀");
+    expect(messageSessionTitle("!!!")).toBe("!!!");
+    expect(messageSessionTitle("研究\u0000\u200B回顾")).toBe("研究回顾");
+    expect(messageSessionTitle(null)).toBeNull();
+    expect(messageSessionTitle(" \n\u200B ")).toBeNull();
+  });
   it("pins one bounded history page and a clear empty title", () => {
     expect(SESSION_HISTORY_PAGE_SIZE).toBe(30);
     expect(UNTITLED_SESSION_TITLE).toBe("Untitled");

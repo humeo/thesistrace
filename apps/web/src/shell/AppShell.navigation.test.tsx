@@ -21,6 +21,7 @@ vi.mock("../auth/AccountMenu", () => ({
 let root: Root | undefined;
 const session: AgentSessionSummary = {
   activity_at: "2026-08-30T04:00:00.000000Z", created_at: "2026-08-29T04:00:00.000000Z",
+  message_title: null,
   current_turn: null, latest_turn: null, title: "Quality Alpha",
   id: "00000000-0000-4000-8000-000000000001", version: "2026-08-30T04:00:00.000Z",
 };

@@ -47,6 +47,7 @@ import {
   encodeSessionCursor,
   normalizeReplacementSessionTitle,
   normalizeSessionTitle,
+  messageSessionTitle,
   type SessionCursor,
 } from "./session-management.js";
 import type { PersistedTokenUsage } from "./usage-capture.js";
@@ -55,6 +56,21 @@ import type { AgentFailureCode } from "@thesistrace/contracts/agent-failure";
 import type { RunSelection } from "@thesistrace/contracts/agent-run-selection";
 
 export type SessionOwnership = "absent" | "foreign" | "owned";
+
+const SESSION_MESSAGE_TITLE_SQL = `
+  CASE WHEN thread.title = 'Untitled' THEN (
+    SELECT (
+      SELECT string_agg(part.value ->> 'text', '' ORDER BY part.ordinality)
+      FROM jsonb_array_elements(message.content::jsonb -> 'parts')
+        WITH ORDINALITY AS part(value, ordinality)
+      WHERE part.value ->> 'type' = 'text'
+    )
+    FROM agent.mastra_messages AS message
+    WHERE message.thread_id = thread.id AND message.role = 'user'
+    ORDER BY message."createdAtZ" ASC, message.id ASC
+    LIMIT 1
+  ) ELSE NULL END AS first_user_message
+`;
 export type PreparedRun = Readonly<{
   durableMessages: readonly Message[];
   generateTitle: boolean;
@@ -89,6 +105,7 @@ export type SessionSummary = Readonly<{
   currentTurn: PublicTurn | null;
   id: string;
   latestTurn: PublicTurn | null;
+  messageTitle: string | null;
   title: string;
   version: string;
 }>;
@@ -488,15 +505,7 @@ export class ResearchSessionRepository {
     }
     parameters.push(SESSION_HISTORY_PAGE_SIZE + 1);
     const limitParameter = parameters.length;
-    const result = await this.pool.query<{
-      activity_at: string;
-      created_at: string;
-      current_turn: unknown;
-      id: string;
-      latest_turn: unknown;
-      title: string;
-      version: Date;
-    }>(`
+    const result = await this.pool.query<SessionSummaryRow>(`
       SELECT
         session.id::text,
         pg_catalog.to_char(
@@ -508,6 +517,7 @@ export class ResearchSessionRepository {
           'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
         ) AS activity_at,
         thread.title,
+        ${SESSION_MESSAGE_TITLE_SQL},
         thread."updatedAtZ" AS version,
         CASE
           WHEN latest_run.status = ANY (ARRAY['running', 'waiting_for_user', 'stopping'])
@@ -610,6 +620,7 @@ export class ResearchSessionRepository {
           'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
         ) AS activity_at,
         thread.title,
+        ${SESSION_MESSAGE_TITLE_SQL},
         thread."updatedAtZ" AS version,
         CASE
           WHEN latest_run.status = ANY (ARRAY['running', 'waiting_for_user', 'stopping'])
@@ -2503,6 +2514,7 @@ type SessionSummaryRow = Readonly<{
   current_turn: unknown;
   id: string;
   latest_turn: unknown;
+  first_user_message: string | null;
   title: string;
   version: Date;
 }>;
@@ -2526,6 +2538,7 @@ function sessionSummaryFromRow(row: SessionSummaryRow): SessionSummary {
     currentTurn: publicTurnFromValue(row.current_turn),
     id: row.id,
     latestTurn: publicTurnFromValue(row.latest_turn),
+    messageTitle: messageSessionTitle(row.first_user_message),
     title,
     version: exactDate(row.version).toISOString(),
   };

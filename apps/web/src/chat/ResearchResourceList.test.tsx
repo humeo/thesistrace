@@ -73,15 +73,21 @@ test("requires strategy results and renders them without Factor evidence", async
 });
 
 test("transient refresh failure preserves prior facts and their read time", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-10-04T11:13:38.752Z"));
   request.mockResolvedValueOnce(new Response(JSON.stringify(run())))
     .mockResolvedValueOnce(new Response(null, { status: 503 }));
   await mount([first]);
   await vi.waitFor(() => expect(document.querySelector("time")).not.toBeNull());
   const readTime = document.querySelector("time")?.getAttribute("datetime");
+  const readLabel = document.querySelector("time")?.textContent;
+  expect(readLabel).toMatch(/^Read \d{2}\/\d{2}\/2026,/);
+  vi.setSystemTime(new Date("2026-10-05T11:13:38.752Z"));
   await act(async () => document.querySelector('button')!.click());
   await vi.waitFor(() => expect(document.querySelector('[role="alert"]')).not.toBeNull());
   expect(document.body.textContent).toContain("0.125");
   expect(document.querySelector("time")?.getAttribute("datetime")).toBe(readTime);
+  expect(document.querySelector("time")?.textContent).toBe(readLabel);
 });
 
 test.each([403, 404])("refresh %s removes facts that are no longer accessible", async status => {

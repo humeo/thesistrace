@@ -26,6 +26,8 @@ import {
   safeResearchA2UIErrorContent,
 } from "@thesistrace/contracts/research-a2ui";
 import { SAFE_TOOL_COMPLETED } from "./browser-message-safety.js";
+import { CHAT_TIMELINE_UPDATE } from "@thesistrace/contracts/chat-events";
+import { sessionResponse, timelineResponse } from "./chat-state-response.js";
 import { parseSafeToolResult, projectSafeToolResult } from "./safe-tool-result.js";
 import { McpRunPreparationError } from "./mcp-token-exchanger.js";
 import type { AgentSettings } from "./config.js";
@@ -123,9 +125,9 @@ const settings: AgentSettings = {
   port: 8400,
   publicOrigin: "http://127.0.0.1:4317",
   runMaxWallSeconds: 300,
+  providerCallTimeoutSeconds: 180,
 };
 const memoryConfiguration = { ...settings, modelRegistry: readModelRegistry(JSON.stringify({
-  providerCallTimeoutSeconds: 180,
   min_compaction_context_window: 65_536, default_model_key: "luna",
   models: [{ context_window: 65_536, max_output_tokens: 128_000, key: "luna", display_name: "Luna", enabled: true,
     provider_adapter: "openai", provider_model_id: "gpt-5.6-luna", default_reasoning_effort: "high",
@@ -181,8 +183,6 @@ describe.sequential("durable Research Agent runtime", () => {
     await owner.end();
   });
 
-  it("retains burst-stream partial text through durable recovery", async () => {
-    const runtime = await createIntegrationRuntime();
   it.each(["http", "stream", "deadline"])("retries a failed provider step twice while retaining one completed research operation: %s", async (failure) => {
     const provider = openAIToolProvider([{ name: "get_research_context", arguments: {} }]);
     const requests: Record<string, unknown>[] = [];
@@ -256,6 +256,8 @@ describe.sequential("durable Research Agent runtime", () => {
     } finally { await runtime.close(); vi.unstubAllGlobals(); }
   }, 10_000);
 
+  it("retains burst-stream partial text through durable recovery", async () => {
+    const runtime = await createIntegrationRuntime();
     const threadId = randomUUID();
     const invoke = (existing: boolean) => run(runtime, runInput({ threadId, runId: randomUUID(), messageId: randomUUID(),
       sessionMode: existing ? "existing" : "new", content: existing ? "[scripted-context-recovery] Continue." : "Prepare research." }), primaryResearcher);
@@ -953,6 +955,15 @@ describe.sequential("durable Research Agent runtime", () => {
       const events = await run(runtime, input, primaryResearcher);
       expect(events.at(-1)?.type).toBe("RUN_FINISHED");
       const timeline = await runtime.timeline(input.threadId, primaryResearcher, undefined, 20);
+      const updates = events.filter(event => event.type === "CUSTOM" && event.name === CHAT_TIMELINE_UPDATE);
+      expect(updates.length).toBeGreaterThan(2);
+      expect(updates[0]!.value).toMatchObject({ session: { id: input.threadId },
+        timeline: { next_cursor: null, turns: [{ id: input.runId, entries: [{ kind: "user_input" }] }] } });
+      expect(updates.at(-1)!.value).toEqual({
+        session: sessionResponse(await runtime.session(input.threadId, primaryResearcher)),
+        timeline: timelineResponse(timeline),
+      });
+      expect(JSON.stringify(updates)).not.toContain('"toolCallId"');
       const entries = timeline.turns[0]!.entries.filter((entry) => entry.kind === "assistant_message" || entry.kind === "tool_activity");
       expect(entries.map((entry) => entry.kind === "assistant_message" ? entry.payload.content : entry.payload.name)).toEqual([
         "Checking.", "get_research_context", "Read the context.", "get_research_context", "Finished.",
@@ -1114,6 +1125,7 @@ describe.sequential("durable Research Agent runtime", () => {
       await expect(runtime.preference(threadId, primaryResearcher)).resolves.toEqual({
         model_key: "scripted-research",
         reasoning_effort: "medium",
+        selection_mode: "manual",
       });
       await expect(runtime.preference(threadId, foreignResearcher)).resolves.toBeNull();
       await expect(runtime.preference("not-a-thread", primaryResearcher)).resolves.toBeNull();
@@ -2331,7 +2343,17 @@ describe.sequential("durable Research Agent runtime", () => {
         runId: fixedUuid(425),
         threadId: retryThreadId,
       }), primaryResearcher);
-      expect(failed.map((event) => event.type)).toEqual(["RUN_STARTED", "RUN_ERROR"]);
+      expect(failed.filter(event => event.type !== "CUSTOM").map(event => event.type))
+        .toEqual(["RUN_STARTED", "RUN_ERROR"]);
+      expect(await runtime.session(retryThreadId, primaryResearcher)).toMatchObject({
+        title: UNTITLED_SESSION_TITLE,
+        messageTitle: "Test an earnings stability Alpha",
+      });
+      const listed = await runtime.sessions(undefined, primaryResearcher);
+      expect(listed.sessions.find(session => session.id === retryThreadId)).toMatchObject({
+        title: UNTITLED_SESSION_TITLE,
+        messageTitle: "Test an earnings stability Alpha",
+      });
     } finally {
       await runtime.close();
     }

@@ -13,6 +13,24 @@ afterEach(() => {
 });
 
 describe("Session title generation", () => {
+  it("allows a title model to finish near the end of its one-minute deadline", async () => {
+    vi.useFakeTimers();
+    const model = new ScriptedLanguageModel("scripted-v1");
+    const generate = model.doGenerate.bind(model);
+    vi.spyOn(model, "doGenerate").mockImplementation(async (options) => {
+      await new Promise((resolve) => setTimeout(resolve, 55_000));
+      return generate(options);
+    });
+    const outcome = generateSessionTitle({
+      languageModel: model,
+      message: "Build a quality Alpha.",
+      providerOptions: {},
+    }).then(title => ({ title }), () => ({ title: null }));
+
+    await vi.advanceTimersByTimeAsync(55_000);
+
+    expect((await outcome).title).not.toBeNull();
+  });
   it("uses one no-Tool Scripted model operation and returns compact plain text", async () => {
     const title = await generateSessionTitle({
       languageModel: new ScriptedLanguageModel("scripted-v1"),

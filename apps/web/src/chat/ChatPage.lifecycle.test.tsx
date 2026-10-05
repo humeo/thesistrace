@@ -6,6 +6,8 @@ import { afterEach, expect, test, vi } from "vitest";
 
 import { ChatTestProvider } from "./chatTestProvider";
 import { ChatComposer } from "./ChatComposer";
+import { ChatConversationView } from "./ChatConversation";
+import { i18n } from "../i18n";
 import type { StagedInput } from "./stagedInputStore";
 import type { ChatConversationController } from "./useChatConversation";
 
@@ -16,6 +18,33 @@ afterEach(async () => {
   await act(async () => root?.unmount());
   root = undefined;
   document.body.replaceChildren();
+  await i18n.changeLanguage("en");
+});
+
+test("a session refresh alert preserves the composer, offers retry and translates in place", async () => {
+  const container = document.createElement("div"); document.body.append(container);
+  root = createRoot(container);
+  const retry = vi.fn();
+  const controller = composerController({ draft: "Unsent question" });
+  const render = (failed: boolean) => <ChatTestProvider><ChatConversationView
+    controller={controller} modelControls={null} existingSession agentId="research"
+    threadId="00000000-0000-4000-8000-000000000001" sessionRefreshFailed={failed} onRetrySession={retry}
+  /></ChatTestProvider>;
+  await act(async () => root!.render(render(false)));
+  const input = container.querySelector("textarea");
+  await act(async () => root!.render(render(true)));
+  expect(container.querySelector("textarea")).toBe(input);
+  expect(input?.value).toBe("Unsent question");
+  const alert = container.querySelector('[role="alert"]')!;
+  expect(alert.textContent).toContain("Showing the last loaded conversation");
+  await act(async () => (alert.querySelector("button") as HTMLButtonElement).click());
+  expect(retry).toHaveBeenCalledOnce();
+  await act(async () => { await i18n.changeLanguage("zh-CN"); });
+  expect(alert.textContent).toContain("无法刷新会话信息，已保留当前对话");
+  expect(container.querySelector("textarea")).toBe(input);
+  await act(async () => root!.render(render(false)));
+  expect(container.querySelector('[role="alert"]')).toBeNull();
+  expect(container.querySelector("textarea")).toBe(input);
 });
 
 test.each([

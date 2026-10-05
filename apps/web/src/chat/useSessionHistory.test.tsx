@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   useSessionHistory,
+  useSelectedSession,
+  type SelectedSessionState,
   type SessionHistoryController,
 } from "./useSessionHistory";
 
@@ -25,6 +27,80 @@ afterEach(() => {
 });
 
 describe("Session history Hook lifecycle", () => {
+  it("retains the opened conversation and draft through a failed background refresh, then recovers", async () => {
+    const requests = installPendingFetch();
+    const container = document.createElement("div"); document.body.append(container);
+    const root = createRoot(container);
+    const session = sessionPage().sessions[0]!;
+    let selected: SelectedSessionState | null = null;
+    function Probe({ revision, owner = "researcher-a" }: { revision: number; owner?: string }) {
+      const state = useSelectedSession(session.id, undefined, owner, "ready", revision);
+      useEffect(() => { selected = state; }, [state]);
+      return state.status === "ready" ? <textarea aria-label="Draft" defaultValue="Keep this draft" /> : <p>{state.status}</p>;
+    }
+    try {
+      await act(async () => root.render(<Probe revision={0} />));
+      await act(async () => requests.at(-1)!.resolve(jsonResponse(session)));
+      const draft = container.querySelector("textarea")!;
+      draft.value = "Unsent research question";
+      await act(async () => root.render(<Probe revision={1} />));
+      await act(async () => requests.at(-1)!.resolve(new Response("", { status: 503 })));
+      expect(selected).toMatchObject({ status: "ready", session, refreshFailed: true });
+      expect(container.querySelector("textarea")).toBe(draft);
+      expect(draft.value).toBe("Unsent research question");
+      await act(async () => root.render(<Probe revision={2} />));
+      await act(async () => requests.at(-1)!.resolve(jsonResponse(session)));
+      expect(selected).toEqual({ status: "ready", session });
+      expect(container.querySelector("textarea")).toBe(draft);
+      await act(async () => root.render(<Probe revision={3} owner="researcher-b" />));
+      expect(container.querySelector("textarea")).toBeNull();
+    } finally { await unmountProbe(root); }
+  });
+  it.each([401, 403, 404, 400])("does not retain an opened conversation after HTTP %s", async status => {
+    const requests = installPendingFetch();
+    const root = createRoot(document.createElement("div"));
+    const session = sessionPage().sessions[0]!;
+    let selected: SelectedSessionState | null = null;
+    function Probe({ revision }: { revision: number }) {
+      const state = useSelectedSession(session.id, undefined, "researcher-a", "ready", revision);
+      useEffect(() => { selected = state; }, [state]);
+      return null;
+    }
+    try {
+      await act(async () => root.render(<Probe revision={0} />));
+      await act(async () => requests.at(-1)!.resolve(jsonResponse(session)));
+      expect(selected).toMatchObject({ status: "ready" });
+      await act(async () => root.render(<Probe revision={1} />));
+      await act(async () => requests.at(-1)!.resolve(new Response("", { status })));
+      expect(selected).not.toMatchObject({ status: "ready" });
+    } finally { await unmountProbe(root); }
+  });
+  it("keeps an already opened session ready during history refreshes, then rejects missing ownership", async () => {
+    const requests = installPendingFetch();
+    const container = document.createElement("div"); document.body.append(container);
+    const root = createRoot(container);
+    let selected: SelectedSessionState | null = null;
+    const receive = (value: SelectedSessionState) => { selected = value; };
+    const session = sessionPage().sessions[0]!;
+    function Probe({ refreshVersion, historyStatus = "ready" }: { refreshVersion: number; historyStatus?: "ready" | "loading" }) {
+      const value = useSelectedSession(session.id, undefined, "researcher-a", historyStatus, refreshVersion);
+      useEffect(() => receive(value), [value]);
+      return null;
+    }
+    try {
+      await act(async () => root.render(<Probe refreshVersion={0} />));
+      expect(selected).toMatchObject({ status: "loading" });
+      await act(async () => { requests[0]!.resolve(jsonResponse(session)); await flushMicrotasks(); });
+      expect(selected).toMatchObject({ status: "ready", session });
+      await act(async () => root.render(<Probe refreshVersion={1} />));
+      expect(selected).toMatchObject({ status: "ready", session });
+      await act(async () => root.render(<Probe refreshVersion={2} historyStatus="loading" />));
+      expect(selected).toMatchObject({ status: "ready", session });
+      await act(async () => root.render(<Probe refreshVersion={2} />));
+      await act(async () => { requests.at(-1)!.resolve(new Response("", { status: 404 })); await flushMicrotasks(); });
+      expect(selected).toMatchObject({ status: "not-found" });
+    } finally { await unmountProbe(root); }
+  });
   it("updates active sessions without discarding loaded history and cancels background probes", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-09-04T00:00:00Z"));
@@ -168,6 +244,7 @@ function sessionPage() {
     sessions: Array.from({ length: 30 }, (_, index) => ({
       activity_at: "2026-08-30T04:00:00.000000Z",
       created_at: "2026-08-29T04:00:00.000000Z",
+      message_title: null,
       current_turn: null,
       id: `00000000-0000-4000-8000-${(30 - index).toString(16).padStart(12, "0")}`,
       latest_turn: null,

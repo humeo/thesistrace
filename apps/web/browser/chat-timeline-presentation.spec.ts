@@ -92,7 +92,18 @@ test("desktop messages match ChatGPT's reading width while the native scroll vie
     return { paragraph: gap(paragraphs[0]!, paragraphs[1]!), headingBefore: gap(paragraphs[1]!, heading),
       headingAfter: gap(heading, paragraphs[2]!), list: gap(items[0]!, items[1]!) };
   });
-  expect(gaps).toEqual({ paragraph: 16, headingBefore: 16, headingAfter: 4, list: 0 });
+  expect(gaps).toEqual({ paragraph: 16, headingBefore: 16, headingAfter: 4, list: 8 });
+  const table = prose.getByRole("table");
+  await expect(table).toHaveCSS("font-size", "14px");
+  await expect(table).toHaveCSS("line-height", "22px");
+  await expect(table.getByRole("columnheader", { name: "阅读位置", exact: true })).toHaveCSS("text-align", "start");
+  await expect(table.getByRole("cell", { name: "+12.5%", exact: true })).toHaveCSS("text-align", /^(?:-webkit-)?right$/);
+  const tableWidth = (await table.boundingBox())!.width;
+  expect(Math.abs(tableWidth - (await prose.boundingBox())!.width)).toBeLessThanOrEqual(1);
+  await page.setViewportSize({ width: 917, height: 944 });
+  expect(Math.abs((await table.boundingBox())!.width - (await prose.boundingBox())!.width)).toBeLessThanOrEqual(1);
+  expect(await table.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 test("native work disclosure opens during execution and folds when finished while preserving final research views", async ({ page }) => {
   const details = page.locator(".ant-think-content").first();
@@ -115,6 +126,26 @@ test("native work disclosure opens during execution and folds when finished whil
   await expect(page.getByText("Default approach", { exact: true })).toBeVisible();
   await work.click();
   await expect(details).toBeHidden();
+});
+test("turns without work records show elapsed time without an empty disclosure", async ({ page }) => {
+  await page.goto("https://chat.fixture/?initial=running");
+  const work = page.locator('[data-entry-id^="work:"]');
+  await expect(work).toHaveText(/^Working for/);
+  await expect(work.getByRole("img", { name: "right", exact: true })).toHaveCount(0);
+  await expect(work.getByRole("img", { name: "loading", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Short reply", exact: true }).click();
+  await expect(work.getByRole("img", { name: "right", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Finish reply", exact: true }).click();
+  await expect(work).toHaveText(/^Worked for/);
+  await expect(work.getByRole("img", { name: "right", exact: true })).toHaveCount(0);
+  await work.getByText(/^Worked for/).click();
+  await expect(work.locator(".ant-card, .ant-think-content")).toHaveCount(0);
+  await expect(page.getByText("Hello. How can I help?", { exact: true })).toBeVisible();
+  await page.goto("https://chat.fixture/?initial=single-history");
+  await page.getByRole("button", { name: "Load history", exact: true }).click();
+  await expect(work).toHaveText(/^Worked for/);
+  await expect(work.getByRole("img", { name: "right", exact: true })).toHaveCount(0);
+  await expect(work.locator(".ant-card, .ant-think-content")).toHaveCount(0);
 });
 test("work steps fill the reading width with native titles, content and disclosure", async ({ page }) => {
   await page.getByRole("button", { name: "Complete", exact: true }).click();
@@ -154,7 +185,7 @@ test("work steps fill the reading width with native titles, content and disclosu
   await expect(process.getByText("Which approach?", { exact: true })).toBeHidden();
   await expect(process.getByText("Default approach", { exact: true })).toBeHidden();
 });
-test("native message footers copy original text and include the requested time format", async ({ page }) => {
+test("native message footers copy original text and include persisted calendar dates", async ({ page }) => {
   await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (value: string) => { (window as unknown as { copied: string }).copied = value; } } }));
   await page.getByRole("button", { name: "Complete", exact: true }).click();
   await page.getByRole("button", { name: "Send next", exact: true }).click();
@@ -177,8 +208,8 @@ test("native message footers copy original text and include the requested time f
   expect(await reply.boundingBox()).toEqual(replyBefore);
   await reply.getByRole("button", { name: "Copy response", exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as unknown as { copied: string }).copied)).toBe("Hello. How can I help?");
-  await expect(reply.locator("time")).toHaveText("12:00 AM");
-  await expect(user.locator("time")).toHaveText("12:00 AM");
+  await expect(reply.locator("time")).toHaveText("09/06/2026 12:00 AM");
+  await expect(user.locator("time")).toHaveText("09/06/2026 12:00 AM");
   const replyCopy = (await reply.getByRole("button", { name: "Copy response", exact: true }).boundingBox())!;
   const replyText = (await reply.locator(".x-markdown").boundingBox())!;
   const replyTime = (await reply.locator("time").boundingBox())!;
@@ -200,10 +231,10 @@ test("plain and expandable elapsed labels share native typography with icons ali
   await page.getByRole("button", { name: "Complete", exact: true }).click();
   await page.getByRole("button", { name: "Send next", exact: true }).click();
   await page.getByRole("button", { name: "Finish reply", exact: true }).click();
-  const headings = page.locator(".ant-think-status-text").filter({ hasText: /^Worked for/ });
+  const headings = page.locator(".ant-think-status-text, .ant-thought-chain-item-description").filter({ hasText: /^Worked for/ });
   expect(await headings.count()).toBe(2);
   const geometry = await headings.evaluateAll(elements => elements.map(element => ({
-    x: element.closest(".ant-think")!.getBoundingClientRect().x, fontSize: getComputedStyle(element).fontSize,
+    x: element.closest(".ant-think, .ant-thought-chain-item")!.getBoundingClientRect().x, fontSize: getComputedStyle(element).fontSize,
     weight: getComputedStyle(element).fontWeight,
   })));
   expect(geometry[0]).toEqual(geometry[1]);
@@ -240,7 +271,7 @@ test("new prompts sit near the top with reply space and stay there through short
 test("the first accepted prompt stays at the top before output and through a short reply", async ({ page }) => {
   await page.clock.setFixedTime(new Date("2026-09-06T00:00:05Z"));
   await page.goto("https://chat.fixture/?initial=prompt");
-  const work = page.locator(".ant-think-status-text");
+  const work = page.locator(".ant-think-status-text, .ant-thought-chain-item-description");
   await expect(work).toHaveText("Working for 5s");
   await expect(page.locator(".chat-message-assistant")).toHaveCount(0);
   await page.clock.setFixedTime(new Date("2026-09-06T00:00:07Z"));

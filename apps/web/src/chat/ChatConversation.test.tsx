@@ -43,6 +43,7 @@ test.each([
   try {
     await act(async () => root.render(<AgentConversation existingSession initialSession={{
       id: "session", title: "Greeting", activity_at: "2026-09-30T00:00:00Z", created_at: "2026-09-30T00:00:00Z",
+      message_title: null,
       current_turn: null, latest_turn: null, version: "2026-09-30T00:00:00Z",
     }} modelControls={null} onAccepted={() => {}} onSessionChanged={() => {}} onTitleMaySettle={() => {}}
       researcherId="owner" selection={null} titleMaySettle={false} threadId="session" />));

@@ -19,6 +19,7 @@ import {
 } from "./modelCatalog";
 import { ModelPicker } from "./ModelPicker";
 import { ResearchChatCopilotProvider } from "./ResearchChatCopilotProvider";
+import { sessionDisplayTitle } from "./sessionHistory";
 import {
   AgentSessionPreferenceInvalidError, AgentSessionPreferenceNotFoundError,
   loadAgentSessionPreference, type AgentSessionPreference,
@@ -157,7 +158,7 @@ export function ChatContent({
           <AuthoritativeStaticChatMain
             modelControls={<Typography.Text type="secondary" role="status">{t("loadingSettings")}</Typography.Text>}
             opening
-            sessionTitle={currentSession?.title && currentSession.title !== "Untitled" ? currentSession.title : t("session")}
+            sessionTitle={sessionDisplayTitle(currentSession, t("session"))}
           />
         ) : thread.kind === "session" && (
           preferenceState.status !== "ready"
@@ -166,7 +167,7 @@ export function ChatContent({
           <AuthoritativeStaticChatMain
             error={t("sessionLoadFailed")}
             modelControls={null}
-            sessionTitle={currentSession?.title && currentSession.title !== "Untitled" ? currentSession.title : t("session")}
+            sessionTitle={sessionDisplayTitle(currentSession, t("session"))}
           />
         ) : (
           <AuthoritativeAgentConversation
@@ -179,6 +180,7 @@ export function ChatContent({
             onTitleMaySettle={sessionHistory.watchGeneratedTitle}
             researcherId={researcherId}
             selection={selection}
+            sessionRefreshFailed={selectedSessionState.status === "ready" && selectedSessionState.refreshFailed}
             titleMaySettle={currentSession?.title === "Untitled"
               || (!accepted && thread.kind === "new")}
             threadId={thread.id}

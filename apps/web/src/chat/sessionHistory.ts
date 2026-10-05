@@ -5,7 +5,7 @@ const SESSION_PAGE_SIZE = 30;
 const MAX_TITLE_CHARACTERS = 80;
 const SESSION_REQUEST_TIMEOUT_MS = 5_000;
 const GENERATED_TITLE_POLL_INTERVAL_MS = 1_000;
-const GENERATED_TITLE_WATCH_TIMEOUT_MS = 20_000;
+const GENERATED_TITLE_WATCH_TIMEOUT_MS = 60_000;
 const SESSION_TITLE_DEFAULT_IGNORABLE = /\p{Default_Ignorable_Code_Point}/u;
 const SESSION_TITLE_VISIBLE_BASE = /[\p{L}\p{N}\p{S}]/u;
 
@@ -15,9 +15,15 @@ export type AgentSessionSummary = Readonly<{
   current_turn: ChatTurn | null;
   id: string;
   latest_turn: ChatTurn | null;
+  message_title: string | null;
   title: string;
   version: string;
 }>;
+
+export function sessionDisplayTitle(session: AgentSessionSummary | undefined, emptyTitle: string): string {
+  if (session === undefined) return emptyTitle;
+  return session.title === "Untitled" ? session.message_title ?? emptyTitle : session.title;
+}
 
 export type AgentSessionPage = Readonly<{
   next_cursor: string | null;
@@ -39,9 +45,11 @@ export class AgentSessionTitleInvalidError extends Error {
 }
 
 export class AgentSessionUnavailableError extends Error {
-  constructor() {
+  readonly transient: boolean;
+  constructor(status?: number) {
     super("Agent Chat Sessions are unavailable");
     this.name = "AgentSessionUnavailableError";
+    this.transient = status === undefined || status === 408 || status === 429 || status >= 500;
   }
 }
 
@@ -70,8 +78,8 @@ export type GeneratedTitleWatchResult = "settled" | "unchanged" | "stopped";
 
 /**
  * Observe the independent best-effort title operation without extending the
- * Agent Run or keeping the Session busy. The final probe occurs after the
- * server's five-second title deadline, and every wait/request is abortable.
+ * Agent Run or keeping the Session busy. Observation is bounded to one minute,
+ * and every wait/request is abortable.
  */
 export async function watchGeneratedSessionTitle(options: Readonly<{
   load?: (threadId: string, signal: AbortSignal) => Promise<AgentSessionSummary>;
@@ -170,7 +178,7 @@ export async function loadAgentSession(
 ): Promise<AgentSessionSummary> {
   const response = await sessionFetch(sessionEndpoint(threadId), { signal });
   if (response.status === 404) throw new AgentSessionNotFoundError();
-  if (!response.ok) throw new AgentSessionUnavailableError();
+  if (!response.ok) throw new AgentSessionUnavailableError(response.status);
   try {
     const session = decodeAgentSessionSummary(await response.json());
     if (session.id !== threadId) throw new AgentSessionInvalidError();
@@ -268,7 +276,7 @@ export function decodeAgentSessionPage(value: unknown): AgentSessionPage {
   return { next_cursor: value.next_cursor, sessions };
 }
 
-function decodeAgentSessionSummary(value: unknown): AgentSessionSummary {
+export function decodeAgentSessionSummary(value: unknown): AgentSessionSummary {
   if (
     !isExactRecord(value, [
       "activity_at",
@@ -276,6 +284,7 @@ function decodeAgentSessionSummary(value: unknown): AgentSessionSummary {
       "current_turn",
       "id",
       "latest_turn",
+      "message_title",
       "title",
       "version",
     ])
@@ -287,6 +296,13 @@ function decodeAgentSessionSummary(value: unknown): AgentSessionSummary {
     || typeof value.id !== "string"
     || !isUuid(value.id)
     || value.id !== value.id.toLowerCase()
+    || !(value.message_title === null || (
+      typeof value.message_title === "string"
+      && value.message_title.length > 0
+      && [...value.message_title].length <= 32
+      && value.message_title.trim().replace(/\s+/gu, " ") === value.message_title
+      && !/[\p{Default_Ignorable_Code_Point}\p{Cc}]/u.test(value.message_title)
+    ))
     || typeof value.title !== "string"
     || normalizeTitle(value.title) !== value.title
     || typeof value.version !== "string"
@@ -312,6 +328,7 @@ function decodeAgentSessionSummary(value: unknown): AgentSessionSummary {
     current_turn: currentTurn,
     id: value.id,
     latest_turn: latestTurn,
+    message_title: value.message_title,
     title: value.title,
     version: value.version,
   };
