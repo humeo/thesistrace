@@ -62,10 +62,21 @@ describe("public Session state", () => {
     ).toEqual({ status: "setup-failure", session });
     expect(
       authStateReducer(authenticated, { type: "auth-unavailable" }),
-    ).toEqual({ status: "unavailable", session });
+    ).toMatchObject({ status: "unavailable", session });
     expect(
       authStateReducer(authenticated, { type: "core-unauthorized" }),
     ).toEqual({ status: "anonymous", session: null });
+  });
+
+  test("retains workspace readiness only after successful setup, including repeated outages", () => {
+    const blocked = authStateReducer({ status: "authenticated", session }, { type: "auth-unavailable" });
+    expect(blocked).toMatchObject({ status: "unavailable", workspaceReady: true });
+    expect(authStateReducer(blocked, { type: "auth-unavailable" })).toMatchObject({ workspaceReady: true });
+    expect(authStateReducer({ status: "setup", session }, { type: "auth-unavailable" })).toMatchObject({ workspaceReady: false });
+    const missing = authStateReducer(blocked, { type: "session-missing" });
+    expect(missing).toEqual({ status: "anonymous", session: null });
+    const nextIdentity = authStateReducer(blocked, { type: "session-available", session: { ...session, researcherId: "00000000-0000-4000-8000-000000000002" } });
+    expect(authStateReducer(nextIdentity, { type: "auth-unavailable" })).toMatchObject({ workspaceReady: false });
   });
 
   test("uses the agreed visible online refresh interval", () => {

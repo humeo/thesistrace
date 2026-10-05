@@ -15,7 +15,7 @@ export type AuthState =
   | Readonly<{ status: "setup"; session: PublicSession }>
   | Readonly<{ status: "setup-failure"; session: PublicSession }>
   | Readonly<{ status: "authenticated"; session: PublicSession }>
-  | Readonly<{ status: "unavailable"; session: PublicSession | null; retryAt?: number }>;
+  | Readonly<{ status: "unavailable"; session: PublicSession | null; workspaceReady: boolean; retryAt?: number }>;
 
 export type AuthAction =
   | Readonly<{ type: "session-available"; session: PublicSession }>
@@ -41,7 +41,15 @@ export function authStateReducer(state: AuthState, action: AuthAction): AuthStat
     case "setup-failed":
       return { status: "setup-failure", session: action.session };
     case "auth-unavailable":
-      return { status: "unavailable", session: state.session, ...(action.retryAt === undefined ? {} : { retryAt: action.retryAt }) };
+      return {
+        status: "unavailable",
+        session: state.session,
+        // Readiness preserves local UI state; it does not grant access while
+        // verification is unavailable. A new identity must finish setup first.
+        workspaceReady: state.status === "authenticated"
+          || (state.status === "unavailable" && state.workspaceReady),
+        ...(action.retryAt === undefined ? {} : { retryAt: action.retryAt }),
+      };
   }
 }
 

@@ -12,13 +12,13 @@ import {
   type BrowserLocation,
   type InitialAuthSecret,
 } from "./auth/routing";
-import { authenticatedResearcherId } from "./auth/session";
 import { CoreApp } from "./shell/CoreApp";
 import { synchronizeEntryLanguage, useTranslation } from "./i18n";
 import { Button } from "./components/ui/button";
 import { Alert, AlertDescription } from "./components/ui/alert";
 import { Spinner } from "./components/ui/spinner";
 import { Toaster } from "./components/ui/toast";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "./components/ui/dialog";
 import "./styles.css";
 
 const LandingPage = lazy(() => import('./landing/LandingPage'));
@@ -51,7 +51,9 @@ const initialLocation = consumeBrowserLocation();
 function BrowserRoutedApp() {
   const { t } = useTranslation("auth");
   const { state, retry } = useAuth();
-  const researcherId = authenticatedResearcherId(state);
+  const workspaceSession = state.status === "authenticated"
+    || (state.status === "unavailable" && state.workspaceReady) ? state.session : null;
+  const researcherId = workspaceSession?.researcherId ?? null;
   const [location, setLocation] = useState(browserLocation);
   const [secret, setSecret] = useState<InitialAuthSecret | null>(initialLocation.secret);
 
@@ -120,7 +122,7 @@ function BrowserRoutedApp() {
       />
     );
   }
-  if (state.status === "unavailable") {
+  if (state.status === "unavailable" && workspaceSession === null) {
     return (
       <AuthStatus
         action={() => void retry()}
@@ -144,18 +146,42 @@ function BrowserRoutedApp() {
       />
     );
   }
-  if (researcherId === null) {
+  if (researcherId === null || workspaceSession === null) {
     return <AuthStatus title={t("opening")} message={t("preparingAccess")} />;
   }
   return (
-    <CoreApp
-      key={researcherId}
-      location={location}
-      navigate={navigate}
-      isOperator={state.session.operator}
-      researcherId={researcherId}
-    />
+    <>
+      <CoreApp
+        key={researcherId}
+        location={location}
+        navigate={navigate}
+        isOperator={workspaceSession.operator}
+        researcherId={researcherId}
+      />
+      <WorkspaceAccessNotice
+        unavailable={state.status === "unavailable"}
+        retry={retry}
+        retryAt={state.status === "unavailable" ? state.retryAt : undefined}
+      />
+    </>
   );
+}
+
+function WorkspaceAccessNotice({ unavailable, retry, retryAt = 0 }: {
+  unavailable: boolean;
+  retry: () => Promise<void>;
+  retryAt?: number;
+}) {
+  const { t } = useTranslation("auth");
+  const cooldown = useAuthRetry(retryAt);
+  return <Dialog open={unavailable} disablePointerDismissal onOpenChange={(open, event) => { if (!open) event.cancel(); }}>
+    <DialogContent showCloseButton={false}>
+      <DialogHeader><DialogTitle>{t("unavailable")}</DialogTitle>
+        <DialogDescription>{cooldown > 0 ? t("rateLimited", { seconds: cooldown }) : t("unavailableMessage")}</DialogDescription>
+      </DialogHeader>
+      <Button disabled={cooldown > 0} onClick={() => void retry()}>{t("retry")}</Button>
+    </DialogContent>
+  </Dialog>;
 }
 
 function AuthStatus({ title, message, action, actionLabel, retryAt = 0 }: {
