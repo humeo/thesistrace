@@ -113,13 +113,17 @@ class TushareDailyBasicSource:
             if "ts_code" not in params and trade_date < since.replace("-", "")
             and current in codes and current in observed_codes
         }
-        # The canonical market universe is SSE/SZSE; whole-day source payloads
-        # also contain Beijing/NEEQ history. Keep those raw rows for audit, but
-        # never use them to broaden the requested identity set or hide a cap.
+        # The canonical universe is SSE/SZSE A shares; whole-day payloads also
+        # contain Beijing/NEEQ and B shares (20xxxx.SZ and 900xxx.SH). Retain
+        # those raw rows for audit without expanding the universe or hiding a cap.
         outside_market = {
             code for code in observed_codes
             if "ts_code" not in params and isinstance(code, str)
-            and len(code) == 9 and code.endswith(".BJ") and code[:6].isdigit()
+            and len(code) == 9 and code[:6].isdigit() and (
+                code.endswith(".BJ")
+                or (code.startswith("20") and code.endswith(".SZ"))
+                or (code.startswith("900") and code.endswith(".SH"))
+            )
         }
         allowed_codes = codes | retired_duplicates | outside_market
         for item in raw.items:

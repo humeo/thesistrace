@@ -88,7 +88,9 @@ def test_retired_code_cannot_replace_a_missing_current_identity_row() -> None:
         )
 
 
-@pytest.mark.parametrize("excluded_code", ("000022.SZ", "920023.BJ"))
+@pytest.mark.parametrize("excluded_code", (
+    "000022.SZ", "920023.BJ", "200011.SZ", "201872.SZ", "900901.SH",
+))
 def test_excluded_source_row_does_not_hide_a_capped_whole_day(excluded_code) -> None:
     codes = tuple(f"{number:06}.SZ" for number in range(6000) if number != 22)
     expected = RawSourceResponse(DAILY_BASIC_SOURCE_FIELDS, tuple(
@@ -121,6 +123,35 @@ def test_whole_day_preserves_beijing_source_evidence_outside_shanghai_shenzhen_s
     assert receipt["response"]["items"] == [list(item) for item in raw.items]
 
 
+def test_whole_day_preserves_b_share_evidence_without_expanding_a_share_universe(tmp_path):
+    import json
+
+    from thesistrace.data.daily_basic_evidence import DailyBasicCheckpoint
+
+    raw = response(("600519.SH", "200011.SZ", "201872.SZ", "900901.SH"), session="20200918")
+    checkpoint = DailyBasicCheckpoint(tmp_path, collection_key="a-share-baseline")
+    collected = TushareDailyBasicSource(Provider([raw])).collect_session(
+        session="2020-09-18", instrument_codes=("600519.SH",), checkpoint=checkpoint,
+    )
+    assert collected == response(("600519.SH",), session="20200918")
+    receipt = json.loads((tmp_path / checkpoint.evidence()[0]["path"]).read_text())
+    assert receipt["response"]["items"] == [list(item) for item in raw.items]
+    assert TushareDailyBasicSource(Provider([])).collect_session(
+        session="2020-09-18", instrument_codes=("600519.SH",),
+        checkpoint=DailyBasicCheckpoint(tmp_path, collection_key="a-share-baseline"),
+    ) == collected
+
+
+@pytest.mark.parametrize("unexpected_code", ("200011.SZ", "201872.SZ", "900901.SH"))
+def test_b_share_row_cannot_replace_a_requested_identity_in_a_capped_day(unexpected_code):
+    codes = tuple(f"{number:06}.SZ" for number in range(6000))
+    provider = Provider([response(codes), response((unexpected_code,))])
+    with pytest.raises(DataSourceError):
+        TushareDailyBasicSource(provider).collect_session(
+            session="2026-09-09", instrument_codes=codes,
+        )
+
+
 def test_full_day_is_split_by_historical_security_without_offset() -> None:
     codes = tuple(f"{number:06}.SZ" for number in range(6000))
     provider = Provider([response(codes), *[response((code,)) for code in codes]])
@@ -137,6 +168,9 @@ def test_full_day_is_split_by_historical_security_without_offset() -> None:
     response(("600519.SH",), session="20260908"),
     response(("600519.SH", "600519.SH")),
     response(("000001.SZ",)),
+    response(("220001.SZ",)),
+    response(("299901.SZ",)),
+    response(("20abcd.SZ",)),
     RawSourceResponse(fields=("ts_code", "trade_date"), items=()),
 ])
 def test_wrong_scope_duplicates_or_missing_columns_fail_closed(raw: RawSourceResponse) -> None:
