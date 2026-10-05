@@ -2,7 +2,7 @@ import { APICallError, InvalidResponseDataError, LoadAPIKeyError } from "@ai-sdk
 import { expect, test } from "vitest";
 
 import { agentFailure, AGENT_FAILURE_CODES, runFailureEvent } from "@thesistrace/contracts/agent-failure";
-import { AgentRunFailure, providerFailureCode } from "./run-failure.js";
+import { AgentRunFailure, providerFailureCode, transientProviderFailure } from "./run-failure.js";
 
 test("classifies an explicit provider context rejection without reading private text", () => {
   const error = new APICallError({ message: "private", url: "https://private.invalid", statusCode: 400,
@@ -63,4 +63,16 @@ test("every closed failure has safe copy and an explicit legal next action", () 
   }
   expect(agentFailure("<script>private</script>").code).toBe("INTERNAL_FAILURE");
   expect(agentFailure("__proto__").code).toBe("INTERNAL_FAILURE");
+});
+
+test.each([
+  ["server_error", true], ["rate_limit_exceeded", true], ["insufficient_quota", false],
+  ["context_length_exceeded", false], ["invalid_request_error", false], ["unknown", false],
+])("retry eligibility depends on typed stream error code %s", (code, retryable) => {
+  expect(transientProviderFailure({ type: "error", sequence_number: 3, code, message: "private-error" })).toBe(retryable);
+});
+
+test("insufficient account quota is not treated as temporary throttling", () => {
+  expect(transientProviderFailure(new APICallError({ message: "private", url: "https://fixture.invalid", statusCode: 429,
+    requestBodyValues: {}, data: { error: { code: "insufficient_quota" } } }))).toBe(false);
 });

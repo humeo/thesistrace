@@ -92,7 +92,7 @@ function fixture(responses: Response[] | ((request: LanguageModelV3CallOptions, 
     } };
   const capacity = { contextWindow: 65_536, maxOutputTokens: 128_000 };
   const guarded = new GuardedLanguageModel(model, new RunModelObservation(new RunUsageCapture()), capacity, "memory");
-  const selection: ResolvedModelSelection = { compactionEnabled: true, effort: "high", languageModel: guarded,
+  const selection: ResolvedModelSelection = { compactionEnabled: true, effort: "high", languageModel: guarded, providerCallTimeoutMs: 180_000,
     memoryLanguageModel: guarded, providerOptions: { openai: { reasoningEffort: "high" } }, model: {
       ...capacity, pricing: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 }, credential: null, defaultReasoningEffort: "high", displayName: "Fixture", enabled: true,
       key: "fixture", providerAdapter: "scripted", providerModelId: "fixture", reasoningEfforts: ["high"],

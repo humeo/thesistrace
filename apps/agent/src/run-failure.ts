@@ -17,6 +17,31 @@ export class AgentRunFailure extends Error {
   }
 }
 
+/** Sanitized retry eligibility; never retain a provider response or error cause. */
+export class TransientProviderFailure extends AgentRunFailure {
+  readonly responseHeaders?: Record<string, string>;
+  constructor(code: AgentFailureCode, retryAfter?: string) {
+    super(code);
+    if (retryAfter && retryAfter.length <= 100) this.responseHeaders = { "retry-after": retryAfter };
+  }
+}
+
+export function transientProviderFailure(error: unknown): boolean {
+  if (error instanceof TransientProviderFailure) return true;
+  if (APICallError.isInstance(error)) {
+    if (isRecord(error.data) && isRecord(error.data.error) && error.data.error.code === "insufficient_quota") return false;
+    if (error.statusCode && error.statusCode >= 400 && error.statusCode < 500
+      && error.statusCode !== 408 && error.statusCode !== 429) return false;
+    return error.isRetryable || error.statusCode === 408 || error.statusCode === 504;
+  }
+  if (error instanceof DOMException && error.name === "TimeoutError") return true;
+  if (error instanceof TypeError && error.cause instanceof Error && "code" in error.cause
+    && error.cause.code === "UND_ERR_SOCKET") return true;
+  if (error instanceof Error && error.name === "MastraTimeoutError" && "timeoutType" in error && error.timeoutType === "step") return true;
+  const detail = responsesErrorDetail(error);
+  return typeof detail?.code === "string" && ["server_error", "internal_error", "overloaded_error", "rate_limit_exceeded"].includes(detail.code);
+}
+
 /** Typed provider metadata only. Never classify by private response text. */
 export function providerFailureCode(error: unknown): AgentFailureCode {
   if (error instanceof AgentRunFailure) return error.code;
@@ -50,6 +75,16 @@ export function providerFailureCode(error: unknown): AgentFailureCode {
   ) return "PROVIDER_MALFORMED_STREAM";
   // After output starts, the native SDK emits validated Responses error
   // frames as objects instead of APICallError. Read only their code metadata.
+  const detail = responsesErrorDetail(error);
+  if (detail) {
+    if (detail.code === "rate_limit_exceeded" || detail.code === "insufficient_quota") return "PROVIDER_RATE_LIMIT";
+    if (detail.code === "context_length_exceeded") return "CONTEXT_TOO_LARGE";
+    return "PROVIDER_UNAVAILABLE";
+  }
+  return "INTERNAL_FAILURE";
+}
+
+function responsesErrorDetail(error: unknown): Record<string, unknown> | undefined {
   if (isRecord(error) && !(error instanceof Error)
     && typeof error.sequence_number === "number" && Number.isSafeInteger(error.sequence_number)
     && error.sequence_number >= 0) {
@@ -57,12 +92,10 @@ export function providerFailureCode(error: unknown): AgentFailureCode {
       : error.type === "response.failed" && isRecord(error.response) ? error.response.error : undefined;
     if (isRecord(detail) && typeof detail.message === "string"
       && (typeof detail.code === "string" || detail.code === null || detail.code === undefined)) {
-      if (detail.code === "rate_limit_exceeded" || detail.code === "insufficient_quota") return "PROVIDER_RATE_LIMIT";
-      if (detail.code === "context_length_exceeded") return "CONTEXT_TOO_LARGE";
-      return "PROVIDER_UNAVAILABLE";
+      return detail;
     }
   }
-  return "INTERNAL_FAILURE";
+  return undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -90,10 +90,24 @@ test('one public origin determines browser port and every MCP address', t => {
     THESISTRACE_DEV_WEB_PORT: '5180', THESISTRACE_MCP_ISSUER_URL: 'http://127.0.0.1:5180/api/auth',
     THESISTRACE_MCP_RESOURCE_URL: 'http://127.0.0.1:5180/mcp', THESISTRACE_MCP_ALLOWED_HOSTS: '["api:8100","127.0.0.1:5180"]',
     THESISTRACE_MCP_ALLOWED_ORIGINS: '["http://127.0.0.1:5180"]'
-});
+  });
   for (const name of ['THESISTRACE_DEV_WEB_PORT', 'THESISTRACE_MCP_ISSUER_URL', 'THESISTRACE_MCP_RESOURCE_URL', 'THESISTRACE_MCP_ALLOWED_HOSTS', 'THESISTRACE_MCP_ALLOWED_ORIGINS']) assert.equal(name in f.values, false);
 });
 
+test('provider call timeout has a bounded configurable value independent of the run budget', t => {
+  const f = fixture(t);
+  const name = 'THESISTRACE_AGENT_PROVIDER_CALL_TIMEOUT_SECONDS';
+  const read = () => run(f.env, 'run', process.execPath, '-e', `console.log(process.env.${name})`);
+  assert.equal(read().stdout.trim(), '180');
+  f.values[name] = '300'; f.save();
+  assert.equal(read().stdout.trim(), '300');
+  for (const value of ['0', '3601', '-1', '1.5', '']) {
+    f.values[name] = value; f.save();
+    const result = run(f.env, 'check');
+    assert.equal(result.status, 2);
+    assert.ok(JSON.parse(result.stderr).variables.includes(name));
+  }
+});
 test('development stop operates on the existing project without a configuration file', t => {
   const f = fixture(t); rmSync(f.file);
   const log = resolve(f.dir, 'docker.jsonl');

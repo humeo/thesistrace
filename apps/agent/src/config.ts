@@ -18,6 +18,7 @@ export type AgentSettings = Readonly<{
   modelRegistry: ModelRegistry;
   port: number;
   publicOrigin: string;
+  providerCallTimeoutSeconds: number;
   runMaxWallSeconds: number;
 }>;
 
@@ -81,6 +82,7 @@ export function readAgentSettings(
     modelRegistry,
     port: parsePort(environment.THESISTRACE_AGENT_PORT ?? "8400"),
     publicOrigin,
+    providerCallTimeoutSeconds: parseBoundedInteger(environment.THESISTRACE_AGENT_PROVIDER_CALL_TIMEOUT_SECONDS ?? "180", 1, 3_600),
     runMaxWallSeconds,
   };
 }

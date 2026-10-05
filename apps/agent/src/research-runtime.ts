@@ -31,6 +31,7 @@ import {
   type TimelinePage,
 } from "./chat-control.js";
 import type { AgentSettings } from "./config.js";
+import { PROVIDER_MAX_RETRIES } from "./provider-retry.js";
 import {
   createAgentPool,
   createAgentReadinessPool,
@@ -70,7 +71,7 @@ import type { VerifiedResearcher } from "./session-verifier.js";
 import { verifyAgentSchema } from "./schema-contract.js";
 import { RunUsageCapture } from "./usage-capture.js";
 import { ModelBudget } from "./model-budget.js";
-import { AGENT_LIMITS, RunModelObservation } from "./guarded-language-model.js";
+import { RunModelObservation } from "./guarded-language-model.js";
 import { providerFailureCode } from "./run-failure.js";
 import { agentTraceId, createRunTelemetry, type AgentTelemetryWriter } from "./run-telemetry.js";
 import { PRIVACY_CANARIES } from "./scripted-privacy-model.js";
@@ -166,7 +167,7 @@ export async function createResearchRuntime(
   const readiness = createAgentReadiness(settings, readinessPool, {
     fetch: dependencies.readinessFetch,
   });
-  const modelRuntime = new RegisteredModelRuntime(settings.modelRegistry);
+  const modelRuntime = new RegisteredModelRuntime(settings.modelRegistry, settings.providerCallTimeoutSeconds * 1_000);
   const modelBudget = new ModelBudget(pool, settings.authInternalOrigin, dependencies.quotaPolicyFetch);
   const mcpRunFactory = dependencies.mcpRunFactory ?? createMcpRunFactory(settings);
   const storage = new PostgresStore({
@@ -185,8 +186,10 @@ export async function createResearchRuntime(
         // Override framework defaults without imposing a model-call count limit.
         maxSteps: Number.POSITIVE_INFINITY,
         // The Provider boundary reduces this configured allowance to fit the actual input.
-        modelSettings: { maxOutputTokens: selectionFrom(requestContext).model.maxOutputTokens, timeout: { stepMs: AGENT_LIMITS.providerCallMs } },
-        maxProcessorRetries: 1,
+        modelSettings: { maxOutputTokens: selectionFrom(requestContext).model.maxOutputTokens,
+          timeout: { stepMs: selectionFrom(requestContext).providerCallTimeoutMs } },
+        // One context repair and the bounded retries of a transient model call.
+        maxProcessorRetries: PROVIDER_MAX_RETRIES + 1,
         onError: ({ error }: { error: unknown }) => { observation?.fail(providerFailureCode(error)); },
         providerOptions: selectionFrom(requestContext).providerOptions,
         // Completed tool steps must be durable while a later MCP call is still

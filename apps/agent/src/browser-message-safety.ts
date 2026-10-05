@@ -358,6 +358,13 @@ export class BrowserEventProjector {
           type: EventType.TOOL_CALL_RESULT,
         }];
       case EventType.CUSTOM: {
+        if (event.name === "provider_retry" && isRecord(event.value)
+          && typeof event.value.runId === "string" && isCanonicalUuid(event.value.runId)
+          && typeof event.value.messageId === "string") {
+          const messageId = safeAssistantMessageId(event.value.messageId);
+          this.openTextMessages.delete(messageId);
+          return [{ type: EventType.CUSTOM, name: "provider_retry", value: { runId: event.value.runId, messageId } }];
+        }
         if (event.name !== "session_recovery_changed" || !isRecord(event.value)
           || typeof event.value.runId !== "string" || !isCanonicalUuid(event.value.runId)) return [];
         return [{ type: EventType.CUSTOM, name: "session_recovery_changed", value: { runId: event.value.runId } }];

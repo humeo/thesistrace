@@ -125,6 +125,7 @@ const settings: AgentSettings = {
   runMaxWallSeconds: 300,
 };
 const memoryConfiguration = { ...settings, modelRegistry: readModelRegistry(JSON.stringify({
+  providerCallTimeoutSeconds: 180,
   min_compaction_context_window: 65_536, default_model_key: "luna",
   models: [{ context_window: 65_536, max_output_tokens: 128_000, key: "luna", display_name: "Luna", enabled: true,
     provider_adapter: "openai", provider_model_id: "gpt-5.6-luna", default_reasoning_effort: "high",
@@ -182,6 +183,79 @@ describe.sequential("durable Research Agent runtime", () => {
 
   it("retains burst-stream partial text through durable recovery", async () => {
     const runtime = await createIntegrationRuntime();
+  it.each(["http", "stream", "deadline"])("retries a failed provider step twice while retaining one completed research operation: %s", async (failure) => {
+    const provider = openAIToolProvider([{ name: "get_research_context", arguments: {} }]);
+    const requests: Record<string, unknown>[] = [];
+    let executed = 0;
+    vi.stubGlobal("fetch", async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      if (body.stream) {
+        requests.push(body);
+        if (requests.length === 2 || requests.length === 3) {
+          if (failure === "deadline") return new Response(new ReadableStream(), { headers: { "Content-Type": "text/event-stream" } });
+          if (failure === "stream") {
+            const frames = [
+              { type: "response.created", response: { id: "resp_retry_fixture", created_at: 1_788_148_800, model: "gpt-5.6-luna" } },
+              { type: "response.output_item.added", output_index: 0, item: { type: "message", id: "msg_retry_fixture" } },
+              { type: "response.output_text.delta", item_id: "msg_retry_fixture", delta: "UNFINISHED_RESPONSE_CANARY" },
+              { type: "error", sequence_number: 3, code: "server_error", message: "private-provider-error-canary", param: null },
+            ];
+            return new Response(frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join(""), { headers: { "Content-Type": "text/event-stream" } });
+          }
+          return Response.json({ error: { type: "server_error", message: "synthetic transient failure" } }, { status: 503 });
+        }
+      }
+      return provider.fetch(url, init);
+    });
+    const runtime = await createResearchRuntime({ ...memoryConfiguration, providerCallTimeoutSeconds: failure === "deadline" ? 1 : 180 }, {
+      mcpRunFactory: async () => ({ close: async () => undefined, hasFatalToolFailure: () => false, toolFailure: () => undefined,
+        tools: { get_research_context: createTool({ id: "get_research_context", description: "Read research", inputSchema: z.object({}),
+          execute: async () => { executed++; return { status: "queued", run_id: "run_0123456789abcdef0123" }; } }) } }),
+    });
+    const input = runInput({ content: "Read the accepted research and report it.", threadId: randomUUID(), runId: randomUUID(),
+      messageId: randomUUID(), modelKey: "luna", reasoningEffort: "high" });
+    try {
+      const events = await run(runtime, input, primaryResearcher);
+      expect(events.at(-1)).toMatchObject({ type: "RUN_FINISHED" });
+      expect(events.filter(event => event.type === "RUN_ERROR")).toHaveLength(0);
+      expect(requests).toHaveLength(4);
+      expect(JSON.stringify(requests.slice(2))).not.toContain("UNFINISHED_RESPONSE_CANARY");
+      expect(JSON.stringify(events)).not.toContain("private-provider-error-canary");
+      expect(executed).toBe(1);
+      const rows = await owner.query("SELECT status,step_count FROM agent.agent_run WHERE id=$1", [input.runId]);
+      expect(rows.rows).toEqual([{ status: "completed", step_count: 4 }]);
+      const replay = await connect(runtime, input.threadId, primaryResearcher);
+      expect(snapshotMessages(replay).filter(message => message.role === "tool")).toHaveLength(1);
+      expect(JSON.stringify(snapshotMessages(replay))).not.toContain("UNFINISHED_RESPONSE_CANARY");
+      const timeline = await new ResearchSessionRepository(agentStore).timeline(input.threadId, primaryResearcher.researcher_id, undefined, 20);
+      expect(JSON.stringify(timeline)).not.toContain("UNFINISHED_RESPONSE_CANARY");
+      expect(timeline.turns.flatMap(turn => turn.entries).filter(entry => entry.kind === "assistant_message" && entry.payload.content.length > 0)).toHaveLength(1);
+      expect(executed).toBe(1);
+    } finally { await runtime.close(); vi.unstubAllGlobals(); }
+  }, 15_000);
+
+  it("the Run wall deadline takes precedence over a transient provider failure during backoff", async () => {
+    const provider = openAIToolProvider([]);
+    let attempts = 0;
+    vi.stubGlobal("fetch", async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      if (JSON.parse(String(init?.body)).stream) {
+        attempts++;
+        return Response.json({ error: { type: "server_error", message: "fixture" } }, { status: 503, headers: { "Retry-After": "10" } });
+      }
+      return provider.fetch(url, init);
+    });
+    const runtime = await createResearchRuntime({ ...memoryConfiguration, runMaxWallSeconds: 2 }, {
+      mcpRunFactory: async () => ({ close: async () => undefined, hasFatalToolFailure: () => false, toolFailure: () => undefined, tools: {} }),
+    });
+    const input = runInput({ content: "Answer.", threadId: randomUUID(), runId: randomUUID(), messageId: randomUUID(), modelKey: "luna", reasoningEffort: "high" });
+    try {
+      const events = await run(runtime, input, primaryResearcher);
+      expect(events.at(-1)).toMatchObject({ type: "RUN_ERROR", code: "AGENT_LIMIT" });
+      expect(attempts).toBe(1);
+      expect((await connect(runtime, input.threadId, primaryResearcher)).at(-1)).toMatchObject({ type: "RUN_ERROR", code: "AGENT_LIMIT" });
+    } finally { await runtime.close(); vi.unstubAllGlobals(); }
+  }, 10_000);
+
     const threadId = randomUUID();
     const invoke = (existing: boolean) => run(runtime, runInput({ threadId, runId: randomUUID(), messageId: randomUUID(),
       sessionMode: existing ? "existing" : "new", content: existing ? "[scripted-context-recovery] Continue." : "Prepare research." }), primaryResearcher);
@@ -778,7 +852,7 @@ describe.sequential("durable Research Agent runtime", () => {
     }
   }, 30_000);
 
-  it.each(Object.entries(SCRIPTED_FAILURE_PROMPTS))("persists one %s terminal event and retries only on a new explicit message", async (code, content) => {
+  it.each(Object.entries(SCRIPTED_FAILURE_PROMPTS))("persists one %s terminal event after exhausting recovery and waits for a new explicit message", async (code, content) => {
     // This contract verifies an exhausted full allowance, without crowded-context recovery.
     const runtime = await createResearchRuntime({ ...settings, modelRegistry: { ...settings.modelRegistry,
       models: settings.modelRegistry.models.map(model => ({ ...model, maxOutputTokens: 1000 })) } }, {
@@ -832,7 +906,7 @@ describe.sequential("durable Research Agent runtime", () => {
       expect(JSON.stringify(replay)).toContain("run_0123456789abcdef0123");
       expect(calls).toBe(expectedCalls);
     } finally { await runtime.close(); }
-  });
+  }, 15_000);
 
   it("streams and replays complete output when each model call is within its token limit", async () => {
     const runtime = await createResearchRuntime(settings, {

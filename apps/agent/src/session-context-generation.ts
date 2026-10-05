@@ -4,7 +4,6 @@ import type { Mastra } from "@mastra/core/mastra";
 import type { RequestContext } from "@mastra/core/request-context";
 import type { MastraCompositeStore } from "@mastra/core/storage";
 import { Memory } from "@mastra/memory";
-import { AGENT_LIMITS } from "./guarded-language-model.js";
 import { modelRequestBudget, ModelInputTokenCounter } from "./model-context.js";
 import type { ResolvedModelSelection } from "./model-runtime.js";
 import { ContextEvidenceBatches, groupContextEvidence } from "./session-context-batches.js";
@@ -57,7 +56,7 @@ export async function generateSessionContext(options: Readonly<{
   const memoryBudget = Math.floor(threshold / 8);
   const target = Math.floor(threshold / 16);
   const counter = new ModelInputTokenCounter();
-  const settings = { maxOutputTokens: selection.model.maxOutputTokens, timeout: { stepMs: AGENT_LIMITS.providerCallMs } };
+  const settings = { maxOutputTokens: selection.model.maxOutputTokens, timeout: { stepMs: selection.providerCallTimeoutMs } };
   const memory = new Memory({ storage: options.storage, vector: false, options: { observationalMemory: {
     scope: "thread", model: selection.memoryLanguageModel,
     observation: { bufferTokens: false, continuationHints: false, instruction: memoryInstructions,

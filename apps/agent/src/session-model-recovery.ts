@@ -11,14 +11,34 @@ import type { ResearchSessionRepository } from "./session-repository.js";
 export class SessionModelRecovery {
   private activeMessageId: string | undefined;
   private pending: ModelStepRecovery | undefined;
+  private providerRetryMessageId: string | undefined;
   constructor(private readonly options: Readonly<{ repository: ResearchSessionRepository; memory: Memory;
     threadId: string; researcherId: string; runId: string; selection: ResolvedModelSelection;
     context: SessionContextController; observation: RunModelObservation; abortSignal: AbortSignal; notify: (claimed: boolean) => void;
   }>) {}
 
   responseMessageId(freshId: string, retryCount: number): string {
+    if (this.providerRetryMessageId) {
+      this.activeMessageId = this.providerRetryMessageId;
+      this.providerRetryMessageId = undefined;
+      return this.activeMessageId;
+    }
     if (retryCount && !this.pending?.replacementMessageId) throw new AgentRunFailure("RECOVERY_FAILED");
     this.activeMessageId = retryCount ? this.pending!.replacementMessageId! : freshId;
+    return this.activeMessageId;
+  }
+
+  async retryProviderCall(messageList: MessageList): Promise<string> {
+    const { observation, abortSignal, memory } = this.options;
+    abortSignal.throwIfAborted();
+    if (!this.activeMessageId) throw new AgentRunFailure("RECOVERY_FAILED");
+    observation.retryProviderCall();
+    // Retry only this unfinished response. Earlier tool/result pairs remain
+    // authoritative and are supplied unchanged to the next model attempt.
+    messageList.removeByIds([this.activeMessageId]);
+    await memory.deleteMessages([this.activeMessageId]);
+    abortSignal.throwIfAborted();
+    this.providerRetryMessageId = this.activeMessageId;
     return this.activeMessageId;
   }
 

@@ -16,7 +16,7 @@ import {
   SCRIPTED_FAILURE_MODEL_ID,
   ScriptedLanguageModel,
 } from "./scripted-language-model.js";
-import { GuardedLanguageModel, type RunModelObservation } from "./guarded-language-model.js";
+import { AGENT_LIMITS, GuardedLanguageModel, type RunModelObservation } from "./guarded-language-model.js";
 import { MeteredLanguageModel } from "./metered-language-model.js";
 import type { ModelBudget } from "./model-budget.js";
 
@@ -27,12 +27,13 @@ export type ResolvedModelSelection = Readonly<{
   memoryLanguageModel: LanguageModelV3;
   model: RegisteredModel;
   providerOptions: SharedV3ProviderOptions;
+  providerCallTimeoutMs: number;
 }>;
 
 export class RegisteredModelRuntime {
   private readonly languageModels: ReadonlyMap<string, LanguageModelV3>;
 
-  constructor(private readonly registry: ModelRegistry) {
+  constructor(private readonly registry: ModelRegistry, private readonly providerCallTimeoutMs: number = AGENT_LIMITS.providerCallMs) {
     this.languageModels = new Map(
       registry.models
         .filter((model) => model.enabled)
@@ -70,6 +71,7 @@ export class RegisteredModelRuntime {
         : new GuardedLanguageModel(languageModel, observation, model, "memory"),
       model,
       providerOptions: providerOptionsFor(model, effort),
+      providerCallTimeoutMs: this.providerCallTimeoutMs,
     };
   }
 }

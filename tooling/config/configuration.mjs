@@ -62,6 +62,8 @@ function validateFields(values, mode) {
     if (cpu < 1 || mem < 1 || threads < 1 || threads > cpu || execution < 1 || execution > Math.floor(mem * 3 / 4)) fail('CONFIG_WORKER_CAPACITY_INVALID', prefix + 'CPU_COUNT', prefix + 'MEMORY_BYTES', prefix + 'EXECUTION_MEMORY_BYTES', prefix + 'CALCULATION_THREADS');
   }
   const wall = Number(values.THESISTRACE_AGENT_RUN_MAX_WALL_SECONDS), skew = Number(values.THESISTRACE_MCP_CLOCK_SKEW_SECONDS), ttl = Number(values.THESISTRACE_MCP_ACCESS_TOKEN_TTL_SECONDS);
+  const providerCall = Number(values.THESISTRACE_AGENT_PROVIDER_CALL_TIMEOUT_SECONDS);
+  if (providerCall < 1 || providerCall > 3600) fail('CONFIG_PROVIDER_TIME_BUDGET_INVALID', 'THESISTRACE_AGENT_PROVIDER_CALL_TIMEOUT_SECONDS');
   if (wall < 1 || wall > 3600 || skew > 300 || ttl > 86400 || ttl <= wall + skew) fail('CONFIG_MCP_TIME_BUDGET_INVALID', 'THESISTRACE_AGENT_RUN_MAX_WALL_SECONDS', 'THESISTRACE_MCP_CLOCK_SKEW_SECONDS', 'THESISTRACE_MCP_ACCESS_TOKEN_TTL_SECONDS');
 }
 function publicIdentity(values, mode) {

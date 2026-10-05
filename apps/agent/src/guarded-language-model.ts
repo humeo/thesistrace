@@ -1,9 +1,9 @@
-import type { LanguageModelV3, LanguageModelV3CallOptions, LanguageModelV3GenerateResult, LanguageModelV3StreamPart } from "@ai-sdk/provider";
+import { APICallError, type LanguageModelV3, type LanguageModelV3CallOptions, type LanguageModelV3GenerateResult, type LanguageModelV3StreamPart } from "@ai-sdk/provider";
 
 import { recoveryImprovesBudget } from "./model-step-recovery.js";
 
 import type { AgentFailureCode } from "@thesistrace/contracts/agent-failure";
-import { AgentRunFailure, providerFailureCode } from "./run-failure.js";
+import { AgentRunFailure, providerFailureCode, transientProviderFailure, TransientProviderFailure } from "./run-failure.js";
 import { frameworkTokenUsage, normalizeTokenUsage, RunUsageCapture, type PersistedTokenUsage } from "./usage-capture.js";
 import { ModelInputTokenCounter, modelRequestBudget, type ModelCapacity, type ModelRequestBudget } from "./model-context.js";
 
@@ -41,6 +41,7 @@ export class RunModelObservation {
   private hasRunAnswer = false;
   private budget: ModelRequestBudget | undefined;
   private requestFailure: ModelRequestFailure | undefined;
+  private completedAnswerStep = false;
 
   constructor(
     readonly usage: RunUsageCapture,
@@ -74,6 +75,7 @@ export class RunModelObservation {
   begin(options: LanguageModelV3CallOptions, model: ModelCapacity, purpose: "answer" | "memory" = "answer"): LanguageModelV3CallOptions {
     if (this.failure !== undefined) throw new AgentRunFailure(this.failure);
     if (purpose === "answer" && this.requestFailure !== undefined) throw this.requestFailure;
+    if (purpose === "answer") this.completedAnswerStep = false;
     this.budget = modelRequestBudget(options, model, this.tokenCounter);
     const maxOutputTokens = this.budget.outputTokens;
     if (!Number.isSafeInteger(maxOutputTokens) || maxOutputTokens <= 0) throw this.fail(purpose === "memory" ? "CONTEXT_COMPACTION_FAILED" : "CONTEXT_TOO_LARGE");
@@ -110,7 +112,10 @@ export class RunModelObservation {
     if (!hasStepAnswer && !(purpose === "answer" && reason === "stop" && this.hasRunAnswer)) {
       throw this.fail("PROVIDER_MALFORMED_STREAM");
     }
-    if (purpose === "answer") this.hasRunAnswer ||= hasStepAnswer;
+    if (purpose === "answer") {
+      this.hasRunAnswer ||= hasStepAnswer;
+      this.completedAnswerStep = true;
+    }
   }
 
   /** Called only after the runtime has claimed and committed a valid recovery. */
@@ -123,6 +128,16 @@ export class RunModelObservation {
   }
 
   cancelCall(): void { this.completeCall(undefined, "cancelled"); }
+
+  /** Only the bounded provider retry processor may reopen a failed model call. */
+  retryProviderCall(): void {
+    if (this.completedAnswerStep) throw this.fail("PROVIDER_MALFORMED_STREAM");
+    if (this.requestFailure) throw this.requestFailure;
+    if (this.failure !== undefined && !["PROVIDER_TIMEOUT", "PROVIDER_UNAVAILABLE", "PROVIDER_RATE_LIMIT"].includes(this.failure)) {
+      throw new AgentRunFailure(this.failure);
+    }
+    this.failure = undefined;
+  }
 
   private completeCall(usage: PersistedTokenUsage | undefined, finishReason: ModelCallObservation["finishReason"]): void {
     const call = this.activeCall;
@@ -170,8 +185,9 @@ export class GuardedLanguageModel implements LanguageModelV3 {
     const reader = result.stream.getReader();
     const observation = this.observation;
     const purpose = this.purpose;
-    const failure = (error: unknown) => this.failure(error, options.abortSignal);
     let finished = false;
+    const failure = (error: unknown) => finished
+      ? observation.fail("PROVIDER_MALFORMED_STREAM") : this.failure(error, options.abortSignal);
     let hasAnswer = false;
     // Mastra can execute collected calls even after a later stream error.
     // Mastra can reconstruct a complete invocation from argument deltas on
@@ -192,7 +208,7 @@ export class GuardedLanguageModel implements LanguageModelV3 {
             if (finished || part === null || typeof part !== "object" || !PROVIDER_PART_TYPES.has(part.type)) {
               throw new AgentRunFailure("PROVIDER_MALFORMED_STREAM");
             }
-            if (part.type === "error") throw failure(part.error);
+            if (part.type === "error") throw part.error;
             if (part.type === "text-delta" || part.type === "reasoning-delta" || part.type === "tool-input-delta") {
               if (typeof part.delta !== "string") throw new AgentRunFailure("PROVIDER_MALFORMED_STREAM");
               observation.output(part.delta);
@@ -234,7 +250,11 @@ export class GuardedLanguageModel implements LanguageModelV3 {
   }
 
   private failure(error: unknown, signal?: AbortSignal): AgentRunFailure {
-    return this.observation.fail(providerFailureCode(signal?.aborted ? signal.reason : error));
+    const cause = signal?.aborted ? signal.reason : error;
+    const failure = this.observation.fail(providerFailureCode(cause));
+    return this.purpose === "answer" && transientProviderFailure(cause)
+      ? new TransientProviderFailure(failure.code, APICallError.isInstance(cause) ? cause.responseHeaders?.["retry-after"] : undefined)
+      : failure;
   }
 }
 

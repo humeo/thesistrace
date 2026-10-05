@@ -50,6 +50,7 @@ it("consumes Core instructions, recoverable rejections and bounded Result pages 
     expect(submit.mcpMetadata).toMatchObject({
       forwardInstructions: true, instructionsMaxLength: 4096,
     });
+    expect(submit.mcpMetadata?.serverInstructions).toContain("QAgentis");
     expect(submit.mcpMetadata?.serverInstructions).toContain("request_id");
     expect(submit.mcpMetadata?.serverInstructions).toContain("result_page");
     const provider = openAIToolProvider([]);

@@ -11,6 +11,7 @@ import { createResearchMemory } from "./research-memory.js";
 import { isSessionControlMessageId, sessionControlMessage, sessionControlMessageId } from "./session-control-message.js";
 import { SessionContextController } from "./session-context-controller.js";
 import { SessionModelRecovery } from "./session-model-recovery.js";
+import { providerRetryProcessor } from "./provider-retry.js";
 import { SessionNotFoundError, type ResearchSessionRepository } from "./session-repository.js";
 
 const stateKey = "sessionContinuation";
@@ -78,7 +79,12 @@ export function createSessionContinuation(options: Readonly<{
       await stateFrom(requestContext)?.recovery?.completeResponse(finishReason);
       return messageList;
     } }],
-    errorProcessors: [{ id: "session-model-recovery", processAPIError: async ({ error, messageList, requestContext }) => {
+    errorProcessors: [providerRetryProcessor(async ({ messageList, requestContext }) => {
+      const state = stateFrom(requestContext);
+      if (!state?.recovery) throw new Error("SESSION_CONTEXT_INPUT_NOT_PREPARED");
+      const messageId = await state.recovery.retryProviderCall(messageList);
+      requestContext?.get<string, ((messageId: string) => void) | undefined>("notifyProviderRetry")?.(messageId);
+    }), { id: "session-model-recovery", processAPIError: async ({ error, messageList, requestContext }) => {
       const state = stateFrom(requestContext);
       if (!state?.recovery) throw error;
       return state.recovery.handle(error, messageList, state.currentRequestId);

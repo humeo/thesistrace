@@ -41,9 +41,17 @@ describe("Agent Host configuration", () => {
       port: 8400,
       publicOrigin: "http://127.0.0.1:5173",
       runMaxWallSeconds: 300,
+      providerCallTimeoutSeconds: 180,
       databaseUrl:
         "postgresql://agent_runtime:agent-password@postgres:5432/thesistrace",
     });
+  });
+
+  it("accepts an explicit provider call deadline and rejects unbounded values", () => {
+    expect(readAgentSettings({ ...environment, THESISTRACE_AGENT_PROVIDER_CALL_TIMEOUT_SECONDS: "300" }).providerCallTimeoutSeconds).toBe(300);
+    for (const value of ["0", "3601", "", "1.5", "-1"]) {
+      expect(() => readAgentSettings({ ...environment, THESISTRACE_AGENT_PROVIDER_CALL_TIMEOUT_SECONDS: value })).toThrow("Agent configuration is invalid");
+    }
   });
 
   it.each([

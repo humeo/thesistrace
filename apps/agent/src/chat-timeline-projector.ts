@@ -35,6 +35,18 @@ export class ChatTimelineProjector {
     if (
       event.type === EventType.TEXT_MESSAGE_CHUNK
       || event.type === EventType.TEXT_MESSAGE_CONTENT
+    if (event.type === EventType.CUSTOM && event.name === "provider_retry") {
+      const value = event.value as { runId?: unknown; messageId?: unknown } | undefined;
+      if (value?.runId !== this.runId || typeof value.messageId !== "string") return;
+      const buffer = this.assistants.get(value.messageId);
+      const id = buffer?.id ?? value.messageId;
+      const replacement = { id, content: "", lastFlushAt: 0, persistedBytes: 0 };
+      this.assistants.set(value.messageId, replacement);
+      if (this.persistedMessageIds.has(value.messageId)) {
+        await this.flushAssistant(replacement, true);
+      }
+      return;
+    }
     ) {
       if (typeof event.messageId !== "string" || typeof event.delta !== "string") return;
       const buffer = this.assistants.get(event.messageId) ?? {
@@ -124,8 +136,8 @@ export class ChatTimelineProjector {
     }
   }
 
-  private async flushAssistant(buffer: AssistantBuffer): Promise<void> {
-    if (buffer.content.length === 0) return;
+  private async flushAssistant(buffer: AssistantBuffer, allowEmpty = false): Promise<void> {
+    if (buffer.content.length === 0 && !allowEmpty) return;
     await this.repository.persistAssistantMessage(
       this.threadId,
       this.runId,

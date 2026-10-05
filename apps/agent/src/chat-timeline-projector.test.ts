@@ -11,6 +11,21 @@ const RUN_ID = "00000000-0000-4000-8000-000000000002";
 afterEach(() => vi.useRealTimers());
 
 describe("browser-safe chat timeline projection", () => {
+  it("replaces only the unfinished response when a model request is retried", async () => {
+    const rows = new Map<string, string>();
+    const projector = new ChatTimelineProjector({
+      persistAssistantMessage: async (_thread: string, _run: string, id: string, content: string) => { rows.set(id, content); },
+    } as unknown as ResearchSessionRepository, THREAD_ID, RUN_ID);
+    await projector.project(event({ type: EventType.TEXT_MESSAGE_CONTENT, messageId: "completed", delta: "Earlier answer" }));
+    await projector.project(event({ type: EventType.TEXT_MESSAGE_END, messageId: "completed" }));
+    await projector.project(event({ type: EventType.TEXT_MESSAGE_CONTENT, messageId: "response", delta: "Unfinished" }));
+    await projector.project(event({ type: EventType.CUSTOM, name: "provider_retry", value: { runId: RUN_ID, messageId: "response" } }));
+    expect([...rows.entries()]).toEqual([["completed", "Earlier answer"], ["response", ""]]);
+    await projector.project(event({ type: EventType.TEXT_MESSAGE_CONTENT, messageId: "response", delta: "Recovered answer" }));
+    await projector.project(event({ type: EventType.TEXT_MESSAGE_END, messageId: "response" }));
+    expect([...rows.entries()]).toEqual([["completed", "Earlier answer"], ["response", "Recovered answer"]]);
+  });
+
   it("preserves the model response identity for durable recovery links", async () => {
     const persistAssistantMessage = vi.fn(async () => undefined);
     const projector = new ChatTimelineProjector({ persistAssistantMessage } as unknown as ResearchSessionRepository, THREAD_ID, RUN_ID);

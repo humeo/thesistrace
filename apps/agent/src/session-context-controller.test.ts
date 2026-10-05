@@ -34,7 +34,7 @@ async function fixture() {
   const prompt = await list.get.all.aiV6.llmPrompt();
   const model: LanguageModelV3 = { specificationVersion: "v3", provider: "fixture", modelId: "fixture", supportedUrls: {},
     doGenerate: async () => { throw new Error("No main model expected"); }, doStream: async () => { throw new Error("No main model expected"); } };
-  const selection: ResolvedModelSelection = { compactionEnabled: true, effort: "none", languageModel: model, memoryLanguageModel: model,
+  const selection: ResolvedModelSelection = { compactionEnabled: true, effort: "none", languageModel: model, memoryLanguageModel: model, providerCallTimeoutMs: 180_000,
     providerOptions: {}, model: { contextWindow: 65_536, maxOutputTokens: 128_000, pricing: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 }, credential: null, defaultReasoningEffort: "none",
       displayName: "Fixture", enabled: true, key: "fixture", providerAdapter: "scripted", providerModelId: "fixture", reasoningEfforts: ["none"] } };
   let checkpoint: SessionContextCheckpoint | null = null;

@@ -281,7 +281,9 @@ export class ResearchMastraAgent extends MastraAgent {
             return from(closeMcp()).pipe(map(() => runFailureEvent(providerFailureCode(error))));
           }
           this.terminalStarted = true;
-          const code = this.execution.failure() ?? providerFailureCode(error);
+          const code = this.abortController.signal.aborted
+            ? providerFailureCode(this.abortController.signal.reason)
+            : this.execution.failure() ?? providerFailureCode(error);
           finishPendingTools(code);
           return this.persistFailure(input.runId, closeMcp, code);
         }),
@@ -313,9 +315,13 @@ export class ResearchMastraAgent extends MastraAgent {
         if (claimed) this.execution.telemetry.recoveryClaimed();
         subscriber.next({ type: EventType.CUSTOM, name: "session_recovery_changed", value: { runId: input.runId } });
       });
+      this.execution.requestContext.set("notifyProviderRetry", (messageId: string) => {
+        subscriber.next({ type: EventType.CUSTOM, name: "provider_retry", value: { runId: input.runId, messageId } });
+      });
       const finish = () => {
         completed = true;
         this.execution.requestContext.set("notifyModelRecovery", undefined);
+        this.execution.requestContext.set("notifyProviderRetry", undefined);
         this.execution.pendingBridges.delete(drained);
         settle();
       };
