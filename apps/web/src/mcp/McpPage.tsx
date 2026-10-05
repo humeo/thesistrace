@@ -31,10 +31,12 @@ export function McpPage() {
   const revokeTrigger = useRef<HTMLButtonElement | null>(null);
   const appsHeading = useRef<HTMLHeadingElement>(null);
   const cancelTrigger = useRef<HTMLButtonElement>(null);
+  const catalogGeneration = useRef(0);
   const load = useCallback(async (signal?: AbortSignal) => {
+    const generation = ++catalogGeneration.current;
     setCatalogError(false);
-    try { const data = await loadConnections(signal); if (!signal?.aborted) setCatalog(data); }
-    catch { if (!signal?.aborted) setCatalogError(true); }
+    try { const data = await loadConnections(signal); if (!signal?.aborted && generation === catalogGeneration.current) setCatalog(data); }
+    catch { if (!signal?.aborted && generation === catalogGeneration.current) setCatalogError(true); }
   }, []);
   const check = useCallback(async (signal?: AbortSignal) => {
     setStatus("checking");
@@ -48,13 +50,15 @@ export function McpPage() {
     void load(controller.signal); void check(controller.signal);
     const refresh = () => { if (document.visibilityState === "visible") void load(controller.signal); };
     window.addEventListener("focus", refresh);
-    return () => { controller.abort(); window.removeEventListener("focus", refresh); };
+    return () => { catalogGeneration.current += 1; controller.abort(); window.removeEventListener("focus", refresh); };
   }, [load, check]);
   async function revokeSelected() {
     if (!selected || revoking) return;
     setRevoking(true); setRevokeError(false);
     try {
       await revokeApp(selected.id);
+      // Reads started before the successful mutation contain an obsolete list.
+      catalogGeneration.current += 1;
       setCatalog(current => current ? { ...current, apps: current.apps.filter(app => app.client_id !== selected.client_id) } : null);
       setNotice({ name: selected.name || selected.client_id }); setSelected(null);
     } catch { setRevokeError(true); }

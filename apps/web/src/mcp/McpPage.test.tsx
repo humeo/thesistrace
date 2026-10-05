@@ -36,6 +36,34 @@ afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi
 async function mount() { await act(async () => root.render(<StrictMode><McpPage /></StrictMode>)); }
 
 describe("MCP product page", () => {
+  it.each([200, 503])("keeps revoked access removed when an earlier background catalog response arrives late with HTTP %s", async status => {
+    apps = [{ id: "00000000-0000-4000-8000-000000000001", name: "Codex", client_id: "codex-client", scopes: ["research:read"], authorized_at: "2026-09-05T00:00:00Z" }];
+    await mount();
+    let complete!: (response: Response) => void;
+    const pending = new Promise<Response>(resolve => { complete = resolve; });
+    vi.mocked(fetch).mockImplementationOnce(async () => pending);
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    await click(host.querySelector("article button")!);
+    await click(document.querySelector('[role="alertdialog"] button:last-child')!);
+    expect(host.querySelector("article")).toBeNull();
+    await act(async () => complete(Response.json({ server_url: endpoint, apps }, { status })));
+    expect(host.querySelector("article")).toBeNull();
+    expect(host.textContent).toContain("No authorized apps yet");
+    apps = [];
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    expect(host.textContent).toContain("No authorized apps yet");
+  });
+  it("uses the newest background catalog when earlier reads complete out of order", async () => {
+    await mount();
+    let complete!: (response: Response) => void;
+    vi.mocked(fetch).mockImplementationOnce(async () => new Promise(resolve => { complete = resolve; }));
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    apps = [{ id: "00000000-0000-4000-8000-000000000002", name: "New app", client_id: "new-client", scopes: ["research:read"], authorized_at: "2026-09-05T00:00:00Z" }];
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    expect(host.querySelector("article")?.textContent).toContain("New app");
+    await act(async () => complete(Response.json({ server_url: endpoint, apps: [] })));
+    expect(host.querySelector("article")?.textContent).toContain("New app");
+  });
   it("has a translated presentation for each known MCP tool", () => {
     expect(Object.keys(mcpEn.toolNames).sort()).toEqual(Object.keys(toolPresentation).sort());
     expect(Object.keys(mcpEn.toolNames).sort()).toEqual(Object.keys(mcpEn.toolDetails).sort());
