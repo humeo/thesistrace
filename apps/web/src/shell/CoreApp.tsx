@@ -63,8 +63,8 @@ export function CoreApp({ location, navigate, isOperator, researcherId }: {
       : currentPath.startsWith("/connections/mcp") ? "mcp"
       : currentPath === "/research" ? "research"
       : currentPath === "/data" ? "data" : "chats";
-    document.title = `${navigationText(title)} · Quantgrove`;
-    document.querySelector('meta[name="description"]')?.setAttribute("content", `${navigationText("workspace")} · Quantgrove`);
+    document.title = `${navigationText(title)} · QAgentis`;
+    document.querySelector('meta[name="description"]')?.setAttribute("content", `${navigationText("workspace")} · QAgentis`);
   }, [currentPath, navigationText]);
   const sessionHistory = useSessionHistory(researcherId);
   const thread = useMemo(() => currentPath === "/chat"

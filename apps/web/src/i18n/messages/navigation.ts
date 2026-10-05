@@ -15,7 +15,7 @@ export const navigationEn = {
   expand: "Expand sidebar",
   collapse: "Collapse sidebar",
   resize: "Resize sidebar",
-  home: "Quantgrove home",
+  home: "QAgentis home",
 } as const;
 
 export const navigationZh = {
@@ -35,5 +35,5 @@ export const navigationZh = {
   expand: "展开侧栏",
   collapse: "收起侧栏",
   resize: "调整侧栏宽度",
-  home: "Quantgrove 首页",
+  home: "QAgentis 首页",
 } satisfies Record<keyof typeof navigationEn, string>;

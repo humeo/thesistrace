@@ -29,10 +29,10 @@ const STARTER_PROMPTS = [
 function ChatWelcome() {
   const { t } = useTranslation("chat");
   return <Welcome
-    icon={<span className="flex items-center gap-2 text-xl font-semibold"><Brand inverse size={24} /></span>}
+    icon={<span className="flex items-center gap-3 text-[32px] leading-10 font-semibold"><Brand inverse size={36} /></span>}
     title={t("introTitle")}
     variant="borderless"
-    styles={{ root: { flexDirection: "column", alignItems: "center", textAlign: "center", minWidth: 0 }, icon: { height: "auto" } }}
+    styles={{ root: { flexDirection: "column", alignItems: "center", textAlign: "center", minWidth: 0, gap: 24 }, icon: { height: "auto" } }}
   />;
 }
 

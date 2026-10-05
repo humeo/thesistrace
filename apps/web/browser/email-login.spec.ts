@@ -32,7 +32,7 @@ for(const width of [1200,390,320]) {
     await serveBrandAssets(page);
     await page.setViewportSize({width,height:850});
     await page.goto("http://auth.fixture/login?returnTo=%2Fresearch");await page.addScriptTag({content:script});
-    await expect(page.getByRole("heading",{name:"Welcome to Quantgrove"})).toBeVisible();
+    await expect(page.getByRole("heading",{name:"Welcome to QAgentis"})).toBeVisible();
     await page.evaluate(() => document.fonts.ready);
     await page.screenshot({path:test.info().outputPath(`email-login-${width}.png`)});
     await expect(page.locator('input[type="password"]')).toHaveCount(0);
@@ -110,7 +110,7 @@ test("invitation mismatch, failed acceptance and retry preserve entered values",
   await page.setViewportSize({width:390,height:850});
   await page.goto("http://auth.fixture/accept-invitation");
   await page.addScriptTag({content:script});
-  await expect(page.getByRole("heading",{name:"Create your Quantgrove access"})).toBeVisible();
+  await expect(page.getByRole("heading",{name:"Create your QAgentis access"})).toBeVisible();
   await expect(page.getByLabel("Email",{exact:true})).toHaveValue(user.email);
   const password = page.getByLabel("Password",{exact:true});
   const confirmation = page.getByLabel("Confirm password",{exact:true});

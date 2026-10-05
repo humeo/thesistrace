@@ -115,7 +115,7 @@ export function createThesisTraceAuth(
       },
       useSecureCookies: settings.secureCookies,
     },
-    appName: "Quantgrove",
+    appName: "QAgentis",
     basePath: "/api/auth",
     baseURL: settings.publicOrigin,
     database: pool,

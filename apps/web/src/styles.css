@@ -31,6 +31,7 @@
   color-scheme: dark;
   --font-body: Inter, "Noto Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   --font-display: var(--font-body);
+  --font-brand: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-family: var(--font-body);
   font-synthesis: none;
   line-height: 1.5;
@@ -187,7 +188,7 @@ html:has(.landing-page, .login-page, .auth-page) {
   color-scheme: dark;
   background: #010102;
 }
-.quantgrove-wordmark { font-family: var(--font-display); }
+.quantgrove-wordmark { font-family: var(--font-brand); font-weight: 550; letter-spacing: -.02em; }
 
 * { box-sizing: border-box; }
 html { min-width: 0; overflow-x: clip; scrollbar-gutter: stable; background: var(--canvas); }
@@ -205,7 +206,7 @@ body {
   button, input, select, textarea { font: inherit; }
 }
 button, a, summary { -webkit-tap-highlight-color: transparent; }
-a { color: inherit; }
+a:not(.landing-page a) { color: inherit; }
 code:not(.quantgrove-chat code), time:not(.quantgrove-chat time) { font-variant-numeric: tabular-nums; }
 code:not(.quantgrove-chat code) { font-family: var(--mono); }
 
@@ -261,7 +262,7 @@ code:not(.quantgrove-chat code) { font-family: var(--mono); }
   border-bottom: 1px solid var(--line);
 }
 .sidebar-brand-row .brand { min-height: 30px; gap: 8px; }
-.sidebar-brand-row .brand-mark { width: 24px; height: 24px; }
+.sidebar-brand-row .brand-mark { width: 32px; height: 24px; }
 .sidebar-brand-row .quantgrove-wordmark { font-size: var(--text-xl); line-height: 1.2; letter-spacing: -.02em; }
 .sidebar-resize-handle { position: absolute; top: 0; bottom: 0; right: -4px; width: 8px; z-index: 61; cursor: col-resize; touch-action: none; }
 .sidebar-resize-handle:hover::after, .sidebar-resize-handle:focus-visible::after { content: ""; position: absolute; inset: 0 3px; background: var(--primary); }
@@ -535,7 +536,7 @@ code:not(.quantgrove-chat code) { font-family: var(--mono); }
   border-bottom-color: transparent;
 }
 .app-shell .quantgrove-wordmark {
-  font-family: var(--font-body);
+  font-family: var(--font-brand);
 }
 .app-shell .sidebar-primary-header {
   gap: 0;
@@ -709,35 +710,10 @@ code:not(.quantgrove-chat code) { font-family: var(--mono); }
   h2:not(.quantgrove-chat h2) { font-family: var(--font-display); font-size: var(--text-xl); font-weight: 600; line-height: var(--text-xl--line-height); letter-spacing: -.015em; }
   h3:not(.quantgrove-chat h3) { font-family: var(--font-display); font-size: var(--text-base); font-weight: 600; line-height: var(--text-base--line-height); }
 }
-.landing-page button {
-  display: inline-flex;
-  min-height: 36px;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  padding: 0 12px;
-  color: var(--ink-muted);
-  background: var(--surface-2);
-  border: 1px solid var(--line-strong);
-  border-radius: 8px;
-  font-size: var(--text-sm);
-  font-weight: 500;
-  line-height: 1.2;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: color 120ms ease, background 120ms ease, border-color 120ms ease, opacity 120ms ease, transform 120ms ease;
-}
-.landing-page :where(button:hover:not(:disabled)) {
-  color: var(--ink);
-  background: var(--surface-3);
-  border-color: var(--line-tertiary);
-}
-.landing-page button:active:not(:disabled) { transform: translateY(1px); }
-.landing-page button:focus-visible, a:focus-visible {
+a:focus-visible {
   outline: 2px solid var(--primary-focus);
   outline-offset: 2px;
 }
-.landing-page button:disabled { cursor: not-allowed; opacity: .42; }
 
 [role="status"] { color: var(--ink-soft); }
 [role="alert"]:not([data-slot="alert"]) { color: var(--danger); }

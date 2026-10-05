@@ -23,7 +23,7 @@ afterEach(async () => { await act(async () => root.unmount()); host.remove(); })
 test("switching language preserves the signed OAuth query and displayed authorization", async () => {
   const search = "?client_id=abc&state=opaque%2Bvalue&scope=research%3Aread";
   await act(async () => root.render(<StrictMode><McpAuthorizePage search={search} /></StrictMode>));
-  expect(host.textContent).toContain("Allow Research client to access Quantgrove?");
+  expect(host.textContent).toContain("Allow Research client to access QAgentis?");
   expect(host.textContent).toContain("Read research context, runs and results");
   const requestsBeforeSwitch = coreFetch.mock.calls.length;
   for (const [url, options] of coreFetch.mock.calls) {
@@ -32,7 +32,7 @@ test("switching language preserves the signed OAuth query and displayed authoriz
   }
   await act(async () => { await i18n.changeLanguage("zh-CN"); });
   expect(coreFetch).toHaveBeenCalledTimes(requestsBeforeSwitch);
-  expect(host.textContent).toContain("允许 Research client 访问 Quantgrove？");
+  expect(host.textContent).toContain("允许 Research client 访问 QAgentis？");
   expect(host.textContent).toContain("读取研究上下文、运行和结果");
   expect(host.textContent).toContain("researcher@example.test");
 });

@@ -91,7 +91,7 @@ test("Operator access control and responsive navigation", { tag: "@isolated" }, 
   await expect(closeNavigation).toBeFocused();
   await expectMinimumTouchTarget(closeNavigation);
   const mobileOperatorLink = page.getByRole("link", { name: "Operator", exact: true });
-  const mobileHomeLink = page.getByRole("link", { name: "Quantgrove home" });
+  const mobileHomeLink = page.getByRole("link", { name: "QAgentis home" });
   const mobileAccountMenu = applicationSidebar.getByRole("button", { name: "Account menu" });
   await expect(mobileOperatorLink).toBeVisible();
   await mobileHomeLink.focus();
@@ -555,7 +555,7 @@ test("Operator researchers and invitations", { tag: "@isolated" }, async ({ page
 
   await restoreResearcherSession(page, ordinary);
   await refreshRevokedSessionOnBrowserEvent(page);
-  await expect(page.getByRole("heading", { name: "Welcome to Quantgrove" }))
+  await expect(page.getByRole("heading", { name: "Welcome to QAgentis" }))
     .toBeVisible();
   await restoreResearcherSession(page, operator);
   await refreshOperatorSessionOnBrowserEvent(page);

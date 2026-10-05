@@ -17,3 +17,9 @@
 - `../quanttrace-logo.png` remains available for previously sent email references. New UI and email use Quantgrove assets.
 
 Production font sources and licenses are documented in [fonts/README.md](../fonts/README.md).
+
+## QAgentis — E1-B
+
+The QAgentis SVG masters implement the approved E1-B silhouette with two equal 27 × 29 radius ellipses. Their centers are (33, 42) and (64, 35) in a 96 × 72 viewBox. Axes remain vertical; their shared overlap is transparent through even-odd fill. The mark preserves its 4:3 canvas ratio. PNG app icons at 32, 128 and 180px are exports of qhypo-icon.svg. The React Brand component renders QAgentis (uppercase Q and A) in locally hosted Inter, weight 550 and -.02em tracking, matching the former QuantTrace homepage wordmark. The website domain is qhypo.com; it is not part of the wordmark. See docs/design/qhypo-brand-reference.png for the approved mark silhouette and fonts/README.md for font provenance.
+
+Keep the older Quantgrove assets for previously delivered email references.

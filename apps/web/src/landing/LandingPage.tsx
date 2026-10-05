@@ -1,81 +1,130 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Brand } from '../brand/Brand';
+import { useEffect, useState } from 'react';
+import { cn } from 'cn';
+import { ArrowRightIcon, ChatCircleIcon, DatabaseIcon, FlaskIcon, ChartLineIcon, ListChecksIcon, PlugsIcon, CheckCircleIcon } from '@phosphor-icons/react';
+import { Bubble, Sender } from '@ant-design/x';
+import { Brand, BrandMark } from '../brand/Brand';
+import { ChatUiProvider } from '../chat/ChatUiProvider';
+import { Button, buttonVariants } from '../components/ui/button';
+import { Badge } from '../components/ui/badge';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../components/ui/tooltip';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
+import { ToggleGroup, ToggleGroupItem } from '../components/ui/toggle-group';
+import { Metric, MetricGroup } from '../components/product/MetricGroup';
+import { TrackingReturnChart } from '../daily-tracks/DailyTrackObservationView';
 import { changeInterfaceLanguage, interfaceLocale, publicLanguageCode, synchronizeEntryLanguage, useTranslation, type InterfaceLocale } from '../i18n';
+import { LanguageIcon } from './LanguageIcon';
+import { factorExamples, trackingExample } from './examples';
 import './landing.css';
+
+const sidebarIcons = [ChatCircleIcon, DatabaseIcon, FlaskIcon, ListChecksIcon, ChartLineIcon, PlugsIcon];
+const sidebarRoutes = ['/chat', '/data', '/research', '/research-runs', '/daily-tracks', '/connections/mcp'];
+const discordHref = 'https://discord.gg/tdwxubVhMJ';
+
 export default function Landing() {
-    const { t: translate } = useTranslation('landing');
-    const language = interfaceLocale();
-    const t = translate('page', { returnObjects: true });
-    const loginHref = `/login?lang=${publicLanguageCode(language)}`;
-    const [stage, setStage] = useState(0);
-    const previewRef = useRef<HTMLElement>(null);
-    useEffect(() => {
-        document.title = `${t.brand} — ${t.descriptor}`;
-        document.querySelector('meta[name="description"]')?.setAttribute('content', t.meta);
-    }, [language, t]);
-    useEffect(() => {
-        window.addEventListener('popstate', synchronizeEntryLanguage);
-        return () => window.removeEventListener('popstate', synchronizeEntryLanguage);
-    }, []);
-    const changeLanguage = (next: InterfaceLocale) => {
-        const url = new URL(location.href);
-        url.searchParams.set('lang', publicLanguageCode(next));
-        history.replaceState(null, '', url);
-        changeInterfaceLanguage(next);
-    };
-    const selectStage = (index: number) => {
-        setStage(index);
-        previewRef.current?.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'start' });
-    };
-    return <div className="landing-page">
-    <header className="qt-header">
-      <a className="qt-brand" href="#top" aria-label={t.home}><Brand className="qt-logo" size={32} inverse /></a>
-      <nav aria-label={t.navigation}>
-        <a className="qt-community" href="https://discord.gg/tdwxubVhMJ" target="_blank" rel="noopener noreferrer" aria-label={t.community} title={t.community}><img src="/brand/discord-symbol-white.svg" alt="" width={20} height={15}/><span>Discord</span></a>
-        <div className="qt-language" role="group" aria-label="Language / 语言">
-          <button type="button" lang="en" aria-label="English" aria-pressed={language === 'en'} onClick={() => changeLanguage('en')}>EN</button>
-          <span aria-hidden="true">/</span>
-          <button type="button" lang="zh-CN" aria-pressed={language === 'zh-CN'} onClick={() => changeLanguage('zh-CN')}>中文</button>
-        </div>
-        <a className="qt-login" href={loginHref}>{t.login}<span aria-hidden="true">↗</span></a>
-      </nav>
+  const { t: translate } = useTranslation('landing');
+  const language = interfaceLocale();
+  const t = translate('page', { returnObjects: true });
+  const loginHref = `/login?lang=${publicLanguageCode(language)}`;
+  const mcpHref = `${loginHref}&returnTo=${encodeURIComponent('/connections/mcp')}`;
+  const [resultTab, setResultTab] = useState('evidence');
+  const [horizon, setHorizon] = useState('5');
+  useEffect(() => {
+    document.title = `${t.brand} — ${t.descriptor}`;
+    document.querySelector('meta[name="description"]')?.setAttribute('content', t.meta);
+  }, [language, t]);
+  useEffect(() => {
+    window.addEventListener('popstate', synchronizeEntryLanguage);
+    return () => window.removeEventListener('popstate', synchronizeEntryLanguage);
+  }, []);
+  const changeLanguage = (next: InterfaceLocale) => {
+    const url = new URL(location.href);
+    url.searchParams.set('lang', publicLanguageCode(next));
+    history.replaceState(null, '', url);
+    changeInterfaceLanguage(next);
+  };
+  const startLink = (large = false) => <a className={cn(buttonVariants({ size: large ? 'xl' : 'lg' }))} href={loginHref}>
+    {t.start}<ArrowRightIcon aria-hidden="true" data-icon="inline-end" />
+  </a>;
+  const navLinks = <><a href="#preview">{t.product}</a><a href={mcpHref}>{t.mcp}</a><a href={discordHref} target="_blank" rel="noopener noreferrer">{t.community}</a></>;
+  return <div className="landing-page">
+    <a className="qh-skip" href="#top">{t.product}</a>
+    <header className="qh-header qh-container">
+      <a className="qh-brand" href="#top" aria-label={t.home}><Brand size={24} inverse /></a>
+      <nav aria-label={t.navigation} className="qh-nav">{navLinks}</nav>
+      <div className="qh-header-actions">
+        <TooltipProvider><Tooltip>
+          <TooltipTrigger render={<Button variant="ghost" size="icon-xl" aria-label={t.languageToggle} onClick={() => changeLanguage(language === 'en' ? 'zh-CN' : 'en')} />}><LanguageIcon language={language} /></TooltipTrigger>
+          <TooltipContent side="bottom" role="tooltip">{language === 'en' ? 'English / 中文' : '中文 / English'}</TooltipContent>
+        </Tooltip></TooltipProvider>
+        <a className="qh-login" href={loginHref}>{t.login}</a>{startLink()}
+      </div>
     </header>
     <main id="top">
-      <section className="qt-hero" aria-labelledby="hero-title">
-        <div className="qt-hero-copy">
-          <h1 id="hero-title">{t.headline[0]}<span className="qt-headline-ending">{t.headline[1]}</span></h1>
-          <p className="qt-descriptor">{t.descriptor}</p>
-          <p className="qt-subtitle">{t.subtitle}</p>
-          <div className="qt-hero-actions"><a className="qt-primary" href={loginHref}>{t.start}</a><a className="qt-secondary" href="#preview">{t.viewExample}</a></div>
-        </div>
-        <img className="qt-hero-image" src="/brand/quantgrove-botanical.jpg" alt="" width={570} height={760} fetchPriority="high" />
+      <section className="qh-hero qh-container" aria-labelledby="hero-title">
+        <h1 id="hero-title">{t.headline[0]}<br />{t.headline[1]}</h1>
+        <p className="qh-subtitle">{t.subtitle}</p>
+        <div className="qh-hero-actions">{startLink(true)}<a className="qh-example-link" href="#preview">{t.viewExample}<ArrowRightIcon aria-hidden="true" size={16} /></a></div>
       </section>
-      <section id="method" className="qt-method" aria-label={t.stepsLabel}>
-        {t.stages.map((item, index) => <button className="qt-stage" key={index} onClick={() => selectStage(index)} aria-label={`${item.title}: ${t.viewExample}`}><span className="qt-number">0{index + 1}</span><h2>{item.title}</h2><p>{item.description}</p></button>)}
-      </section>
-      <section id="preview" ref={previewRef} className="qt-preview" aria-labelledby="preview-title">
-        <div className="qt-preview-intro"><div><span className="qt-caption">{t.preview}</span><h2 id="preview-title">{t.previewTitle}</h2></div><p>{t.previewIntro}<br />{t.previewNote}</p></div>
-        <div className="qt-tabs" role="tablist" aria-label={t.stagesLabel}>
-          {t.stages.map((item, index) => <button id={`stage-${index}`} role="tab" aria-selected={stage === index} aria-controls="stage-panel" tabIndex={stage === index ? 0 : -1} onKeyDown={event => { if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
-        event.preventDefault();
-        const next = (stage + (event.key === 'ArrowRight' ? 1 : 2)) % 3;
-        setStage(next);
-        document.getElementById(`stage-${next}`)?.focus();
-    } }} onClick={() => setStage(index)} key={index}>{item.title}</button>)}
+      <section id="preview" className="qh-product qh-container" aria-label={t.exampleResearch}>
+        <div className="qh-app-frame">
+          <aside className="qh-example-sidebar" aria-label={t.product}>
+            <a className="qh-brand" href="#top" aria-label={t.home}><Brand size={20} inverse /></a>
+            <ul>{t.sidebar.map((name, index) => {
+              const Icon = sidebarIcons[index];
+              return <li key={index}><a href={`${loginHref}&returnTo=${encodeURIComponent(sidebarRoutes[index])}`} className={index === 0 ? 'qh-nav-selected' : undefined}><Icon size={18} aria-hidden="true" />{name}</a></li>;
+            })}</ul>
+          </aside>
+          <div className="qh-example-conversation"><ChatUiProvider>
+            <Bubble.List autoScroll={false} items={[
+              { key: 'question', role: 'user', placement: 'end', variant: 'filled', content: t.question },
+              { key: 'answer', role: 'ai', variant: 'borderless', avatar: <BrandMark size={24} inverse />, content: <>
+                <p>{t.answer}</p>
+                <Table className="qh-research-table"><TableHeader><TableRow><TableHead>{t.researchName}</TableHead><TableHead>{t.rankOne}</TableHead><TableHead>{t.rankFive}</TableHead></TableRow></TableHeader>
+                  <TableBody>{factorExamples.map(item => <TableRow key={item.key}>
+                    <TableCell>{item.key === 'reversal' ? <a href="#evidence">{t[item.key]}</a> : <span className="qh-research-name">{t[item.key]}</span>}<Badge variant="outline"><CheckCircleIcon aria-hidden="true" />{t.completed}</Badge><code>{item.expression}</code></TableCell><TableCell>{item.oneDay}</TableCell><TableCell>{item.fiveDay}</TableCell>
+                  </TableRow>)}</TableBody>
+                </Table>
+              </> },
+            ]} />
+            <Sender disabled placeholder={t.ask} aria-label={t.ask} footer={<span>{t.builtIn}</span>} />
+          </ChatUiProvider></div>
         </div>
-        <div id="stage-panel" role="tabpanel" aria-labelledby={`stage-${stage}`} className="qt-preview-body">
-          <div aria-live="polite"><span className="qt-caption">{t.stages[stage].label}</span><h3>{t.stages[stage].detail}</h3><p>{t.stages[stage].body}</p>
-            {stage === 0 ? <div className="qt-formula"><span>{t.alpha}</span><code>-rank(ts_delta(close, 5))</code></div> : <dl>{(stage === 1 ? t.validation : t.tracking).map(([term, description]) => <div key={term}><dt>{term}</dt><dd>{description}</dd></div>)}</dl>}
+        <div className="qh-frame-caption"><span>{t.exampleResearch}</span><a href={mcpHref}>{t.connect}<ArrowRightIcon size={16} aria-hidden="true" /></a></div>
+        <p className="qh-example-notice">{t.exampleNotice}</p>
+      </section>
+      <section id="evidence" className="qh-evidence-section qh-container" aria-labelledby="evidence-title">
+        <div className="qh-section-copy" id="method"><h2 id="evidence-title">{t.evidenceTitle[0]}<br />{t.evidenceTitle[1]}</h2><p>{t.evidenceBody}</p></div>
+        <div className="qh-result-example">
+          <div className="qh-result-panel">
+            <p className="qh-breadcrumb">{t.sidebar[3]} / {t.reversal}</p>
+            <div className="qh-result-heading"><h3>{t.reversal}</h3><Badge variant="secondary">{t.factor}</Badge><Badge variant="outline"><CheckCircleIcon aria-hidden="true" />{t.completed}</Badge></div>
+            <Tabs value={resultTab} onValueChange={value => setResultTab(String(value))}>
+              <TabsList variant="line" activateOnFocus aria-label={t.exampleResult}>{['overview', 'evidence', 'inputs', 'configuration'].map((key, index) => <TabsTrigger key={key} value={key} size="lg">{t.resultTabs[index]}</TabsTrigger>)}</TabsList>
+              <TabsContent value="overview"><MetricGroup label={t.resultTabs[0]} className="grid-cols-2 sm:grid-cols-2"><Metric label={t.rankOne} value="0.082" /><Metric label={t.rankFive} value="0.043" /></MetricGroup><p className="qh-evidence-note">{t.evidenceNote}</p></TabsContent>
+              <TabsContent value="evidence">
+                <code className="qh-formula">{factorExamples[0].expression}</code>
+                <ToggleGroup value={[horizon]} onValueChange={values => { if (values[0]) setHorizon(values[0]); }} variant="outline" aria-label={t.horizonLabel}>{['1', '5'].map((value, index) => <ToggleGroupItem key={value} value={value}>{t.horizons[index]}</ToggleGroupItem>)}</ToggleGroup>
+                <Table><TableHeader><TableRow><TableHead>{t.period}</TableHead><TableHead>Rank IC</TableHead><TableHead>{t.coverage}</TableHead></TableRow></TableHeader><TableBody><TableRow><TableCell>{t.august}</TableCell><TableCell>{horizon === '1' ? '0.082' : '0.043'}</TableCell><TableCell>{horizon === '1' ? '19' : '15'} / 21 {t.days}</TableCell></TableRow></TableBody></Table>
+              </TabsContent>
+              {(['inputs', 'configuration'] as const).map(key => <TabsContent key={key} value={key}><dl className="qh-facts">{(key === 'inputs' ? t.inputLabels : t.configLabels).map((label, index) => <div key={index}><dt>{label}</dt><dd>{(key === 'inputs' ? t.inputValues : t.configValues)[index]}</dd></div>)}</dl></TabsContent>)}
+            </Tabs>
           </div>
-          <button className="qt-next" onClick={() => setStage((stage + 1) % 3)}>{t.stages[stage].action}</button>
+          <p className="qh-frame-caption">{t.exampleResult}</p>
         </div>
       </section>
-      <section className="qt-value" aria-labelledby="value-title">
-        <h2 id="value-title">{t.valueTitle}</h2>
-        <div className="qt-value-reasons">{t.reasons.map(([title, body]) => <article key={title}><h3>{title}</h3><p>{body}</p></article>)}</div>
+      <section id="tracking" className="qh-tracking qh-container" aria-labelledby="tracking-title">
+        <div className="qh-section-copy"><h2 id="tracking-title">{t.dailyTitle}</h2><p>{t.dailyBody}</p></div>
+        <div className="qh-tracking-panel">
+          <div className="qh-track-heading"><div><h3>{t.dailyTracking}</h3><p>{t.exampleStrategy}</p></div><span>{t.dailyPeriod}</span></div>
+          <MetricGroup variant="observation" label={t.dailyTracking} className="grid-cols-4">{['-1.23%', '8.30%', '¥1,424,714.10', '13'].map((value, index) => <Metric key={index} variant="observation" label={t.metrics[index]} value={value} />)}</MetricGroup>
+          <div className="qh-chart"><h3>{t.performance}</h3><TrackingReturnChart observation={trackingExample} originSession="2026-08-31" /></div>
+          <p className="qh-daily-note">{t.dailyNote}</p>
+        </div>
+        <p className="qh-frame-caption">{t.exampleTrack}</p>
       </section>
-      <section className="qt-access"><h2>{t.accessTitle}</h2><p>{t.accessBody}</p><a className="qt-primary" href={loginHref}>{t.login}</a></section>
+      <section className="qh-closing qh-container" aria-labelledby="closing-title"><h2 id="closing-title">{t.closing}</h2>{startLink(true)}</section>
     </main>
-    <footer><a className="qt-brand" href="#top" aria-label={t.home}><Brand className="qt-logo" size={24} inverse /></a><p>{t.footer}</p><a className="qt-footer-community" href="https://discord.gg/tdwxubVhMJ" target="_blank" rel="noopener noreferrer">{t.community}</a></footer>
+    <footer className="qh-footer qh-container"><a className="qh-brand" href="#top" aria-label={t.home}><Brand size={20} inverse /></a><nav aria-label={t.navigation}>{navLinks}</nav><span>© {new Date().getFullYear()} QAgentis</span></footer>
   </div>;
 }

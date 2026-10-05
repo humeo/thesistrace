@@ -1,44 +1,18 @@
-export type Language = 'en' | 'zh';
 export const copy = {
-    en: {
-        valueTitle: "Why Quantgrove?",
-        reasons: [
-    ['Turn an idea into Alpha with AI', 'Generate formulas with built-in AI and a choice of models, then evaluate and backtest. Connect your own agent through MCP.'],
-    ['Evaluate quickly, inspect from multiple angles', 'Factor evaluation and strategy backtesting in one lab. Examine Rank IC, returns, drawdowns and changes in holdings.'],
-    ['Observe signals after market close', 'Start daily tracking from a research result. Review signals and holdings changes to inform your own next steps.'],
-    ['Documentation for every research step', 'Use guides and examples to learn Alpha formulas, understand metrics and connect your agent through MCP.'],
-  ],
-        brand: 'Quantgrove', descriptor: 'A quant lab for curious minds and agents.', home: 'Quantgrove home', navigation: 'Main navigation', method: 'How it works', preview: 'Product preview', login: 'Log in',
-        headline: ['Ideas grow ', 'through evidence.'], subtitle: 'From an idea to Alpha formulas, backtests and daily observation. Use built-in AI or connect your own agent through MCP.', start: 'Get started', explore: 'Explore Quantgrove', stepsLabel: 'Three research steps', viewExample: 'View example', demo: 'Demo content',
-        previewTitle: 'An experiment in short-term reversal.', previewIntro: 'Follow one question through the research process.', previewNote: 'An interactive demo. No live research tasks are run.', stagesLabel: 'Research stages', alpha: 'Alpha expression',
-        stages: [
-            { title: 'Form a hypothesis', description: 'Turn an investment idea into a testable question.', label: 'Research hypothesis', detail: 'Do stocks that recently fell tend to reverse in the short term?', action: 'Explore validation', body: 'Express your intuition as a formula, then check whether the research supports it.' },
-            { title: 'Test the evidence', description: 'Evaluate your hypothesis with backtests and analysis.', label: 'Validation approach', detail: 'Examine factor performance, strategy returns and drawdowns over a historical period.', action: 'Explore daily tracking', body: 'Look beyond returns: assess stability and understand which research settings your conclusions depend on.' },
-            { title: 'Keep observing', description: 'Track daily results and observe long-term stability.', label: 'Ongoing observation', detail: 'Start daily tracking from a research result and observe performance in subsequent trading sessions.', action: 'Revisit the hypothesis', body: 'A historical backtest gives you a starting point. Continued observation adds evidence.' },
-        ],
-        validation: [['Factor performance', 'Examine the relationship between signals and subsequent returns'], ['Strategy backtest', 'Inspect returns, drawdowns and changes in holdings'], ['Research context', 'Keep the expression, parameters and data context together']],
-        tracking: [['Starting point', 'An existing research result'], ['Frequency', 'After the market closes'], ['Record', 'Review daily observations and run status']],
-        accessTitle: 'Your next experiment starts with a hypothesis.', accessBody: 'A quantitative research workbench for China A-shares.', footer: 'Quantgrove · Quantitative Research Workbench', community: 'Join Discord',
-        meta: 'Quantgrove: a quantitative research lab for AI agents. Generate Alpha, evaluate factors, backtest strategies and track daily observations.',
-    },
-    zh: {
-        valueTitle: "为什么选择 Quantgrove？",
-        reasons: [
-    ['用 AI，把 idea 变成 Alpha', '内置 AI 公式生成与多模型选择，从研究思路走到评估与回测。也支持通过 MCP 连接你自己的 Agent。'],
-    ['快速验证，多维分析', '在同一实验台完成因子评估与策略回测，结合 Rank IC、收益、回撤与持仓变化，判断想法是否值得继续。'],
-    ['盘后看信号，持续做观察', '从研究结果开启每日跟踪，交易日盘后查看信号与持仓变化，为你自主决定后续操作提供参考。'],
-    ['从上手到深入，都有文档', '从第一条 Alpha 公式，到指标解释与 Agent MCP 接入，通过指南和示例理解每一步研究。'],
-  ],
-        brand: 'Quantgrove', descriptor: '为好奇的研究者与 Agent 而建的量化实验室。', home: 'Quantgrove 首页', navigation: '主导航', method: '研究方法', preview: '产品预览', login: '登录',
-        headline: ['让想法，', '在证据中生长。'], subtitle: '从想法到 Alpha 公式、回测与盘后观察。使用内置 AI，或通过 MCP 连接自己的 Agent。', start: '开始研究', explore: '探索 Quantgrove', stepsLabel: '三个研究步骤', viewExample: '查看示例', demo: '演示内容',
-        previewTitle: '短期反转的一次实验。', previewIntro: '用一个具体问题，走过完整研究流程。', previewNote: '以下为交互演示，不执行真实研究任务。', stagesLabel: '研究阶段', alpha: 'Alpha 表达式',
-        stages: [
-            { title: '提出假设', description: '明确研究思路，构建可检验的假设。', label: '研究假设', detail: '近期下跌较多的股票，之后是否存在短期反转？', action: '查看验证方式', body: '把直觉写成表达式，再检查它能否得到研究结果的支持。' },
-            { title: '验证结果', description: '通过回测与检验，评估假设的有效性。', label: '验证方式', detail: '结合因子表现、策略收益与回撤，检查假设在历史区间内的表现。', action: '查看后续观察', body: '收益之外，也关注结果是否稳定，以及结论依赖哪些研究设定。' },
-            { title: '持续观察', description: '每日跟踪表现，观察长期稳定性。', label: '后续观察', detail: '从研究结果开始每日跟踪，继续观察后续交易日的策略表现。', action: '重新查看假设', body: '历史回测提供起点，后续观察继续积累证据。' },
-        ],
-        validation: [['因子表现', '观察信号与后续收益的关系'], ['策略回测', '检查收益、回撤和持仓变化'], ['研究依据', '保留表达式、参数与数据上下文']],
-        tracking: [['起点', '已有研究结果'], ['频率', '交易日收盘后'], ['记录', '逐日查看观察结果与运行状态']],
-        accessTitle: '下一次研究，从一个假设开始。', accessBody: '面向 A 股研究者的量化实验工作台。', footer: 'Quantgrove · 量化研究工作台', community: '加入社区', meta: 'Quantgrove：面向 AI Agent 的量化研究实验台。生成 Alpha 公式、评估因子、回测策略并持续盘后观察。',
-    },
+  en: {
+    brand: 'QAgentis', descriptor: 'Quant research for you and your AI Agent',
+    home: 'QAgentis home', navigation: 'Main navigation', product: 'Product', mcp: 'MCP', community: 'Community', login: 'Log in', start: 'Get started', viewExample: 'View example', languageToggle: 'Switch to Chinese',
+    headline: ['Quant research for you', 'and your AI Agent'], subtitle: 'Turn ideas into factors, backtests, and evidence. Use built-in AI or connect your own agent through MCP.',
+    exampleResearch: 'Example research', exampleResult: 'Example result', exampleTrack: 'Example track', exampleNotice: 'Historical examples from a research workspace. No live tasks are run here.', connect: 'Connect your agent with MCP',
+    sidebar: ['New chat', 'Data', 'Research', 'Research runs', 'Daily tracks', 'MCP'], question: 'Compare five-day reversal and twenty-day momentum.', answer: 'Two factor evaluations completed.', reversal: 'Five-day reversal', momentum: 'Twenty-day momentum', completed: 'Completed', factor: 'Factor evaluation', researchName: 'Research', signal: 'Alpha expression', rankOne: '1D Rank IC', rankFive: '5D Rank IC', ask: 'Ask a research question…', builtIn: 'Built-in AI',
+    evidenceTitle: ['Every result,', 'with its evidence.'], evidenceBody: 'Inspect the formula, data context, and run settings behind each result.', resultTabs: ['Overview', 'Factor evidence', 'Inputs', 'Configuration'], horizonLabel: 'Return horizon', horizons: ['1 trading day', '5 trading days'], period: 'Period', coverage: 'Coverage', august: 'Aug 2026', days: 'days',
+    inputLabels: ['Stock pool', 'Research period', 'Price input'], inputValues: ['Top 300 stocks by market capitalization', 'Aug 3 – Aug 31, 2026', 'Close price'], configLabels: ['Evaluation', 'Lookback', 'Ranking'], configValues: ['Factor evaluation', '5 trading sessions', 'Cross-sectional rank'], evidenceNote: 'Coverage: valid observations / research sessions. Rank IC measures the relationship with subsequent returns.',
+    dailyTitle: 'Research continues after the backtest.', dailyBody: 'Follow subsequent trading days, review holdings, and inspect what changed.', dailyTracking: 'Daily tracking', exampleStrategy: 'Example reversal strategy', dailyPeriod: 'Aug 31 – Sep 17, 2026', metrics: ['Since start', 'Max drawdown', 'Account net value', 'Trading days'], performance: 'Strategy performance', dailyNote: 'Simulated account · CNY · Net returns after trading costs', closing: 'Start with a hypothesis.', meta: 'QAgentis: quantitative research for you and your AI Agent. Evaluate factors, backtest strategies, inspect evidence, and follow subsequent trading days.',
+  },
+  zh: {
+    brand: 'QAgentis', descriptor: '为你和 AI Agent 而建的量化研究工作台', home: 'QAgentis 首页', navigation: '主导航', product: '产品', mcp: 'MCP', community: '社区', login: '登录', start: '开始研究', viewExample: '查看示例', languageToggle: '切换为 English', headline: ['量化研究，', '与你的 AI Agent 一起。'], subtitle: '把想法变成因子、回测与证据。使用内置 AI，或通过 MCP 连接你自己的 Agent。',
+    exampleResearch: '研究示例', exampleResult: '结果示例', exampleTrack: '跟踪示例', exampleNotice: '以下为研究工作台的历史示例，不执行真实任务。', connect: '通过 MCP 连接你的 Agent', sidebar: ['新对话', '数据', '研究', '研究记录', '每日跟踪', 'MCP'], question: '比较五日反转与二十日动量。', answer: '两个因子评估已完成。', reversal: '五日反转', momentum: '二十日动量', completed: '已完成', factor: '因子评估', researchName: '研究', signal: 'Alpha 表达式', rankOne: '1 日 Rank IC', rankFive: '5 日 Rank IC', ask: '提出一个研究问题…', builtIn: '内置 AI',
+    evidenceTitle: ['每个结果，', '都有依据可查。'], evidenceBody: '查看结果背后的公式、数据上下文与运行设置。', resultTabs: ['总览', '因子证据', '输入', '配置'], horizonLabel: '收益观察区间', horizons: ['1 个交易日', '5 个交易日'], period: '区间', coverage: '覆盖率', august: '2026 年 8 月', days: '天', inputLabels: ['股票池', '研究区间', '价格输入'], inputValues: ['市值前 300 只股票', '2026-08-03 至 2026-08-31', '收盘价'], configLabels: ['评估类型', '回看区间', '排序方式'], configValues: ['因子评估', '5 个交易日', '截面排序'], evidenceNote: '覆盖率：有效观测 / 研究交易日。Rank IC 衡量信号与后续收益的关系。',
+    dailyTitle: '回测结束，研究仍在继续。', dailyBody: '观察后续交易日，回看持仓，检查发生了哪些变化。', dailyTracking: '每日跟踪', exampleStrategy: '反转策略示例', dailyPeriod: '2026-08-31 至 2026-09-17', metrics: ['跟踪以来收益', '最大回撤', '账户净值', '观察交易日'], performance: '策略绩效', dailyNote: '模拟账户 · 人民币 · 收益已扣除交易费用', closing: '从一个假设开始。', meta: 'QAgentis：为你和 AI Agent 而建的量化研究工作台。评估因子、回测策略、检查证据，并持续观察后续交易日。',
+  },
 };

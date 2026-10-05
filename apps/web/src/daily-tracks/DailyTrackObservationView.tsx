@@ -118,7 +118,7 @@ export function SelectionSchedule({ observation, isStopped, isStopping, isBehind
 }
 
 export function TrackingReturnChart({ observation, originSession }: {
-  observation: DailyTrackObservation; originSession: string;
+  observation: Pick<DailyTrackObservation, "returns">; originSession: string;
 }) {
   const { t, i18n } = useTranslation("daily");
   const chartRef = useRef<IChartApi | null>(null);

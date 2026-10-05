@@ -68,7 +68,7 @@ for (const width of [1280, 1440]) {
     const prompt = page.getByRole("region", { name: "Setup prompt", exact: true });
     const promptText = prompt.getByRole("textbox", { name: "Setup prompt", exact: true });
     await expect(promptText).toBeVisible();
-    await expect(promptText).toHaveValue(/^Add Quantgrove MCP to Codex using/);
+    await expect(promptText).toHaveValue(/^Add QAgentis MCP to Codex using/);
     await expect(promptText).toHaveAttribute("readonly", "");
     await expect(prompt.getByRole("button", { name: "Copy", exact: true })).toBeVisible();
     await expect(page.getByRole("list", { name: "Connection steps" })).toHaveCount(0);
@@ -78,7 +78,7 @@ for (const width of [1280, 1440]) {
     await expect(page.getByLabel("Codex add command", { exact: true })).toBeVisible();
     await expect(page.getByText("codex mcp login quantgrove", { exact: true })).toBeVisible();
     await expect(page.getByText("Copy into a new conversation and follow your assistant's instructions to add the server and authorize access.", { exact: true })).toHaveCount(0);
-    await expect(page.getByText("Then ask Codex to list the available Quantgrove tools.", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Then ask Codex to list the available QAgentis tools.", { exact: true })).toHaveCount(0);
     for (const [commandLabel, copyLabel] of [["Codex add command", "Copy command"], ["Codex authorization command", "Copy login command"]]) {
       await expect(page.getByRole("button", { name: copyLabel, exact: true })).toHaveText("");
       await expect(page.getByRole("button", { name: copyLabel, exact: true }).locator("svg")).toHaveCount(1);
@@ -107,7 +107,7 @@ for (const width of [1280, 1440]) {
     await expect(page.locator('[data-slot="toast-title"]')).toContainText("Copy failed");
     await page.locator('[data-slot="toast-close"]').click();
     await page.getByText("Claude Code", { exact: true }).click();
-    await expect(promptText).toHaveValue(/^Add Quantgrove MCP to Claude Code using/);
+    await expect(promptText).toHaveValue(/^Add QAgentis MCP to Claude Code using/);
     await expect(page.getByLabel("Claude Code add command", { exact: true })).toBeVisible();
     await expect(page.getByLabel("Claude Code authorization command", { exact: true })).toHaveText("/mcp");
     await expect(page.getByRole("button", { name: "Copy command", exact: true })).toBeVisible();
@@ -138,9 +138,9 @@ for (const width of [1280, 1440]) {
     await expect(page.getByRole("button", { name: "复制命令", exact: true })).toHaveText("");
     await expect(page.getByRole("button", { name: "复制登录命令", exact: true })).toHaveText("");
     await expect(page.getByText("复制到新对话，按助手指引添加服务并授权。", { exact: true })).toHaveCount(0);
-    await expect(page.getByText("然后让 Claude Code 列出可用的 Quantgrove 工具。", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("然后让 Claude Code 列出可用的 QAgentis 工具。", { exact: true })).toHaveCount(0);
     await expect(page.getByRole("region", { name: "设置提示", exact: true }).getByRole("button", { name: "复制", exact: true })).toBeVisible();
-    await expect(page.getByRole("textbox", { name: "设置提示", exact: true })).toHaveValue(/^请使用 .* 将 Quantgrove MCP 添加到 Claude Code/);
+    await expect(page.getByRole("textbox", { name: "设置提示", exact: true })).toHaveValue(/^请使用 .* 将 QAgentis MCP 添加到 Claude Code/);
     await expect(tool).toHaveCount(0);
     await expect(page.getByText("get_research_context", { exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

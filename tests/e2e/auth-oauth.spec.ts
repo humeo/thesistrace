@@ -12,7 +12,7 @@ test("External OAuth authentication completes login, consent, token refresh and 
   const callback = createServer((request, response) => {
     receive(new URL(request.url!, "http://127.0.0.1"));
     response.writeHead(200, { "content-type": "text/html", "cache-control": "no-store" });
-    response.end("<p>Authorization complete. Return to Quantgrove.</p>");
+    response.end("<p>Authorization complete. Return to QAgentis.</p>");
   });
   await new Promise<void>(resolve => callback.listen(0, "127.0.0.1", resolve));
   const external = await apiRequest.newContext({ baseURL: base });
@@ -32,16 +32,16 @@ test("External OAuth authentication completes login, consent, token refresh and 
       code_challenge_method: "S256", code_challenge: createHash("sha256").update(verifier).digest("base64url") });
     await page.context().clearCookies();
     await page.goto(`/api/auth/oauth2/authorize?${query}`);
-    await expect(page.getByRole("heading", { name: "Welcome to Quantgrove" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Welcome to QAgentis" })).toBeVisible();
     await page.getByLabel("Email", { exact: true }).fill(researcher.email);
     await page.getByRole("button", { name: "Continue with email", exact: true }).click();
     await expect(page.getByLabel("Verification code")).toBeVisible();
     await page.getByLabel("Verification code").fill(await emailCode(researcher.email));
     await page.getByRole("button", { name: "Verify and continue", exact: true }).click();
-    await expect(page.getByRole("heading", { name: "Allow OAuth acceptance client to access Quantgrove?" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Allow OAuth acceptance client to access QAgentis?" })).toBeVisible();
     await expect(page.getByText("Create research runs and batches", { exact: true })).toHaveCount(0);
     await page.getByRole("button", { name: "Allow access" }).click();
-    await expect(page.getByText("Authorization complete. Return to Quantgrove.")).toBeVisible();
+    await expect(page.getByText("Authorization complete. Return to QAgentis.")).toBeVisible();
     const returned = await received;
     expect(returned.searchParams.get("state")).toBe("oauth-acceptance");
     const issued = await external.post(`${base}/api/auth/oauth2/token`, { form: {

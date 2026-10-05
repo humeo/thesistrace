@@ -1,4 +1,4 @@
-# Quantgrove fonts
+# Product fonts
 
 Locally served variable WOFF2 subsets, retrieved from Google Fonts on 2026-09-22.
 No third-party requests are needed at runtime. `quantgrove.css` preserves the
@@ -18,3 +18,15 @@ Upstream sources and licenses: https://github.com/google/fonts/tree/main/ofl
 `sources.json` records the exact source URL, file size and SHA-256 of each font.
 The 215 files total approximately 10.4 MiB on disk; browsers download only the
 Unicode subsets needed by the displayed text, not the entire collection.
+
+## QAgentis wordmark
+
+The wordmark reuses locally served **Inter at weight 550**, the same family and
+weight as the former QuantTrace homepage wordmark. Its tracking is -.02em.
+The existing variable Inter WOFF2 files support the requested weight without
+synthesis; `quantgrove.css` loads them with `font-display: swap`, and the main
+document preloads the Latin subset `inter-a28b7e319024.woff2`.
+
+[inter-OFL.txt](inter-OFL.txt) contains its SIL Open Font License. `sources.json`
+records the source, byte size and SHA-256. No additional font family or remote
+font request is needed.

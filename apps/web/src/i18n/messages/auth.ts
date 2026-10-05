@@ -1,7 +1,7 @@
 import type { AuthErrorCode } from "../../auth/errors";
 
 export const authEn = {
-  welcome: "Welcome to Quantgrove",
+  welcome: "Welcome to QAgentis",
   checkEmail: "Check your email",
   enterCode: "Enter the six-digit code from your email.",
   introduction: "Sign in or create an account with your email.",
@@ -20,9 +20,9 @@ export const authEn = {
   continueEmail: "Continue with email",
   back: "Back",
   noPassword: "No password needed. New accounts are created after verification.",
-  footer: "Quantgrove · Quantitative research workspace",
+  footer: "QAgentis · Quantitative research workspace",
   invitation: "Invitation",
-  createAccess: "Create your Quantgrove access",
+  createAccess: "Create your QAgentis access",
   checkingInvitation: "Checking invitation…",
   password: "Password",
   passwordHint: "Use 12–128 characters.",
@@ -31,7 +31,7 @@ export const authEn = {
   acceptInvitation: "Accept invitation",
   workspace: "Research workspace",
   checkingAccess: "Checking access",
-  verifyingSession: "Verifying your Quantgrove session…",
+  verifyingSession: "Verifying your QAgentis session…",
   preparingWorkspace: "Preparing workspace",
   preparingFolders: "Setting up your Research folders…",
   retrySetup: "Retry setup",
@@ -41,7 +41,7 @@ export const authEn = {
   unavailableMessage: "Your access state could not be verified. Existing session data has been retained.",
   unavailable: "Authentication unavailable",
   rateLimited: "Too many requests. Try again in {{seconds}}s.",
-  opening: "Opening Quantgrove",
+  opening: "Opening QAgentis",
   redirecting: "Redirecting…",
   preparingAccess: "Preparing product access…",
   errors: {
@@ -60,7 +60,7 @@ export const authEn = {
 } as const;
 
 export const authZh = {
-  welcome: "欢迎来到 Quantgrove",
+  welcome: "欢迎来到 QAgentis",
   checkEmail: "请查收邮件",
   enterCode: "输入邮件中的六位验证码。",
   introduction: "使用邮箱登录或创建账户。",
@@ -79,9 +79,9 @@ export const authZh = {
   continueEmail: "使用邮箱继续",
   back: "返回",
   noPassword: "无需密码，验证通过后将自动创建新账户。",
-  footer: "Quantgrove · 量化研究工作区",
+  footer: "QAgentis · 量化研究工作区",
   invitation: "邀请",
-  createAccess: "开通 Quantgrove 访问权限",
+  createAccess: "开通 QAgentis 访问权限",
   checkingInvitation: "正在检查邀请…",
   password: "密码",
   passwordHint: "请输入 12–128 个字符。",
@@ -90,7 +90,7 @@ export const authZh = {
   acceptInvitation: "接受邀请",
   workspace: "研究工作区",
   checkingAccess: "正在检查访问权限",
-  verifyingSession: "正在验证你的 Quantgrove 登录状态…",
+  verifyingSession: "正在验证你的 QAgentis 登录状态…",
   preparingWorkspace: "正在准备工作区",
   preparingFolders: "正在设置研究文件夹…",
   retrySetup: "重新设置",
@@ -100,7 +100,7 @@ export const authZh = {
   unavailableMessage: "无法验证访问状态，已有的会话数据已保留。",
   unavailable: "身份验证暂不可用",
   rateLimited: "请求过于频繁，请在 {{seconds}} 秒后重试。",
-  opening: "正在打开 Quantgrove",
+  opening: "正在打开 QAgentis",
   redirecting: "正在跳转…",
   preparingAccess: "正在准备访问权限…",
   errors: {

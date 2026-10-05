@@ -95,7 +95,7 @@ test('mobile Sheet keeps keyboard focus within its navigation', async ({ page })
  await page.setViewportSize({ width: 390, height: 844 });
  await page.getByRole('button', { name: 'Open navigation' }).click();
  const sheet = page.getByRole('dialog', { name: 'Navigation' });
- const home = sheet.getByRole('link', { name: 'Quantgrove home' });
+ const home = sheet.getByRole('link', { name: 'QAgentis home' });
  const close = sheet.getByRole('button', { name: 'Close navigation' });
  const account = sheet.getByRole('button', { name: 'Account menu' });
  await expect(sheet.locator('[data-slot="sheet-close"]')).toHaveCount(0);

@@ -479,9 +479,9 @@ function passwordResetEmail(
 ): ResendEmail {
   const link = `${publicOrigin}/reset-password#token=${encodeURIComponent(token)}`;
   return {
-    html: `<p>Reset your Quantgrove password.</p><p><a href="${link}">Reset password</a></p>`,
-    subject: "Reset your Quantgrove password",
-    text: `Reset your Quantgrove password: ${link}`,
+    html: `<p>Reset your QAgentis password.</p><p><a href="${link}">Reset password</a></p>`,
+    subject: "Reset your QAgentis password",
+    text: `Reset your QAgentis password: ${link}`,
     to: email,
   };
 }

@@ -1,4 +1,4 @@
-export const PRODUCT_NAME = "Quantgrove";
+export const PRODUCT_NAME = "QAgentis";
 
 type BrandMarkProps = Readonly<{
   size?: number;
@@ -10,9 +10,9 @@ type BrandMarkProps = Readonly<{
 export function BrandMark({ size = 30, className, inverse = false }: BrandMarkProps) {
   return <img
     className={className}
-    src={`/brand/quantgrove-mark${inverse ? "-inverse" : ""}.svg`}
+    src={`/brand/qhypo-mark${inverse ? "-inverse" : ""}.svg`}
     alt=""
-    width={size}
+    width={size * 4 / 3}
     height={size}
   />;
 }

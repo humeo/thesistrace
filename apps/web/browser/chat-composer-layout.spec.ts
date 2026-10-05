@@ -46,7 +46,7 @@ test("new chat starter cards fill an editable draft without sending it", async (
 test("new chat centers the welcome, composer and starter cards together on desktop", async ({ page }) => {
   for (const language of ["English", "简体中文"]) {
     await page.getByRole("button", { name: language, exact: true }).click();
-    await expect(page.locator(".ant-welcome-icon")).toHaveText("Quantgrove");
+    await expect(page.locator(".ant-welcome-icon")).toHaveText("QAgentis");
     await expect(page.locator(".ant-welcome-title")).toHaveText(language === "简体中文" ? "从一个研究问题开始" : "Start with a research question");
     await expect(page.locator(".ant-welcome-description")).toHaveCount(0);
     const cards = page.getByRole("region", { name: language === "简体中文" ? "研究问题示例" : "Research question examples", exact: true });

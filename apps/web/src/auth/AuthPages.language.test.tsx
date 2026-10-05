@@ -24,7 +24,7 @@ test("an existing authentication error follows the interface language without re
     await act(async () => changeInterfaceLanguage("zh-CN"));
     expect(container.querySelector('[role="alert"]')?.textContent).toBe("未能发送验证码，请重试。");
     expect(container.querySelector("input")).toBe(emailInput);
-    expect(container.querySelector("h1")?.textContent).toBe("欢迎来到 Quantgrove");
+    expect(container.querySelector("h1")?.textContent).toBe("欢迎来到 QAgentis");
     expect(document.documentElement.lang).toBe("zh-CN");
   } finally {
     await act(async () => root.unmount());

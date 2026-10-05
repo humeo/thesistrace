@@ -32,7 +32,7 @@ function LoginPage() {
   const verificationCooldown = useAuthRetry(verificationRetryAt);
   const errorCooldown = useAuthRetry(errorRetryAt);
   useEffect(() => {
-    document.title = `${t(sent ? "checkEmail" : "welcome")} · Quantgrove`;
+    document.title = `${t(sent ? "checkEmail" : "welcome")} · QAgentis`;
     document.querySelector('meta[name="description"]')?.setAttribute("content", t("introduction"));
   }, [sent, t]);
 
@@ -366,7 +366,7 @@ export function AuthSurface({ eyebrow, title, children, as: Root = "main" }: {
 }) {
   const { t } = useTranslation("auth");
   useEffect(() => {
-    document.title = `${title} · Quantgrove`;
+    document.title = `${title} · QAgentis`;
     document.querySelector('meta[name="description"]')?.setAttribute("content", t("footer"));
   }, [title, t]);
   return (

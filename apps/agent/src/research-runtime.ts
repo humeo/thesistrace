@@ -76,7 +76,7 @@ import { agentTraceId, createRunTelemetry, type AgentTelemetryWriter } from "./r
 import { PRIVACY_CANARIES } from "./scripted-privacy-model.js";
 
 const RESEARCH_AGENT_ID = "research";
-const RESEARCH_AGENT_INSTRUCTIONS = `You are the ThesisTrace Research Agent.
+const RESEARCH_AGENT_INSTRUCTIONS = `You are the QAgentis Research Agent.
 Help a researcher turn an investment idea into a precise, testable Alpha research plan.
 Use only the Tools supplied by the current authenticated MCP discovery. You own Tool selection, arguments, Folder choice, Formula authoring and correction, Research type, dates, universe, neutralization, Strategy parameters, polling decisions, Result-section selection, and the final response.
 Before creating or editing research, read get_research_context for current readiness, constraints and the authoring guide. Use get_authoring_reference for the relevant workflow, formula syntax, Python SDK symbols and executable examples; omit symbol to discover the topic index. Use get_alpha_catalog with kind=fields or functions and query to find available inputs, then exact identifiers for their definitions. Formula identifiers and Python data.history field IDs are different; use the catalog's published values. Do not invent operators, SDK methods or object properties from general Python knowledge. These same public references are available to external MCP clients.
@@ -212,7 +212,7 @@ export async function createResearchRuntime(
       return memory;
     },
     ...continuation.agentOptions,
-    name: "ThesisTrace Research Agent",
+    name: "QAgentis Research Agent",
     tools: ({ requestContext }) => researchToolsFrom(requestContext),
   });
   const mastra = new Mastra({

@@ -94,7 +94,7 @@ test("brand opens the landing page through browser navigation", async () => {
   document.body.append(container);
   root = createRoot(container);
   await act(async () => root!.render(<Routes />));
-  const home = document.querySelector<HTMLAnchorElement>('[aria-label="Quantgrove home"]')!;
+  const home = document.querySelector<HTMLAnchorElement>('[aria-label="QAgentis home"]')!;
   expect(home.getAttribute("href")).toBe("/");
   const event = new MouseEvent("click", { bubbles: true, cancelable: true });
   await act(async () => home.dispatchEvent(event));

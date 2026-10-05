@@ -45,19 +45,19 @@ describe("MCP product page", () => {
     expect(host.textContent).toContain("Service available");
     expect(host.textContent).toContain("1 tool");
     expect(host.textContent).not.toContain("Browse daily tracks");
-    expect(host.textContent).not.toContain("Built into Quantgrove chat");
+    expect(host.textContent).not.toContain("Built into QAgentis chat");
     await click(button("Copy"));
-    expect(copied).toHaveBeenLastCalledWith(expect.stringContaining(`Add Quantgrove MCP to Codex using ${endpoint}.`));
+    expect(copied).toHaveBeenLastCalledWith(expect.stringContaining(`Add QAgentis MCP to Codex using ${endpoint}.`));
     expect(host.textContent).toContain("No authorized apps yet");
     await click(button("Claude Code"));
     await click(button("Copy"));
-    expect(copied).toHaveBeenLastCalledWith(expect.stringContaining("Add Quantgrove MCP to Claude Code"));
+    expect(copied).toHaveBeenLastCalledWith(expect.stringContaining("Add QAgentis MCP to Claude Code"));
     await click(button("Other client"));
     await click(button("Copy URL"));
     expect(copied).toHaveBeenLastCalledWith(endpoint);
     expect(requested.every(path => !path.includes("revoke") && !path.includes("consent"))).toBe(true);
   });
-  it("uses the Quantgrove server alias in client setup and login instructions", async () => {
+  it("preserves the configured server alias in client setup and login instructions", async () => {
     await mount();
     expect(host.querySelector('pre[aria-label="Codex add command"] code')?.textContent).toBe(`codex mcp add quantgrove --url '${endpoint}'`);
     expect(host.textContent).toContain("codex mcp login quantgrove");

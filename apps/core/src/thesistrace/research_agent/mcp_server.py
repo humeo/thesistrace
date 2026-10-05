@@ -59,7 +59,7 @@ RESEARCH_AGENT_MAX_CALLS_PER_WINDOW = 120
 RESEARCH_AGENT_MAX_CONCURRENT_CALLS = 4
 RESEARCH_AGENT_TOOL_OUTCOME_META_KEY = "thesistrace/tool-outcome"
 RESEARCH_AGENT_INSTRUCTIONS = (
-    "ThesisTrace performs researcher-owned research and simulated Daily Tracking. "
+    "QAgentis performs researcher-owned research and simulated Daily Tracking. "
     "For new research, use available get_research_context/get_alpha_catalog information, "
     "read get_authoring_reference for unfamiliar Formula syntax or Python SDK members, "
     "then diagnose_research_spec before submit_research_run or submit_research_batch. "
@@ -259,7 +259,7 @@ def create_research_agent_mcp_server(
                 await ingress.release(subject)
 
     return Server(
-        name="ThesisTrace Research Agent",
+        name="QAgentis Research Agent",
         version="0.1.0",
         instructions=RESEARCH_AGENT_INSTRUCTIONS,
         on_list_tools=list_tools,

@@ -252,7 +252,7 @@ def create_research_agent_http_transport(
                 key=lambda scope: scope.value,
             )
         ],
-        resource_name="ThesisTrace Research Agent",
+        resource_name="QAgentis Research Agent",
     )
     return ResearchAgentHTTPTransport(
         app=protected_app,

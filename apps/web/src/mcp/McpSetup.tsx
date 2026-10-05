@@ -33,7 +33,7 @@ export function McpSetup({ endpoint }: { endpoint: string }) {
           <pre className={mcpLayout.code} tabIndex={0} aria-label={t("serverUrl")}><code>{endpoint}</code></pre>
           <InputGroupAddon align="inline-end" className="py-0"><CopyButton iconOnly text={endpoint} label={t("copyUrl")} /></InputGroupAddon>
         </InputGroup>
-        <p>{t("name")}: <strong>Quantgrove</strong> · {t("transport")}: <strong>Streamable HTTP</strong></p>
+        <p>{t("name")}: <strong>QAgentis</strong> · {t("transport")}: <strong>Streamable HTTP</strong></p>
       </div> : <div className="grid min-w-0 gap-6">
         <div className={mcpLayout.stack}>
         <h3 className="m-0 text-base leading-6 font-medium">{t("terminalStep")}</h3>
