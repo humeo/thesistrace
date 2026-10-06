@@ -465,7 +465,7 @@ function runDataStateCommand(statement: string): string {
   ).trim();
 }
 
-function runDataOperator(...args: string[]): unknown {
+export function runDataOperator(...args: string[]): unknown {
   const output = execFileSync(
     "docker",
     [
