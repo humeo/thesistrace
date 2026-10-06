@@ -17,7 +17,7 @@ from test_core_daily_track_detail import (
 )
 from test_core_research_agent_mcp_runs import _mcp_client
 
-from thesistrace.benchmark import BenchmarkLevel, BenchmarkSnapshotStore
+from thesistrace.benchmark import BenchmarkLevel, PreparedBenchmarkSnapshots
 from thesistrace.daily_track.models import DailyTrackProvenanceResultSectionInput
 from thesistrace.data.canonical_mapping import adjusted_price_string
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
@@ -40,12 +40,14 @@ def test_current_data_rerun_keeps_parameters_and_original_result_without_old_gen
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
     sessions = _business_sessions(date(2024, 8, 1), count=5)
-    BenchmarkSnapshotStore(settings.benchmark_mount).publish(
+    benchmark = PreparedBenchmarkSnapshots(settings.benchmark_mount).prepare(
         (BenchmarkLevel("2010-01-04", "3500"), *(BenchmarkLevel(day, "4000") for day in sessions)),
         published_at=datetime(2026, 8, 10, 8, tzinfo=UTC),
     )
-    original_generation = _publish_head(settings, sessions=sessions, expected_manifest=None,
-                                        operation_id="rerun-original")
+    original_generation = _publish_head(
+        settings, sessions=sessions, expected_manifest=None, operation_id="rerun-original",
+        benchmark_snapshot_sha256=benchmark.sha256,
+    )
     with TestClient(create_app(settings)) as client:
         runtime = client.app.state.core_runtime
         command = {**_run_command("original", start_date=sessions[0], end_date=sessions[3]),
@@ -90,9 +92,10 @@ def test_current_data_rerun_keeps_parameters_and_original_result_without_old_gen
             return value
 
         monkeypatch.setattr(fixture, "_canonical", revised)
-        current_generation = _publish_head(settings, sessions=sessions,
-                                            expected_manifest=original_generation,
-                                            operation_id="revised-history")
+        current_generation = _publish_head(
+            settings, sessions=sessions, expected_manifest=original_generation,
+            operation_id="revised-history", benchmark_snapshot_sha256=benchmark.sha256,
+        )
         assert current_generation != original_generation
         old_manifest = (settings.data_mount / "manifests" / "sha256" / original_generation[:2]
                         / f"{original_generation}.json")

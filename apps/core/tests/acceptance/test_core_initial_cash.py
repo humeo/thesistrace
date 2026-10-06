@@ -16,7 +16,7 @@ from test_core_daily_track_detail import (
     _run_worker_once,
 )
 
-from thesistrace.benchmark import BenchmarkLevel, BenchmarkSnapshotStore
+from thesistrace.benchmark import BenchmarkLevel, PreparedBenchmarkSnapshots
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.entrypoints.schema import initialize_core
 
@@ -31,7 +31,7 @@ def test_actual_initial_cash_publishes_independent_runs_batch_and_track(tmp_path
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
     sessions = _business_sessions(date(2024, 8, 1), count=5)
-    BenchmarkSnapshotStore(settings.benchmark_mount).publish(
+    benchmark = PreparedBenchmarkSnapshots(settings.benchmark_mount).prepare(
         (
             BenchmarkLevel("2010-01-04", "3500"),
             *(BenchmarkLevel(session, "4000") for session in sessions),
@@ -39,7 +39,8 @@ def test_actual_initial_cash_publishes_independent_runs_batch_and_track(tmp_path
         published_at=datetime(2026, 8, 10, 8, tzinfo=UTC),
     )
     head = _publish_head(
-        settings, sessions=sessions[:3], expected_manifest=None, operation_id="cash-seed"
+        settings, sessions=sessions[:3], expected_manifest=None, operation_id="cash-seed",
+        benchmark_snapshot_sha256=benchmark.sha256,
     )
     with TestClient(create_app(settings)) as client:
         commands = {}
@@ -126,7 +127,10 @@ def test_actual_initial_cash_publishes_independent_runs_batch_and_track(tmp_path
         track_id = started.json()["id"]
         deleted = client.delete(f"/api/research-runs/{ids['100000']}")
         assert deleted.status_code in (200, 204), deleted.text
-        _publish_head(settings, sessions=sessions, expected_manifest=head, operation_id="cash-next")
+        _publish_head(
+            settings, sessions=sessions, expected_manifest=head, operation_id="cash-next",
+            benchmark_snapshot_sha256=benchmark.sha256,
+        )
         _refresh_daily_track(client, track_id, "cash-refresh")
         worker = _run_worker_once(settings, "tracking")
         assert worker.returncode == 0, worker.stdout + worker.stderr

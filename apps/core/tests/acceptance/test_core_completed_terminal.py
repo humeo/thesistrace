@@ -16,7 +16,7 @@ from test_core_daily_track_detail import (
     _run_worker_once,
 )
 
-from thesistrace.benchmark import BenchmarkLevel, BenchmarkSnapshotStore
+from thesistrace.benchmark import BenchmarkLevel, PreparedBenchmarkSnapshots
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.entrypoints.schema import initialize_core
 
@@ -44,14 +44,17 @@ def test_fixed_exposure_publishes_and_tracks_its_first_entry(
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
     sessions = _business_sessions(date(2024, 8, 1), count=3)
-    BenchmarkSnapshotStore(settings.benchmark_mount).publish(
+    benchmark = PreparedBenchmarkSnapshots(settings.benchmark_mount).prepare(
         (
             BenchmarkLevel("2010-01-04", "3500"),
             *(BenchmarkLevel(session, "4000") for session in sessions),
         ),
         published_at=datetime(2026, 8, 10, 8, tzinfo=UTC),
     )
-    _publish_head(settings, sessions=sessions, expected_manifest=None, operation_id="one-day")
+    _publish_head(
+        settings, sessions=sessions, expected_manifest=None, operation_id="one-day",
+        benchmark_snapshot_sha256=benchmark.sha256,
+    )
     with TestClient(create_app(settings)) as client:
         command = {
             **_run_command("one-day", start_date=sessions[0], end_date=sessions[0]),
@@ -233,7 +236,7 @@ def test_common_statistics_publish_from_checkpoint_to_completed_result(
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
     sessions = _business_sessions(date(2024, 8, 1), count=6 if dynamic else 5)
-    BenchmarkSnapshotStore(settings.benchmark_mount).publish(
+    benchmark = PreparedBenchmarkSnapshots(settings.benchmark_mount).prepare(
         (BenchmarkLevel("2010-01-04", "3500"), *(BenchmarkLevel(day, "4000") for day in sessions)),
         published_at=datetime(2026, 8, 10, 8, tzinfo=UTC),
     )
@@ -242,6 +245,7 @@ def test_common_statistics_publish_from_checkpoint_to_completed_result(
         sessions=(("2024-07-31", *sessions) if weighting == "inverse_volatility" else sessions),
         expected_manifest=None,
         operation_id="common",
+        benchmark_snapshot_sha256=benchmark.sha256,
     )
     with TestClient(create_app(settings)) as client:
         accepted = client.post(
@@ -612,7 +616,7 @@ def test_common_statistics_publish_from_checkpoint_to_completed_result(
 
         # The latest checkpoint, not temporary historical holdings, owns continuation.
         extended_sessions = _business_sessions(date(2024, 8, 1), count=len(sessions) + 1)
-        BenchmarkSnapshotStore(settings.benchmark_mount).publish(
+        benchmark = PreparedBenchmarkSnapshots(settings.benchmark_mount).prepare(
             (BenchmarkLevel("2010-01-04", "3500"),
              *(BenchmarkLevel(day, "4000") for day in extended_sessions)),
             published_at=datetime(2026, 8, 11, 8, tzinfo=UTC),
@@ -623,6 +627,7 @@ def test_common_statistics_publish_from_checkpoint_to_completed_result(
                       if weighting == "inverse_volatility" else extended_sessions),
             expected_manifest=generation,
             operation_id="after-holding-expiry",
+            benchmark_snapshot_sha256=benchmark.sha256,
         )
         _refresh_daily_track(client, track_id, "after-holding-expiry")
         worker = _run_worker_once(settings, "tracking")
@@ -647,11 +652,14 @@ def test_inverse_eligibility_is_published_and_preserved_in_track(tmp_path: Path)
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
     sessions = _business_sessions(date(2024, 8, 1), count=5)
-    BenchmarkSnapshotStore(settings.benchmark_mount).publish(
+    benchmark = PreparedBenchmarkSnapshots(settings.benchmark_mount).prepare(
         (BenchmarkLevel("2010-01-04", "3500"), *(BenchmarkLevel(day, "4000") for day in sessions)),
         published_at=datetime(2026, 8, 10, 8, tzinfo=UTC),
     )
-    _publish_head(settings, sessions=sessions, expected_manifest=None, operation_id="eligibility")
+    _publish_head(
+        settings, sessions=sessions, expected_manifest=None, operation_id="eligibility",
+        benchmark_snapshot_sha256=benchmark.sha256,
+    )
     with TestClient(create_app(settings)) as client:
         accepted = client.post(
             "/api/research-runs",

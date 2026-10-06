@@ -25,7 +25,7 @@ from test_core_research_batch_factor_recovery import (
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.alpha_language import alpha_language
-from thesistrace.benchmark import BenchmarkLevel, BenchmarkSnapshotStore
+from thesistrace.benchmark import BenchmarkLevel, PreparedBenchmarkSnapshots
 from thesistrace.data import DatasetLifecycle
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.publication import PublishedRef
@@ -560,10 +560,7 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
     drop_product_schemas(settings)
     events: list[dict[str, object]] = []
     with TestClient(create_app(settings)) as client:
-        generation_id = _publish_current_data(
-            settings, sessions=("2026-07-30", "2026-07-31", *SESSIONS),
-        )
-        BenchmarkSnapshotStore(settings.benchmark_mount).publish(
+        benchmark = PreparedBenchmarkSnapshots(settings.benchmark_mount).prepare(
             (
                 BenchmarkLevel("2010-01-04", "3500"),
                 BenchmarkLevel("2026-08-03", "4000"),
@@ -571,6 +568,10 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
                 BenchmarkLevel("2026-08-05", "4080"),
             ),
             published_at=datetime(2026, 8, 5, 18, tzinfo=UTC),
+        )
+        generation_id = _publish_current_data(
+            settings, sessions=("2026-07-30", "2026-07-31", *SESSIONS),
+            benchmark_snapshot_sha256=benchmark.sha256,
         )
         command = {
             **_strategy_command("strategy-sweep-equivalence"),

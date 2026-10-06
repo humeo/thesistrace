@@ -25,7 +25,7 @@ from test_core_daily_track_detail import (
     _run_command,
 )
 
-from thesistrace.benchmark import BenchmarkLevel, BenchmarkSnapshotStore
+from thesistrace.benchmark import BenchmarkLevel, PreparedBenchmarkSnapshots
 from thesistrace.daily_track.models import DailyTrackStrategyObservationsResultSectionInput
 from thesistrace.daily_track.observation_state import (
     TrackingObservationState,
@@ -44,12 +44,13 @@ def test_daily_track_read_cost_is_bounded_at_1000_advances(
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
     sessions = _business_sessions(date(2020, 1, 2), count=1003)
-    BenchmarkSnapshotStore(settings.benchmark_mount).publish(
+    benchmark = PreparedBenchmarkSnapshots(settings.benchmark_mount).prepare(
         (BenchmarkLevel("2010-01-04", "3500"), *(BenchmarkLevel(day, "4000") for day in sessions)),
         published_at=datetime(2026, 8, 10, tzinfo=UTC),
     )
     head = _publish_head(
-        settings, sessions=sessions[:3], expected_manifest=None, operation_id="cost-seed"
+        settings, sessions=sessions[:3], expected_manifest=None, operation_id="cost-seed",
+        benchmark_snapshot_sha256=benchmark.sha256,
     )
     with TestClient(create_app(settings)) as client:
         runtime = client.app.state.core_runtime
@@ -66,7 +67,8 @@ def test_daily_track_read_cost_is_bounded_at_1000_advances(
             f"/api/research-runs/{run_id}/daily-tracks", json={"request_id": "cost-track"}
         ).json()["id"]
         head = _publish_head(
-            settings, sessions=sessions[:4], expected_manifest=head, operation_id="cost-first"
+            settings, sessions=sessions[:4], expected_manifest=head, operation_id="cost-first",
+            benchmark_snapshot_sha256=benchmark.sha256,
         )
         _refresh_daily_track(client, track_id, "cost-refresh")
         assert runtime.daily_tracks.process_next()
@@ -76,7 +78,8 @@ def test_daily_track_read_cost_is_bounded_at_1000_advances(
         terminal = stored["terminal_strategy_state"]
         state = TrackingObservationState.model_validate(template["tracking_observation_state"])
         _publish_head(
-            settings, sessions=sessions, expected_manifest=head, operation_id="cost-calendar"
+            settings, sessions=sessions, expected_manifest=head, operation_id="cost-calendar",
+            benchmark_snapshot_sha256=benchmark.sha256,
         )
         coordinates = runtime.daily_track_sessions
         metrics = []

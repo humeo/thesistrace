@@ -629,6 +629,7 @@ def _publish_current_data(
     prepared_at: datetime = datetime(2026, 8, 11, 12, tzinfo=UTC),
     sessions: tuple[str, ...] = SESSIONS,
     instrument_count: int = 1,
+    benchmark_snapshot_sha256: str | None = None,
 ) -> str:
     s3 = boto3.client(
         "s3",
@@ -723,6 +724,7 @@ def _publish_current_data(
             expected_generation_manifest_sha256=expected_generation,
             candidate_generation_manifest_sha256=generation.manifest_sha256,
             operation_id=operation_id,
+            benchmark_snapshot_sha256=benchmark_snapshot_sha256,
         )
     finally:
         database.close()

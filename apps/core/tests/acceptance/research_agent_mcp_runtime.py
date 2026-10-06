@@ -10,7 +10,7 @@ import boto3
 from core_runtime import TEST_RESEARCHER, internal_api_origin
 
 from thesistrace._postgres import PostgresDatabase
-from thesistrace.benchmark import BenchmarkLevel, BenchmarkSnapshotStore
+from thesistrace.benchmark import BenchmarkLevel, PreparedBenchmarkSnapshots
 from thesistrace.data import DatasetLifecycle, MountedGenerationStore
 from thesistrace.data.canonical_mapping import field_catalog
 from thesistrace.entrypoints.runtime import CoreSettings
@@ -22,7 +22,7 @@ def publish_current_data(
     settings: CoreSettings, *, daily_fields: bool = False, indicator_fields: bool = False,
 ) -> tuple[str, ...]:
     sessions = _weekday_sessions(date(2026, 8, 3), 75)
-    BenchmarkSnapshotStore(settings.benchmark_mount).publish(
+    benchmark = PreparedBenchmarkSnapshots(settings.benchmark_mount).prepare(
         (
             BenchmarkLevel("2010-01-04", "3500"),
             *(
@@ -188,6 +188,7 @@ def publish_current_data(
             expected_generation_manifest_sha256=None,
             candidate_generation_manifest_sha256=generation.manifest_sha256,
             operation_id="research-agent-mcp-head",
+            benchmark_snapshot_sha256=benchmark.sha256,
         )
     finally:
         database.close()

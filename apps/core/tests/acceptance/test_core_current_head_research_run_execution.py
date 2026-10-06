@@ -27,7 +27,7 @@ from core_runtime import create_initialized_test_app as create_app
 from fastapi.testclient import TestClient
 
 from thesistrace._postgres import PostgresDatabase
-from thesistrace.benchmark import BenchmarkLevel, BenchmarkSnapshotStore
+from thesistrace.benchmark import BenchmarkLevel, PreparedBenchmarkSnapshots
 from thesistrace.daily_track import (
     DailyTrackProgressionFailed,
     DailyTrackService,
@@ -2493,8 +2493,7 @@ def test_interior_benchmark_gap_keeps_successful_run_comparison_unavailable(
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
     sessions = ("2026-08-03", "2026-08-04", "2026-08-05", "2026-08-06")
-    _publish_head(settings, sessions=sessions, price_offset=0)
-    BenchmarkSnapshotStore(settings.benchmark_mount).publish(
+    benchmark = PreparedBenchmarkSnapshots(settings.benchmark_mount).prepare(
         (
             BenchmarkLevel("2010-01-04", "3500"),
             BenchmarkLevel(sessions[0], "4000"),
@@ -2502,6 +2501,10 @@ def test_interior_benchmark_gap_keeps_successful_run_comparison_unavailable(
             BenchmarkLevel(sessions[3], "4120"),
         ),
         published_at=datetime(2026, 8, 6, 18, tzinfo=UTC),
+    )
+    _publish_head(
+        settings, sessions=sessions, price_offset=0,
+        benchmark_snapshot_sha256=benchmark.sha256,
     )
 
     with TestClient(create_app(settings)) as client:
@@ -2543,8 +2546,7 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
     sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
-    head_a = _publish_head(settings, sessions=sessions, price_offset=0)
-    BenchmarkSnapshotStore(settings.benchmark_mount).publish(
+    benchmark = PreparedBenchmarkSnapshots(settings.benchmark_mount).prepare(
         (
             BenchmarkLevel("2010-01-04", "3500"),
             BenchmarkLevel(sessions[0], "4000"),
@@ -2552,6 +2554,10 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
             BenchmarkLevel(sessions[2], "4080"),
         ),
         published_at=datetime(2026, 8, 5, 18, tzinfo=UTC),
+    )
+    head_a = _publish_head(
+        settings, sessions=sessions, price_offset=0,
+        benchmark_snapshot_sha256=benchmark.sha256,
     )
 
     with TestClient(create_app(settings)) as client:
@@ -2566,6 +2572,7 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
             sessions=sessions,
             price_offset=1,
             expected_manifest=head_a,
+            benchmark_snapshot_sha256=benchmark.sha256,
         )
 
         completed = _run_worker_once(settings)
@@ -2694,6 +2701,7 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
             sessions=extended_sessions,
             price_offset=2,
             expected_manifest=head_b,
+            benchmark_snapshot_sha256=benchmark.sha256,
         )
         claimed = Event()
         continue_advance = Event()
@@ -2724,6 +2732,7 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
                 sessions=latest_sessions,
                 price_offset=3,
                 expected_manifest=head_c,
+                benchmark_snapshot_sha256=benchmark.sha256,
             )
             continue_advance.set()
             assert future.result(timeout=20) is True
@@ -2832,6 +2841,7 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
             sessions=(*latest_sessions, "2026-08-11"),
             price_offset=4,
             expected_manifest=head_d,
+            benchmark_snapshot_sha256=benchmark.sha256,
         )
         stop_claimed = Event()
         finish_stopped_advance = Event()
@@ -4081,12 +4091,7 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
         "2026-08-05",
     )
     seed_canonical = _two_instrument_canonical(seed_sessions, corrected=False)
-    seed_head = _publish_canonical_head(
-        settings,
-        seed_canonical,
-        operation_id="forward-only-seed",
-    )
-    BenchmarkSnapshotStore(settings.benchmark_mount).publish(
+    benchmark = PreparedBenchmarkSnapshots(settings.benchmark_mount).prepare(
         (
             BenchmarkLevel("2010-01-04", "3001"),
             *(
@@ -4095,6 +4100,12 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
             ),
         ),
         published_at=datetime(2026, 8, 5, 8, tzinfo=UTC),
+    )
+    seed_head = _publish_canonical_head(
+        settings,
+        seed_canonical,
+        operation_id="forward-only-seed",
+        benchmark_snapshot_sha256=benchmark.sha256,
     )
     with TestClient(create_app(settings)) as client:
         accepted = client.post(
@@ -5651,6 +5662,7 @@ def _publish_canonical_head(
     canonical: dict[str, object],
     *,
     operation_id: str,
+    benchmark_snapshot_sha256: str | None = None,
 ) -> str:
     generation = MountedGenerationStore(settings.data_mount).materialize(
         canonical,
@@ -5671,6 +5683,7 @@ def _publish_canonical_head(
             expected_generation_manifest_sha256=None,
             candidate_generation_manifest_sha256=generation.manifest_sha256,
             operation_id=operation_id,
+            benchmark_snapshot_sha256=benchmark_snapshot_sha256,
         )
     finally:
         database.close()
@@ -5962,6 +5975,7 @@ def _publish_head(
     expected_manifest: str | None = None,
     available_field_id: str = "price.close.adjusted",
     include_industry: bool = True,
+    benchmark_snapshot_sha256: str | None = None,
 ) -> str:
     canonical = _canonical(
         sessions,
@@ -5990,6 +6004,7 @@ def _publish_head(
             expected_generation_manifest_sha256=expected_manifest,
             candidate_generation_manifest_sha256=generation.manifest_sha256,
             operation_id=operation_id,
+            benchmark_snapshot_sha256=benchmark_snapshot_sha256,
         )
     finally:
         database.close()
