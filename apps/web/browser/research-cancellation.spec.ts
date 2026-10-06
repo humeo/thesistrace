@@ -41,6 +41,71 @@ async function openResearch(page: Page, expectFacts = true) {
   if (expectFacts) await expect(page.getByRole("group", { name: "Research execution conditions" })).toContainText("Top 1000");
 }
 
+for (const language of ["English", "简体中文"]) {
+  test(`desktop running progress keeps the count and estimate without redundant timing in ${language}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 1315, height: 944 });
+    await page.route("**/api/research-runs/run_cancel", route => route.fulfill({ json: {
+      ...detail, progress: { ...detail.progress, phase: "shared_alpha_factor",
+        completed_research_sessions: 463, total_research_sessions: 727,
+        remaining_duration_estimate_seconds: 93 },
+      execution_timing: { started_at: "2026-10-06T14:56:51Z", finished_at: null, elapsed_seconds: 162, is_final: false },
+    } }));
+    await openResearch(page);
+    await page.getByRole("button", { name: language, exact: true }).click();
+    const zh = language !== "English";
+    const progress = page.getByRole("region", { name: zh ? "研究运行进度" : "ResearchRun progress", exact: true });
+    await expect(progress).toContainText("64%");
+    await expect(progress).toContainText("463 / 727");
+    await expect(progress).toContainText(zh ? "预计还需 1分 33秒" : "About 1m 33s remaining");
+    await expect(progress).not.toContainText(zh ? "已用时间" : "Elapsed");
+    await expect(progress).not.toContainText(zh ? "正在计算共享 Alpha" : "Computing shared Alpha");
+    await expect(progress.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "463");
+    await expect(progress.getByRole("progressbar")).toHaveAttribute("aria-valuemax", "727");
+    await page.screenshot({ path: testInfo.outputPath(`running-progress-${zh ? "zh" : "en"}.png`) });
+  });
+}
+
+test("desktop manual refresh retains waiting research through a pending read and failed retry", async ({ page }) => {
+  await page.setViewportSize({ width: 1315, height: 944 });
+  await page.clock.install();
+  let response = { ...detail, progress: { ...detail.progress, phase: "waiting_for_execution", completed_research_sessions: 0 } };
+  let hold = false;
+  let fail = false;
+  let release!: () => void;
+  const ready = new Promise<void>(resolve => { release = resolve; });
+  await page.route("**/api/research-runs/run_cancel", async route => {
+    if (hold) await ready;
+    await route.fulfill(fail ? { status: 503, json: { error: "unavailable" } } : { json: response });
+  });
+  try {
+    await openResearch(page);
+    const progress = page.getByRole("region", { name: "ResearchRun progress", exact: true });
+    const refresh = page.getByRole("button", { name: "Refresh", exact: true });
+    await expect(progress).toContainText("Waiting for earlier research in this batch");
+    hold = true;
+    fail = true;
+    await refresh.focus();
+    await refresh.press("Enter");
+    await expect(refresh).toBeDisabled();
+    await expect(progress).toContainText("0 / 5");
+    await expect(page.getByRole("group", { name: "Research execution conditions" })).toContainText("Top 1000");
+    release();
+    await expect(page.getByRole("alert")).toContainText("ResearchRun unavailable");
+    await expect(refresh).toBeEnabled();
+    await expect(progress).toContainText("Waiting for earlier research in this batch");
+    hold = false;
+    fail = false;
+    response = { ...detail, progress: { ...detail.progress, phase: "research", completed_research_sessions: 3 } };
+    await refresh.click();
+    await expect(progress.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "3");
+    await expect(progress).toContainText("60%");
+    await expect(progress).not.toContainText("Waiting for earlier research in this batch");
+    await expect(page.getByRole("alert")).toHaveCount(0);
+  } finally {
+    release();
+  }
+});
+
 const horizon = (value: 1 | 5 | 20) => ({
   horizon: value,
   summary: {

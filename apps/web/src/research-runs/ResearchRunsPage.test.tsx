@@ -172,8 +172,10 @@ describe("ResearchRunProgressView", () => {
     ["shared_alpha_factor", "Computing shared Alpha"],
     ["waiting_for_execution", "Waiting for earlier research in this batch"],
     ["strategy", "Running strategy"],
+    ["research", "Running research"],
+    ["warmup", "Running warmup"],
     ["recovering", "Waiting for execution recovery"],
-  ] as const)("explains the %s execution phase", (phase, label) => {
+  ] as const)("keeps useful waiting context without repeating the %s execution status", (phase, label) => {
     const markup = renderToStaticMarkup(
       <ResearchRunProgressView
         status="running"
@@ -191,7 +193,11 @@ describe("ResearchRunProgressView", () => {
         }}
       />,
     );
-    expect(markup).toContain(label);
+    if (["shared_alpha_factor", "strategy", "research", "warmup"].includes(phase)) {
+      expect(markup).not.toContain(label);
+    } else {
+      expect(markup).toContain(label);
+    }
     expect(markup).not.toContain("Running queued");
     if (phase === "shared_alpha_factor") {
       expect(markup).toContain("Shared calculation sessions");
@@ -231,7 +237,8 @@ describe("ResearchRunProgressView", () => {
     expect(markup).not.toContain("Committed chunks");
     expect(markup).toContain("Research sessions");
     expect(markup).toContain("126 / 4,034");
-    expect(markup).toContain("1h 2m 3s");
+    expect(markup).not.toContain("Elapsed");
+    expect(markup).not.toContain("1h 2m 3s");
     expect(markup).toContain("Started");
     expect(markup).toContain("2026-08-13 01:00:00 UTC");
     expect(markup).toContain("Finished");

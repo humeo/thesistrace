@@ -5,8 +5,9 @@ function Progress({
   className,
   children,
   value,
+  size = "default",
   ...props
-}: ProgressPrimitive.Root.Props) {
+}: ProgressPrimitive.Root.Props & { size?: "default" | "lg" }) {
   return (
     <ProgressPrimitive.Root
       value={value}
@@ -15,18 +16,19 @@ function Progress({
       {...props}
     >
       {children}
-      <ProgressTrack>
+      <ProgressTrack size={size}>
         <ProgressIndicator />
       </ProgressTrack>
     </ProgressPrimitive.Root>
   )
 }
 
-function ProgressTrack({ className, ...props }: ProgressPrimitive.Track.Props) {
+function ProgressTrack({ className, size = "default", ...props }: ProgressPrimitive.Track.Props & { size?: "default" | "lg" }) {
   return (
     <ProgressPrimitive.Track
       className={cn(
-        "relative flex h-1 w-full items-center overflow-x-hidden rounded-none bg-muted",
+        "relative flex w-full items-center overflow-x-hidden bg-muted",
+        size === "lg" ? "h-2 rounded-full" : "h-1 rounded-none",
         className
       )}
       data-slot="progress-track"

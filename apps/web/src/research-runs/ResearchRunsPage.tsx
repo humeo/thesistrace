@@ -3,6 +3,7 @@ import { ResearchRunList } from "./ResearchRunList";
 import { useResearchRunListController } from "./useResearchRunListController";
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
 import { Progress } from "../components/ui/progress";
+import { Spinner } from "../components/ui/spinner";
 import { StrategyResultView } from "./StrategyResultView";
 import { Trans } from "react-i18next";
 import { catalogLabel } from "../i18n/catalog";
@@ -17,6 +18,7 @@ import { StrategyEvents } from "../analysis/StrategyEvents";
 import { type StrategyDecisionState } from "../research/strategyDecisionState";
 import { FrozenFact, FrozenFrameworkModules, FrozenPythonProgram, FrozenSimulationCosts } from "../research/FrozenStrategyDefinition";
 import {
+  ArrowClockwise,
   CaretLeft,
   CalendarBlank,
   CheckCircle,
@@ -47,7 +49,7 @@ import { Input } from "../components/ui/input";
 import { Field, FieldGroup, FieldLabel } from "../components/ui/field";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Badge } from "../components/ui/badge";
-import { Card, CardAction, CardContent, CardHeader, CardTitle } from "../components/ui/card";
+import { Card, CardAction, CardContent, CardFooter, CardHeader, CardTitle } from "../components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { FactorResultView } from "./FactorResultView";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
@@ -246,7 +248,7 @@ export function ResearchRunsPage({ researcherId, runId }: {
   const { run } = detail;
   const list = useResearchRunListController(runId);
   const { folders, folderError, refreshFolders } = list;
-  if (runId && detail.error) return <Page><PageContent>
+  if (runId && detail.error && run?.id !== runId) return <Page><PageContent>
     <PageHeader title={t("run")} />
     <Alert variant="destructive"><AlertDescription>{formatRunError(detail.error)}</AlertDescription></Alert>
     <div className="mt-4 flex flex-wrap gap-2"><ResearchRunBackLink /><Button variant="outline" onClick={detail.refresh}>{t("retry")}</Button></div>
@@ -304,6 +306,12 @@ function ResearchRunDetail({ detail, folderError, folders, onRefreshFolders, res
           {sourceFolder ? <span className="ml-3 inline-flex items-center gap-2"><FolderSimple aria-hidden="true" className="size-4" />{folderDisplayName(sourceFolder)}</span> : null}
         </span>}
         actions={<>
+          <Button variant="outline" aria-label={t("refresh")} aria-busy={detail.loadState === "refreshing"}
+            disabled={detail.loadState !== null || detail.canceling || detail.deleting || detail.startingTracking}
+            onClick={detail.refresh}>
+            {detail.loadState === "refreshing" ? <Spinner data-icon="inline-start" /> : <ArrowClockwise aria-hidden="true" data-icon="inline-start" />}
+            {t("refresh")}
+          </Button>
           {run.batch_id ? <Button variant="outline" nativeButton={false} role="link" render={<a href={`/research-runs/batches/${encodeURIComponent(run.batch_id)}`} onClick={followCoreLink} />}>{t("viewBatch")}</Button> : null}
           {run.batch_id && ["queued", "running", "cancelling"].includes(run.status) ? <ResearchBatchCancelButton key={run.batch_id} batchId={run.batch_id} status={run.status} /> : null}
           {!run.batch_id && (run.status === "queued" || run.status === "running") ? <Button variant="outline" disabled={detail.canceling} onClick={() => void detail.cancel()}>{t(detail.canceling ? "cancelling" : "cancel")}</Button> : null}
@@ -323,9 +331,10 @@ function ResearchRunDetail({ detail, folderError, folders, onRefreshFolders, res
           </DropdownMenu> : null}
         </>}
       />
+      {detail.error ? <Alert variant="destructive"><AlertDescription>{formatRunError(detail.error)}</AlertDescription></Alert> : null}
       {detail.cancelError ? <Alert variant="destructive"><AlertDescription>{t(detail.cancelError)}</AlertDescription></Alert> : null}
       {detail.trackingError ? <Alert variant="destructive"><AlertDescription>{formatRunError(detail.trackingError)}</AlertDescription></Alert> : null}
-      {detail.loadState === "refreshing" ? <p role="status" className="text-xs text-muted-foreground">{t("refreshingRun")}</p> : null}
+      {detail.loadState === "refreshing" ? <span role="status" className="sr-only">{t("refreshingRun")}</span> : null}
       {run.rerun_origin ? <CurrentDataRerunOrigin origin={run.rerun_origin} /> : null}
       {run.status === "failed" ? <Alert variant="destructive" aria-label={t("failure")}>
         <AlertTitle>{t("failure")}</AlertTitle>
@@ -439,8 +448,10 @@ export function ResearchRunProgressView({
   const total = progress.total_warmup_sessions + progress.total_research_sessions;
   const active = status === "running" || status === "cancelling";
   const progressPercentage = total === 0 ? 0 : Math.round((completed / total) * 100);
+  const phaseNotice = status === "running" && ["shared_alpha_factor", "warmup", "research", "strategy"].includes(progress.phase)
+    ? null : progressLabel(status, progress.phase);
   const executionTiming = (
-    <dl className="m-0 grid min-w-0 gap-4 sm:grid-cols-2 [&_dt]:text-muted-foreground [&_dd]:m-0 [&_dd]:font-mono [&_dd]:break-words">
+    <dl className="m-0 grid w-full min-w-0 gap-4 sm:grid-cols-2 [&_dt]:text-muted-foreground [&_dd]:m-0 [&_dd]:font-mono [&_dd]:break-words">
       <div>
         <dt>{t("started")}</dt>
         <dd><ExecutionTimestamp value={timing?.started_at ?? null} /></dd>
@@ -472,44 +483,27 @@ export function ResearchRunProgressView({
     );
   }
   return (
-    <section aria-label={t("progress")} className="flex min-w-0 flex-col gap-4 rounded-lg border border-border bg-card p-4">
-      <header className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex flex-wrap items-center gap-3">
-          <h2>{t("executionProgress")}</h2>
-          <Badge variant={status === "failed" || status === "cancelled" ? "destructive" : "outline"}>{progressLabel(status, progress.phase)}</Badge>
+    <Card aria-label={t("progress")} role="region" className="min-w-0">
+      <CardHeader>
+        <CardTitle role="heading" aria-level={2}>{t("executionProgress")}</CardTitle>
+        <CardAction><span className="text-xl font-semibold tabular-nums">{formatNumber(progressPercentage)}%</span></CardAction>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        <Progress size="lg" aria-label={t("progressAria")} max={Math.max(total, 1)} value={completed} />
+        <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
+          <dl className="m-0 flex flex-wrap items-baseline gap-2">
+            <dt className="text-muted-foreground">{progress.phase === "shared_alpha_factor" ? t("sharedSessions") : t("researchSessions")}</dt>
+            <dd className="m-0 font-medium tabular-nums">{formatNumber(progress.completed_research_sessions)} / {formatNumber(progress.total_research_sessions)}</dd>
+          </dl>
+          {phaseNotice ? <p role="status" className="m-0 text-muted-foreground">{phaseNotice}</p>
+            : active && estimate !== null ? <p className="m-0 text-muted-foreground">
+              {t("remaining", { duration: formatDuration(estimate) })}
+              {progress.duration_is_estimate ? <span className="text-xs">{t("estimate")}</span> : null}
+            </p> : null}
         </div>
-        <span className="ml-auto font-mono">{formatNumber(progressPercentage)}%</span>
-        <dl className="m-0 [&_dt]:text-muted-foreground [&_dd]:m-0 [&_dd]:font-mono">
-          <div>
-            <dt>{t(timing?.is_final ? "executionTime" : "elapsed")}</dt>
-            <dd>{formatDuration(timing?.elapsed_seconds ?? null)}</dd>
-          </div>
-        </dl>
-      </header>
-      <div className="w-full">
-        <Progress
-          aria-label={t("progressAria")}
-          max={Math.max(total, 1)}
-          value={completed}
-        />
-      </div>
-      <div className="grid min-w-0 gap-4 lg:grid-cols-2">
-        <dl className="m-0 [&_dt]:text-muted-foreground [&_dd]:m-0 [&_dd]:font-mono">
-          <div>
-            <dt>{progress.phase === "shared_alpha_factor"
-              ? t("sharedSessions") : t("researchSessions")}</dt>
-            <dd>{formatNumber(progress.completed_research_sessions)} / {formatNumber(progress.total_research_sessions)}</dd>
-          </div>
-        </dl>
-        {executionTiming}
-      </div>
-      {active && estimate !== null ? (
-        <p className="m-0 text-muted-foreground">
-          {t("remaining", { duration: formatDuration(estimate) })}
-          {progress.duration_is_estimate ? t("estimate") : ""}
-        </p>
-      ) : null}
-    </section>
+      </CardContent>
+      <CardFooter>{executionTiming}</CardFooter>
+    </Card>
   );
 }
 
