@@ -13,12 +13,12 @@ from pydantic import ValidationError
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.benchmark import (
     INTERNAL_STRATEGY_METRIC_PATH,
-    BenchmarkSnapshotStore,
     InternalAnnualizedExcessRequest,
     StrategyComparisonError,
     StrategyComparisonFacts,
     StrategyComparisonService,
 )
+from thesistrace.data.benchmark_snapshot import PublishedBenchmarkSnapshots
 from thesistrace.entrypoints.http import create_app as create_core_app
 from thesistrace.entrypoints.runtime import CoreSettings
 from thesistrace.entrypoints.schema import CORE_SCHEMAS, initialize_core
@@ -37,16 +37,16 @@ class _TestSessionVerifier:
         return TEST_RESEARCHER
 
 _INTERNAL_API_LOCK = Lock()
-_INTERNAL_API_SERVERS: dict[Path, ThreadingHTTPServer] = {}
+_INTERNAL_API_SERVERS: dict[tuple[Path, Path], ThreadingHTTPServer] = {}
 
 
 class _InternalStrategyMetricServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, benchmark_mount: Path) -> None:
+    def __init__(self, benchmark_mount: Path, data_mount: Path) -> None:
         super().__init__(("127.0.0.1", 0), _InternalStrategyMetricHandler)
         self.comparison = StrategyComparisonService(
-            BenchmarkSnapshotStore(benchmark_mount)
+            PublishedBenchmarkSnapshots(benchmark_mount, data_mount)
         )
 
 
@@ -94,11 +94,13 @@ class _InternalStrategyMetricHandler(BaseHTTPRequestHandler):
 
 def internal_api_origin(settings: CoreSettings) -> str:
     benchmark_mount = Path(settings.benchmark_mount).resolve()
+    data_mount = Path(settings.data_mount).resolve()
+    key = (benchmark_mount, data_mount)
     with _INTERNAL_API_LOCK:
-        server = _INTERNAL_API_SERVERS.get(benchmark_mount)
+        server = _INTERNAL_API_SERVERS.get(key)
         if server is None:
-            server = _InternalStrategyMetricServer(benchmark_mount)
-            _INTERNAL_API_SERVERS[benchmark_mount] = server
+            server = _InternalStrategyMetricServer(benchmark_mount, data_mount)
+            _INTERNAL_API_SERVERS[key] = server
             Thread(target=server.serve_forever, daemon=True).start()
     return f"http://127.0.0.1:{server.server_port}"
 

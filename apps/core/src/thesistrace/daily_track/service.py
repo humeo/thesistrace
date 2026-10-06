@@ -4,13 +4,14 @@ import hashlib
 import json
 from base64 import urlsafe_b64encode
 from collections.abc import Callable, Iterator, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from threading import Event, Thread
-from typing import Protocol
+from typing import Literal, Protocol, overload
 from uuid import UUID, uuid4
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -52,8 +53,12 @@ from thesistrace.daily_track.models import (
     DAILY_TRACK_RESULT_SECTIONS,
     DailyTrackCommonInputObservationsResultSection,
     DailyTrackCommonInputObservationsResultSectionInput,
+    DailyTrackComparison,
+    DailyTrackComparisonItem,
+    DailyTrackComparisonValues,
     DailyTrackDetail,
     DailyTrackList,
+    DailyTrackListItem,
     DailyTrackOriginAccount,
     DailyTrackOriginResultSection,
     DailyTrackOriginResultSectionInput,
@@ -77,7 +82,7 @@ from thesistrace.daily_track.models import (
     TrackingOrigin,
     daily_track_polling_retry_after_seconds,
 )
-from thesistrace.daily_track.observation import project_daily_observation
+from thesistrace.daily_track.observation import project_daily_observation, project_daily_performance
 from thesistrace.daily_track.observation_state import (
     TrackingObservationState,
     initial_tracking_observation_state,
@@ -865,7 +870,9 @@ class DailyTrackService:
                         limit + 1,
                     ),
                 ).fetchall()
-                summaries = [_summary(row) for row in rows[:limit]]
+                summaries = [DailyTrackListItem(
+                    **_summary(row).model_dump(), seed_name=row["seed_name"],
+                ) for row in rows[:limit]]
             return fit_page(
                 summaries,
                 lambda kept: DailyTrackList(
@@ -1528,7 +1535,23 @@ class DailyTrackService:
         return removed
 
     def get(self, researcher_id: UUID, track_id: str) -> DailyTrackDetail | None:
-        return self._get_current(researcher_id, track_id)
+        return self._read_current(researcher_id, track_id)
+
+    def compare(self, researcher_id: UUID, track_ids: list[str]) -> DailyTrackComparison:
+        if not 1 <= len(track_ids) <= 20 or len(set(track_ids)) != len(track_ids):
+            raise ValueError("A DailyTrack comparison requires 1 to 20 distinct Track IDs")
+
+        def read(track_id: str) -> DailyTrackComparisonItem:
+            try:
+                values = self._read_current(researcher_id, track_id, view="comparison")
+            except DailyTrackDetailUnavailable:
+                values = None
+            # Missing, foreign and unreadable observations disclose no private facts.
+            return DailyTrackComparisonItem(id=track_id, values=values)
+
+        # Publication I/O is independent for each Track; bound concurrency across a page.
+        with ThreadPoolExecutor(max_workers=min(4, len(track_ids))) as executor:
+            return DailyTrackComparison(items=list(executor.map(read, track_ids)))
 
     def get_polling_detail(
         self,
@@ -2264,11 +2287,23 @@ class DailyTrackService:
         next_after = str(selected[-1]["session"]) if len(rows) > limit else None
         return selected, next_after
 
-    def _get_current(
+    @overload
+    def _read_current(
+        self, researcher_id: UUID, track_id: str, *, view: Literal["detail"] = "detail",
+    ) -> DailyTrackDetail | None: ...
+
+    @overload
+    def _read_current(
+        self, researcher_id: UUID, track_id: str, *, view: Literal["comparison"],
+    ) -> DailyTrackComparisonValues | None: ...
+
+    def _read_current(
         self,
         researcher_id: UUID,
         track_id: str,
-    ) -> DailyTrackDetail | None:
+        *,
+        view: Literal["detail", "comparison"] = "detail",
+    ) -> DailyTrackDetail | DailyTrackComparisonValues | None:
         if self._publication is None or self._dataset_lifecycle is None:
             raise RuntimeError("current-data DailyTrack detail is not configured")
         try:
@@ -2385,10 +2420,39 @@ class DailyTrackService:
                 projected_strategy_summary,
                 comparison,
             )
+            origin_account = DailyTrackOriginAccount.model_validate({
+                name: getattr(origin.initial_strategy_state, name)
+                for name in DailyTrackOriginAccount.model_fields
+            })
+            current_account = DailyTrackOriginAccount.model_validate({
+                name: row["terminal_strategy_state"][name]
+                for name in DailyTrackOriginAccount.model_fields
+            })
+            if view == "comparison":
+                metrics = _mapping_value(projected_strategy_summary["metrics"], "Strategy metrics")
+                available = comparison["status"] == "available"
+                return DailyTrackComparisonValues.model_validate({
+                    "status": row["status"], "phase": progress_phase,
+                    "strategy_session": current_session,
+                    "observation": project_daily_performance(
+                        origin=origin_account, current=current_account,
+                        observations=recent_observations,
+                        tracking_observation_state=tracking_observation_state,
+                    ),
+                    "strategy": {
+                        "entry_session": comparison["entry"]["session"] if available else None,
+                        "net_return": metrics["net_cumulative_return"],
+                        "maximum_drawdown": metrics["maximum_drawdown"]["value"],
+                        "returns": [{"session": point["session"],
+                                     "net_return": point["net_strategy_return"]}
+                                    for point in comparison["curves"]] if available else [],
+                    },
+                })
             return DailyTrackDetail.model_validate(
                 {
                     "checkpoint_manifest_sha256": row["current_checkpoint_manifest_sha256"],
                     "id": str(row["id"]),
+                    "seed_name": row["seed_name"],
                     "status": row["status"],
                     "origin": {
                         "seed_run_id": origin.seed_run_id,
@@ -2457,14 +2521,8 @@ class DailyTrackService:
                     ),
                     "observation": project_daily_observation(
                         tracking_observation_state=tracking_observation_state,
-                        origin=DailyTrackOriginAccount.model_validate({
-                            name: getattr(origin.initial_strategy_state, name)
-                            for name in DailyTrackOriginAccount.model_fields
-                        }),
-                        current=DailyTrackOriginAccount.model_validate({
-                            name: row["terminal_strategy_state"][name]
-                            for name in DailyTrackOriginAccount.model_fields
-                        }),
+                        origin=origin_account,
+                        current=current_account,
                         observations=recent_observations,
                     ),
                     "strategy": {
@@ -3855,13 +3913,16 @@ _TRACK_SELECT = """
 SELECT track.id, track.status, track.origin, track.blocked_reason,
        track.queue_position,
        track.created_at, state.updated_at AS state_updated_at,
-       checkpoint.boundary_session::text AS current_strategy_session
+       checkpoint.boundary_session::text AS current_strategy_session,
+       seed.name AS seed_name
 FROM daily_tracks.tracks AS track
 JOIN daily_tracks.session_tracking_states AS state
   ON state.track_id = track.id
 JOIN daily_tracks.session_checkpoints AS checkpoint
   ON checkpoint.track_id = state.track_id
  AND checkpoint.manifest_sha256 = state.current_checkpoint_manifest_sha256
+LEFT JOIN research_runs.runs AS seed
+  ON seed.id = track.seed_run_id AND seed.researcher_id = track.researcher_id
 """
 
 

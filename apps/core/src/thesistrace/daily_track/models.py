@@ -342,10 +342,16 @@ def daily_track_polling_retry_after_seconds(*, status: str, phase: str) -> int |
     return 30
 
 
+class DailyTrackListItem(DailyTrackSummary):
+    """Current presentation metadata, separate from immutable mutation receipts."""
+
+    seed_name: str | None
+
+
 class DailyTrackList(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    items: list[DailyTrackSummary]
+    items: list[DailyTrackListItem]
     next_cursor: str | None
 
 
@@ -740,24 +746,27 @@ type DailyTrackResultSectionResponse = Annotated[
 ]
 
 
+type DailyTrackProgressPhase = Literal[
+    "waiting",
+    "queued",
+    "retry_wait",
+    "starting",
+    "calculating",
+    "result_ready",
+    "staging",
+    "stopping",
+    "blocked",
+    "up_to_date",
+    "stopped",
+]
+
+
 class DailyTrackProgress(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     head_session: str
     lag_sessions: int
-    phase: Literal[
-        "waiting",
-        "queued",
-        "retry_wait",
-        "starting",
-        "calculating",
-        "result_ready",
-        "staging",
-        "stopping",
-        "blocked",
-        "up_to_date",
-        "stopped",
-    ]
+    phase: DailyTrackProgressPhase
     target_start_session: str | None
     target_end_session: str | None
     target_session_count: int
@@ -790,26 +799,65 @@ class DailyTrackObservationPoint(BaseModel):
     net_return: float
 
 
-class DailyTrackObservation(BaseModel):
-    """The published account and performance since the immutable Tracking Origin."""
+class DailyTrackPerformance(BaseModel):
+    """Bounded performance since the immutable Tracking Origin, without holdings."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     session: str
     net_asset_value_cny: str
+    net_return: float
+    maximum_drawdown: float
+    session_count: int
+    returns: list[DailyTrackObservationPoint] = Field(max_length=504)
+
+
+class DailyTrackObservation(DailyTrackPerformance):
+    """The published account and performance since the immutable Tracking Origin."""
+
     close_risk_nav_cny: str
     cash_cny: str
     net_change_cny: str
-    net_return: float
-    maximum_drawdown: float
     transaction_cost_cny: str
-    session_count: int
     holdings: list[DailyTrackHolding]
     decision_state: DecisionState
     selection_interval: int | None
     pending_target_session: str | None
     sessions_until_next_signal: int | None
-    returns: list[DailyTrackObservationPoint]
+
+
+class DailyTrackStrategyPerformance(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    entry_session: str | None
+    net_return: float | None
+    maximum_drawdown: float | None
+    returns: list[DailyTrackObservationPoint] = Field(max_length=504)
+
+
+class DailyTrackComparisonValues(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    status: Literal["active", "blocked", "stopping", "stopped"]
+    phase: DailyTrackProgressPhase
+    strategy_session: str
+    observation: DailyTrackPerformance
+    strategy: DailyTrackStrategyPerformance
+
+
+class DailyTrackComparisonItem(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str
+    values: DailyTrackComparisonValues | None
+
+
+class DailyTrackComparison(BaseModel):
+    """A browser comparison contains at most one page of bounded curve windows."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    items: list[DailyTrackComparisonItem] = Field(min_length=1, max_length=20)
 
 
 class DailyTrackDetail(BaseModel):
@@ -818,6 +866,7 @@ class DailyTrackDetail(BaseModel):
     checkpoint_manifest_sha256: Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 
     id: str
+    seed_name: str | None
     status: Literal["active", "blocked", "stopping", "stopped"]
     origin: DailyTrackOriginView
     strategy_session: str

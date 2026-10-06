@@ -21,8 +21,8 @@
     "cursor_characters": 1024
   },
   "deterministic_payloads": {
-    "v1_contract_sha256": "ad4bb490c2e414232a840f2db5a2fef22fa0b3bf6791ab45d1c7a06118c5cdef",
-    "v1_contract_bytes": 344556,
+    "v1_contract_sha256": "6cfeb2baf562416d63a7e2855484a09fd54d2553b758eaa8a1cabf385a9c2405",
+    "v1_contract_bytes": 344739,
     "maximum_factor_batch_call_bytes": 84536,
     "maximum_framework_batch_call_bytes": 31420694
   },
@@ -38,10 +38,10 @@
     "swaps": 0
   },
   "measurement_context": {
-    "date": "2026-10-04",
+    "date": "2026-10-06",
     "transport": "in-process deterministic MCP client",
     "network_access": false,
     "real_model": false,
-    "note": "Deterministic contract sizes refreshed for shared authoring references, startup guide, catalog filters, conditional Framework inputs, safe validation issues, business rejection semantics and bounded Result pages. Observed performance remains the 2026-09-07 measurement; this is not a new performance qualification. Request and complete event-page wire envelopes have independent deterministic regressions in test_research_agent_mcp_contract.py."
+    "note": "Deterministic contract sizes refreshed for shared authoring references, startup guide, catalog filters, conditional Framework inputs, safe validation issues, business rejection semantics, bounded Result pages and current seed names on DailyTrack list items. Observed performance remains the 2026-09-07 measurement; this is not a new performance qualification. Request and complete event-page wire envelopes have independent deterministic regressions in test_research_agent_mcp_contract.py."
   }
 }

@@ -102,10 +102,8 @@ class SessionCoordinateRepository:
                        checkpoint.provenance AS current_checkpoint_provenance,
                        checkpoint.progression_id IS NULL AS current_checkpoint_is_seed,
                        checkpoint.terminal_strategy_state,
-                       EXISTS(SELECT 1 FROM research_runs.runs AS run
-                              WHERE run.id = track.origin->>'seed_run_id'
-                                AND run.researcher_id = track.researcher_id
-                       ) AS seed_research_available,
+                       seed.id IS NOT NULL AS seed_research_available,
+                       seed.name AS seed_name,
                        to_jsonb(unresolved) AS unresolved_progression,
                        COALESCE((
                            SELECT jsonb_agg(jsonb_build_object(
@@ -139,6 +137,8 @@ class SessionCoordinateRepository:
                      %s, state.current_checkpoint_manifest_sha256
                  )
                 CROSS JOIN calendar
+                LEFT JOIN research_runs.runs AS seed
+                  ON seed.id = track.seed_run_id AND seed.researcher_id = track.researcher_id
                 LEFT JOIN LATERAL (
                     SELECT progression.status,
                            progression.target_start_session::text,

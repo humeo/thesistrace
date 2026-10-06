@@ -3,7 +3,11 @@
 from collections.abc import Mapping, Sequence
 from decimal import Decimal, localcontext
 
-from thesistrace.daily_track.models import DailyTrackObservation, DailyTrackOriginAccount
+from thesistrace.daily_track.models import (
+    DailyTrackObservation,
+    DailyTrackOriginAccount,
+    DailyTrackPerformance,
+)
 from thesistrace.daily_track.observation_state import (
     TrackingObservationState,
     tracking_maximum_drawdown,
@@ -11,13 +15,13 @@ from thesistrace.daily_track.observation_state import (
 from thesistrace.research_kernel.numeric import ACCOUNTING_CONTEXT, canonical_decimal
 
 
-def project_daily_observation(
+def project_daily_performance(
     *,
     origin: DailyTrackOriginAccount,
     current: DailyTrackOriginAccount,
     observations: Sequence[Mapping[str, object]],
     tracking_observation_state: TrackingObservationState,
-) -> DailyTrackObservation:
+) -> DailyTrackPerformance:
     """Keep the inception denominator even when the chart's retained window rolls."""
     with localcontext(ACCOUNTING_CONTEXT):
         origin_nav = Decimal(origin.net_nav)
@@ -36,6 +40,31 @@ def project_daily_observation(
                 continue
             nav = Decimal(str(row["net_nav"]))
             points.append({"session": session, "net_return": float(nav / origin_nav - 1)})
+        return DailyTrackPerformance.model_validate({
+            "session": current.session,
+            "net_asset_value_cny": current.net_nav,
+            "net_return": float(current_nav / origin_nav - 1),
+            "maximum_drawdown": float(maximum_drawdown),
+            "session_count": current.research_phase.report_session_count
+            - origin.research_phase.report_session_count,
+            "returns": points[-504:],
+        })
+
+
+def project_daily_observation(
+    *,
+    origin: DailyTrackOriginAccount,
+    current: DailyTrackOriginAccount,
+    observations: Sequence[Mapping[str, object]],
+    tracking_observation_state: TrackingObservationState,
+) -> DailyTrackObservation:
+    performance = project_daily_performance(
+        origin=origin, current=current, observations=observations,
+        tracking_observation_state=tracking_observation_state,
+    )
+    with localcontext(ACCOUNTING_CONTEXT):
+        origin_nav = Decimal(origin.net_nav)
+        current_nav = Decimal(current.net_nav)
         holdings = []
         for position in current.positions:
             # Execution shares and adjusted units are different coordinates.
@@ -61,19 +90,14 @@ def project_daily_observation(
         signal_offset = (phase.report_session_count - 1) % interval if interval else None
         return DailyTrackObservation.model_validate(
             {
-                "session": current.session,
-                "net_asset_value_cny": current.net_nav,
+                **performance.model_dump(),
                 "close_risk_nav_cny": current.close_risk_nav_cny,
                 "cash_cny": current.net_cash,
                 "net_change_cny": canonical_decimal(current_nav - origin_nav),
-                "net_return": float(current_nav / origin_nav - 1),
-                "maximum_drawdown": float(maximum_drawdown),
                 "transaction_cost_cny": canonical_decimal(
                     Decimal(current.cumulative_transaction_cost)
                     - Decimal(origin.cumulative_transaction_cost)
                 ),
-                "session_count": phase.report_session_count
-                - origin.research_phase.report_session_count,
                 "holdings": sorted(
                     holdings, key=lambda row: (-row["weight"], row["instrument_id"])
                 ),
@@ -85,6 +109,5 @@ def project_daily_observation(
                 "sessions_until_next_signal": (
                     (interval - signal_offset if signal_offset else 0) if interval else None
                 ),
-                "returns": points[-504:],
             }
         )

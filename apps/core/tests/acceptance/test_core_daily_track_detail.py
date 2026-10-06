@@ -16,8 +16,9 @@ from core_runtime import create_initialized_test_app as create_app
 from fastapi.testclient import TestClient
 
 from thesistrace._postgres import PostgresDatabase
-from thesistrace.benchmark import BenchmarkLevel, BenchmarkSnapshotStore
+from thesistrace.benchmark import BenchmarkLevel
 from thesistrace.data import DatasetLifecycle, MountedGenerationStore
+from thesistrace.data.benchmark_snapshot import PreparedBenchmarkSnapshots
 from thesistrace.data.canonical_mapping import field_catalog
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.entrypoints.schema import initialize_core
@@ -40,7 +41,7 @@ def test_daily_track_detail_keeps_latest_504_sessions_and_full_origin_metrics(
     initialize_core(settings.database_url)
     sessions = _business_sessions(date(2024, 8, 1), count=510)
     seed_sessions = sessions[:3]
-    BenchmarkSnapshotStore(settings.benchmark_mount).publish(
+    benchmark = PreparedBenchmarkSnapshots(settings.benchmark_mount).prepare(
         (
             BenchmarkLevel("2010-01-04", "3500"),
             *(BenchmarkLevel(session, "4000") for session in sessions),
@@ -52,6 +53,7 @@ def test_daily_track_detail_keeps_latest_504_sessions_and_full_origin_metrics(
         sessions=seed_sessions,
         expected_manifest=None,
         operation_id="daily-track-504-head-a",
+        benchmark_snapshot_sha256=benchmark.sha256,
     )
 
     with TestClient(create_app(settings)) as client:
@@ -92,6 +94,7 @@ def test_daily_track_detail_keeps_latest_504_sessions_and_full_origin_metrics(
             sessions=sessions[:303],
             expected_manifest=head_a,
             operation_id="daily-track-504-head-b",
+            benchmark_snapshot_sha256=benchmark.sha256,
         )
         _refresh_daily_track(client, track_id, "daily-track-504-first-refresh")
         first_advance = _run_worker_once(settings, "tracking")
@@ -128,8 +131,14 @@ def test_daily_track_detail_keeps_latest_504_sessions_and_full_origin_metrics(
             sessions=sessions,
             expected_manifest=head_b,
             operation_id="daily-track-504-head-c",
+            benchmark_snapshot_sha256=benchmark.sha256,
         )
         detail = catch_up_to(len(sessions) - 1, "daily-track-504-second-catch-up")
+        compact_response = client.get(
+            "/api/daily-tracks/comparison", params={"track_id": track_id},
+        )
+        assert compact_response.status_code == 200
+        compact = compact_response.json()["items"][0]["values"]
 
     expected_window = list(sessions[-504:])
     observations = detail["strategy"]["observations"]
@@ -157,6 +166,14 @@ def test_daily_track_detail_keeps_latest_504_sessions_and_full_origin_metrics(
         expected_cost
     )
     assert actual_metrics["net_cumulative_return"] == expected_net_return
+    assert compact["strategy"]["net_return"] == expected_net_return
+    assert compact["strategy"]["returns"] == [
+        {"session": session, "net_return": expected_net_return} for session in expected_window
+    ]
+    assert compact["observation"]["returns"] == [
+        {"session": session, "net_return": 0.0} for session in expected_window
+    ]
+    assert "holdings" not in compact["observation"]
     assert actual_metrics["benchmark_cumulative_return"] == 0.0
     assert actual_metrics["annualized_excess_return"] == expected_annualized_return
     comparison = detail["strategy"]["comparison"]
@@ -188,6 +205,7 @@ def _publish_head(
     sessions: tuple[str, ...],
     expected_manifest: str | None,
     operation_id: str,
+    benchmark_snapshot_sha256: str | None = None,
 ) -> str:
     generation = MountedGenerationStore(settings.data_mount).materialize(
         _canonical(sessions),
@@ -208,6 +226,7 @@ def _publish_head(
             expected_generation_manifest_sha256=expected_manifest,
             candidate_generation_manifest_sha256=generation.manifest_sha256,
             operation_id=operation_id,
+            benchmark_snapshot_sha256=benchmark_snapshot_sha256,
         )
     finally:
         database.close()

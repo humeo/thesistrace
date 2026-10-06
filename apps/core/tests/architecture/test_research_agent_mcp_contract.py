@@ -28,6 +28,7 @@ from thesistrace.daily_track import (
     DailyTrackDetailUnavailable,
     DailyTrackInvalidCursor,
     DailyTrackList,
+    DailyTrackListItem,
     DailyTrackOriginResultSection,
     DailyTrackPollingDetail,
     DailyTrackRefreshConflict,
@@ -592,7 +593,9 @@ class _DailyTrackReader:
         if self.failure is not None:
             raise self.failure
         self.list_filters = {"cursor": cursor, "limit": limit}
-        return DailyTrackList(items=[_daily_track_summary()], next_cursor="track_cursor_next")
+        return DailyTrackList(items=[DailyTrackListItem(
+            **_daily_track_summary().model_dump(), seed_name="Strategy",
+        )], next_cursor="track_cursor_next")
 
     def get_polling_detail(
         self,
@@ -1744,6 +1747,7 @@ def test_registry_projects_daily_track_history_detail_start_and_expected_errors(
     )
     assert listed.result is not None
     assert listed.result.model_dump(mode="json")["next_cursor"] == "track_cursor_next"
+    assert listed.result.model_dump(mode="json")["items"][0]["seed_name"] == "Strategy"
     assert track_reader.list_filters == {"cursor": "track_cursor", "limit": 20}
 
     detail = registry.invoke(
@@ -2159,9 +2163,9 @@ def test_v1_inventory_scopes_descriptions_annotations_and_schemas_are_exact() ->
     canonical = _canonical_v1_contract()
 
     assert sha256(canonical).hexdigest() == (
-        "ad4bb490c2e414232a840f2db5a2fef22fa0b3bf6791ab45d1c7a06118c5cdef"
+        "6cfeb2baf562416d63a7e2855484a09fd54d2553b758eaa8a1cabf385a9c2405"
     )
-    assert len(canonical) == 344556
+    assert len(canonical) == 344739
 
 
 def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None:

@@ -29,6 +29,7 @@ from thesistrace.benchmark import (
 )
 from thesistrace.daily_holding_queries import HoldingPageResponse, HoldingQueryInput
 from thesistrace.daily_track import (
+    DailyTrackComparison,
     DailyTrackDeleteConflict,
     DailyTrackDetail,
     DailyTrackDetailUnavailable,
@@ -1391,6 +1392,19 @@ def create_app(
                 status_code=503,
                 detail="DailyTrack listing is temporarily unavailable",
             ) from error
+
+    @app.get("/api/daily-tracks/comparison", response_model=DailyTrackComparison)
+    def compare_daily_tracks(
+        request: Request,
+        track_id: Annotated[
+            list[Annotated[str, Field(min_length=1, max_length=128)]],
+            Query(min_length=1, max_length=20),
+        ],
+    ) -> DailyTrackComparison:
+        try:
+            return _runtime(request).daily_tracks.compare(_researcher_id(request), track_id)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
 
     @app.get("/api/daily-tracks/{track_id}", response_model=DailyTrackDetail)
     def get_daily_track(request: Request, track_id: str) -> DailyTrackDetail:
