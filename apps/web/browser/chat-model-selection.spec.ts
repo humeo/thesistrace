@@ -4,7 +4,7 @@ for (const mode of ["default", "manual"] as const) {
   test(`reopening a session ${mode === "default" ? "follows current defaults" : "retains an available manual choice"}`, async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 960 });
     const session = {
-      id: "00000000-0000-4000-8000-000000000101", title: "Saved model settings",
+      id: "00000000-0000-4000-8000-000000000101", title: "Saved model settings", message_title: null,
       activity_at: "2026-09-30T00:00:00.000000Z", created_at: "2026-09-30T00:00:00.000000Z",
       version: "2026-09-30T00:00:00.000Z", current_turn: null, latest_turn: null,
     };
@@ -57,7 +57,7 @@ for (const mode of ["default", "manual"] as const) {
 test("a retired saved selection opens with the current default without requiring model selection", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1440, height: 960 });
   const session = {
-    id: "00000000-0000-4000-8000-000000000102", title: "Retired model session",
+    id: "00000000-0000-4000-8000-000000000102", title: "Retired model session", message_title: null,
     activity_at: "2026-09-30T00:00:00.000000Z", created_at: "2026-09-30T00:00:00.000000Z",
     version: "2026-09-30T00:00:00.000Z", current_turn: null, latest_turn: null,
   };

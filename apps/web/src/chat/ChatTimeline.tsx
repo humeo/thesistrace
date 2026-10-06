@@ -37,14 +37,15 @@ const TOOL_STATUS = { running: "loading", complete: "success", failed: "error", 
 export function ChatTimeline({ controller }: { controller: ChatConversationController }) {
   const { t } = useTranslation("chat");
   const list = useRef<ListRef>(null);
-  const [readingOlder, setReadingOlder] = useState(false);
+  const restoringPosition = useRef(controller.viewState?.readingPosition ?? null);
+  const [readingOlder, setReadingOlder] = useState((restoringPosition.current?.top ?? 0) < -80);
   const messages = chatViewMessages(controller.turns);
   const prompts = messages.filter(message => message.role === "user");
   const promptId = prompts.at(-1)?.id;
   const firstPrompt = prompts.length === 1;
   const running = controller.turns.at(-1)?.status === "running";
   const previousPrompt = useRef(promptId);
-  const [anchoredPrompt, setAnchoredPrompt] = useState(running ? promptId : undefined);
+  const [anchoredPrompt, setAnchoredPrompt] = useState(running && restoringPosition.current === null ? promptId : undefined);
   const [replyMinHeight, setReplyMinHeight] = useState(0);
   // Short first conversations also need reply space when reopened from history.
   const layoutPrompt = anchoredPrompt ?? (firstPrompt ? promptId : undefined);
@@ -96,6 +97,24 @@ export function ChatTimeline({ controller }: { controller: ChatConversationContr
     };
   }, [anchoredPrompt, firstPrompt, layoutPrompt]);
 
+  useLayoutEffect(() => {
+    if (restoringPosition.current === null || controller.turns.length === 0) return;
+    const frame = requestAnimationFrame(() => {
+      const viewport = list.current?.scrollBoxNativeElement;
+      const position = restoringPosition.current;
+      if (!viewport || !position) return;
+      // Bubble.List exposes positions from the top while its native viewport
+      // counts backwards from the bottom. Keep the same content in view if
+      // the latest reply grew while this conversation was closed.
+      list.current?.scrollTo({ top: position.top < -80
+        ? position.height + position.top - viewport.clientHeight
+        : "bottom", behavior: "instant" });
+      restoringPosition.current = null;
+      setReadingOlder(viewport.scrollTop < -80);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [controller.turns, replyMinHeight]);
+
   const items = bubbleItems(messages, controller);
   return <ResearchResourceProvider><div className="relative flex min-h-0 flex-1 flex-col">
     <Bubble.List ref={list} className="min-h-0 flex-1"
@@ -105,7 +124,14 @@ export function ChatTimeline({ controller }: { controller: ChatConversationContr
         style: { maxWidth: 808, marginInline: "auto", paddingInline: 20, paddingBlock: 8,
           minHeight: index === items.length - 1 ? replyMinHeight : undefined },
       }))} autoScroll
-      onScroll={() => setReadingOlder((list.current?.scrollBoxNativeElement.scrollTop ?? 0) < -80)} />
+      onScroll={() => {
+        const viewport = list.current?.scrollBoxNativeElement;
+        if (!viewport || restoringPosition.current !== null) return;
+        setReadingOlder(viewport.scrollTop < -80);
+        if (controller.viewState) controller.viewState.readingPosition = {
+          top: viewport.scrollTop, height: viewport.scrollHeight,
+        };
+      }} />
     {readingOlder ? <Button shape="round" className="absolute bottom-3 self-center" icon={<ArrowDown />} onClick={() => list.current?.scrollTo({ top: "bottom" })}>{t("backToLatest")}</Button> : null}
   </div></ResearchResourceProvider>;
 }

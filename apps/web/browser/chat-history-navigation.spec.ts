@@ -3,7 +3,7 @@ import { expect, test } from "./workbench-fixture";
 test("history navigation keeps the selected conversation canvas through delayed opening", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1440, height: 960 });
   const session = {
-    id: "00000000-0000-4000-8000-000000000101", title: "Greeting",
+    id: "00000000-0000-4000-8000-000000000101", title: "Greeting", message_title: null,
     activity_at: "2026-09-30T00:00:00.000000Z", created_at: "2026-09-30T00:00:00.000000Z",
     version: "2026-09-30T00:00:00.000Z", current_turn: null, latest_turn: null,
   };

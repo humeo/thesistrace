@@ -11,6 +11,7 @@ import "../i18n";
 
 import { Brand } from "../brand/Brand";
 import { createAgentFetch } from "./agentTransport";
+import type { ChatSessionViewState } from "./chatSessionViewState";
 import { ChatComposer } from "./ChatComposer";
 import { ChatTimeline } from "./ChatTimeline";
 import type { ResolvedModelSelection } from "./chatState";
@@ -77,6 +78,7 @@ export function AgentConversation(props: Readonly<{
   sessionRefreshFailed?: boolean;
   titleMaySettle: boolean;
   threadId: string;
+  viewState?: ChatSessionViewState;
 }>) {
   const { t } = useTranslation("chat");
   const { copilotkit } = useCopilotKit();
@@ -194,7 +196,11 @@ export function StaticChatMain({
     {error ? <div className="mx-auto w-full max-w-[808px] shrink-0 px-5"><Alert type="error" title={error} action={<Button type="text" onClick={() => window.location.reload()}>{t("reconnect")}</Button>} /></div> : null}
     <div className={`mx-auto flex w-full max-w-[808px] px-5 ${newChat ? "mb-6 shrink-0 justify-center" : "flex-1"}`}>{newChat ? <ChatWelcome /> : null}</div>
     <div className="mx-auto w-full max-w-[808px] shrink-0 px-5">
-      <Sender aria-label={t("message")} disabled placeholder={t("newPlaceholder")} footer={modelControls} />
+      <Sender aria-label={t("message")} disabled placeholder={t("newPlaceholder")}
+        autoSize={{ minRows: 2, maxRows: 8 }} suffix={false}
+        footer={(_, { components: { SendButton } }) => <Flex justify="space-between" align="center" gap={8}>
+          <div className="min-w-0">{modelControls}</div><SendButton disabled aria-label={t("send")} />
+        </Flex>} />
     </div>
     {newChat ? <div className="mx-auto mt-6 w-full max-w-[760px] shrink-0 px-5"><ChatStarterCards disabled /></div> : null}
   </main></ChatUiProvider>;

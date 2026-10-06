@@ -1,9 +1,9 @@
+import { useQuery } from "@tanstack/react-query";
 import { Flex, Progress, Tooltip, Typography, theme } from "antd";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { contextWindowSnapshotSchema, type ContextWindowSnapshot } from "@thesistrace/contracts/context-window";
 
-type SnapshotState = Readonly<{ identity: string; status: "loading" | "unavailable" | "ready"; snapshot?: ContextWindowSnapshot }>;
 
 export async function loadContextWindow(modelKey: string, threadId: string | null, signal: AbortSignal): Promise<ContextWindowSnapshot> {
   const query = new URLSearchParams({ model_key: modelKey });
@@ -21,29 +21,18 @@ export function ContextWindowIndicator({ modelKey, threadId }: { modelKey: strin
   const { t } = useTranslation("chat");
   const { token } = theme.useToken();
   const [open, setOpen] = useState(false);
-  const identity = `${modelKey}:${threadId ?? "new"}`;
-  const [state, setState] = useState<SnapshotState>({ identity, status: "loading" });
-  useEffect(() => {
-    const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    async function refresh() {
-      try {
-        const snapshot = await loadContextWindow(modelKey, threadId, controller.signal);
-        if (!controller.signal.aborted) setState({ identity, status: "ready", snapshot });
-      } catch {
-        if (!controller.signal.aborted) setState({ identity, status: "unavailable" });
-      }
-      if (open && !controller.signal.aborted) timer = setTimeout(() => void refresh(), 5_000);
-    }
-    void refresh();
-    return () => { controller.abort(); clearTimeout(timer); };
-  }, [identity, modelKey, open, threadId]);
-  const current = state.identity === identity ? state : { identity, status: "loading" as const };
-  const snapshot = current.status === "ready" ? current.snapshot : undefined;
+  const { data, isPending, isError, refetch } = useQuery({
+    queryKey: ["chat-context-window", threadId, modelKey],
+    queryFn: ({ signal }) => loadContextWindow(modelKey, threadId, signal),
+    staleTime: 5_000,
+    refetchInterval: open ? 5_000 : false,
+  });
+  useEffect(() => { if (open) void refetch(); }, [open, refetch]);
+  const snapshot = isError ? undefined : data;
   const used = snapshot?.input_tokens;
   const percent = snapshot && used !== null && used !== undefined ? Math.round(used / snapshot.context_window * 100) : null;
-  const summary = percent === null ? t(current.status === "loading" ? "contextWindow.loading"
-    : current.status === "unavailable" ? "contextWindow.unavailable" : "contextWindow.unmeasured")
+  const summary = percent === null ? t(isPending ? "contextWindow.loading"
+    : isError ? "contextWindow.unavailable" : "contextWindow.unmeasured")
     : t("contextWindow.percent", { used: percent, left: Math.max(0, 100 - percent) });
   const compact = (value: number) => new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(value).replace("K", "k");
   return <Tooltip placement="top" trigger={["hover", "focus"]} open={open} onOpenChange={setOpen}

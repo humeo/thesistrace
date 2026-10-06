@@ -1,6 +1,8 @@
 import { Alert, Button, Flex, Result, Typography } from "antd";
 import { ContextWindowIndicator } from "./ContextWindowIndicator";
 import { ChatUiProvider } from "./ChatUiProvider";
+import { useQuery } from "@tanstack/react-query";
+import { useChatSessionViewState, type ChatSessionViewState } from "./chatSessionViewState";
 import { type MouseEvent, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -43,7 +45,16 @@ export type AgentSessionPreferenceState =
   | Readonly<{ status: "invalid" }>
   | Readonly<{ status: "unavailable" }>;
 
-export function ChatPage({ researcherId, thread: routedThread }: {
+export function ChatPage({ researcherId, thread }: {
+  researcherId: string;
+  thread: BrowserChatThread;
+}) {
+  return <ResearchChatCopilotProvider>
+    <SelectedChatPage key={thread.id ?? "invalid"} researcherId={researcherId} thread={thread} />
+  </ResearchChatCopilotProvider>;
+}
+
+function SelectedChatPage({ researcherId, thread: routedThread }: {
   researcherId: string;
   thread: BrowserChatThread;
 }) {
@@ -51,6 +62,7 @@ export function ChatPage({ researcherId, thread: routedThread }: {
   // but must not reopen settings or unmount the active conversation.
   const [thread] = useState(routedThread);
   const { reload, state } = useAgentCatalog();
+  const viewState = useChatSessionViewState(thread.id);
   const { sessionHistory, navigate } = useWorkspace();
   const listedSession = thread.id === null
     ? undefined
@@ -62,24 +74,23 @@ export function ChatPage({ researcherId, thread: routedThread }: {
   const preferenceState = useAgentSessionPreference(thread, researcherId);
 
   return (
-    <ResearchChatCopilotProvider>
-      <ChatContent
-        catalogState={state}
-        navigateChat={navigate}
-        preferenceState={preferenceState}
-        researcherId={researcherId}
-        reloadCatalog={reload}
-        selectedSessionState={selectedSessionState}
-        sessionHistory={sessionHistory}
-        thread={thread}
-      />
-    </ResearchChatCopilotProvider>
+    <ChatContent
+      catalogState={state}
+      navigateChat={navigate}
+      preferenceState={preferenceState}
+      researcherId={researcherId}
+      reloadCatalog={reload}
+      selectedSessionState={selectedSessionState}
+      sessionHistory={sessionHistory}
+      thread={thread}
+      viewState={viewState}
+    />
   );
 }
 
 export function ChatContent({
   catalogState, navigateChat, preferenceState, researcherId,
-  reloadCatalog, selectedSessionState, sessionHistory, thread,
+  reloadCatalog, selectedSessionState, sessionHistory, thread, viewState,
 }: {
   catalogState: AgentCatalogState;
   navigateChat: WorkspaceNavigate;
@@ -89,9 +100,10 @@ export function ChatContent({
   selectedSessionState: SelectedSessionState;
   sessionHistory: SessionHistoryController;
   thread?: BrowserChatThread;
+  viewState?: ChatSessionViewState;
 }) {
   const { t } = useTranslation("chat");
-  const [requestedPreference, setRequestedPreference] = useState<AgentSessionPreference | null>(null);
+  const [requestedPreference, setRequestedPreference] = useState<AgentSessionPreference | null>(viewState?.requestedPreference ?? null);
   const [acceptedThreadId, setAcceptedThreadId] = useState<string | null>(null);
   const accepted = thread?.kind === "session"
     || (thread?.kind === "new" && thread.id === acceptedThreadId);
@@ -110,8 +122,8 @@ export function ChatContent({
     : null;
 
   useEffect(() => {
-    setRequestedPreference(null);
-  }, [thread?.id, thread?.kind]);
+    if (viewState) viewState.requestedPreference = requestedPreference;
+  }, [requestedPreference, viewState]);
 
   function acceptThread(): void {
     if (thread === undefined || thread.id === null || accepted) return;
@@ -184,6 +196,7 @@ export function ChatContent({
             titleMaySettle={currentSession?.title === "Untitled"
               || (!accepted && thread.kind === "new")}
             threadId={thread.id}
+            viewState={viewState}
           />
         )}
     </>
@@ -268,72 +281,29 @@ function useAgentCatalog(): Readonly<{
   reload: () => void;
   state: AgentCatalogState;
 }> {
-  const [attempt, setAttempt] = useState(0);
-  const [state, setState] = useState<AgentCatalogState>({ status: "loading" });
-  useEffect(() => {
-    const controller = new AbortController();
-    setState({ status: "loading" });
-    void loadAgentModelCatalog(controller.signal)
-      .then((catalog) => setState({ catalog, status: "ready" }))
-      .catch((error: unknown) => {
-        if (error instanceof DOMException && error.name === "AbortError") return;
-        if (error instanceof AgentCatalogAuthenticationRequiredError) {
-          setState({ status: "authentication-required" });
-        } else if (error instanceof AgentCatalogInvalidError) {
-          setState({ status: "invalid" });
-        } else {
-          setState({ status: "unavailable" });
-        }
-      });
-    return () => controller.abort();
-  }, [attempt]);
-  return { reload: () => setAttempt((current) => current + 1), state };
+  const query = useQuery({
+    queryKey: ["chat-models"],
+    queryFn: ({ signal }) => loadAgentModelCatalog(signal),
+  });
+  const state: AgentCatalogState = query.data !== undefined ? { status: "ready", catalog: query.data }
+    : query.isPending ? { status: "loading" }
+    : { status: query.error instanceof AgentCatalogAuthenticationRequiredError ? "authentication-required"
+      : query.error instanceof AgentCatalogInvalidError ? "invalid" : "unavailable" };
+  return { reload: () => { void query.refetch(); }, state };
 }
 
 function useAgentSessionPreference(
   thread: BrowserChatThread,
   researcherId: string,
 ): AgentSessionPreferenceState {
-  const preferenceKey = `${researcherId}:${thread.kind}:${thread.id ?? "invalid"}`;
-  const [owned, setOwned] = useState<Readonly<{
-    key: string;
-    state: AgentSessionPreferenceState;
-  }>>(() => ({
-    key: preferenceKey,
-    state: thread.kind === "session" ? { status: "loading" } : { status: "not-required" },
-  }));
-  useEffect(() => {
-    if (thread.kind !== "session") {
-      setOwned({ key: preferenceKey, state: { status: "not-required" } });
-      return;
-    }
-    const controller = new AbortController();
-    let current = true;
-    setOwned({ key: preferenceKey, state: { status: "loading" } });
-    void loadAgentSessionPreference(thread.id, controller.signal)
-      .then((preference) => {
-        if (!current) return;
-        setOwned({
-          key: preferenceKey,
-          state: { preference, status: "ready" },
-        });
-      })
-      .catch((error: unknown) => {
-        if (!current || (error instanceof DOMException && error.name === "AbortError")) return;
-        if (error instanceof AgentSessionPreferenceNotFoundError) {
-          setOwned({ key: preferenceKey, state: { status: "not-found" } });
-        } else if (error instanceof AgentSessionPreferenceInvalidError) {
-          setOwned({ key: preferenceKey, state: { status: "invalid" } });
-        } else {
-          setOwned({ key: preferenceKey, state: { status: "unavailable" } });
-        }
-      });
-    return () => {
-      current = false;
-      controller.abort();
-    };
-  }, [preferenceKey, thread.id, thread.kind]);
-  return owned.key === preferenceKey
-    ? owned.state
-    : thread.kind === "session" ? { status: "loading" } : { status: "not-required" };
+  const query = useQuery({
+    queryKey: ["chat-preference", researcherId, thread.id],
+    queryFn: ({ signal }) => loadAgentSessionPreference(thread.id!, signal),
+    enabled: thread.kind === "session",
+  });
+  if (thread.kind !== "session") return { status: "not-required" };
+  if (query.error instanceof AgentSessionPreferenceNotFoundError) return { status: "not-found" };
+  if (query.error instanceof AgentSessionPreferenceInvalidError) return { status: "invalid" };
+  if (query.data !== undefined) return { preference: query.data, status: "ready" };
+  return { status: query.isPending ? "loading" : "unavailable" };
 }

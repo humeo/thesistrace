@@ -89,7 +89,7 @@ export function CoreApp({ location, navigate, isOperator, researcherId }: {
           ? <main aria-busy="true" aria-label={t("loadingChat")} className="chat-main" />
           : <section className="state-section"><p>{t("loadingWorkspace")}</p></section>}
       >
-        {thread === null ? null : <ChatPage key={thread.id ?? "invalid"} researcherId={researcherId} thread={thread} />}
+        {thread === null ? null : <ChatPage key={researcherId} researcherId={researcherId} thread={thread} />}
         {currentPath === "/data" ? <DataPage /> : null}
         {currentPath === "/connections/mcp" ? <McpPage /> : null}
         {currentPath === "/connections/mcp/authorize" ? <McpAuthorizePage search={location.search} /> : null}

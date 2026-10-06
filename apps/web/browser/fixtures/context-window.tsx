@@ -1,4 +1,5 @@
 import "../../src/styles.css";
+import { WorkspaceQueryProvider } from "../../src/shell/WorkspaceQueryProvider";
 import { createRoot } from "react-dom/client";
 import { useState } from "react";
 import { ChatUiProvider } from "../../src/chat/ChatUiProvider";
@@ -12,4 +13,4 @@ function Fixture() {
     <button onClick={() => setModelKey("sol")}>Switch model</button>
   </main></ChatUiProvider></>;
 }
-createRoot(document.getElementById("root")!).render(<Fixture />);
+createRoot(document.getElementById("root")!).render(<WorkspaceQueryProvider researcherId="context-fixture"><Fixture /></WorkspaceQueryProvider>);

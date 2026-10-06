@@ -14,6 +14,17 @@ intent; a default request that no longer matches the catalog is rejected before
 execution. Accepted and resumed Runs retain their pinned model identity. Updating
 the default catalog requires no per-model preference migration.
 
+The browser keeps unsent message and question drafts, pending command receipts,
+model-picker edits and reading positions by Session within the Researcher's
+workspace. Switching conversations restores those edits and a short-lived
+public timeline snapshot, then reconciles current Session and timeline facts in
+the background. It never resubmits a retained input: pending commands reconcile
+by their original command ID before clearing a draft. The existing workspace
+Query client owns these caches and discards them when the Researcher changes.
+Model discovery and context usage share that client; the CopilotKit connection
+lives across Chat navigation while each scoped agent belongs to one Session.
+Research resource queries below still reopen against current Core truth.
+
 Automatic Session naming is independent of the Chat Turn and has a one-minute
 deadline. The browser observes the saved title for up to one minute without
 holding Chat execution open. Until a generated or manually renamed title exists,

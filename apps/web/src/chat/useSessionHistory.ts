@@ -413,7 +413,8 @@ export function useSelectedSession(
     state: SelectedSessionState;
   }>>(() => ({
     key: selectionKey,
-    state: threadId === null ? { status: "not-required" } : { status: "loading" },
+    state: threadId === null ? { status: "not-required" }
+      : listed !== undefined ? { session: listed, status: "ready" } : { status: "loading" },
   }));
   useEffect(() => {
     if (threadId === null) {

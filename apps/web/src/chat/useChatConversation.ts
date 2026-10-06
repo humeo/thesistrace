@@ -2,6 +2,7 @@ import { HttpAgent, type AgentSubscriber } from "@ag-ui/client";
 import { useCallback, useEffect, useRef, useState, type SetStateAction } from "react";
 import { useTranslation } from "react-i18next";
 import { i18n } from "../i18n";
+import type { ChatSessionViewState } from "./chatSessionViewState";
 import type { ChatErrorKey } from "../i18n/messages/chat";
 
 import { formatChatAnswer, isChatAnswer, type ChatAnswer } from "@thesistrace/contracts/chat-answer";
@@ -39,12 +40,7 @@ import {
 } from "./stagedInputStore";
 
 type LocalCommand = "none" | "opening" | "stopping" | "recovering";
-type Recovery = Readonly<{
-  clearAnswer: boolean;
-  commandId: string;
-  draft: string | null;
-  item: StagedInput | null;
-}>;
+type Recovery = NonNullable<ChatSessionViewState["pendingCommand"]>;
 type TimelineLoadState = {
   generation: number;
   promise: Promise<void>;
@@ -52,6 +48,7 @@ type TimelineLoadState = {
 };
 
 export type ChatConversationController = Readonly<{
+  viewState?: ChatSessionViewState;
   action: ChatMainAction;
   answerSelections: readonly string[];
   currentTurnId: string | null;
@@ -97,27 +94,29 @@ export function useChatConversation(options: Readonly<{
   selection: ResolvedModelSelection | null;
   threadId: string;
   titleMaySettle: boolean;
+  viewState?: ChatSessionViewState;
 }>): ChatConversationController {
   const { t } = useTranslation("chat");
+  const saved = options.viewState;
   const [session, setSession] = useState<AgentSessionSummary | null>(
-    options.existingSession ? options.initialSession ?? null : null,
+    saved?.snapshot?.session ?? (options.existingSession ? options.initialSession ?? null : null),
   );
   const [opening, setOpening] = useState(options.existingSession && options.initialSession === undefined);
-  const [localCommand, setLocalCommand] = useState<LocalCommand>("none");
-  const [messageDraft, setMessageDraft] = useState("");
-  const [answerDraft, setAnswerDraft] = useState<ChatAnswer & { interruptId: string } | null>(null);
+  const [localCommand, setLocalCommand] = useState<LocalCommand>(saved?.pendingCommand ? "recovering" : "none");
+  const [messageDraft, setMessageDraft] = useState(saved?.messageDraft ?? "");
+  const [answerDraft, setAnswerDraft] = useState<ChatAnswer & { interruptId: string } | null>(saved?.answerDraft ?? null);
   const [submittingQuestion, setSubmittingQuestion] = useState<ChatQuestion | null>(null);
-  const [turns, setTurns] = useState<readonly TimelineTurn[]>([]);
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [turns, setTurns] = useState<readonly TimelineTurn[]>(saved?.snapshot?.turns ?? []);
+  const [nextCursor, setNextCursor] = useState<string | null>(saved?.snapshot?.nextCursor ?? null);
   const [latestTimelineError, setLatestTimelineError] = useState(false);
   const [olderTimelineError, setOlderTimelineError] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [queue, setQueue] = useState<readonly StagedInput[]>([]);
   const [queueLocked, setQueueLocked] = useState(false);
-  const [stageWriting, setStageWriting] = useState(false);
+  const [stageWriting, setStageWriting] = useState(Boolean(saved?.stageWrite));
   const [error, setError] = useState<ChatErrorKey | null>(null);
   const [errorCode, setErrorCode] = useState<string | null>(null);
-  const [recovery, setRecovery] = useState<Recovery | null>(null);
+  const [recovery, setRecovery] = useState<Recovery | null>(saved?.pendingCommand ?? null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const storeRef = useRef<StagedInputStore | null>(null);
   const stagedChannelRef = useRef<ReturnType<typeof createStagedInputChannel> | null>(null);
@@ -132,7 +131,7 @@ export function useChatConversation(options: Readonly<{
   const selectionRef = useRef(options.selection);
   const queueRef = useRef(queue);
   const queueLockedRef = useRef(queueLocked);
-  const stageWritingRef = useRef(false);
+  const stageWritingRef = useRef(Boolean(saved?.stageWrite));
   const generationRef = useRef(0);
   const runInFlightRef = useRef(false);
   const stopInFlightRef = useRef(false);
@@ -141,7 +140,7 @@ export function useChatConversation(options: Readonly<{
   const handledCompletionsRef = useRef(new Set<string>());
   const completionDeliveriesRef = useRef(new Set<string>());
   const watchedTitlesRef = useRef(new Set<string>());
-  const timelineInitializedRef = useRef(false);
+  const timelineInitializedRef = useRef(saved?.snapshot?.initialized ?? false);
   const timelineLoadRef = useRef<TimelineLoadState | null>(null);
   const streamRevisionRef = useRef(0);
   const streamedTurnsRef = useRef(new Map<string, number>());
@@ -156,6 +155,14 @@ export function useChatConversation(options: Readonly<{
     onTitleMaySettle: options.onTitleMaySettle,
     titleMaySettle: options.titleMaySettle,
   };
+
+  useEffect(() => {
+    if (!saved) return;
+    saved.messageDraft = messageDraft;
+    saved.answerDraft = answerDraft;
+    saved.pendingCommand = recovery;
+    saved.snapshot = { session, turns, nextCursor, initialized: timelineInitializedRef.current };
+  }, [saved, messageDraft, answerDraft, session, turns, nextCursor, recovery]);
 
   const question = submittingQuestion ?? (session?.current_turn?.status === "waiting_for_user"
     ? session.current_turn.question
@@ -576,6 +583,7 @@ export function useChatConversation(options: Readonly<{
     }
     const runId = crypto.randomUUID();
     const recoveryTarget = { clearAnswer: false, commandId: inputId, draft: item === null ? content : null, item };
+    setRecovery(recoveryTarget);
     runInFlightRef.current = true;
     setLocalCommand("opening");
     setError(null);
@@ -687,6 +695,7 @@ export function useChatConversation(options: Readonly<{
     observedActiveTurnsRef.current.add(turn.id);
     const inputId = crypto.randomUUID();
     const target = { clearAnswer: true, commandId: inputId, draft: answer.text || null, item: null };
+    setRecovery(target);
     runInFlightRef.current = true;
     setSubmittingQuestion(activeQuestion);
     setLocalCommand("opening");
@@ -768,6 +777,27 @@ export function useChatConversation(options: Readonly<{
     }
   }, [focusComposer, options.threadId, refresh]);
 
+  async function settleStageWrite(write: NonNullable<ChatSessionViewState["stageWrite"]>, generation: number) {
+    try {
+      await write.result;
+      if (generationRef.current !== generation) return;
+      setMessageDraft(current => current === write.draft ? "" : current);
+      await loadQueue();
+      if (generationRef.current !== generation) return;
+      stagedChannelRef.current?.notify();
+      setError(null);
+    } catch (failure) {
+      if (generationRef.current === generation) setError(stageErrorCopy(failure));
+    } finally {
+      if (generationRef.current === generation) {
+        if (saved) saved.stageWrite = null;
+        stageWritingRef.current = false;
+        setStageWriting(false);
+        focusComposer();
+      }
+    }
+  }
+
   const executeMainAction = useCallback(async () => {
     if (!action.enabled) return;
     if (action.kind === "send") {
@@ -782,25 +812,10 @@ export function useChatConversation(options: Readonly<{
       stageWritingRef.current = true;
       setStageWriting(true);
       storeRef.current ??= new StagedInputStore();
-      try {
-        await storeRef.current.stage(options.researcherId, options.threadId, acceptedDraft);
-        if (generationRef.current !== generation) return;
-        setDraft((current) => current === acceptedDraft ? "" : current);
-        await loadQueue();
-        if (generationRef.current !== generation) return;
-        stagedChannelRef.current?.notify();
-        setError(null);
-        setErrorCode(null);
-      } catch (failure) {
-        if (generationRef.current !== generation) return;
-        setError(stageErrorCopy(failure));
-      } finally {
-        if (generationRef.current === generation) {
-          stageWritingRef.current = false;
-          setStageWriting(false);
-          focusComposer();
-        }
-      }
+      const write = { draft: acceptedDraft,
+        result: storeRef.current.stage(options.researcherId, options.threadId, acceptedDraft) };
+      if (saved) saved.stageWrite = write;
+      await settleStageWrite(write, generation);
       return;
     }
     if (action.kind === "answer") {
@@ -935,29 +950,31 @@ export function useChatConversation(options: Readonly<{
     handledCompletionsRef.current.clear();
     completionDeliveriesRef.current.clear();
     watchedTitlesRef.current.clear();
-    setSession(options.existingSession ? initialSessionRef.current ?? null : null);
+    setSession(saved?.snapshot?.session ?? (options.existingSession ? initialSessionRef.current ?? null : null));
     setOpening(options.existingSession && initialSessionRef.current === undefined);
-    setLocalCommand("none");
-    setRecovery(null);
+    setLocalCommand(saved?.pendingCommand ? "recovering" : "none");
+    setRecovery(saved?.pendingCommand ?? null);
     setErrorCode(null);
-    setMessageDraft("");
-    setAnswerDraft(null);
+    setMessageDraft(saved?.messageDraft ?? "");
+    setAnswerDraft(saved?.answerDraft ?? null);
     setSubmittingQuestion(null);
     stopInFlightRef.current = false;
-    setTurns([]);
+    setTurns(saved?.snapshot?.turns ?? []);
     streamRevisionRef.current = 0;
     streamedTurnsRef.current.clear();
-    timelineInitializedRef.current = false;
-    setNextCursor(null);
+    timelineInitializedRef.current = saved?.snapshot?.initialized ?? false;
+    setNextCursor(saved?.snapshot?.nextCursor ?? null);
     setLatestTimelineError(false);
     setOlderTimelineError(false);
     setQueueLocked(false);
-    stageWritingRef.current = false;
-    setStageWriting(false);
+    stageWritingRef.current = Boolean(saved?.stageWrite);
+    setStageWriting(Boolean(saved?.stageWrite));
     const controller = new AbortController();
     const generation = generationRef.current;
     const revision = streamRevisionRef.current;
     void loadQueue();
+    if (saved?.pendingCommand) void reconcileCommand(saved.pendingCommand, generation);
+    if (saved?.stageWrite) void settleStageWrite(saved.stageWrite, generation);
     if (options.existingSession) {
       void Promise.all([
         loadAgentSession(options.threadId, controller.signal),
@@ -1045,6 +1062,7 @@ export function useChatConversation(options: Readonly<{
   const localizedError = error === null ? null : t(`errors.${error}`);
   const statusAnnouncement = localizedError ?? statusCopy(phase, latestTurnStatus, queue.length);
   return {
+    viewState: saved,
     action,
     answerSelections,
     currentTurnId,

@@ -16,6 +16,7 @@ vi.mock("./chatProtocol", async (importOriginal) => {
   return { ...actual, loadCommandReceipt: vi.fn(), loadTimelinePage: vi.fn() };
 });
 
+import type { ChatSessionViewState } from "./chatSessionViewState";
 import { ChatApiError, loadCommandReceipt, loadTimelinePage, type TimelineTurn } from "./chatProtocol";
 import { loadAgentSession, type AgentSessionSummary } from "./sessionHistory";
 import { CHAT_TIMELINE_UPDATE } from "@thesistrace/contracts/chat-events";
@@ -390,11 +391,84 @@ test("treats a missing receipt as rejection when the user explicitly retries rec
   expect(latestController?.error).toContain("input was restored");
 });
 
+test("reopening after acceptance while away clears the submitted draft without sending it again", async () => {
+  const viewState: ChatSessionViewState = {
+    messageDraft: "", answerDraft: null, requestedPreference: null, readingPosition: null,
+  };
+  vi.spyOn(StagedInputStore.prototype, "list").mockResolvedValue([]);
+  const idle = { ...session, current_turn: null, latest_turn: { ...turn, status: "completed" as const } };
+  vi.mocked(loadAgentSession).mockResolvedValue(idle);
+  vi.mocked(loadTimelinePage).mockResolvedValue({ next_cursor: null, turns: [] });
+  let finishRun!: () => void;
+  const runAgent = vi.fn(() => new Promise<void>(resolve => { finishRun = resolve; }));
+  const agent = { runAgent, setMessages: vi.fn() } as unknown as HttpAgent;
+  await mountConversation({ agent, existingSession: true, initialSession: idle, viewState });
+  await act(async () => latestController!.setDraft("Sent while switching"));
+  let sending!: Promise<void>;
+  await act(async () => { sending = latestController!.executeMainAction(); });
+  await act(async () => root!.unmount());
+  root = undefined;
+  vi.mocked(loadCommandReceipt).mockImplementation(async (_, commandId) => ({
+    command_id: commandId, kind: "prompt", status: "accepted", error_code: null, turn_id: turnId,
+  }));
+  await act(async () => { finishRun(); await sending; });
+  await mountConversation({ agent, existingSession: true, initialSession: idle, viewState });
+  expect(latestController!.draft).toBe("");
+  expect(latestController!.phase).toBe("idle");
+  expect(latestController!.action.enabled).toBe(false);
+});
+
+test("question selections and free text survive reopening and stay with the same question", async () => {
+  const question = { interrupt_id: `${turnId}::first`, question: "Choose an objective", options: [{ label: "Quality" }], selection_mode: "single_select" as const };
+  const waiting = { ...session, current_turn: { ...turn, status: "waiting_for_user" as const, question } };
+  const viewState: ChatSessionViewState = { messageDraft: "", answerDraft: null, requestedPreference: null, readingPosition: null };
+  vi.spyOn(StagedInputStore.prototype, "list").mockResolvedValue([]);
+  vi.mocked(loadAgentSession).mockResolvedValue(waiting);
+  vi.mocked(loadTimelinePage).mockResolvedValue({ next_cursor: null, turns: [] });
+  const agent = { runAgent: vi.fn(), setMessages: vi.fn() } as unknown as HttpAgent;
+  await mountConversation({ agent, existingSession: true, initialSession: waiting, viewState });
+  await act(async () => { latestController!.setAnswerSelections(["Quality"]); latestController!.setDraft("Keep turnover low"); });
+  await act(async () => root!.unmount());
+  root = undefined;
+  await mountConversation({ agent, existingSession: true, initialSession: waiting, viewState });
+  expect(latestController!.draft).toBe("Keep turnover low");
+  expect(latestController!.answerSelections).toEqual(["Quality"]);
+  vi.mocked(loadAgentSession).mockResolvedValue({ ...waiting, current_turn: { ...waiting.current_turn,
+    question: { ...question, interrupt_id: `${turnId}::second` },
+  } });
+  await act(async () => latestController!.refresh());
+  expect(latestController!.draft).toBe("");
+  expect(latestController!.answerSelections).toEqual([]);
+});
+
+test("a Stage write finishing while away does not leave a duplicate draft on return", async () => {
+  const viewState: ChatSessionViewState = { messageDraft: "", answerDraft: null, requestedPreference: null, readingPosition: null };
+  vi.mocked(loadAgentSession).mockResolvedValue(session);
+  vi.mocked(loadTimelinePage).mockResolvedValue({ next_cursor: null, turns: [] });
+  vi.spyOn(StagedInputStore.prototype, "list").mockResolvedValue([]);
+  let finishStage!: (item: StagedInput) => void;
+  vi.spyOn(StagedInputStore.prototype, "stage").mockImplementation(() => new Promise(resolve => { finishStage = resolve; }));
+  const agent = { runAgent: vi.fn(), setMessages: vi.fn() } as unknown as HttpAgent;
+  await mountConversation({ agent, existingSession: true, viewState });
+  await act(async () => latestController!.setDraft("Queued while switching"));
+  let writing!: Promise<void>;
+  await act(async () => { writing = latestController!.executeMainAction(); });
+  await act(async () => root!.unmount());
+  root = undefined;
+  const item = stagedInput("Queued while switching");
+  vi.mocked(StagedInputStore.prototype.list).mockResolvedValue([item]);
+  await act(async () => { finishStage(item); await writing; });
+  await mountConversation({ agent, existingSession: true, viewState });
+  expect(latestController!.draft).toBe("");
+  expect(latestController!.queue.map(input => input.content)).toEqual(["Queued while switching"]);
+});
+
 async function mountConversation(options: Readonly<{
   agent: HttpAgent;
   existingSession: boolean;
   initialSession?: AgentSessionSummary;
   onSessionChanged?: () => void;
+  viewState?: ChatSessionViewState;
 }>): Promise<void> {
   const container = document.createElement("div");
   document.body.append(container);
@@ -451,15 +525,18 @@ function ConversationHarness({
   existingSession = true,
   initialSession,
   onSessionChanged = vi.fn(),
+  viewState,
 }: Readonly<{
   agent?: HttpAgent;
   existingSession?: boolean;
   initialSession?: AgentSessionSummary;
   onSessionChanged?: () => void;
+  viewState?: ChatSessionViewState;
 }>) {
   const [testAgent] = useState(() => Object.assign({ subscribe: vi.fn(() => ({ unsubscribe: vi.fn() })) }, agent) as HttpAgent);
   const controller = useChatConversation({
     agent: testAgent,
+    viewState,
     existingSession,
     initialSession: existingSession ? initialSession ?? session : undefined,
     onAccepted: vi.fn(),
