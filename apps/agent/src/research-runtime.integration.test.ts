@@ -964,6 +964,11 @@ describe.sequential("durable Research Agent runtime", () => {
         timeline: timelineResponse(timeline),
       });
       expect(JSON.stringify(updates)).not.toContain('"toolCallId"');
+      const duplicate = await run(runtime, input, primaryResearcher);
+      expect(lifecycleEventTypes(duplicate)).toEqual(["RUN_STARTED", "MESSAGES_SNAPSHOT", "RUN_FINISHED"]);
+      const replayedState = duplicate.filter(event => event.type === "CUSTOM" && event.name === CHAT_TIMELINE_UPDATE).at(-1);
+      expect(replayedState?.value).toEqual(updates.at(-1)!.value);
+      expect(await runtime.timeline(input.threadId, primaryResearcher, undefined, 20)).toEqual(timeline);
       const entries = timeline.turns[0]!.entries.filter((entry) => entry.kind === "assistant_message" || entry.kind === "tool_activity");
       expect(entries.map((entry) => entry.kind === "assistant_message" ? entry.payload.content : entry.payload.name)).toEqual([
         "Checking.", "get_research_context", "Read the context.", "get_research_context", "Finished.",
@@ -1067,7 +1072,7 @@ describe.sequential("durable Research Agent runtime", () => {
       ]);
 
       const duplicate = await run(runtime, input, primaryResearcher);
-      expect(duplicate.map((event) => event.type)).toEqual([
+      expect(lifecycleEventTypes(duplicate)).toEqual([
         "RUN_STARTED",
         "MESSAGES_SNAPSHOT",
         "RUN_FINISHED",
@@ -2756,7 +2761,7 @@ describe.sequential("durable Research Agent runtime", () => {
       expect(JSON.stringify(persisted.rows)).toContain("server-only-sensitive-result");
 
       const duplicate = await run(runtime, input, primaryResearcher);
-      expect(duplicate.map((event) => event.type)).toEqual([
+      expect(lifecycleEventTypes(duplicate)).toEqual([
         "RUN_STARTED",
         "MESSAGES_SNAPSHOT",
         "RUN_FINISHED",
@@ -3413,7 +3418,7 @@ describe.sequential("durable Research Agent runtime", () => {
       expect(workflowRows.rows).toEqual([{ count: "0" }]);
 
       const duplicate = await run(runtime, input, primaryResearcher);
-      expect(duplicate.map((event) => event.type)).toEqual([
+      expect(lifecycleEventTypes(duplicate)).toEqual([
         "RUN_STARTED",
         "MESSAGES_SNAPSHOT",
         "RUN_FINISHED",
@@ -3554,7 +3559,7 @@ describe.sequential("durable Research Agent runtime", () => {
       expect(persistedAfterFailure.rows[0]?.content).toContain(SCRIPTED_TOOL_PROMPT);
 
       const replay = await run(runtime, firstInput, primaryResearcher);
-      expect(replay.map((event) => event.type)).toEqual([
+      expect(lifecycleEventTypes(replay)).toEqual([
         "RUN_STARTED",
         "MESSAGES_SNAPSHOT",
         "RUN_ERROR",
@@ -3687,7 +3692,7 @@ describe.sequential("durable Research Agent runtime", () => {
       );
 
       const replay = await run(runtime, input, primaryResearcher);
-      expect(replay.map((event) => event.type)).toEqual([
+      expect(lifecycleEventTypes(replay)).toEqual([
         "RUN_STARTED",
         "MESSAGES_SNAPSHOT",
         "RUN_ERROR",
@@ -3812,7 +3817,7 @@ describe.sequential("durable Research Agent runtime", () => {
       expect(productRun.rows).toEqual([{ status: "completed" }]);
 
       const replay = await run(runtime, input, primaryResearcher);
-      expect(replay.map((event) => event.type)).toEqual([
+      expect(lifecycleEventTypes(replay)).toEqual([
         "RUN_STARTED",
         "MESSAGES_SNAPSHOT",
         "RUN_FINISHED",
