@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { dataSnapshotQuery } from "../data/dataResources";
 import { i18n, useTranslation } from "../i18n";
 import { formatNumber } from "../i18n/format";
 import { CalendarDateField } from "../components/layout/CalendarDateField";
@@ -30,6 +32,7 @@ const noFieldErrors: DatasetRefreshFieldErrors = {
 
 export function OperatorDataPage() {
   const { t } = useTranslation("operator");
+  const queryClient = useQueryClient();
   const [asOf, setAsOf] = useState("");
   const [notFound, setNotFound] = useState(false);
   const [fieldErrors, setFieldErrors] = useState(noFieldErrors);
@@ -41,8 +44,11 @@ export function OperatorDataPage() {
   const attributedFailure = useRef<unknown>(null);
   const showNotFound = useCallback(() => setNotFound(true), []);
   const notifyOperationAccepted = useCallback(
-    () => setDatasetStatusReloadGeneration((current) => current + 1),
-    [],
+    () => {
+      void queryClient.invalidateQueries({ queryKey: dataSnapshotQuery.queryKey, refetchType: "none" });
+      setDatasetStatusReloadGeneration((current) => current + 1);
+    },
+    [queryClient],
   );
 
   const refresh = useDataRefresh("dataset", { onAccessNotFound: showNotFound, onOperationAccepted: notifyOperationAccepted });

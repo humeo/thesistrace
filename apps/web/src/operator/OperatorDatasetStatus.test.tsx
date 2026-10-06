@@ -4,6 +4,10 @@ import { createRoot } from "react-dom/client";
 import * as statusClient from "./operatorDataStatusClient";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
+import { notifyManager } from "@tanstack/react-query";
+import { DataPage } from "../data/DataPage";
+import { WorkspaceQueryProvider } from "../shell/WorkspaceQueryProvider";
+import { workbenchData } from "../../browser/fixtures/workbench-data";
 
 import {
   datasetStatusNeedsPolling,
@@ -21,6 +25,45 @@ import type {
 } from "./operatorDataStatusClient";
 
 describe("Operator Dataset status", () => {
+  it.each(["before arrival", "while open"])("refreshes cached Data after publication %s in Operator", async (publication) => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    notifyManager.setNotifyFunction(callback => { act(callback); });
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    let published = false;
+    vi.stubGlobal("fetch", () => Promise.resolve(Response.json(published
+      ? { ...workbenchData, market_coverage: { start: "2010-01-04", end: "2026-10-05" } }
+      : workbenchData)));
+    vi.spyOn(statusClient, "loadDatasetOperationalStatus").mockImplementation(async () => {
+      const current = statusPage();
+      return { ...current, head: { ...current.head, dataIdentity: (published ? "b" : "a").repeat(64), dataThroughSession: published ? "2026-10-05" : "2026-08-13" } };
+    });
+    const host = document.createElement("div"); document.body.append(host);
+    const root = createRoot(host);
+    const unexpectedAccess = () => { throw new Error("Unexpected access rejection"); };
+    const render = (view: "data" | "operator", reloadGeneration = 0) => act(async () => root.render(
+      <WorkspaceQueryProvider researcherId="operator-cache">
+        {view === "data" ? <DataPage /> : <OperatorDatasetStatus onAccessNotFound={unexpectedAccess} reloadGeneration={reloadGeneration} />}
+      </WorkspaceQueryProvider>,
+    ));
+    try {
+      await render("data");
+      await vi.waitFor(() => expect(host.textContent).toContain("2010-01-04 — 2026-08-13"));
+      published = publication === "before arrival";
+      await render("operator");
+      if (!published) {
+        published = true;
+        await render("operator", 1);
+      }
+      expect(host.textContent).toContain("2026-10-05");
+      await render("data");
+      await vi.waitFor(() => expect(host.textContent).toContain("2010-01-04 — 2026-10-05"));
+    } finally {
+      await act(async () => root.unmount()); host.remove();
+      notifyManager.setNotifyFunction(callback => callback());
+      vi.restoreAllMocks(); vi.unstubAllGlobals();
+    }
+  });
+
   it("recovers Worker availability after a restart even when all operations are terminal", async () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     vi.useFakeTimers();
@@ -32,7 +75,7 @@ describe("Operator Dataset status", () => {
     document.body.append(host);
     const root = createRoot(host);
     try {
-      await act(async () => root.render(<OperatorDatasetStatus onAccessNotFound={() => { throw new Error("Unexpected access rejection"); }} reloadGeneration={0} />));
+      await act(async () => root.render(<WorkspaceQueryProvider researcherId="operator"><OperatorDatasetStatus onAccessNotFound={() => { throw new Error("Unexpected access rejection"); }} reloadGeneration={0} /></WorkspaceQueryProvider>));
       expect(host.textContent).toContain("Data Operator Worker unavailable");
       await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
       expect(host.textContent).toContain("Data Operator Worker available");
@@ -55,7 +98,7 @@ describe("Operator Dataset status", () => {
     const host = document.createElement("div"); document.body.append(host);
     const root = createRoot(host);
     try {
-      await act(async () => root.render(<OperatorDatasetStatus onAccessNotFound={() => { throw new Error("Unexpected access rejection"); }} reloadGeneration={0} />));
+      await act(async () => root.render(<WorkspaceQueryProvider researcherId="operator"><OperatorDatasetStatus onAccessNotFound={() => { throw new Error("Unexpected access rejection"); }} reloadGeneration={0} /></WorkspaceQueryProvider>));
       expect(host.textContent).toContain("Accepted");
       const initial = load.mock.calls.length;
       await act(async () => { await vi.advanceTimersByTimeAsync(5000); });

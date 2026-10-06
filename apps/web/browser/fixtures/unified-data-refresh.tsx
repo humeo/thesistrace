@@ -1,6 +1,7 @@
 import "../../src/styles.css";
 import { createRoot } from "react-dom/client";
 import { OperatorDataPage } from "../../src/operator/OperatorDataPage";
+import { WorkspaceQueryProvider } from "../../src/shell/WorkspaceQueryProvider";
 import type { DataRefreshOperationalStatus, DatasetOperationalStatus } from "../../src/operator/operatorDataStatusClient";
 
 const key = `market-${"long".repeat(35)}`;
@@ -93,4 +94,4 @@ const fixtureFetch: typeof fetch = async (input, options) => {
   throw new Error(`Unexpected browser fixture request: ${url.pathname}`);
 };
 window.fetch = fixtureFetch;
-createRoot(document.getElementById("root")!).render(<main className="console-workspace mx-auto max-w-[1280px] p-8"><OperatorDataPage /></main>);
+createRoot(document.getElementById("root")!).render(<WorkspaceQueryProvider researcherId="operator-fixture"><main className="console-workspace mx-auto max-w-[1280px] p-8"><OperatorDataPage /></main></WorkspaceQueryProvider>);

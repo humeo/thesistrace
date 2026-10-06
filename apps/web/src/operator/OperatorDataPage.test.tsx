@@ -1,3 +1,4 @@
+import { WorkspaceQueryProvider } from "../shell/WorkspaceQueryProvider";
 import { expect, test } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -9,7 +10,7 @@ import {
 } from "./OperatorDataPage";
 
 test("renders the focused forms without redundant Operator copy", () => {
-  const markup = renderToStaticMarkup(<OperatorDataPage />);
+  const markup = renderToStaticMarkup(<WorkspaceQueryProvider researcherId="operator"><OperatorDataPage /></WorkspaceQueryProvider>);
 
   expect(markup).toContain('href="/operator/researchers"');
   expect(markup).toContain('aria-current="page" href="/operator/data"');

@@ -1,4 +1,6 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { dataSnapshotQuery } from "../data/dataResources";
 
 import { catalogLabel } from "../i18n/catalog";
 import { i18n, useTranslation } from "../i18n";
@@ -37,6 +39,7 @@ export function OperatorDatasetStatus({
   onActionCompleted?: (receipt: import("./operatorMutationClient").DataRefreshActionReceipt) => void;
 }>) {
   useTranslation("operator");
+  const queryClient = useQueryClient();
   const [data, setData] = useState<DatasetOperationalStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -85,6 +88,11 @@ export function OperatorDatasetStatus({
       try {
         const next = await loadDatasetOperationalStatus(cursor, controller.signal);
         if (disposed || generation !== requestGeneration) return;
+        // An Operator Head read can observe publication while Data was cached.
+        // Revalidate the next workspace visit without loading an unused catalog.
+        await queryClient.cancelQueries({ queryKey: dataSnapshotQuery.queryKey });
+        if (disposed || generation !== requestGeneration) return;
+        void queryClient.invalidateQueries({ queryKey: dataSnapshotQuery.queryKey, refetchType: "none" });
         lastKnown = next;
         currentPage.current = { cursor, data: next };
         setData(next);
@@ -130,7 +138,7 @@ export function OperatorDatasetStatus({
       window.removeEventListener("focus", refreshOnRecovery);
       window.removeEventListener("online", refreshOnRecovery);
     };
-  }, [cursor, manualReloadGeneration, onAccessNotFound, reloadGeneration]);
+  }, [cursor, manualReloadGeneration, onAccessNotFound, queryClient, reloadGeneration]);
 
   useEffect(() => {
     if (data === null) return;
