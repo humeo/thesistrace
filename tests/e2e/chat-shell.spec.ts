@@ -235,13 +235,13 @@ for (const mobile of [false, true]) {
     await sessionLink.click();
     await expect(page).toHaveURL(sessionUrl);
     await expect(page.locator(".context-bar")).toHaveCount(0);
-    await expect(page.locator(".chat-message-user .chat-message-content")).toHaveText("Build a low volatility Alpha.");
+    await expect(page.locator(".chat-message-user")).toContainText("Build a low volatility Alpha.");
     await expect(agentRunStatus(page)).toHaveText("Run complete");
     await page.goBack();
     await expect(page).toHaveURL(/\/daily-tracks$/);
     await page.goForward();
     await expect(page).toHaveURL(sessionUrl);
-    await expect(page.locator(".chat-message-user .chat-message-content")).toHaveText("Build a low volatility Alpha.");
+    await expect(page.locator(".chat-message-user")).toContainText("Build a low volatility Alpha.");
     expect(await shellElement!.evaluate((element) => element.isConnected)).toBe(true);
     expect(documentRequests).toEqual([]);
     await expect(page.locator(".app-shell")).toHaveCount(1);

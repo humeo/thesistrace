@@ -4,9 +4,13 @@ type ToolStatus = "complete" | "failed" | "running" | "stopped";
 const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
 export function toolActivity(page: Page, name: string, status: ToolStatus): Locator {
-  return page.locator(
-    `.chat-tool-group [data-tool-name="${safeToolName(name)}"][data-tool-status="${status}"]`,
-  );
+  const labels = {
+    complete: ["Completed", "已完成"], failed: ["Failed", "失败"],
+    running: ["Running", "运行中"], stopped: ["Stopped", "已停止"],
+  }[status];
+  return page.getByRole("listitem", {
+    name: new RegExp(`^(?:Tool ${safeToolName(name)}: ${labels[0]}|工具 ${safeToolName(name)}：${labels[1]})$`),
+  });
 }
 
 export async function revealToolActivity(
@@ -14,16 +18,22 @@ export async function revealToolActivity(
   name: string,
   status: ToolStatus,
 ): Promise<Locator> {
-  const activity = toolActivity(page, name, status);
-  await activity.first().waitFor({ state: "attached" });
-  // Open outer execution history before its nested Tool group, as a user would.
-  const groups = activity.locator("xpath=ancestor::*[@data-slot='collapsible']");
-  for (const group of await groups.all()) {
-    const trigger = group.locator(":scope > [data-slot=collapsible-trigger]");
-    if (await trigger.getAttribute("aria-expanded") === "false") {
-      await trigger.click();
+  // Native Think and ThoughtChain unmount collapsed content. Expand the visible
+  // history controls before locating their accessible Tool items.
+  for (const history of await page.locator(".ant-think").all()) {
+    const content = history.locator(".ant-think-content");
+    if (!await content.isVisible()) await history.locator(".ant-think-status-wrapper").click();
+    await expect(content).toBeVisible();
+    for (const group of await content.locator(".ant-thought-chain-node").all()) {
+      const trigger = group.locator(":scope > .ant-thought-chain-node-box > .ant-thought-chain-node-header > .ant-thought-chain-node-collapsible");
+      if (await trigger.count() === 0) continue;
+      const details = group.locator(":scope > .ant-thought-chain-node-box > .ant-thought-chain-node-content");
+      if (!await details.isVisible()) await trigger.click();
+      await expect(details).toBeVisible();
     }
   }
+  const activity = toolActivity(page, name, status);
+  await expect(activity.first()).toBeVisible();
   return activity;
 }
 

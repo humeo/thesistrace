@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import type { Page } from "@playwright/test";
 
 import { expect, sameOriginHeaders, test, testProjectName } from "./auth-fixture";
-import { revealToolActivity, submitChatPrompt } from "../fixtures/chat-ui";
+import { revealToolActivity, submitChatPrompt, waitForChatTurn } from "../fixtures/chat-ui";
 import { proxyState, setProxyMode } from "./fault-proxy";
 import { controlWorker } from "./research-run-control";
 
@@ -90,7 +90,7 @@ test("Chat DailyTrack replays lost Start and Retry responses while Tracking adva
   try {
     await page.goto("/chat");
     setProxyMode("mcp-fault-proxy", 8150, "tool-call", "disconnect-submit");
-    await send(page, `Start daily tracking for ${runId}.`, "Run failed");
+    await send(page, `Start daily tracking for ${runId}.`, "failed");
     await expect((await revealToolActivity(page, "start_daily_track", "failed")).last()).toBeVisible();
     const started = trackFacts(researcher.id);
     expect(started).toMatchObject({ starts: 1, tracks: 1, refreshes: 0, retries: 0 });
@@ -126,7 +126,7 @@ test("Chat DailyTrack replays lost Start and Retry responses while Tracking adva
     await page.keyboard.press("Escape");
     expect(trackFacts(researcher.id)).toEqual(beforeLanguageSwitch);
     setProxyMode("mcp-fault-proxy", 8150, "tool-call", "disconnect-submit");
-    await send(page, "Retry the blocked DailyTrack in this Chat if it is eligible.", "Run failed");
+    await send(page, "Retry the blocked DailyTrack in this Chat if it is eligible.", "failed");
     await expect((await revealToolActivity(page, "retry_daily_track", "failed")).last()).toBeVisible();
     const retryAccepted = trackFacts(researcher.id);
     expect(retryAccepted).toMatchObject({ tracks: 1, starts: 1, refreshes: 1, retries: 1, stops: 0 });
@@ -143,7 +143,7 @@ test("Chat DailyTrack replays lost Start and Retry responses while Tracking adva
     }, { timeout: 90_000 }).toBe("active:2026-08-05");
     expect(trackFacts(researcher.id)).toEqual(retryAccepted);
     await page.goto(`/daily-tracks/${id}`);
-    await expect(page.getByRole("heading", { level: 2, name: /^Daily Track / }).locator("[data-slot=badge]")).toHaveText("Up to date");
+    await expect(page.getByRole("heading", { level: 2, name: /^Tracking advance fixture/ }).locator("[data-slot=badge]")).toHaveText("Up to date");
   } finally {
     setProxyMode("mcp-fault-proxy", 8150, "tool-call", "pass");
     if (paused) controlWorker("unpause", "tracking-worker");
@@ -168,7 +168,7 @@ async function assertCurrentObservation(page: Page, detail: Track): Promise<void
   expect(observation.session).toBe(detail.strategy_session);
   const card = page.getByRole("region", { name: `DailyTrack ${detail.id}`, exact: true }).last();
   await expect(card).toBeVisible();
-  const facts = card.locator("dl");
+  const facts = card.getByRole("table");
   for (const value of [detail.origin.seed_run_id, detail.strategy_session, detail.data_through_session]) {
     await expect(facts).toContainText(value);
   }
@@ -177,12 +177,10 @@ async function assertCurrentObservation(page: Page, detail: Track): Promise<void
   }
 }
 
-async function send(page: Page, prompt: string, status = "Run complete"): Promise<void> {
+async function send(page: Page, prompt: string, status: "completed" | "failed" = "completed"): Promise<void> {
   const turnId = await submitChatPrompt(page, prompt);
-  const turn = page.locator(`.chat-turn[data-turn-id="${turnId}"]`);
-  await expect(turn.locator(".chat-response-footer time")).toBeVisible({ timeout: 90_000 });
-  await expect(turn.locator(".chat-work-history > [aria-expanded=true]")).toHaveCount(0);
-  await expect(page.locator("[data-chat-status]")).toHaveText(status, { timeout: 90_000 });
+  await waitForChatTurn(page, turnId, status, 90_000);
+  await expect(page.locator(".ant-think").last().locator(".ant-think-content")).not.toBeVisible();
 }
 
 async function deleteChat(page: Page): Promise<void> {
