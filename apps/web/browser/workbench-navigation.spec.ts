@@ -467,8 +467,10 @@ test("Configuration feedback follows the actions after checking, without a valid
 });
 
 test("date inputs retain manually entered values when focus leaves the field", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
   await page.goto("/research?new");
   await page.getByRole("button", { name: "Factor Evaluation", exact: true }).click();
+  await page.getByTitle("Edit research name", { exact: true }).click();
   await page.getByLabel("Research name").fill("Browser populated dates");
   await page.getByRole("textbox", { name: "Alpha formula", exact: true }).click();
   await page.keyboard.type("close");

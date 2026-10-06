@@ -820,7 +820,7 @@ export function ResearchDraftWorkspace({
           </div>
 
           <aside id="research-conditions-panel" aria-label={t("settings")} className={cn("research-conditions-column", conditionsOpen && "research-conditions-open")}>
-            <section className="research-settings-panel grid min-w-0 gap-5">
+            <section className={cn("research-settings-panel grid min-w-0 gap-5", factor && "research-settings-panel-factor")}>
             <h2 className="m-0 text-base font-semibold">{factor ? t("factorConditions") : i18n.t("strategy:workbench.conditionsTitle")}</h2>
             <ResearchDateFields
               compact

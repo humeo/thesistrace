@@ -100,6 +100,13 @@ body:has(.app-shell) .research-reading-workspace .research-name-button[data-slot
   gap: 16px;
   padding: 0;
 }
+@container (min-width: 1024px) {
+  .research-reading-workspace .research-settings-panel-factor {
+    min-height: 426px;
+    align-content: space-between;
+    row-gap: 12px;
+  }
+}
 body:has(.app-shell-research) [data-slot="popover-content"],
 body:has(.app-shell-research) [data-slot="sheet-content"],
 body:has(.app-shell-research) [data-slot="alert-dialog-content"] {
