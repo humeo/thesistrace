@@ -846,30 +846,10 @@ class DailyTrackService:
                     secret=secret,
                     researcher_id=researcher_id,
                 )
-                rows = transaction.execute(
-                    f"""
-                    {_TRACK_SELECT}
-                    WHERE track.researcher_id = %s
-                      AND (
-                        %s::timestamptz IS NULL
-                        OR track.created_at < %s::timestamptz
-                        OR (
-                            track.created_at = %s::timestamptz
-                            AND track.id > %s::text
-                        )
-                    )
-                    ORDER BY track.created_at DESC, track.id
-                    LIMIT %s::integer
-                    """,
-                    (
-                        researcher_id,
-                        cursor_created_at,
-                        cursor_created_at,
-                        cursor_created_at,
-                        cursor_id,
-                        limit + 1,
-                    ),
-                ).fetchall()
+                rows = self._session_coordinates.list_read_summaries(
+                    transaction, researcher_id, cursor_created_at=cursor_created_at,
+                    cursor_id=cursor_id, limit=limit + 1,
+                )
                 summaries = [DailyTrackListItem(
                     **_summary(row).model_dump(), seed_name=row["seed_name"],
                 ) for row in rows[:limit]]
@@ -3913,16 +3893,13 @@ _TRACK_SELECT = """
 SELECT track.id, track.status, track.origin, track.blocked_reason,
        track.queue_position,
        track.created_at, state.updated_at AS state_updated_at,
-       checkpoint.boundary_session::text AS current_strategy_session,
-       seed.name AS seed_name
+       checkpoint.boundary_session::text AS current_strategy_session
 FROM daily_tracks.tracks AS track
 JOIN daily_tracks.session_tracking_states AS state
   ON state.track_id = track.id
 JOIN daily_tracks.session_checkpoints AS checkpoint
   ON checkpoint.track_id = state.track_id
  AND checkpoint.manifest_sha256 = state.current_checkpoint_manifest_sha256
-LEFT JOIN research_runs.runs AS seed
-  ON seed.id = track.seed_run_id AND seed.researcher_id = track.researcher_id
 """
 
 

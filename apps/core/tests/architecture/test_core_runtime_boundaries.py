@@ -488,6 +488,7 @@ def test_http_route_and_action_inventory_is_exactly_the_core_resources() -> None
         ("post", "/api/research-runs/{run_id}/cancel"),
         ("post", "/api/research-runs/{run_id}/daily-tracks"),
         ("get", "/api/daily-tracks"),
+        ("get", "/api/daily-tracks/comparison"),
         ("get", "/api/daily-tracks/{track_id}"),
         ("get", "/api/daily-tracks/{track_id}/common-input-observations"),
         ("delete", "/api/daily-tracks/{track_id}"),

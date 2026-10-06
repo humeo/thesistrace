@@ -436,6 +436,7 @@ def daily_track_history_payload() -> dict[str, object]:
                 "id": "track_test",
                 "status": "active",
                 "seed_run_id": "run_strategy",
+                "seed_name": None,
                 "result_checksum_sha256": "a" * 64,
                 "origin_session": "2024-01-31",
                 "strategy_session": "2024-01-31",

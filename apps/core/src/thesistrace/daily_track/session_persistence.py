@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from itertools import pairwise
 from typing import Literal
 from uuid import UUID
@@ -78,6 +78,35 @@ class SessionCoordinateRepository:
 
     def __init__(self, database: PostgresDatabase) -> None:
         self._database = database
+
+    def list_read_summaries(
+        self, transaction: PostgresTransaction, researcher_id: UUID, *,
+        cursor_created_at: datetime | None, cursor_id: str | None, limit: int,
+    ) -> list[dict[str, object]]:
+        """Current display metadata belongs to reads, never activation or receipt SQL."""
+        return transaction.execute(
+            """
+            SELECT track.id, track.status, track.origin, track.blocked_reason,
+                   track.queue_position, track.created_at,
+                   state.updated_at AS state_updated_at,
+                   checkpoint.boundary_session::text AS current_strategy_session,
+                   seed.name AS seed_name
+            FROM daily_tracks.tracks AS track
+            JOIN daily_tracks.session_tracking_states AS state ON state.track_id = track.id
+            JOIN daily_tracks.session_checkpoints AS checkpoint
+              ON checkpoint.track_id = state.track_id
+             AND checkpoint.manifest_sha256 = state.current_checkpoint_manifest_sha256
+            LEFT JOIN research_runs.runs AS seed
+              ON seed.id = track.seed_run_id AND seed.researcher_id = track.researcher_id
+            WHERE track.researcher_id = %s
+              AND (%s::timestamptz IS NULL OR track.created_at < %s::timestamptz
+                   OR (track.created_at = %s::timestamptz AND track.id > %s::text))
+            ORDER BY track.created_at DESC, track.id
+            LIMIT %s::integer
+            """,
+            (researcher_id, cursor_created_at, cursor_created_at,
+             cursor_created_at, cursor_id, limit),
+        ).fetchall()
 
     def load_read_snapshot(
         self, researcher_id: UUID, track_id: str, *, calendar: list[str] | None = None,
