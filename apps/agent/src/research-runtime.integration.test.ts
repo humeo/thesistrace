@@ -1057,7 +1057,7 @@ describe.sequential("durable Research Agent runtime", () => {
     let runtime = await createIntegrationRuntime();
     try {
       const first = await run(runtime, input, primaryResearcher);
-      expect(first.map((event) => event.type)).toEqual([
+      expect(lifecycleEventTypes(first)).toEqual([
         "RUN_STARTED",
         "TEXT_MESSAGE_START",
         "TEXT_MESSAGE_CONTENT",
@@ -2714,7 +2714,7 @@ describe.sequential("durable Research Agent runtime", () => {
         threadId,
       });
       const events = await run(runtime, input, primaryResearcher);
-      expect(events.map((event) => event.type)).toEqual([
+      expect(lifecycleEventTypes(events)).toEqual([
         "RUN_STARTED",
         "TOOL_CALL_START",
         "TOOL_CALL_ARGS",
@@ -2779,7 +2779,7 @@ describe.sequential("durable Research Agent runtime", () => {
         runId: randomUUID(),
         threadId,
       }), primaryResearcher);
-      expect(followUp.map((event) => event.type)).toEqual([
+      expect(lifecycleEventTypes(followUp)).toEqual([
         "RUN_STARTED",
         "TEXT_MESSAGE_START",
         "TEXT_MESSAGE_CONTENT",
@@ -3538,7 +3538,7 @@ describe.sequential("durable Research Agent runtime", () => {
     });
     try {
       const failed = await run(runtime, firstInput, primaryResearcher);
-      expect(failed.map((event) => event.type)).toEqual([
+      expect(lifecycleEventTypes(failed)).toEqual([
         "RUN_STARTED",
         "RUN_ERROR",
       ]);
@@ -3651,7 +3651,7 @@ describe.sequential("durable Research Agent runtime", () => {
       const events = await run(runtime, input, primaryResearcher);
 
       expect(observedMcpRun?.toolFailure("scripted-tool-call-1")).toEqual({ code: "MCP_TRANSIENT", fatal: true });
-      expect(events.map((event) => event.type)).toEqual([
+      expect(lifecycleEventTypes(events)).toEqual([
         "RUN_STARTED",
         "TOOL_CALL_START",
         "TOOL_CALL_ARGS",
@@ -3775,7 +3775,7 @@ describe.sequential("durable Research Agent runtime", () => {
       const events = await run(runtime, input, primaryResearcher);
 
       expect(observedMcpRun?.toolFailure("scripted-tool-call-1")).toEqual({ code: "MCP_TRANSIENT", fatal: false });
-      expect(events.map((event) => event.type)).toEqual([
+      expect(lifecycleEventTypes(events)).toEqual([
         "RUN_STARTED",
         "TOOL_CALL_START",
         "TOOL_CALL_ARGS",
@@ -3983,7 +3983,7 @@ describe.sequential("durable Research Agent runtime", () => {
         runId: failureRunId,
         threadId: randomUUID(),
       }), primaryResearcher);
-      expect(events.map((event) => event.type)).toEqual([
+      expect(lifecycleEventTypes(events)).toEqual([
         "RUN_STARTED",
         "RUN_ERROR",
       ]);
@@ -4566,6 +4566,13 @@ function snapshotMessages(events: readonly AGUIEvent[]): Message[] {
     throw new Error("expected message snapshot");
   }
   return [...snapshot.messages];
+}
+
+function lifecycleEventTypes(events: readonly AGUIEvent[]) {
+  // Public timeline state has its own persistence/replay assertions above.
+  // Keep the native lifecycle exact, including any unexpected CUSTOM event.
+  return events.filter(event => event.type !== "CUSTOM" || event.name !== CHAT_TIMELINE_UPDATE)
+    .map(event => event.type);
 }
 
 function a2uiMessages(values: readonly unknown[]): Array<Readonly<{
