@@ -1,9 +1,7 @@
-import { useEffect, useState } from 'react';
+import { lazy, useEffect, useState } from 'react';
 import { cn } from 'cn';
 import { ArrowRightIcon, ChatCircleIcon, DatabaseIcon, FlaskIcon, ChartLineIcon, ListChecksIcon, PlugsIcon, CheckCircleIcon } from '@phosphor-icons/react';
-import { Bubble, Sender } from '@ant-design/x';
-import { Brand, BrandMark } from '../brand/Brand';
-import { ChatUiProvider } from '../chat/ChatUiProvider';
+import { Brand } from '../brand/Brand';
 import { Button, buttonVariants } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
@@ -11,15 +9,17 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { ToggleGroup, ToggleGroupItem } from '../components/ui/toggle-group';
 import { Metric, MetricGroup } from '../components/product/MetricGroup';
-import { TrackingReturnChart } from '../daily-tracks/DailyTrackObservationView';
 import { changeInterfaceLanguage, interfaceLocale, publicLanguageCode, synchronizeEntryLanguage, useTranslation, type InterfaceLocale } from '../i18n';
 import { LanguageIcon } from './LanguageIcon';
+import { DeferredPreview } from './DeferredPreview';
 import { factorExamples, trackingExample } from './examples';
 import './landing.css';
 
 const sidebarIcons = [ChatCircleIcon, DatabaseIcon, FlaskIcon, ListChecksIcon, ChartLineIcon, PlugsIcon];
 const sidebarRoutes = ['/chat', '/data', '/research', '/research-runs', '/daily-tracks', '/connections/mcp'];
 const discordHref = 'https://discord.gg/tdwxubVhMJ';
+const LandingConversationPreview = lazy(() => import('./LandingConversationPreview'));
+const TrackingReturnChart = lazy(() => import('../daily-tracks/DailyTrackObservationView').then(module => ({ default: module.TrackingReturnChart })));
 
 export default function Landing() {
   const { t: translate } = useTranslation('landing');
@@ -75,20 +75,7 @@ export default function Landing() {
               return <li key={index}><a href={`${loginHref}&returnTo=${encodeURIComponent(sidebarRoutes[index])}`} className={index === 0 ? 'qh-nav-selected' : undefined}><Icon size={18} aria-hidden="true" />{name}</a></li>;
             })}</ul>
           </aside>
-          <div className="qh-example-conversation"><ChatUiProvider>
-            <Bubble.List autoScroll={false} items={[
-              { key: 'question', role: 'user', placement: 'end', variant: 'filled', content: t.question },
-              { key: 'answer', role: 'ai', variant: 'borderless', avatar: <BrandMark size={24} inverse />, content: <>
-                <p>{t.answer}</p>
-                <Table className="qh-research-table"><TableHeader><TableRow><TableHead>{t.researchName}</TableHead><TableHead>{t.rankOne}</TableHead><TableHead>{t.rankFive}</TableHead></TableRow></TableHeader>
-                  <TableBody>{factorExamples.map(item => <TableRow key={item.key}>
-                    <TableCell>{item.key === 'reversal' ? <a href="#evidence">{t[item.key]}</a> : <span className="qh-research-name">{t[item.key]}</span>}<Badge variant="outline"><CheckCircleIcon aria-hidden="true" />{t.completed}</Badge><code>{item.expression}</code></TableCell><TableCell>{item.oneDay}</TableCell><TableCell>{item.fiveDay}</TableCell>
-                  </TableRow>)}</TableBody>
-                </Table>
-              </> },
-            ]} />
-            <Sender disabled placeholder={t.ask} aria-label={t.ask} footer={<span>{t.builtIn}</span>} />
-          </ChatUiProvider></div>
+          <div className="qh-example-conversation"><DeferredPreview height={420}><LandingConversationPreview /></DeferredPreview></div>
         </div>
         <div className="qh-frame-caption"><span>{t.exampleResearch}</span><a href={mcpHref}>{t.connect}<ArrowRightIcon size={16} aria-hidden="true" /></a></div>
         <p className="qh-example-notice">{t.exampleNotice}</p>
@@ -118,7 +105,7 @@ export default function Landing() {
         <div className="qh-tracking-panel">
           <div className="qh-track-heading"><div><h3>{t.dailyTracking}</h3><p>{t.exampleStrategy}</p></div><span>{t.dailyPeriod}</span></div>
           <MetricGroup variant="observation" label={t.dailyTracking} className="grid-cols-4">{['-1.23%', '8.30%', '¥1,424,714.10', '13'].map((value, index) => <Metric key={index} variant="observation" label={t.metrics[index]} value={value} />)}</MetricGroup>
-          <div className="qh-chart"><h3>{t.performance}</h3><TrackingReturnChart observation={trackingExample} originSession="2026-08-31" /></div>
+          <div className="qh-chart"><h3>{t.performance}</h3><DeferredPreview height={216}><TrackingReturnChart observation={trackingExample} originSession="2026-08-31" /></DeferredPreview></div>
           <p className="qh-daily-note">{t.dailyNote}</p>
         </div>
         <p className="qh-frame-caption">{t.exampleTrack}</p>
