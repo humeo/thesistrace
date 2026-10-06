@@ -70,6 +70,51 @@ test.each(['sign-out','core-401'])('ignores delayed bootstrap after %s',async ac
   } finally {await act(async()=>root.unmount());}
 });
 
+test("requires successful workspace setup again after capability verification fails", async () => {
+  getSession.mockResolvedValue({data: {user: {active: true, id: researcherId, email: "audit@example.com", name: "Audit"}}, error: null});
+  let retrying = false;
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+    if (String(input) === "/api/auth/operator/capability") return new Response(null, {status: retrying ? 404 : 503});
+    if (String(input) === "/api/researcher/bootstrap") return retrying
+      ? new Response(null, {status: 503})
+      : Response.json({researcher_id: researcherId, system_folders: {default: "folder_default", batch_research: "folder_batch_research"}});
+    throw new Error("Unexpected request");
+  });
+  let auth!: ReturnType<typeof useAuth>;
+  function Consumer() {auth = useAuth(); return null;}
+  const root = createRoot(document.createElement("div"));
+  try {
+    await act(async () => root.render(<AuthProvider><Consumer /></AuthProvider>));
+    expect(auth.state).toMatchObject({status: "unavailable", workspaceReady: false});
+    retrying = true;
+    await act(async () => {await auth.retry();});
+    expect(auth.state).toMatchObject({status: "setup-failure", session: {researcherId}});
+  } finally {await act(async () => root.unmount());}
+});
+
+test.each([401, 503])("keeps the workspace blocked when bootstrap returns %s before capability verification", async status => {
+  getSession.mockResolvedValue({data: {user: {active: true, id: researcherId, email: "audit@example.com", name: "Audit"}}, error: null});
+  let finish!: (response: Response) => void;
+  const capability = new Promise<Response>(resolve => { finish = resolve; });
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+    if (String(input) === "/api/auth/operator/capability") return capability;
+    if (String(input) === "/api/researcher/bootstrap") return new Response(null, {status});
+    throw new Error("Unexpected request");
+  });
+  let auth!: ReturnType<typeof useAuth>;
+  function Consumer() {auth = useAuth(); return null;}
+  const root = createRoot(document.createElement("div"));
+  try {
+    await act(async () => root.render(<AuthProvider><Consumer /></AuthProvider>));
+    expect(auth.state.status).not.toBe("authenticated");
+    await act(async () => finish(Response.json({operator: true})));
+    expect(auth.state.status).toBe(status === 401 ? "anonymous" : "setup-failure");
+  } finally {
+    finish(new Response(null, {status: 404}));
+    await act(async () => root.unmount());
+  }
+});
+
 
 test.each([200, 401, 503])("ignores old identity bootstrap status %s after a new sign-in", async oldStatus => {
   const secondId = "b9aaeb26-fb97-4d1a-af62-a29c73021cab";

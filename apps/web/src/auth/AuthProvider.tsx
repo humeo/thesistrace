@@ -11,7 +11,6 @@ import {
 
 import { authClient } from "./client";
 import {
-  CoreAuthenticationRequiredError,
   CoreUnavailableError,
   createCoreFetch,
   setCoreUnauthorizedHandler,
@@ -73,7 +72,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     dispatch({ type: "session-missing" });
   }, [invalidate]);
 
-  const bootstrap = useCallback(async (session: PublicSession, epoch: number): Promise<void> => {
+  const bootstrap = useCallback(async (session: PublicSession, epoch: number): Promise<boolean> => {
     const bootstrapFetch = createCoreFetch({
       fetch: (...args) => globalThis.fetch(...args),
       onUnauthorized: () => { if (epoch === generation.current) clearSession(); },
@@ -83,12 +82,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!response.ok) throw new CoreUnavailableError();
       const payload = await response.json() as unknown;
       if (!isRecord(payload) || payload.researcher_id !== session.researcherId || !isSystemFolderContract(payload.system_folders)) throw new CoreUnavailableError();
-      if (epoch !== generation.current) return;
-      readyResearcherId.current = session.researcherId;
-      dispatch({ type: "setup-succeeded", session });
-    } catch (error) {
-      if (epoch !== generation.current || error instanceof CoreAuthenticationRequiredError) return;
-      dispatch({ type: "setup-failed", session });
+      return true;
+    } catch {
+      return false;
     }
   }, [clearSession]);
 
@@ -117,14 +113,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           readyResearcherId.current = null;
           dispatch({type: "session-available", session: researcherSession});
         }
+        const setupRequest = forceSetup || readyResearcherId.current !== researcherSession.researcherId
+          ? bootstrap(researcherSession, epoch)
+          : null;
         const session: PublicSession = { ...researcherSession, operator: await loadOperatorCapability() };
         if (epoch !== generation.current) return;
-        if (!forceSetup && readyResearcherId.current === session.researcherId) {
+        if (setupRequest === null) {
           dispatch({ type: "setup-succeeded", session });
           return;
         }
         dispatch({ type: "session-available", session });
-        await bootstrap(session, epoch);
+        const setupSucceeded = await setupRequest;
+        if (epoch !== generation.current) return;
+        if (setupSucceeded) {
+          readyResearcherId.current = session.researcherId;
+          dispatch({ type: "setup-succeeded", session });
+        } else {
+          dispatch({ type: "setup-failed", session });
+        }
       } catch {
         if (epoch === generation.current) dispatch({ type: "auth-unavailable" });
       }
