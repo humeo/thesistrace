@@ -19,7 +19,7 @@ for (const width of [1080, 390]) {
     await page.route("http://research.test/**", async route => {
       const url = new URL(route.request().url());
       if (url.pathname === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
-      if (url.pathname === "/api/research-folders") return route.fulfill({ json: { items: [], next_cursor: null } });
+      if (url.pathname === "/api/research-folders") return route.fulfill({ json: { items: [{ id: "folder_default", name: "Default", is_default: true, created_at: "2026-08-01T00:00:00Z" }], next_cursor: null } });
       const pageNumber = Number(url.searchParams.get("page"));
       const total = url.searchParams.get("research_kind") === "factor_evaluation" ? 0 : 21;
       const items = Array.from({ length: total === 0 ? 0 : pageNumber === 1 ? 20 : 1 }, (_, index) => ({
@@ -61,7 +61,7 @@ test("sorts all Research on the server before paging and keeps sorting across pa
     key_metrics: { research_kind: "strategy_backtest", annualized_excess_return: i === 20 ? 0.9 : 0.1, sharpe: 1, maximum_drawdown: 0.2 },
   }));
   await page.route("http://research.test/", route => route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' }));
-  await page.route("**/api/research-folders", route => route.fulfill({ json: { items: [], next_cursor: null } }));
+  await page.route("**/api/research-folders", route => route.fulfill({ json: { items: [{ id: "folder_default", name: "Default", is_default: true, created_at: "2026-08-01T00:00:00Z" }], next_cursor: null } }));
   await page.route("**/api/research-runs?*", async route => {
     const params = new URL(route.request().url()).searchParams;
     requests.push(params);

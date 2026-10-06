@@ -1,12 +1,13 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { researchFoldersQuery } from "../research/folderResources";
 import { coreFetch } from "../auth/coreFetch";
 import type { RunError } from "./errors";
-import type { ResearchRun, ResearchFolderOption } from "./ResearchRunsPage";
+import type { ResearchRun } from "./ResearchRunsPage";
 
 export const RESEARCH_RUN_PAGE_SIZE = 20;
 export type ResearchKindFilter = "" | ResearchRun["research_kind"];
 type ResearchRunList = { items: ResearchRun[]; total_count: number };
-type ResearchFolderList = { items: ResearchFolderOption[]; next_cursor: null };
 type LoadState = "loading" | "refreshing" | null;
 export type ResearchRunSortKey =
   | "created_at"
@@ -33,135 +34,51 @@ const DEFAULT_RESEARCH_RUN_SORT: ResearchRunSort = { key: "created_at", directio
 
 /** Owns server paging, filtering and ordering; pauses list reads while a detail is open. */
 export function useResearchRunListController(runId: string | undefined) {
-  const [items, setItems] = useState<ResearchRun[] | null>(null);
-  const [folders, setFolders] = useState<ResearchFolderOption[]>([]);
   const [folderFilter, setFolderFilter] = useState("");
   const [researchKindFilter, setResearchKindFilter] = useState<ResearchKindFilter>("");
   const [pageIndex, setPageIndex] = useState(0);
   const [sort, setSort] = useState<ResearchRunSort>(DEFAULT_RESEARCH_RUN_SORT);
   const [metricFilters, setMetricFilters] = useState<ResearchMetricFilter[]>([]);
-  const [totalCount, setTotalCount] = useState<number | null>(null);
-  const [folderError, setFolderError] = useState<"folderError" | null>(null);
-  const [error, setError] = useState<RunError | null>(null);
-  const [loadState, setLoadState] = useState<LoadState>("loading");
-  const [refreshGeneration, setRefreshGeneration] = useState(0);
-  const [folderRefreshGeneration, setFolderRefreshGeneration] = useState(0);
-  const loadGeneration = useRef(0);
+  const folderQuery = useQuery(researchFoldersQuery);
+  const path = researchRunListPath({ page: pageIndex + 1, sort, metricFilters, folderId: folderFilter, researchKind: researchKindFilter });
+  const listQuery = useQuery({
+    queryKey: ["workspace", "research-runs", path],
+    queryFn: async ({ signal }): Promise<ResearchRunList> => {
+      const response = await coreFetch(path, { signal });
+      if (!response.ok) throw new Error("ResearchRun unavailable");
+      return await response.json() as ResearchRunList;
+    },
+    enabled: runId === undefined,
+    // Runs may change through a detail, Batch or Chat. Keep cached rows visible
+    // while revalidating each visit, rather than treating the list as static Data.
+    staleTime: 0,
+    refetchInterval: query => query.state.status !== "error" && query.state.data?.items.some(item => ["queued", "running", "cancelling"].includes(item.status)) ? 500 : false,
+  });
+  const items = listQuery.data?.items ?? null;
+  const totalCount = listQuery.data?.total_count ?? null;
+  const folders = folderQuery.data ?? [];
+  const folderError = folderQuery.isError ? "folderError" as const : null;
+  const error: RunError | null = listQuery.isError ? { code: "loadError" } : null;
+  const loadState: LoadState = listQuery.isLoading ? "loading" : null;
 
   useEffect(() => {
-    const controller = new AbortController();
-    setFolderError(null);
-    void coreFetch("/api/research-folders", { signal: controller.signal })
-      .then(async (response) => {
-        if (!response.ok) throw new Error("Research Folders unavailable");
-        const payload = (await response.json()) as ResearchFolderList;
-        setFolders(payload.items);
-      })
-      .catch((reason: unknown) => {
-        if (reason instanceof DOMException && reason.name === "AbortError") return;
-        setFolderError("folderError");
-      });
-    return () => controller.abort();
-  }, [folderRefreshGeneration]);
+    if (totalCount === null) return;
+    const lastPageIndex = Math.max(0, Math.ceil(totalCount / RESEARCH_RUN_PAGE_SIZE) - 1);
+    if (pageIndex > lastPageIndex) setPageIndex(lastPageIndex);
+  }, [pageIndex, totalCount]);
 
-  useEffect(() => {
-    if (runId !== undefined) return;
-    const controller = new AbortController();
-    const generation = ++loadGeneration.current;
-    let timeout: number | undefined;
-    setError(null);
-    setLoadState(items === null ? "loading" : "refreshing");
-    const path = researchRunListPath({
-      page: pageIndex + 1,
-      sort,
-      metricFilters,
-      folderId: folderFilter,
-      researchKind: researchKindFilter,
-    });
-
-    async function load(polling = false) {
-      try {
-        const response = await coreFetch(path, { signal: controller.signal });
-        if (!response.ok) throw new Error("ResearchRun unavailable");
-        if (generation !== loadGeneration.current) return;
-        const payload = (await response.json()) as ResearchRunList;
-        const nextItems = payload.items;
-        if (generation !== loadGeneration.current) return;
-        setItems(nextItems);
-        setTotalCount(payload.total_count);
-        const lastPageIndex = Math.max(0, Math.ceil(payload.total_count / RESEARCH_RUN_PAGE_SIZE) - 1);
-        if (pageIndex > lastPageIndex) setPageIndex(lastPageIndex);
-        if (nextItems.some((item) => ["queued", "running", "cancelling"].includes(item.status))) {
-          timeout = window.setTimeout(() => void load(true), 500);
-        }
-        if (!polling) setLoadState(null);
-      } catch (reason: unknown) {
-        if (reason instanceof DOMException && reason.name === "AbortError") return;
-        if (generation !== loadGeneration.current) return;
-        setLoadState(null);
-        setError({ code: "loadError" });
-      }
-    }
-
-    void load();
-    return () => {
-      if (generation === loadGeneration.current) loadGeneration.current += 1;
-      if (timeout !== undefined) window.clearTimeout(timeout);
-      controller.abort();
-    };
-  }, [pageIndex, folderFilter, refreshGeneration, researchKindFilter, runId, sort, metricFilters]);
-
-  function refresh() {
-    setRefreshGeneration((generation) => generation + 1);
+  function refresh() { void listQuery.refetch(); }
+  function refreshFolders() { void folderQuery.refetch(); }
+  function changeSort(value: ResearchRunSort) { setSort(value); setPageIndex(0); }
+  function changeFolderFilter(value: string) { setFolderFilter(value); setPageIndex(0); }
+  function changeResearchKindFilter(value: ResearchKindFilter) {
+    setResearchKindFilter(value); setMetricFilters([]); setSort(DEFAULT_RESEARCH_RUN_SORT); setPageIndex(0);
   }
-
-  function refreshFolders() {
-    setFolderRefreshGeneration((generation) => generation + 1);
+  function showPreviousPage() { if (pageIndex > 0) setPageIndex(current => current - 1); }
+  function showNextPage() {
+    if (totalCount !== null && (pageIndex + 1) * RESEARCH_RUN_PAGE_SIZE < totalCount) setPageIndex(current => current + 1);
   }
-
-  function resetListPage(): void {
-    setItems([]);
-    setLoadState("refreshing");
-    setPageIndex(0);
-    setTotalCount(null);
-  }
-
-  function changeSort(value: ResearchRunSort): void {
-    setSort(value);
-    resetListPage();
-  }
-
-  function changeFolderFilter(value: string): void {
-    setFolderFilter(value);
-    resetListPage();
-  }
-
-  function changeResearchKindFilter(value: ResearchKindFilter): void {
-    setResearchKindFilter(value);
-    setMetricFilters([]);
-    setSort(DEFAULT_RESEARCH_RUN_SORT);
-    resetListPage();
-  }
-
-  function showPreviousPage(): void {
-    if (pageIndex === 0) return;
-    setItems([]);
-    setLoadState("refreshing");
-    setPageIndex((current) => current - 1);
-  }
-
-  function showNextPage(): void {
-    if (totalCount === null || (pageIndex + 1) * RESEARCH_RUN_PAGE_SIZE >= totalCount) return;
-    setItems([]);
-    setLoadState("refreshing");
-    setPageIndex((current) => current + 1);
-  }
-
-
-  function applyMetricFilters(filters: ResearchMetricFilter[]) {
-    setMetricFilters(filters);
-    resetListPage();
-  }
+  function applyMetricFilters(filters: ResearchMetricFilter[]) { setMetricFilters(filters); setPageIndex(0); }
   return { items, folders, folderFilter, researchKindFilter, pageIndex, sort, metricFilters, totalCount, folderError, error, loadState, refresh, refreshFolders, changeSort, changeFolderFilter, changeResearchKindFilter, showPreviousPage, showNextPage, applyMetricFilters };
 }
 

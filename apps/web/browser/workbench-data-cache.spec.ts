@@ -1,5 +1,27 @@
 import { expect, test, workbenchData } from "./workbench-fixture";
 
+test("Research Runs retain loaded rows on return while their live list revalidates", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await page.route("**/api/research-runs?*", route => route.fulfill({ json: { items: [{
+    id: "run_cafebabefeed1234", name: "Loaded factor", research_kind: "factor_evaluation", status: "succeeded",
+    folder_id: "folder_default", created_at: "2026-10-05T00:00:00Z", start_date: "2026-08-01", end_date: "2026-08-31", formula_summary: "rank(close)",
+  }], total_count: 1 } }));
+  await page.goto("/research-runs");
+  const result = page.getByRole("link", { name: "Loaded factor", exact: true });
+  await expect(result).toBeVisible();
+  await page.getByRole("link", { name: "Data", exact: true }).click();
+  await expect(page.locator(".data-field-table")).toBeVisible();
+  let release!: () => void;
+  const responseAvailable = new Promise<void>(resolve => { release = resolve; });
+  await page.route("**/api/research-runs?*", async route => { await responseAvailable; await route.fallback(); });
+  const refreshing = page.waitForRequest("**/api/research-runs?*");
+  try {
+    await page.goBack();
+    await refreshing;
+    await expect(result).toBeVisible();
+  } finally { release(); }
+});
+
 test("Research opens from the loaded Data snapshot without waiting for another data response", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 960 });
   await page.goto("/data");

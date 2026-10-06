@@ -162,7 +162,7 @@ test("reusing a Factor run asks before replacing unsent browser changes", async 
 test("a missing or forbidden Factor run offers a way back to Research Runs", async ({ page }) => {
   let status = 404;
   await page.route("**/api/research-runs/run_cancel", route => route.fulfill({ status }));
-  await page.route("**/api/research-folders", route => route.fulfill({ json: { items: [], next_cursor: null } }));
+  await page.route("**/api/research-folders", route => route.fulfill({ json: { items: [{ id: "folder_default", name: "Default", is_default: true, created_at: "2026-08-01T00:00:00Z" }], next_cursor: null } }));
   await page.route("http://127.0.0.1/", route => route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' }));
   await page.goto("http://127.0.0.1/");
   await page.addStyleTag({ content: styles });
@@ -241,7 +241,7 @@ test("cancellation retry keeps its request identity and preserves the frozen inp
   await page.getByRole("button", { name: "English", exact: true }).click();
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
   const facts = page.getByRole("group", { name: "Research execution conditions" });
-  await expect(facts).toContainText("cancelled");
+  await expect(page.getByText("cancelled", { exact: true })).toBeVisible();
   await expect(facts).toContainText("Top 1000");
   await expect(page.getByRole("alert")).toHaveCount(0);
   expect(requests).toHaveLength(2);
@@ -266,11 +266,12 @@ test("accepted cancellation keeps its details and polls until execution has stop
   await openResearch(page);
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
   const facts = page.getByRole("group", { name: "Research execution conditions" });
-  await expect(facts).toContainText("cancelling");
-  await expect(facts).toContainText("Top 1000");
-  status = "cancelled";
-  releaseDetail();
-  await expect(facts).toContainText("cancelled");
+  try {
+    await expect(page.getByText("cancelling", { exact: true })).toBeVisible();
+    await expect(facts).toContainText("Top 1000");
+    status = "cancelled";
+  } finally { releaseDetail(); }
+  await expect(page.getByText("cancelled", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Cancel", exact: true })).toHaveCount(0);
 });
 

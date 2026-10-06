@@ -1,3 +1,4 @@
+import { WorkspaceQueryProvider } from "../../src/shell/WorkspaceQueryProvider";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "../../src/styles.css";
@@ -9,4 +10,4 @@ function Fixture() {
   const runId = path.startsWith("/research-runs/run_") ? path.split("/").at(-1) : undefined;
   return <><LanguageControls /><ResearchRunsPage researcherId="test" runId={runId} /></>;
 }
-createRoot(document.getElementById("root")!).render(<Fixture />);
+createRoot(document.getElementById("root")!).render(<WorkspaceQueryProvider researcherId="test"><Fixture /></WorkspaceQueryProvider>);
