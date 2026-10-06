@@ -38,7 +38,7 @@ import {
   useResearchAsDraft,
   type FrozenResearchAuthorableInput,
 } from "../research/draft";
-import { followCoreLink } from "../shell/navigation";
+import { followCoreLink, navigateCorePath } from "../shell/navigation";
 import { ResearchBatchCancelButton } from "./ResearchBatchesPage";
 import { useResearchRunDetailController } from "./useResearchRunDetailController";
 import { Page, PageContent, PageHeader, Section } from "../components/layout/Page";
@@ -568,7 +568,7 @@ export function UseAsDraftPanel({
   researcherId,
   sourceFolderId,
   storage = window.localStorage,
-  navigate = (path) => window.location.assign(path),
+  navigate = navigateCorePath,
 }: {
   embedded?: boolean;
   folders: ResearchFolderOption[];

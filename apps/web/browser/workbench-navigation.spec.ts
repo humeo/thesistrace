@@ -1,6 +1,7 @@
 import type { Page } from "@playwright/test";
 import { expect, test } from "./workbench-fixture";
 import { exampleDailyTrack } from "./fixtures/daily-track";
+import { completedStrategyRun } from "./fixtures/strategy-result";
 
 function recordDocumentRequests(page: Page): string[] {
   const documentRequests: string[] = [];
@@ -81,6 +82,69 @@ test("a lazy workspace route keeps the previous content visible until it can ope
   await expect(fields).toBeVisible();
   await page.goForward();
   await expect(page.getByRole("button", { name: "Factor Evaluation", exact: true })).toBeVisible();
+});
+
+test("a later navigation wins while an earlier lazy route is pending", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await page.route("**/api/research-runs?*", route => route.fulfill({ json: { items: [], total_count: 0 } }));
+  await page.goto("/data");
+  await expect(page.locator(".data-field-table")).toBeVisible();
+  const documents = recordDocumentRequests(page);
+  let release!: () => void;
+  const available = new Promise<void>(resolve => { release = resolve; });
+  await page.route("**/assets/ResearchWorkspacePage-*.js", async route => { await available; await route.fallback(); });
+  const requested = page.waitForRequest("**/assets/ResearchWorkspacePage-*.js");
+  try {
+    await page.getByRole("link", { name: "Research", exact: true }).click();
+    await requested;
+    await expect(page.locator(".data-field-table")).toBeVisible();
+    await page.getByRole("link", { name: "Research Runs", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Research Runs", exact: true })).toBeVisible();
+    const resolved = page.waitForResponse("**/assets/ResearchWorkspacePage-*.js");
+    release();
+    await resolved;
+    await expect(page.getByRole("heading", { name: "Research Runs", exact: true })).toBeVisible();
+    await page.goBack();
+    await expect(page.getByRole("button", { name: "Factor Evaluation", exact: true })).toBeVisible();
+    await page.goForward();
+    await expect(page.getByRole("heading", { name: "Research Runs", exact: true })).toBeVisible();
+    expect(documents).toEqual([]);
+  } finally { release(); }
+});
+
+test("changing Researcher clears private content while a lazy route is pending", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  let researcherId = "00000000-0000-4000-8000-000000000001";
+  await page.route("**/api/auth/get-session", route => route.fulfill({ json: {
+    session: { id: "00000000-0000-4000-8000-000000000002" },
+    user: { id: researcherId, email: "browser@example.test", name: "Browser", active: true },
+  } }));
+  await page.route("**/api/researcher/bootstrap", route => route.fulfill({ json: {
+    researcher_id: researcherId, system_folders: { default: "folder_default", batch_research: "folder_batch_research" },
+  } }));
+  await page.route("**/api/research-runs?*", route => route.fulfill({ json: { items: [{
+    id: "run_cafebabefeed1234", name: "First Researcher's private run", research_kind: "factor_evaluation", status: "succeeded",
+    folder_id: "folder_default", created_at: "2026-10-05T00:00:00Z", start_date: "2026-08-01", end_date: "2026-08-31", formula_summary: "rank(close)",
+  }], total_count: 1 } }));
+  await page.goto("/research-runs");
+  const privateRun = page.getByRole("link", { name: "First Researcher's private run", exact: true });
+  await expect(privateRun).toBeVisible();
+  let release!: () => void;
+  const available = new Promise<void>(resolve => { release = resolve; });
+  await page.route("**/assets/ResearchWorkspacePage-*.js", async route => { await available; await route.fallback(); });
+  const requested = page.waitForRequest("**/assets/ResearchWorkspacePage-*.js");
+  try {
+    await page.getByRole("link", { name: "Research", exact: true }).click();
+    await requested;
+    await expect(privateRun).toBeVisible();
+    researcherId = "00000000-0000-4000-8000-000000000003";
+    const bootstrapped = page.waitForResponse("**/api/researcher/bootstrap");
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await bootstrapped;
+    await expect(privateRun).toHaveCount(0);
+    release();
+    await expect(page.getByRole("button", { name: "Factor Evaluation", exact: true })).toBeVisible();
+  } finally { release(); }
 });
 
 test("ResearchRun return keeps the selected Type without a document reload", async ({ page }) => {
@@ -200,6 +264,7 @@ test("Start Tracking opens the created DailyTrack without a document reload", as
 });
 
 test("Research deletion uses an in-page decision instead of a browser dialog", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
   const runId = "run_de1e7ed1a109";
   let deleteRequestCount = 0;
   const nativeDialogs: string[] = [];
@@ -246,6 +311,8 @@ test("Research deletion uses an in-page decision instead of a browser dialog", a
   });
 
   await page.goto(`/research-runs/${runId}`);
+  const documents = recordDocumentRequests(page);
+  const origin = await page.evaluate(() => performance.timeOrigin);
   await page.getByRole("button", { name: "More actions", exact: true }).click();
   await page.getByRole("menuitem", { name: "Delete Research", exact: true }).click();
 
@@ -274,6 +341,99 @@ test("Research deletion uses an in-page decision instead of a browser dialog", a
   await decision.getByRole("button", { name: "Delete Research", exact: true }).click();
   await expect(page).toHaveURL(/\/research-runs$/);
   expect(deleteRequestCount).toBe(1);
+  expect(documents).toEqual([]);
+  expect(await page.evaluate(() => performance.timeOrigin)).toBe(origin);
+});
+
+test("creating a draft and submitting it keep the authenticated document", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  const runId = "run_cafebabefeed1234";
+  const acceptedId = "run_deadbeef1234abcd";
+  const input = {
+    formula: "rank(close)", hypothesis: null, start_date: "2026-08-01", end_date: "2026-08-05",
+    universe: "top300", neutralization: "none", research_kind: "factor_evaluation",
+  };
+  const run = {
+    id: runId, status: "failed", name: "Copied factor", input, research_kind: "factor_evaluation",
+    folder_id: "folder_default", created_at: "2026-08-13T01:02:03Z", start_date: input.start_date,
+    end_date: input.end_date, formula_summary: input.formula,
+  };
+  await page.route(`**/api/research-runs/${runId}`, route => route.fulfill({ json: run }));
+  await page.route(`**/api/research-runs/${acceptedId}`, route => route.fulfill({ json: { ...run, id: acceptedId, name: "Accepted factor", status: "queued" } }));
+  const submissions: unknown[] = [];
+  await page.route("**/api/research-runs", route => {
+    submissions.push(route.request().postDataJSON());
+    return route.fulfill({ status: 201, json: { id: acceptedId } });
+  });
+  await page.goto(`/research-runs/${runId}`);
+  await expect(page.getByRole("heading", { name: "Copied factor", exact: true })).toBeVisible();
+  const documents = recordDocumentRequests(page);
+  const origin = await page.evaluate(() => performance.timeOrigin);
+  await page.getByRole("button", { name: "Create draft", exact: true }).click();
+  await expect(page).toHaveURL(/\/research$/);
+  await expect(page.getByRole("textbox", { name: "Alpha formula", exact: true })).toHaveText(input.formula);
+  expect(documents).toEqual([]);
+  await page.getByRole("button", { name: "Run evaluation", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/research-runs/${acceptedId}$`));
+  await expect(page.getByRole("heading", { name: "Accepted factor", exact: true })).toBeVisible();
+  expect(submissions).toHaveLength(1);
+  expect(documents).toEqual([]);
+  expect(await page.evaluate(() => performance.timeOrigin)).toBe(origin);
+});
+
+test("deleting a stopped DailyTrack keeps the authenticated document", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  const trackId = "track_cafebabefeed1234";
+  const runId = "run_feedface1234abcd9876";
+  const track = { ...exampleDailyTrack, id: trackId, status: "stopped", origin: { ...exampleDailyTrack.origin, seed_run_id: runId } };
+  let deleted = false;
+  await page.route("**/api/daily-tracks", route => route.fulfill({ json: { items: deleted ? [] : [{
+    id: trackId, status: track.status, seed_run_id: runId, result_checksum_sha256: track.origin.result_checksum_sha256,
+    origin_session: track.origin.strategy_session, strategy_session: track.strategy_session,
+  }], next_cursor: null } }));
+  await page.route(`**/api/daily-tracks/${trackId}`, route => {
+    if (route.request().method() === "DELETE") { deleted = true; return route.fulfill({ status: 204 }); }
+    return route.fulfill({ json: track });
+  });
+  await page.route(`**/api/research-runs/${runId}`, route => route.fulfill({ json: { name: "Stopped strategy" } }));
+  await page.goto(`/daily-tracks/${trackId}`);
+  await expect(page.getByRole("button", { name: "Manage", exact: true })).toBeVisible();
+  const documents = recordDocumentRequests(page);
+  const origin = await page.evaluate(() => performance.timeOrigin);
+  await page.getByRole("button", { name: "Manage", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Delete DailyTrack", exact: true }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Delete DailyTrack", exact: true }).click();
+  await expect(page).toHaveURL(/\/daily-tracks$/);
+  expect(deleted).toBe(true);
+  expect(documents).toEqual([]);
+  expect(await page.evaluate(() => performance.timeOrigin)).toBe(origin);
+});
+
+test("an expired holdings rerun opens its accepted ResearchRun without reloading", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  const runId = "run_cafebabefeed1234";
+  const acceptedId = "run_deadbeef1234abcd";
+  await page.route(`**/api/research-runs/${runId}`, route => route.fulfill({ json: { ...completedStrategyRun, id: runId } }));
+  await page.route(`**/api/research-runs/${runId}/holdings/query`, route => route.fulfill({ json: {
+    status: "recorded", units: [{ unit_id: "unit_expired", source_kind: "research_run", first_session: "2026-08-03", last_session: "2026-08-04", expires_at: "2026-08-11T00:00:00Z", status: "expired" }], next_cursor: null,
+  } }));
+  await page.route(`**/api/research-runs/${acceptedId}`, route => route.fulfill({ json: { ...completedStrategyRun, id: acceptedId, name: "New holdings run", status: "queued", result: undefined } }));
+  const submissions: unknown[] = [];
+  await page.route("**/api/research-runs", route => {
+    submissions.push(route.request().postDataJSON());
+    return route.fulfill({ status: 202, json: { id: acceptedId } });
+  });
+  await page.goto(`/research-runs/${runId}`);
+  await page.getByRole("tab", { name: "Daily holdings", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Rerun to generate holdings" })).toBeVisible();
+  const documents = recordDocumentRequests(page);
+  const origin = await page.evaluate(() => performance.timeOrigin);
+  await page.getByRole("button", { name: "Rerun to generate holdings" }).click();
+  await expect(page.getByRole("heading", { name: "New holdings run", exact: true })).toBeVisible();
+  expect(submissions).toHaveLength(1);
+  expect(submissions[0]).toMatchObject({ folder_id: "folder_default", rerun_source: { kind: "research_run", run_id: runId } });
+  expect(documents).toEqual([]);
+  expect(await page.evaluate(() => performance.timeOrigin)).toBe(origin);
 });
 
 test("Notes keeps multiline research context visible", async ({ page }) => {

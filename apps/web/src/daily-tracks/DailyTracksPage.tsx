@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { ArrowClockwise } from "@phosphor-icons/react";
 
 import { coreFetch } from "../auth/coreFetch";
-import { followCoreLink } from "../shell/navigation";
+import { followCoreLink, navigateCorePath } from "../shell/navigation";
 import type { DailyTrackAnalysis } from "./DailyTrackAnalysisView";
 import type { DailyTrackObservation } from "./DailyTrackObservationView";
 import { DailyTrackWorkspace } from "./DailyTrackWorkspace";
@@ -305,7 +305,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
       });
       if (!response.ok) { if (generation === deleteGeneration.current) setDeleteError({ status: response.status }); return; }
       if (generation !== deleteGeneration.current) return;
-      window.location.assign("/daily-tracks");
+      navigateCorePath("/daily-tracks");
     } catch (reason: unknown) {
       if (reason instanceof DOMException && reason.name === "AbortError") return;
       if (generation !== deleteGeneration.current) return;

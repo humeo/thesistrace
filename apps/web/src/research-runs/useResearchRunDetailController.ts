@@ -206,7 +206,7 @@ export function useResearchRunDetailController(runId: string | undefined) {
         return;
       }
       if (generation !== deleteGeneration.current) return;
-      window.location.assign("/research-runs");
+      navigateCorePath("/research-runs");
     } catch (reason: unknown) {
       if (reason instanceof DOMException && reason.name === "AbortError") return;
       if (generation !== deleteGeneration.current) return;

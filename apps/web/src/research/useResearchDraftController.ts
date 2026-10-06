@@ -222,7 +222,7 @@ export function useResearchDraftController({
       if (next === null) return;
       setDraft(next);
       setStorageError(null);
-      window.location.assign(`/research-runs/${accepted.id}`);
+      navigateCorePath(`/research-runs/${accepted.id}`);
     } catch (reason: unknown) {
       if (reason instanceof DOMException && reason.name === "AbortError") return;
       if (generation !== admissionGeneration.current) return;

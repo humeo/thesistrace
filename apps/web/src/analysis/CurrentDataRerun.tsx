@@ -2,7 +2,7 @@ import { Button } from "../components/ui/button";
 import { Alert, AlertDescription } from "../components/ui/alert";
 import { useRef, useState } from "react";
 import { coreFetch } from "../auth/coreFetch";
-import { followCoreLink } from "../shell/navigation";
+import { followCoreLink, navigateCorePath } from "../shell/navigation";
 import { useTranslation } from "../i18n";
 import { readResearchIssues, formatResearchIssue, researchIssueField, type ResearchRunAdmissionIssue } from "../research/admission";
 
@@ -10,7 +10,7 @@ export type RerunSource =
   | { kind: "research_run"; run_id: string }
   | { kind: "daily_track"; track_id: string; checkpoint_manifest_sha256: string; through_session: string };
 
-export function CurrentDataRerun({ source, folderId, navigate = path => window.location.assign(path) }: {
+export function CurrentDataRerun({ source, folderId, navigate = navigateCorePath }: {
   source: RerunSource; folderId: string; navigate?: (path: string) => void;
 }) {
   const { t } = useTranslation("analysis");
