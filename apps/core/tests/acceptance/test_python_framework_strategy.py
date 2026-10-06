@@ -1,6 +1,7 @@
 import json
 from copy import deepcopy
 from dataclasses import replace
+from hashlib import sha256
 from uuid import UUID
 
 import anyio
@@ -276,27 +277,49 @@ class Fixture(RiskManagement):
         assert origin.terminal_account.decision_state.module_states["risk_management"] == {
             "payload": "x" * 200000,
         }
-        mcp_result = anyio.run(
+        mcp_origin = anyio.run(
             _get_origin_through_mcp,
             settings,
             tracked.json()["id"],
             tmp_path / "framework-origin-mcp.stderr.log",
         )
-        assert not mcp_result.is_error
-        assert (
-            mcp_result.structured_content["terminal_account"]["decision_state"]["module_states"][
-                "risk_management"
-            ]
-        ) == {"payload": "x" * 200000}
-        assert json.loads(mcp_result.content[0].text) == mcp_result.structured_content
+        assert mcp_origin == origin.model_dump(mode="json")
 
 
 async def _get_origin_through_mcp(settings, track_id, stderr_path):
+    query = {"track_id": track_id, "section": "origin"}
+    arguments = query
+    fragments = []
+    checksum = None
+    offset = 0
     async with _mcp_client(settings, stderr_path) as mcp:
-        return await mcp.call_tool(
-            "get_daily_track_result",
-            {"track_id": track_id, "section": "origin"},
-        )
+        while True:
+            result = await mcp.call_tool("get_daily_track_result", arguments)
+            assert not result.is_error
+            page = result.structured_content
+            assert json.loads(result.content[0].text) == page
+            assert page["section"] == "result_page"
+            assert page["result_section"] == "origin"
+            assert page["encoding"] == "ascii-json"
+            assert page["offset"] == offset
+            checksum = checksum or page["checksum_sha256"]
+            assert page["checksum_sha256"] == checksum
+            fragment = page["json_fragment"].encode("ascii")
+            assert 0 < len(fragment) <= 32 * 1024
+            fragments.append(fragment)
+            offset += len(fragment)
+            assert offset <= page["total_bytes"]
+            if page["next_result_cursor"] is None:
+                assert offset == page["total_bytes"]
+                break
+            arguments = {
+                "section": "result_page", "query": query,
+                "result_cursor": page["next_result_cursor"],
+            }
+    encoded = b"".join(fragments)
+    assert len(fragments) > 1
+    assert sha256(encoded).hexdigest() == checksum
+    return json.loads(encoded)
 
 
 @pytest.mark.parametrize(

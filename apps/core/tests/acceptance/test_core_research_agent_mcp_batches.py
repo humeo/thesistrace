@@ -270,7 +270,7 @@ async def _exercise_batches(
             client,
             concurrent_rejected_command,
         )
-        assert all(not result.is_error for result in concurrent_rejections)
+        assert all(result.is_error for result in concurrent_rejections)
         assert all(
             result.structured_content["outcome"] == "rejected" for result in concurrent_rejections
         )

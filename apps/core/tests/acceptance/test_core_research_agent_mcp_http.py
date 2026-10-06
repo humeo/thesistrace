@@ -440,7 +440,7 @@ async def _exercise_http_contract(
                 action_token,
                 concurrent_rejected_command,
             )
-            assert all(not result.is_error for result in concurrent_rejected_results)
+            assert all(result.is_error for result in concurrent_rejected_results)
             assert all(
                 result.structured_content["outcome"] == "rejected"
                 for result in concurrent_rejected_results
@@ -1253,8 +1253,8 @@ async def _exercise_real_transport_parity_and_redaction(
                     "formula": "unknown_alpha",
                 },
             )
-            assert rejected_stdio.is_error is False
-            assert rejected_http.is_error is False
+            assert rejected_stdio.is_error is True
+            assert rejected_http.is_error is True
             assert rejected_stdio.structured_content == rejected_http.structured_content
             assert rejected_stdio.structured_content["outcome"] == "rejected"
             captured_payloads.extend(

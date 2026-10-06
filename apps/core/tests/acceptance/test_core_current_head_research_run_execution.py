@@ -25,6 +25,7 @@ from canonical_store import align_canonical_market_data, open_complete_refresh_b
 from core_runtime import TEST_RESEARCHER, drop_product_schemas, internal_api_origin
 from core_runtime import create_initialized_test_app as create_app
 from fastapi.testclient import TestClient
+from test_financial_collection import _daily_financial_replay
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.benchmark import BenchmarkLevel
@@ -2679,7 +2680,9 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
         }
         assert "release" not in str(track).lower()
         assert "generation" not in str(track).lower()
-        assert client.get("/api/daily-tracks").json()["items"] == [track]
+        assert client.get("/api/daily-tracks").json()["items"] == [
+            {**track, "seed_name": "Attempt-scoped current data"},
+        ]
         track_detail = client.get(f"/api/daily-tracks/{track['id']}")
         assert track_detail.status_code == 200
         assert track_detail.json()["origin"]["terminal_account"] == terminal_account
@@ -3406,7 +3409,9 @@ def test_current_data_track_limit_releases_capacity_after_stop(tmp_path: Path) -
             for response in same_seed_responses
             if response.status_code == 409
         )
-        assert client.get("/api/daily-tracks").json()["items"] == [first_track]
+        assert client.get("/api/daily-tracks").json()["items"] == [
+            {**first_track, "seed_name": "Attempt-scoped current data"},
+        ]
 
         tracks: list[dict[str, object]] = [first_track]
         for index, run_id in enumerate(run_ids[1:2], start=1):
@@ -4086,6 +4091,7 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
     seed_sessions = (
+        "2010-01-04",
         "2026-07-31",
         "2026-08-03",
         "2026-08-04",
@@ -4094,17 +4100,16 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
     seed_canonical = _two_instrument_canonical(seed_sessions, corrected=False)
     benchmark = PreparedBenchmarkSnapshots(settings.benchmark_mount).prepare(
         (
-            BenchmarkLevel("2010-01-04", "3001"),
             *(
-                BenchmarkLevel(session, str(3002 + index))
+                BenchmarkLevel(session, str(3001 + index))
                 for index, session in enumerate(seed_sessions)
             ),
         ),
         published_at=datetime(2026, 8, 5, 8, tzinfo=UTC),
     )
-    seed_head = _publish_canonical_head(
+    seed_head = _publish_composite_head(
         settings,
-        seed_canonical,
+        sessions=seed_sessions,
         operation_id="forward-only-seed",
         benchmark_snapshot_sha256=benchmark.sha256,
     )
@@ -4222,7 +4227,8 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
         assert impact_detail.status_code == 200
         assert impact_detail.json()["strategy_session"] == impact_sessions[-1]
         observations = impact_detail.json()["strategy"]["observations"]
-        assert observations[:len(seed_sessions) - 1] == before_detail["strategy"]["observations"]
+        prior_observations = before_detail["strategy"]["observations"]
+        assert observations[:len(prior_observations)] == prior_observations
         by_session = {row["session"]: row for row in observations}
         # Aug 6 executes the already-frozen A target. The corrected Aug 5 close
         # affects the Aug 6 mean, whose B decision first trades on Aug 7.
@@ -5537,7 +5543,7 @@ def _write_refresh_replay(
                 "trade_date": session.replace("-", ""),
                 "open": str(Decimal("3000") + Decimal(index)),
             }
-            for index, session in enumerate(("2010-01-04", *calendar), start=1)
+            for index, session in enumerate(calendar, start=1)
         ],
         "calendar_sse": [
             {
@@ -5587,6 +5593,10 @@ def _write_refresh_replay(
             for limit in limits
             if isinstance(limit, dict)
         ],
+        "industry_classification": [
+            {"index_code": "801010", "industry_name": "Agriculture",
+             "level": "L1", "src": "SW2021"},
+        ],
         "industry_membership": [
             {
                 "ts_code": _ts_code(canonical, str(industry["instrument_id"])),
@@ -5595,19 +5605,26 @@ def _write_refresh_replay(
                 "l1_code": "801010",
                 "l2_code": "801011",
                 "l3_code": "850111",
+                "is_new": "Y",
             }
             for industry in industries
             if isinstance(industry, dict)
         ],
     }
+    financial_replay = _daily_financial_replay(has_gap=False)
     replay = {
         "format": "thesistrace-tushare-refresh-replay",
         "version": 3,
         "request_start": request_start,
         "request_end": str(calendar[-1]),
         "snapshot": snapshot,
-        "financial": {},
-        "financial_refresh": None,
+        "financial": financial_replay["financial"],
+        "financial_refresh": {
+            **financial_replay["financial_refresh"],
+            # Both refreshes begin with financial coverage through Aug 5.
+            "request_start": "2026-07-30",
+            "request_end": str(calendar[-1]),
+        },
     }
     path.write_text(
         json.dumps(replay, sort_keys=True, separators=(",", ":")),
@@ -5703,6 +5720,7 @@ def _publish_composite_head(
     industry_through: str | None = None,
     expected_manifest: str | None = None,
     operation_id: str = "composite-e2e",
+    benchmark_snapshot_sha256: str | None = None,
 ) -> str:
     observation_through = financial_through or sessions[-1]
     finished_date = max(observation_through, "2026-08-05")
@@ -5946,6 +5964,7 @@ def _publish_composite_head(
             expected_generation_manifest_sha256=expected_manifest,
             candidate_generation_manifest_sha256=composite.manifest_sha256,
             operation_id=operation_id,
+            benchmark_snapshot_sha256=benchmark_snapshot_sha256,
         )
     finally:
         database.close()
