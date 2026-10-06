@@ -15,7 +15,7 @@ import {
   Trash,
   X,
 } from "@phosphor-icons/react";
-import { useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import { lazy, useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { cn } from "cn";
@@ -28,7 +28,7 @@ import { i18n, interfaceLocale, useTranslation } from "../i18n";
 import { dataSnapshotQuery, type DataOverview } from "../data/dataResources";
 import { researchFoldersQuery, type ResearchFolder } from "./folderResources";
 import type { PythonSourceEditorHandle } from "./PythonSourceEditor";
-import { AlphaFormulaEditor, type AlphaFormulaEditorHandle } from "./AlphaFormulaEditor";
+import type { AlphaFormulaEditorHandle } from "./AlphaFormulaEditor";
 import { ResearchCodeInput } from "./ResearchCodeInput";
 import { folderDisplayName, folderMutationError, type FolderError } from "./folders";
 import { formatResearchIssue, researchIssueField } from "./admission";
@@ -90,6 +90,8 @@ type WorkspaceResources = {
   catalog: AlphaCatalog;
   data: DataOverview;
 };
+
+const AlphaFormulaEditor = lazy(() => import("./AlphaFormulaEditor").then(module => ({ default: module.AlphaFormulaEditor })));
 
 const stageLocations = {
   universe_selection: "universe", alpha: "signal", portfolio_construction: "portfolio", risk_management: "risk",
@@ -735,7 +737,7 @@ export function ResearchDraftWorkspace({
         } }))} />
     </div>
     <div hidden={!direct} className={cn("min-w-0", !direct && "hidden")}>
-      <PythonStrategyAuthoring inputs={draft} error={programError} errorLine={programErrorLine()}
+      <PythonStrategyAuthoring active={direct} inputs={draft} error={programError} errorLine={programErrorLine()}
         onChange={changes => updateDraft(current => ({ ...current, ...changes }))} fieldsButton={editor => fieldsButton("catalog", editor)} />
     </div>
   </div>;

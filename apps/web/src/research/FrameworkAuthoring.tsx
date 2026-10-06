@@ -46,7 +46,7 @@ export function FrameworkAuthoring({ factor = false, drawdown, updateDrawdown, m
   const panels = frameworkStages.map((stage) => {
     const python = !factor && modules[stage].kind === "python";
     const modeLabel = t("workbench.stageMode", { stage: t(`workbench.stageHeading.${stage}`) });
-    const codeEditor = <PythonStrategyAuthoring stage={stage} inputs={modules[stage].program}
+    const codeEditor = <PythonStrategyAuthoring active={python && activeStage === stage} stage={stage} inputs={modules[stage].program}
       onChange={changes => updateProgram(stage, changes)} error={field => error(`${stage}.${field}`)}
       errorLine={errorLine?.(stage)} fieldsButton={fieldsButton} />;
     const configuredContents = stage === "alpha" ? <div className="grid min-w-0 gap-4">{alphaEditor}{!factor && neutralizationSettings}</div>

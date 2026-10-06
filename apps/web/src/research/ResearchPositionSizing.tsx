@@ -1,4 +1,4 @@
-import { useState, type Ref } from "react";
+import { lazy, useState, type Ref } from "react";
 import { cn } from "cn";
 import type { AlphaCatalog } from "../alphaCatalog";
 import { useTranslation } from "../i18n";
@@ -7,11 +7,13 @@ import { ResearchParameterHelp } from "./ResearchParameterHelp";
 import { Field, FieldError, FieldGroup, FieldLabel } from "../components/ui/field";
 import { Input } from "../components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
-import { AlphaFormulaEditor, type AlphaFormulaEditorHandle } from "./AlphaFormulaEditor";
+import type { AlphaFormulaEditorHandle } from "./AlphaFormulaEditor";
 import type { FormulaDiagnostic } from "./diagnostics";
 import { exposurePercentage, percentageExposure } from "./strategyRules";
 import { ResearchInfotip } from "./ResearchInfotip";
 import { ResearchCodeInput } from "./ResearchCodeInput";
+
+const AlphaFormulaEditor = lazy(() => import("./AlphaFormulaEditor").then(module => ({ default: module.AlphaFormulaEditor })));
 
 export function ResearchPositionSizing({ ref, catalog, expression, diagnostics, onChange, error }: {
   ref: Ref<AlphaFormulaEditorHandle>; error?: string;

@@ -9,7 +9,7 @@ const researcherId = "00000000-0000-4000-8000-000000000001";
 
 // Use the actual entry point: route changes, Auth boundary and CSS are production code.
 // Only HTTP facts are fixtures. Each Playwright context owns its mutable state.
-export const test = base.extend<{ workbench: void }, { bundle: Map<string, { body: string | Buffer; contentType: string }> }>({
+export const test = base.extend<{ workbench: void }, { bundle: Map<string, { body: string | Buffer; contentType: string; modules: string[] }> }>({
   baseURL: "https://workbench.fixture",
   bundle: [async ({}, use) => {
     const result = await build({
@@ -22,6 +22,7 @@ export const test = base.extend<{ workbench: void }, { bundle: Map<string, { bod
     const files = new Map(output.map(item => [item.fileName, {
       body: item.type === "chunk" ? item.code : typeof item.source === "string" ? item.source : Buffer.from(item.source),
       contentType: item.fileName.endsWith(".js") ? "text/javascript" : item.fileName.endsWith(".css") ? "text/css" : "text/html",
+      modules: item.type === "chunk" ? Object.entries(item.modules).filter(([, module]) => module.renderedLength > 0).map(([id]) => id) : [],
     }]));
     if (!files.has("index.html")) throw new Error("product HTML entry missing");
     await use(files);
@@ -33,8 +34,8 @@ export const test = base.extend<{ workbench: void }, { bundle: Map<string, { bod
       const request = route.request();
       const path = new URL(request.url()).pathname;
       const asset = bundle.get(path.slice(1));
-      if (asset) return route.fulfill(asset);
-      if (request.resourceType() === "document") return route.fulfill(bundle.get("index.html")!);
+      if (asset) return route.fulfill({ body: asset.body, contentType: asset.contentType });
+      if (request.resourceType() === "document") return route.fulfill({ body: bundle.get("index.html")!.body, contentType: "text/html" });
       if (path === "/api/auth/get-session") return route.fulfill({ json: {
         session: { id: "00000000-0000-4000-8000-000000000002" },
         user: { id: researcherId, email: "browser@example.test", name: "Browser", active: true },

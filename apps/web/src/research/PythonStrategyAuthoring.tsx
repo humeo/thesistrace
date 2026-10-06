@@ -1,19 +1,25 @@
-import { useRef, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import type { ProgramInputs, ProgramInputField } from "./pythonStrategy";
 import type { FrameworkStage } from "./frameworkModules";
 import { useTranslation } from "../i18n";
 import { Field, FieldError, FieldGroup, FieldLabel } from "../components/ui/field";
-import { PythonSourceEditor, type PythonSourceEditorHandle } from "./PythonSourceEditor";
+import type { PythonSourceEditorHandle } from "./PythonSourceEditor";
 import { ResearchInfotip } from "./ResearchInfotip";
 
 export type PythonFieldsButton = (editor: () => PythonSourceEditorHandle | null) => ReactNode;
 
-export function PythonStrategyAuthoring({ inputs, onChange, error, fieldsButton, stage, errorLine }: {
+const PythonSourceEditor = lazy(() => import("./PythonSourceEditor").then(module => ({ default: module.PythonSourceEditor })));
+
+export function PythonStrategyAuthoring({ active, inputs, onChange, error, fieldsButton, stage, errorLine }: {
+  active: boolean;
   inputs: ProgramInputs; onChange: (changes: Partial<ProgramInputs>) => void;
   error: (field: ProgramInputField) => string | undefined; fieldsButton: PythonFieldsButton;
   stage?: FrameworkStage; errorLine?: number | null;
 }) {
   const { t } = useTranslation("strategy");
+  const { t: commonText } = useTranslation("common");
+  const [opened, setOpened] = useState(active);
+  useEffect(() => { if (active) setOpened(true); }, [active]);
   const id = (suffix: string) => `${stage ? `${stage}-` : ""}python-${suffix}`;
   const sourceError = error("programSource");
   const editor = useRef<PythonSourceEditorHandle>(null);
@@ -44,10 +50,12 @@ export function PythonStrategyAuthoring({ inputs, onChange, error, fieldsButton,
         </div>
         <div className="flex items-center gap-2">{fieldsButton(() => editor.current)}</div>
       </div>
+      {(active || opened) && <Suspense fallback={<p role="status" className="h-[280px] p-3 text-sm text-muted-foreground">{commonText("loadingWorkspace")}</p>}>
       <PythonSourceEditor editorRef={editor} id={id("source")} label={t("python.source")}
         describedBy={id("source-error")}
         source={inputs.programSource} error={sourceError} errorLine={errorLine}
         onChange={programSource => onChange({ programSource })} />
+      </Suspense>}
       <FieldError id={id("source-error")}>{sourceError}</FieldError>
     </Field>
   </FieldGroup>;

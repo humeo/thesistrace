@@ -45,7 +45,10 @@ test.each(["success", "failure"])("a late previous Researcher %s cannot replace 
     await act(async () => root.render(<WorkspaceQueryProvider researcherId="owner-b"><ResearchWorkspacePage researcherId="owner-b" location={{ pathname: "/research", search: "?folder=folder_b", hash: "" }} /></WorkspaceQueryProvider>));
     expect(oldSignal?.aborted).toBe(true);
     await vi.waitFor(() => expect(container.querySelector('[aria-labelledby="research-choice-factor_evaluation"]')).not.toBeNull());
-    await act(async () => container.querySelector<HTMLButtonElement>('[aria-labelledby="research-choice-factor_evaluation"]')!.click());
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[aria-labelledby="research-choice-factor_evaluation"]')!.click();
+      await vi.dynamicImportSettled();
+    });
     expect(container.querySelector('[aria-label="Research Folders"]')?.textContent).toContain("B folder");
     await act(async () => container.querySelector<HTMLButtonElement>('[title="Edit research name"]')!.click());
     const name = container.querySelector<HTMLInputElement>("#research-name")!;
