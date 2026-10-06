@@ -10,8 +10,9 @@ import boto3
 from core_runtime import TEST_RESEARCHER, internal_api_origin
 
 from thesistrace._postgres import PostgresDatabase
-from thesistrace.benchmark import BenchmarkLevel, PreparedBenchmarkSnapshots
+from thesistrace.benchmark import BenchmarkLevel
 from thesistrace.data import DatasetLifecycle, MountedGenerationStore
+from thesistrace.data.benchmark_snapshot import PreparedBenchmarkSnapshots
 from thesistrace.data.canonical_mapping import field_catalog
 from thesistrace.entrypoints.runtime import CoreSettings
 from thesistrace.fixture import build_minimal_canonical_fixture

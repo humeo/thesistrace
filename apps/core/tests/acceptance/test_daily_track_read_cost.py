@@ -25,12 +25,13 @@ from test_core_daily_track_detail import (
     _run_command,
 )
 
-from thesistrace.benchmark import BenchmarkLevel, PreparedBenchmarkSnapshots
+from thesistrace.benchmark import BenchmarkLevel
 from thesistrace.daily_track.models import DailyTrackStrategyObservationsResultSectionInput
 from thesistrace.daily_track.observation_state import (
     TrackingObservationState,
     advance_tracking_observation_state,
 )
+from thesistrace.data.benchmark_snapshot import PreparedBenchmarkSnapshots
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.publication import CompressedJsonPayload, Publication, PublishedRef

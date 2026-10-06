@@ -25,8 +25,9 @@ from test_core_research_batch_factor_recovery import (
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.alpha_language import alpha_language
-from thesistrace.benchmark import BenchmarkLevel, PreparedBenchmarkSnapshots
+from thesistrace.benchmark import BenchmarkLevel
 from thesistrace.data import DatasetLifecycle
+from thesistrace.data.benchmark_snapshot import PreparedBenchmarkSnapshots
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.publication import PublishedRef
 from thesistrace.publication.serialization import canonical_json_bytes

@@ -16,7 +16,8 @@ from test_core_daily_track_detail import (
     _run_worker_once,
 )
 
-from thesistrace.benchmark import BenchmarkLevel, PreparedBenchmarkSnapshots
+from thesistrace.benchmark import BenchmarkLevel
+from thesistrace.data.benchmark_snapshot import PreparedBenchmarkSnapshots
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.entrypoints.schema import initialize_core
 

@@ -27,7 +27,7 @@ from core_runtime import create_initialized_test_app as create_app
 from fastapi.testclient import TestClient
 
 from thesistrace._postgres import PostgresDatabase
-from thesistrace.benchmark import BenchmarkLevel, PreparedBenchmarkSnapshots
+from thesistrace.benchmark import BenchmarkLevel
 from thesistrace.daily_track import (
     DailyTrackProgressionFailed,
     DailyTrackService,
@@ -44,6 +44,7 @@ from thesistrace.daily_track.checkpoint import (
 )
 from thesistrace.daily_track.observation_state import initial_tracking_observation_state
 from thesistrace.data import DatasetLifecycle, MountedGenerationStore
+from thesistrace.data.benchmark_snapshot import PreparedBenchmarkSnapshots
 from thesistrace.data.canonical_mapping import field_catalog
 from thesistrace.data.financial_candidate import (
     FinancialCandidateStore,

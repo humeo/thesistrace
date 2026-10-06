@@ -17,8 +17,9 @@ from test_core_daily_track_detail import (
 )
 from test_core_research_agent_mcp_runs import _mcp_client
 
-from thesistrace.benchmark import BenchmarkLevel, PreparedBenchmarkSnapshots
+from thesistrace.benchmark import BenchmarkLevel
 from thesistrace.daily_track.models import DailyTrackProvenanceResultSectionInput
+from thesistrace.data.benchmark_snapshot import PreparedBenchmarkSnapshots
 from thesistrace.data.canonical_mapping import adjusted_price_string
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.entrypoints.schema import initialize_core
