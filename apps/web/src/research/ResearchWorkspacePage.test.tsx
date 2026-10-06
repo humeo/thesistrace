@@ -1,5 +1,7 @@
 import { defaultSimulationCosts } from "./simulationCosts";
-import { renderToStaticMarkup } from "react-dom/server";
+import { PassThrough } from "node:stream";
+import { text } from "node:stream/consumers";
+import { renderToPipeableStream, renderToStaticMarkup } from "react-dom/server";
 import { highlightTree } from "@lezer/highlight";
 import { describe, expect, it, vi } from "vitest";
 
@@ -511,10 +513,15 @@ describe("browser Research Draft", () => {
     expect(hasUnexecutedChanges({ ...admitted, lastAdmittedBaseline: researchInputs(admitted) })).toBe(false);
   });
 
-  it("renders the DSL as the only Alpha surface without server-edit controls", () => {
+  it("renders the DSL as the only Alpha surface without server-edit controls", async () => {
     const storage = new MemoryStorage();
     persistResearchDraft(storage, researcherId, folder.id, emptyResearchDraft());
-    const markup = renderToStaticMarkup(<ResearchDraftWorkspace catalog={catalog} data={data} folder={folder} researcherId={researcherId} storage={storage} />);
+    const output = new PassThrough();
+    const stream = renderToPipeableStream(<ResearchDraftWorkspace catalog={catalog} data={data} folder={folder} researcherId={researcherId} storage={storage} />, {
+      onAllReady: () => stream.pipe(output),
+      onError: error => { output.destroy(error instanceof Error ? error : new Error(String(error))); },
+    });
+    const markup = await text(output);
     expect(markup).toContain("Alpha formula editor");
     expect(markup).toContain('>Alpha formula</h2>');
     expect(markup).not.toContain("Ctrl + Space to autocomplete");
