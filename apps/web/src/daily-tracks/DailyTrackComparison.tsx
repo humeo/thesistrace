@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ColorType, LineSeries, createChart, type IChartApi, type Time } from "lightweight-charts";
+import { ColorType, LineSeries, createChart, type IChartApi, type ISeriesApi, type LogicalRange, type Time } from "lightweight-charts";
 import { coreFetch } from "../auth/coreFetch";
 import { followCoreLink } from "../shell/navigation";
 import { chartTheme } from "../analysis/chartTheme";
@@ -54,7 +54,7 @@ export function DailyTrackComparison({ items, revision }: { items: readonly Dail
   return <div className="grid min-w-0 gap-8">
     <Section title={t("comparePerformance")} actions={<ToggleGroup variant="chart" value={[period]} onValueChange={values => { if (values[0]) setPeriod(values[0] as typeof period); }} aria-label={t("period")}><ToggleGroupItem value="tracking">{t("sinceTracking")}</ToggleGroupItem><ToggleGroupItem value="full">{t("fullStrategy")}</ToggleGroupItem></ToggleGroup>}>
       <p className="m-0 text-sm text-muted-foreground">{t(period === "tracking" ? "compareTracking" : "compareFull")}</p>
-      <ComparisonChart curves={curves} loading={items.some(item => !loaded[item.id])} />
+      <ComparisonChart curves={curves} period={period} loading={items.some(item => !loaded[item.id])} />
     </Section>
     <section aria-label={t("list")} className="grid min-w-0 gap-4">
       <h2 className="m-0 text-xl leading-7 font-semibold">{t("allTracks")} <span className="text-muted-foreground">{formatNumber(items.length)}</span></h2>
@@ -81,54 +81,84 @@ export function DailyTrackComparison({ items, revision }: { items: readonly Dail
   </div>;
 }
 
-function ComparisonChart({ curves, loading }: { curves: Curve[]; loading: boolean }) {
+function ComparisonChart({ curves, period, loading }: { curves: Curve[]; period: "tracking" | "full"; loading: boolean }) {
   const { t, i18n } = useTranslation("daily");
   const container = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  const lines = useRef(new Map<string, { line: ISeriesApi<"Line">; points: Curve["points"] }>());
+  const visibleRange = useRef<LogicalRange | null>(null);
+  const fittedPeriod = useRef<typeof period | null>(null);
+  const [chartReady, setChartReady] = useState(false);
   const [hidden, setHidden] = useState<string[]>([]);
   const [selected, setSelected] = useState<{ time: string; values: { id: string; value: number }[] } | null>(null);
   const plotted = curves.filter(curve => curve.points.length >= 2 && !hidden.includes(curve.id));
   const allHidden = plotted.length === 0 && curves.some(curve => curve.points.length >= 2);
-  // Names are presentation, including translated fallback labels. Only chart
-  // data and series colors determine the lifetime of the canvas.
-  const signature = JSON.stringify(plotted.map(curve => ({
-    id: curve.id, points: curve.points, colorIndex: curves.findIndex(value => value.id === curve.id),
-  })));
+  const hasData = curves.some(curve => curve.points.length >= 2);
+  useEffect(() => { if (hasData) setChartReady(true); }, [hasData]);
   useEffect(() => {
-    setSelected(null);
-    if (!container.current || !plotted.length) return;
+    if (!chartReady || !container.current) return;
     const theme = chartTheme(container.current);
     const chart = createChart(container.current, { autoSize: true, height: 280, layout: { background: { type: ColorType.Solid, color: theme.background }, textColor: theme.text, attributionLogo: false }, grid: { vertLines: { color: theme.grid }, horzLines: { color: theme.grid } }, rightPriceScale: { borderColor: theme.border }, timeScale: { borderColor: theme.border }, localization: { locale: interfaceLocale(), priceFormatter: (value: number) => formatReturn(value) } });
     chartRef.current = chart;
-    const styles = getComputedStyle(container.current);
-    const colors = Array.from({ length: 5 }, (_, index) => styles.getPropertyValue(`--chart-${index + 1}`).trim());
-    const lines = plotted.map(curve => {
-      const colorIndex = curves.findIndex(value => value.id === curve.id);
-      const line = chart.addSeries(LineSeries, { color: colors[colorIndex % colors.length], lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
-      line.setData(curve.points.map(point => ({ time: point.session as Time, value: point.value })));
-      return { line, id: curve.id };
+    chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+      if (range) visibleRange.current = range;
     });
-    chart.timeScale().fitContent();
     chart.subscribeCrosshairMove(event => {
       if (!event.time) { setSelected(null); return; }
-      const values = lines.flatMap(({ line, id }) => {
+      const values = [...lines.current].flatMap(([id, { line }]) => {
+        if (!line.options().visible) return [];
         const row = event.seriesData.get(line);
         return row && "value" in row ? [{ id, value: row.value }] : [];
       });
       setSelected({ time: String(event.time), values });
     });
-    return () => { chart.remove(); chartRef.current = null; };
-  // The serialized curves keep the canvas stable across unrelated state updates.
-  }, [signature]);
+    return () => { chart.remove(); chartRef.current = null; lines.current.clear(); visibleRange.current = null; fittedPeriod.current = null; };
+  }, [chartReady]);
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || !container.current) return;
+    const range = chart.timeScale().getVisibleLogicalRange() ?? visibleRange.current;
+    const valid = curves.filter(curve => curve.points.length >= 2);
+    for (const [id, entry] of lines.current) {
+      if (!valid.some(curve => curve.id === id)) { chart.removeSeries(entry.line); lines.current.delete(id); }
+    }
+    const styles = getComputedStyle(container.current);
+    const colors = Array.from({ length: 5 }, (_, index) => styles.getPropertyValue(`--chart-${index + 1}`).trim());
+    for (const curve of valid) {
+      let entry = lines.current.get(curve.id);
+      if (!entry) {
+        entry = { line: chart.addSeries(LineSeries, { lineWidth: 2, priceLineVisible: false, lastValueVisible: false }), points: [] };
+        lines.current.set(curve.id, entry);
+      }
+      entry.line.applyOptions({ visible: !hidden.includes(curve.id), color: colors[curves.indexOf(curve) % colors.length] });
+      const previous = entry.points;
+      const same = (point: Curve["points"][number], index: number) => point.session === curve.points[index]?.session && point.value === curve.points[index]?.value;
+      if (previous.length !== curve.points.length || !previous.every(same)) {
+        // Append or revise the latest observation through the library's update API.
+        // A changed period or retained window replaces this series' data in place.
+        const appending = previous.length > 0 && curve.points.length >= previous.length
+          && previous.slice(0, -1).every(same) && previous.at(-1)!.session === curve.points[previous.length - 1].session;
+        if (appending) for (const point of curve.points.slice(previous.length - 1)) entry.line.update({ time: point.session as Time, value: point.value });
+        else entry.line.setData(curve.points.map(point => ({ time: point.session as Time, value: point.value })));
+        entry.points = curve.points;
+      }
+    }
+    if (valid.some(curve => !hidden.includes(curve.id))) {
+      if (fittedPeriod.current !== period) { chart.timeScale().fitContent(); fittedPeriod.current = period; }
+      else if (range) chart.timeScale().setVisibleLogicalRange(range);
+    }
+    setSelected(null);
+  }, [curves, hidden, period, chartReady]);
   useEffect(() => {
     chartRef.current?.applyOptions({ localization: {
       locale: interfaceLocale(), priceFormatter: (value: number) => formatReturn(value),
     } });
-  }, [signature, i18n.language]);
+  }, [i18n.language, chartReady]);
   const readout = selected ? `${selected.time} · ${selected.values.map(({ id, value }) =>
     `${curves.find(curve => curve.id === id)?.name} ${formatReturn(value)}`).join(" · ")}` : t("comparisonHint");
   return <figure aria-label={t("comparisonChart")} className="m-0 grid min-w-0 gap-4">
-    {plotted.length ? <div ref={container} className="min-w-0 overflow-hidden" /> : <Empty><EmptyHeader><EmptyTitle>{t(allHidden ? "curvesHidden" : "compareEmpty")}</EmptyTitle><EmptyDescription>{t(allHidden ? "showCurves" : loading ? "compareLoading" : "compareEmptyDescription")}</EmptyDescription></EmptyHeader></Empty>}
+    <div ref={container} hidden={!plotted.length} className="h-[280px] min-w-0 overflow-hidden" />
+    {!plotted.length && <Empty><EmptyHeader><EmptyTitle>{t(allHidden ? "curvesHidden" : "compareEmpty")}</EmptyTitle><EmptyDescription>{t(allHidden ? "showCurves" : loading ? "compareLoading" : "compareEmptyDescription")}</EmptyDescription></EmptyHeader></Empty>}
     <ToggleGroup variant="chart" multiple value={curves.filter(curve => !hidden.includes(curve.id)).map(curve => curve.id)} onValueChange={values => setHidden(curves.filter(curve => !values.includes(curve.id)).map(curve => curve.id))} aria-label={t("visibleStrategies")} className="flex-wrap justify-start">
       {curves.map((curve, index) => <ToggleGroupItem key={curve.id} value={curve.id}><span aria-hidden="true" className="size-2 rounded-full" style={{ background: `var(--chart-${index % 5 + 1})` }} />{curve.name}</ToggleGroupItem>)}
     </ToggleGroup>

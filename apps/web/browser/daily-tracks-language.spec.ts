@@ -58,6 +58,69 @@ test("comparison language changes preserve zoom, canvas and translated fallback 
   expect(reads).toBe(readsBefore);
 });
 
+test("comparison keeps its canvas and zoom as curves arrive, hide and refresh", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  const value = structuredClone(track);
+  value.observation.returns = Array.from({ length: 300 }, (_, index) => ({
+    session: new Date(Date.UTC(2025, 0, 1 + index)).toISOString().slice(0, 10), net_return: index / 1000,
+  }));
+  const summaries = ["track_first", "track_second"].map(id => ({ id, status: "active", seed_run_id: id,
+    origin_session: "2025-01-01", strategy_session: "2025-10-27" }));
+  let release!: () => void;
+  const secondReady = new Promise<void>(resolve => { release = resolve; });
+  await page.route("https://daily-incremental.test/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    if (path === "/api/daily-tracks") return route.fulfill({ json: { items: summaries, next_cursor: null } });
+    if (path.startsWith("/api/research-runs/")) return route.fulfill({ json: { name: path.endsWith("track_first") ? "First" : "Second" } });
+    if (path.endsWith("track_second")) await secondReady;
+    return route.fulfill({ json: { ...value, id: path.split("/").at(-1) } });
+  });
+  try {
+    await page.goto("https://daily-incremental.test/?list");
+    await page.addStyleTag({ content: styles });
+    await page.addScriptTag({ content: script });
+    const chart = page.getByRole("figure", { name: "Strategy comparison chart" });
+    const canvases = chart.locator("canvas");
+    await expect(canvases.first()).toBeVisible();
+    const plot = canvases.nth(await canvases.evaluateAll(elements => elements.reduce((largest, element, index) => element.clientWidth > elements[largest].clientWidth ? index : largest, 0)));
+    const original = await plot.elementHandle();
+    await plot.scrollIntoViewIfNeeded();
+    async function observation(ratio: number) {
+      const bounds = (await plot.boundingBox())!;
+      await page.mouse.move(bounds.x + bounds.width * ratio - 3, bounds.y + 100);
+      await page.mouse.move(bounds.x + bounds.width * ratio, bounds.y + 100);
+      const footer = chart.locator("p[aria-live]");
+      await expect(footer).toContainText("First");
+      return (await footer.innerText()).match(/\d{4}-\d{2}-\d{2}/)?.[0];
+    }
+    const initial = await observation(0.7);
+    await observation(0.3);
+    await page.mouse.wheel(0, -600);
+    await expect.poll(() => observation(0.7)).not.toEqual(initial);
+    const before = [await observation(0.3), await observation(0.5), await observation(0.7)];
+    release();
+    const visible = page.getByRole("group", { name: "Visible strategies", exact: true });
+    await expect(visible.getByRole("button", { name: "Second", exact: true })).toBeVisible();
+    expect(await original!.evaluate(element => element.isConnected)).toBe(true);
+    expect([await observation(0.3), await observation(0.5), await observation(0.7)]).toEqual(before);
+    await visible.getByRole("button", { name: "Second", exact: true }).click();
+    await visible.getByRole("button", { name: "First", exact: true }).click();
+    await expect(page.getByText("All strategy curves are hidden", { exact: true })).toBeVisible();
+    expect(await original!.evaluate(element => element.isConnected)).toBe(true);
+    await visible.getByRole("button", { name: "First", exact: true }).click();
+    expect([await observation(0.3), await observation(0.5), await observation(0.7)]).toEqual(before);
+    value.observation.returns.push({ session: "2025-10-28", net_return: 0.3 });
+    value.observation.net_return = 0.3;
+    const refreshed = page.waitForResponse("**/api/daily-tracks/track_first");
+    await page.getByRole("button", { name: "Reload status", exact: true }).click();
+    await refreshed;
+    await expect(page.getByRole("region", { name: "Strategy comparison table" }).getByRole("row", { name: /First/ })).toContainText("30.00%");
+    expect(await original!.evaluate(element => element.isConnected)).toBe(true);
+    expect([await observation(0.3), await observation(0.5), await observation(0.7)]).toEqual(before);
+  } finally { release(); }
+});
+
 async function open(page: Page, value = track) {
   let reads = 0;
   let mutations = 0;
