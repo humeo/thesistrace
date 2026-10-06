@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { buildProductFixture } from "./build-product-fixture";
 let script: string;
 let styles: string;
-import { exampleDailyTrack as track } from "./fixtures/daily-track";
+import { comparisonValues, exampleDailyTrack as track } from "./fixtures/daily-track";
 
 test.beforeAll(async () => {
   test.setTimeout(120_000);
@@ -21,7 +21,8 @@ test("comparison language changes preserve zoom, canvas and translated fallback 
     const path = new URL(route.request().url()).pathname;
     if (path === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
     reads += 1;
-    if (path === "/api/daily-tracks") return route.fulfill({ json: { items: [{ id: "track_ui", status: "active", seed_run_id: "run_origin", origin_session: "2025-01-01", strategy_session: "2025-10-27" }], next_cursor: null } });
+    if (path === "/api/daily-tracks") return route.fulfill({ json: { items: [{ id: "track_ui", seed_name: null, status: "active", seed_run_id: "run_origin", origin_session: "2025-01-01", strategy_session: "2025-10-27" }], next_cursor: null } });
+    if (path === "/api/daily-tracks/comparison") return route.fulfill({ json: { items: [{ id: "track_ui", values: comparisonValues(value) }] } });
     if (path.startsWith("/api/research-runs/")) return route.fulfill({ status: 503 });
     return route.fulfill({ json: value });
   });
@@ -64,16 +65,20 @@ test("comparison keeps its canvas and zoom as curves arrive, hide and refresh", 
   value.observation.returns = Array.from({ length: 300 }, (_, index) => ({
     session: new Date(Date.UTC(2025, 0, 1 + index)).toISOString().slice(0, 10), net_return: index / 1000,
   }));
-  const summaries = ["track_first", "track_second"].map(id => ({ id, status: "active", seed_run_id: id,
+  const summaries = ["track_first", "track_second"].map(id => ({ id, status: "active", seed_run_id: id, seed_name: id === "track_first" ? "First" : "Second",
     origin_session: "2025-01-01", strategy_session: "2025-10-27" }));
   let release!: () => void;
+  let includeSecond = false;
   const secondReady = new Promise<void>(resolve => { release = resolve; });
   await page.route("https://daily-incremental.test/**", async route => {
     const path = new URL(route.request().url()).pathname;
     if (path === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
     if (path === "/api/daily-tracks") return route.fulfill({ json: { items: summaries, next_cursor: null } });
-    if (path.startsWith("/api/research-runs/")) return route.fulfill({ json: { name: path.endsWith("track_first") ? "First" : "Second" } });
-    if (path.endsWith("track_second")) await secondReady;
+    if (path === "/api/daily-tracks/comparison") {
+      if (includeSecond) await secondReady;
+      return route.fulfill({ json: { items: summaries.map(item => ({ id: item.id,
+        values: item.id === "track_first" || includeSecond ? comparisonValues(value) : null })) } });
+    }
     return route.fulfill({ json: { ...value, id: path.split("/").at(-1) } });
   });
   try {
@@ -99,6 +104,11 @@ test("comparison keeps its canvas and zoom as curves arrive, hide and refresh", 
     await page.mouse.wheel(0, -600);
     await expect.poll(() => observation(0.7)).not.toEqual(initial);
     const before = [await observation(0.3), await observation(0.5), await observation(0.7)];
+    includeSecond = true;
+    const arriving = page.waitForRequest(request => new URL(request.url()).pathname === "/api/daily-tracks/comparison");
+    await page.getByRole("button", { name: "Reload status", exact: true }).click();
+    await arriving;
+    expect(await original!.evaluate(element => element.isConnected)).toBe(true);
     release();
     const visible = page.getByRole("group", { name: "Visible strategies", exact: true });
     await expect(visible.getByRole("button", { name: "Second", exact: true })).toBeVisible();
@@ -333,7 +343,7 @@ test("track list retains published rows after failure and distinguishes an empty
     if (failed) return route.fulfill({ status: 503 });
     if (pathname !== "/api/daily-tracks") return route.fulfill({ status: 503 });
     return route.fulfill({ json: { items: empty ? [] : ["active", "blocked", "stopping", "stopped"].map((status, index) => ({
-      id: `track_${index}`, status, seed_run_id: "run_origin", result_checksum_sha256: "a".repeat(64), origin_session: "2026-08-01", strategy_session: "2026-08-20",
+      id: `track_${index}`, status, seed_name: null, seed_run_id: "run_origin", result_checksum_sha256: "a".repeat(64), origin_session: "2026-08-01", strategy_session: "2026-08-20",
     })), next_cursor: null } });
   });
   await page.goto("https://daily-list.test/?list");
@@ -403,13 +413,16 @@ test("daily review queries the selected published session and distinguishes expi
 
 test("comparison selects real account previews and leaves failed observations unavailable", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 960 });
-  const summaries = ["track_ui", "track_other", "track_failed"].map(id => ({ id, status: "active", seed_run_id: id === "track_ui" ? "run_momentum" : "run_quality", result_checksum_sha256: "a".repeat(64), origin_session: "2026-08-01", strategy_session: "2026-08-20" }));
+  const summaries = ["track_ui", "track_other", "track_failed"].map(id => ({ id, status: "active", seed_name: id === "track_ui" ? "Momentum" : "Quality", seed_run_id: id === "track_ui" ? "run_momentum" : "run_quality", result_checksum_sha256: "a".repeat(64), origin_session: "2026-08-01", strategy_session: "2026-08-20" }));
   let mutations = 0;
   await page.route("https://daily-compare.test/**", route => {
     const pathname = new URL(route.request().url()).pathname;
     if (pathname === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
     if (route.request().method() !== "GET") { mutations++; return route.fulfill({ status: 503 }); }
     if (pathname === "/api/daily-tracks") return route.fulfill({ json: { items: summaries, next_cursor: null } });
+    if (pathname === "/api/daily-tracks/comparison") return route.fulfill({ json: {
+      items: summaries.map(item => ({ id: item.id, values: item.id === "track_failed" ? null : comparisonValues(track) })),
+    } });
     if (pathname.startsWith("/api/research-runs/")) return route.fulfill({ json: { name: pathname.endsWith("run_momentum") ? "Momentum" : "Quality" } });
     if (pathname.endsWith("track_failed")) return route.fulfill({ status: 503 });
     const value = structuredClone(track);

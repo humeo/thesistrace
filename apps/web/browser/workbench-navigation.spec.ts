@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
 import { expect, test } from "./workbench-fixture";
-import { exampleDailyTrack } from "./fixtures/daily-track";
+import { comparisonValues, exampleDailyTrack } from "./fixtures/daily-track";
 import { completedStrategyRun } from "./fixtures/strategy-result";
 
 function recordDocumentRequests(page: Page): string[] {
@@ -15,12 +15,13 @@ test("DailyTrack list and detail links keep the authenticated document", async (
   await page.setViewportSize({ width: 1440, height: 960 });
   const trackId = "track_cafebabefeed1234";
   const runId = "run_feedface1234abcd9876";
-  const track = { ...exampleDailyTrack, id: trackId, origin: { ...exampleDailyTrack.origin, seed_run_id: runId } };
+  const track = { ...exampleDailyTrack, id: trackId, seed_name: "Tracked strategy", origin: { ...exampleDailyTrack.origin, seed_run_id: runId } };
   await page.route("**/api/daily-tracks", route => route.fulfill({ json: { items: [{
-    id: trackId, status: track.status, seed_run_id: runId, result_checksum_sha256: track.origin.result_checksum_sha256,
+    id: trackId, status: track.status, seed_name: track.seed_name, seed_run_id: runId, result_checksum_sha256: track.origin.result_checksum_sha256,
     origin_session: track.origin.strategy_session, strategy_session: track.strategy_session,
   }], next_cursor: null } }));
   await page.route(`**/api/daily-tracks/${trackId}`, route => route.fulfill({ json: track }));
+  await page.route("**/api/daily-tracks/comparison?*", route => route.fulfill({ json: { items: [{ id: trackId, values: comparisonValues(track) }] } }));
   await page.route(`**/api/research-runs/${runId}`, route => route.fulfill({ json: { name: "Tracked strategy" } }));
   await page.goto("/daily-tracks");
   await expect(page.getByRole("link", { name: trackId, exact: true })).toBeVisible();

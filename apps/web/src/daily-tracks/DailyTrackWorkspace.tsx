@@ -18,10 +18,10 @@ import { CommonInputObservations } from "../analysis/CommonInputObservations";
 import { TrackingOriginView, TrackingProgressView } from "./DailyTrackFacts";
 import { DailyTrackAnalysisView } from "./DailyTrackAnalysisView";
 import { CurrentHoldings, ObservationSummary, SelectionSchedule, TrackingReturnChart, formatMoney } from "./DailyTrackObservationView";
-import { AccountAllocation, HoldingsPreview, useTrackNames } from "./DailyTrackPresentation";
+import { AccountAllocation, HoldingsPreview } from "./DailyTrackPresentation";
 import { DailyTrackReview } from "./DailyTrackReview";
 import { blockedReason } from "./blockedReason";
-import type { DailyTrackDetail, DailyTrackSummary } from "./DailyTracksPage";
+import type { DailyTrackDetail, DailyTrackListItem } from "./DailyTracksPage";
 
 const VIEWS = ["performance", "review", "holdings", "rebalance"] as const;
 type View = typeof VIEWS[number];
@@ -36,22 +36,21 @@ export function trackStatusLabel(track: Pick<DailyTrackDetail, "status"> & { pro
 }
 
 export function DailyTrackWorkspace({ track, items, listError = false, onReloadList, actions, notices, reloadAction }: {
-  track: DailyTrackDetail; items: readonly DailyTrackSummary[] | null; listError?: boolean; onReloadList?: () => void; actions: ReactNode; notices: ReactNode; reloadAction: ReactNode;
+  track: DailyTrackDetail; items: readonly DailyTrackListItem[] | null; listError?: boolean; onReloadList?: () => void; actions: ReactNode; notices: ReactNode; reloadAction: ReactNode;
 }) {
   const { t } = useTranslation("daily");
   const [view, setView] = useUrlSelection("tab", VIEWS, "performance");
   const [visited, setVisited] = useState<View[]>(["performance", "holdings", "rebalance", view]);
   useEffect(() => { setVisited(values => values.includes(view) ? values : [...values, view]); }, [view]);
   const [period, setPeriod] = useState<"tracking" | "full">("tracking");
-  const visibleItems = items?.some(item => item.id === track.id) ? items : [{ id: track.id, seed_run_id: track.origin.seed_run_id }, ...(items ?? [])];
-  const names = useTrackNames(visibleItems.map(item => item.seed_run_id));
-  const title = names[track.origin.seed_run_id] ?? `${t("trackHeading")} ${track.id.replace(/^track_/, "").slice(0, 6)}`;
+  const visibleItems = items?.some(item => item.id === track.id) ? items : [{ id: track.id, seed_name: track.seed_name }, ...(items ?? [])];
+  const title = track.seed_name ?? `${t("trackHeading")} ${track.id.replace(/^track_/, "").slice(0, 6)}`;
   return <Page className="console-workspace" aria-label={t("title")}><PageContent className="flex flex-col gap-6">
     <PageHeader variant="console" title={t("title")} className="mb-0" actions={<>
       <Button variant="link" nativeButton={false} role="link" render={<a href="/daily-tracks" onClick={followCoreLink} />}>{t("backToList")}</Button>
       <DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" />} aria-label={t("switchTrack")}>{t("switchTrack")}<CaretDownIcon data-icon="inline-end" /></DropdownMenuTrigger>
         <DropdownMenuContent className="min-w-72"><DropdownMenuGroup>
-          {visibleItems.map(item => <DropdownMenuLinkItem key={item.id} href={`/daily-tracks/${encodeURIComponent(item.id)}`} onClick={followCoreLink} aria-label={item.id} aria-current={item.id === track.id ? "page" : undefined}>{names[item.seed_run_id] ?? `${t("trackHeading")} ${item.id.replace(/^track_/, "").slice(0, 6)}`}</DropdownMenuLinkItem>)}
+          {visibleItems.map(item => <DropdownMenuLinkItem key={item.id} href={`/daily-tracks/${encodeURIComponent(item.id)}`} onClick={followCoreLink} aria-label={item.id} aria-current={item.id === track.id ? "page" : undefined}>{item.seed_name ?? `${t("trackHeading")} ${item.id.replace(/^track_/, "").slice(0, 6)}`}</DropdownMenuLinkItem>)}
         </DropdownMenuGroup></DropdownMenuContent>
       </DropdownMenu>
       {reloadAction}

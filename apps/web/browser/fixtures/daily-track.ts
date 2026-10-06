@@ -1,5 +1,5 @@
 export const exampleDailyTrack = {
-  id: "track_ui", status: "active", checkpoint_manifest_sha256: "a".repeat(64),
+  id: "track_ui", seed_name: null as string | null, status: "active", checkpoint_manifest_sha256: "a".repeat(64),
   origin: { seed_run_id: "My original run", seed_research_available: true, strategy_session: "2026-08-01",
     result_checksum_sha256: "b".repeat(64), terminal_account: { net_nav: "10000", net_cash: "10000", positions: [] } },
   strategy_session: "2026-08-20", data_through_session: "2026-08-21", lag_sessions: 1,
@@ -20,3 +20,15 @@ export const exampleDailyTrack = {
     annualized_excess_return: null, maximum_drawdown: { value: 0.025 }, sharpe: null, transaction_costs: { cumulative_amount: 27.50 } } },
     comparison: { status: "unavailable", reason: "benchmark_snapshot_unavailable" }, observations: [] },
 };
+
+export function comparisonValues(track = exampleDailyTrack) {
+  const observation = track.observation;
+  return {
+    status: track.status, phase: track.progress.phase, strategy_session: track.strategy_session,
+    observation: { session: observation.session, net_asset_value_cny: observation.net_asset_value_cny,
+      net_return: observation.net_return, maximum_drawdown: observation.maximum_drawdown,
+      session_count: observation.session_count, returns: observation.returns },
+    strategy: { entry_session: null, net_return: track.strategy.summary.metrics.net_cumulative_return,
+      maximum_drawdown: track.strategy.summary.metrics.maximum_drawdown.value, returns: [] },
+  };
+}

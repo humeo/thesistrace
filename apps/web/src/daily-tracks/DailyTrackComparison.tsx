@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ColorType, LineSeries, createChart, type IChartApi, type ISeriesApi, type LogicalRange, type Time } from "lightweight-charts";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { dailyTrackDetailOptions, dailyTrackKeys } from "./queries";
 import { coreFetch } from "../auth/coreFetch";
 import { followCoreLink } from "../shell/navigation";
 import { chartTheme } from "../analysis/chartTheme";
@@ -12,62 +14,71 @@ import { Badge } from "../components/ui/badge";
 import { Empty, EmptyHeader, EmptyTitle, EmptyDescription } from "../components/ui/empty";
 import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
-import { AccountAllocation, HoldingsPreview, useTrackNames } from "./DailyTrackPresentation";
+import { AccountAllocation, HoldingsPreview } from "./DailyTrackPresentation";
 import { formatMoney, formatReturn } from "./DailyTrackObservationView";
 import { trackStatusLabel } from "./DailyTrackWorkspace";
-import type { DailyTrackDetail, DailyTrackSummary } from "./DailyTracksPage";
+import type { DailyTrackDetail, DailyTrackListItem } from "./DailyTracksPage";
 
-type LoadedTrack = { detail: DailyTrackDetail | null; failed: boolean };
+type ComparisonValues = {
+  status: DailyTrackDetail["status"];
+  phase: DailyTrackDetail["progress"]["phase"];
+  strategy_session: string;
+  observation: Pick<DailyTrackDetail["observation"], "session" | "net_asset_value_cny" | "net_return" | "maximum_drawdown" | "session_count" | "returns">;
+  strategy: { entry_session: string | null; net_return: number | null; maximum_drawdown: number | null;
+    returns: DailyTrackDetail["observation"]["returns"] };
+};
+type LoadedTrack = { values: ComparisonValues | null; failed: boolean };
 type Curve = { id: string; name: string; points: { session: string; value: number }[] };
 
-export function DailyTrackComparison({ items, revision }: { items: readonly DailyTrackSummary[]; revision: number }) {
+export function DailyTrackComparison({ items }: { items: readonly DailyTrackListItem[] }) {
   const { t } = useTranslation("daily");
-  const [loaded, setLoaded] = useState<Record<string, LoadedTrack>>({});
+  const queryClient = useQueryClient();
   const [selected, setSelected] = useState<string | null>(null);
   const [period, setPeriod] = useState<"tracking" | "full">("tracking");
-  const names = useTrackNames(items.map(item => item.seed_run_id));
-  const ids = JSON.stringify(items.map(item => item.id));
-  useEffect(() => {
-    const controller = new AbortController();
-    void Promise.allSettled((JSON.parse(ids) as string[]).map(async id => {
-      try {
-        const response = await coreFetch(`/api/daily-tracks/${encodeURIComponent(id)}`, { signal: controller.signal });
-        if (!response.ok) throw new Error("Track observation unavailable");
-        const detail = await response.json() as DailyTrackDetail;
-        if (!controller.signal.aborted) setLoaded(value => ({ ...value, [id]: { detail, failed: false } }));
-      } catch {
-        if (!controller.signal.aborted) setLoaded(value => ({ ...value, [id]: { detail: value[id]?.detail ?? null, failed: true } }));
-      }
-    }));
-    return () => controller.abort();
-  }, [ids, revision]);
-  const name = (item: DailyTrackSummary) => names[item.seed_run_id] ?? `${t("trackHeading")} ${item.id.replace(/^track_/, "").slice(0, 6)}`;
+  const queryKey = dailyTrackKeys.comparison(items.map(item => item.id));
+  const comparisonQuery = useQuery({
+    queryKey,
+    queryFn: async ({ signal }): Promise<Record<string, LoadedTrack>> => {
+      const params = new URLSearchParams(items.map(item => ["track_id", item.id]));
+      const response = await coreFetch(`/api/daily-tracks/comparison?${params}`, { signal });
+      if (!response.ok) throw new Error("Track comparison unavailable");
+      const result = await response.json() as { items: { id: string; values: ComparisonValues | null }[] };
+      const previous = queryClient.getQueryData<Record<string, LoadedTrack>>(queryKey);
+      return Object.fromEntries(result.items.map(item => [item.id, {
+        values: item.values ?? previous?.[item.id]?.values ?? null, failed: item.values === null,
+      }]));
+    },
+    enabled: items.length > 0,
+    staleTime: 0,
+  });
+  const loaded = comparisonQuery.data ?? {};
+  const name = (item: DailyTrackListItem) => item.seed_name ?? `${t("trackHeading")} ${item.id.replace(/^track_/, "").slice(0, 6)}`;
   const activeId = items.some(item => item.id === selected) ? selected! : items[0]?.id;
-  const active = loaded[activeId]?.detail;
+  const activeQuery = useQuery(dailyTrackDetailOptions(activeId));
+  const active = activeQuery.data;
   const curves: Curve[] = items.flatMap(item => {
-    const detail = loaded[item.id]?.detail;
-    if (!detail || loaded[item.id].failed) return [];
-    return [{ id: item.id, name: name(item), points: period === "tracking"
-      ? detail.observation.returns.map(point => ({ session: point.session, value: point.net_return }))
-      : detail.strategy.comparison.status === "available" ? detail.strategy.comparison.curves.map(point => ({ session: point.session, value: point.net_strategy_return })) : [] }];
+    const values = loaded[item.id]?.values;
+    if (!values || loaded[item.id].failed || comparisonQuery.isError) return [];
+    const points = period === "tracking" ? values.observation.returns : values.strategy.returns;
+    return [{ id: item.id, name: name(item), points: points.map(point => ({ session: point.session, value: point.net_return })) }];
   });
   return <div className="grid min-w-0 gap-8">
     <Section title={t("comparePerformance")} actions={<ToggleGroup variant="chart" value={[period]} onValueChange={values => { if (values[0]) setPeriod(values[0] as typeof period); }} aria-label={t("period")}><ToggleGroupItem value="tracking">{t("sinceTracking")}</ToggleGroupItem><ToggleGroupItem value="full">{t("fullStrategy")}</ToggleGroupItem></ToggleGroup>}>
       <p className="m-0 text-sm text-muted-foreground">{t(period === "tracking" ? "compareTracking" : "compareFull")}</p>
-      <ComparisonChart curves={curves} period={period} loading={items.some(item => !loaded[item.id])} />
+      <ComparisonChart curves={curves} period={period} loading={comparisonQuery.isPending} />
     </Section>
     <section aria-label={t("list")} className="grid min-w-0 gap-4">
       <h2 className="m-0 text-xl leading-7 font-semibold">{t("allTracks")} <span className="text-muted-foreground">{formatNumber(items.length)}</span></h2>
       <Table scrollLabel={t("comparisonTable")} className="min-w-[800px] tabular-nums [&_td:not(:first-child)]:text-right [&_th:not(:first-child)]:text-right">
         <TableHeader><TableRow><TableHead>{t("trackColumn")}</TableHead><TableHead>{t("status")}</TableHead><TableHead>{t("periodReturn")}</TableHead><TableHead>{t("maximumDrawdown")}</TableHead><TableHead>{t("nav")}</TableHead><TableHead><span className="sr-only">{t("openTrack")}</span></TableHead></TableRow></TableHeader>
         <TableBody>{items.map(item => {
-          const row = loaded[item.id]; const detail = row?.detail;
-          const metrics = detail?.strategy.summary.metrics;
-          const returnValue = period === "tracking" ? detail?.observation.net_return : metrics?.net_cumulative_return;
-          const drawdown = period === "tracking" ? detail?.observation.maximum_drawdown : metrics?.maximum_drawdown.value;
+          const row = loaded[item.id]; const detail = row?.values;
+          const failed = comparisonQuery.isError || row?.failed;
+          const returnValue = period === "tracking" ? detail?.observation.net_return : detail?.strategy.net_return;
+          const drawdown = period === "tracking" ? detail?.observation.maximum_drawdown : detail?.strategy.maximum_drawdown;
           return <TableRow key={item.id} data-state={activeId === item.id ? "selected" : undefined}>
-            <TableHead scope="row"><Button variant="ghost" className="h-auto min-h-11 max-w-72 justify-start whitespace-normal text-left" aria-pressed={activeId === item.id} onClick={() => setSelected(item.id)}>{name(item)}</Button><p className="m-0 text-xs text-muted-foreground">{period === "tracking" ? item.origin_session : detail?.strategy.comparison.status === "available" ? detail.strategy.comparison.entry.session : "—"} → {detail?.strategy_session ?? item.strategy_session}{detail && <> · {t("trackedSessions", { count: detail.observation.session_count })}</>}</p>{row?.failed && <p role="status" className="m-0 text-xs text-destructive">{t(detail ? "rowStale" : "rowUnavailable")}</p>}</TableHead>
-            <TableCell><Badge variant={item.status === "blocked" ? "destructive" : "secondary"}>{detail ? trackStatusLabel(detail) : t(`statuses.${item.status}`)}</Badge></TableCell>
+            <TableHead scope="row"><Button variant="ghost" className="h-auto min-h-11 max-w-72 justify-start whitespace-normal text-left" aria-pressed={activeId === item.id} onClick={() => setSelected(item.id)}>{name(item)}</Button><p className="m-0 text-xs text-muted-foreground">{period === "tracking" ? item.origin_session : detail?.strategy.entry_session ?? "—"} → {detail?.strategy_session ?? item.strategy_session}{detail && <> · {t("trackedSessions", { count: detail.observation.session_count })}</>}</p>{failed && <p role="status" className="m-0 text-xs text-destructive">{t(detail ? "rowStale" : "rowUnavailable")}</p>}</TableHead>
+            <TableCell><Badge variant={item.status === "blocked" ? "destructive" : "secondary"}>{detail ? trackStatusLabel({ status: detail.status, progress: { phase: detail.phase } }) : t(`statuses.${item.status}`)}</Badge></TableCell>
             <TableCell>{returnValue == null ? "—" : formatReturn(returnValue)}</TableCell><TableCell>{drawdown == null ? "—" : formatReturn(drawdown)}</TableCell>
             <TableCell>{detail ? formatMoney(detail.observation.net_asset_value_cny) : "—"}</TableCell>
             <TableCell><Button variant="link" nativeButton={false} role="link" render={<a href={`/daily-tracks/${encodeURIComponent(item.id)}`} onClick={followCoreLink} />} aria-label={item.id}>{t("openTrack")}</Button></TableCell>
@@ -76,8 +87,9 @@ export function DailyTrackComparison({ items, revision }: { items: readonly Dail
       </Table>
     </section>
     {active ? <Section title={name(items.find(item => item.id === activeId)!)} actions={<Button variant="outline" nativeButton={false} role="link" render={<a href={`/daily-tracks/${encodeURIComponent(activeId)}`} onClick={followCoreLink} />}>{t("openTrack")}</Button>}>
+      {activeQuery.isError && <p role="status" className="m-0 text-sm text-destructive">{t("rowStale")}</p>}
       <div className="grid grid-cols-[minmax(0,1fr)_248px] gap-8"><HoldingsPreview observation={active.observation} /><aside className="min-w-0 border-l border-border pl-6"><AccountAllocation observation={active.observation} /></aside></div>
-    </Section> : <p role="status" className="m-0 text-sm text-muted-foreground">{t(loaded[activeId]?.failed ? "rowUnavailable" : "loading")}</p>}
+    </Section> : <p role="status" className="m-0 text-sm text-muted-foreground">{t(activeQuery.isError ? "rowUnavailable" : "loading")}</p>}
   </div>;
 }
 
@@ -157,8 +169,10 @@ function ComparisonChart({ curves, period, loading }: { curves: Curve[]; period:
   const readout = selected ? `${selected.time} · ${selected.values.map(({ id, value }) =>
     `${curves.find(curve => curve.id === id)?.name} ${formatReturn(value)}`).join(" · ")}` : t("comparisonHint");
   return <figure aria-label={t("comparisonChart")} className="m-0 grid min-w-0 gap-4">
-    <div ref={container} hidden={!plotted.length} className="h-[280px] min-w-0 overflow-hidden" />
-    {!plotted.length && <Empty><EmptyHeader><EmptyTitle>{t(allHidden ? "curvesHidden" : "compareEmpty")}</EmptyTitle><EmptyDescription>{t(allHidden ? "showCurves" : loading ? "compareLoading" : "compareEmptyDescription")}</EmptyDescription></EmptyHeader></Empty>}
+    <div className="relative h-[280px] min-w-0">
+      <div ref={container} aria-hidden={!plotted.length} style={{ visibility: plotted.length ? "visible" : "hidden" }} className="h-full min-w-0 overflow-hidden" />
+      {!plotted.length && <Empty className="absolute inset-0"><EmptyHeader><EmptyTitle>{t(allHidden ? "curvesHidden" : "compareEmpty")}</EmptyTitle><EmptyDescription>{t(allHidden ? "showCurves" : loading ? "compareLoading" : "compareEmptyDescription")}</EmptyDescription></EmptyHeader></Empty>}
+    </div>
     <ToggleGroup variant="chart" multiple value={curves.filter(curve => !hidden.includes(curve.id)).map(curve => curve.id)} onValueChange={values => setHidden(curves.filter(curve => !values.includes(curve.id)).map(curve => curve.id))} aria-label={t("visibleStrategies")} className="flex-wrap justify-start">
       {curves.map((curve, index) => <ToggleGroupItem key={curve.id} value={curve.id}><span aria-hidden="true" className="size-2 rounded-full" style={{ background: `var(--chart-${index % 5 + 1})` }} />{curve.name}</ToggleGroupItem>)}
     </ToggleGroup>

@@ -1,27 +1,8 @@
-import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { coreFetch } from "../auth/coreFetch";
 import { formatNumber } from "../i18n/format";
 import { Section } from "../components/layout/Page";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { formatMoney, formatReturn, type DailyTrackObservation } from "./DailyTrackObservationView";
-
-export function useTrackNames(seedIds: readonly string[]) {
-  const key = JSON.stringify([...new Set(seedIds)].sort());
-  const [names, setNames] = useState<Record<string, string>>({});
-  useEffect(() => {
-    const controller = new AbortController();
-    const ids = JSON.parse(key) as string[];
-    void Promise.allSettled(ids.map(async id => {
-      const response = await coreFetch(`/api/research-runs/${encodeURIComponent(id)}`, { signal: controller.signal });
-      if (!response.ok) return;
-      const run = await response.json() as { name: string };
-      if (!controller.signal.aborted) setNames(value => ({ ...value, [id]: run.name }));
-    }));
-    return () => controller.abort();
-  }, [key]);
-  return names;
-}
 
 export function AccountAllocation({ observation }: { observation: DailyTrackObservation }) {
   const { t } = useTranslation("daily");

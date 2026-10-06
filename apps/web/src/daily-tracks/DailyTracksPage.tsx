@@ -1,5 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { useEffect, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowClockwise } from "@phosphor-icons/react";
 
 import { coreFetch } from "../auth/coreFetch";
@@ -8,6 +9,7 @@ import type { DailyTrackAnalysis } from "./DailyTrackAnalysisView";
 import type { DailyTrackObservation } from "./DailyTrackObservationView";
 import { DailyTrackWorkspace } from "./DailyTrackWorkspace";
 import { DailyTrackComparison } from "./DailyTrackComparison";
+import { DailyTrackReadError, dailyTrackDetailOptions, dailyTrackKeys, readDailyTrackList } from "./queries";
 import type { TerminalStrategyState } from "../research-runs/ResearchRunsPage";
 import { Page, PageHeader, PageContent } from "../components/layout/Page";
 import { Button } from "../components/ui/button";
@@ -31,6 +33,7 @@ export type DailyTrackSummary = {
 export type DailyTrackDetail = {
   checkpoint_manifest_sha256: string;
   id: string;
+  seed_name: string | null;
   status: "active" | "blocked" | "stopping" | "stopped";
   origin: {
     seed_run_id: string;
@@ -62,7 +65,8 @@ export type DailyTrackDetail = {
   strategy: DailyTrackAnalysis["strategy"];
 };
 
-type DailyTrackList = { items: DailyTrackSummary[]; next_cursor: string | null };
+export type DailyTrackListItem = DailyTrackSummary & { seed_name: string | null };
+export type DailyTrackList = { items: DailyTrackListItem[]; next_cursor: string | null };
 type LoadState = "loading" | "reloading" | null;
 type RefreshState = "submitting" | "accepted" | null;
 type RetryState = "submitting" | "accepted" | null;
@@ -92,11 +96,25 @@ export function dailyTrackCanRefresh(
 
 export function DailyTracksPage({ trackId }: { trackId?: string }) {
   const { t } = useTranslation("daily");
-  const [track, setTrack] = useState<DailyTrackDetail | null>(null);
-  const [items, setItems] = useState<DailyTrackSummary[] | null>(null);
-  const [listError, setListError] = useState(false);
-  const [error, setError] = useState(false);
-  const [detailNotFound, setDetailNotFound] = useState(false);
+  const queryClient = useQueryClient();
+  const listQuery = useQuery({
+    queryKey: dailyTrackKeys.list,
+    queryFn: ({ signal }) => readDailyTrackList(signal),
+    staleTime: 0,
+  });
+  const detailQuery = useQuery({
+    ...dailyTrackDetailOptions(trackId),
+    refetchInterval: query => query.state.status !== "error" && query.state.data
+      && dailyTrackNeedsPolling(query.state.data) ? 500 : false,
+  });
+  const track = detailQuery.data ?? null;
+  const items = listQuery.data?.items ?? null;
+  const listError = listQuery.isError;
+  const error = trackId ? detailQuery.isError : listError;
+  const detailNotFound = detailQuery.error instanceof DailyTrackReadError && detailQuery.error.status === 404;
+  const [reloading, setReloading] = useState(false);
+  const loadState: LoadState = (trackId ? detailQuery.isLoading : listQuery.isLoading)
+    ? "loading" : reloading ? "reloading" : null;
   const [actionError, setActionError] = useState<ActionError | null>(null);
   const [confirmStop, setConfirmStop] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -104,14 +122,11 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
   const reloadTrigger = useRef<HTMLButtonElement>(null);
   const mutationPending = useRef(false);
   const mutationController = useRef<AbortController | null>(null);
-  const [loadState, setLoadState] = useState<LoadState>("loading");
-  const [refreshGeneration, setRefreshGeneration] = useState(0);
   const [advanceState, setAdvanceState] = useState<RefreshState>(null);
   const [retryState, setRetryState] = useState<RetryState>(null);
   const [stopState, setStopState] = useState<StopState>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<{ status: number | null } | null>(null);
-  const loadGeneration = useRef(0);
   const deleteGeneration = useRef(0);
   const deleteController = useRef<AbortController | null>(null);
 
@@ -123,11 +138,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
     setActionError(null);
     setConfirmStop(false);
     setConfirmDelete(false);
-    setTrack(null);
-    setItems(null);
-    setListError(false);
-    setLoadState("loading");
-    setDetailNotFound(false);
+    setReloading(false);
   }, [trackId]);
 
   useEffect(() => () => {
@@ -137,74 +148,22 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
   }, [trackId]);
 
   useEffect(() => {
-    const controller = new AbortController();
-    const generation = ++loadGeneration.current;
-    let timeout: number | undefined;
-    setError(false);
-    setDetailNotFound(false);
-    const path = trackId ? `/api/daily-tracks/${trackId}` : "/api/daily-tracks";
-
-    async function load(polling = false) {
-      try {
-        const response = await coreFetch(path, { signal: controller.signal });
-        if (!response.ok) {
-          if (trackId && response.status === 404 && generation === loadGeneration.current) setDetailNotFound(true);
-          throw new Error("DailyTrack unavailable");
-        }
-        if (trackId) {
-          const nextTrack = (await response.json()) as DailyTrackDetail;
-          if (generation !== loadGeneration.current) return;
-          setTrack(nextTrack);
-          if (dailyTrackNeedsPolling(nextTrack)) {
-            timeout = window.setTimeout(() => void load(true), 500);
-          } else {
-            setAdvanceState(null);
-            setRetryState(null);
-            setStopState(null);
-          }
-        } else {
-          const nextItems = ((await response.json()) as DailyTrackList).items;
-          if (generation !== loadGeneration.current) return;
-          setItems(nextItems);
-        }
-        if (!polling) setLoadState(null);
-      } catch (reason: unknown) {
-        if (reason instanceof DOMException && reason.name === "AbortError") return;
-        if (generation === loadGeneration.current) {
-          setError(true);
-          setLoadState(null);
-        }
-      }
+    if (track && !dailyTrackNeedsPolling(track)) {
+      setAdvanceState(null);
+      setRetryState(null);
+      setStopState(null);
     }
+  }, [track, detailQuery.dataUpdatedAt]);
 
-    void load();
-    return () => {
-      if (generation === loadGeneration.current) loadGeneration.current += 1;
-      if (timeout !== undefined) window.clearTimeout(timeout);
-      controller.abort();
-    };
-  }, [refreshGeneration, trackId]);
-
-  useEffect(() => {
-    if (!trackId) return;
-    const controller = new AbortController();
-    void (async () => {
-      try {
-        const response = await coreFetch("/api/daily-tracks", { signal: controller.signal });
-        if (!response.ok) throw new Error("DailyTrack list unavailable");
-        const list = await response.json() as DailyTrackList;
-        if (!controller.signal.aborted) { setItems(list.items); setListError(false); }
-      } catch {
-        if (!controller.signal.aborted) setListError(true);
-      }
-    })();
-    return () => controller.abort();
-  }, [refreshGeneration, trackId]);
+  async function reloadFacts() {
+    await queryClient.cancelQueries({ queryKey: dailyTrackKeys.all });
+    await queryClient.invalidateQueries({ queryKey: dailyTrackKeys.all });
+  }
 
   function reloadStatus() {
     setRetryState(null);
-    setLoadState("reloading");
-    setRefreshGeneration((value) => value + 1);
+    setReloading(true);
+    void reloadFacts().finally(() => setReloading(false));
   }
 
   async function refreshToLatestData() {
@@ -224,7 +183,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
       if (!response.ok) throw new Error("DailyTrack Refresh was not accepted");
       await response.json();
       setAdvanceState("accepted");
-      setRefreshGeneration((value) => value + 1);
+      void reloadFacts();
     } catch {
       if (controller.signal.aborted) return;
       setAdvanceState(null);
@@ -251,7 +210,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
       if (!response.ok) throw new Error("DailyTrack Retry was not accepted");
       await response.json();
       setRetryState("accepted");
-      setRefreshGeneration((value) => value + 1);
+      void reloadFacts();
     } catch {
       if (controller.signal.aborted) return;
       setRetryState(null);
@@ -279,7 +238,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
       await response.json();
       setStopState("accepted");
       setConfirmStop(false);
-      setRefreshGeneration((value) => value + 1);
+      void reloadFacts();
     } catch {
       if (controller.signal.aborted) return;
       setStopState(null);
@@ -305,6 +264,12 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
       });
       if (!response.ok) { if (generation === deleteGeneration.current) setDeleteError({ status: response.status }); return; }
       if (generation !== deleteGeneration.current) return;
+      await queryClient.cancelQueries({ queryKey: dailyTrackKeys.all });
+      if (generation !== deleteGeneration.current || controller.signal.aborted) return;
+      queryClient.removeQueries({ queryKey: dailyTrackKeys.detail(trackId), exact: true });
+      queryClient.setQueryData<DailyTrackList>(dailyTrackKeys.list, current => current
+        ? { ...current, items: current.items.filter(item => item.id !== trackId) } : current);
+      void queryClient.invalidateQueries({ queryKey: dailyTrackKeys.all });
       navigateCorePath("/daily-tracks");
     } catch (reason: unknown) {
       if (reason instanceof DOMException && reason.name === "AbortError") return;
@@ -370,7 +335,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
     {error ? <Alert variant="destructive"><AlertDescription>{t("listReloadFailed")}</AlertDescription></Alert> : null}
     {items?.length === 0 ? <Empty variant="page"><EmptyHeader><EmptyTitle role="heading" aria-level={2}>{t("emptyTitle")}</EmptyTitle><EmptyDescription>{t("emptyDescription")}</EmptyDescription></EmptyHeader>
       <Button nativeButton={false} role="link" render={<a href="/research-runs" onClick={followCoreLink} />}>{t("browseRuns")}</Button>
-    </Empty> : <DailyTrackComparison items={items ?? []} revision={refreshGeneration} />}
+    </Empty> : <DailyTrackComparison items={items ?? []} />}
   </PageContent></Page>;
 }
 
