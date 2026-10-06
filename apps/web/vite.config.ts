@@ -33,6 +33,7 @@ export default defineConfig({
     },
   },
   build: {
+    manifest: true,
     rollupOptions: {
       input: {
         product: fileURLToPath(new URL("./index.html", import.meta.url)),
