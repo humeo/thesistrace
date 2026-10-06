@@ -3,7 +3,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import type { AlphaCatalog } from "../alphaCatalog";
-import { DataOverviewView, loadDataPage, type DataOverview } from "./DataPage";
+import { DataOverviewView } from "./DataPage";
+import { loadDataSnapshot, type DataOverview } from "./dataResources";
 import { changeInterfaceLanguage } from "../i18n";
 
 const overview: DataOverview = {
@@ -250,21 +251,13 @@ describe("DataOverviewView", () => {
     expect(failed).not.toContain("OVERLAPPING_PRIMARY_INDUSTRY_CLASSIFICATION");
   });
 
-  it("loads coverage and fields together and turns either failure into visible state", async () => {
+  it("loads coverage and fields together and rejects a failed read", async () => {
     const unavailable = vi.fn<typeof fetch>().mockRejectedValue(new Error("network detail"));
-    await expect(loadDataPage(unavailable)).resolves.toEqual({
-      resources: null,
-      error: "unavailable",
-    });
+    await expect(loadDataSnapshot(unavailable)).rejects.toThrow("network detail");
 
     const recovered = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(Response.json({ ...overview, catalog }));
-    await expect(loadDataPage(recovered)).resolves.toEqual({
-      resources: { overview, catalog },
-      error: null,
-    });
-    expect(recovered).toHaveBeenNthCalledWith(1, "/api/data");
-    expect(recovered).toHaveBeenCalledTimes(1);
+    await expect(loadDataSnapshot(recovered)).resolves.toEqual({ ...overview, catalog });
   });
 });
 

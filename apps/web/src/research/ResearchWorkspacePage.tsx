@@ -16,14 +16,17 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { cn } from "cn";
 import type { AlphaCatalog } from "../alphaCatalog";
 import { coreFetch } from "../auth/coreFetch";
 import type { BrowserLocation } from "../auth/routing";
 import { useUrlSelection } from "../shell/useUrlSelection";
+import { followCoreLink, navigateCorePath } from "../shell/navigation";
 import { i18n, interfaceLocale, useTranslation } from "../i18n";
-import { type DataOverview } from "../data/DataPage";
+import { dataSnapshotQuery, type DataOverview } from "../data/dataResources";
+import { researchFoldersQuery, type ResearchFolder } from "./folderResources";
 import type { PythonSourceEditorHandle } from "./PythonSourceEditor";
 import { AlphaFormulaEditor, type AlphaFormulaEditorHandle } from "./AlphaFormulaEditor";
 import { ResearchCodeInput } from "./ResearchCodeInput";
@@ -81,13 +84,6 @@ import {
   usesBuiltinAlpha,
 } from "./draft";
 
-export type ResearchFolder = {
-  id: string;
-  name: string;
-  is_default: boolean;
-  created_at: string;
-};
-type ResearchFolderList = { items: ResearchFolder[]; next_cursor: null };
 type WorkspaceResources = {
   folder: ResearchFolder;
   folders: ResearchFolder[];
@@ -101,53 +97,27 @@ const stageLocations = {
 
 export function ResearchWorkspacePage({ location, researcherId }: { location: BrowserLocation; researcherId: string }) {
   const { t } = useTranslation("research");
-  const [resources, setResources] = useState<WorkspaceResources | null>(null);
-  const [error, setError] = useState<"unavailable" | null>(null);
+  const queryClient = useQueryClient();
+  const dataQuery = useQuery(dataSnapshotQuery);
+  const foldersQuery = useQuery(researchFoldersQuery);
   const [folderError, setFolderError] = useState<FolderError | null>(null);
   const [folderMenuOpen, setFolderMenuOpen] = useState(false);
-  const resourceRequest = useRef<AbortController | null>(null);
+  const mutationLifetime = useRef(new AbortController());
   const parameters = new URLSearchParams(location.search);
   const requestedFolderId = parameters.has("new") ? null : parameters.get("folder");
-
-  const load = useCallback(async () => {
-    resourceRequest.current?.abort();
-    const controller = new AbortController();
-    resourceRequest.current = controller;
-    setError(null);
-    setResources(null);
-    try {
-      const [folderResponse, dataResponse] = await Promise.all([
-        coreFetch("/api/research-folders", { signal: controller.signal }),
-        coreFetch("/api/data", { signal: controller.signal }),
-      ]);
-      if (!folderResponse.ok || !dataResponse.ok) {
-        throw new Error("Research workspace unavailable");
-      }
-      const folders = (await folderResponse.json()) as ResearchFolderList;
-      const defaults = folders.items.filter((folder) => folder.is_default);
-      if (defaults.length !== 1) throw new Error("Default Folder unavailable");
-      const selected = folders.items.find((folder) => folder.id === requestedFolderId) ?? defaults[0];
-      const { catalog, ...data } = await dataResponse.json();
-      if (controller.signal.aborted) return;
-      setResources({
-        folder: selected,
-        folders: folders.items,
-        catalog: catalog as AlphaCatalog,
-        data: data as DataOverview,
-      });
-    } catch {
-      if (controller.signal.aborted) return;
-      setResources(null);
-      setError("unavailable");
-    }
-  }, [requestedFolderId]);
-
   useEffect(() => {
-    void load();
-    return () => resourceRequest.current?.abort();
-  }, [load]);
+    const controller = new AbortController();
+    mutationLifetime.current = controller;
+    return () => controller.abort();
+  }, []);
+  const folders = foldersQuery.data;
+  const selected = folders?.find(folder => folder.id === requestedFolderId) ?? folders?.find(folder => folder.is_default);
+  const resources: WorkspaceResources | null = dataQuery.data && folders && selected
+    ? { folder: selected, folders, catalog: dataQuery.data.catalog, data: dataQuery.data } : null;
+  const error = dataQuery.isError || foldersQuery.isError ? "unavailable" : null;
+  const load = () => Promise.all([dataQuery.refetch(), foldersQuery.refetch()]);
 
-  if (error !== null) return (
+  if (error !== null && resources === null) return (
     <section aria-label={t("title")} className="page-section state-section">
       <p role="alert">{t(error)}</p>
       <Button variant="outline" onClick={() => void load()}>{t("retry")}</Button>
@@ -159,84 +129,91 @@ export function ResearchWorkspacePage({ location, researcherId }: { location: Br
     </section>
   );
   async function createFolder(name: string): Promise<boolean> {
+    const signal = mutationLifetime.current.signal;
     setFolderError(null);
     try {
       const response = await coreFetch("/api/research-folders", {
         method: "POST",
+        signal,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),
       });
       if (!response.ok) {
-        setFolderError(await folderMutationError(response));
+        const error = await folderMutationError(response);
+        signal.throwIfAborted();
+        setFolderError(error);
         return false;
       }
       const folder = (await response.json()) as ResearchFolder;
-      setResources((current) => current === null ? current : {
-        ...current,
-        folder,
-        folders: [...current.folders, folder],
-      });
-      window.history.replaceState(null, "", `/research?folder=${folder.id}`);
+      await queryClient.cancelQueries({ queryKey: researchFoldersQuery.queryKey });
+      signal.throwIfAborted();
+      queryClient.setQueryData(researchFoldersQuery.queryKey, current => [...(current ?? []).filter(item => item.id !== folder.id), folder]);
+      void queryClient.invalidateQueries({ queryKey: researchFoldersQuery.queryKey, refetchType: "none" });
+      navigateCorePath(`/research?folder=${encodeURIComponent(folder.id)}`, { replace: true });
       return true;
     } catch {
-      setFolderError("unavailable");
+      if (!signal.aborted) setFolderError("unavailable");
       return false;
     }
   }
 
   async function renameFolder(folderId: string, name: string): Promise<boolean> {
+    const signal = mutationLifetime.current.signal;
     setFolderError(null);
     try {
       const response = await coreFetch(`/api/research-folders/${folderId}`, {
         method: "PATCH",
+        signal,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),
       });
       if (!response.ok) {
-        setFolderError(await folderMutationError(response));
+        const error = await folderMutationError(response);
+        signal.throwIfAborted();
+        setFolderError(error);
         return false;
       }
       const renamed = (await response.json()) as ResearchFolder;
-      setResources((current) => current === null ? current : {
-        ...current,
-        folder: current.folder.id === renamed.id ? renamed : current.folder,
-        folders: current.folders.map((folder) => folder.id === renamed.id ? renamed : folder),
-      });
+      await queryClient.cancelQueries({ queryKey: researchFoldersQuery.queryKey });
+      signal.throwIfAborted();
+      queryClient.setQueryData(researchFoldersQuery.queryKey, current => current?.map(folder => folder.id === renamed.id ? renamed : folder));
+      void queryClient.invalidateQueries({ queryKey: researchFoldersQuery.queryKey, refetchType: "none" });
       return true;
     } catch {
-      setFolderError("unavailable");
+      if (!signal.aborted) setFolderError("unavailable");
       return false;
     }
   }
 
   async function deleteFolder(folder: ResearchFolder): Promise<boolean> {
+    const signal = mutationLifetime.current.signal;
     const currentResources = resources;
     if (currentResources === null) return false;
     setFolderError(null);
     try {
-      const response = await coreFetch(`/api/research-folders/${folder.id}`, { method: "DELETE" });
+      const response = await coreFetch(`/api/research-folders/${folder.id}`, { method: "DELETE", signal });
       if (!response.ok) {
-        setFolderError(await folderMutationError(response));
+        const error = await folderMutationError(response);
+        signal.throwIfAborted();
+        setFolderError(error);
         return false;
       }
+      await queryClient.cancelQueries({ queryKey: researchFoldersQuery.queryKey });
+      signal.throwIfAborted();
       window.localStorage.removeItem(researchDraftKey(researcherId, folder.id));
-      const defaultFolder = currentResources.folders.find((item) => item.is_default);
-      if (defaultFolder === undefined) throw new Error("Default Folder unavailable");
-      setResources({
-        ...currentResources,
-        folder: currentResources.folder.id === folder.id ? defaultFolder : currentResources.folder,
-        folders: currentResources.folders.filter((item) => item.id !== folder.id),
-      });
-      if (currentResources.folder.id === folder.id) window.history.replaceState(null, "", "/research");
+      queryClient.setQueryData(researchFoldersQuery.queryKey, current => current?.filter(item => item.id !== folder.id));
+      void queryClient.invalidateQueries({ queryKey: researchFoldersQuery.queryKey, refetchType: "none" });
+      if (currentResources.folder.id === folder.id) navigateCorePath("/research", { replace: true });
       return true;
     } catch {
-      setFolderError("unavailable");
+      if (!signal.aborted) setFolderError("unavailable");
       return false;
     }
   }
 
   return (
     <section aria-label={t("workspace")} className="research-folder-layout">
+      {error && <Alert variant="destructive"><AlertDescription>{t(error)}<Button variant="outline" onClick={() => void load()}>{t("retry")}</Button></AlertDescription></Alert>}
       <ResearchDraftWorkspace
         key={`${researcherId}:${resources.folder.id}`}
         researcherId={researcherId}
@@ -313,6 +290,7 @@ export function ResearchFolderNavigation({
                 <DropdownMenuLinkItem
                   aria-current={folder.id === activeFolder.id ? "page" : undefined}
                   href={folder.is_default ? "/research" : `/research?folder=${folder.id}`}
+                  onClick={followCoreLink}
                   className="min-w-0 flex-1"
                   title={folderDisplayName(folder)}
                 >

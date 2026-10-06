@@ -4,96 +4,14 @@ import { Badge } from "../components/ui/badge";
 import { Alert, AlertDescription } from "../components/ui/alert";
 import { InfoHelp } from "../components/product/InfoHelp";
 import { ArrowClockwise, ChartLineUp, Database, FileText, Stack } from "@phosphor-icons/react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 import type { AlphaCatalog } from "../alphaCatalog";
-import { coreFetch } from "../auth/coreFetch";
+import { dataSnapshotQuery, type DataOverview, type FieldFamilyAvailability } from "./dataResources";
 import { useTranslation } from "../i18n";
 import { catalogLabel } from "../i18n/catalog";
 import { DataDirectory } from "./DataDirectory";
 export { ResearchFieldCatalog } from "./DataDirectory";
-
-type FinancialResearchReadiness =
-  | "ready"
-  | "ready_with_pending"
-  | "ready_with_gaps"
-  | "not_ready";
-
-export type FieldFamilyAvailability = {
-  family_id: string;
-  research_category: "market" | "financial";
-  source_endpoints: string[];
-  supported_field_ids: string[];
-  available_field_ids: string[];
-  coverage_start: string | null;
-  coverage_end: string | null;
-  readiness: FinancialResearchReadiness | "partial";
-};
-
-export type DataOverview = {
-  generation_manifest_sha256: string | null;
-  available_field_ids: string[];
-  field_families: FieldFamilyAvailability[];
-  market_coverage: { start: string; end: string } | null;
-  financial_coverage: {
-    start: string;
-    discovery_baseline_session: string;
-    discovery_attempted_through_session: string;
-    discovery_complete_through_session: string;
-    historical_reconciliation_watermark: string;
-    revision_coverage: string;
-    seed_policy: string;
-    readiness_status: Exclude<FinancialResearchReadiness, "not_ready">;
-    pending_instrument_count: number;
-    discovery_gap_count: number;
-    earliest_unresolved_date: string | null;
-    sparse_facts: boolean;
-  } | null;
-  industry_coverage: {
-    start: string;
-    observation_through_session: string;
-    classification_version: "SW2021";
-  } | null;
-  benchmark_coverage: { start: string; end: string } | null;
-  benchmark_snapshot_sha256: string | null;
-  benchmark_last_published_at: string | null;
-  data_through_session: string | null;
-  last_market_refresh_at: string | null;
-  last_financial_refresh_at: string | null;
-  last_industry_refresh_at: string | null;
-  industry_refresh_status: "running" | "succeeded" | "failed" | null;
-  industry_refresh_failure_code: string | null;
-  market_research_readiness: boolean;
-  benchmark_research_readiness: boolean;
-  financial_research_readiness: FinancialResearchReadiness;
-  industry_research_readiness: boolean;
-};
-
-export type DataSnapshot = DataOverview & { catalog: AlphaCatalog };
-
-type DataPageResources = {
-  overview: DataOverview;
-  catalog: AlphaCatalog;
-};
-
-export type DataPageLoad =
-  | { resources: DataPageResources; error: null }
-  | { resources: null; error: "unavailable" };
-
-export async function loadDataPage(
-  request: typeof fetch = coreFetch,
-): Promise<DataPageLoad> {
-  try {
-    const response = await request("/api/data");
-    if (!response.ok) {
-      throw new Error("Data unavailable");
-    }
-    const { catalog, ...overview } = await response.json() as DataSnapshot;
-    return { resources: { overview, catalog }, error: null };
-  } catch {
-    return { resources: null, error: "unavailable" };
-  }
-}
 
 export function DataOverviewView({
   catalog,
@@ -167,29 +85,13 @@ function categoryReadiness(families: FieldFamilyAvailability[]): FieldFamilyAvai
 
 export function DataPage() {
   const { t } = useTranslation("data");
-  const [resources, setResources] = useState<DataPageResources | null>(null);
-  const [error, setError] = useState<"unavailable" | null>(null);
+  const { data, isError, isFetching, refetch } = useQuery(dataSnapshotQuery);
+  const error = isError ? "unavailable" : null;
+  const refresh = () => { void refetch({ cancelRefetch: false }); };
 
-  const [refreshing, setRefreshing] = useState(false);
-  const refreshingRef = useRef(false);
-  const refresh = useCallback(async () => {
-    if (refreshingRef.current) return;
-    refreshingRef.current = true;
-    setRefreshing(true);
-    const result = await loadDataPage();
-    if (result.resources !== null) setResources(result.resources);
-    setError(result.error);
-    refreshingRef.current = false;
-    setRefreshing(false);
-  }, []);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  if (!resources) return <Page className="console-workspace" aria-label={t("title")}><PageContent>
+  if (!data) return <Page className="console-workspace" aria-label={t("title")}><PageContent>
     <PageHeader variant="console" title={t("title")} />
-    {error ? <Alert variant="destructive"><AlertDescription>{t(error)}<Button variant="outline" disabled={refreshing} onClick={() => void refresh()}>{t("retry")}</Button></AlertDescription></Alert> : <p role="status">{t("loading")}</p>}
+    {error ? <Alert variant="destructive"><AlertDescription>{t(error)}<Button variant="outline" disabled={isFetching} onClick={refresh}>{t("retry")}</Button></AlertDescription></Alert> : <p role="status">{t("loading")}</p>}
   </PageContent></Page>;
-  return <DataOverviewView catalog={resources.catalog} overview={resources.overview} error={error} refreshing={refreshing} onRefresh={() => void refresh()} />;
+  return <DataOverviewView catalog={data.catalog} overview={data} error={error} refreshing={isFetching} onRefresh={refresh} />;
 }

@@ -6,6 +6,7 @@ import { useSessionHistory } from "../chat/useSessionHistory";
 import type { WorkspaceNavigate } from "./navigation";
 
 import { AppShell } from "./AppShell";
+import { WorkspaceQueryProvider } from "./WorkspaceQueryProvider";
 import { useTranslation } from "../i18n";
 
 const McpPage = lazy(() => import("../mcp/McpPage").then(({ McpPage }) => ({ default: McpPage })));
@@ -74,6 +75,7 @@ export function CoreApp({ location, navigate, isOperator, researcherId }: {
   const researchBatchMatch = currentPath.match(/^\/research-runs\/batches\/(batch_[a-f0-9]+)$/);
   const dailyTrackMatch = currentPath.match(/^\/daily-tracks\/(track_[a-f0-9]+)$/);
   return (
+    <WorkspaceQueryProvider researcherId={researcherId}>
     <AppShell
       currentPath={currentPath}
       currentSessionId={thread?.kind === "session" ? thread.id : null}
@@ -125,5 +127,6 @@ export function CoreApp({ location, navigate, isOperator, researcherId }: {
         ) : null}
       </Suspense>
     </AppShell>
+    </WorkspaceQueryProvider>
   );
 }

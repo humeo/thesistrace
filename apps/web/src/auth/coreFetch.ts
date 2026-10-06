@@ -31,6 +31,7 @@ export function createCoreFetch(dependencies: Readonly<{
       requestInit.headers = headers;
     }
 
+    requestInit.signal?.throwIfAborted();
     let response: Response;
     try {
       response = await dependencies.fetch(input, requestInit);
@@ -38,6 +39,7 @@ export function createCoreFetch(dependencies: Readonly<{
       if (error instanceof DOMException && error.name === "AbortError") throw error;
       throw new CoreUnavailableError("Core network request failed", { cause: error });
     }
+    requestInit.signal?.throwIfAborted();
     if (response.status === 401) {
       dependencies.onUnauthorized();
       throw new CoreAuthenticationRequiredError();

@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { AlphaCatalog } from "../../src/alphaCatalog";
 import { DataPage } from "../../src/data/DataPage";
+import { WorkspaceQueryProvider } from "../../src/shell/WorkspaceQueryProvider";
 import { AlphaFormulaEditor } from "../../src/research/AlphaFormulaEditor";
 import type { FormulaDiagnostic } from "../../src/research/diagnostics";
 import catalog from "./data-field-catalog.json";
@@ -18,7 +19,7 @@ function DataFieldsFixture() {
       <button type="button" onClick={() => changeInterfaceLanguage("en")}>English</button>
       <button type="button" onClick={() => changeInterfaceLanguage("zh-CN")}>简体中文</button>
     </nav>
-    <DataPage /><Toaster />
+    <WorkspaceQueryProvider researcherId="data-fields-fixture"><DataPage /></WorkspaceQueryProvider><Toaster />
     <section style={{ display: "grid", gap: 16, padding: 16, minWidth: 0 }} aria-labelledby="alpha-formula-title">
       <h2 id="alpha-formula-title">Alpha formula</h2>
       <button type="button" onClick={() => {
