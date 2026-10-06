@@ -25,6 +25,96 @@ async function openBatches(page: Page) {
   await page.getByRole("button", { name: "Cancel batch", exact: true }).click();
 }
 
+test("desktop batch cancellation preserves the accepted state while revalidation is pending", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  let detail = structuredClone(batch);
+  let holdDetail = false;
+  let releaseDetail!: () => void;
+  const detailReady = new Promise<void>(resolve => { releaseDetail = resolve; });
+  let releaseCancel!: () => void;
+  const cancelReady = new Promise<void>(resolve => { releaseCancel = resolve; });
+  const requests: string[] = [];
+  await page.route("**/api/research-batches/batch_running", async route => {
+    if (holdDetail) await detailReady;
+    await route.fulfill({ json: detail });
+  });
+  await page.route("**/api/research-batches/batch_running/cancel", async route => {
+    requests.push(route.request().postDataJSON().request_id);
+    if (requests.length === 1) return route.abort("failed");
+    await cancelReady;
+    detail = { ...detail, status: "cancelling" };
+    await route.fulfill({ json: detail });
+  });
+  try {
+    await openBatches(page);
+    await page.route("**/api/research-batches?**", route => route.fulfill({ json: { items: detail.status === "cancelled" ? [] : [detail], next_cursor: null } }));
+    const confirmation = page.getByRole("alertdialog", { name: "Cancel batch?" });
+    await expect(confirmation.getByRole("button", { name: "Keep batch" })).toBeFocused();
+    await expect(confirmation).toContainText("1 unfinished research run will be cancelled. Completed results will remain.");
+    await confirmation.getByRole("button", { name: "Cancel batch", exact: true }).click();
+    await expect(confirmation.getByRole("alert")).toContainText("cancellation failed");
+    holdDetail = true;
+    await confirmation.getByRole("button", { name: "Cancel batch", exact: true }).click();
+    await expect.poll(() => requests.length).toBe(2);
+    await expect(confirmation.getByRole("button", { name: "Keep batch" })).toBeDisabled();
+    await page.keyboard.press("Escape");
+    await expect(confirmation).toBeVisible();
+    releaseCancel();
+    await expect(confirmation).toHaveCount(0);
+    await expect(page.getByRole("status")).toContainText("Waiting for the running work to stop");
+    await expect(page.getByRole("listitem").filter({ hasText: "Completed factor" })).toContainText("Completed");
+    expect(requests[0]).toBeTruthy();
+    expect(requests[1]).toBe(requests[0]);
+    detail = { ...detail, status: "cancelled", items: [detail.items[0]!, { ...detail.items[1]!, status: "cancelled" }] };
+    releaseDetail();
+    await expect(page.getByRole("status")).toHaveText("Batch cancelled. Completed results are retained.");
+    await page.getByRole("link", { name: "Back to Batches", exact: true }).click();
+    await expect(page.getByText("No queued or running batches.", { exact: true })).toBeVisible();
+  } finally { releaseCancel(); releaseDetail(); }
+});
+
+test("desktop batch pages retain their filter and cursor through detail return and reload", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  const requests: URLSearchParams[] = [];
+  const detail = { ...batch, id: "batch_history", status: "completed_with_failures", items: [
+    batch.items[0], { ...batch.items[1], status: "failed", run_availability: "deleted" },
+  ] };
+  await page.route("http://127.0.0.1/research-runs/batches", route => route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' }));
+  await page.route("**/api/research-batches?**", route => {
+    const params = new URL(route.request().url()).searchParams;
+    requests.push(params);
+    return route.fulfill({ json: params.get("cursor") === "page2" ? { items: [detail], next_cursor: null } : { items: [batch], next_cursor: "page2" } });
+  });
+  await page.route("**/api/research-batches/batch_history", route => route.fulfill({ json: detail }));
+  await page.goto("http://127.0.0.1/research-runs/batches");
+  await page.addStyleTag({ content: styles });
+  await page.addScriptTag({ content: script });
+  await page.getByRole("button", { name: "All batches", exact: true }).click();
+  const pages = page.getByRole("navigation", { name: "Batch pages" });
+  await pages.getByRole("button", { name: "Next", exact: true }).click();
+  await expect(pages).toContainText("Page 2");
+  await page.getByRole("link").filter({ hasText: "batch_history" }).click();
+  await expect(page.getByRole("link", { name: "Completed factor", exact: true })).toHaveAttribute("href", "/research-runs/run_complete");
+  await expect(page.getByText("Running factor (deleted)", { exact: true })).toBeVisible();
+  await expect(page.locator('a[href="/research-runs/run_running"]')).toHaveCount(0);
+  await page.getByRole("link", { name: "Back to Batches", exact: true }).click();
+  await expect(pages).toContainText("Page 2");
+  await expect(page.getByRole("button", { name: "All batches", exact: true })).toHaveAttribute("aria-pressed", "true");
+  const refreshed = page.waitForResponse(response => response.url().includes("/api/research-batches?") && response.url().includes("cursor=page2"));
+  await page.getByRole("button", { name: "Reload", exact: true }).click();
+  await refreshed;
+  expect(requests.at(-1)?.get("cursor")).toBe("page2");
+  expect(requests.at(-1)?.get("active_only")).toBe("false");
+  expect(requests.at(-1)?.get("limit")).toBe("20");
+  await page.getByRole("button", { name: "简体中文", exact: true }).click();
+  await expect(page.getByRole("navigation", { name: "批次分页" })).toContainText("2");
+  await page.getByRole("button", { name: "English", exact: true }).click();
+  await page.getByRole("button", { name: "Active", exact: true }).click();
+  await expect(pages).toContainText("Page 1");
+  await expect.poll(() => requests.at(-1)?.get("active_only")).toBe("true");
+  expect(requests.at(-1)?.get("cursor")).toBeNull();
+});
+
 test("batch cancellation retries the same request and follows cancelling through to cancelled", async ({ page }) => {
   let detail = structuredClone(batch);
   const requests: string[] = [];

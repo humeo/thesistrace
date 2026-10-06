@@ -1,4 +1,5 @@
 import "../../src/styles.css";
+import { WorkspaceQueryProvider } from "../../src/shell/WorkspaceQueryProvider";
 import { LanguageControls } from "./language-controls";
 import { useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
@@ -13,4 +14,4 @@ function Fixture() {
   const batchId = path.match(/^\/research-runs\/batches\/(batch_[a-z0-9]+)$/)?.[1];
   return <ResearchBatchesPage batchId={batchId} />;
 }
-createRoot(document.getElementById("root")!).render(<><LanguageControls /><Fixture /></>);
+createRoot(document.getElementById("root")!).render(<WorkspaceQueryProvider researcherId="test"><LanguageControls /><Fixture /></WorkspaceQueryProvider>);

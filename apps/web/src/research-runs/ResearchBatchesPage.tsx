@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { i18n } from "../i18n";
 import { formatNumber, formatUtcTimestamp } from "../i18n/format";
 import { useEffect, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { coreFetch } from "../auth/coreFetch";
 import { followCoreLink, navigateCorePath } from "../shell/navigation";
 import { ResearchRunsNavigation } from "./ResearchRunsNavigation";
@@ -61,52 +62,45 @@ export function ResearchBatchesPage({ batchId }: { batchId?: string }) {
   const { t } = useTranslation("batches");
   const [activeOnly, setActiveOnly] = useState(true);
   const [cursors, setCursors] = useState<Array<string | null>>([null]);
-  const [items, setItems] = useState<ResearchBatch[] | null>(null);
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
-  const [batch, setBatch] = useState<ResearchBatchDetail | null>(null);
-  const [error, setError] = useState<"loadBatch" | "loadBatches" | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [refresh, setRefresh] = useState(0);
+  const queryClient = useQueryClient();
   const cursor = cursors.at(-1) ?? null;
+  const listQuery = useQuery({
+    queryKey: ["workspace", "research-batches", activeOnly, cursor],
+    queryFn: async ({ signal }): Promise<BatchList> => {
+      const params = new URLSearchParams({ limit: "20", active_only: String(activeOnly) });
+      if (cursor !== null) params.set("cursor", cursor);
+      const response = await coreFetch(`/api/research-batches?${params}`, { signal });
+      if (!response.ok) throw new Error("Batches unavailable");
+      return await response.json() as BatchList;
+    },
+    enabled: !batchId,
+    staleTime: 0,
+    refetchInterval: query => query.state.status === "error" ? false : 5000,
+  });
+  const detailQuery = useQuery({
+    queryKey: ["workspace", "research-batch", batchId],
+    queryFn: async ({ signal }): Promise<ResearchBatchDetail> => {
+      const response = await coreFetch(`/api/research-batches/${encodeURIComponent(batchId!)}`, { signal });
+      if (!response.ok) throw new Error("Batch unavailable");
+      return await response.json() as ResearchBatchDetail;
+    },
+    enabled: !!batchId,
+    staleTime: 0,
+    refetchInterval: query => query.state.status !== "error" && query.state.data && active(query.state.data.status) ? 2000 : false,
+  });
+  const items = listQuery.data?.items ?? null;
+  const nextCursor = listQuery.data?.next_cursor ?? null;
+  const batch = detailQuery.data;
+  const loading = batchId ? detailQuery.isLoading : listQuery.isLoading;
+  const error = batchId ? detailQuery.isError && "loadBatch" : listQuery.isError && "loadBatches";
+  function refresh() { void (batchId ? detailQuery.refetch() : listQuery.refetch()); }
 
-  useEffect(() => {
-    const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    setLoading(true);
-    setError(null);
-    const params = new URLSearchParams({ limit: "20", active_only: String(activeOnly) });
-    if (cursor !== null) params.set("cursor", cursor);
-    const path = batchId ? `/api/research-batches/${encodeURIComponent(batchId)}` : `/api/research-batches?${params}`;
-    async function load() {
-      try {
-        const response = await coreFetch(path, { signal: controller.signal });
-        if (!response.ok) throw new Error(batchId ? "Batch unavailable. Try reloading." : "Batches unavailable. Try reloading.");
-        if (batchId) {
-          const detail = await response.json() as ResearchBatchDetail;
-          if (controller.signal.aborted) return;
-          setBatch(detail);
-          if (active(detail.status)) timer = setTimeout(() => void load(), 2000);
-        } else {
-          const page = await response.json() as BatchList;
-          if (controller.signal.aborted) return;
-          setItems(page.items);
-          setNextCursor(page.next_cursor);
-          timer = setTimeout(() => void load(), 5000);
-        }
-        setLoading(false);
-      } catch {
-        if (controller.signal.aborted) return;
-        setLoading(false);
-        setError(batchId ? "loadBatch" : "loadBatches");
-      }
-    }
-    void load();
-    return () => { controller.abort(); clearTimeout(timer); };
-  }, [activeOnly, batchId, cursor, refresh]);
-
-  function accepted(detail: ResearchBatchDetail) {
-    setBatch(detail);
-    setRefresh(value => value + 1);
+  async function accepted(detail: ResearchBatchDetail) {
+    const queryKey = ["workspace", "research-batch", detail.id];
+    await queryClient.cancelQueries({ queryKey });
+    queryClient.setQueryData(queryKey, detail);
+    void queryClient.invalidateQueries({ queryKey: ["workspace", "research-batches"] });
+    void queryClient.invalidateQueries({ queryKey });
     if (!batchId) navigateCorePath(batchPath(detail.id));
   }
 
@@ -115,7 +109,7 @@ export function ResearchBatchesPage({ batchId }: { batchId?: string }) {
       <PageHeader variant="console" className="mb-0" title={batchId ? t("batch") : i18n.t("runs:title")} actions={batchId
         ? <Button variant="outline" nativeButton={false} role="link" render={<a href="/research-runs/batches" onClick={followCoreLink} />}>{t("back")}</Button> : undefined} />
       {!batchId && <ResearchRunsNavigation active="batches" />}
-      {error && <Alert variant="destructive"><AlertDescription>{t(error)}<Button variant="outline" onClick={() => setRefresh(value => value + 1)}>{t("reload")}</Button></AlertDescription></Alert>}
+      {error && <Alert variant="destructive"><AlertDescription>{t(error)}<Button variant="outline" onClick={refresh}>{t("reload")}</Button></AlertDescription></Alert>}
       {batchId ? batch?.id === batchId ? <>
         <Section title={kindLabel(batch)} actions={<>
           <BatchStatusLabel status={batch.status} />
@@ -139,12 +133,12 @@ export function ResearchBatchesPage({ batchId }: { batchId?: string }) {
             if (!values.length) return;
             const value = values[0] === "active";
             if (value === activeOnly) return;
-            setActiveOnly(value); setCursors([null]); setItems(null); setNextCursor(null);
+            setActiveOnly(value); setCursors([null]);
           }} variant="outline">
             <ToggleGroupItem value="active">{t("active")}</ToggleGroupItem>
             <ToggleGroupItem value="all">{t("all")}</ToggleGroupItem>
           </ToggleGroup>
-          <Button variant="outline" onClick={() => setRefresh(value => value + 1)} disabled={loading}>{t("reload")}</Button>
+          <Button variant="outline" onClick={refresh} disabled={loading}>{t("reload")}</Button>
         </div>
         {items === null && loading && <p role="status">{t("loadingBatches")}</p>}
         {items?.length === 0 && !error && <Empty><EmptyHeader><EmptyTitle>{t(activeOnly ? "emptyActive" : "empty")}</EmptyTitle></EmptyHeader></Empty>}
@@ -160,8 +154,8 @@ export function ResearchBatchesPage({ batchId }: { batchId?: string }) {
         </Table>}
         <PageNavigation label={t("pages")} previousLabel={t("previous")} nextLabel={t("next")}
           previousDisabled={cursors.length === 1 || loading} nextDisabled={!nextCursor || loading}
-          onPrevious={() => { setCursors(values => values.slice(0, -1)); setItems(null); }}
-          onNext={() => { if (nextCursor) { setCursors(values => [...values, nextCursor]); setItems(null); } }}>
+          onPrevious={() => { setCursors(values => values.slice(0, -1)); }}
+          onNext={() => { if (nextCursor) { setCursors(values => [...values, nextCursor]); } }}>
           {t("page", { page: formatNumber(cursors.length) })}
         </PageNavigation>
       </>}
@@ -189,7 +183,7 @@ function BatchItems({ items, links = true }: { items: BatchItem[]; links?: boole
 export function ResearchBatchCancelButton({ batchId, status, onAccepted }: {
   batchId: string;
   status: string;
-  onAccepted?: (batch: ResearchBatchDetail) => void;
+  onAccepted?: (batch: ResearchBatchDetail) => void | Promise<void>;
 }) {
   const { t } = useTranslation("batches");
   const [open, setOpen] = useState(false);
@@ -242,7 +236,8 @@ export function ResearchBatchCancelButton({ batchId, status, onAccepted }: {
       const updated = await response.json() as ResearchBatchDetail;
       if (request.signal.aborted) return;
       setOpen(false);
-      onAccepted?.(updated);
+      await onAccepted?.(updated);
+      if (request.signal.aborted) return;
       if (window.location.pathname !== batchPath(batchId)) navigateCorePath(batchPath(batchId));
 
     } catch {
