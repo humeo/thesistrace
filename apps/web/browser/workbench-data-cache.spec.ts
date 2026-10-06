@@ -1,5 +1,29 @@
 import { expect, test, workbenchData } from "./workbench-fixture";
 
+test("Batches retain loaded rows on return while the live list revalidates", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  const batchId = "batch_cafebabefeed1234";
+  await page.route("**/api/research-batches?*", route => route.fulfill({ json: { items: [{
+    id: batchId, batch_kind: "factor_evaluation", status: "running", created_at: "2026-10-05T00:00:00Z",
+    scope: { start_date: "2026-08-01", end_date: "2026-08-31", universe: "top1000", neutralization: "none" },
+    progress: { completed_factor_tasks: 1, total_factor_tasks: 2 },
+  }], next_cursor: null } }));
+  await page.goto("/research-runs/batches");
+  const result = page.locator(`a[href="/research-runs/batches/${batchId}"]`);
+  await expect(result).toBeVisible();
+  await page.getByRole("link", { name: "Data", exact: true }).click();
+  await expect(page.locator(".data-field-table")).toBeVisible();
+  let release!: () => void;
+  const responseAvailable = new Promise<void>(resolve => { release = resolve; });
+  await page.route("**/api/research-batches?*", async route => { await responseAvailable; await route.fallback(); });
+  const refreshing = page.waitForRequest("**/api/research-batches?*");
+  try {
+    await page.goBack();
+    await refreshing;
+    await expect(result).toBeVisible();
+  } finally { release(); }
+});
+
 test("Research Runs retain loaded rows on return while their live list revalidates", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 960 });
   await page.route("**/api/research-runs?*", route => route.fulfill({ json: { items: [{
