@@ -12,6 +12,35 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 const researcherId='b9aaeb26-fb97-4d1a-af62-a29c73021caa';
+test("initializes the workspace while Operator capability is pending, without exposing it early", async () => {
+  getSession.mockResolvedValue({data: {user: {active: true, id: researcherId, email: "audit@example.com", name: "Audit"}}, error: null});
+  let finishCapability!: (response: Response) => void;
+  const pending = new Promise<Response>(resolve => { finishCapability = resolve; });
+  const requests: string[] = [];
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+    const path = String(input);
+    requests.push(path);
+    if (path === "/api/auth/operator/capability") return pending;
+    if (path === "/api/researcher/bootstrap") return Response.json({
+      researcher_id: researcherId, system_folders: {default: "folder_default", batch_research: "folder_batch_research"},
+    });
+    throw new Error("Unexpected request");
+  });
+  let auth!: ReturnType<typeof useAuth>;
+  function Consumer() {auth = useAuth(); return null;}
+  const root = createRoot(document.createElement("div"));
+  try {
+    await act(async () => root.render(<AuthProvider><Consumer /></AuthProvider>));
+    expect(requests).toContain("/api/researcher/bootstrap");
+    expect(auth.state.status).not.toBe("authenticated");
+    await act(async () => finishCapability(Response.json({operator: true})));
+    expect(auth.state).toMatchObject({status: "authenticated", session: {researcherId, operator: true}});
+  } finally {
+    finishCapability(new Response(null, {status: 404}));
+    await act(async () => root.unmount());
+  }
+});
+
 test.each(['sign-out','core-401'])('ignores delayed bootstrap after %s',async action=>{
   getSession.mockResolvedValue({data:{user:{active:true,id:researcherId,email:'audit@example.com',name:'Audit'}},error:null});
   signOut.mockResolvedValue({data:null,error:null});
