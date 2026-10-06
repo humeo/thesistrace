@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import https from "node:https";
 import { setTimeout as pollInterval } from "node:timers/promises";
+import { handleTransfer, qualifyTransfers } from "./caddy-transfer-probe.mjs";
 
 const cases = [
   { kind: "auth", port: 8200, path: "/api/auth/keepalive-probe", idleMilliseconds: 6_000 },
@@ -10,6 +11,11 @@ const cases = [
 
 if (process.argv[2] === "serve") {
   for (const probe of cases) startUpstream(probe);
+  http.createServer((request, response) => {
+    if (!handleTransfer(request, response)) response.writeHead(404).end();
+  }).listen(8400, "0.0.0.0");
+} else if (process.argv[2] === "transfer") {
+  console.log(JSON.stringify(await qualifyTransfers()));
 } else if (process.argv[2] === "probe") {
   const results = [];
   for (const probe of cases) results.push(await qualifyIdlePost(probe));
@@ -25,6 +31,7 @@ function startUpstream({ port, path, idleMilliseconds }) {
   const socketIds = new WeakMap();
   let receivedPosts = 0;
   const server = http.createServer(async (request, response) => {
+    if (handleTransfer(request, response)) return;
     const url = new URL(request.url, "http://probe.test");
     if (url.pathname === "/probe/health") {
       response.end("ready");

@@ -65,8 +65,13 @@ try {
   await phase('idle-close-race', async () => {
     await docker(['logs', auth], { stdoutFile: `${evidence}/auth-header-echo.log`, stderrFile: `${evidence}/auth-header-echo.stderr.log` });
     await docker(['rm', '--force', auth], { quiet: true });
-    await docker(['run', '--detach', '--name', auth, '--network', network, '--network-alias', 'auth', '--network-alias', 'api', '--volume', `${root}/tests/fixtures/caddy-keepalive-upstream.mjs:/keepalive-probe.mjs:ro`, 'node:24.14.0-bookworm-slim@sha256:d3d197c99e937af98e07c7830622c243d836a7485e6131495418232e787308fe', 'node', '/keepalive-probe.mjs', 'serve'], { stdoutFile: `${evidence}/keepalive-container-id.txt` });
-    await docker(['exec', auth, 'node', '/keepalive-probe.mjs', 'probe'], { stdoutFile: `${evidence}/keepalive.json`, stderrFile: `${evidence}/keepalive.stderr.log` });
+    await docker(['run', '--detach', '--name', auth, '--network', network, '--network-alias', 'auth', '--network-alias', 'api', '--network-alias', 'agent', '--volume', `${root}/tests/fixtures:/fixtures:ro`, 'node:24.14.0-bookworm-slim@sha256:d8e448a56fc63242f70026718378bd4b00f8c82e78d20eefb199224a4d8e33d8', 'node', '/fixtures/caddy-keepalive-upstream.mjs', 'serve'], { stdoutFile: `${evidence}/keepalive-container-id.txt` });
+    await docker(['exec', auth, 'node', '/fixtures/caddy-keepalive-upstream.mjs', 'probe'], { stdoutFile: `${evidence}/keepalive.json`, stderrFile: `${evidence}/keepalive.stderr.log` });
+  });
+  await phase('transfer', async () => {
+    const transfers = await docker(['exec', auth, 'node', '/fixtures/caddy-keepalive-upstream.mjs', 'transfer'], { capture: true, stderrFile: `${evidence}/transfer.stderr.log` });
+    writeFileSync(`${evidence}/transfer.json`, transfers);
+    console.log(`Caddy transfer checks: ${transfers.trim()}`);
   });
 } catch (error) { result ||= error.status ?? 1; console.error(error.message); }
 finally {

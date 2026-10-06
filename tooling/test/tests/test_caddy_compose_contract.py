@@ -497,6 +497,8 @@ def test_release_image_gate_uses_the_same_caddyfile_with_an_internal_test_ca() -
     smoke = (ROOT / "tooling/test/caddy-image.mjs").read_text() + (
         ROOT / "tests/caddy-image-checks.sh"
     ).read_text()
+    node_image = (ROOT / "apps/web/Dockerfile").read_text().splitlines()[0].split()[1]
+    assert node_image in smoke, "The probe must use the same pinned Node image as the product build"
 
     assert '"test:caddy-image-smoke": "./tooling/test/caddy-image.mjs"' in package
     assert "pnpm test:caddy-image-smoke" in package
