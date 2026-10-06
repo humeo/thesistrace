@@ -1,5 +1,6 @@
 import type { TimelinePage } from "./chat-control.js";
 import type { SessionSummary } from "./session-repository.js";
+import { A2UI_FRAMEWORK_TOOL_NAMES } from "./browser-message-safety.js";
 
 /** The same browser-safe public state is used by HTTP history and live AG-UI. */
 export function sessionResponse(session: SessionSummary) {
@@ -38,7 +39,8 @@ export function timelineResponse(page: TimelinePage) {
     next_cursor: page.nextCursor,
     turns: page.turns.map((turn) => ({
       completed_at: turn.completedAt,
-      entries: turn.entries.map((entry) => ({
+      entries: turn.entries.filter(entry => entry.kind !== "tool_activity"
+        || !A2UI_FRAMEWORK_TOOL_NAMES.has(entry.payload.name)).map((entry) => ({
         created_at: entry.createdAt,
         entry_id: entry.entryId,
         kind: entry.kind,

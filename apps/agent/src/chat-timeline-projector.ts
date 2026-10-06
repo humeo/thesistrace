@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { EventType, type BaseEvent } from "@ag-ui/core";
 
 import { parseSafeToolResult } from "./safe-tool-result.js";
+import { A2UI_FRAMEWORK_TOOL_NAMES } from "./browser-message-safety.js";
 import type { ResearchSessionRepository } from "./session-repository.js";
 
 const FLUSH_INTERVAL_MS = 75;
@@ -88,6 +89,7 @@ export class ChatTimelineProjector {
         typeof event.toolCallId !== "string"
         || typeof event.toolCallName !== "string"
         || !SAFE_TOOL_NAME.test(event.toolCallName)
+        || A2UI_FRAMEWORK_TOOL_NAMES.has(event.toolCallName)
       ) {
         return;
       }

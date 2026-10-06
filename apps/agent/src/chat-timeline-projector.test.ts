@@ -11,6 +11,20 @@ const RUN_ID = "00000000-0000-4000-8000-000000000002";
 afterEach(() => vi.useRealTimers());
 
 describe("browser-safe chat timeline projection", () => {
+  it("keeps framework rendering calls out of persisted public tool activity", async () => {
+    const rows = new Map<string, string>();
+    const projector = new ChatTimelineProjector({
+      persistAssistantMessage: async (_thread: string, _run: string, id: string, content: string) => { rows.set(id, content); },
+      persistToolActivity: async (_thread: string, _run: string, id: string, name: string) => { rows.set(id, name); },
+    } as unknown as ResearchSessionRepository, THREAD_ID, RUN_ID);
+    await projector.project(event({ type: EventType.TEXT_MESSAGE_CONTENT, messageId: "answer", delta: "Preparing a view." }));
+    await projector.project(event({ type: EventType.TOOL_CALL_START, toolCallId: "render", toolCallName: "render_a2ui" }));
+    await projector.project(event({ type: EventType.TOOL_CALL_RESULT, toolCallId: "render", content: SAFE_TOOL_COMPLETED }));
+    await projector.project(event({ type: EventType.TEXT_MESSAGE_CONTENT, messageId: "answer", delta: "View ready." }));
+    await projector.flush();
+    expect([...rows.values()]).toEqual(["Preparing a view.", "View ready."]);
+  });
+
   it("replaces only the unfinished response when a model request is retried", async () => {
     const rows = new Map<string, string>();
     const projector = new ChatTimelineProjector({
