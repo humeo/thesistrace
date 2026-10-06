@@ -1,5 +1,6 @@
 import type { Page } from "@playwright/test";
 import { expect, test } from "./workbench-fixture";
+import { exampleDailyTrack } from "./fixtures/daily-track";
 
 function recordDocumentRequests(page: Page): string[] {
   const documentRequests: string[] = [];
@@ -8,6 +9,79 @@ function recordDocumentRequests(page: Page): string[] {
   });
   return documentRequests;
 }
+
+test("DailyTrack list and detail links keep the authenticated document", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  const trackId = "track_cafebabefeed1234";
+  const runId = "run_feedface1234abcd9876";
+  const track = { ...exampleDailyTrack, id: trackId, origin: { ...exampleDailyTrack.origin, seed_run_id: runId } };
+  await page.route("**/api/daily-tracks", route => route.fulfill({ json: { items: [{
+    id: trackId, status: track.status, seed_run_id: runId, result_checksum_sha256: track.origin.result_checksum_sha256,
+    origin_session: track.origin.strategy_session, strategy_session: track.strategy_session,
+  }], next_cursor: null } }));
+  await page.route(`**/api/daily-tracks/${trackId}`, route => route.fulfill({ json: track }));
+  await page.route(`**/api/research-runs/${runId}`, route => route.fulfill({ json: { name: "Tracked strategy" } }));
+  await page.goto("/daily-tracks");
+  await expect(page.getByRole("link", { name: trackId, exact: true })).toBeVisible();
+  const documents = recordDocumentRequests(page);
+  const origin = await page.evaluate(() => performance.timeOrigin);
+
+  await page.getByRole("link", { name: trackId, exact: true }).click();
+  const back = page.locator('main a[href="/daily-tracks"]');
+  await expect(back).toBeVisible();
+  await back.click();
+  await expect(page.getByRole("link", { name: trackId, exact: true })).toBeVisible();
+
+  expect(documents).toEqual([]);
+  expect(await page.evaluate(() => performance.timeOrigin)).toBe(origin);
+});
+
+test("Operator section links keep the authenticated document", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await page.route("**/api/auth/operator/capability", route => route.fulfill({ json: { operator: true } }));
+  await page.route("**/api/auth/operator/researchers*", route => route.fulfill({ json: { items: [], next_cursor: null } }));
+  await page.route("**/api/auth/operator/invitations*", route => route.fulfill({ json: { items: [], next_cursor: null } }));
+  // The navigation remains available while operational status is temporarily unavailable.
+  await page.route("**/api/operator/data/status", route => route.fulfill({ status: 503, json: { code: "UNAVAILABLE" } }));
+  await page.goto("/operator/researchers");
+  const data = page.locator('main a[href="/operator/data"]');
+  await expect(data).toBeVisible();
+  const documents = recordDocumentRequests(page);
+  const origin = await page.evaluate(() => performance.timeOrigin);
+
+  await data.click();
+  await expect(data).toHaveAttribute("aria-current", "page");
+  await page.locator('main a[href="/operator/researchers"]').click();
+  await expect(data).not.toHaveAttribute("aria-current", "page");
+
+  expect(documents).toEqual([]);
+  expect(await page.evaluate(() => performance.timeOrigin)).toBe(origin);
+});
+
+test("a lazy workspace route keeps the previous content visible until it can open", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await page.goto("/data");
+  const fields = page.locator(".data-field-table");
+  await expect(fields).toBeVisible();
+  let release!: () => void;
+  const available = new Promise<void>(resolve => { release = resolve; });
+  await page.route("**/assets/ResearchWorkspacePage-*.js", async route => {
+    await available;
+    await route.fallback();
+  });
+  const requested = page.waitForRequest("**/assets/ResearchWorkspacePage-*.js");
+  await page.getByRole("link", { name: "Research", exact: true }).click();
+  await requested;
+  try {
+    await expect(fields).toBeVisible();
+    await expect(page.getByText("Loading workspace…", { exact: true })).toHaveCount(0);
+  } finally { release(); }
+  await expect(page.getByRole("button", { name: "Factor Evaluation", exact: true })).toBeVisible();
+  await page.goBack();
+  await expect(fields).toBeVisible();
+  await page.goForward();
+  await expect(page.getByRole("button", { name: "Factor Evaluation", exact: true })).toBeVisible();
+});
 
 test("ResearchRun return keeps the selected Type without a document reload", async ({ page }) => {
   const documentRequests = recordDocumentRequests(page);
@@ -110,6 +184,9 @@ test("Start Tracking opens the created DailyTrack without a document reload", as
     startTrackingMethods.push(route.request().method());
     await route.fulfill({ status: 201, json: { id: trackId } });
   });
+  await page.route("**/api/daily-tracks", route => route.fulfill({
+    json: { items: [], next_cursor: null },
+  }));
 
   await page.goto(`/research-runs/${runId}`);
   await expect(page.getByRole("button", { name: "Start Tracking" })).toBeVisible();

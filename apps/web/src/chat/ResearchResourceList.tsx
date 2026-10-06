@@ -5,6 +5,7 @@ import { z } from "zod";
 import { ArrowClockwiseIcon } from "@phosphor-icons/react";
 import "./researchResourceList.css";
 import { coreFetch } from "../auth/coreFetch";
+import { followCoreLink } from "../shell/navigation";
 import { i18n } from "../i18n";
 import { formatDecimal, formatPercent, formatTimestamp } from "../i18n/format";
 import { blockedReason } from "../daily-tracks/blockedReason";
@@ -51,7 +52,7 @@ export function ResearchResourceList({ kind, ids }: { kind: "run" | "track"; ids
   return <div role="list"><Listy items={ids} rowKey={id => `${kind}:${id}`} virtual={false}
     classNames={{ item: "chat-research-list-row" }}
     itemRender={id => <div role="listitem">{details === null || details.has(id) ? <ResourceRow kind={kind} id={id} />
-      : <Typography.Link href={resourceHref(kind, id)}>{t(kind === "run" ? "a2ui.researchLink" : "a2ui.trackLink", { id })}</Typography.Link>}
+      : <Typography.Link href={resourceHref(kind, id)} onClick={followCoreLink}>{t(kind === "run" ? "a2ui.researchLink" : "a2ui.trackLink", { id })}</Typography.Link>}
     </div>} /></div>;
 }
 
@@ -124,7 +125,7 @@ function ResourceRow({ kind, id }: { kind: "run" | "track"; id: string }) {
       <Flex vertical gap={4}>
         <Flex justify="space-between" align="center" gap="small">
           <Flex align="center" gap="small" wrap>
-            <Typography.Link href={href} strong>{title}</Typography.Link>
+            <Typography.Link href={href} onClick={followCoreLink} strong>{title}</Typography.Link>
             {resource ? <ResourceStatus resource={resource} /> : null}
           </Flex>
           <Space size="small">
@@ -156,7 +157,7 @@ function ResourceFacts({ resource }: { resource: Resource }) {
   if (resource.kind === "track") {
     const track = resource.value;
     return <><Descriptions size="small" column={2} items={[
-        { key: "origin", label: t("a2ui.originRun"), children: <Typography.Link href={`/research-runs/${track.origin.seed_run_id}`}>{track.origin.seed_run_id}</Typography.Link> },
+        { key: "origin", label: t("a2ui.originRun"), children: <Typography.Link href={`/research-runs/${track.origin.seed_run_id}`} onClick={followCoreLink}>{track.origin.seed_run_id}</Typography.Link> },
         { key: "session", label: t("a2ui.trackingSession"), children: track.strategy_session },
         { key: "data", label: t("a2ui.dataThrough"), children: track.data_through_session },
         { key: "observation", label: t("a2ui.observationSession"), children: track.observation.session },

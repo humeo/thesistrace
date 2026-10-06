@@ -20,6 +20,7 @@ import {
 
 import { Alert, App, Card, Collapse, Descriptions, Divider, Flex, Spin, Table, Tag, Typography } from "antd";
 import { ResearchResourceDetailsContext, ResearchResourceList } from "./ResearchResourceList";
+import { followCoreLink } from "../shell/navigation";
 
 export const researchA2UICatalogDefinitions = RESEARCH_A2UI_DEFINITIONS;
 
@@ -106,7 +107,7 @@ function ResearchNavigation({ href: sourceHref, label }: { href: string; label: 
   const href = parseResearchA2UINavigationHref(sourceHref);
   return href === null
     ? <Alert type="error" title={t("a2ui.unavailableLink")} />
-    : <Typography.Link href={href}>{label}</Typography.Link>;
+    : <Typography.Link href={href} onClick={followCoreLink}>{label}</Typography.Link>;
 }
 
 export function ResearchA2UIActivity({

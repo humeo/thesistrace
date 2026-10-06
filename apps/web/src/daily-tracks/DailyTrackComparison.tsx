@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ColorType, LineSeries, createChart, type IChartApi, type Time } from "lightweight-charts";
 import { coreFetch } from "../auth/coreFetch";
+import { followCoreLink } from "../shell/navigation";
 import { chartTheme } from "../analysis/chartTheme";
 import { interfaceLocale } from "../i18n";
 import { formatNumber } from "../i18n/format";
@@ -69,12 +70,12 @@ export function DailyTrackComparison({ items, revision }: { items: readonly Dail
             <TableCell><Badge variant={item.status === "blocked" ? "destructive" : "secondary"}>{detail ? trackStatusLabel(detail) : t(`statuses.${item.status}`)}</Badge></TableCell>
             <TableCell>{returnValue == null ? "—" : formatReturn(returnValue)}</TableCell><TableCell>{drawdown == null ? "—" : formatReturn(drawdown)}</TableCell>
             <TableCell>{detail ? formatMoney(detail.observation.net_asset_value_cny) : "—"}</TableCell>
-            <TableCell><Button variant="link" nativeButton={false} role="link" render={<a href={`/daily-tracks/${encodeURIComponent(item.id)}`} />} aria-label={item.id}>{t("openTrack")}</Button></TableCell>
+            <TableCell><Button variant="link" nativeButton={false} role="link" render={<a href={`/daily-tracks/${encodeURIComponent(item.id)}`} onClick={followCoreLink} />} aria-label={item.id}>{t("openTrack")}</Button></TableCell>
           </TableRow>;
         })}</TableBody>
       </Table>
     </section>
-    {active ? <Section title={name(items.find(item => item.id === activeId)!)} actions={<Button variant="outline" nativeButton={false} role="link" render={<a href={`/daily-tracks/${encodeURIComponent(activeId)}`} />}>{t("openTrack")}</Button>}>
+    {active ? <Section title={name(items.find(item => item.id === activeId)!)} actions={<Button variant="outline" nativeButton={false} role="link" render={<a href={`/daily-tracks/${encodeURIComponent(activeId)}`} onClick={followCoreLink} />}>{t("openTrack")}</Button>}>
       <div className="grid grid-cols-[minmax(0,1fr)_248px] gap-8"><HoldingsPreview observation={active.observation} /><aside className="min-w-0 border-l border-border pl-6"><AccountAllocation observation={active.observation} /></aside></div>
     </Section> : <p role="status" className="m-0 text-sm text-muted-foreground">{t(loaded[activeId]?.failed ? "rowUnavailable" : "loading")}</p>}
   </div>;

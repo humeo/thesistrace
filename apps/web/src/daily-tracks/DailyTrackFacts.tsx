@@ -2,6 +2,7 @@ import { useTranslation } from "react-i18next";
 import { formatCurrency, formatNumber, formatUtcTimestamp } from "../i18n/format";
 import { Button } from "../components/ui/button";
 import { Section } from "../components/layout/Page";
+import { followCoreLink } from "../shell/navigation";
 import type { DailyTrackDetail } from "./DailyTracksPage";
 
 export function TrackingProgressView({
@@ -40,7 +41,7 @@ export function TrackingOriginView({ origin }: { origin: DailyTrackDetail["origi
         <p>
           <strong>{t("seed")} </strong>{" "}
           {origin.seed_research_available ? (
-            <Button variant="link" nativeButton={false} role="link" render={<a href={`/research-runs/${origin.seed_run_id}`} />} className="h-auto min-h-11 max-w-full whitespace-normal p-0 text-left [overflow-wrap:anywhere]">{origin.seed_run_id}</Button>
+            <Button variant="link" nativeButton={false} role="link" render={<a href={`/research-runs/${origin.seed_run_id}`} onClick={followCoreLink} />} className="h-auto min-h-11 max-w-full whitespace-normal p-0 text-left [overflow-wrap:anywhere]">{origin.seed_run_id}</Button>
           ) : (
             <span>{origin.seed_run_id}{t("deleted")}</span>
           )}

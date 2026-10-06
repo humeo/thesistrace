@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { ArrowClockwise } from "@phosphor-icons/react";
 
 import { coreFetch } from "../auth/coreFetch";
+import { followCoreLink } from "../shell/navigation";
 import type { DailyTrackAnalysis } from "./DailyTrackAnalysisView";
 import type { DailyTrackObservation } from "./DailyTrackObservationView";
 import { DailyTrackWorkspace } from "./DailyTrackWorkspace";
@@ -329,7 +330,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
   if (error && track === null && (trackId || items === null)) {
     return <Page className="console-workspace" aria-label={t("title")}><PageContent><PageHeader variant="console" title={t("title")} />
       {detailNotFound
-        ? <Alert><AlertDescription>{t("notFound")}<Button nativeButton={false} role="link" render={<a href="/daily-tracks" />}>{t("backToList")}</Button></AlertDescription></Alert>
+        ? <Alert><AlertDescription>{t("notFound")}<Button nativeButton={false} role="link" render={<a href="/daily-tracks" onClick={followCoreLink} />}>{t("backToList")}</Button></AlertDescription></Alert>
         : <Alert variant="destructive"><AlertDescription>{t("unavailable")}<Button variant="outline" onClick={reloadStatus}>{t("retry")}</Button></AlertDescription></Alert>}
     </PageContent></Page>;
   }
@@ -368,7 +369,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
     <PageHeader variant="console" title={t("title")} className="mb-0" actions={reloadAction} />
     {error ? <Alert variant="destructive"><AlertDescription>{t("listReloadFailed")}</AlertDescription></Alert> : null}
     {items?.length === 0 ? <Empty variant="page"><EmptyHeader><EmptyTitle role="heading" aria-level={2}>{t("emptyTitle")}</EmptyTitle><EmptyDescription>{t("emptyDescription")}</EmptyDescription></EmptyHeader>
-      <Button nativeButton={false} role="link" render={<a href="/research-runs" />}>{t("browseRuns")}</Button>
+      <Button nativeButton={false} role="link" render={<a href="/research-runs" onClick={followCoreLink} />}>{t("browseRuns")}</Button>
     </Empty> : <DailyTrackComparison items={items ?? []} revision={refreshGeneration} />}
   </PageContent></Page>;
 }

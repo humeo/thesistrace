@@ -8,6 +8,7 @@ import { useTranslation } from "react-i18next";
 import { ArrowDown, Atom, ListChecks } from "@phosphor-icons/react";
 import markedCjkFriendly from "marked-cjk-friendly";
 import { i18n } from "../i18n";
+import { followCoreLink } from "../shell/navigation";
 import { formatNumber, formatTimestamp } from "../i18n/format";
 import { parseResearchRunHref } from "./toolResult";
 import { ResearchA2UIActivity, researchResourceIds } from "./researchA2UI";
@@ -338,7 +339,7 @@ function IncompleteMarkdown({ "data-raw": encoded, domNode }: ComponentProps) {
 function SafeMarkdownLink({ children, href }: ComponentProps) {
   const safeHref = parseResearchRunHref(typeof href === "string" ? href : undefined);
   return safeHref === null ? <Typography.Text className="chat-markdown-link-disabled" type="secondary">{children}</Typography.Text>
-    : <Typography.Link className="chat-markdown-run-link" href={safeHref}>{children}</Typography.Link>;
+    : <Typography.Link className="chat-markdown-run-link" href={safeHref} onClick={followCoreLink}>{children}</Typography.Link>;
 }
 
 function HiddenMarkdownImage() { return null; }

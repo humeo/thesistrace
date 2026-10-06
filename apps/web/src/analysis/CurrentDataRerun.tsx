@@ -2,6 +2,7 @@ import { Button } from "../components/ui/button";
 import { Alert, AlertDescription } from "../components/ui/alert";
 import { useRef, useState } from "react";
 import { coreFetch } from "../auth/coreFetch";
+import { followCoreLink } from "../shell/navigation";
 import { useTranslation } from "../i18n";
 import { readResearchIssues, formatResearchIssue, researchIssueField, type ResearchRunAdmissionIssue } from "../research/admission";
 
@@ -58,8 +59,8 @@ export function CurrentDataRerunOrigin({ origin }: { origin: RerunOrigin }) {
   const { t } = useTranslation("analysis");
   return <p className="research-run-rerun-origin">
     {t("rerun.origin")} · {origin.source_track_id
-      ? <a href={`/daily-tracks/${encodeURIComponent(origin.source_track_id)}`}>{t("rerun.sourceTrack")}</a>
-      : <a href={`/research-runs/${encodeURIComponent(origin.source_run_id)}`}>{t("rerun.sourceRun")}</a>}
+      ? <a href={`/daily-tracks/${encodeURIComponent(origin.source_track_id)}`} onClick={followCoreLink}>{t("rerun.sourceTrack")}</a>
+      : <a href={`/research-runs/${encodeURIComponent(origin.source_run_id)}`} onClick={followCoreLink}>{t("rerun.sourceRun")}</a>}
     . {t("rerun.different")}
   </p>;
 }

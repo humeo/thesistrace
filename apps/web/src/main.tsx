@@ -60,7 +60,7 @@ function BrowserRoutedApp() {
   const synchronizeLocation = useCallback(() => {
     const next = consumeBrowserLocation();
     if (isAuthPath(next.location.pathname)) synchronizeEntryLanguage();
-    setLocation(next.location);
+    React.startTransition(() => setLocation(next.location));
     setSecret((current) => {
       if (next.secret !== null) return next.secret;
       if (next.hadFragment || current === null) return null;

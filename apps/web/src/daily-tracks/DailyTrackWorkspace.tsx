@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useUrlSelection } from "../shell/useUrlSelection";
+import { followCoreLink } from "../shell/navigation";
 import { useTranslation } from "react-i18next";
 import { CaretDownIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import { i18n } from "../i18n";
@@ -47,10 +48,10 @@ export function DailyTrackWorkspace({ track, items, listError = false, onReloadL
   const title = names[track.origin.seed_run_id] ?? `${t("trackHeading")} ${track.id.replace(/^track_/, "").slice(0, 6)}`;
   return <Page className="console-workspace" aria-label={t("title")}><PageContent className="flex flex-col gap-6">
     <PageHeader variant="console" title={t("title")} className="mb-0" actions={<>
-      <Button variant="link" nativeButton={false} role="link" render={<a href="/daily-tracks" />}>{t("backToList")}</Button>
+      <Button variant="link" nativeButton={false} role="link" render={<a href="/daily-tracks" onClick={followCoreLink} />}>{t("backToList")}</Button>
       <DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" />} aria-label={t("switchTrack")}>{t("switchTrack")}<CaretDownIcon data-icon="inline-end" /></DropdownMenuTrigger>
         <DropdownMenuContent className="min-w-72"><DropdownMenuGroup>
-          {visibleItems.map(item => <DropdownMenuLinkItem key={item.id} href={`/daily-tracks/${encodeURIComponent(item.id)}`} aria-label={item.id} aria-current={item.id === track.id ? "page" : undefined}>{names[item.seed_run_id] ?? `${t("trackHeading")} ${item.id.replace(/^track_/, "").slice(0, 6)}`}</DropdownMenuLinkItem>)}
+          {visibleItems.map(item => <DropdownMenuLinkItem key={item.id} href={`/daily-tracks/${encodeURIComponent(item.id)}`} onClick={followCoreLink} aria-label={item.id} aria-current={item.id === track.id ? "page" : undefined}>{names[item.seed_run_id] ?? `${t("trackHeading")} ${item.id.replace(/^track_/, "").slice(0, 6)}`}</DropdownMenuLinkItem>)}
         </DropdownMenuGroup></DropdownMenuContent>
       </DropdownMenu>
       {reloadAction}
