@@ -33,6 +33,10 @@ SDK_OVERVIEW = (
     "Only self.state persists. Class instances are recreated for each invocation. A failed "
     "invocation publishes neither changed state nor a decision. Check configuration validates "
     "syntax, class loading and callback signature, not every branch or future data request.",
+    "Use NumPy on history.array for vectorized computation across instruments and history. "
+    "The array axes are history.instruments and history.sessions. Account-dependent decisions "
+    "still execute in Close order. Convert finite array results with tolist() or item() before "
+    "putting them in the bounded JSON state.",
 )
 
 
@@ -134,9 +138,10 @@ def _sdk_entries() -> tuple[dict[str, AuthoringReferenceEntry], set[str]]:
                "return self.limit_positions({account.positions[0]['instrument_id']: 0})"),
         _entry("Data.history", "Read numeric observations through this Close from the frozen "
                "data generation. Financial values obey disclosure-time visibility.",
-               parameters=history, returns="History; values are float or None.",
+               parameters=history, returns="History with a read-only NumPy array and keyed values.",
                notes=("Fewer sessions may be returned at the start of the generation. "
-                      "Missing observations are None. Unknown fields, out-of-scope IDs or "
+                      "Missing observations are NaN in array and None in keyed values. "
+                      "Unknown fields, out-of-scope IDs or "
                       "exceeded limits fail explicitly. No future dates can be requested.",),
                body="history = data.history('price.close.adjusted', 2)\n"
                "self.state['observations'] = len(history.sessions)\nreturn None"),
@@ -167,8 +172,8 @@ def _sdk_entries() -> tuple[dict[str, AuthoringReferenceEntry], set[str]]:
                "Attributes assigned locally do not change the host's date or data authority."),
         _entry("Account", "Recursively read-only actual simulated account. Money and exact "
                "accounting quantities are decimal strings; use decimal.Decimal for arithmetic."),
-        _entry("History", "Historical observations, ordered oldest to newest. "
-               "sessions is a tuple; values is a read-only mapping of IDs to tuples."),
+        _entry("History", "Historical observations as a read-only float64 array with explicit "
+               "instrument/session axes, and a keyed view of float-or-None tuples."),
         _entry("Decision", "Value returned by SDK helpers. Only the Decision returned by "
                "on_close is submitted. The host independently validates it and its stage."),
     ]
@@ -191,7 +196,22 @@ def _sdk_entries() -> tuple[dict[str, AuthoringReferenceEntry], set[str]]:
         _entry("History.sessions", "Tuple of ISO dates from oldest to newest, ending no later "
                "than the current Close. May contain fewer dates than requested."),
         _entry("History.values", "Read-only mapping: instrument ID -> tuple of float or None. "
-               "Every tuple aligns to History.sessions. No missing value is silently filled."),
+               "Keys iterate in canonical instrument-ID order. Every tuple aligns to "
+               "History.sessions. No missing value is silently filled."),
+        _entry("History.instruments", "Tuple of IDs aligned to the rows of History.array. "
+               "Explicit instrument requests retain their order; the default scope is sorted."),
+        _entry("History.array", "Read-only NumPy float64 ndarray with shape "
+               "(len(history.instruments), len(history.sessions)). Missing observations are NaN.",
+               notes=("Use array.copy() for writable work. Vectorization does not change "
+                      "the current Close, permitted instruments or history limits.",),
+               body="import numpy as np\n"
+               "history = data.close_prices(2)\n"
+               "if len(history.sessions) < 2 or not history.instruments:\n    return None\n"
+               "prices = history.array\n"
+               "valid = np.isfinite(prices[:, 0]) & np.isfinite(prices[:, -1]) "
+               "& (prices[:, 0] > 0)\n"
+               "returns = prices[valid, -1] / prices[valid, 0] - 1\n"
+               "self.state['returns'] = returns.tolist()\nreturn None"),
         _entry("Account.cash_cny", "Available cash as a decimal CNY string."),
         _entry("Account.post_open_net_nav_cny", "Net NAV marked after this Session's Open "
                "execution, as a decimal CNY string."),
@@ -228,7 +248,7 @@ def sdk_reference_entries() -> tuple[AuthoringReferenceEntry, ...]:
     public_methods = set()
     source = Path(__file__).parents[1] / "research_kernel" / "strategy_sdk.py"
     for node in ast.parse(source.read_text(encoding="utf-8")).body:
-        if not isinstance(node, ast.ClassDef):
+        if not isinstance(node, ast.ClassDef) or node.name.startswith("_"):
             continue
         # Missing documentation for a newly published class/method fails here and in CI.
         entries[node.name]

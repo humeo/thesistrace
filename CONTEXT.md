@@ -321,6 +321,8 @@ _避免混用_: Alpha, Factor, Investment Hypothesis
 Researcher-authored code expressing a Strategy's portfolio decision rules.
 Python programs implement an isolated class callback with bounded data/account
 inputs, one returned decision and optional explicit cross-session state.
+Numerical work may use array operations over bounded completed-session history;
+the generic Python executor does not choose Strategy rules or callback frequency.
 _避免混用_: Alpha Formula, Strategy parameters, Simulation Conditions
 
 **Direct Strategy**:

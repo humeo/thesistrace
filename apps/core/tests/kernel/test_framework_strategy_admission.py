@@ -77,7 +77,7 @@ def test_framework_admission_freezes_only_active_modules_and_unions_declared_req
     assert frozen["strategy"]["modules"] == values["modules"]
     assert "holdings_count" not in frozen["strategy"]
     assert "exposure_expression" not in frozen["strategy"]
-    assert frozen["strategy"]["environment"]["contract"] == "python-strategy/v3"
+    assert frozen["strategy"]["environment"]["contract"] == "python-strategy/v4"
     assert admitted.expression_admission.effective_lookback == 0
     assert admitted.field_bindings == {
         "price.close.adjusted": "close",

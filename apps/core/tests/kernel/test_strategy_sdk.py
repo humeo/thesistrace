@@ -1,5 +1,7 @@
+import numpy as np
 import pytest
 
+from thesistrace.research_history import HistoryWindow
 from thesistrace.research_kernel.strategy_program_runtime import (
     PythonStrategyRuntime,
     StrategyProgramError,
@@ -30,7 +32,7 @@ class Momentum(Strategy):
 
     def read(request):
         requests.append(request)
-        return {"sessions": ["2026-08-03"], "values": {"A": [12.0]}}
+        return HistoryWindow(("2026-08-03",), ("A",), np.array([[12.0]]))
 
     context = {"session": "2026-08-03", "account": {"cash_cny": "100", "positions": []}}
     first = runtime.invoke(source, context=context, state={}, read_history=read)
@@ -93,7 +95,7 @@ def test_history_request_limit_is_enforced_even_when_user_catches_errors(runtime
 
     def read(request):
         requests.append(request)
-        return {"sessions": [], "values": {}}
+        return HistoryWindow((), (), np.empty((0, 0)))
 
     source = '''from quantgrove import Strategy
 class TooMany(Strategy):

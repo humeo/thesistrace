@@ -78,10 +78,11 @@ def test_context_and_dynamic_reads_exclude_future_data_and_metadata():
     for field in ("price.close.adjusted", financial):
         request = {"field_id": field, "days": 10, "instruments": None}
         first = program_history(original, before)(request)
-        assert first == program_history(altered, context(altered))(request)
-        assert first["sessions"] == list(SESSIONS[:2])
-        assert set(first["values"]) == {A, B}
-    assert first["values"] == {A: [100, 100], B: [100, 100]}
+        second = program_history(altered, context(altered))(request)
+        assert first.sessions == second.sessions == tuple(SESSIONS[:2])
+        assert first.instruments == second.instruments == (A, B)
+        assert first.array.tolist() == second.array.tolist()
+    assert first.array.tolist() == [[100, 100], [100, 100]]
 
 
 @pytest.mark.parametrize(

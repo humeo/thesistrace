@@ -2,17 +2,14 @@
 
 import io
 import json
-import os
 import sys
 import types
 
 AVAILABLE_MODULES = (
     "bisect", "calendar", "collections", "copy", "dataclasses", "datetime", "decimal",
     "enum", "fractions", "functools", "heapq", "itertools", "json", "math", "operator",
-    "random", "re", "statistics", "string", "time", "typing", "_strptime",
+    "random", "re", "statistics", "string", "time", "typing", "_strptime", "numpy",
 )
-BOOTSTRAP_READY_FD = 3
-BOOTSTRAP_READY = b"thesistrace-python-ready/v1"
 
 
 def freeze(value):
@@ -37,23 +34,16 @@ class Diagnostics(io.TextIOBase):
 
 
 def main():
-    # Preserve the pinned entropy stream before executing researcher source.
-    # random seeds its singleton on import; other libraries can load lazily.
-    __import__("random")
+    from _thesistrace_execution import ready
+
     request = json.loads(sys.stdin.buffer.read())
-    # The only preopened directory contains the pinned standard library. Revoke
-    # its descriptor before executing any source, including top-level imports.
-    os.close(3)
-    os.close(0)
     sys.path.clear()
     sys.path_importer_cache.clear()
     output = sys.stdout
     diagnostics = Diagnostics()
     sys.stdout = diagnostics
     sys.stderr = diagnostics
-    # The host accepts this one-time control write only after the trusted
-    # bootstrap has revoked its file capabilities and before any user source.
-    os.write(BOOTSTRAP_READY_FD, BOOTSTRAP_READY)
+    ready()
     try:
         code = compile(request["source"], "strategy.py", "exec")
         sdk = sys.modules["quantgrove"]

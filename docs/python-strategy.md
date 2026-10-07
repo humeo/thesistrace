@@ -82,13 +82,38 @@ the field's disclosure-time visibility. Current and earlier published research
 sessions are available, including history before the research start or execution
 chunk. No future calendar or future universe members are supplied.
 
-The returned `History` has `sessions` (oldest to newest), `values` (instrument to
-tuple), `history[stock]` and `history.items()`. Missing observations are `None`.
+The returned `History` has a read-only NumPy `array`, with instruments on rows and
+oldest-to-newest sessions on columns. `history.instruments` and `history.sessions`
+name those axes. Explicit instrument requests retain their row order; the default
+scope is sorted by instrument ID. Missing observations are `NaN` in the array.
+Use `array.copy()` for writable calculations.
+
+The keyed `values`, `history[stock]` and `history.items()` views expose tuples of
+floats or `None`, with keys in canonical instrument-ID order. They use the same
+observations as the array and only materialize tuples when accessed.
 If the generation starts too recently, fewer than `days` sessions are returned;
 the strategy decides whether to wait or use them. Reading does not shift the
 research start or create additional decisions. Unknown/unavailable fields and
 out-of-scope stocks raise a source-located error rather than receiving substitute
 data. Empty stock lists return no instrument values.
+
+For example, compute every instrument's return in one NumPy operation:
+
+```python
+import numpy as np
+
+history = data.close_prices(61)
+if len(history.sessions) == 61:
+    prices = history.array
+    valid = np.isfinite(prices[:, 0]) & np.isfinite(prices[:, -1]) & (prices[:, 0] > 0)
+    scores = prices[valid, -1] / prices[valid, 0] - 1
+    instruments = np.asarray(history.instruments)[valid]
+```
+
+The execution layer does not infer a strategy category or translate Python into
+a formula. NumPy operates on the requested, bounded window. Decisions that use
+the actual account or explicit state still run in Close order. Convert NumPy
+values to finite JSON with `tolist()` or `item()` before saving them in `self.state`.
 
 ### Account
 
@@ -168,7 +193,7 @@ that does not belong to its stage. Only the composed decision reaches execution.
 Web, HTTP and MCP submit `program: {"source": "..."}` plus simulation conditions.
 Framework slots use `{"kind": "python", "program": {"source": "..."}}`.
 There are no `parameters` or `data_requirements` properties. The current contract
-is `python-strategy/v3`; the old function ABI is not an execution fallback.
+is `python-strategy/v4`; the old function ABI is not an execution fallback.
 
 Dates, universe, initial capital, fees and slippage remain backtest conditions.
 The Run freezes source, execution identity and data generation. Results expose
@@ -195,45 +220,57 @@ bound storage access. Capacity planning reserves guest, host read and event buff
 
 ## Frozen environment
 
-The runtime uses CPython 3.14.7 compiled for WASI, executed by Wasmtime 49.0.0.
-The archive is the [CPython WASI build](https://github.com/brettcannon/cpython-wasi-build/releases/tag/v3.14.7)
-`python-3.14.7-wasi_sdk-24.zip`, 14,291,017 bytes, SHA-256
-`2e064d3fb8172471d39d741348efa722349c40b96301f69968dff714999c584b`.
-Installation is an explicit dependency setup operation; execution neither
-downloads packages nor inherits the host Python environment.
+The current environment is a preinitialized **CPython 3.14.0 + NumPy 2.5.0**
+WASI component, executed by Wasmtime 49.0.0. It uses componentize-py's pinned
+WASI interpreter fork, rather than the previous CPython 3.14.7 command archive.
+The portable component, source hashes, toolchain revision and dependency hashes
+are packaged in `research_kernel/python_runtime/manifest.json`. The explicit
+[build recipe](../tooling/python-runtime/README.md) records its source inputs,
+patches and licenses. Execution verifies the packaged component; it never
+fetches packages or inherits the host Python environment.
 
-The runtime identity records these versions, the archive, the actual prepared
-bootstrap and module-source hashes (including the SDK and library loader),
-available modules, limits and deterministic-input policies. Changing
-that identity changes the accepted execution environment.
+The runtime identity includes these versions, the component archive, actual
+bootstrap and module-source hashes (including the SDK and history codec),
+available modules, limits and deterministic-input policies. New admissions use
+`python-strategy/v4`. Historical inputs and results remain unchanged; executing
+an old frozen environment still fails explicitly. API and all Python-capable
+Worker pools must use the same revision. Drain pending work and resolve affected
+DailyTracks before a cutover.
 
-Programs can import `bisect`, `calendar`, `collections`, `copy`, `dataclasses`,
-`datetime`, `decimal`, `enum`, `fractions`, `functools`, `heapq`, `itertools`,
-`json`, `math`, `operator`, `random`, `re`, `statistics`, `string`, `time` and
-`typing`, with their prepared dependencies. NumPy, pandas and package
-installation are unavailable in the guest.
+Programs can import `numpy`, including its prepared `fft`, `linalg`, `ma`,
+`polynomial`, `random`, `rec` and `strings` modules, and the supported standard
+library: `bisect`, `calendar`, `collections`, `copy`, `dataclasses`, `datetime`,
+`decimal`, `enum`, `fractions`, `functools`, `heapq`, `itertools`, `json`, `math`,
+`operator`, `random`, `re`, `statistics`, `string`, `time` and `typing`, with their
+prepared dependencies. Pandas and package installation are unavailable. NumPy
+runs compiled array kernels inside WASI; this build has no external BLAS or
+host CPU-specific dispatch. Batch arithmetic does not imply native BLAS speed.
 
-The pinned interpreter prepares trusted SDK/bootstrap bytecode and the permitted
-library import closure once. Each fresh guest imports library modules on demand
-through a bounded, read-only bytecode capability. This avoids repeatedly loading
-unused libraries while preserving invocation-local modules and globals. Library
-reads accept prepared module names only (at most 200 bytes per name, 256 requests and 16 MiB per
-invocation); they do not expose paths, task data or additional installed packages.
+Only trusted libraries are initialized in the component image. Every invocation
+gets a fresh Store and component instance before receiving strategy source,
+input, data or explicit state. Wasmtime shares compiled code and copy-on-write
+initial memory; Python globals, module mutations and arrays never survive calls.
+The executor receives opaque input and bounded host capabilities, without knowing
+whether the caller is a Direct Strategy or any Framework stage.
 
-The host does not grant filesystem, network, subprocess or native-library
-capabilities. The trusted bootstrap installs the prepared library loader, then
-closes its sole directory capability and input descriptor before any user
-source executes. Imports are not the security boundary: the WASI guest has no
-host file, credential, dataset or socket authority even if a program reaches
-Python's lower-level modules. The only environment variables are fixed
-`PYTHONHOME=/runtime`, `PYTHONHASHSEED=0` and `TZ=UTC`.
+The host grants no filesystem, network, subprocess or native-library authority.
+The SDK's history callback returns only authorized observations up to this Close,
+as a bounded, non-pickled float64 NPY matrix plus explicit axes. The guest exposes
+an immutable bytes-backed ndarray and lazily creates keyed tuples for code using
+`history[instrument]`. No Python object graph is serialized cell by cell on the
+array path. Arrays expose missing values as NaN; keyed tuples retain None.
+The only environment variables are fixed `PYTHONHOME=/runtime`,
+`PYTHONHASHSEED=0` and `TZ=UTC`.
 
-Wall-clock APIs return 15:00 UTC+08:00 on the decision session; monotonic and CPU
-clocks return zero. Random bytes, including `SystemRandom`, derive from the
-canonical invocation. Identical source, context and state therefore
-receive identical random input. Sleeping and blocking are unavailable.
-The trusted bootstrap initializes `random` before researcher source to retain
-the existing entropy sequence even when user code calls `os.urandom` first.
+Wall-clock APIs, including NumPy's `datetime64("now")`, return 15:00 UTC+08:00 on
+the decision session; monotonic and CPU clocks return zero. Random bytes,
+including `SystemRandom` and unseeded NumPy generators, derive from the canonical
+invocation. NumPy's legacy global RNG receives a separate domain-separated seed;
+it does not consume the standard-library RNG stream. Explicit NumPy seeds retain
+their usual meaning. Identical source, context and state receive identical random
+input. Sleeping and blocking timer subscriptions are unavailable. The initialized
+stdlib `random` is reseeded once before researcher source, preserving the prior
+entropy sequence even when user code calls `os.urandom` first.
 
 ## Invocation limits
 
@@ -251,7 +288,7 @@ the existing entropy sequence even when user code calls `os.urandom` first.
 
 Fuel bounds CPU work across the complete invocation. The trusted bootstrap
 has its own bounded startup time for setting up the prepared environment. After
-it revokes the library and input descriptors, the user-program deadline starts;
+it prepares the SDK and immutable input, the user-program deadline starts;
 source compilation, top-level code, the callback and serialization share that
 3-second budget. Repeating the bootstrap readiness signal cannot restart it. Both budgets are
 frozen in the execution identity, and wall deadlines also apply on overloaded

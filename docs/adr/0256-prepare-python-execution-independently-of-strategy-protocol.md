@@ -4,6 +4,10 @@ status: accepted
 
 # Prepare Python execution independently of the strategy protocol
 
+[ADR-0257](0257-freeze-numerical-python-libraries-and-transfer-history-arrays.md)
+replaces the bytecode-loader implementation below with preinitialized numerical
+libraries and binary history arrays, retaining the execution/strategy separation.
+
 The shared simulator owns event ordering and the account. The Python Strategy
 Adapter owns SDK entrypoints, decision validation, explicit state, and the
 decision-scoped history capability. A prepared Python execution Module receives

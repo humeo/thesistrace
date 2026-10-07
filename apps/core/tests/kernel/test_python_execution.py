@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 
 import pytest
 
@@ -8,41 +7,33 @@ from thesistrace.research_kernel.python_execution import PreparedPythonEnvironme
 pytestmark = pytest.mark.bounded_process
 
 
-def test_prepared_identity_tracks_loaded_sources_and_library_limits(tmp_path, monkeypatch):
-    from thesistrace.research_kernel import python_execution
-
-    loader = Path(python_execution.__file__).with_name("python_library_guest.py")
-    staged_loader = tmp_path / loader.name
-    staged_loader.write_bytes(loader.read_bytes())
-    monkeypatch.setattr(python_execution, "__file__", str(tmp_path / "python_execution.py"))
-    with PreparedPythonEnvironment("print('hello')", ()) as first:
+def test_prepared_identity_tracks_the_actual_bootstrap_and_module_sources():
+    modules = {"helper": "value = 1"}
+    with PreparedPythonEnvironment("import helper\nprint(helper.value)",
+                                   module_sources=modules) as first:
         identity = first.identity()
-        staged_loader.write_text(staged_loader.read_text() + "\n# Revised loader\n")
+        modules["helper"] = "value = 2"
         assert first.identity() == identity
-        with PreparedPythonEnvironment("print('hello')", ()) as second:
+        assert first.invoke(b"", clock_time_ns=0) == b"1\n"
+        with PreparedPythonEnvironment("import helper\nprint(helper.value)",
+                                       module_sources=modules) as second:
             assert second.identity() != identity
-            assert second.invoke(b"", clock_time_ns=0) == first.invoke(b"", clock_time_ns=0)
-        assert identity["library_requests"] == 256
-        assert identity["library_request_bytes"] == 200
-        assert identity["library_response_bytes"] == 16 * 1024 * 1024
+            assert second.invoke(b"", clock_time_ns=0) == b"2\n"
 
 
 def test_prepared_python_executes_an_opaque_protocol_and_isolates_module_mutations():
     bootstrap = """
-import json, os, sys
+import json, sys, helper
+from _thesistrace_execution import ready, read_request
 request = json.loads(sys.stdin.buffer.read())
-os.close(0)
-os.close(3)
-os.write(3, b'thesistrace-python-ready/v1')
-import helper
-os.write(4, request['message'].encode())
-reply = os.pread(4, 1024, 0).decode()
+ready()
+reply = read_request(request['message'].encode()).decode()
 output = {'value': helper.double(request['value']), 'counter': helper.counter, 'reply': reply}
 helper.counter += 1
 print(json.dumps(output))
 """
     environment = PreparedPythonEnvironment(
-        bootstrap, (),
+        bootstrap,
         module_sources={"helper": "counter = 0\ndef double(value): return value * 2\n"},
     )
     request = json.dumps({"value": 21, "message": "hello"}).encode()
@@ -55,31 +46,45 @@ print(json.dumps(output))
         environment.invoke(request, clock_time_ns=0)
 
 
-def test_prepared_python_rejects_oversized_capability_responses():
-    environment = PreparedPythonEnvironment("""
-import os
-os.close(3)
-os.close(0)
-os.write(3, b'thesistrace-python-ready/v1')
-os.write(4, b'request')
-""", ())
-    with pytest.raises(ValueError, match="resource or capability"):
-        environment.invoke(b"", clock_time_ns=0, read_request=lambda _: b"x" * (5 * 1024**2))
+@pytest.mark.parametrize("body, response", [
+    ("read_request(b'request')", b"x" * (5 * 1024**2)),
+    ("read_request(b'x' * 65537)", b""),
+    ("[read_request(b'x') for _ in range(65)]", b""),
+    ("[read_request(b'x') for _ in range(5)]", b"x" * (4 * 1024**2)),
+    ("ready()", b""),
+])
+def test_prepared_python_enforces_capability_limits(body, response):
+    with PreparedPythonEnvironment(
+        "from _thesistrace_execution import ready, read_request\nready()\n" + body,
+    ) as environment:
+        with pytest.raises(ValueError, match="resource or capability"):
+            environment.invoke(b"", clock_time_ns=0, read_request=lambda _: response)
 
 
-def test_prepared_libraries_load_on_demand_without_restoring_file_authority():
-    environment = PreparedPythonEnvironment("""
-import os, sys
-os.close(3)
-os.close(0)
+def test_prepared_libraries_are_available_without_restoring_file_authority():
+    with PreparedPythonEnvironment("""
+import sys
+from _thesistrace_execution import ready
 sys.path.clear()
 sys.path_importer_cache.clear()
-os.write(3, b'thesistrace-python-ready/v1')
+ready()
 from statistics import fmean
-print(fmean([1, 2, 3]))
+import numpy as np
+print(fmean([1, 2, 3]), np.add([1, 2], [3, 4]).tolist())
 try:
     open('/runtime/lib/python3.14/statistics.py').read()
 except OSError:
     print('denied')
-""", ("statistics",))
-    assert environment.invoke(b"", clock_time_ns=0) == b"2.0\ndenied\n"
+""") as environment:
+        assert environment.invoke(b"", clock_time_ns=0) == b"2.0 [4, 6]\ndenied\n"
+
+
+def test_prepared_output_handles_short_wasi_writes_and_bounds_total_output():
+    with PreparedPythonEnvironment(
+        "from _thesistrace_execution import ready, payload\nready()\n"
+        "print('数值' * int(payload))",
+    ) as environment:
+        assert environment.invoke(b"12000", clock_time_ns=0) == ("数值" * 12000 + "\n").encode()
+        with pytest.raises(ValueError):
+            environment.invoke(b"200000", clock_time_ns=0)
+        assert environment.invoke(b"1", clock_time_ns=0) == "数值\n".encode()

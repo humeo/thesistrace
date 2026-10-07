@@ -1,8 +1,12 @@
 """Public authoring API, loaded only inside the isolated Python guest."""
 
 import json
-import os
+import math
+from collections.abc import Mapping
 from types import MappingProxyType
+
+from _history_wire import decode_history
+from _thesistrace_execution import read_request
 
 
 def _freeze(value):
@@ -33,14 +37,38 @@ class Account:
         raise TypeError("Account observations are read-only")
 
 
+class _HistoryValues(Mapping):
+    def __init__(self, history):
+        self._history = history
+        # The keyed view retains its canonical instrument ordering. The array
+        # has its own explicit axis in the caller's requested order.
+        self._rows = dict(sorted((instrument, index)
+                                for index, instrument in enumerate(history.instruments)))
+
+    def __getitem__(self, instrument):
+        row = self._history.array[self._rows[instrument]].tolist()
+        return tuple(None if math.isnan(value) else value for value in row)
+
+    def __iter__(self):
+        return iter(self._rows)
+
+    def __len__(self):
+        return len(self._rows)
+
+
 class History:
-    """Oldest-to-newest observations, keyed by instrument ID."""
+    """Read-only float64 array: instruments by oldest-to-newest sessions.
+
+    Missing observations are NaN in ``array`` and None in the keyed values view.
+    Use ``array.copy()`` for writable numerical work.
+    """
 
     def __init__(self, response):
-        self.sessions = tuple(response["sessions"])
-        self.values = MappingProxyType({
-            key: tuple(values) for key, values in response["values"].items()
-        })
+        window = decode_history(response)
+        self.sessions = window.sessions
+        self.instruments = window.instruments
+        self.array = window.array
+        self.values = _HistoryValues(self)
 
     def __getitem__(self, instrument):
         return self.values[instrument]
@@ -63,14 +91,7 @@ class Data:
             "field_id": field_id, "days": days,
             "instruments": None if instruments is None else list(instruments),
         }, allow_nan=False, separators=(",", ":")).encode()
-        os.write(4, payload)
-        chunks = []
-        while chunk := os.pread(4, 65536, 0):
-            chunks.append(chunk)
-        response = json.loads(b"".join(chunks))
-        if "error" in response:
-            raise ValueError(response["error"])
-        return History(response)
+        return History(read_request(payload))
 
     def close_prices(self, days, *, instruments=None):
         return self.history("price.close.adjusted", days, instruments=instruments)

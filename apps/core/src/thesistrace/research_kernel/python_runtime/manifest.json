@@ -1,0 +1,24 @@
+{
+  "contract": "thesistrace-python-component/v1",
+  "python": "3.14.0",
+  "numpy": "2.5.0",
+  "wasmtime": "49.0.0",
+  "wasi": "0.2.4",
+  "wasm_bytes": 34817876,
+  "wasm_sha256": "8b33919474a7b30bdad41ce9f400e550dd387d40a8a8f275e0b7aad991c67c8c",
+  "archive_bytes": 11043231,
+  "archive_sha256": "1ed699b6c473c5b55a03102db8e32630abebc073c5a1faeaa5c22eb5845672e6",
+  "source_sha256": {
+    "prepared.py": "bc283f0f58e82c1ec43b662b4e8b64e2dbc01aae3bbb99ea0627e8ce33156be6",
+    "execution.wit": "f005555239608c996838ea6779231a29a9d9b658c75a50d2a950cd16a2a6863f"
+  },
+  "toolchain_image": "ghcr.io/actpkg/python-env-toolchain@sha256:3442524631048df96516e2363afcad2e77ccbad7ac4f03bd94fdf0b9f71ff024",
+  "componentize_py": "811ff834f1d6a0fb1b61a637f002dce36c10ee4a",
+  "numpy_source_sha256": "5a129578019311b6e56bdd714250f19b518f7dceeeb8d1af5490f4942d3f891c",
+  "build_recipe_sha256": {
+    "build.py": "2b6d51ca4a952b585eba431715030764a493cfdbfd09cf2d213bdd04bc871a88",
+    "build.sh": "6cebe80c88959d5a91d002df4a4963a6d10a07a23d68da89f8c1aa7132475f90",
+    "patches.py": "4455594bff0ac4d1cfea392387906b06c067c8bb9de9c4b50f6da7c1a63945ac",
+    "inputs.lock.json": "5ce2711d9f66e59f1c0fbc45ced20d1d117668570eb3204ab33e15aaff8e9b82"
+  }
+}

@@ -86,6 +86,7 @@ from thesistrace.publication.serialization import (
     parquet_table_bytes,
     validate_parquet_table,
 )
+from thesistrace.research_history import HistoryWindow
 from thesistrace.research_series import AlignedResearchData, ttm_window_column
 
 _FAMILY_GENERATION_FORMAT = "thesistrace-family-generation"
@@ -1525,7 +1526,7 @@ class MountedGenerationStore:
         if definition is None or definition.alpha is None:
             raise ValueError("History requires a numeric research field")
         if not instruments:
-            return {"sessions": list(sessions), "values": {}}
+            return HistoryWindow(sessions, (), np.empty((0, len(sessions))))
         binding = {field_id: definition.alpha.identifier}
         families = _field_family_bindings(binding, None)
         family_id = next(key for key, fields in families.items() if field_id in fields)
@@ -1565,14 +1566,7 @@ class MountedGenerationStore:
             raise ValueError("Program history contains an out-of-scope coordinate")
         matrix = np.full((len(instruments), len(sessions)), np.nan)
         matrix[stocks.to_numpy(), dates.to_numpy()] = numbers
-        # Arrow converts nulls and floats in native code; the guest still sees
-        # the same oldest-to-newest lists, including None for missing values.
-        flattened = matrix.ravel()
-        observations = pa.array(flattened, mask=np.isnan(flattened)).to_pylist()
-        width = len(sessions)
-        values = {item: observations[index * width:(index + 1) * width]
-                  for index, item in enumerate(instruments)}
-        return {"sessions": list(sessions), "values": values}
+        return HistoryWindow(sessions, tuple(instruments), matrix)
 
     def open_admission(self, manifest_sha256: str) -> MountedGenerationAdmission:
         root = self._read_family_generation_root(manifest_sha256)

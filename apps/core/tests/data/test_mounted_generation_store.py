@@ -969,12 +969,13 @@ def test_strategy_history_reads_unloaded_fields_before_slice_start_from_pinned_g
     history = read({"field_id": "price.open.adjusted", "days": 10,
                     "instruments": ["equity:A.SH"]})
     expected_sessions = list(calendar[max(0, len(calendar) - 11):-1])
-    assert history["sessions"] == expected_sessions
-    assert history["values"] == {"equity:A.SH": [
+    assert history.sessions == tuple(expected_sessions)
+    assert history.instruments == ("equity:A.SH",)
+    assert history.array.tolist() == [[
         float(row["open_adj"]) for row in canonical["prices"]
         if row["instrument_id"] == "equity:A.SH" and row["session"] in expected_sessions
-    ]}
-    assert str(calendar[-1]) not in history["sessions"]
+    ]]
+    assert str(calendar[-1]) not in history.sessions
     with pytest.raises(ValueError, match="unavailable"):
         read({"field_id": "unknown", "days": 1, "instruments": None})
 
@@ -1001,18 +1002,19 @@ def test_strategy_history_reuses_a_projection_without_leaking_dates_or_instrumen
             field_id="price.close.adjusted", days=2, instruments=["equity:B.SZ"],
         )
     assert second_io.parquet_object_opens == 0
-    assert history["sessions"] == list(calendar[-4:-2])
-    assert history["values"] == {"equity:B.SZ": [
+    assert history.sessions == tuple(calendar[-4:-2])
+    assert history.instruments == ("equity:B.SZ",)
+    assert history.array.tolist() == [[
         float(row["close_adj"]) for row in canonical["prices"]
         if row["instrument_id"] == "equity:B.SZ" and row["session"] in calendar[-4:-2]
-    ]}
-    # A caller may mutate the returned JSON without poisoning immutable cached data.
-    history["values"]["equity:B.SZ"][0] = -1
+    ]]
+    # A host caller may mutate the selection without poisoning immutable cached data.
+    history.array[0, 0] = -1
     repeated = store.read_strategy_history(
         generation.manifest_sha256, session=calendar[-3],
         field_id="price.close.adjusted", days=2, instruments=["equity:B.SZ"],
     )
-    assert repeated["values"]["equity:B.SZ"][0] != -1
+    assert repeated.array[0, 0] != -1
 
 
 def test_strategy_history_preserves_decimal_rounding_and_requested_axis_order(tmp_path):
@@ -1031,15 +1033,16 @@ def test_strategy_history_preserves_decimal_rounding_and_requested_axis_order(tm
         generation.manifest_sha256, session=calendar[1],
         field_id="price.close.adjusted", days=2, instruments=instruments,
     )
-    assert history == {"sessions": calendar[:2], "values": {
-        "equity:B.SZ": [11.29, 12.29], "equity:A.SH": [10.29, 11.29],
-    }}
-    assert list(history["values"]) == list(instruments)
+    assert history.sessions == tuple(calendar[:2])
+    assert history.array.tolist() == [[11.29, 12.29], [10.29, 11.29]]
+    assert history.instruments == instruments
     empty = store.read_strategy_history(
         generation.manifest_sha256, session=calendar[1],
         field_id="price.close.adjusted", days=2, instruments=(),
     )
-    assert empty == {"sessions": calendar[:2], "values": {}}
+    assert empty.sessions == tuple(calendar[:2])
+    assert empty.instruments == ()
+    assert empty.array.shape == (0, 2)
 
 
 def test_market_slice_rejects_a_corrupt_selected_session_partition(

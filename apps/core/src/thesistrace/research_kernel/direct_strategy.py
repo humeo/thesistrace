@@ -5,6 +5,7 @@ import math
 from dataclasses import dataclass
 from typing import Annotated
 
+import numpy as np
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -13,6 +14,7 @@ from pydantic import (
     model_validator,
 )
 
+from thesistrace.research_history import HistoryWindow
 from thesistrace.research_kernel.strategy_decision import program_target
 from thesistrace.research_kernel.strategy_program_runtime import (
     HISTORY_CELLS,
@@ -116,14 +118,17 @@ def program_history(research_data, context):
             if isinstance(research_data, ColumnarResearchSeries):
                 scoped = slice_research_sessions(research_data, sessions)
                 matrix = scoped.numeric_field_matrices((field_id,), tuple(instruments))[field_id]
-                values = {item: [_numeric(value) for value in row]
-                          for item, row in zip(instruments, matrix, strict=True)}
+                matrix = np.array(matrix, dtype="<f8", copy=True)
+                matrix[matrix == 0] = 0.0
             else:
                 if field_id not in research_data.fields:
                     raise ValueError("History field unavailable in the pinned data")
-                values = {item: [_numeric(research_data.fields[field_id].get((date, item)))
-                                 for date in sessions] for item in instruments}
-            result = {"sessions": list(sessions), "values": values}
+                matrix = np.asarray([
+                    [_numeric(research_data.fields[field_id].get((date, item)))
+                     for date in sessions]
+                    for item in instruments
+                ], dtype="<f8").reshape(len(instruments), len(sessions))
+            result = HistoryWindow(tuple(sessions), tuple(instruments), matrix)
         return result
 
     return read

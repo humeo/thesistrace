@@ -24,7 +24,8 @@ def test_image_probe_checks_each_framework_stage_and_recovers(tmp_path):
     assert evidence == {
         "stages": ["universe_selection", "alpha", "portfolio_construction", "risk_management"],
         "authority_unchanged": True, "bounded_failure_recovered": True,
-        "failure_cases": ["loop", "memory", "output", "state_size", "exception", "invalid_state"],
+        "failure_cases": ["loop", "memory", "output", "numpy_memory", "state_size",
+                          "exception", "invalid_state"],
         "modes": ["direct", "framework"],
     }
     assert sentinel.read_text() == "private"

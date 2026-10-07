@@ -19,6 +19,7 @@ from tempfile import TemporaryFile
 from threading import Lock
 from typing import Never, TextIO
 
+import numpy as np
 import pytest
 from core_runtime import drop_product_schemas, isolated_core_settings
 from jsonschema import validate
@@ -33,6 +34,7 @@ from thesistrace.entrypoints.runtime import (
     core_environment_is_configured,
 )
 from thesistrace.entrypoints.schema import initialize_core
+from thesistrace.research_history import HistoryWindow
 from thesistrace.research_kernel.strategy_program_runtime import get_strategy_runtime
 
 SAFE_TOOL_NAMES = {
@@ -1133,10 +1135,9 @@ def _assert_reference_guided_python(calls: list[_ObservedMcpCall]) -> None:
                  "framework": {"proposal": None},
                  "account": {"positions": [], "cash_cny": "100000",
                              "post_open_net_nav_cny": "100000", "close_risk_nav_cny": "100000"}},
-        read_history=lambda _request: {
-            "sessions": ["2026-07-31", "2026-08-03"],
-            "values": {"equity:600001.SH": [10.0, 11.0]},
-        },
+        read_history=lambda _request: HistoryWindow(
+            ("2026-07-31", "2026-08-03"), ("equity:600001.SH",), np.array([[10.0, 11.0]]),
+        ),
     )
     assert result.output is None
     assert result.state["history_sessions"] == 2

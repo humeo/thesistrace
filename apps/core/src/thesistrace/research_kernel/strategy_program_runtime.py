@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 
+from thesistrace.research_history import encode_history
 from thesistrace.research_kernel.python_execution import (
     BOOTSTRAP_WALL_SECONDS,
     FUEL,
@@ -26,6 +27,7 @@ from thesistrace.research_kernel.python_execution import (
 from thesistrace.research_kernel.serialization import canonical_json_bytes
 from thesistrace.research_kernel.strategy_program_assets import (
     ARCHIVE_SHA256,
+    NUMPY_VERSION,
     PYTHON_VERSION,
     WASMTIME_VERSION,
 )
@@ -127,15 +129,18 @@ class PythonStrategyRuntime:
     def __init__(self) -> None:
         bootstrap = Path(__file__).with_name("strategy_program_guest.py").read_text()
         sdk = Path(__file__).with_name("strategy_sdk.py").read_text()
+        history_wire = Path(__file__).parent.parent.joinpath("research_history.py").read_text()
         self._execution = PreparedPythonEnvironment(
-            bootstrap, AVAILABLE_MODULES, module_sources={"quantgrove": sdk},
+            bootstrap,
+            module_sources={"_history_wire": history_wire, "quantgrove": sdk},
         )
 
     def identity(self) -> dict[str, object]:
         return {
-            "contract": "python-strategy/v3", "python": PYTHON_VERSION,
+            "contract": "python-strategy/v4", "python": PYTHON_VERSION, "numpy": NUMPY_VERSION,
             "wasmtime": WASMTIME_VERSION, "archive_sha256": ARCHIVE_SHA256,
             **self._execution.identity(),
+            "modules": list(AVAILABLE_MODULES),
             "source_bytes": SOURCE_BYTES,
             "input_bytes": INPUT_BYTES, "output_bytes": OUTPUT_BYTES,
             "state_bytes": STATE_BYTES,
@@ -149,6 +154,7 @@ class PythonStrategyRuntime:
             "json_depth": MAX_JSON_DEPTH,
             "clock": "decision_session_15:00_UTC+08:00",
             "random": "sha256_of_canonical_invocation/v1",
+            "numpy_random": "sha256_with_numpy_domain/v1",
         }
 
     def validate(self, source: str, *, entrypoint="Strategy") -> None:
@@ -188,13 +194,13 @@ class PythonStrategyRuntime:
                     request = json.loads(raw, object_pairs_hook=_unique_object)
                     _check_json(request)
                     result = read_history(request)
-                    encoded = encode_program_json(result, INPUT_BYTES, "history response")
+                    encoded = encode_history(result)
                 except (ValueError, KeyError, TypeError, UnicodeError) as error:
                     return encode_program_json({"error": str(error)[:4096]}, 8192, "error")
-                dates = result["sessions"]
+                dates = result.sessions
                 history_reads.append({
                     "field_id": request["field_id"], "requested_sessions": request["days"],
-                    "returned_sessions": len(dates), "instrument_count": len(result["values"]),
+                    "returned_sessions": len(dates), "instrument_count": len(result.instruments),
                     "first_session": dates[0] if dates else None,
                     "last_session": dates[-1] if dates else None,
                     "response_bytes": len(encoded),

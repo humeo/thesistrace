@@ -21,6 +21,7 @@ SOURCE = """
 import datetime
 import os
 import random
+import numpy as np
 
 def observe(context, state, parameters):
     observed = {}
@@ -52,6 +53,15 @@ def observe(context, state, parameters):
         'environment': dict(os.environ),
         'clock': datetime.datetime.now(datetime.UTC).isoformat(),
         'random': [random.random(), random.SystemRandom().randint(1, 1000000)],
+        'numpy': {
+            'version': np.__version__,
+            'squares': np.square(np.arange(8, dtype=float)).tolist(),
+            'linear_system': np.linalg.solve([[3., 1.], [1., 2.]], [9., 8.]).tolist(),
+            'fft': np.fft.fft([1., 2., 3., 4.]).real.tolist(),
+            'clock': str(np.datetime64('now')),
+            'random': np.random.default_rng().integers(0, 1000000, size=5).tolist(),
+            'legacy': np.random.randint(0, 1000000, size=5).tolist(),
+        },
     }, 'state': {'count': state['count'] + 1}}
 """
 
@@ -131,7 +141,8 @@ def probe_framework(parameters):
     failures = {
         "loop": "while True: pass",
         "memory": "bytearray(512 * 1024 * 1024)",
-        "output": "__import__('os').write(1, b'x' * (2 * 1024 * 1024))",
+        "output": "while True: __import__('os').write(1, b'x' * 65536)",
+        "numpy_memory": "__import__('numpy').ones(128 * 1024 * 1024, dtype='float64')",
         "state_size": "self.state['large'] = 'x' * (300 * 1024)",
         "exception": "raise ValueError('expected probe failure')",
         "invalid_state": "self.state['invalid'] = float('nan')",
@@ -139,7 +150,8 @@ def probe_framework(parameters):
     expected_errors = {
         "loop": ("resource or capability limits", "wall time limit"),
         "memory": ("MemoryError", "resource or capability limits"),
-        "output": ("resource or capability limits",),
+        "numpy_memory": ("MemoryError", "resource or capability limits"),
+        "output": ("resource or capability limits", "Program output limit exceeded"),
         "state_size": ("state exceeds 262144 bytes",),
         "exception": ("expected probe failure",),
         "invalid_state": ("Out of range float", "finite JSON values"),
@@ -194,6 +206,11 @@ def main():
             "PYTHONHOME": "/runtime", "PYTHONHASHSEED": "0", "TZ": "UTC",
         }
         assert result.output["clock"] == "2026-08-03T07:00:00+00:00"
+        assert result.output["numpy"]["version"] == runtime.identity()["numpy"]
+        assert result.output["numpy"]["squares"] == [0, 1, 4, 9, 16, 25, 36, 49]
+        assert result.output["numpy"]["linear_system"] == [2, 3]
+        assert result.output["numpy"]["fft"] == [10, -2, -2, -2]
+        assert result.output["numpy"]["clock"] == "2026-08-03T07:00:00"
         assert result.state == {"count": 2}
         replay = subprocess.run(
             [sys.executable, __file__, json.dumps(parameters)], check=True,

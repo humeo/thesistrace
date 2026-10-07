@@ -230,9 +230,11 @@ def test_validation_reports_program_and_source_line_and_sandboxes_top_level(runt
 def test_guest_cannot_bypass_host_diagnostics_validation(runtime, diagnostics):
     source = f"""
 import json, os
-os.write(1, json.dumps({{
+payload = json.dumps({{
     "ok": True, "result": {{"output": None, "state": {{}}}}, "diagnostics": {diagnostics},
-}}).encode())
+}}).encode()
+while payload:
+    payload = payload[os.write(1, payload):]
 os._exit(0)
 """
     with pytest.raises(StrategyProgramError, match="diagnostics"):

@@ -1,0 +1,7 @@
+package thesistrace:python;
+
+world execution {
+  import read-request: func(payload: string) -> string;
+  import ready: func();
+  export invoke: func(bootstrap: string, payload: string);
+}

@@ -78,7 +78,7 @@ def test_direct_diagnosis_and_admission_freeze_only_the_active_program():
     assert frozen["strategy"]["program"] == values["program"]
     assert "holdings_count" not in frozen["strategy"]
     assert "modules" not in frozen["strategy"]
-    assert frozen["strategy"]["environment"]["contract"] == "python-strategy/v3"
+    assert frozen["strategy"]["environment"]["contract"] == "python-strategy/v4"
     assert admitted.expression_admission.effective_lookback == 0
     assert admitted.execution_plan.calculation_sessions[0].isoformat() == "2026-08-07"
     values["program"]["source"] = "changed outside the admitted snapshot"

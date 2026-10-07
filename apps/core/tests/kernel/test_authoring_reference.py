@@ -3,10 +3,12 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from thesistrace.alpha_language import alpha_language
 from thesistrace.research_authoring import ResearchAuthoringService
+from thesistrace.research_history import HistoryWindow
 from thesistrace.research_kernel.strategy_decision import program_target
 from thesistrace.research_kernel.strategy_program_runtime import get_strategy_runtime
 
@@ -33,9 +35,11 @@ def test_reference_publishes_the_complete_formula_operator_contract():
 def test_reference_covers_every_shipped_public_sdk_class_method_and_attribute():
     service = ResearchAuthoringService()
     entries = {item.symbol for item in service.reference("python_sdk").symbols}
+    assert {"History.array", "History.instruments"} <= entries
+    assert not any(name.startswith("_") for name in entries)
     source = Path(__file__).parents[2] / "src/thesistrace/research_kernel/strategy_sdk.py"
     for node in ast.parse(source.read_text()).body:
-        if not isinstance(node, ast.ClassDef):
+        if not isinstance(node, ast.ClassDef) or node.name.startswith("_"):
             continue
         assert node.name in entries
         for member in node.body:
@@ -81,10 +85,10 @@ def test_documented_examples_execute_in_the_real_guest_and_use_legal_decisions()
                 runtime.validate(example.source, entrypoint=example.entrypoint)
                 result = runtime.invoke(
                     example.source, entrypoint=example.entrypoint, state={}, context=context,
-                    read_history=lambda _request: {
-                        "sessions": ["2026-08-31", "2026-09-01"],
-                        "values": {"equity:600001.SH": [10.0, 11.0]},
-                    },
+                    read_history=lambda _request: HistoryWindow(
+                        ("2026-08-31", "2026-09-01"), ("equity:600001.SH",),
+                        np.array([[10.0, 11.0]]),
+                    ),
                 )
                 if example.entrypoint in {"Strategy", "PortfolioConstruction"}:
                     program_target(result.output, context, "a" * 64)

@@ -108,9 +108,12 @@ def test_generation_composes_indicator_without_changing_original_root(
         dict(columnar.fields["financial.indicator.roe"])
         == result.research_data.fields["financial.indicator.roe"]
     )
-    assert columnar.strategy_history_loader(
+    history = columnar.strategy_history_loader(
         "2026-08-07", "financial.indicator.roe", 1, ("equity:000001.SZ",),
-    ) == {"sessions": ["2026-08-07"], "values": {"equity:000001.SZ": [0.15]}}
+    )
+    assert history.sessions == ("2026-08-07",)
+    assert history.instruments == ("equity:000001.SZ",)
+    assert history.array.tolist() == [[0.15]]
     import pytest
 
     from thesistrace.data.generation_store import GenerationStoreError
