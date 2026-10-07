@@ -1,12 +1,9 @@
 """Trusted bootstrap whose main function executes only inside the pinned WASI guest."""
 
-import importlib
-import inspect
 import io
 import json
 import os
 import sys
-import traceback
 import types
 
 AVAILABLE_MODULES = (
@@ -40,8 +37,9 @@ class Diagnostics(io.TextIOBase):
 
 
 def main():
-    for name in AVAILABLE_MODULES:
-        importlib.import_module(name)
+    # Preserve the pinned entropy stream before executing researcher source.
+    # random seeds its singleton on import; other libraries can load lazily.
+    __import__("random")
     request = json.loads(sys.stdin.buffer.read())
     # The only preopened directory contains the pinned standard library. Revoke
     # its descriptor before executing any source, including top-level imports.
@@ -73,18 +71,23 @@ def main():
         if type(strategy).on_close is sdk.Strategy.on_close:
             raise ValueError("Implement on_close(self, data, account)")
         data, account = sdk.Data(request["context"]), sdk.Account(request["context"])
-        inspect.signature(strategy.on_close).bind(data, account)
         decision = None
         if request["operation"] == "invoke":
             decision = strategy.on_close(data, account)
             if decision is not None and not isinstance(decision, sdk.Decision):
                 raise TypeError("Return None or a decision built by a strategy helper")
+        else:
+            import inspect
+
+            inspect.signature(strategy.on_close).bind(data, account)
         result = {"output": None if decision is None else decision.value, "state": strategy.state}
         encoded = json.dumps(
             {"ok": True, "result": result, "diagnostics": "".join(diagnostics.parts)},
             allow_nan=False, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
         )
     except BaseException as error:
+        import traceback
+
         line = error.lineno if isinstance(error, SyntaxError) else None
         for frame in traceback.extract_tb(error.__traceback__):
             if frame.filename == "strategy.py":

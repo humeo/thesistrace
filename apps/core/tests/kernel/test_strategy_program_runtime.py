@@ -52,7 +52,7 @@ def test_prepared_library_never_reuses_mutated_modules_or_builtins(runtime):
 
 
 def test_trusted_bootstrap_does_not_consume_the_user_program_wall_budget(monkeypatch):
-    from thesistrace.research_kernel import strategy_program_runtime as execution
+    from thesistrace.research_kernel import python_execution as execution
 
     runtime = PythonStrategyRuntime()
     clock = [0]
@@ -80,7 +80,7 @@ def test_trusted_bootstrap_does_not_consume_the_user_program_wall_budget(monkeyp
 
 
 def test_bootstrap_deadline_is_bounded_and_does_not_poison_next_invocation(runtime, monkeypatch):
-    from thesistrace.research_kernel import strategy_program_runtime as execution
+    from thesistrace.research_kernel import python_execution as execution
 
     source = strategy("return None")
     with monkeypatch.context() as limits:
@@ -102,6 +102,21 @@ def test_simulated_clock_and_randomness_repeat_in_another_runtime(runtime):
     assert first == second
     assert first.state["time"] == "2026-08-03T07:00:00+00:00"
     assert first.state["monotonic"] == 0
+
+
+def test_random_input_preserves_the_pinned_eager_runtime_sequence(runtime):
+    source = strategy(
+        "import os\nself.state['before'] = os.urandom(16).hex()\n"
+        "import random\n"
+        "self.state['draws'] = [random.random(), random.SystemRandom().randint(1, 1000000)]\n"
+        "self.state['after'] = os.urandom(16).hex()"
+    )
+    # Recorded from the pinned pre-optimization runtime for this exact invocation.
+    assert runtime.invoke(source, context={"session": "2026-08-03"}, state={}).state == {
+        "before": "b40dfaa953cc2361728d7dcde8789ad5",
+        "draws": [0.8702406777544645, 339109],
+        "after": "8de1b4605e7992b83d0a16d3f3d7bee4",
+    }
 
 
 def test_actual_guest_cannot_read_host_resources_or_open_network(runtime, tmp_path, monkeypatch):

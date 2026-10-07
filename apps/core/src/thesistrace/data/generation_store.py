@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import os
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -11,6 +10,7 @@ from decimal import Decimal
 from pathlib import Path
 from sys import intern
 
+import numpy as np
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
@@ -1524,6 +1524,8 @@ class MountedGenerationStore:
         definition = next((item for item in field_definitions() if item.field_id == field_id), None)
         if definition is None or definition.alpha is None:
             raise ValueError("History requires a numeric research field")
+        if not instruments:
+            return {"sessions": list(sessions), "values": {}}
         binding = {field_id: definition.alpha.identifier}
         families = _field_family_bindings(binding, None)
         family_id = next(key for key, fields in families.items() if field_id in fields)
@@ -1544,15 +1546,32 @@ class MountedGenerationStore:
                 sessions=sessions, instrument_ids=tuple(sorted(instruments)),
             )
             column, session_column = field_id, "session"
-        positions = {date: index for index, date in enumerate(sessions)}
-        values = {item: [None] * len(sessions) for item in instruments}
-        for row in table.select([session_column, "instrument_id", column]).to_pylist():
-            value = None if row[column] is None else float(row[column])
-            if value is not None and math.isnan(value):
-                value = None
-            if value is not None and not math.isfinite(value):
-                raise ValueError("Program history contains a non-finite field value")
-            values[row["instrument_id"]][positions[str(row[session_column])]] = value
+        # Align columns directly. Materializing a dict (and date/string objects)
+        # for every observation dominated overlapping daily history reads.
+        dates = pc.index_in(
+            pc.cast(table[session_column], pa.string()), value_set=pa.array(sessions),
+        )
+        stocks = pc.index_in(table["instrument_id"], value_set=pa.array(instruments, pa.string()))
+        # Arrow's direct Decimal -> float cast scales in floating point and can
+        # double-round. Parsing its exact decimal text retains float(Decimal)'s
+        # rounding without constructing a Python Decimal for every observation.
+        numeric_column = table[column]
+        if pa.types.is_decimal(numeric_column.type):
+            numeric_column = pc.cast(numeric_column, pa.string())
+        numbers = pc.cast(numeric_column, pa.float64()).to_numpy()
+        if np.isinf(numbers).any():
+            raise ValueError("Program history contains a non-finite field value")
+        if dates.null_count or stocks.null_count:
+            raise ValueError("Program history contains an out-of-scope coordinate")
+        matrix = np.full((len(instruments), len(sessions)), np.nan)
+        matrix[stocks.to_numpy(), dates.to_numpy()] = numbers
+        # Arrow converts nulls and floats in native code; the guest still sees
+        # the same oldest-to-newest lists, including None for missing values.
+        flattened = matrix.ravel()
+        observations = pa.array(flattened, mask=np.isnan(flattened)).to_pylist()
+        width = len(sessions)
+        values = {item: observations[index * width:(index + 1) * width]
+                  for index, item in enumerate(instruments)}
         return {"sessions": list(sessions), "values": values}
 
     def open_admission(self, manifest_sha256: str) -> MountedGenerationAdmission:

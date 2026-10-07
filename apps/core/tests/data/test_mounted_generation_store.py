@@ -1015,6 +1015,33 @@ def test_strategy_history_reuses_a_projection_without_leaking_dates_or_instrumen
     assert repeated["values"]["equity:B.SZ"][0] != -1
 
 
+def test_strategy_history_preserves_decimal_rounding_and_requested_axis_order(tmp_path):
+    canonical = _canonical(3)
+    for row in canonical["prices"]:
+        row["close_raw"] = row["close_raw"].replace(".5000", ".2900")
+        row["close_adj"] = row["close_adj"].replace(".50000000", ".29000000")
+    store = MountedGenerationStore(tmp_path)
+    generation = store.materialize(
+        canonical, prepared_at=datetime(2026, 8, 9, tzinfo=UTC),
+        source_name="deterministic-test", source_lineage={"snapshot": "fixed"},
+    )
+    calendar = canonical["research_calendar"]
+    instruments = ("equity:B.SZ", "equity:A.SH")
+    history = store.read_strategy_history(
+        generation.manifest_sha256, session=calendar[1],
+        field_id="price.close.adjusted", days=2, instruments=instruments,
+    )
+    assert history == {"sessions": calendar[:2], "values": {
+        "equity:B.SZ": [11.29, 12.29], "equity:A.SH": [10.29, 11.29],
+    }}
+    assert list(history["values"]) == list(instruments)
+    empty = store.read_strategy_history(
+        generation.manifest_sha256, session=calendar[1],
+        field_id="price.close.adjusted", days=2, instruments=(),
+    )
+    assert empty == {"sessions": calendar[:2], "values": {}}
+
+
 def test_market_slice_rejects_a_corrupt_selected_session_partition(
     tmp_path: Path,
 ) -> None:

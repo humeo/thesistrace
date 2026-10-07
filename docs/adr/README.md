@@ -45,6 +45,7 @@ The current Strategy contract in [ADR-0250](0250-admit-strategy-programs-with-ex
 - [ADR-0252 — Author Python strategies with a bounded class SDK](0252-author-python-strategies-with-a-bounded-class-sdk.md)
 - [ADR-0253 — Share the current Authoring Reference between Console and MCP](0253-share-current-authoring-reference-between-console-and-mcp.md)
 - [ADR-0255 — Bound research throughput by memory](0255-bound-research-throughput-by-memory.md)
+- [ADR-0256 — Prepare Python execution independently of the strategy protocol](0256-prepare-python-execution-independently-of-strategy-protocol.md)
 
 ## Market universe and calendar
 

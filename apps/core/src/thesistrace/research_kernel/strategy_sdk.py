@@ -2,7 +2,6 @@
 
 import json
 import os
-from fractions import Fraction
 from types import MappingProxyType
 
 
@@ -39,7 +38,9 @@ class History:
 
     def __init__(self, response):
         self.sessions = tuple(response["sessions"])
-        self.values = _freeze(response["values"])
+        self.values = MappingProxyType({
+            key: tuple(values) for key, values in response["values"].items()
+        })
 
     def __getitem__(self, instrument):
         return self.values[instrument]
@@ -116,6 +117,8 @@ class Strategy:
 
     @staticmethod
     def _weights(weights, mode, reason):
+        from fractions import Fraction
+
         ratios = {}
         for instrument, weight in weights.items():
             if type(instrument) is not str or not instrument:

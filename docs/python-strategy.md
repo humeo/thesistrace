@@ -202,18 +202,26 @@ The archive is the [CPython WASI build](https://github.com/brettcannon/cpython-w
 Installation is an explicit dependency setup operation; execution neither
 downloads packages nor inherits the host Python environment.
 
-The runtime identity records these versions, the archive and trusted bootstrap
-hashes, available modules, limits and deterministic-input policies. Changing
+The runtime identity records these versions, the archive, the actual prepared
+bootstrap and module-source hashes (including the SDK and library loader),
+available modules, limits and deterministic-input policies. Changing
 that identity changes the accepted execution environment.
 
 Programs can import `bisect`, `calendar`, `collections`, `copy`, `dataclasses`,
 `datetime`, `decimal`, `enum`, `fractions`, `functools`, `heapq`, `itertools`,
 `json`, `math`, `operator`, `random`, `re`, `statistics`, `string`, `time` and
-`typing`, with their already loaded dependencies. NumPy, pandas and package
+`typing`, with their prepared dependencies. NumPy, pandas and package
 installation are unavailable in the guest.
 
+The pinned interpreter prepares trusted SDK/bootstrap bytecode and the permitted
+library import closure once. Each fresh guest imports library modules on demand
+through a bounded, read-only bytecode capability. This avoids repeatedly loading
+unused libraries while preserving invocation-local modules and globals. Library
+reads accept prepared module names only (at most 200 bytes per name, 256 requests and 16 MiB per
+invocation); they do not expose paths, task data or additional installed packages.
+
 The host does not grant filesystem, network, subprocess or native-library
-capabilities. The trusted bootstrap loads the fixed standard library, then
+capabilities. The trusted bootstrap installs the prepared library loader, then
 closes its sole directory capability and input descriptor before any user
 source executes. Imports are not the security boundary: the WASI guest has no
 host file, credential, dataset or socket authority even if a program reaches
@@ -224,6 +232,8 @@ Wall-clock APIs return 15:00 UTC+08:00 on the decision session; monotonic and CP
 clocks return zero. Random bytes, including `SystemRandom`, derive from the
 canonical invocation. Identical source, context and state therefore
 receive identical random input. Sleeping and blocking are unavailable.
+The trusted bootstrap initializes `random` before researcher source to retain
+the existing entropy sequence even when user code calls `os.urandom` first.
 
 ## Invocation limits
 
@@ -240,7 +250,7 @@ receive identical random input. Sleeping and blocking are unavailable.
 | JSON nesting | 32 levels |
 
 Fuel bounds CPU work across the complete invocation. The trusted bootstrap
-has its own bounded startup time for loading the pinned standard library. After
+has its own bounded startup time for setting up the prepared environment. After
 it revokes the library and input descriptors, the user-program deadline starts;
 source compilation, top-level code, the callback and serialization share that
 3-second budget. Repeating the bootstrap readiness signal cannot restart it. Both budgets are

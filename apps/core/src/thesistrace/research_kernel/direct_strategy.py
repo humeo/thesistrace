@@ -18,11 +18,9 @@ from thesistrace.research_kernel.strategy_program_runtime import (
     HISTORY_CELLS,
     HISTORY_SESSIONS,
     HISTORY_TOTAL_CELLS,
-    INPUT_BYTES,
     SOURCE_BYTES,
     PythonStrategyRuntime,
     StrategyProgramError,
-    encode_program_json,
 )
 from thesistrace.research_kernel.terminal_state_schema import PendingTarget
 from thesistrace.research_series import (
@@ -126,7 +124,6 @@ def program_history(research_data, context):
                 values = {item: [_numeric(research_data.fields[field_id].get((date, item)))
                                  for date in sessions] for item in instruments}
             result = {"sessions": list(sessions), "values": values}
-        encode_program_json(result, INPUT_BYTES, "history")
         return result
 
     return read
