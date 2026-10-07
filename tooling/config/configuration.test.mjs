@@ -71,9 +71,9 @@ test('research maximum chunk sessions is configurable and must be positive', t =
   const f = fixture(t);
   const name = 'THESISTRACE_RESEARCH_WORKER_MAX_CHUNK_SESSIONS';
   const read = () => run(f.env, 'run', process.execPath, '-e', `console.log(process.env.${name})`);
-  assert.equal(read().stdout.trim(), '64');
-  f.values[name] = '128'; f.save();
   assert.equal(read().stdout.trim(), '128');
+  f.values[name] = '64'; f.save();
+  assert.equal(read().stdout.trim(), '64');
   for (const value of ['0', '-1', '1.5', 'true']) {
     f.values[name] = value; f.save();
     const result = run(f.env, 'check');

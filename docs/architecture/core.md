@@ -573,10 +573,27 @@ the same frozen Generation and resumes only from the latest valid Checkpoint;
 unchecked partial outputs are never combined or published.
 
 Research admission reads `THESISTRACE_RESEARCH_WORKER_MAX_CHUNK_SESSIONS`
-(default 64). The planner selects the minimum of that ceiling, the memory
-estimate, and the calculation work budget, then freezes the selected size in
-the execution plan. Batch capacity may reduce the shared size further.
+(default 128). The planner selects the largest size within that ceiling and
+the memory estimate, then freezes it in the execution plan. Worst-case Python
+deadlines and the historical 30-second work target remain diagnostic facts;
+they do not reduce Chunk size. Batch capacity may reduce the shared size further
+when its resident data, retained state, and event buffers need more memory.
 Changing the setting never replans an admitted Run or retry.
+
+Python history reads reuse verified, immutable market-column projections in a
+32 MiB LRU cache owned by the mounted Generation store. Each call still applies
+its exact permitted instruments and completed-session range. The planner
+reserves the cache budget. A private pinned standard library is bytecode-prepared
+once per Python runtime; every user invocation still receives a fresh WASI Store
+and only explicit JSON state survives. No user module or mutable guest is reused.
+
+Research and Batch supervisors sample child RSS independently of progress output
+and terminate children above the execution budget (default 1.5 GiB). The Worker
+container bounds total charged memory at 2 GiB by default with swap disabled.
+Polling may observe an overshoot; the container limit remains the final bound,
+and a confirmed cgroup OOM is a permanent resource failure. These limits do not
+guarantee that arbitrary Python research can finish within the budget. See
+[ADR-0255](../adr/0255-bound-research-throughput-by-memory.md).
 
 `Create draft` is the sole reuse action. It copies frozen authorable input into
 one selected Folder's browser-local Draft and creates no server state. A later
@@ -617,7 +634,8 @@ An active Track reports the lag between its latest successful session coordinate
 and the current Dataset Head but does not advance merely because Head moved. One
 explicit, idempotent DailyTrack Refresh queues one Tracking Advance for an
 active, lagging, idle Track. Each Advance freezes an exact capacity-planned
-Target containing the oldest 1 through 64 unpublished sessions. Every Attempt
+Target containing the oldest 1 through 128 unpublished sessions, using the same
+memory-based capacity policy. Every Attempt
 retains that Target and pins one current Data Generation for its complete
 calculation. Only a complete immutable Checkpoint moves the Tracking Head to the
 Target boundary. Longer catch-up and later Dataset Head growth require another

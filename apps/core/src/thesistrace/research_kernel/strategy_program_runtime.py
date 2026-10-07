@@ -151,6 +151,40 @@ class PythonStrategyRuntime:
         self._engine = wasmtime.Engine(config)
         self._module = wasmtime.Module(self._engine, wasm)
         self._lock = threading.Lock()
+        self._prepare_library_bytecode()
+
+    def _prepare_library_bytecode(self) -> None:
+        """Compile pinned library sources once, without retaining any guest state.
+
+        Only this trusted preparation can write the private runtime directory.
+        Researcher source never runs here; normal invocations still receive a
+        new Store and a read-only directory revoked before their source executes.
+        The same pinned interpreter produces and consumes its bytecode.
+        """
+        with wasmtime.Store(self._engine) as store:
+            store.set_limits(memory_size=MEMORY_BYTES, instances=1, memories=1, tables=1)
+            store.set_fuel(FUEL)
+            store.set_epoch_deadline(1)
+            wasi = wasmtime.WasiConfig()
+            wasi.argv = [
+                "python", "-S", "-c", "import importlib, inspect, traceback\n"
+                + f"for name in {AVAILABLE_MODULES!r}: importlib.import_module(name)",
+            ]
+            wasi.env = [("PYTHONHOME", "/runtime"), ("PYTHONHASHSEED", "0"), ("TZ", "UTC")]
+            wasi.preopen_dir(self._library.name, "/runtime")
+            store.set_wasi(wasi)
+            linker = wasmtime.Linker(self._engine)
+            linker.define_wasi()
+            timeout = threading.Timer(BOOTSTRAP_WALL_SECONDS, self._engine.increment_epoch)
+            timeout.daemon = True
+            timeout.start()
+            try:
+                linker.instantiate(store, self._module).exports(store)["_start"](store)
+            except (wasmtime.Trap, wasmtime.ExitTrap) as error:
+                raise StrategyRuntimeUnavailable("Python library preparation failed") from error
+            finally:
+                timeout.cancel()
+                timeout.join()
 
     def identity(self) -> dict[str, object]:
         return {

@@ -6,10 +6,14 @@ import selectors
 import signal
 import subprocess
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Event, Thread
 from time import monotonic
+
+import psutil
 
 from thesistrace.strategy_event_wire import EventByteBudgetExceeded, EventMessageAssembler
 
@@ -37,6 +41,10 @@ class ChildTransportCgroupOom(ChildTransportError):
 
 
 class ChildTransportEventBudgetExceeded(ChildTransportError):
+    pass
+
+
+class ChildTransportMemoryBudgetExceeded(ChildTransportError):
     pass
 
 
@@ -70,9 +78,22 @@ class SupervisedChildTransport:
     def read(
         self, *,
         max_event_bytes: int,
+        child_memory_limit_bytes: int | None = None,
         cancel_requested: Callable[[], bool] | None = None,
         on_cancel: Callable[[], None] | None = None,
         on_termination: Callable[[], None] | None = None,
+    ) -> dict[str, object]:
+        with self._watch_memory(child_memory_limit_bytes):
+            return self._read_message(
+                max_event_bytes=max_event_bytes, cancel_requested=cancel_requested,
+                on_cancel=on_cancel, on_termination=on_termination,
+            )
+
+    def _read_message(
+        self, *, max_event_bytes: int,
+        cancel_requested: Callable[[], bool] | None,
+        on_cancel: Callable[[], None] | None,
+        on_termination: Callable[[], None] | None,
     ) -> dict[str, object]:
         assembler = EventMessageAssembler(max_event_bytes=max_event_bytes)
         while True:
@@ -88,6 +109,49 @@ class SupervisedChildTransport:
             if message is not None:
                 return message
             self.write({"command": "acknowledge_event_frame"})
+
+    @contextmanager
+    def _watch_memory(self, limit: int | None) -> Iterator[None]:
+        if limit is None:
+            yield
+            return
+        if limit <= 0:
+            raise ValueError("Child execution memory budget must be positive")
+        stopped = Event()
+        errors: list[ChildTransportError] = []
+
+        def watch() -> None:
+            try:
+                child = psutil.Process(self.process.pid)
+                while not stopped.is_set():
+                    resident = child.memory_info().rss
+                    if resident > limit:
+                        errors.append(ChildTransportMemoryBudgetExceeded(
+                            f"Research child exceeded its execution memory budget "
+                            f"({resident} > {limit} bytes)"
+                        ))
+                        self.process.kill()
+                        return
+                    stopped.wait(0.05)
+            except (psutil.NoSuchProcess, ProcessLookupError):
+                return
+            except (psutil.Error, OSError) as error:
+                errors.append(ChildTransportError(f"Cannot supervise child memory: {error}"))
+                if self.process.poll() is None:
+                    self.process.kill()
+
+        # Independent of stdout: even a child stalled halfway through a protocol
+        # line must not postpone enforcement until it reports progress.
+        monitor = Thread(target=watch, name="research-child-memory", daemon=True)
+        monitor.start()
+        try:
+            yield
+        finally:
+            stopped.set()
+            monitor.join()
+            if errors:
+                self.process.wait(timeout=2)
+                raise errors[0]
 
     def _read_frame(
         self,
@@ -222,6 +286,7 @@ __all__ = (
     "ChildTransportCancelled",
     "ChildTransportCgroupOom",
     "ChildTransportEventBudgetExceeded",
+    "ChildTransportMemoryBudgetExceeded",
     "ChildTransportError",
     "SupervisedChildTransport",
     "enforce_cancellation_deadline",

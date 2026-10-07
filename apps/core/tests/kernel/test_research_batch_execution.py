@@ -174,6 +174,7 @@ def _batch_request(
         maximum_universe_cardinality=len(canonical["instruments"]),
         effective_lookback=compiled.effective_lookback,
         execution_memory_bytes=1536 * 1024**2,
+        max_chunk_sessions=64,
     )
     assert plan.research_session_count > plan.chunk_session_count
     strategy = kind == "strategy_sweep"

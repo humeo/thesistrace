@@ -15,7 +15,10 @@ from thesistrace.research_run.execution import (
     ResearchExecutionInputInvalid,
     ResearchExecutionResourceExhausted,
 )
-from thesistrace.research_run.supervised_child import SupervisedChildTransport
+from thesistrace.research_run.supervised_child import (
+    ChildTransportEventBudgetExceeded,
+    SupervisedChildTransport,
+)
 
 
 def test_batch_attempt_control_is_independent_from_read_only_canonical_data(
@@ -78,9 +81,7 @@ def test_supervisor_preserves_resource_exhausted_child_category(
         )
 
 
-def test_event_byte_budget_exhaustion_is_permanent_resource_failure(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
-) -> None:
+def test_transport_enforces_event_bytes_independently_of_child_memory() -> None:
     frame = json.dumps({
         "status": "strategy_event_frame", "section": "strategy_orders", "offset": 0,
         "rows": [{"order_id": "over-budget"}],
@@ -90,16 +91,14 @@ def test_event_byte_budget_exhaustion_is_permanent_resource_failure(
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
     transport = SupervisedChildTransport(process, None)
-    monkeypatch.setattr(
-        SupervisedChildTransport, "spawn", classmethod(lambda _cls, _module: transport),
-    )
-    executor = SupervisedResearchBatchExecutor(
-        tmp_path, attempt_control_directory=tmp_path / ".batch-attempts",
-        execution_memory_bytes=16,
-    )
-    with pytest.raises(ResearchExecutionResourceExhausted, match="event.*budget"):
-        executor.execute(_empty_request(), emit=lambda _event: None, cancel_requested=lambda: False)
-    assert process.poll() is not None
+    try:
+        transport.write({"command": "start"})
+        with pytest.raises(ChildTransportEventBudgetExceeded, match="event.*budget"):
+            transport.read(max_event_bytes=16, child_memory_limit_bytes=64 * 1024**2)
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.wait(timeout=5)
 
 
 def test_supervised_child_rejects_an_unknown_batch_kind(tmp_path: Path) -> None:
@@ -120,6 +119,45 @@ def test_supervised_child_rejects_an_unknown_batch_kind(tmp_path: Path) -> None:
         executor.execute(
             request, emit=lambda _event: None, cancel_requested=lambda: False
         )
+
+
+@pytest.mark.bounded_process
+@pytest.mark.parametrize("partial_response", [False, True])
+def test_memory_limit_stops_a_child_without_waiting_for_progress(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, partial_response: bool,
+) -> None:
+    # A bounded real child exercises both a silent calculation and a stalled
+    # protocol line. Its own deadline makes a missing monitor fail decisively.
+    code = (
+        "import os, sys, threading\n"
+        "sys.stdin.readline()\n"
+        "deadline = threading.Timer(5, lambda: os._exit(77)); deadline.start()\n"
+        + ("sys.stdout.write('{'); sys.stdout.flush()\n" if partial_response else "")
+        + "data = bytearray(96 * 1024**2)\n"
+        "for offset in range(0, len(data), 4096): data[offset] = 1\n"
+        "threading.Event().wait()\n"
+    )
+    process = subprocess.Popen(
+        [sys.executable, "-c", code], stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    transport = SupervisedChildTransport(process, None)
+    monkeypatch.setattr(
+        SupervisedChildTransport, "spawn", classmethod(lambda _cls, _module: transport),
+    )
+    executor = SupervisedResearchBatchExecutor(
+        tmp_path, attempt_control_directory=tmp_path / ".batch-attempts",
+        execution_memory_bytes=64 * 1024**2,
+    )
+    try:
+        with pytest.raises(ResearchExecutionResourceExhausted, match="memory"):
+            executor.execute(_empty_request(), emit=lambda _event: None,
+                             cancel_requested=lambda: False)
+        assert process.poll() is not None
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
 
 
 def _empty_request() -> ResearchBatchExecutionRequest:

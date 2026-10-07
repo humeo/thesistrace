@@ -979,6 +979,42 @@ def test_strategy_history_reads_unloaded_fields_before_slice_start_from_pinned_g
         read({"field_id": "unknown", "days": 1, "instruments": None})
 
 
+def test_strategy_history_reuses_a_projection_without_leaking_dates_or_instruments(tmp_path):
+    from thesistrace.data.io_metrics import measure_data_io
+
+    canonical = _canonical()
+    store = MountedGenerationStore(tmp_path)
+    generation = store.materialize(
+        canonical, prepared_at=datetime(2026, 8, 9, tzinfo=UTC),
+        source_name="deterministic-test", source_lineage={"snapshot": "fixed"},
+    )
+    calendar = canonical["research_calendar"]
+    with measure_data_io() as first_io:
+        store.read_strategy_history(
+            generation.manifest_sha256, session=calendar[-2],
+            field_id="price.close.adjusted", days=3, instruments=["equity:A.SH"],
+        )
+    assert first_io.parquet_object_opens > 0
+    with measure_data_io() as second_io:
+        history = store.read_strategy_history(
+            generation.manifest_sha256, session=calendar[-3],
+            field_id="price.close.adjusted", days=2, instruments=["equity:B.SZ"],
+        )
+    assert second_io.parquet_object_opens == 0
+    assert history["sessions"] == list(calendar[-4:-2])
+    assert history["values"] == {"equity:B.SZ": [
+        float(row["close_adj"]) for row in canonical["prices"]
+        if row["instrument_id"] == "equity:B.SZ" and row["session"] in calendar[-4:-2]
+    ]}
+    # A caller may mutate the returned JSON without poisoning immutable cached data.
+    history["values"]["equity:B.SZ"][0] = -1
+    repeated = store.read_strategy_history(
+        generation.manifest_sha256, session=calendar[-3],
+        field_id="price.close.adjusted", days=2, instruments=["equity:B.SZ"],
+    )
+    assert repeated["values"]["equity:B.SZ"][0] != -1
+
+
 def test_market_slice_rejects_a_corrupt_selected_session_partition(
     tmp_path: Path,
 ) -> None:

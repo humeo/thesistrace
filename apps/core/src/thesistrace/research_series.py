@@ -13,6 +13,10 @@ type Coordinate = tuple[str, str]
 type NumericValue = Decimal | int | float | str
 SeriesValue = TypeVar("SeriesValue")
 
+# Shared allowance for retained immutable history projections: Data owns the
+# cache, while the storage-independent capacity planner reserves this budget.
+HISTORY_PROJECTION_CACHE_BYTES = 32 * 1024**2
+
 
 def ttm_window_column(field_id: str) -> str:
     return f"ttm_window_end:{field_id}"

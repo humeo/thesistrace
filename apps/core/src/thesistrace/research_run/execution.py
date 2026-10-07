@@ -34,6 +34,7 @@ from thesistrace.research_run.supervised_child import (
     ChildTransportCgroupOom,
     ChildTransportError,
     ChildTransportEventBudgetExceeded,
+    ChildTransportMemoryBudgetExceeded,
     SupervisedChildTransport,
     enforce_cancellation_deadline,
 )
@@ -778,6 +779,7 @@ def _read_message(
     try:
         return transport.read(
             max_event_bytes=request.immutable_input.execution_plan.execution_memory_bytes,
+            child_memory_limit_bytes=request.immutable_input.execution_plan.execution_memory_bytes,
             cancel_requested=cancel_requested,
             on_cancel=lambda: emit(
                 {
@@ -806,7 +808,7 @@ def _read_message(
         raise ResearchExecutionResourceExhausted(
             "Research execution child exceeded its cgroup memory limit"
         ) from error
-    except ChildTransportEventBudgetExceeded as error:
+    except (ChildTransportEventBudgetExceeded, ChildTransportMemoryBudgetExceeded) as error:
         raise ResearchExecutionResourceExhausted(str(error)) from error
     except ChildTransportError as error:
         raise ResearchExecutionError(str(error)) from error

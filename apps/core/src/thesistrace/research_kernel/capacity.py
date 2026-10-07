@@ -19,8 +19,9 @@ from thesistrace.research_kernel.strategy_program_runtime import (
     WALL_SECONDS,
 )
 from thesistrace.research_kernel.terminal_state_schema import FRAMEWORK_STATE_BYTES
+from thesistrace.research_series import HISTORY_PROJECTION_CACHE_BYTES
 
-DEFAULT_MAX_CHUNK_SESSIONS = 64
+DEFAULT_MAX_CHUNK_SESSIONS = 128
 CHUNK_TIME_TARGET_SECONDS = 30
 CHUNK_TIME_TARGET_WORK = 15_000_000
 _FIXED_EXECUTION_OVERHEAD_BYTES = 64 * 1024**2
@@ -85,17 +86,12 @@ def plan_session_capacity(
     per_session_work = _session_work(
         formula_work, maximum_universe_cardinality, python_program_count,
     )
-    time_session_count = CHUNK_TIME_TARGET_WORK // per_session_work
-    time_target_exceeded = time_session_count < 1
-    session_count = min(
-        memory_session_count,
-        1 if time_target_exceeded else time_session_count,
-        max_chunk_sessions,
-    )
-    session_count = max(1, int(session_count))
+    # Worst-case Python deadlines are useful telemetry, not throughput estimates.
+    # Cancellation is supervised independently of a completed Chunk.
+    session_count = max(1, int(memory_session_count))
     return SessionCapacityPlan(
         session_count=session_count,
-        time_target_exceeded=time_target_exceeded,
+        time_target_exceeded=per_session_work * session_count > CHUNK_TIME_TARGET_WORK,
         estimated_peak_bytes=fixed_bytes + per_session_bytes * session_count,
         estimated_work=per_session_work * session_count,
     )
@@ -172,7 +168,7 @@ def _decision_fixed_bytes(mode: DecisionMode, programs: int) -> int:
     # One bounded read may overlap Arrow buffers, Python numeric rows and its
     # encoded response. Programs execute sequentially, so reserve this once.
     guest = (MEMORY_BYTES + 2 * INPUT_BYTES + OUTPUT_BYTES
-             + HISTORY_CELLS * 128) if programs else 0
+             + HISTORY_CELLS * 128 + HISTORY_PROJECTION_CACHE_BYTES) if programs else 0
     return state + MAX_TARGET_RECORD_BYTES + guest
 
 

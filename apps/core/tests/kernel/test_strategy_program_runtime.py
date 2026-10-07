@@ -37,6 +37,20 @@ def test_python_strategy_restores_only_explicit_state_in_a_fresh_guest(runtime):
     assert second.state == {"days": 2, "counter": 1, "session": "2026-08-04"}
 
 
+def test_prepared_library_never_reuses_mutated_modules_or_builtins(runtime):
+    poisoning = strategy(
+        "import math, builtins\n"
+        "math.sqrt = lambda value: -999\n"
+        "builtins.abs = lambda value: -999\n"
+        "self.state['explicit'] = 1"
+    )
+    state = runtime.invoke(poisoning, context={}, state={}).state
+    result = runtime.invoke(strategy(
+        "import math\nself.state['sqrt'] = math.sqrt(9)\nself.state['abs'] = abs(-2)"
+    ), context={}, state=state)
+    assert result.state == {"explicit": 1, "sqrt": 3.0, "abs": 2}
+
+
 def test_trusted_bootstrap_does_not_consume_the_user_program_wall_budget(monkeypatch):
     from thesistrace.research_kernel import strategy_program_runtime as execution
 

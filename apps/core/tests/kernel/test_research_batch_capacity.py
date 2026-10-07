@@ -54,7 +54,23 @@ def test_strategy_sweep_preserves_a_128_session_child_plan_when_budget_fits() ->
     assert plan.estimated_peak_bytes <= 3 * 1024**3
 
 
-def test_framework_batch_reserves_guest_time_state_and_stage_records_per_child() -> None:
+def test_sequential_python_strategies_do_not_sum_time_into_a_smaller_chunk() -> None:
+    children = [
+        _prepared_child(
+            field_id="price.close.adjusted", execution_memory_bytes=1536 * 1024**2,
+            chunk_session_count=64, calculation_session_count=256,
+            maximum_universe_cardinality=300,
+        ) for _ in range(4)
+    ]
+    for child in children:
+        child.immutable_input.programs = {"alpha": object()}
+    solo = _validate_research_batch_capacity("strategy_sweep", children[:1])
+    batch = _validate_research_batch_capacity("strategy_sweep", children)
+    assert solo.session_count == batch.session_count == 64
+    assert batch.estimated_peak_bytes < 1536 * 1024**2
+
+
+def test_framework_batch_reserves_guest_memory_state_and_stage_records_per_child() -> None:
     ordinary = _prepared_child(
         field_id="price.close.adjusted", execution_memory_bytes=1024 * 1024**2,
         chunk_session_count=4,
@@ -69,13 +85,13 @@ def test_framework_batch_reserves_guest_time_state_and_stage_records_per_child()
     )}
     base_plan = _validate_research_batch_capacity("strategy_sweep", [ordinary])
     custom_plan = _validate_research_batch_capacity("strategy_sweep", [custom])
-    assert custom_plan.session_count == 1
+    assert custom_plan.session_count == 4
     assert custom_plan.time_target_exceeded is True
     assert custom_plan.estimated_peak_bytes > base_plan.estimated_peak_bytes
     assert custom_plan.estimated_work > base_plan.estimated_work
 
 
-def test_framework_batch_time_target_counts_every_child_program() -> None:
+def test_framework_batch_work_telemetry_counts_every_child_program() -> None:
     children = [
         _prepared_child(
             field_id="price.close.adjusted", execution_memory_bytes=1024 * 1024**2,
@@ -86,8 +102,8 @@ def test_framework_batch_time_target_counts_every_child_program() -> None:
         child.immutable_input.programs = {"risk_management": object()}
     solo = _validate_research_batch_capacity("strategy_sweep", children[:1])
     paired = _validate_research_batch_capacity("strategy_sweep", children)
-    assert solo.session_count == 2
-    assert paired.session_count == 1
+    assert solo.session_count == paired.session_count == 4
+    assert paired.estimated_work > solo.estimated_work
     assert paired.time_target_exceeded is True
 
 
@@ -276,6 +292,7 @@ def test_batch_capacity_rechunks_the_frozen_child_plan_without_changing_scope() 
     assert rechunked.calculation_sessions == original.calculation_sessions
     assert rechunked.research_session_offset == 3
     assert rechunked.chunk_session_count == 3
+    assert rechunked.time_target_exceeded is False
     assert tuple(chunk.session_count for chunk in rechunked.chunks) == (3, 3, 3, 1)
     assert tuple(chunk.warmup_session_count for chunk in rechunked.chunks) == (3, 0, 0, 0)
     assert tuple(chunk.research_session_count for chunk in rechunked.chunks) == (0, 3, 3, 1)

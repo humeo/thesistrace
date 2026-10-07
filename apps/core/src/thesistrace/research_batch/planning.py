@@ -188,8 +188,6 @@ def validate_research_batch_capacity(
                 program_count=sum(len(value.programs) for value in inputs),
                 session_count=session_count,
             )
-        if ordinary_chunk_work > CHUNK_TIME_TARGET_WORK and session_count > 1:
-            continue
         resident_bytes = maximum_resident_cell_count * (
             _ARROW_SOURCE_AND_COORDINATE_BYTES
             + _DECIMAL_OPEN_OBJECT_BYTES
@@ -238,10 +236,7 @@ def validate_research_batch_capacity(
         if estimated_peak_bytes <= capacity_limit_bytes:
             return SessionCapacityPlan(
                 session_count=session_count,
-                time_target_exceeded=(
-                    session_count < maximum_chunk_session_count
-                    or any(value.execution_plan.time_target_exceeded for value in inputs)
-                ),
+                time_target_exceeded=ordinary_chunk_work > CHUNK_TIME_TARGET_WORK,
                 estimated_peak_bytes=estimated_peak_bytes,
                 estimated_work=ordinary_chunk_work,
             )
@@ -297,9 +292,6 @@ def rechunk_research_execution_plan(
     return plan.model_copy(
         update={
             "chunk_session_count": chunk_session_count,
-            "time_target_exceeded": (
-                plan.time_target_exceeded or chunk_session_count < plan.chunk_session_count
-            ),
             "chunks": tuple(chunks),
         }
     )

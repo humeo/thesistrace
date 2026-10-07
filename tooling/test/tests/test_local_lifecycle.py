@@ -722,6 +722,11 @@ def test_development_topology_declares_every_core_service_and_pinned_infrastruct
             in service
         )
         assert f"THESISTRACE_{variable_role}_WORKER_CALCULATION_THREADS:-{cpu}" in service
+        if role in {"research", "batch-research"}:
+            assert (
+                f"memswap_limit: ${{THESISTRACE_{variable_role}_WORKER_MEMORY_BYTES:-{memory}}}"
+                in service
+            )
         assert "healthcheck:" not in service
     assert "--healthcheck" not in compose
     api_service = compose.split("  api:\n", maxsplit=1)[1].split(

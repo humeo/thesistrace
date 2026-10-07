@@ -62,6 +62,7 @@ from thesistrace.data.generation_validation import (
     GenerationValidationError,
     validate_canonical_generation,
 )
+from thesistrace.data.history_projection import HistoryProjectionCache
 from thesistrace.data.io_metrics import record_parquet_scan
 from thesistrace.data.market_series import (
     MarketSeriesError,
@@ -149,6 +150,7 @@ class MountedGenerationStore:
     def __init__(self, root: Path | str) -> None:
         self._root = Path(root).resolve()
         self._files = AddressedFileStore(self._root)
+        self._history_projections = HistoryProjectionCache()
 
     @property
     def root(self) -> Path:
@@ -1532,6 +1534,7 @@ class MountedGenerationStore:
                 spec, reference, selected_sessions=set(sessions),
                 columns={"session_date", "instrument_id", column},
                 instrument_ids=frozenset(instruments),
+                history_projections=self._history_projections,
             )
             session_column = "session_date"
         else:
@@ -2532,6 +2535,7 @@ class MountedGenerationStore:
         selected_sessions: set[str],
         columns: set[str] | None,
         instrument_ids: frozenset[str] | None = None,
+        history_projections: HistoryProjectionCache | None = None,
     ) -> pa.Table:
         if spec.session_field is None:
             raise ValueError("Selected-session read requires a session table")
@@ -2550,13 +2554,23 @@ class MountedGenerationStore:
                 continue
             if str(last_key[0]) < first_session or str(first_key[0]) > last_session:
                 continue
-            table = self._open_partition_table(
-                spec,
-                object_ref,
-                ordinal,
-                columns=columns,
-                instrument_ids=instrument_ids,
-            )
+            if history_projections is None:
+                table = self._open_partition_table(
+                    spec, object_ref, ordinal, columns=columns,
+                    instrument_ids=instrument_ids,
+                )
+            else:
+                assert columns is not None
+                table = history_projections.read(
+                    str(object_ref["sha256"]), frozenset(columns),
+                    lambda object_ref=object_ref, ordinal=ordinal: self._open_partition_table(
+                        spec, object_ref, ordinal, columns=columns, instrument_ids=None,
+                    ),
+                )
+                if instrument_ids is not None:
+                    table = table.filter(pc.is_in(
+                        table["instrument_id"], value_set=pa.array(sorted(instrument_ids)),
+                    ))
             mask = pc.is_in(
                 table[spec.session_field],
                 value_set=pa.array(sorted(selected_sessions)),
