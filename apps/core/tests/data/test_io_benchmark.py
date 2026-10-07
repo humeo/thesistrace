@@ -357,6 +357,34 @@ def test_long_research_sample_qualification_is_reportable_before_fail_fast() -> 
     }
 
 
+def test_long_research_qualification_accepts_the_current_128_session_cap() -> None:
+    evidence = _long_research_evidence()
+    evidence["workload"].update(chunk_session_count=128, chunk_count=35)
+    for kind in evidence["research_kinds"].values():
+        for phase in ("cold", "warm"):
+            for sample in kind[phase]["samples"]:
+                sample.update(chunk_session_count=128, chunk_count=35)
+    assert assert_long_research_qualification(evidence) == evidence["summary"]
+
+
+@pytest.mark.parametrize("scope", ("sample", "workload"))
+def test_long_research_qualification_rejects_chunks_above_128_sessions(scope) -> None:
+    evidence = _long_research_evidence()
+    if scope == "workload":
+        evidence["workload"]["chunk_session_count"] = 129
+        with pytest.raises(AssertionError, match="Chunk exceeds 128 sessions"):
+            assert_long_research_qualification(evidence)
+    else:
+        sample = _qualification_sample(evidence, "factor_evaluation", "cold", 0)
+        sample["chunk_session_count"] = 129
+        assert long_research_sample_qualification(
+            sample, research_kind="factor_evaluation", phase="cold", index=0,
+        ) == {
+            "status": "failed",
+            "failure_reason": "long Research sample Chunk exceeds 128 sessions",
+        }
+
+
 def test_long_research_final_qualification_failure_is_reportable() -> None:
     evidence = _long_research_evidence()
     evidence["scientific_equivalence"]["result_summary_sha256_by_kind"]["factor_evaluation"] = (

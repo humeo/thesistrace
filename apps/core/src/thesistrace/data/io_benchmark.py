@@ -25,6 +25,7 @@ LONG_RESEARCH_START_DATE = "2010-01-04"
 LONG_RESEARCH_END_DATE = "2026-08-13"
 LONG_RESEARCH_UNIVERSE = "top3000"
 LONG_RESEARCH_SAMPLE_COUNT = 5
+LONG_RESEARCH_CHUNK_SESSION_LIMIT = 128
 LONG_RESEARCH_COLD_MAX_LIMIT_MS = 600_000
 LONG_RESEARCH_WARM_MAX_LIMIT_MS = 300_000
 LONG_RESEARCH_PEAK_RSS_LIMIT_BYTES = 1536 * 1024 * 1024
@@ -211,8 +212,11 @@ def assert_long_research_qualification(
     generation = workload.get("generation_manifest_sha256")
     if not isinstance(generation, str) or len(generation) != 64:
         raise AssertionError("long Research frozen Generation identity is invalid")
-    if _positive_int(workload.get("chunk_session_count"), "Chunk session count") > 64:
-        raise AssertionError("long Research Chunk exceeds 64 sessions")
+    if (_positive_int(workload.get("chunk_session_count"), "Chunk session count")
+            > LONG_RESEARCH_CHUNK_SESSION_LIMIT):
+        raise AssertionError(
+            f"long Research Chunk exceeds {LONG_RESEARCH_CHUNK_SESSION_LIMIT} sessions"
+        )
     _positive_int(workload.get("chunk_count"), "Chunk count")
 
     preload = _mapping(evidence.get("warm_preload"), "warm preload")
@@ -403,8 +407,11 @@ def assert_long_research_sample(
     generation = sample["generation_manifest_sha256"]
     if not isinstance(generation, str) or len(generation) != 64:
         raise AssertionError("long Research sample Generation identity is invalid")
-    if _positive_int(sample["chunk_session_count"], "sample Chunk size") > 64:
-        raise AssertionError("long Research sample Chunk exceeds 64 sessions")
+    if (_positive_int(sample["chunk_session_count"], "sample Chunk size")
+            > LONG_RESEARCH_CHUNK_SESSION_LIMIT):
+        raise AssertionError(
+            f"long Research sample Chunk exceeds {LONG_RESEARCH_CHUNK_SESSION_LIMIT} sessions"
+        )
     _positive_int(sample["chunk_count"], "sample Chunk count")
     for metric in required - {
         "result_manifest_sha256",
