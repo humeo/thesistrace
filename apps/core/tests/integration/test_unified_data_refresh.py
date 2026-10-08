@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -96,6 +97,7 @@ def test_financial_preparation_uses_unpublished_market_and_does_not_move_head(
     "failed_stage,publication_crash,recovery",
     [
         ("market", False, "retry"),
+        ("market", False, "fenced"),
         ("benchmark", False, "retry"),
         ("industry", False, "branch_gc"),
         ("financial", False, "retry"),
@@ -108,6 +110,7 @@ def test_financial_preparation_uses_unpublished_market_and_does_not_move_head(
 def test_one_release_retries_without_exposing_partial_preparation(
     core_settings, tmp_path, failed_stage, publication_crash, recovery, monkeypatch
 ):
+    events: list[dict[str, object]] = []
     database = _database(core_settings)
     key = uuid4().hex
     benchmark_root = benchmark_mount_for_data_mount(tmp_path)
@@ -143,6 +146,16 @@ def test_one_release_retries_without_exposing_partial_preparation(
                     raise WorkerStopped("injected Worker interruption")
                 raise IndustrySourceError("INDUSTRY_SOURCE_UNAVAILABLE")
 
+        class LostLeaseSource(UnavailableRefreshSource):
+            def collect(self, plan):
+                with database.transaction() as tx:
+                    tx.execute(
+                        "UPDATE data.refresh_operations "
+                        "SET lease_expires_at=now()-interval '1 second' WHERE idempotency_key=%s",
+                        (key,),
+                    )
+                return super().collect(plan)
+
         class BrokenBenchmark:
             def collect_open_levels(self, **_kwargs):
                 raise BenchmarkSnapshotError("BENCHMARK_SOURCE_UNAVAILABLE")
@@ -153,15 +166,19 @@ def test_one_release_retries_without_exposing_partial_preparation(
             benchmark_mount_root=benchmark_root,
             clock=lambda: NOW,
             max_attempts=1,
+            lifecycle_event=events.append,
         )
         accepted = service.submit_dataset(idempotency_key=key, as_of=NOW)
         assert accepted.status == "accepted"
         assert service.submit_dataset(idempotency_key=key, as_of=NOW) == accepted
         with pytest.raises(DataRefreshError, match="IDEMPOTENCY_KEY_CONFLICT"):
             service.submit_dataset(idempotency_key=key, as_of=NOW - timedelta(hours=1))
-        with pytest.raises(WorkerStopped if recovery == "restart" else DataRefreshError):
+        with (
+            nullcontext() if recovery == "fenced"
+            else pytest.raises(WorkerStopped if recovery == "restart" else DataRefreshError)
+        ):
             service.process_next(
-                UnavailableRefreshSource()
+                LostLeaseSource() if recovery == "fenced" else UnavailableRefreshSource()
                 if failed_stage == "market"
                 else RecordingRefreshSource(canonical),
                 benchmark_source=(
@@ -172,6 +189,18 @@ def test_one_release_retries_without_exposing_partial_preparation(
                 indicator_provider=TushareFinancialIndicatorProvider(provider),
                 industry_source=BrokenIndustry() if failed_stage == "industry" else industry,
             )
+        assert events[0]["event"] == "data_refresh_started"
+        assert events[0]["kind"] == "dataset"
+        if recovery == "fenced":
+            assert events[-1]["event"] == "data_refresh_fenced"
+            assert events[-1]["phase"] == "market"
+            assert service.inspect(key).status == "running"
+            assert MountedDatasetHeadStore(tmp_path).current_pointer() == head
+            return
+        if recovery != "restart":
+            assert events[-1]["event"] == "data_refresh_failed"
+            assert events[-1]["phase"] == failed_stage
+            assert not any(event["event"] == "data_refresh_succeeded" for event in events)
         if recovery == "restart":
             assert service.inspect(key).status == "running"
             with database.transaction() as tx:
@@ -186,6 +215,7 @@ def test_one_release_retries_without_exposing_partial_preparation(
                 benchmark_mount_root=benchmark_root,
                 clock=lambda: NOW,
                 max_attempts=1,
+                lifecycle_event=events.append,
             )
             assert service.process_next(
                 UnavailableRefreshSource(), benchmark_source=FixtureBenchmarkSource()
@@ -249,7 +279,8 @@ def test_one_release_retries_without_exposing_partial_preparation(
         provider = ReplayTushareRefreshBundle((replay,))
         # Recreate the Worker to prove all resumable state is durable.
         service = DataRefreshService(
-            database, tmp_path, benchmark_mount_root=benchmark_root, clock=lambda: NOW
+            database, tmp_path, benchmark_mount_root=benchmark_root, clock=lambda: NOW,
+            lifecycle_event=events.append,
         )
 
         def resume():
@@ -275,13 +306,23 @@ def test_one_release_retries_without_exposing_partial_preparation(
                     resume()
             assert service.inspect(retry_key).status == "running"
             service = DataRefreshService(
-                database, tmp_path, benchmark_mount_root=benchmark_root, clock=lambda: NOW
+                database, tmp_path, benchmark_mount_root=benchmark_root, clock=lambda: NOW,
+                lifecycle_event=events.append,
             )
             assert service.process_next(
                 UnavailableRefreshSource(), benchmark_source=FixtureBenchmarkSource()
             )
         else:
             assert resume()
+        assert events[-1]["event"] == "data_refresh_succeeded"
+        assert events[-1]["outcome"] == "published"
+        phases = {
+            event["phase"] for event in events
+            if event["event"] == "data_refresh_phase_completed"
+        }
+        assert {"market", "benchmark", "financial", "industry", "candidate_validation"} <= phases
+        assert "publication" in phases
+        assert all(event["duration_ms"] >= 0 for event in events if "duration_ms" in event)
         result = service.inspect(retry_key)
         assert result.status == "succeeded"
         assert result.outcome == "published"

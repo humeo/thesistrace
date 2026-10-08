@@ -780,6 +780,25 @@ class DataRefreshService:
     def _process_dataset_claim(self, claim: _RefreshClaim, **sources) -> bool:
         from thesistrace.data.unified_refresh import UnifiedRefreshPreparation
 
+        operation_id = _operation_id(claim.key, claim.owner_token)
+        operation_started = self._monotonic()
+        phase = "claim"
+
+        def emit(name: str, **context: object) -> None:
+            self._lifecycle_event(_data_refresh_event(
+                name, operation_id=operation_id, attempt_number=claim.attempt_count,
+                kind="dataset", duration_ms=_duration_ms(self._monotonic() - operation_started),
+                **context,
+            ))
+
+        @contextmanager
+        def timed_phase(name: str) -> Iterator[None]:
+            nonlocal phase
+            phase = name
+            with self._timed_phase(claim, name):
+                yield
+
+        emit("data_refresh_started", status="running")
         final_manifest = None
         benchmark_digest = None
         try:
@@ -794,10 +813,11 @@ class DataRefreshService:
                     )
                 ):
                     raise DataRefreshError("REFRESH_SOURCES_UNAVAILABLE")
-                head = self._lifecycle.current_pointer()
-                if head is None:
-                    raise DataRefreshError("DATA_NOT_READY")
-                self._record_expected_head(claim, head.generation_manifest_sha256)
+                with timed_phase("current_head"):
+                    head = self._lifecycle.current_pointer()
+                    if head is None:
+                        raise DataRefreshError("DATA_NOT_READY")
+                    self._record_expected_head(claim, head.generation_manifest_sha256)
                 with self._database.transaction() as transaction:
                     row = transaction.execute(
                         "SELECT preparation FROM data.refresh_operations WHERE idempotency_key=%s",
@@ -811,7 +831,7 @@ class DataRefreshService:
                     clock=self._operator_time,
                     guard=heartbeat.assert_owned,
                     checkpoint=lambda state: self._save_preparation(claim, state),
-                    phase=lambda phase: self._record_phase(claim, phase),
+                    phase=timed_phase,
                 ).prepare(
                     key=claim.key,
                     attempt=claim.attempt_count,
@@ -824,7 +844,7 @@ class DataRefreshService:
                 benchmark_digest = str(prepared["benchmark"])
                 prepared_at = self._operator_time()
                 with self._lifecycle.protected_refresh_candidate(
-                    operation_id=_operation_id(claim.key, claim.owner_token),
+                    operation_id=operation_id,
                     generation_manifest_sha256=final_manifest,
                     lease_seconds=self._lease_seconds,
                     admission_guard=lambda transaction: self._record_candidate_in_transaction(
@@ -835,21 +855,22 @@ class DataRefreshService:
                         prepared_at=prepared_at,
                     ),
                 ) as candidate:
-                    self._record_phase(claim, "publication")
-                    moved = self._lifecycle.compare_and_swap_refresh_head(
-                        expected_generation_manifest_sha256=head.generation_manifest_sha256,
-                        candidate=candidate,
-                        prepared_at=prepared_at,
-                        benchmark_snapshot_sha256=benchmark_digest,
-                        publication_guard=lambda transaction: self._owned_refresh_transaction(
-                            transaction,
-                            claim,
-                            expected_manifest=head.generation_manifest_sha256,
-                            candidate_manifest=final_manifest,
-                        ),
-                    )
-                    self._complete_published(claim, moved, prepared_at)
+                    with timed_phase("publication"):
+                        moved = self._lifecycle.compare_and_swap_refresh_head(
+                            expected_generation_manifest_sha256=head.generation_manifest_sha256,
+                            candidate=candidate,
+                            prepared_at=prepared_at,
+                            benchmark_snapshot_sha256=benchmark_digest,
+                            publication_guard=lambda transaction: self._owned_refresh_transaction(
+                                transaction,
+                                claim,
+                                expected_manifest=head.generation_manifest_sha256,
+                                candidate_manifest=final_manifest,
+                            ),
+                        )
+                        self._complete_published(claim, moved, prepared_at)
         except _RefreshFenced:
+            emit("data_refresh_fenced", level="WARNING", phase=phase, outcome="fenced")
             return True
         except Exception as error:
             pointer = self._heads.current_pointer()
@@ -861,6 +882,11 @@ class DataRefreshService:
                     and pointer.benchmark_snapshot_sha256 == benchmark_digest
                 )
             ):
+                emit(
+                    "data_refresh_failed", level="ERROR", phase=phase, status="running",
+                    outcome="completion_pending", failure_code="REFRESH_COMPLETION_PENDING",
+                    exception_type=type(error).__name__,
+                )
                 raise DataRefreshError("REFRESH_COMPLETION_PENDING") from error
             if isinstance(error, FinancialDailyRefreshError):
                 policy = _financial_failure_policy(error)
@@ -871,10 +897,20 @@ class DataRefreshService:
             else:
                 code, retryable = _failure_policy(error)
             try:
-                self._record_failure(claim, code=code, retryable=retryable, terminal_outcome=None)
+                failure = self._record_failure(
+                    claim, code=code, retryable=retryable, terminal_outcome=None,
+                )
             except _RefreshFenced:
+                emit("data_refresh_fenced", level="WARNING", phase=phase, outcome="fenced")
                 return True
+            emit(
+                "data_refresh_failed", level="WARNING" if failure.retry else "ERROR",
+                phase=phase, status="accepted" if failure.retry else "failed",
+                outcome="retry_scheduled" if failure.retry else "failed",
+                failure_code=failure.code, exception_type=type(error).__name__,
+            )
             raise DataRefreshError(code) from error
+        emit("data_refresh_succeeded", status="succeeded", outcome="published")
         return True
 
     def _save_preparation(self, claim: _RefreshClaim, state: dict[str, object]) -> None:
