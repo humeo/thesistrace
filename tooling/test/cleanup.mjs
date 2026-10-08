@@ -1,6 +1,6 @@
 import { existsSync, rmSync, rmdirSync } from 'node:fs';
 import { CommandError } from '../process.mjs';
-import { captureEvidence, captureLogs, sanitize, scanCanaries } from './evidence.mjs';
+import { captureEvidence, captureLogs, logFiles, sanitize, scanCanaries } from './evidence.mjs';
 
 export async function cleanupImages(run) {
   if (run.keep_images) return;
@@ -45,7 +45,9 @@ export async function finish(run, initialStatus) {
   if (secrets) { console.error('runtime secret cleanup failed'); status ||= secrets; }
   // Scan originals before sanitization: redaction must not make a leak pass.
   const diagnostics = await attempt(() => captureEvidence(run));
-  const logs = await attempt(() => captureLogs(run));
+  // Reset/recreation can remove the containers that produced earlier evidence.
+  // Preserve those snapshots and keep the final container logs separately.
+  const logs = await attempt(() => captureLogs(run, Object.keys(logFiles), 'final-'));
   record({ diagnostic_capture_status: diagnostics, log_capture_status: logs });
   status ||= diagnostics || logs;
   const scan = await attempt(() => sanitize(run, 'scan', { stdoutFile: `${run.evidence_dir}/raw-canary-scan.json` }));

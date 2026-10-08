@@ -13,8 +13,8 @@ export async function captureEvidence(run) {
   } catch {}
   writeFileSync(`${run.evidence_dir}/container-inspect.txt`, inspection);
 }
-export async function captureLogs(run, files = Object.keys(logFiles)) {
-  for (const file of files) await run.compose(['logs', '--no-color', ...logFiles[file]], { stdoutFile: `${run.evidence_dir}/${file}`, stderrFile: `${run.evidence_dir}/${file}.stderr` });
+export async function captureLogs(run, files = Object.keys(logFiles), prefix = '') {
+  for (const file of files) await run.compose(['logs', '--no-color', ...logFiles[file]], { stdoutFile: `${run.evidence_dir}/${prefix}${file}`, stderrFile: `${run.evidence_dir}/${prefix}${file}.stderr` });
 }
 export function sanitize(run, action, options = {}) {
   return run.exec('uv', ['run', 'python', `${run.repo_root}/tests/sanitize_production_mcp_evidence.py`, action, run.evidence_dir], options);

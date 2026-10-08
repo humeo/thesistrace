@@ -1,9 +1,28 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { test } from 'node:test';
 import { TestRun } from './resources.mjs';
 import { finish } from './cleanup.mjs';
+
+test('final diagnostics preserve captured worker events after product reset removed the containers', async () => {
+  const directory = mkdtempSync(`${tmpdir()}/thesistrace-cleanup-evidence-`);
+  try {
+    const run = new TestRun('image-qualification', { ambient: { THESISTRACE_TEST_STATE_ROOT: directory } });
+    run.createMounts(); run.setOrigin(5180);
+    writeFileSync(run.run_metadata, `project_name=${run.project_name}\n`);
+    const events = '{"event":"research_run_succeeded"}\n';
+    writeFileSync(`${run.evidence_dir}/worker-events.jsonl`, events);
+    run.compose = async (_args, options = {}) => {
+      if (options.stdoutFile) writeFileSync(options.stdoutFile, '');
+      return '';
+    };
+    run.exec = async () => '';
+    assert.equal(await finish(run, 6), 6);
+    assert.equal(readFileSync(`${run.evidence_dir}/worker-events.jsonl`, 'utf8'), events);
+    assert.equal(readFileSync(`${run.evidence_dir}/final-worker-events.jsonl`, 'utf8'), '');
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
 
 for (const initial of [0, 6]) for (const failure of ['evidence-directory', 'metadata-write']) {
   test(`${failure} failure still cleans owned resources and preserves initial status ${initial}`, async () => {

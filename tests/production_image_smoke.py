@@ -2200,9 +2200,18 @@ def _after_product_state_reset(
 ) -> dict[str, object]:
     overview = _request_json(api_origin, "GET", "/api/data")
     expected_overview = dict(expected["reset_overview"])
-    expected_overview["last_market_refresh_at"] = None
-    expected_overview["last_financial_refresh_at"] = None
-    assert overview == expected_overview
+    # Product reset clears operational refresh metadata for all three Dataset
+    # stages while preserving the mounted canonical data and its coverage.
+    for field in (
+        "last_market_refresh_at", "last_financial_refresh_at", "last_industry_refresh_at",
+        "industry_refresh_status", "industry_refresh_failure_code",
+    ):
+        expected_overview[field] = None
+    assert overview == expected_overview, {
+        key: {"expected": expected_overview.get(key), "actual": overview.get(key)}
+        for key in overview.keys() | expected_overview.keys()
+        if overview.get(key) != expected_overview.get(key)
+    }
     assert _directory_sha256(settings.data_mount) == expected["reset_mounted_data_sha256"]
     assert _canonical_identity(settings) == expected["reset_canonical_identity"]
     stale_run_ids = {
