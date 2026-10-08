@@ -62,7 +62,9 @@ def test_framework_portfolio_program_matches_direct_condition_triggered_executio
     assert result["framework_events"][2]["target_id"] is None
     assert result["positions"] == expected["positions"]
     assert Decimal(result["daily"][-1]["net_nav"]) == Decimal("200000")
-    assert result["decision_state"]["module_states"]["portfolio_construction"] == {"count": 4}
+    assert result["decision_state"]["module_states"]["portfolio_construction"]["decision"] == {
+        "count": 4
+    }
     assert result["pending_target"]["allocation"] == expected["pending_target"]["allocation"]
     assert result["pending_target"]["decision_session"] == SESSIONS[-1]
 
@@ -91,27 +93,24 @@ def test_framework_module_observations_exclude_future_data_and_other_modules_fie
     data.fields[financial] = {(day, item): "100" for day in SESSIONS for item in (A, B)}
     modules = definition["strategy"]["modules"]
     modules["portfolio_construction"] = python_module(
-        """
-from quantgrove import Strategy, Decision
+        """from quantgrove import Decision
 
 SETTINGS = {}
 
 
-class Fixture(Strategy):
-    def on_close(self, data, account):
-        closes = data.close_prices(2)
-        financial = data.history("financial.income.total_revenue.latest_fy", 2)
-        history = {
-            "sessions": closes.sessions,
-            "instruments": list(closes.values),
-            "fields": {
-                "price.close.adjusted": list(closes.values.values()),
-                "financial.income.total_revenue.latest_fy": list(
-                    financial.values.values()
-                ),
-            },
-        }
-        self.state = {
+def decide(data, account, state):
+    closes = data.close_prices(2)
+    financial = data.history("financial.income.total_revenue.latest_fy", 2)
+    history = {
+        "sessions": closes.sessions,
+        "instruments": list(closes.values),
+        "fields": {
+            "price.close.adjusted": list(closes.values.values()),
+            "financial.income.total_revenue.latest_fy": list(financial.values.values()),
+        },
+    }
+    state.update(
+        {
             "history": {
                 "sessions": list(history["sessions"]),
                 "instruments": list(history["instruments"]),
@@ -122,24 +121,21 @@ class Fixture(Strategy):
             },
             "candidates": [dict(row) for row in data.candidate_details],
         }
-        decision = None
-        return None if decision is None else Decision(decision)
+    )
+    decision = None
+    return None if decision is None else Decision(decision)
 """,
         stage="portfolio_construction",
     )
     modules["risk_management"] = python_module(
-        """
-from quantgrove import Strategy, Decision
-
+        """from quantgrove import Decision
 SETTINGS = {}
 
-
-class Fixture(Strategy):
-    def on_close(self, data, account):
-        assert not hasattr(data, "fields")
-        self.state = {}
-        decision = None
-        return None if decision is None else Decision(decision)
+def decide(data, account, state):
+    assert not hasattr(data, 'fields')
+    state.update({})
+    decision = None
+    return None if decision is None else Decision(decision)
 """,
         stage="risk_management",
     )
@@ -167,7 +163,7 @@ class Fixture(Strategy):
 
     before, after = observe(data), observe(altered)
     assert before == after
-    observed = before.state["module_states"]["portfolio_construction"]
+    observed = before.state["module_states"]["portfolio_construction"]["decision"]
     assert observed["history"]["sessions"] == list(SESSIONS[:2])
     assert observed["history"]["fields"][financial] == [[100, 100], [100, 100]]
     assert all("listed_to" not in row for row in observed["candidates"])
@@ -178,32 +174,30 @@ class Fixture(Strategy):
 def test_framework_risk_explicitly_replaces_or_cancels_the_portfolio(replacement):
     data, definition, matrix, _ = framework_inputs()
     definition["strategy"]["modules"]["risk_management"] = python_module(
-        """
-from quantgrove import Strategy, Decision
+        """from quantgrove import Decision
 
 SETTINGS = {}
 
 
-class Fixture(Strategy):
-    def on_close(self, data, account):
-        item = SETTINGS["replacement"]
-        target = (
-            None
-            if item is None
-            else {
-                "reason": "replacement_portfolio",
-                "allocation": {
-                    "mode": "rebalance",
-                    "instrument_ids": [item],
-                    "relative_weights": {item: "1"},
-                    "exposure": 1.0,
-                },
-                "position_limits": {},
-            }
-        )
-        self.state = {}
-        decision = {"mode": "replace", "reason": "explicit_override", "target": target}
-        return None if decision is None else Decision(decision)
+def decide(data, account, state):
+    item = SETTINGS["replacement"]
+    target = (
+        None
+        if item is None
+        else {
+            "reason": "replacement_portfolio",
+            "allocation": {
+                "mode": "rebalance",
+                "instrument_ids": [item],
+                "relative_weights": {item: "1"},
+                "exposure": 1.0,
+            },
+            "position_limits": {},
+        }
+    )
+    state.update({})
+    decision = {"mode": "replace", "reason": "explicit_override", "target": target}
+    return None if decision is None else Decision(decision)
 """,
         parameters={"replacement": replacement},
         stage="risk_management",
@@ -250,40 +244,40 @@ def test_each_framework_module_uses_the_actual_isolated_guest(stage, tmp_path, m
         path.write_text("private sentinel")
     monkeypatch.setenv("THESISTRACE_DATABASE_URL", "private credential")
     definition["strategy"]["modules"][stage] = python_module(
-        """
-from quantgrove import Strategy, Decision
+        """from quantgrove import Decision
 
 SETTINGS = {}
 import os
 
 
-class Fixture(Strategy):
-    def on_close(self, data, account):
-        denied = []
-        for path in SETTINGS["paths"]:
-            try:
-                open(path).read()
-            except OSError:
-                denied.append(path)
+def decide(data, account, state):
+    denied = []
+    for path in SETTINGS["paths"]:
         try:
-            import socket
+            open(path).read()
+        except OSError:
+            denied.append(path)
+    try:
+        import socket
 
-            network = True
-        except ImportError:
-            network = False
-        try:
-            account._values["cash_cny"] = "999999"
-            writable = True
-        except TypeError:
-            writable = False
-        self.state = {
+        network = True
+    except ImportError:
+        network = False
+    try:
+        account._values["cash_cny"] = "999999"
+        writable = True
+    except TypeError:
+        writable = False
+    state.update(
+        {
             "denied": denied,
             "network": network,
             "writable": writable,
             "credential": os.environ.get("THESISTRACE_DATABASE_URL"),
         }
-        decision = None
-        return None if decision is None else Decision(decision)
+    )
+    decision = None
+    return None if decision is None else Decision(decision)
 """,
         parameters={"paths": [str(path) for path in paths]},
         stage=stage,
@@ -294,7 +288,7 @@ class Fixture(Strategy):
         definition,
         origin_session=SESSIONS[0],
     ).finalized
-    assert result["decision_state"]["module_states"][stage] == {
+    assert result["decision_state"]["module_states"][stage]["decision"] == {
         "denied": [str(path) for path in paths],
         "network": False,
         "writable": False,
@@ -309,15 +303,14 @@ class Fixture(Strategy):
     [
         "while True:\n    pass",
         "bytearray(512 * 1024 * 1024)",
-        "self.state = {'large': 'x' * (300 * 1024)}",
+        "state['large'] = 'x' * (300 * 1024)",
     ],
 )
 def test_framework_resource_failure_is_bounded_and_the_next_strategy_succeeds(body):
     data, definition, matrix, _ = framework_inputs()
     bounded = slice_research_sessions(data, SESSIONS[:1])
     definition["strategy"]["modules"]["risk_management"] = python_module(
-        "from quantgrove import Strategy\nclass Fixture(Strategy):\n"
-        "    def on_close(self, data, account):\n" + indent(body, "        "),
+        "def decide(data, account, state):\n" + indent(body, "    "),
         stage="risk_management",
     )
     started = monotonic()
@@ -326,99 +319,87 @@ def test_framework_resource_failure_is_bounded_and_the_next_strategy_succeeds(bo
     assert monotonic() - started < 20
     assert caught.value.session == SESSIONS[0]
     definition["strategy"]["modules"]["risk_management"] = python_module(
-        """
-from quantgrove import Strategy, Decision
-
+        """from quantgrove import Decision
 SETTINGS = {}
 
-
-class Fixture(Strategy):
-    def on_close(self, data, account):
-        self.state = {"ok": True}
-        decision = None
-        return None if decision is None else Decision(decision)
+def decide(data, account, state):
+    state.update({'ok': True})
+    decision = None
+    return None if decision is None else Decision(decision)
 """,
         stage="risk_management",
     )
     result = transition_strategy(bounded, matrix, definition, origin_session=SESSIONS[0]).finalized
-    assert result["decision_state"]["module_states"]["risk_management"] == {"ok": True}
+    assert result["decision_state"]["module_states"]["risk_management"]["decision"] == {"ok": True}
 
 
 def test_signal_expiry_is_a_portfolio_input_not_an_automatic_exit():
     data, definition, _, _ = framework_inputs()
     modules = definition["strategy"]["modules"]
     modules["universe_selection"] = python_module(
-        """
-from quantgrove import Strategy, Decision
-
+        """from quantgrove import Decision
 SETTINGS = {}
 
-
-class Fixture(Strategy):
-    def on_close(self, data, account):
-        item = SETTINGS["a"] if data.completed_sessions < 4 else SETTINGS["b"]
-        self.state = {}
-        decision = {"reason": "selected_candidates", "instrument_ids": [item]}
-        return None if decision is None else Decision(decision)
+def decide(data, account, state):
+    item = SETTINGS['a'] if data.completed_sessions < 4 else SETTINGS['b']
+    state.update({})
+    decision = {'reason': 'selected_candidates', 'instrument_ids': [item]}
+    return None if decision is None else Decision(decision)
 """,
         parameters={"a": A, "b": B},
         stage="universe_selection",
     )
     modules["alpha"] = python_module(
-        """
-from quantgrove import Strategy, Decision
+        """from quantgrove import Decision
 
 SETTINGS = {}
 
 
-class Fixture(Strategy):
-    def on_close(self, data, account):
-        output = None
-        if data.completed_sessions in (1, 4):
-            output = {
-                "reason": "new_signal",
-                "signals": [
-                    {
-                        "instrument_id": data.framework["universe"][0],
-                        "value": 1.0,
-                        "valid_for_sessions": 2,
-                    }
-                ],
-            }
-        self.state = {"count": self.state.get("count", 0) + 1}
-        decision = output
-        return None if decision is None else Decision(decision)
+def decide(data, account, state):
+    output = None
+    if data.completed_sessions in (1, 4):
+        output = {
+            "reason": "new_signal",
+            "signals": [
+                {
+                    "instrument_id": data.framework["universe"][0],
+                    "value": 1.0,
+                    "valid_for_sessions": 2,
+                }
+            ],
+        }
+    state.update({"count": state.get("count", 0) + 1})
+    decision = output
+    return None if decision is None else Decision(decision)
 """,
         stage="alpha",
     )
     modules["portfolio_construction"] = python_module(
-        """
-from quantgrove import Strategy, Decision
+        """from quantgrove import Decision
 
 SETTINGS = {}
 
 
-class Fixture(Strategy):
-    def on_close(self, data, account):
-        framework = data.framework
-        self.state.setdefault("expired", []).extend(framework["expired_signals"])
-        self.state.setdefault("updates", []).append(framework["signals_updated"])
-        output = None
-        if framework["signals_updated"] and framework["signals"]:
-            item = framework["signals"][0]["instrument_id"]
-            output = {
-                "reason": "signal_change",
-                "allocation": {
-                    "mode": "rebalance",
-                    "instrument_ids": [item],
-                    "relative_weights": {item: "1"},
-                    "exposure": 1.0,
-                },
-                "position_limits": {},
-            }
-        self.state = self.state
-        decision = output
-        return None if decision is None else Decision(decision)
+def decide(data, account, state):
+    framework = data.framework
+    state.setdefault("expired", []).extend(framework["expired_signals"])
+    state.setdefault("updates", []).append(framework["signals_updated"])
+    output = None
+    if framework["signals_updated"] and framework["signals"]:
+        item = framework["signals"][0]["instrument_id"]
+        output = {
+            "reason": "signal_change",
+            "allocation": {
+                "mode": "rebalance",
+                "instrument_ids": [item],
+                "relative_weights": {item: "1"},
+                "exposure": 1.0,
+            },
+            "position_limits": {},
+        }
+    state = state
+    decision = output
+    return None if decision is None else Decision(decision)
 """,
         stage="portfolio_construction",
     )
@@ -437,8 +418,8 @@ class Fixture(Strategy):
     assert expired["proposal"] is None
     assert expired["target_id"] is None
     assert result["framework_events"][3]["universe"]["instrument_ids"] == [B]
-    assert state["module_states"]["alpha"] == {"count": 4}
-    assert state["module_states"]["portfolio_construction"] == {
+    assert state["module_states"]["alpha"]["decision"] == {"count": 4}
+    assert state["module_states"]["portfolio_construction"]["decision"] == {
         "expired": [A],
         "updates": [True, False, False, True],
     }
@@ -500,56 +481,52 @@ def test_framework_risk_runs_without_a_new_portfolio_and_only_exits_a():
         for values in (data.execution_prices, data.trading_states, data.price_limits):
             values[(session, c)] = values[(session, B)]
     definition["strategy"]["modules"]["portfolio_construction"] = python_module(
-        """
-from quantgrove import Strategy, Decision
+        """from quantgrove import Decision
 
 SETTINGS = {}
 
 
-class Fixture(Strategy):
-    def on_close(self, data, account):
-        output = None
-        if data.completed_sessions == 1:
-            ids = SETTINGS["ids"]
-            output = {
-                "reason": "initial_portfolio",
-                "allocation": {
-                    "mode": "rebalance",
-                    "instrument_ids": list(ids),
-                    "relative_weights": {item: "1/3" for item in ids},
-                    "exposure": 1.0,
-                },
-                "position_limits": {},
-            }
-        self.state = {}
-        decision = output
-        return None if decision is None else Decision(decision)
+def decide(data, account, state):
+    output = None
+    if data.completed_sessions == 1:
+        ids = SETTINGS["ids"]
+        output = {
+            "reason": "initial_portfolio",
+            "allocation": {
+                "mode": "rebalance",
+                "instrument_ids": list(ids),
+                "relative_weights": {item: "1/3" for item in ids},
+                "exposure": 1.0,
+            },
+            "position_limits": {},
+        }
+    state.update({})
+    decision = output
+    return None if decision is None else Decision(decision)
 """,
         parameters={"ids": [A, B, c]},
         stage="portfolio_construction",
     )
     definition["strategy"]["modules"]["risk_management"] = python_module(
-        """
-from quantgrove import Strategy, Decision
+        """from quantgrove import Decision
 
 SETTINGS = {}
 
 
-class Fixture(Strategy):
-    def on_close(self, data, account):
-        output = None
-        if data.completed_sessions == 3:
-            assert data.framework["proposal"] is None
-            assert data.framework["retained_proposal"] is not None
-            assert len(account._values["positions"]) == 3
-            output = {
-                "mode": "limit_positions",
-                "reason": "exit_a",
-                "position_limits": {SETTINGS["a"]: 0},
-            }
-        self.state = {"count": self.state.get("count", 0) + 1}
-        decision = output
-        return None if decision is None else Decision(decision)
+def decide(data, account, state):
+    output = None
+    if data.completed_sessions == 3:
+        assert data.framework["proposal"] is None
+        assert data.framework["retained_proposal"] is not None
+        assert len(account._values["positions"]) == 3
+        output = {
+            "mode": "limit_positions",
+            "reason": "exit_a",
+            "position_limits": {SETTINGS["a"]: 0},
+        }
+    state.update({"count": state.get("count", 0) + 1})
+    decision = output
+    return None if decision is None else Decision(decision)
 """,
         parameters={"a": A},
         stage="risk_management",
@@ -570,7 +547,7 @@ class Fixture(Strategy):
     }
     assert Decimal(result["daily"][-1]["net_cash"]) == Decimal("34000")
     assert result["pending_target"] is None
-    assert result["decision_state"]["module_states"]["risk_management"] == {"count": 4}
+    assert result["decision_state"]["module_states"]["risk_management"]["decision"] == {"count": 4}
 
 
 def test_builtin_portfolio_keeps_its_interval_when_custom_signals_change_daily():
@@ -578,37 +555,31 @@ def test_builtin_portfolio_keeps_its_interval_when_custom_signals_change_daily()
     modules = definition["strategy"]["modules"]
     modules["portfolio_construction"] = "periodic_top_n/v1"
     modules["alpha"] = python_module(
-        """
-from quantgrove import Strategy, Decision
+        """from quantgrove import Decision
 
 SETTINGS = {}
 
 
-class Fixture(Strategy):
-    def on_close(self, data, account):
-        item = SETTINGS["a"] if data.completed_sessions == 1 else SETTINGS["b"]
-        self.state = {}
-        decision = {
-            "reason": "daily_signal",
-            "signals": [{"instrument_id": item, "value": 1.0, "valid_for_sessions": 1}],
-        }
-        return None if decision is None else Decision(decision)
+def decide(data, account, state):
+    item = SETTINGS["a"] if data.completed_sessions == 1 else SETTINGS["b"]
+    state.update({})
+    decision = {
+        "reason": "daily_signal",
+        "signals": [{"instrument_id": item, "value": 1.0, "valid_for_sessions": 1}],
+    }
+    return None if decision is None else Decision(decision)
 """,
         parameters={"a": A, "b": B},
         stage="alpha",
     )
     modules["risk_management"] = python_module(
-        """
-from quantgrove import Strategy, Decision
-
+        """from quantgrove import Decision
 SETTINGS = {}
 
-
-class Fixture(Strategy):
-    def on_close(self, data, account):
-        self.state = {"count": self.state.get("count", 0) + 1}
-        decision = None
-        return None if decision is None else Decision(decision)
+def decide(data, account, state):
+    state.update({'count': state.get('count', 0) + 1})
+    decision = None
+    return None if decision is None else Decision(decision)
 """,
         stage="risk_management",
     )
@@ -619,64 +590,56 @@ class Fixture(Strategy):
     ] == [(SESSIONS[1], A, "buy", 10000)]
     assert result["pending_target"] is None
     assert result["decision_state"]["signals"][0]["instrument_id"] == B
-    assert result["decision_state"]["module_states"]["risk_management"] == {"count": 4}
+    assert result["decision_state"]["module_states"]["risk_management"]["decision"] == {"count": 4}
 
 
 def test_invalid_risk_increase_cannot_be_hidden_by_a_stricter_portfolio_cap():
     data, definition, matrix, _ = framework_inputs()
     definition["strategy"]["modules"]["portfolio_construction"] = python_module(
-        """
-from quantgrove import Strategy, Decision
+        """from quantgrove import Decision
 
 SETTINGS = {}
 
 
-class Fixture(Strategy):
-    def on_close(self, data, account):
-        item = SETTINGS["a"]
-        if data.completed_sessions == 1:
-            output = {
-                "reason": "enter",
-                "allocation": {
-                    "mode": "rebalance",
-                    "instrument_ids": [item],
-                    "relative_weights": {item: "1"},
-                    "exposure": 1.0,
-                },
-                "position_limits": {},
-            }
-        else:
-            output = {
-                "reason": "exit",
-                "allocation": None,
-                "position_limits": {item: 0},
-            }
-        self.state = {}
-        decision = output
-        return None if decision is None else Decision(decision)
+def decide(data, account, state):
+    item = SETTINGS["a"]
+    if data.completed_sessions == 1:
+        output = {
+            "reason": "enter",
+            "allocation": {
+                "mode": "rebalance",
+                "instrument_ids": [item],
+                "relative_weights": {item: "1"},
+                "exposure": 1.0,
+            },
+            "position_limits": {},
+        }
+    else:
+        output = {"reason": "exit", "allocation": None, "position_limits": {item: 0}}
+    state.update({})
+    decision = output
+    return None if decision is None else Decision(decision)
 """,
         parameters={"a": A},
         stage="portfolio_construction",
     )
     definition["strategy"]["modules"]["risk_management"] = python_module(
-        """
-from quantgrove import Strategy, Decision
+        """from quantgrove import Decision
 
 SETTINGS = {}
 
 
-class Fixture(Strategy):
-    def on_close(self, data, account):
-        output = None
-        if account._values["positions"]:
-            output = {
-                "mode": "limit_positions",
-                "reason": "invalid_increase",
-                "position_limits": {SETTINGS["a"]: 10001},
-            }
-        self.state = {}
-        decision = output
-        return None if decision is None else Decision(decision)
+def decide(data, account, state):
+    output = None
+    if account._values["positions"]:
+        output = {
+            "mode": "limit_positions",
+            "reason": "invalid_increase",
+            "position_limits": {SETTINGS["a"]: 10001},
+        }
+    state.update({})
+    decision = output
+    return None if decision is None else Decision(decision)
 """,
         parameters={"a": A},
         stage="risk_management",
@@ -729,7 +692,7 @@ def test_framework_programs_survive_public_kernel_run_and_advance(custom_alpha):
     )
     assert continued.output_snapshot() == expected
     state = expected["strategy_backtest"]["decision_state"]
-    assert state["module_states"]["portfolio_construction"] == {"count": 4}
+    assert state["module_states"]["portfolio_construction"]["decision"] == {"count": 4}
     initial = initial_tracking_observation_state(SESSIONS[0], "100000")
     checkpoint = project_tracking_checkpoint(
         prefix,
@@ -779,33 +742,25 @@ def framework_run_input(*, custom_alpha=False, builtin_portfolio=False, exposure
     if builtin_portfolio:
         strategy["modules"]["portfolio_construction"] = "periodic_top_n/v1"
         strategy["modules"]["risk_management"] = python_module(
-            """
-from quantgrove import Strategy, Decision
-
+            """from quantgrove import Decision
 SETTINGS = {}
 
-
-class Fixture(Strategy):
-    def on_close(self, data, account):
-        self.state = {}
-        decision = None
-        return None if decision is None else Decision(decision)
+def decide(data, account, state):
+    state.update({})
+    decision = None
+    return None if decision is None else Decision(decision)
 """,
             stage="risk_management",
         )
     if custom_alpha:
         strategy["modules"]["alpha"] = python_module(
-            """
-from quantgrove import Strategy, Decision
-
+            """from quantgrove import Decision
 SETTINGS = {}
 
-
-class Fixture(Strategy):
-    def on_close(self, data, account):
-        self.state = {}
-        decision = None
-        return None if decision is None else Decision(decision)
+def decide(data, account, state):
+    state.update({})
+    decision = None
+    return None if decision is None else Decision(decision)
 """,
             stage="alpha",
         )
@@ -1023,27 +978,25 @@ def test_custom_risk_cap_can_exit_a_minimum_holding_reservation():
         "minimum_holding_sessions": 3,
     }
     definition["strategy"]["modules"]["risk_management"] = python_module(
-        """
-from quantgrove import Strategy, Decision
+        """from quantgrove import Decision
 
 SETTINGS = {}
 
 
-class Fixture(Strategy):
-    def on_close(self, data, account):
-        output = None
-        if data.completed_sessions == 2:
-            held = account._values["positions"][0]
-            assert held["holding_age"] == 1
-            assert data.framework["proposal"]["allocation"]["retained_instrument_ids"]
-            output = {
-                "mode": "limit_positions",
-                "reason": "custom_risk_exit",
-                "position_limits": {held["instrument_id"]: 0},
-            }
-        self.state = {}
-        decision = output
-        return None if decision is None else Decision(decision)
+def decide(data, account, state):
+    output = None
+    if data.completed_sessions == 2:
+        held = account._values["positions"][0]
+        assert held["holding_age"] == 1
+        assert data.framework["proposal"]["allocation"]["retained_instrument_ids"]
+        output = {
+            "mode": "limit_positions",
+            "reason": "custom_risk_exit",
+            "position_limits": {held["instrument_id"]: 0},
+        }
+    state.update({})
+    decision = output
+    return None if decision is None else Decision(decision)
 """,
         stage="risk_management",
     )
@@ -1060,54 +1013,50 @@ def test_custom_local_risk_preserves_portfolio_stock_cap_in_single_final_target(
     data, definition, matrix, _ = framework_inputs()
     definition["costs"] = dict.fromkeys(definition["costs"], "0")
     definition["strategy"]["modules"]["portfolio_construction"] = python_module(
-        """
-from quantgrove import Strategy, Decision
+        """from quantgrove import Decision
 
 SETTINGS = {}
 
 
-class Fixture(Strategy):
-    def on_close(self, data, account):
-        output = None
-        if data.completed_sessions in (1, 2):
-            output = {
-                "reason": "stock_cap",
-                "allocation": {
-                    "mode": "rebalance",
-                    "instrument_ids": [SETTINGS["a"]],
-                    "relative_weights": {SETTINGS["a"]: "1"},
-                    "exposure": 1.0,
-                },
-                "position_limits": {},
-            }
-            if data.completed_sessions == 2:
-                output["maximum_stock_exposure"] = 0.3
-        self.state = {}
-        decision = output
-        return None if decision is None else Decision(decision)
+def decide(data, account, state):
+    output = None
+    if data.completed_sessions in (1, 2):
+        output = {
+            "reason": "stock_cap",
+            "allocation": {
+                "mode": "rebalance",
+                "instrument_ids": [SETTINGS["a"]],
+                "relative_weights": {SETTINGS["a"]: "1"},
+                "exposure": 1.0,
+            },
+            "position_limits": {},
+        }
+        if data.completed_sessions == 2:
+            output["maximum_stock_exposure"] = 0.3
+    state.update({})
+    decision = output
+    return None if decision is None else Decision(decision)
 """,
         parameters={"a": A},
         stage="portfolio_construction",
     )
     definition["strategy"]["modules"]["risk_management"] = python_module(
-        """
-from quantgrove import Strategy, Decision
+        """from quantgrove import Decision
 
 SETTINGS = {}
 
 
-class Fixture(Strategy):
-    def on_close(self, data, account):
-        output = None
-        if data.completed_sessions == 2:
-            output = {
-                "mode": "limit_positions",
-                "reason": "local_cap",
-                "position_limits": {SETTINGS["a"]: 5000},
-            }
-        self.state = {}
-        decision = output
-        return None if decision is None else Decision(decision)
+def decide(data, account, state):
+    output = None
+    if data.completed_sessions == 2:
+        output = {
+            "mode": "limit_positions",
+            "reason": "local_cap",
+            "position_limits": {SETTINGS["a"]: 5000},
+        }
+    state.update({})
+    decision = output
+    return None if decision is None else Decision(decision)
 """,
         parameters={"a": A},
         stage="risk_management",
@@ -1137,32 +1086,30 @@ def test_stock_cap_preserves_increase_only_intent_unless_binding(cap, second_exp
     definition["costs"] = dict.fromkeys(definition["costs"], "0")
     definition["strategy"]["modules"]["risk_management"] = "no_risk/v1"
     definition["strategy"]["modules"]["portfolio_construction"] = python_module(
-        """
-from quantgrove import Strategy, Decision
+        """from quantgrove import Decision
 
 SETTINGS = {}
 
 
-class Fixture(Strategy):
-    def on_close(self, data, account):
-        number = data.completed_sessions
-        output = None
-        if number in (1, 2):
-            output = {
-                "reason": "increase_only",
-                "allocation": {
-                    "mode": "rebalance" if number == 1 else "increase",
-                    "instrument_ids": [SETTINGS["a"]],
-                    "relative_weights": {SETTINGS["a"]: "1"},
-                    "exposure": 0.25 if number == 1 else SETTINGS["exposure"],
-                },
-                "position_limits": {},
-            }
-            if number == 2 and SETTINGS["cap"] is not None:
-                output["maximum_stock_exposure"] = SETTINGS["cap"]
-        self.state = {}
-        decision = output
-        return None if decision is None else Decision(decision)
+def decide(data, account, state):
+    number = data.completed_sessions
+    output = None
+    if number in (1, 2):
+        output = {
+            "reason": "increase_only",
+            "allocation": {
+                "mode": "rebalance" if number == 1 else "increase",
+                "instrument_ids": [SETTINGS["a"]],
+                "relative_weights": {SETTINGS["a"]: "1"},
+                "exposure": 0.25 if number == 1 else SETTINGS["exposure"],
+            },
+            "position_limits": {},
+        }
+        if number == 2 and SETTINGS["cap"] is not None:
+            output["maximum_stock_exposure"] = SETTINGS["cap"]
+    state.update({})
+    decision = output
+    return None if decision is None else Decision(decision)
 """,
         parameters={"a": A, "cap": cap, "exposure": second_exposure},
         stage="portfolio_construction",
@@ -1177,38 +1124,36 @@ def test_nonbinding_stock_cap_preserves_frozen_local_quantity_with_slippage(cap)
     definition["costs"] = {**dict.fromkeys(definition["costs"], "0"), "slippage_bps": "1000"}
     definition["strategy"]["modules"]["risk_management"] = "no_risk/v1"
     definition["strategy"]["modules"]["portfolio_construction"] = python_module(
-        """
-from quantgrove import Strategy, Decision
+        """from quantgrove import Decision
 
 SETTINGS = {}
 
 
-class Fixture(Strategy):
-    def on_close(self, data, account):
-        number = data.completed_sessions
-        output = None
-        if number == 1:
-            output = {
-                "reason": "initial",
-                "allocation": {
-                    "mode": "rebalance",
-                    "instrument_ids": [SETTINGS["a"]],
-                    "relative_weights": {SETTINGS["a"]: "1"},
-                    "exposure": 1.0,
-                },
-                "position_limits": {},
-            }
-        elif number == 2:
-            output = {
-                "reason": "local",
-                "allocation": None,
-                "position_limits": {SETTINGS["a"]: 5000},
-            }
-            if SETTINGS["cap"] is not None:
-                output["maximum_stock_exposure"] = SETTINGS["cap"]
-        self.state = {}
-        decision = output
-        return None if decision is None else Decision(decision)
+def decide(data, account, state):
+    number = data.completed_sessions
+    output = None
+    if number == 1:
+        output = {
+            "reason": "initial",
+            "allocation": {
+                "mode": "rebalance",
+                "instrument_ids": [SETTINGS["a"]],
+                "relative_weights": {SETTINGS["a"]: "1"},
+                "exposure": 1.0,
+            },
+            "position_limits": {},
+        }
+    elif number == 2:
+        output = {
+            "reason": "local",
+            "allocation": None,
+            "position_limits": {SETTINGS["a"]: 5000},
+        }
+        if SETTINGS["cap"] is not None:
+            output["maximum_stock_exposure"] = SETTINGS["cap"]
+    state.update({})
+    decision = output
+    return None if decision is None else Decision(decision)
 """,
         parameters={"a": A, "cap": cap},
         stage="portfolio_construction",

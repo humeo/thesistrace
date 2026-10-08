@@ -8,9 +8,15 @@ import sys
 import tempfile
 from copy import deepcopy
 from dataclasses import asdict
+from datetime import date, timedelta
 from pathlib import Path
 
+import numpy as np
+
+from thesistrace.research_kernel.batch_program import PreparedProgramBlock
 from thesistrace.research_kernel.daily_strategy import prepare_daily_strategy
+from thesistrace.research_kernel.direct_strategy import PythonProgram
+from thesistrace.research_kernel.program_wire import decode_state
 from thesistrace.research_kernel.strategy_program_runtime import (
     PythonStrategyRuntime,
     StrategyProgramError,
@@ -66,22 +72,21 @@ def observe(context, state, parameters):
 """
 
 
-def program_source(parameters, base="Strategy", *, observation=False):
+def program_source(parameters, *, observation=False):
     callback = (
-        "        self.state = observed['state']\n"
-        "        return Decision(observed['output'])\n" if observation else
-        "        self.state = observed['output']\n"
-        "        try:\n"
-        "            account.cash_cny = '999999'\n"
-        "            self.state['account_writable'] = True\n"
-        "        except TypeError:\n"
-        "            self.state['account_writable'] = False\n"
-        "        return None\n"
+        "    state.update(observed['state'])\n"
+        "    return Decision(observed['output'])\n" if observation else
+        "    state.update(observed['output'])\n"
+        "    try:\n"
+        "        account.cash_cny = '999999'\n"
+        "        state['account_writable'] = True\n"
+        "    except TypeError:\n"
+        "        state['account_writable'] = False\n"
+        "    return None\n"
     )
-    return (f"from quantgrove import {base}, Decision\nCONFIG = {parameters!r}\n"
-            + SOURCE + f"\nclass Probe({base}):\n"
-            "    def on_close(self, data, account):\n"
-            "        observed = observe({}, {'count': 1}, CONFIG)\n" + callback)
+    return (f"from quantgrove import Decision\nCONFIG = {parameters!r}\n"
+            + SOURCE + "\ndef decide(data, account, state):\n"
+            "    observed = observe({}, {'count': 1}, CONFIG)\n" + callback)
 
 
 def invoke(runtime, parameters):
@@ -99,15 +104,12 @@ def probe_framework(parameters):
         historical_universe_members={session: ()}, industries={}, execution_prices={},
         trading_states={}, price_limits={},
     )
-    stages = {
-        "universe_selection": "UniverseSelection", "alpha": "Alpha",
-        "portfolio_construction": "PortfolioConstruction", "risk_management": "RiskManagement",
-    }
+    stages = ("universe_selection", "alpha", "portfolio_construction", "risk_management")
     definition = {"strategy": {
         "mode": "framework", "environment": PythonStrategyRuntime().identity(),
         "modules": {stage: {"kind": "python", "program": {
-            "source": program_source(parameters, base),
-        }} for stage, base in stages.items()},
+            "source": program_source(parameters),
+        }} for stage in stages},
     }}
     account = {"positions": [], "cash_cny": "100000"}
 
@@ -118,7 +120,7 @@ def probe_framework(parameters):
 
     result = decide(definition)
     for stage in stages:
-        observed = result.state["module_states"][stage]
+        observed = result.state["module_states"][stage]["decision"]
         assert observed["resources"] == dict.fromkeys(
             [*parameters["paths"], "socket", "subprocess", "ctypes", "network",
              "restart_deadline"], "denied",
@@ -135,17 +137,17 @@ def probe_framework(parameters):
     }}
     direct_result = decide(direct)
     for key in ("resources", "environment", "clock", "account_writable"):
-        assert direct_result.state["state"][key] == (
-            result.state["module_states"]["portfolio_construction"][key]
+        assert direct_result.state["state"]["decision"][key] == (
+            result.state["module_states"]["portfolio_construction"]["decision"][key]
         )
     failures = {
         "loop": "while True: pass",
         "memory": "bytearray(512 * 1024 * 1024)",
         "output": "while True: __import__('os').write(1, b'x' * 65536)",
         "numpy_memory": "__import__('numpy').ones(128 * 1024 * 1024, dtype='float64')",
-        "state_size": "self.state['large'] = 'x' * (300 * 1024)",
+        "state_size": "state['large'] = 'x' * (300 * 1024)",
         "exception": "raise ValueError('expected probe failure')",
-        "invalid_state": "self.state['invalid'] = float('nan')",
+        "invalid_state": "state['invalid'] = float('nan')",
     }
     expected_errors = {
         "loop": ("resource or capability limits", "wall time limit"),
@@ -161,9 +163,7 @@ def probe_framework(parameters):
             failing = deepcopy(valid)
             program = (failing["strategy"]["program"] if mode == "direct" else
                        failing["strategy"]["modules"]["universe_selection"]["program"])
-            base = "Strategy" if mode == "direct" else "UniverseSelection"
-            program["source"] = (f"from quantgrove import {base}\nclass Failure({base}):\n"
-                                 "    def on_close(self, data, account):\n        " + body)
+            program["source"] = ("def decide(data, account, state):\n    " + body)
             try:
                 decide(failing)
             except StrategyProgramError as error:
@@ -178,6 +178,47 @@ def probe_framework(parameters):
     assert account == {"positions": [], "cash_cny": "100000"}
     return {"stages": list(stages), "authority_unchanged": True, "bounded_failure_recovered": True,
             "failure_cases": list(failures), "modes": ["direct", "framework"]}
+
+
+def probe_batch():
+    """Installed binary transport, 128-date calculation and T=1 state restoration."""
+    sessions = tuple((date(2026, 1, 1) + timedelta(days=i)).isoformat() for i in range(129))
+    stock = "equity:600000.SH"
+    data = AlignedResearchData(
+        sessions=sessions, instruments={},
+        fields={"price.close.adjusted": {(day, stock): "10" for day in sessions}},
+        universe_members={day: (stock,) for day in sessions},
+        historical_universe_members={day: (stock,) for day in sessions},
+        industries={}, execution_prices={}, trading_states={}, price_limits={},
+    )
+    source = '''
+import numpy as np
+from quantgrove import Targets
+
+def compute(data, state):
+    prices = data.history("price.close.adjusted", lookback=1)
+    dates = data.history_sessions("price.close.adjusted", lookback=1)
+    assert dates[-len(data.sessions):] == data.sessions
+    state["days"] = state.get("days", 0) + len(data.sessions)
+    state["last"] = prices[:, -1].copy()
+    return Targets.equal_weight(
+        np.isfinite(prices[:, 1:]), priority=prices[:, 1:],
+        update=data.session_index % 5 == 0,
+    )
+'''
+    prepared = PreparedProgramBlock(data, PythonProgram(source=source), PythonStrategyRuntime(),
+                                    sessions, 0)
+    dates, instruments, output, result = prepared.compute(sessions[0], {}, {"positions": []})
+    assert dates == sessions[:128] and instruments == (stock,)
+    np.testing.assert_array_equal(output["weights"], np.ones((1, 128), dtype=bool))
+    np.testing.assert_array_equal(output["priority"], np.full((1, 128), 10.0))
+    np.testing.assert_array_equal(output["update"], np.arange(128) % 5 == 0)
+    dates, _, output, result = prepared.compute(sessions[128], result.state, {"positions": []})
+    assert dates == sessions[128:] and output["update"].tolist() == [False]
+    state = decode_state(result.state)
+    assert state["days"] == 129
+    np.testing.assert_array_equal(state["last"], [10.0])
+    return {"output_dates": 128, "restored_dates": 1, "state_days": state["days"]}
 
 
 def main():
@@ -213,14 +254,17 @@ def main():
         assert result.output["numpy"]["clock"] == "2026-08-03T07:00:00"
         assert result.state == {"count": 2}
         replay = subprocess.run(
-            [sys.executable, __file__, json.dumps(parameters)], check=True,
+            [sys.executable, __file__, json.dumps(parameters)], check=False,
             text=True, capture_output=True, timeout=20,
         )
+        if replay.returncode:
+            raise RuntimeError(
+                f"Installed guest replay exited {replay.returncode}: {replay.stderr[-65536:]}"
+            )
         assert json.loads(replay.stdout) == json.loads(json.dumps(asdict(result)))
         try:
             runtime.invoke(
-                "from quantgrove import Strategy\nclass Loop(Strategy):\n"
-                "    def on_close(self, data, account):\n        while True: pass",
+                "def decide(data, account, state):\n    while True: pass",
                 context={"session": "2026-08-03"}, state={},
             )
         except StrategyProgramError:
@@ -230,7 +274,8 @@ def main():
         assert invoke(runtime, parameters) == result
         framework = probe_framework(parameters)
         assert sentinel.read_text() == "private-host-content"
-    print(json.dumps({"status": "passed", "runtime": runtime.identity(), "framework": framework}))
+    print(json.dumps({"status": "passed", "runtime": runtime.identity(), "framework": framework,
+                      "batch": probe_batch()}))
 
 
 if __name__ == "__main__":

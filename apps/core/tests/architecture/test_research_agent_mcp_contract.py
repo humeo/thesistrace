@@ -146,9 +146,15 @@ TEST_RESEARCHER_ID = UUID("018f6f7e-8342-7c9a-a4df-9a86147d2e01")
 
 
 @pytest.mark.parametrize("tool_name", ["submit_research_run", "diagnose_research_spec"])
-@pytest.mark.parametrize("missing", [
-    "holdings_count", "selection_every_sessions", "formula", "neutralization",
-])
+@pytest.mark.parametrize(
+    "missing",
+    [
+        "holdings_count",
+        "selection_every_sessions",
+        "formula",
+        "neutralization",
+    ],
+)
 def test_discovered_framework_schema_expresses_builtin_required_settings(tool_name, missing):
     spec = {
         "research_kind": "strategy_backtest", "start_date": "2026-01-01",
@@ -169,11 +175,14 @@ def test_discovered_framework_schema_expresses_builtin_required_settings(tool_na
     assert not schema.is_valid(arguments({**spec, missing: None}))
 
 
-@pytest.mark.parametrize("tool,arguments,path,code,hint", [
-    ("diagnose_alpha_formula", {}, ["source"], "missing", "required"),
-    ("diagnose_alpha_formula", {"source": 123}, ["source"], "string_type", "string"),
-    ("list_research_runs", {"limit": 51}, ["limit"], "less_than_equal", "50"),
-])
+@pytest.mark.parametrize(
+    "tool,arguments,path,code,hint",
+    [
+        ("diagnose_alpha_formula", {}, ["source"], "missing", "required"),
+        ("diagnose_alpha_formula", {"source": 123}, ["source"], "string_type", "string"),
+        ("list_research_runs", {"limit": 51}, ["limit"], "less_than_equal", "50"),
+    ],
+)
 def test_tool_validation_errors_explain_the_field_and_constraint(tool, arguments, path, code, hint):
     result = _registry().invoke(tool, arguments, trace_id="trace_validation")
     issue = result.error.model_dump(mode="json")["issues"][0]
@@ -191,9 +200,13 @@ def test_tool_validation_guidance_does_not_echo_input_or_unknown_field_names():
     assert "private" not in json.dumps(payload)
 
 
-@pytest.mark.parametrize("missing", [
-    ("holdings_count", "selection_every_sessions"), ("formula", "neutralization"),
-])
+@pytest.mark.parametrize(
+    "missing",
+    [
+        ("holdings_count", "selection_every_sessions"),
+        ("formula", "neutralization"),
+    ],
+)
 def test_tool_validation_explains_missing_builtin_settings(missing):
     spec = {
         "research_kind": "strategy_backtest", "start_date": "2026-01-01",
@@ -281,16 +294,22 @@ def test_sweep_schema_matches_shared_alpha_and_single_mode_constraints():
         assert not schema.is_valid(mixed)
 
 
-@pytest.mark.parametrize("tool,dependency", [
-    ("get_research_context", "overview"),
-    ("get_alpha_catalog", "overview"),
-    ("get_research_context", "folders"),
-])
-@pytest.mark.parametrize("failure,code,retryable", [
-    (OperationalError("private database detail"), "TEMPORARILY_UNAVAILABLE", True),
-    (PoolTimeout("private pool detail"), "TEMPORARILY_UNAVAILABLE", True),
-    (RuntimeError("private program detail"), "INTERNAL", False),
-])
+@pytest.mark.parametrize(
+    "tool,dependency",
+    [
+        ("get_research_context", "overview"),
+        ("get_alpha_catalog", "overview"),
+        ("get_research_context", "folders"),
+    ],
+)
+@pytest.mark.parametrize(
+    "failure,code,retryable",
+    [
+        (OperationalError("private database detail"), "TEMPORARILY_UNAVAILABLE", True),
+        (PoolTimeout("private pool detail"), "TEMPORARILY_UNAVAILABLE", True),
+        (RuntimeError("private program detail"), "INTERNAL", False),
+    ],
+)
 def test_discovery_reads_report_dependency_unavailability_without_retrying_program_errors(
     tmp_path: Path, tool: str, dependency: str, failure: Exception, code: str, retryable: bool,
 ) -> None:
@@ -316,14 +335,11 @@ def test_discovery_reads_report_dependency_unavailability_without_retrying_progr
 
 
 @pytest.mark.bounded_process
-@pytest.mark.parametrize("stage,entrypoint", [
-    ("direct", "Strategy"),
-    ("universe_selection", "UniverseSelection"),
-    ("alpha", "Alpha"),
-    ("portfolio_construction", "PortfolioConstruction"),
-    ("risk_management", "RiskManagement"),
-])
-def test_context_sdk_templates_can_be_validated_and_executed_in_the_real_guest(stage, entrypoint):
+@pytest.mark.parametrize(
+    "stage",
+    ["direct", "universe_selection", "alpha", "portfolio_construction", "risk_management"],
+)
+def test_context_sdk_templates_can_be_validated_and_executed_in_the_real_guest(stage):
     from thesistrace.research_kernel.strategy_program_runtime import get_strategy_runtime
 
     constraints = _registry().get_research_context().authoring_constraints
@@ -334,12 +350,38 @@ def test_context_sdk_templates_can_be_validated_and_executed_in_the_real_guest(s
                   if item.stage == stage)
     )
     runtime = get_strategy_runtime()
-    runtime.validate(source, entrypoint=entrypoint)
-    result = runtime.invoke(source, entrypoint=entrypoint, state={}, context={
-        "session": "2026-09-01", "account": {"positions": [], "cash_cny": "100000"},
+    import numpy as np
+
+    from thesistrace.research_history import HistoryWindow
+    from thesistrace.research_kernel.program_wire import array_from_wire, array_to_wire
+
+    entries = runtime.validate(source)
+    sessions = [f"2026-07-{day:02d}" for day in range(1, 31)] + [
+        f"2026-08-{day:02d}" for day in range(1, 31)
+    ] + ["2026-09-01"]
+    context = {
+        "session": sessions[-1], "account": {"positions": [], "cash_cny": "100000"},
         "candidates": [{"instrument_id": "equity:600001.SH"}],
         "framework": {"signals": [{"instrument_id": "equity:600001.SH", "value": 1.0}]},
-    })
+    }
+    if entries["compute"]:
+        computed = runtime.invoke(source, state={}, operation="compute", context={
+            **context,
+            "block": {"sessions": [sessions[-1]], "instruments": ["equity:600001.SH"],
+                      "session_index": [0], "eligible": array_to_wire(np.array([[True]]))},
+        }, read_history=lambda _: HistoryWindow(
+            tuple(sessions), ("equity:600001.SH",), np.array([[10.0] * 60 + [20.0]]),
+        ))
+        if stage == "direct":
+            assert array_from_wire(computed.output["weights"]).tolist() == [[True]]
+            assert array_from_wire(computed.output["update"]).tolist() == [True]
+            return
+        context["value_instruments"] = ["equity:600001.SH"]
+        context["values"] = {
+            name: array_to_wire(array_from_wire(value)[:, -1])
+            for name, value in computed.output["values"].items()
+        }
+    result = runtime.invoke(source, state={}, context=context)
     if stage == "universe_selection":
         assert result.output["instrument_ids"] == ["equity:600001.SH"]
     elif stage == "alpha":
@@ -1118,16 +1160,16 @@ def test_mcp_can_discover_and_read_the_public_strategy_sdk_without_repository_ac
     index = registry.invoke("get_authoring_reference", {"topic": "python_sdk"}, trace_id="docs")
     assert index.error is None
     assert index.result.found
-    assert {"Strategy.increase_to_weights", "Strategy.with_limits", "Data.candidate_details",
+    assert {"increase_to_weights", "with_limits", "Data.candidate_details",
             "Data.history", "Account.positions", "History.sessions"} <= {
         item.symbol for item in index.result.symbols
     }
     detail = registry.invoke("get_authoring_reference", {
-        "topic": "python_sdk", "symbol": "Strategy.increase_to_weights",
+        "topic": "python_sdk", "symbol": "increase_to_weights",
     }, trace_id="docs")
     assert detail.error is None
     assert detail.result.entry.signature == (
-        "Strategy.increase_to_weights(self, weights, *, reason='increase_to_weights')"
+        "increase_to_weights(weights, *, reason='increase_to_weights')"
     )
     assert "never sell" in detail.result.entry.description
     assert detail.result.entry.parameters["weights"]
@@ -2163,9 +2205,9 @@ def test_v1_inventory_scopes_descriptions_annotations_and_schemas_are_exact() ->
     canonical = _canonical_v1_contract()
 
     assert sha256(canonical).hexdigest() == (
-        "6cfeb2baf562416d63a7e2855484a09fd54d2553b758eaa8a1cabf385a9c2405"
+        "75ac5ea31d30b96f1b6a7c78553c46e7d4fa10161e446ffa04eb0d19745fe1a0"
     )
-    assert len(canonical) == 344739
+    assert len(canonical) == 345159
 
 
 def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None:
@@ -2234,7 +2276,7 @@ def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None
         "v1_contract_sha256": sha256(canonical_contract).hexdigest(),
         "v1_contract_bytes": len(canonical_contract),
         "maximum_factor_batch_call_bytes": maximum_batch_bytes,
-        "maximum_framework_batch_call_bytes": 31_420_694,
+        "maximum_framework_batch_call_bytes": 31_444_214,
     }
     assert evidence["observed"]["maximum_resident_set_bytes"] < (
         evidence["production_envelope"]["container_memory_bytes"] // 10
@@ -2245,31 +2287,45 @@ def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None
 def test_wire_envelope_carries_twenty_maximum_python_programs_and_explicit_state():
     from pydantic import TypeAdapter
 
-    prefix = (
-        "from quantgrove import Strategy\nclass Example(Strategy):\n"
-        "    def on_close(self, data, account): return None\n#"
-    )
+    prefix = """def decide(data, account, state):
+    return None
+"""
     source = prefix + "\x01" * (65_536 - len(prefix.encode()))
     program = {
         "source": source,
     }
     batch = {
-        "batch_kind": "strategy_sweep", "request_id": "maximum-python-batch",
-        "start_date": "2026-08-03", "end_date": "2026-08-04", "universe": "top300",
+        "batch_kind": "strategy_sweep",
+        "request_id": "maximum-python-batch",
+        "start_date": "2026-08-03",
+        "end_date": "2026-08-04",
+        "universe": "top300",
         "strategies": [
-            {"item_key": str(i), "strategy_mode": "direct", "initial_cash_cny": "100000",
-             "program": program} for i in range(20)
+            {
+                "item_key": str(i),
+                "strategy_mode": "direct",
+                "initial_cash_cny": "100000",
+                "program": program,
+            }
+            for i in range(20)
         ],
     }
     TypeAdapter(ResearchBatchAdmissionCommand).validate_python(batch)
-    assert _wire_request_bytes(CallToolRequestParams(
-        name="submit_research_batch", arguments=batch,
-    )) <= RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES
+    assert (
+        _wire_request_bytes(
+            CallToolRequestParams(
+                name="submit_research_batch",
+                arguments=batch,
+            )
+        )
+        <= RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES
+    )
     # MCP returns both structured and text content. Neither may truncate a
     # valid explicit state at its 256 KiB contract limit.
     state = {"payload": "x" * (256 * 1024 - len('{"payload":""}'))}
     result = CallToolResult(
-        content=[TextContent(type="text", text=json.dumps(state))], structured_content=state,
+        content=[TextContent(type="text", text=json.dumps(state))],
+        structured_content=state,
     )
     context = SimpleNamespace(protocol_version=LATEST_HANDSHAKE_VERSION, request_id="request")
     assert _wire_response_bytes(context, method="tools/call", result=result) <= (
@@ -2280,30 +2336,46 @@ def test_wire_envelope_carries_twenty_maximum_python_programs_and_explicit_state
 def test_wire_envelope_carries_twenty_frameworks_with_four_maximum_programs():
     from pydantic import TypeAdapter
 
-    prefix = (
-        "from quantgrove import Strategy\nclass Example(Strategy):\n"
-        "    def on_close(self, data, account): return None\n#"
-    )
+    prefix = """def decide(data, account, state):
+    return None
+"""
     source = prefix + "\x01" * (65_536 - len(prefix.encode()))
     program = {
         "source": source,
     }
-    modules = {stage: {"kind": "python", "program": program} for stage in (
-        "universe_selection", "alpha", "portfolio_construction", "risk_management",
-    )}
+    modules = {
+        stage: {"kind": "python", "program": program}
+        for stage in (
+            "universe_selection",
+            "alpha",
+            "portfolio_construction",
+            "risk_management",
+        )
+    }
     batch = {
-        "batch_kind": "strategy_sweep", "request_id": "maximum-framework-batch",
-        "start_date": "2026-08-03", "end_date": "2026-08-04", "universe": "top300",
-        "strategies": [{
-            "item_key": str(index), "strategy_mode": "framework", "initial_cash_cny": "100000",
-            "modules": modules,
-        } for index in range(20)],
+        "batch_kind": "strategy_sweep",
+        "request_id": "maximum-framework-batch",
+        "start_date": "2026-08-03",
+        "end_date": "2026-08-04",
+        "universe": "top300",
+        "strategies": [
+            {
+                "item_key": str(index),
+                "strategy_mode": "framework",
+                "initial_cash_cny": "100000",
+                "modules": modules,
+            }
+            for index in range(20)
+        ],
     }
     TypeAdapter(ResearchBatchAdmissionCommand).validate_python(batch)
-    size = _wire_request_bytes(CallToolRequestParams(
-        name="submit_research_batch", arguments=batch,
-    ))
-    assert size == 31_420_694
+    size = _wire_request_bytes(
+        CallToolRequestParams(
+            name="submit_research_batch",
+            arguments=batch,
+        )
+    )
+    assert size == 31_444_214
     assert size <= RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES
 
 
@@ -2351,7 +2423,7 @@ def _large_origin_result(payload="x" * 240_000):
 
 
 @pytest.mark.parametrize("kind", ["research_run", "daily_track"])
-@pytest.mark.parametrize("payload", ["x" * 240_000, '中😀\\\n' * 10_000], ids=["ascii", "unicode"])
+@pytest.mark.parametrize("payload", ["x" * 240_000, "中😀\\\n" * 10_000], ids=["ascii", "unicode"])
 def test_mcp_result_pages_preserve_large_legal_state_without_data_loss(kind, payload):
     origin = _large_origin_result(payload)
     if kind == "daily_track":
@@ -3811,12 +3883,21 @@ def test_registry_whole_spec_diagnosis_is_read_only_and_uses_formal_validation()
     assert result.result.issues[0].field == "exposure_expression"
 
 
-@pytest.mark.parametrize("source,read_scope", [
-    ({"kind": "research_run", "run_id": "run_test"}, ResearchAgentScope.RESEARCH_READ),
-    ({"kind": "daily_track", "track_id": "track_test",
-      "checkpoint_manifest_sha256": "a" * 64, "through_session": "2026-08-03"},
-     ResearchAgentScope.TRACKING_READ),
-])
+@pytest.mark.parametrize(
+    "source,read_scope",
+    [
+        ({"kind": "research_run", "run_id": "run_test"}, ResearchAgentScope.RESEARCH_READ),
+        (
+            {
+                "kind": "daily_track",
+                "track_id": "track_test",
+                "checkpoint_manifest_sha256": "a" * 64,
+                "through_session": "2026-08-03",
+            },
+            ResearchAgentScope.TRACKING_READ,
+        ),
+    ],
+)
 def test_source_rerun_mcp_requires_source_read_authority(source, read_scope):
     async def exercise():
         for permitted in (False, True):

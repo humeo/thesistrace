@@ -795,7 +795,7 @@ files, product HTTP routes, SQL, or internal Python APIs. Complete one research 
    Include a non-empty hypothesis that explains the corrected Formula.
    Keep builtin Universe, Alpha and Portfolio modules. Write a Python RiskManagement module
    that reads two Research Sessions of adjusted Close prices, stores the returned Session
-   count in self.state['history_sessions'], and leaves the portfolio proposal unchanged.
+   count in state['history_sessions'], and leaves the portfolio proposal unchanged.
    Use the documented SDK. Before submission, diagnose
    the complete ResearchSpec and correct every error until valid=true.
 5. Call get_research_run exactly once for the returned durable run_id. No Worker is running,
@@ -1129,7 +1129,7 @@ def _assert_reference_guided_python(calls: list[_ObservedMcpCall]) -> None:
     source = _require_mapping(risk.get("program")).get("source")
     assert isinstance(source, str)
     result = get_strategy_runtime().invoke(
-        source, entrypoint="RiskManagement", state={},
+        source, state={},
         context={"session": "2026-08-03", "completed_sessions": 1,
                  "candidates": [{"instrument_id": "equity:600001.SH"}],
                  "framework": {"proposal": None},
@@ -2565,9 +2565,7 @@ def test_tool_discovery_failure_persists_only_closed_names_and_code(
             "admission_outcome_contract",
         ),
         (
-            _submission_calls_for_failure_test(
-                submission_overrides={"hypothesis": ""}
-            ),
+            _submission_calls_for_failure_test(submission_overrides={"hypothesis": ""}),
             "rationale_presence_contract",
         ),
         (
@@ -2577,9 +2575,7 @@ def test_tool_discovery_failure_persists_only_closed_names_and_code(
             "research_kind_contract",
         ),
         (
-            _submission_calls_for_failure_test(
-                submission_overrides={"holdings_count": 52}
-            ),
+            _submission_calls_for_failure_test(submission_overrides={"holdings_count": 52}),
             "holdings_count_contract",
         ),
         (
@@ -2589,9 +2585,7 @@ def test_tool_discovery_failure_persists_only_closed_names_and_code(
             "selection_interval_contract",
         ),
         (
-            _submission_calls_for_failure_test(
-                accepted_request_id="private-request-canary"
-            ),
+            _submission_calls_for_failure_test(accepted_request_id="private-request-canary"),
             "request_id_contract",
         ),
     ),

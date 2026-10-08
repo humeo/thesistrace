@@ -2317,6 +2317,15 @@ class ResearchRunService:
                         "Start Tracking requires a Strategy Backtest Result",
                         code="TRACKING_STRATEGY_REQUIRED",
                     )
+                if (
+                    immutable_input.programs
+                    and immutable_input.strategy["environment"] != get_strategy_runtime().identity()
+                ):
+                    raise ResearchRunTrackingUnavailable(
+                        "Update and run a new Python draft before starting tracking; "
+                        "the historical execution environment is obsolete",
+                        code="TRACKING_PROGRAM_ENVIRONMENT_OBSOLETE",
+                    )
                 try:
                     origin = self._tracking_origin(transaction, row)
                 except PublicationUnavailableError:
@@ -4223,14 +4232,12 @@ def _admitted_input(
         runtime = get_strategy_runtime()
         for path, program in programs.items():
             try:
-                entrypoint = {
-                    "program": "Strategy",
-                    "modules.universe_selection.program": "UniverseSelection",
-                    "modules.alpha.program": "Alpha",
-                    "modules.portfolio_construction.program": "PortfolioConstruction",
-                    "modules.risk_management.program": "RiskManagement",
-                }[path]
-                runtime.validate(program.source, entrypoint=entrypoint)
+                entries = runtime.validate(program.source)
+                if not direct and not entries["decide"]:
+                    raise StrategyProgramError(
+                        "Framework modules require decide; optional compute returns Values",
+                        source=program.source, session=None,
+                    )
             except StrategyProgramError as error:
                 raise ResearchRunAdmissionRejected([ResearchRunAdmissionIssue(
                     code="STRATEGY_PROGRAM_INVALID", field=f"{path}.source", message=str(error),

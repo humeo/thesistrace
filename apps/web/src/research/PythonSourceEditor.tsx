@@ -59,14 +59,15 @@ export function PythonSourceEditor({ id, label, describedBy, source, error, erro
           const word = context.matchBefore(/[\w.]+/);
           if (!word || (!context.explicit && word.from === word.to)) return null;
           return { from: word.from, options: [
-            "Strategy", "UniverseSelection", "Alpha", "PortfolioConstruction", "RiskManagement",
-            "data.close_prices", "data.history", "data.candidates", "data.session",
+            "compute", "decide", "Targets", "Targets.equal_weight", "Values",
+            "data.sessions", "data.instruments", "data.eligible", "data.session_index", "data.values", "data.rng",
+            "data.close_prices", "data.history", "data.history_sessions", "data.common", "data.candidates", "data.session",
             "data.completed_sessions", "data.candidate_details", "data.framework",
             "account.positions", "account.cash_cny", "account.fills", "account.rejections",
             "account.post_open_net_nav_cny", "account.close_risk_nav_cny",
-            "self.target_weights", "self.limit_positions", "self.limit_exposure", "self.state",
-            "self.increase_to_weights", "self.reduce_exposure", "self.with_limits",
-            "self.select", "self.signals", "self.replace", "on_close",
+            "target_weights", "limit_positions", "limit_exposure", "state",
+            "increase_to_weights", "reduce_exposure", "with_limits",
+            "select", "signals", "replace", "risk_limits",
           ].map(label => ({ label, type: "property" })) };
         } }), history(),
         keymap.of([...closeBracketsKeymap, ...completionKeymap, ...defaultKeymap, ...historyKeymap]),

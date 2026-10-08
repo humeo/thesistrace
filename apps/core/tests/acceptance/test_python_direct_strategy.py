@@ -23,33 +23,31 @@ pytestmark = pytest.mark.skipif(
 )
 
 SESSIONS = ("2026-08-03", "2026-08-04", "2026-08-05", "2026-08-06", "2026-08-07")
-SOURCE = """
-from quantgrove import Strategy, Decision
+SOURCE = """from quantgrove import Decision
 
 SETTINGS = {}
 
 
-class Fixture(Strategy):
-    def on_close(self, data, account):
-        if data.session == SETTINGS.get("fail_session"):
-            raise ValueError("deliberate program failure")
-        self.state["count"] = self.state.get("count", 0) + 1
-        output = None
-        if not account._values["positions"]:
-            candidate = data.candidate_details[0]["instrument_id"]
-            output = {
-                "reason": "enter_visible_candidate",
-                "allocation": {
-                    "mode": "rebalance",
-                    "instrument_ids": [candidate],
-                    "relative_weights": {candidate: "1"},
-                    "exposure": 1.0,
-                },
-                "position_limits": {},
-            }
-        self.state = self.state
-        decision = output
-        return None if decision is None else Decision(decision)
+def decide(data, account, state):
+    if data.session == SETTINGS.get("fail_session"):
+        raise ValueError("deliberate program failure")
+    state["count"] = state.get("count", 0) + 1
+    output = None
+    if not account._values["positions"]:
+        candidate = data.candidate_details[0]["instrument_id"]
+        output = {
+            "reason": "enter_visible_candidate",
+            "allocation": {
+                "mode": "rebalance",
+                "instrument_ids": [candidate],
+                "relative_weights": {candidate: "1"},
+                "exposure": 1.0,
+            },
+            "position_limits": {},
+        }
+
+    decision = output
+    return None if decision is None else Decision(decision)
 """
 
 
@@ -70,6 +68,37 @@ def command(request_id, *, end=SESSIONS[2], parameters=None):
     }
 
 
+def test_obsolete_python_environment_keeps_results_but_rejects_new_tracking(tmp_path, monkeypatch):
+    from thesistrace.research_kernel.strategy_program_runtime import PythonStrategyRuntime
+
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    _publish_head(settings, sessions=SESSIONS[:2], price_offset=0)
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        admitted = client.post(
+            "/api/research-runs", json=command("old-environment", end=SESSIONS[1])
+        )
+        assert admitted.status_code == 202, admitted.text
+        run_id = admitted.json()["id"]
+        assert runtime.research_runs.process_next()
+        original = client.get(f"/api/research-runs/{run_id}").json()
+        assert original["status"] == "succeeded"
+        # Simulate upgrading the runtime, without changing this frozen Run or its Result.
+        identity = PythonStrategyRuntime().identity()
+        monkeypatch.setattr(PythonStrategyRuntime, "identity",
+                            lambda self: {**identity, "contract": "next-python-contract"})
+        response = client.post(f"/api/research-runs/{run_id}/daily-tracks",
+                               json={"request_id": "reject-obsolete-python"})
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"]["code"] == "TRACKING_PROGRAM_ENVIRONMENT_OBSOLETE"
+        assert client.get("/api/daily-tracks").json()["items"] == []
+        current = client.get(f"/api/research-runs/{run_id}").json()
+        assert current["result"] == original["result"]
+        assert current["input"] == original["input"]
+
+
 def test_direct_track_origin_keeps_a_large_legal_explicit_state(tmp_path: Path):
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
@@ -77,17 +106,13 @@ def test_direct_track_origin_keeps_a_large_legal_explicit_state(tmp_path: Path):
     _publish_head(settings, sessions=SESSIONS[:2], price_offset=0)
     with TestClient(create_app(settings)) as client:
         submitted = command("large-direct-state", end=SESSIONS[1])
-        submitted["program"]["source"] = """
-from quantgrove import Strategy, Decision
-
+        submitted["program"]["source"] = """from quantgrove import Decision
 SETTINGS = {}
 
-
-class Fixture(Strategy):
-    def on_close(self, data, account):
-        self.state = {"payload": "x" * 200000}
-        decision = None
-        return None if decision is None else Decision(decision)
+def decide(data, account, state):
+    state.update({'payload': 'x' * 200000})
+    decision = None
+    return None if decision is None else Decision(decision)
 """
         admitted = client.post("/api/research-runs", json=submitted)
         assert admitted.status_code == 202, admitted.text
@@ -107,12 +132,15 @@ class Fixture(Strategy):
             TEST_RESEARCHER.researcher_id,
             DailyTrackOriginResultSectionInput(track_id=track_id, section="origin"),
         )
-        assert origin.terminal_account.decision_state.state == {
+        assert origin.terminal_account.decision_state.state["decision"] == {
             "payload": "x" * 200000,
         }
 
 
-def test_direct_run_freezes_program_and_continues_the_same_account_in_daily_track(tmp_path: Path):
+@pytest.mark.parametrize("batch", [False, True])
+def test_direct_run_freezes_program_and_continues_the_same_account_in_daily_track(
+    tmp_path: Path, batch,
+):
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
@@ -120,6 +148,15 @@ def test_direct_run_freezes_program_and_continues_the_same_account_in_daily_trac
     with TestClient(create_app(settings)) as client:
         runtime = client.app.state.core_runtime
         submitted = command("direct-run")
+        if batch:
+            submitted["program"]["source"] = """from quantgrove import Values
+
+def compute(data, state):
+    prices = data.history("price.close.adjusted")
+    state["days"] = state.get("days", 0) + len(data.sessions)
+    return Values({"close": prices})
+
+""" + submitted["program"]["source"]
         diagnosed = client.post(
             "/api/research/diagnostics",
             json={
@@ -138,7 +175,9 @@ def test_direct_run_freezes_program_and_continues_the_same_account_in_daily_trac
         assert detail["status"] == "succeeded", detail
         assert detail["input"]["program"] == submitted["program"]
         terminal = detail["result"]["terminal_strategy_state"]
-        assert terminal["decision_state"]["state"] == {"count": 3}
+        assert terminal["decision_state"]["state"]["decision"] == {"count": 3}
+        if batch:
+            assert terminal["decision_state"]["state"]["compute"] == {"days": 3}
         assert terminal["pending_target"] is None
         tracked = client.post(
             f"/api/research-runs/{run_id}/daily-tracks", json={"request_id": "track"}
@@ -153,9 +192,12 @@ def test_direct_run_freezes_program_and_continues_the_same_account_in_daily_trac
         assert runtime.daily_tracks.process_next()
         track = client.get(f"/api/daily-tracks/{track_id}").json()
         assert track["strategy_session"] == SESSIONS[-1], track
-        assert track["observation"]["decision_state"]["state"] == {"count": 5}
+        assert track["observation"]["decision_state"]["state"]["decision"] == {"count": 5}
         assert track["observation"]["selection_interval"] is None
-        full = client.post("/api/research-runs", json=command("full", end=SESSIONS[-1]))
+        reference = {**submitted, "request_id": "full", "end_date": SESSIONS[-1]}
+        if batch:
+            assert track["observation"]["decision_state"]["state"]["compute"] == {"days": 5}
+        full = client.post("/api/research-runs", json=reference)
         assert full.status_code == 202, full.text
         assert runtime.research_runs.process_next()
         full_result = client.get(f"/api/research-runs/{full.json()['id']}").json()
@@ -207,7 +249,9 @@ def test_direct_batch_item_failure_does_not_mutate_its_successful_sibling(tmp_pa
         assert items["bad"]["status"] == "failed"
         assert "2026-08-04" in items["bad"]["diagnostic"]["message"]
         good_run = client.get(f"/api/research-runs/{items['good']['research_run_id']}").json()
-        assert good_run["result"]["terminal_strategy_state"]["decision_state"]["state"] == {
+        assert good_run["result"]["terminal_strategy_state"]["decision_state"]["state"][
+            "decision"
+        ] == {
             "count": 3
         }
         bad_run = client.get(f"/api/research-runs/{items['bad']['research_run_id']}").json()
@@ -241,7 +285,7 @@ def test_direct_program_failure_does_not_publish_a_tracking_head_and_keeps_locat
         failure = client.get(f"/api/research-runs/{bad.json()['id']}").json()
         assert failure["status"] == "failed", failure
         assert "2026-08-04" in failure["failure_reason"]
-        assert "line 10" in failure["failure_reason"]
+        assert "line 8" in failure["failure_reason"]
         assert "result" not in failure
         seed = client.post(
             "/api/research-runs",
@@ -297,24 +341,22 @@ def test_direct_mcp_admission_reads_financial_fields_through_the_real_worker(tmp
     _publish_composite_head(settings, sessions=("2010-01-04", "2010-04-21", *SESSIONS[:3]))
     value = command("direct-mcp")
     value["program"] = {
-        "source": """
-from quantgrove import Strategy, Decision
+        "source": """from quantgrove import Decision
 
 SETTINGS = {}
 
 
-class Fixture(Strategy):
-    def on_close(self, data, account):
-        self.state = {
-            "revenue": [
-                list(row)
-                for row in data.history(
-                    "financial.income.total_revenue.latest_fy", 1
-                ).values.values()
-            ]
-        }
-        decision = None
-        return None if decision is None else Decision(decision)
+def decide(data, account, state):
+    state.update({
+        "revenue": [
+            list(row)
+            for row in data.history(
+                "financial.income.total_revenue.latest_fy", 1
+            ).values.values()
+        ]
+    })
+    decision = None
+    return None if decision is None else Decision(decision)
 """,
     }
 
@@ -330,6 +372,8 @@ class Fixture(Strategy):
         assert client.app.state.core_runtime.research_runs.process_next()
         detail = client.get(f"/api/research-runs/{run_id}").json()
         assert detail["status"] == "succeeded", detail
-        assert detail["result"]["terminal_strategy_state"]["decision_state"]["state"] == {
+        assert detail["result"]["terminal_strategy_state"]["decision_state"]["state"][
+            "decision"
+        ] == {
             "revenue": [[100], [200]],
         }

@@ -177,8 +177,8 @@ for (const width of [1280, 1440]) {
     await alpha.getByRole("radio", { name: "Code", exact: true }).check();
     await page.getByRole("tab", { name: /Portfolio/ }).click();
     await portfolio.getByRole("radio", { name: "Code", exact: true }).check();
-    await expect(alpha.locator("#alpha-python-source")).toContainText("MomentumSignals");
-    await expect(portfolio.getByRole("textbox", { name: "Python source", exact: true })).toContainText("BestSignal");
+    await expect(alpha.locator("#alpha-python-source")).toContainText("def compute(data, state)");
+    await expect(portfolio.getByRole("textbox", { name: "Python source", exact: true })).toContainText("def decide(data, account, state)");
     await expect(page.getByLabel("Alpha formula", { exact: true })).not.toBeVisible();
     await expect(page.getByLabel("Holdings count", { exact: true })).not.toBeVisible();
     await portfolio.getByRole("textbox", { name: "Python source", exact: true }).fill("");
@@ -191,13 +191,15 @@ for (const width of [1280, 1440]) {
     await portfolio.getByRole("textbox", { name: "Python source", exact: true }).fill("class Broken(:");
     await page.getByRole("button", { name: "Check configuration" }).click();
     await expect(portfolio.locator("#portfolio_construction-python-source-error")).toContainText("line 1");
+    await page.getByRole("tab", { name: /Signals/ }).click();
     await expect(alpha.locator("#alpha-python-source")).not.toHaveAttribute("aria-invalid", "true");
-    await portfolio.getByRole("textbox", { name: "Python source", exact: true }).fill("from quantgrove import PortfolioConstruction\nclass Example(PortfolioConstruction):\n    def on_close(self, data, account): return None\n");
+    await page.getByRole("tab", { name: /Portfolio/ }).click();
+    await portfolio.getByRole("textbox", { name: "Python source", exact: true }).fill("def decide(data, account, state): return None\n");
     await page.getByRole("button", { name: "Check configuration" }).click();
     await expect(page.getByText("Configuration is valid.", { exact: false })).toBeVisible();
     expect(checks[1]).toMatchObject({ strategy_mode: "framework", modules: {
-      alpha: { kind: "python", program: { source: expect.stringContaining("class MomentumSignals(Alpha)") } },
-      portfolio_construction: { kind: "python", program: { source: expect.stringContaining("def on_close") } },
+      alpha: { kind: "python", program: { source: expect.stringContaining("def compute(data, state)") } },
+      portfolio_construction: { kind: "python", program: { source: expect.stringContaining("def decide") } },
       universe_selection: "dataset_universe/v1", risk_management: "no_risk/v1",
     } });
     for (const field of ["formula", "neutralization", "holdings_count", "selection_every_sessions", "exposure_expression", "program"]) {
@@ -244,7 +246,7 @@ for (const width of [1280, 1440]) {
     };
     await mount();
     await page.getByRole("radio", { name: "Python authoring", exact: true }).check();
-    await expect(page.getByRole("textbox", { name: "Python source", exact: true })).toContainText("class Momentum(Strategy)");
+    await expect(page.getByRole("textbox", { name: "Python source", exact: true })).toContainText("Targets.equal_weight");
     await expect(page.getByLabel("Alpha formula", { exact: true })).not.toBeVisible();
     await expect(page.getByLabel("Holdings count", { exact: true })).not.toBeVisible();
     await page.getByRole("textbox", { name: "Python source", exact: true }).fill("");
@@ -260,7 +262,7 @@ for (const width of [1280, 1440]) {
     await page.getByRole("button", { name: "Check configuration" }).click();
     await expect(page.getByLabel("Configuration issues")).toContainText("line 1");
     await expect(page.locator("#python-source-error")).toContainText("line 1");
-    const source = "from quantgrove import Strategy\nclass Example(Strategy):\n    def on_close(self, data, account): return None\n";
+    const source = "def decide(data, account, state): return None\n";
     await page.getByRole("textbox", { name: "Python source", exact: true }).fill(source);
     await expect(page.getByLabel("Configuration issues")).not.toBeVisible();
     await page.getByRole("button", { name: "Check configuration" }).click();
@@ -931,12 +933,16 @@ test("Direct field browser inserts history at the selection and preserves undo",
   const catalog = page.getByRole("dialog", { name: "Field browser", exact: true });
   await expect(catalog.getByRole("searchbox", { name: "Search fields", exact: true })).toBeFocused();
   await expect(catalog.getByRole("region", { name: "Field details", exact: true })).toContainText('data.history("price.close.adjusted", 10)');
-  await catalog.getByRole("button", { name: "Insert data call", exact: true }).click();
+  await catalog.getByRole("button", { name: "Insert decide read", exact: true }).click();
   await expect(catalog).toHaveCount(0);
   await expect(source).toBeFocused();
   await expect(source).toHaveText('prices = data.history("price.close.adjusted", 10)');
   await source.press("ControlOrMeta+z");
   await expect(source).toHaveText("prices = ");
+  await trigger.click();
+  await catalog.getByRole("button", { name: "Insert compute read", exact: true }).click();
+  await expect(source).toHaveText('prices = data.history("price.close.adjusted", lookback=10)');
+  await source.press("ControlOrMeta+z");
   await trigger.click();
   await page.keyboard.press("Escape");
   await expect(catalog).toHaveCount(0);

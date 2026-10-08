@@ -74,8 +74,8 @@ test("strategy summary prioritizes metrics and keeps execution conventions expan
     await expect(explanation).not.toBeVisible();
     const risk = summary.locator('[data-slot="collapsible"]').filter({ has: page.getByRole("button", { name: "Close risk and holdings", exact: true }) });
     await risk.getByRole("button", { name: "Close risk and holdings", exact: true }).click();
-    await expect(risk.getByText("98995", { exact: true })).toBeVisible();
-    await expect(risk.getByText("10005", { exact: true })).toBeVisible();
+    await expect(risk.getByText("98,995.00", { exact: true })).toBeVisible();
+    await expect(risk.getByText("10,005.00", { exact: true })).toBeVisible();
     await expect(risk.getByText("Holding age (trading sessions)")).toBeVisible();
     expect(await summary.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
     await page.screenshot({ path: `../../.local/browser-tests/close-risk-${width}.png`, fullPage: true });
@@ -123,7 +123,7 @@ test("result tabs hide inactive panels and retain applied holdings filters", asy
 test.describe("Frozen Framework touch controls", () => {
   test.use({ hasTouch: true });
   test("frozen module source disclosures work on desktop touch layouts", async ({ page }) => {
-    const program = { source: "from quantgrove import PortfolioConstruction\nclass Example(PortfolioConstruction):\n    def on_close(self, data, account): return None" };
+    const program = { source: "def decide(data, account, state): return None" };
     const input = { research_kind: "strategy_backtest", strategy_mode: "framework", initial_cash_cny: "100000", costs: defaultSimulationCosts(),
       hypothesis: null, start_date: "2026-08-03", end_date: "2026-08-04", universe: "top300", modules: {
         universe_selection: "dataset_universe/v1", alpha: { kind: "python", program },

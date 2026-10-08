@@ -405,7 +405,7 @@ def test_incomplete_factor_chunk_estimate_never_advances_durable_task_progress(
 ) -> None:
     settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
-    sessions = _business_sessions(120, ending=date(2026, 8, 4))
+    sessions = _business_sessions(150, ending=date(2026, 8, 4))
     chunk_observed = Event()
     release = Event()
 
@@ -493,7 +493,7 @@ def test_incomplete_factor_chunk_estimate_never_advances_durable_task_progress(
         assert run["progress"]["phase"] == "succeeded"
         assert run["progress"]["completed_warmup_sessions"] == 19
         assert run["progress"]["total_warmup_sessions"] == 19
-        assert run["progress"]["completed_research_sessions"] == 100
+        assert run["progress"]["completed_research_sessions"] == 130
         assert run["execution_timing"]["is_final"] is True
         assert run["execution_timing"]["finished_at"] is not None
         assert run["execution_timing"]["elapsed_seconds"] > 0
@@ -514,7 +514,7 @@ def test_strategy_sweep_reports_intermediate_shared_and_item_progress(
 ) -> None:
     settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
-    sessions = _business_sessions(120, ending=date(2026, 8, 4))
+    sessions = _business_sessions(150, ending=date(2026, 8, 4))
     shared_observed = Event()
     release_shared = Event()
     strategy_observed = Event()

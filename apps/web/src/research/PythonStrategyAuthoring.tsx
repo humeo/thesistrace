@@ -4,11 +4,15 @@ import type { FrameworkStage } from "./frameworkModules";
 import { useTranslation } from "../i18n";
 import { Field, FieldError, FieldGroup, FieldLabel } from "../components/ui/field";
 import type { PythonSourceEditorHandle } from "./PythonSourceEditor";
+import { Button } from "../components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "../components/ui/dialog";
 import { ResearchInfotip } from "./ResearchInfotip";
 
 export type PythonFieldsButton = (editor: () => PythonSourceEditorHandle | null) => ReactNode;
 
 const PythonSourceEditor = lazy(() => import("./PythonSourceEditor").then(module => ({ default: module.PythonSourceEditor })));
+
+const AuthoringReference = lazy(() => import("../mcp/AuthoringReference").then(module => ({ default: module.AuthoringReference })));
 
 export function PythonStrategyAuthoring({ active, inputs, onChange, error, fieldsButton, stage, errorLine }: {
   active: boolean;
@@ -48,7 +52,16 @@ export function PythonStrategyAuthoring({ active, inputs, onChange, error, field
             </div>
           </ResearchInfotip>
         </div>
-        <div className="flex items-center gap-2">{fieldsButton(() => editor.current)}</div>
+        <div className="flex items-center gap-2">
+          <Dialog>
+            <DialogTrigger render={<Button type="button" variant="outline" size="sm" />}>{t("python.writingReference")}</DialogTrigger>
+            <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-3xl">
+              <DialogHeader><DialogTitle>{t("python.writingReference")}</DialogTitle></DialogHeader>
+              <Suspense fallback={<p role="status">{commonText("loadingWorkspace")}</p>}><AuthoringReference initialTopic="python_sdk" /></Suspense>
+            </DialogContent>
+          </Dialog>
+          {fieldsButton(() => editor.current)}
+        </div>
       </div>
       {(active || opened) && <Suspense fallback={<p role="status" className="h-[280px] p-3 text-sm text-muted-foreground">{commonText("loadingWorkspace")}</p>}>
       <PythonSourceEditor editorRef={editor} id={id("source")} label={t("python.source")}

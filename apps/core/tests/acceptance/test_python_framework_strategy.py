@@ -31,58 +31,48 @@ pytestmark = pytest.mark.skipif(
     reason="isolated Core runtime is not configured",
 )
 
-UNIVERSE = """
-from quantgrove import Strategy, Decision
+UNIVERSE = """from quantgrove import Decision
 
 SETTINGS = {}
 
 
-class Fixture(Strategy):
-    def on_close(self, data, account):
-        self.state = {"count": self.state.get("count", 0) + 1}
-        decision = {
-            "reason": "visible_candidates",
-            "instrument_ids": [
-                item["instrument_id"] for item in data.candidate_details
-            ],
-        }
-        return None if decision is None else Decision(decision)
+def decide(data, account, state):
+    state.update({"count": state.get("count", 0) + 1})
+    decision = {
+        "reason": "visible_candidates",
+        "instrument_ids": [item["instrument_id"] for item in data.candidate_details],
+    }
+    return None if decision is None else Decision(decision)
 """
-SIGNALS = """
-from quantgrove import Strategy, Decision
+SIGNALS = """from quantgrove import Decision
 
 SETTINGS = {}
 
 
-class Fixture(Strategy):
-    def on_close(self, data, account):
-        self.state = {"count": self.state.get("count", 0) + 1}
-        decision = {
-            "reason": "fresh_opportunities",
-            "signals": [
-                {
-                    "instrument_id": item["instrument_id"],
-                    "value": 1.0,
-                    "valid_for_sessions": 2,
-                }
-                for item in data.candidate_details
-            ],
-        }
-        return None if decision is None else Decision(decision)
+def decide(data, account, state):
+    state.update({"count": state.get("count", 0) + 1})
+    decision = {
+        "reason": "fresh_opportunities",
+        "signals": [
+            {
+                "instrument_id": item["instrument_id"],
+                "value": 1.0,
+                "valid_for_sessions": 2,
+            }
+            for item in data.candidate_details
+        ],
+    }
+    return None if decision is None else Decision(decision)
 """
-RISK = """
-from quantgrove import Strategy, Decision
-
+RISK = """from quantgrove import Decision
 SETTINGS = {}
 
-
-class Fixture(Strategy):
-    def on_close(self, data, account):
-        if data.session == SETTINGS.get("fail_session"):
-            raise ValueError("deliberate risk failure")
-        self.state = {"count": self.state.get("count", 0) + 1}
-        decision = None
-        return None if decision is None else Decision(decision)
+def decide(data, account, state):
+    if data.session == SETTINGS.get('fail_session'):
+        raise ValueError('deliberate risk failure')
+    state.update({'count': state.get('count', 0) + 1})
+    decision = None
+    return None if decision is None else Decision(decision)
 """
 
 
@@ -136,35 +126,50 @@ def test_risk_only_instrument_events_survive_run_and_track_filtered_pagination(t
     initialize_core(settings.database_url)
     head = _publish_head(settings, sessions=SESSIONS[:2], price_offset=0)
     submitted = command("risk-only-seed", end=SESSIONS[1])
-    submitted["modules"]["universe_selection"]["program"]["source"] = """
-from quantgrove import UniverseSelection, Decision
+    submitted["modules"]["universe_selection"]["program"][
+        "source"
+    ] = """from quantgrove import Decision
 
-class Fixture(UniverseSelection):
-    def on_close(self, data, account):
-        self.state["count"] = self.state.get("count", 0) + 1
-        return Decision({"reason": "entry_only", "instrument_ids":
-                         list(data.candidates) if self.state["count"] == 1 else []})
+
+def decide(data, account, state):
+    state["count"] = state.get("count", 0) + 1
+    return Decision(
+        {
+            "reason": "entry_only",
+            "instrument_ids": list(data.candidates) if state["count"] == 1 else [],
+        }
+    )
 """
-    submitted["modules"]["portfolio_construction"]["program"]["source"] = """
-from quantgrove import PortfolioConstruction, Decision
+    submitted["modules"]["portfolio_construction"]["program"][
+        "source"
+    ] = """from quantgrove import Decision
 
-class Fixture(PortfolioConstruction):
-    def on_close(self, data, account):
-        self.state["count"] = self.state.get("count", 0) + 1
-        if self.state["count"] > 2:
-            return None
-        ids = list(data.candidates) if self.state["count"] == 1 else []
-        return Decision({"reason": "enter_then_exit", "allocation": {
-            "mode": "rebalance", "instrument_ids": ids,
-            "relative_weights": {item: "1" for item in ids},
-            "exposure": 1.0 if ids else 0.0}, "position_limits": {}})
+
+def decide(data, account, state):
+    state["count"] = state.get("count", 0) + 1
+    if state["count"] > 2:
+        return None
+    ids = list(data.candidates) if state["count"] == 1 else []
+    return Decision(
+        {
+            "reason": "enter_then_exit",
+            "allocation": {
+                "mode": "rebalance",
+                "instrument_ids": ids,
+                "relative_weights": {item: "1" for item in ids},
+                "exposure": 1.0 if ids else 0.0,
+            },
+            "position_limits": {},
+        }
+    )
 """
     submitted["modules"]["risk_management"] = {
         "kind": "builtin_risk/v1",
         "take_profit_tiers": [{"profit_threshold": 0.01, "cumulative_reduction": 0.3}],
     }
     submitted["modules"]["alpha"]["program"]["source"] = SIGNALS.replace(
-        "Strategy", "Alpha",
+        "Strategy",
+        "Alpha",
     ).replace('"valid_for_sessions": 2', '"valid_for_sessions": 1')
     try:
         with TestClient(create_app(settings)) as client:
@@ -172,23 +177,33 @@ class Fixture(PortfolioConstruction):
             seed = client.post("/api/research-runs", json=submitted)
             assert seed.status_code == 202, seed.text
             assert runtime.research_runs.process_next()
-            tracked = client.post(f"/api/research-runs/{seed.json()['id']}/daily-tracks",
-                                  json={"request_id": "risk-only-track"})
+            tracked = client.post(
+                f"/api/research-runs/{seed.json()['id']}/daily-tracks",
+                json={"request_id": "risk-only-track"},
+            )
             assert tracked.status_code == 201, tracked.text
             track_id = tracked.json()["id"]
             _publish_head(settings, sessions=SESSIONS[:3], price_offset=0, expected_manifest=head)
-            refreshed = client.post(f"/api/daily-tracks/{track_id}/refresh",
-                                    json={"request_id": "risk-only-advance"})
+            refreshed = client.post(
+                f"/api/daily-tracks/{track_id}/refresh", json={"request_id": "risk-only-advance"}
+            )
             assert refreshed.status_code == 202, refreshed.text
             assert runtime.daily_tracks.process_next()
-            full = client.post("/api/research-runs", json={
-                **submitted, "request_id": "risk-only-full", "end_date": SESSIONS[2],
-            })
+            full = client.post(
+                "/api/research-runs",
+                json={
+                    **submitted,
+                    "request_id": "risk-only-full",
+                    "end_date": SESSIONS[2],
+                },
+            )
             assert full.status_code == 202, full.text
             assert runtime.research_runs.process_next()
             run_id = full.json()["id"]
-            paths = (f"/api/research-runs/{run_id}/events/query",
-                     f"/api/daily-tracks/{track_id}/events/query")
+            paths = (
+                f"/api/research-runs/{run_id}/events/query",
+                f"/api/daily-tracks/{track_id}/events/query",
+            )
             for path in paths:
                 all_events = client.post(path, json={"section": "strategy_framework", "limit": 50})
                 assert all_events.status_code == 200, all_events.text
@@ -206,7 +221,9 @@ class Fixture(PortfolioConstruction):
                 assert risk_only[-1]["proposal"] is None
                 assert risk_only[-1]["risk_adjustment"]["position_limits"] == {}
                 query = {
-                    "section": "strategy_framework", "instrument_id": instrument_id, "limit": 1,
+                    "section": "strategy_framework",
+                    "instrument_id": instrument_id,
+                    "limit": 1,
                 }
                 first = client.post(path, json=query)
                 assert first.status_code == 200, first.text
@@ -223,16 +240,28 @@ class Fixture(PortfolioConstruction):
                 assert unrelated.status_code == 200, unrelated.text
                 assert unrelated.json()["rows"] == []
                 assert unrelated.json()["next_cursor"] is None
-            assert runtime.research_runs.get_result_section(
-                UUID(int=1234), RunStrategyFrameworkInput(
-                    run_id=run_id, section="strategy_framework", instrument_id=instrument_id,
-                ),
-            ) is None
-            assert runtime.daily_tracks.get_result_section(
-                UUID(int=1234), TrackStrategyFrameworkInput(
-                    track_id=track_id, section="strategy_framework", instrument_id=instrument_id,
-                ),
-            ) is None
+            assert (
+                runtime.research_runs.get_result_section(
+                    UUID(int=1234),
+                    RunStrategyFrameworkInput(
+                        run_id=run_id,
+                        section="strategy_framework",
+                        instrument_id=instrument_id,
+                    ),
+                )
+                is None
+            )
+            assert (
+                runtime.daily_tracks.get_result_section(
+                    UUID(int=1234),
+                    TrackStrategyFrameworkInput(
+                        track_id=track_id,
+                        section="strategy_framework",
+                        instrument_id=instrument_id,
+                    ),
+                )
+                is None
+            )
     finally:
         drop_product_schemas(settings)
 
@@ -244,17 +273,15 @@ def test_framework_track_origin_keeps_a_large_legal_module_state(tmp_path):
     _publish_head(settings, sessions=SESSIONS[:2], price_offset=0)
     with TestClient(create_app(settings)) as client:
         submitted = command("large-framework-state", end=SESSIONS[1])
-        submitted["modules"]["risk_management"]["program"]["source"] = """
-from quantgrove import RiskManagement, Decision
-
+        submitted["modules"]["risk_management"]["program"][
+            "source"
+        ] = """from quantgrove import Decision
 SETTINGS = {}
 
-
-class Fixture(RiskManagement):
-    def on_close(self, data, account):
-        self.state = {"payload": "x" * 200000}
-        decision = None
-        return None if decision is None else Decision(decision)
+def decide(data, account, state):
+    state.update({'payload': 'x' * 200000})
+    decision = None
+    return None if decision is None else Decision(decision)
 """
         admitted = client.post("/api/research-runs", json=submitted)
         assert admitted.status_code == 202, admitted.text
@@ -274,7 +301,9 @@ class Fixture(RiskManagement):
             TEST_RESEARCHER.researcher_id,
             DailyTrackOriginResultSectionInput(track_id=tracked.json()["id"], section="origin"),
         )
-        assert origin.terminal_account.decision_state.module_states["risk_management"] == {
+        assert origin.terminal_account.decision_state.module_states["risk_management"][
+            "decision"
+        ] == {
             "payload": "x" * 200000,
         }
         mcp_origin = anyio.run(
@@ -411,7 +440,10 @@ def test_framework_run_reuse_and_track_preserve_frozen_modules_and_account(
         assert detail["input"]["modules"] == submitted["modules"]
         assert detail["input"]["costs"] == costs
         assert ("holdings_count" in detail["input"]) == holding_periods
-        expected = {stage: {"count": 3} for stage in submitted["modules"]}
+        expected = {
+            stage: {"compute": {}, "decision": {"count": 3}}
+            for stage in submitted["modules"]
+        }
         if builtin_alpha:
             expected["alpha"] = {}
         if builtin_risk:

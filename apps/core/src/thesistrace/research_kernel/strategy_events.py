@@ -32,9 +32,14 @@ Session = StrictStr
 PositiveShares = Annotated[StrictInt, Field(gt=0)]
 RejectionReason = Literal["suspension", "data_unavailable", "upper_limit_buy", "lower_limit_sell"]
 StrategyEventSection = Literal[
-    "strategy_targets", "strategy_orders", "strategy_child_orders", "strategy_fills",
-    "strategy_adjustments", "strategy_execution_constraints",
-    "strategy_framework", "strategy_history_reads",
+    "strategy_targets",
+    "strategy_orders",
+    "strategy_child_orders",
+    "strategy_fills",
+    "strategy_adjustments",
+    "strategy_execution_constraints",
+    "strategy_framework",
+    "strategy_history_reads",
 ]
 
 
@@ -57,17 +62,19 @@ class StrategyFrameworkEvent(FrameworkEvidence):
 class StrategyHistoryReadEvent(TerminalStateModel):
     read_id: StrictStr
     session: Session
-    module: Literal["direct", "universe_selection", "alpha", "portfolio_construction",
-                    "risk_management"]
+    module: Literal[
+        "direct", "universe_selection", "alpha", "portfolio_construction", "risk_management"
+    ]
+    phase: Literal["compute", "decide"] = "decide"
     program_sha256: Annotated[StrictStr, Field(pattern=r"^[a-f0-9]{64}$")]
     field_id: Annotated[StrictStr, Field(min_length=1, max_length=200)]
     request_index: Annotated[StrictInt, Field(ge=1, le=64)]
-    requested_sessions: Annotated[StrictInt, Field(ge=1, le=253)]
-    returned_sessions: Annotated[StrictInt, Field(ge=0, le=253)]
+    requested_sessions: Annotated[StrictInt, Field(ge=1, le=380)]
+    returned_sessions: Annotated[StrictInt, Field(ge=0, le=380)]
     instrument_count: Annotated[StrictInt, Field(ge=0, le=262144)]
     first_session: Session | None
     last_session: Session | None
-    response_bytes: Annotated[StrictInt, Field(ge=0, le=4 * 1024 * 1024)]
+    response_bytes: Annotated[StrictInt, Field(ge=0, le=32 * 1024 * 1024)]
 
     @model_validator(mode="after")
     def bounded_history(self):
@@ -231,23 +238,31 @@ EVENT_MODELS = {
 EVENT_ID_FIELDS = {
     "strategy_history_reads": "read_id",
     "strategy_framework": "decision_id",
-    "strategy_targets": "target_id", "strategy_orders": "order_id",
-    "strategy_child_orders": "child_order_id", "strategy_fills": "fill_id",
+    "strategy_targets": "target_id",
+    "strategy_orders": "order_id",
+    "strategy_child_orders": "child_order_id",
+    "strategy_fills": "fill_id",
     "strategy_adjustments": "adjustment_id",
     "strategy_execution_constraints": "constraint_id",
 }
 
 
 def strategy_event_rows(
-    strategy: Mapping[str, object], *, sessions: Sequence[str],
+    strategy: Mapping[str, object],
+    *,
+    sessions: Sequence[str],
 ) -> dict[str, list[dict[str, object]]]:
     """Select this completed segment only; never reconstruct absent historical trades."""
     covered = set(sessions)
     candidates = {
         "strategy_history_reads": [
-            {**{key: value for key, value in read.items() if key != "reason"},
-             "read_id": f"{read['session']}:{read['module']}:{read['request_index']}"}
-            for read in strategy["diagnostics"] if read["reason"] == "python_history"
+            {
+                **{key: value for key, value in read.items() if key != "reason"},
+                "read_id": (f"{read['session']}:{read['module']}:{read['phase']}:"
+                            f"{read['request_index']}"),
+            }
+            for read in strategy["diagnostics"]
+            if read["reason"] == "python_history"
         ],
         "strategy_framework": strategy["framework_events"],
         "strategy_targets": strategy["target_events"],
@@ -256,17 +271,25 @@ def strategy_event_rows(
         "strategy_fills": strategy["fills"],
         "strategy_execution_constraints": strategy["execution_constraints"],
         "strategy_adjustments": [
-            event for day in strategy["daily"] if day["session"] in covered
+            event
+            for day in strategy["daily"]
+            if day["session"] in covered
             for event in day["valuation_events"]
         ],
     }
     result = {}
     for section, rows in candidates.items():
-        session_key = ("decision_session" if section in {"strategy_targets", "strategy_framework"}
-                       else "session")
+        session_key = (
+            "decision_session"
+            if section in {"strategy_targets", "strategy_framework"}
+            else "session"
+        )
         model = EVENT_MODELS[section]
-        selected = [model.model_validate(row).model_dump(mode="json") for row in rows
-                    if row[session_key] in covered]
+        selected = [
+            model.model_validate(row).model_dump(mode="json")
+            for row in rows
+            if row[session_key] in covered
+        ]
         id_key = EVENT_ID_FIELDS[section]
         if len({row[id_key] for row in selected}) != len(selected):
             raise ValueError("Duplicate logical Strategy event in segment")

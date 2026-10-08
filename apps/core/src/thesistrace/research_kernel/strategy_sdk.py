@@ -1,11 +1,14 @@
 """Public authoring API, loaded only inside the isolated Python guest."""
 
+import hashlib
 import json
 import math
 from collections.abc import Mapping
 from types import MappingProxyType
 
+import numpy as np
 from _history_wire import decode_history
+from _program_wire import array_from_wire, array_to_wire
 from _thesistrace_execution import read_request
 
 
@@ -82,8 +85,22 @@ class Data:
         self.session = context.get("session")
         self.completed_sessions = context.get("completed_sessions", 0)
         self.candidates = tuple(row["instrument_id"] for row in context.get("candidates", []))
+        self.instruments = tuple(context.get("value_instruments", self.candidates))
         self.candidate_details = _freeze(context.get("candidates", []))
         self.framework = _freeze(context.get("framework", {}))
+        self.values = MappingProxyType(
+            {name: array_from_wire(value) for name, value in context.get("values", {}).items()}
+        )
+        self._random_seed = context.get("random_seed", "")
+
+    def rng(self, purpose, *, session=None):
+        """A reproducible, date-addressed generator, independent of block size."""
+        date = getattr(self, "session", None) if session is None else session
+        allowed = (self.session,) if isinstance(self, Data) else self.sessions
+        if type(purpose) is not str or not purpose or len(purpose) > 200 or date not in allowed:
+            raise ValueError("rng requires a nonempty purpose and a visible output date")
+        digest = hashlib.sha256(f"{self._random_seed}\0{date}\0{purpose}".encode()).digest()
+        return np.random.default_rng(int.from_bytes(digest[:16], "little"))
 
     def history(self, field_id, days, *, instruments=None):
         """Read up to days sessions through this Close, never future observations."""
@@ -92,6 +109,10 @@ class Data:
             "instruments": None if instruments is None else list(instruments),
         }, allow_nan=False, separators=(",", ":")).encode()
         return History(read_request(payload))
+
+    def common(self, name, days, *, industry=None):
+        field = "common." + name + ("" if industry is None else ":" + str(industry))
+        return self.history(field, days).array[0]
 
     def close_prices(self, days, *, instruments=None):
         return self.history("price.close.adjusted", days, instruments=instruments)
@@ -102,12 +123,7 @@ class Decision:
         self.value = value
 
 
-class Strategy:
-    """Implement on_close(data, account); only self.state survives invocations."""
-
-    def on_close(self, data, account):
-        raise NotImplementedError("Implement on_close(self, data, account)")
-
+class _DecisionBuilder:
     def target_weights(self, weights, *, reason="target_weights"):
         return self._weights(weights, "rebalance", reason)
 
@@ -173,12 +189,12 @@ class Strategy:
                          "maximum_stock_exposure": float(maximum)})
 
 
-class UniverseSelection(Strategy):
+class _UniverseBuilder(_DecisionBuilder):
     def select(self, instruments, *, reason="selection"):
         return Decision({"reason": reason, "instrument_ids": list(instruments)})
 
 
-class Alpha(Strategy):
+class _SignalBuilder(_DecisionBuilder):
     def signals(self, values, *, valid_for_sessions=1, reason="signals"):
         return Decision({"reason": reason, "signals": [
             {"instrument_id": key, "value": float(value),
@@ -186,11 +202,7 @@ class Alpha(Strategy):
         ]})
 
 
-class PortfolioConstruction(Strategy):
-    pass
-
-
-class RiskManagement(Strategy):
+class _RiskBuilder(_DecisionBuilder):
     def replace(self, decision):
         return Decision({"mode": "replace", "reason": "replace",
                          "target": None if decision is None else decision.value})
@@ -198,3 +210,139 @@ class RiskManagement(Strategy):
     def limit_positions(self, maximum_shares, *, reason="limit_positions"):
         return Decision({"mode": "limit_positions", "reason": reason,
                          "position_limits": dict(maximum_shares)})
+
+
+target_weights = _DecisionBuilder().target_weights
+increase_to_weights = _DecisionBuilder().increase_to_weights
+reduce_exposure = _DecisionBuilder().reduce_exposure
+with_limits = _DecisionBuilder().with_limits
+limit_positions = _DecisionBuilder().limit_positions
+limit_exposure = _DecisionBuilder().limit_exposure
+select = _UniverseBuilder().select
+signals = _SignalBuilder().signals
+replace = _RiskBuilder().replace
+risk_limits = _RiskBuilder().limit_positions
+
+
+class BatchData:
+    """Numerical observations for several output dates; not an execution account."""
+
+    def __init__(self, context):
+        block = context["block"]
+        self.sessions = tuple(block["sessions"])
+        self.instruments = tuple(block["instruments"])
+        self.session_index = np.asarray(block["session_index"], dtype=np.int64)
+        self.eligible = array_from_wire(block["eligible"])
+        self._random_seed = context.get("random_seed", "")
+        self._cache = {}
+        self._history_dates = {}
+
+    rng = Data.rng
+
+    def history(self, field_id, *, lookback=0):
+        if type(lookback) is not int or not 0 <= lookback <= 252:
+            raise ValueError("lookback must be an integer between 0 and 252")
+        key = (field_id, lookback)
+        if key not in self._cache:
+            days = lookback + len(self.sessions)
+            payload = json.dumps(
+                {"field_id": field_id, "days": days, "instruments": list(self.instruments)},
+                allow_nan=False,
+                separators=(",", ":"),
+            ).encode()
+            history = History(read_request(payload))
+            if (
+                history.instruments != self.instruments
+                or history.sessions[-len(self.sessions) :] != self.sessions
+            ):
+                raise ValueError("History axes differ from the output block")
+            padded = np.full((len(self.instruments), days), np.nan)
+            padded[:, -len(history.sessions) :] = history.array
+            self._cache[key] = np.frombuffer(padded.tobytes(), dtype="<f8").reshape(padded.shape)
+            self._history_dates[key] = (None,) * (days - len(history.sessions)) + history.sessions
+        return self._cache[key]
+
+    def history_sessions(self, field_id, *, lookback=0):
+        """Aligned history dates; None marks unavailable warmup positions."""
+        self.history(field_id, lookback=lookback)
+        return self._history_dates[(field_id, lookback)]
+
+    def common(self, name, *, lookback=0, industry=None):
+        if type(lookback) is not int or not 0 <= lookback <= 252:
+            raise ValueError("lookback must be an integer between 0 and 252")
+        field = "common." + name + ("" if industry is None else ":" + str(industry))
+        key = (field, lookback)
+        if key not in self._cache:
+            days = lookback + len(self.sessions)
+            history = History(
+                read_request(
+                    json.dumps(
+                        {
+                            "field_id": field,
+                            "days": days,
+                            "instruments": None,
+                        },
+                        separators=(",", ":"),
+                    ).encode()
+                )
+            )
+            if history.sessions[-len(self.sessions) :] != self.sessions:
+                raise ValueError("Common input dates differ from the output block")
+            padded = np.full(days, np.nan)
+            padded[-len(history.sessions) :] = history.array[0]
+            self._cache[key] = np.frombuffer(padded.tobytes(), dtype="<f8")
+        return self._cache[key]
+
+
+class Targets:
+    """One portfolio column per output date; False update means no new decision."""
+
+    def __init__(self, weights, *, update, priority=None, reason="target_weights"):
+        self.weights = np.asarray(weights)
+        self.update = np.asarray(update)
+        self.priority = None if priority is None else np.asarray(priority)
+        self.reason = reason
+        self.equal = False
+
+    @classmethod
+    def equal_weight(cls, selected, *, update, priority=None, reason="target_weights"):
+        selected = np.asarray(selected)
+        if selected.dtype != np.dtype(bool):
+            raise TypeError("equal_weight requires a boolean selection matrix")
+        result = cls(selected, update=update, priority=priority, reason=reason)
+        result.equal = True
+        return result
+
+    def _to_wire(self):
+        priority = None
+        if self.priority is not None:
+            if self.priority.shape != self.weights.shape:
+                raise ValueError("Targets priority must align with weights")
+            selected = self.weights > 0
+            # Only selected priorities affect buy order. Keep wide sparse portfolios
+            # small without reducing precision or changing the author's array API.
+            priority = {
+                "indices": array_to_wire(np.flatnonzero(selected).astype(np.uint32)),
+                "values": array_to_wire(self.priority[selected]),
+            }
+        return {
+            "kind": "targets",
+            "weights": array_to_wire(self.weights),
+            "update": array_to_wire(self.update),
+            "priority": priority,
+            "equal": self.equal,
+            "reason": self.reason,
+        }
+
+
+class Values:
+    """Named stock-by-date or date-only results consumed by decide."""
+
+    def __init__(self, values):
+        self.values = dict(values)
+
+    def _to_wire(self):
+        return {
+            "kind": "values",
+            "values": {name: array_to_wire(value) for name, value in self.values.items()},
+        }

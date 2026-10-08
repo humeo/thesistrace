@@ -43,7 +43,7 @@ class AuthoringExample(BaseModel):
     title: str
     language: Literal["python", "formula", "json"]
     source: str
-    entrypoint: str | None = None
+    entrypoint: Literal["compute", "decide"] | None = None
     context: Literal["signal", "exposure"] | None = None
 
 

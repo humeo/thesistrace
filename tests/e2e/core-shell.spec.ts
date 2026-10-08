@@ -111,48 +111,46 @@ test("Framework modules author, execute, reuse frozen programs and refresh Daily
   publishFinancialTrackHead("lagged");
   await page.goto("/research?new");
   await page.getByRole("button", { name: "Strategy Backtest", exact: true }).click();
-  await page.getByLabel("Research name").fill("Daily Framework modules");
+  await renameDraft(page, "Daily Framework modules");
+  await showResearchConditions(page);
   await page.getByLabel("Research start date").fill("2026-08-04");
   await page.getByLabel("Research end date").fill("2026-08-05");
   await page.locator("#research-stage-tab-universe_selection").click();
-  await page.getByRole("combobox", { name: "Universe", exact: true }).click();
-  await page.getByRole("option", { name: "Top 300", exact: true }).click();
+  await page.getByRole("combobox", { name: "Base stock universe", exact: true }).click();
+  await page.getByRole("option", { name: "Top 300 by liquidity", exact: true }).click();
   const programs = [
-    { stage: "universe_selection", label: "Universe Selection", section: "Which stocks can be selected?", source: `from quantgrove import UniverseSelection
-class Candidates(UniverseSelection):
-    def on_close(self, data, account):
-        self.state["count"] = self.state.get("count", 0) + 1
-        return self.select(data.candidates)
+    { stage: "universe_selection", label: "Universe Selection", section: "Which stocks can be selected?", source: `from quantgrove import select
+
+def decide(data, account, state):
+    state['count'] = state.get('count', 0) + 1
+    return select(data.candidates)
 ` },
-    { stage: "alpha", label: "Alpha / Signals", section: "How are stocks selected?", source: `from quantgrove import Alpha
-class Scores(Alpha):
-    def on_close(self, data, account):
-        self.state["count"] = self.state.get("count", 0) + 1
-        prices = data.close_prices(1)
-        return self.signals({stock: prices[stock][-1] for stock in data.candidates
-                             if prices[stock][-1] is not None}, valid_for_sessions=2)
+    { stage: "alpha", label: "Alpha / Signals", section: "How are stocks selected?", source: `from quantgrove import signals
+
+def decide(data, account, state):
+    state['count'] = state.get('count', 0) + 1
+    prices = data.close_prices(1)
+    return signals({stock: prices[stock][-1] for stock in data.candidates if prices[stock][-1] is not None}, valid_for_sessions=2)
 ` },
-    { stage: "portfolio_construction", label: "Portfolio Construction", section: "How much to buy and when to rebalance?", source: `from quantgrove import PortfolioConstruction
-class Portfolio(PortfolioConstruction):
-    def on_close(self, data, account):
-        self.state["count"] = self.state.get("count", 0) + 1
-        signals = data.framework["signals"]
-        if signals and not account.positions:
-            return self.target_weights({signals[0]["instrument_id"]: 1.0})
-        return None
+    { stage: "portfolio_construction", label: "Portfolio Construction", section: "How much to buy and when to rebalance?", source: `from quantgrove import target_weights
+
+def decide(data, account, state):
+    state['count'] = state.get('count', 0) + 1
+    signals = data.framework['signals']
+    if signals and (not account.positions):
+        return target_weights({signals[0]['instrument_id']: 1.0})
+    return None
 ` },
-    { stage: "risk_management", label: "Risk Management", section: "When should positions be reduced or sold?", source: `from quantgrove import RiskManagement
-class Risk(RiskManagement):
-    def on_close(self, data, account):
-        self.state["count"] = self.state.get("count", 0) + 1
-        self.state["label"] = "original_frozen_risk"
-        return None
+    { stage: "risk_management", label: "Risk Management", section: "When should positions be reduced or sold?", source: `def decide(data, account, state):
+    state['count'] = state.get('count', 0) + 1
+    state['label'] = 'original_frozen_risk'
+    return None
 ` },
   ];
   for (const program of programs) {
     await page.locator(`#research-stage-tab-${program.stage}`).click();
-    await page.getByRole("button", { name: `Customize ${program.label} with Python`, exact: true }).click();
     const editor = page.locator(`#research-stage-panel-${program.stage}`);
+    await editor.getByRole("radio", { name: "Code", exact: true }).check();
     await editor.getByRole("textbox", { name: "Python source", exact: true }).fill(program.source);
   }
   const riskSource = page.locator("#research-stage-panel-risk_management").getByRole("textbox", { name: "Python source", exact: true });
@@ -192,7 +190,7 @@ class Risk(RiskManagement):
   const accepted = await (await page.request.get(`/api/research-runs/${runId}`)).json();
   for (const program of programs) {
     expect(accepted.input.modules[program.stage].program.source).toBe(program.source);
-    expect(accepted.result.terminal_strategy_state.decision_state.module_states[program.stage].count).toBe(2);
+    expect(accepted.result.terminal_strategy_state.decision_state.module_states[program.stage].decision.count).toBe(2);
   }
   const evidence = await page.request.post(`/api/research-runs/${runId}/events/query`, {
     headers: sameOriginHeaders(), data: { section: "strategy_framework", limit: 50 },
@@ -218,8 +216,8 @@ class Risk(RiskManagement):
   await refreshPythonTrackThroughFixtureEnd(page, trackId);
   await expect(page.getByRole("alert")).toHaveCount(0);
   const latest = await (await page.request.get(`/api/daily-tracks/${trackId}`)).json();
-  for (const program of programs) expect(latest.observation.decision_state.module_states[program.stage].count).toBe(6);
-  expect(latest.observation.decision_state.module_states.risk_management.label).toBe("original_frozen_risk");
+  for (const program of programs) expect(latest.observation.decision_state.module_states[program.stage].decision.count).toBe(6);
+  expect(latest.observation.decision_state.module_states.risk_management.decision.label).toBe("original_frozen_risk");
   expect(latest.observation.selection_interval).toBeNull();
   await page.screenshot({ path: testInfo.outputPath("framework-track.png"), fullPage: true });
 });
@@ -261,15 +259,20 @@ test("Direct Python authoring executes, reuses frozen source and explicitly adva
   await page.getByRole("radio", { name: "Python authoring", exact: true }).check();
   await page.getByRole("combobox", { name: "Universe", exact: true }).click();
   await page.getByRole("option", { name: "Top 300", exact: true }).click();
-  const source = `from quantgrove import Strategy
-class BuyAndHold(Strategy):
-    def on_close(self, data, account):
-        self.state["count"] = self.state.get("count", 0) + 1
-        lookback = 1 + self.state["count"]
-        prices = data.close_prices(lookback)
-        if not account.positions and data.candidates:
-            return self.target_weights({data.candidates[0]: 1.0}, reason="visible_candidate")
-        return None
+  const source = `from quantgrove import Values, target_weights
+
+def compute(data, state):
+    state['days'] = state.get('days', 0) + len(data.sessions)
+    return Values({'close': data.history('price.close.adjusted')})
+
+def decide(data, account, state):
+    assert data.values['close'].shape == (len(data.instruments),)
+    state['count'] = state.get('count', 0) + 1
+    lookback = 1 + state['count']
+    prices = data.close_prices(lookback)
+    if not account.positions and data.candidates:
+        return target_weights({data.candidates[0]: 1.0}, reason='visible_candidate')
+    return None
 `;
   await page.getByRole("textbox", { name: "Python source", exact: true }).fill("class Broken(:");
   await page.getByRole("button", { name: "Check configuration" }).click();
@@ -301,15 +304,22 @@ class BuyAndHold(Strategy):
   await page.getByText("Frozen Python source", { exact: true }).click();
   await expect(facts.locator("pre").first()).toHaveText(source);
   const accepted = await (await page.request.get(`/api/research-runs/${runId}`)).json();
-  expect(accepted.result.terminal_strategy_state.decision_state.state).toEqual({ count: 2 });
+  expect(accepted.result.terminal_strategy_state.decision_state.state.decision).toEqual({ count: 2 });
+  expect(accepted.result.terminal_strategy_state.decision_state.state.compute).toEqual({ days: 2 });
   const reads = await page.request.post(`/api/research-runs/${runId}/events/query`, {
     headers: sameOriginHeaders(), data: { section: "strategy_history_reads", limit: 50 },
   });
   expect(reads.status()).toBe(200);
-  expect((await reads.json()).rows.map((row: { requested_sessions: number }) => row.requested_sessions)).toEqual([2, 3]);
+  const history = (await reads.json()).rows.map((row: { phase: string; requested_sessions: number }) => ({
+    phase: row.phase, days: row.requested_sessions,
+  }));
+  expect(history).toHaveLength(3);
+  expect(history).toEqual(expect.arrayContaining([
+    { phase: "compute", days: 2 }, { phase: "decide", days: 2 }, { phase: "decide", days: 3 },
+  ]));
   await page.getByRole("tab", { name: "Trading events", exact: true }).click();
   await selectTradingEvent(page, "Python data reads");
-  await expect(page.getByRole("cell", { name: "price.close.adjusted", exact: true })).toHaveCount(2);
+  await expect(page.getByRole("cell", { name: "price.close.adjusted", exact: true })).toHaveCount(3);
   await page.screenshot({ path: testInfo.outputPath("python-sdk-data-reads.png"), fullPage: true });
 
   await page.getByRole("button", { name: "Use as draft", exact: true }).click();
@@ -323,11 +333,12 @@ class BuyAndHold(Strategy):
   const trackId = page.url().split("/").at(-1)!;
   const origin = await (await page.request.get(`/api/daily-tracks/${trackId}`)).json();
   expect(origin.strategy_session).toBe("2026-08-05");
-  expect(origin.observation.decision_state.state).toEqual({ count: 2 });
+  expect(origin.observation.decision_state.state.decision).toEqual({ count: 2 });
   await refreshPythonTrackThroughFixtureEnd(page, trackId);
   await expect(page.getByRole("alert")).toHaveCount(0);
   const latest = await (await page.request.get(`/api/daily-tracks/${trackId}`)).json();
-  expect(latest.observation.decision_state.state).toEqual({ count: 6 });
+  expect(latest.observation.decision_state.state.decision).toEqual({ count: 6 });
+  expect(latest.observation.decision_state.state.compute).toEqual({ days: 6 });
   expect(latest.observation.selection_interval).toBeNull();
   await page.screenshot({ path: testInfo.outputPath("python-sdk-track.png"), fullPage: true });
 });

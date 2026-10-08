@@ -15,7 +15,7 @@ describe("Research mode draft preservation", () => {
     let draft = frameworkDraft();
     for (const stage of frameworkStages) {
       draft = selectFrameworkModule(draft, stage, "python");
-      draft.frameworkModules[stage].program = { programSource: `# ${stage}\nfrom quantgrove import Strategy\nclass Saved(Strategy):\n    def on_close(self, data, account): return None`, };
+      draft.frameworkModules[stage].program = { programSource: `# ${stage}\ndef decide(data, account, state): return None`, };
     }
     const programs = structuredClone(draft.frameworkModules);
     for (const stage of frameworkStages) draft = selectFrameworkModule(draft, stage, "builtin");

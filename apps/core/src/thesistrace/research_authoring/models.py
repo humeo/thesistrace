@@ -60,7 +60,9 @@ class ExposureAuthoringConstraints(BaseModel):
 class PythonProgramConstraints(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    callback: str = "Strategy.on_close(self, data, account)"
+    callback: str = "compute(data, state); optional decide(data, account, state)"
+    batch_output_sessions: IntegerRange = IntegerRange(minimum=1, maximum=128)
+    batch_lookback: IntegerRange = IntegerRange(minimum=0, maximum=252)
     sdk_module: Literal["quantgrove"] = "quantgrove"
     source_template: str
     decision_time: Literal["session_close"] = "session_close"
@@ -77,11 +79,11 @@ class PythonProgramConstraints(BaseModel):
     python_version: str
     modules: tuple[str, ...]
     output: str = (
-        "Subclass Strategy and return self.target_weights({instrument_id: portfolio_weight}) "
-        "for a complete portfolio target, self.target_weights({}) to liquidate, or None "
-        "for NoUpdate. self.limit_positions caps held shares; self.limit_exposure caps total "
-        "stock exposure. Only self.state survives. Read history dynamically through "
-        "data.close_prices(days) or data.history(field_id, days). No filesystem or network access."
+        "compute(data, state) returns Targets for multiple dates, or Values when decide is "
+        "defined. Optional decide(data, account, state) returns a helper-built Decision or None. "
+        "compute reads data.history(field_id, lookback=L); decide reads current Close history. "
+        "Each phase has separate explicit state supporting JSON and numeric arrays. "
+        "Batch code must not use future observations for earlier outputs. No filesystem or network."
     )
 
 

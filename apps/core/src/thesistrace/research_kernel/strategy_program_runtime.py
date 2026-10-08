@@ -9,6 +9,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from thesistrace.research_history import encode_history
+from thesistrace.research_kernel.program_wire import decode_state
 from thesistrace.research_kernel.python_execution import (
     BOOTSTRAP_WALL_SECONDS,
     FUEL,
@@ -130,63 +131,112 @@ class PythonStrategyRuntime:
         bootstrap = Path(__file__).with_name("strategy_program_guest.py").read_text()
         sdk = Path(__file__).with_name("strategy_sdk.py").read_text()
         history_wire = Path(__file__).parent.parent.joinpath("research_history.py").read_text()
+        program_wire = Path(__file__).with_name("program_wire.py").read_text()
         self._execution = PreparedPythonEnvironment(
             bootstrap,
-            module_sources={"_history_wire": history_wire, "quantgrove": sdk},
+            module_sources={
+                "_history_wire": history_wire,
+                "_program_wire": program_wire,
+                "quantgrove": sdk,
+            },
         )
 
     def identity(self) -> dict[str, object]:
         return {
-            "contract": "python-strategy/v4", "python": PYTHON_VERSION, "numpy": NUMPY_VERSION,
-            "wasmtime": WASMTIME_VERSION, "archive_sha256": ARCHIVE_SHA256,
+            "contract": "python-strategy/v5",
+            "python": PYTHON_VERSION,
+            "numpy": NUMPY_VERSION,
+            "wasmtime": WASMTIME_VERSION,
+            "archive_sha256": ARCHIVE_SHA256,
             **self._execution.identity(),
             "modules": list(AVAILABLE_MODULES),
             "source_bytes": SOURCE_BYTES,
-            "input_bytes": INPUT_BYTES, "output_bytes": OUTPUT_BYTES,
+            "input_bytes": INPUT_BYTES,
+            "output_bytes": OUTPUT_BYTES,
             "state_bytes": STATE_BYTES,
             "history_requests": HISTORY_REQUESTS,
             "history_response_bytes": HISTORY_RESPONSE_BYTES,
-            "history_cells": HISTORY_CELLS, "history_total_cells": HISTORY_TOTAL_CELLS,
+            "history_cells": HISTORY_CELLS,
+            "history_total_cells": HISTORY_TOTAL_CELLS,
             "history_sessions": HISTORY_SESSIONS,
             "diagnostic_bytes": DIAGNOSTIC_BYTES,
-            "memory_bytes": MEMORY_BYTES, "fuel": FUEL, "wall_seconds": WALL_SECONDS,
+            "memory_bytes": MEMORY_BYTES,
+            "fuel": FUEL,
+            "wall_seconds": WALL_SECONDS,
             "bootstrap_wall_seconds": BOOTSTRAP_WALL_SECONDS,
             "json_depth": MAX_JSON_DEPTH,
-            "clock": "decision_session_15:00_UTC+08:00",
+            "clock": "operation_end_session_15:00_UTC+08:00",
+            "batch_output_sessions": 128,
+            "batch_lookback": 252,
+            "batch_history_cells": 2_097_152,
+            "batch_history_total_cells": 4_194_304,
+            "state_arrays": "bounded_npy_no_pickle/v1",
+            "execution_session": "private_heap_explicit_checkpoint/v1",
+            "date_random": "sha256_source_date_purpose/v1",
             "random": "sha256_of_canonical_invocation/v1",
             "numpy_random": "sha256_with_numpy_domain/v1",
         }
 
-    def validate(self, source: str, *, entrypoint="Strategy") -> None:
-        self._invoke(source, context={}, state={}, operation="validate",
-                     entrypoint=entrypoint, read_history=None)
+    def validate(self, source: str):
+        return self._invoke(
+            source,
+            context={},
+            state={},
+            operation="validate",
+            read_history=None,
+        ).output
+
+    def open_session(self, source):
+        return PythonProgramSession(self, source)
 
     def invoke(
-        self, source: str, *, context: dict[str, object], state: dict[str, object],
-        read_history=None, entrypoint="Strategy",
+        self,
+        source: str,
+        *,
+        context: dict[str, object],
+        state: dict[str, object],
+        read_history=None,
+        operation="invoke",
     ) -> ProgramResult:
         return self._invoke(
-            source, context=context, state=state, operation="invoke",
-            entrypoint=entrypoint, read_history=read_history,
+            source,
+            context=context,
+            state=state,
+            operation=operation,
+            read_history=read_history,
         )
 
     def _invoke(
-        self, source, *, context, state, operation, entrypoint, read_history,
+        self,
+        source,
+        *,
+        context,
+        state,
+        operation,
+        read_history,
+        execution=None,
+        initialized=False,
+        checkpoint=True,
     ) -> ProgramResult:
         session = context.get("session")
         try:
             if not isinstance(source, str) or not source or len(source.encode()) > SOURCE_BYTES:
                 raise ValueError("Program source must contain at most 65536 UTF-8 bytes")
-            if entrypoint not in {"Strategy", "UniverseSelection", "Alpha",
-                                  "PortfolioConstruction", "RiskManagement"}:
-                raise ValueError("Unknown strategy entrypoint")
             if type(state) is not dict:
                 raise ValueError("Program state must be an explicit JSON object")
             encode_program_json(state, STATE_BYTES, "state")
-            payload = encode_program_json({
-                "source": source, "context": context, "state": state,
-                "entrypoint": entrypoint, "operation": operation,
-            }, INPUT_BYTES, "input")
+            decode_state(state)
+            payload = encode_program_json(
+                {
+                    "source": None if initialized else source,
+                    "context": context,
+                    "state": None if initialized else state,
+                    "operation": operation,
+                    "checkpoint": checkpoint,
+                },
+                INPUT_BYTES,
+                "input",
+            )
             history_reads = []
 
             def observed_read(raw):
@@ -209,10 +259,13 @@ class PythonStrategyRuntime:
 
             clock_time_ns = (
                 int(datetime.fromisoformat(session).replace(hour=7, tzinfo=UTC).timestamp())
-                * 1_000_000_000 if session is not None else 0
+                * 1_000_000_000
+                if session is not None
+                else 0
             )
-            raw = self._execution.invoke(
-                payload, clock_time_ns=clock_time_ns,
+            raw = (execution or self._execution).invoke(
+                payload,
+                clock_time_ns=clock_time_ns,
                 read_request=observed_read if read_history else None,
             )
             result = json.loads(raw, object_pairs_hook=_unique_object)
@@ -221,38 +274,94 @@ class PythonStrategyRuntime:
                 raise ValueError("Program returned an invalid response")
             if not result["ok"]:
                 error = result.get("error")
-                if (set(result) != {"ok", "error"} or type(error) is not dict
-                        or set(error) != {"type", "message", "line"}
-                        or type(error["type"]) is not str or len(error["type"]) > 256
-                        or type(error["message"]) is not str or len(error["message"]) > 4096
-                        or (error["line"] is not None and (
-                            type(error["line"]) is not int or error["line"] < 1
-                        ))):
+                if (
+                    set(result) != {"ok", "error"}
+                    or type(error) is not dict
+                    or set(error) != {"type", "message", "line"}
+                    or type(error["type"]) is not str
+                    or len(error["type"]) > 256
+                    or type(error["message"]) is not str
+                    or len(error["message"]) > 4096
+                    or (
+                        error["line"] is not None
+                        and (type(error["line"]) is not int or error["line"] < 1)
+                    )
+                ):
                     raise ValueError("Program returned an invalid error response")
                 raise StrategyProgramError(
-                    error["message"], source=source, session=session,
-                    line=error["line"], error_type=error["type"],
+                    error["message"],
+                    source=source,
+                    session=session,
+                    line=error["line"],
+                    error_type=error["type"],
                 )
             if set(result) != {"ok", "result", "diagnostics"}:
                 raise ValueError("Program returned an invalid response")
             diagnostics = result["diagnostics"]
-            if (type(diagnostics) is not str
-                    or len(diagnostics.encode()) > DIAGNOSTIC_BYTES):
+            if type(diagnostics) is not str or len(diagnostics.encode()) > DIAGNOSTIC_BYTES:
                 raise ValueError("Program diagnostics must be a string of at most 65536 bytes")
             returned = result["result"]
             if type(returned) is not dict or set(returned) != {"output", "state"}:
                 raise ValueError("Program must return exactly output and state")
+            if not checkpoint and returned["state"] is None:
+                returned["state"] = state
             if type(returned["state"]) is not dict:
                 raise ValueError("Program must return an explicit JSON object state")
             encode_program_json(returned["state"], STATE_BYTES, "state")
-            return ProgramResult(returned["output"], returned["state"], diagnostics,
-                                 tuple(history_reads))
+            decode_state(returned["state"])
+            return ProgramResult(
+                returned["output"], returned["state"], diagnostics, tuple(history_reads)
+            )
         except StrategyProgramError:
             raise
         except (ValueError, KeyError, TypeError, RecursionError, UnicodeError) as error:
-            raise StrategyProgramError(str(error), source=source, session=session,
-                                       error_type=type(error).__name__) from error
+            raise StrategyProgramError(
+                str(error), source=source, session=session, error_type=type(error).__name__
+            ) from error
 
+
+class PythonProgramSession:
+    """A source and mutable state loaded once in one private guest heap."""
+
+    def __init__(self, runtime, source):
+        self.runtime, self.source = runtime, source
+        self.execution = runtime._execution.open_session()
+        self.initialized = False
+
+    def invoke(
+        self,
+        *,
+        context,
+        state,
+        read_history=None,
+        checkpoint=True,
+        operation="invoke",
+    ):
+        try:
+            result = self.runtime._invoke(
+                self.source,
+                context=context,
+                state=state,
+                operation=operation,
+                read_history=read_history,
+                execution=self.execution,
+                initialized=self.initialized,
+                checkpoint=checkpoint,
+            )
+            self.initialized = True
+            return result
+        except BaseException:
+            self.close()
+            raise
+
+    def close(self):
+        self.execution.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_error):
+        self.close()
 
 
 @lru_cache(maxsize=1)

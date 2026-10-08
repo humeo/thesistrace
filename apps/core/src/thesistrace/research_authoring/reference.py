@@ -42,14 +42,26 @@ AUTHORING_GUIDE = AuthoringGuide(
         "and follow opaque cursors with unchanged filters. Research continues after disconnect.",
     ),
     topics=(
-        AuthoringTopicSummary(topic="workflow", title="Research workflow",
-                              summary="Choose research, submit, recover and read results."),
-        AuthoringTopicSummary(topic="formula", title="Alpha Formula language",
-                              summary="Allowed syntax, operators, types and context restrictions."),
-        AuthoringTopicSummary(topic="python_sdk", title="Python strategy SDK",
-                              summary="Public classes, methods, observations and current limits."),
-        AuthoringTopicSummary(topic="examples", title="Executable examples",
-                              summary="Formula and Direct/Framework source templates."),
+        AuthoringTopicSummary(
+            topic="workflow",
+            title="Research workflow",
+            summary="Choose research, submit, recover and read results.",
+        ),
+        AuthoringTopicSummary(
+            topic="formula",
+            title="Alpha Formula language",
+            summary="Allowed syntax, operators, types and context restrictions.",
+        ),
+        AuthoringTopicSummary(
+            topic="python_sdk",
+            title="Python strategy SDK",
+            summary="Public classes, methods, observations and current limits.",
+        ),
+        AuthoringTopicSummary(
+            topic="examples",
+            title="Executable examples",
+            summary="Formula and Direct/Framework source templates.",
+        ),
     ),
 )
 
@@ -57,7 +69,8 @@ AUTHORING_GUIDE = AuthoringGuide(
 def _workflow_entries(constraints: ResearchAuthoringConstraints):
     return (
         AuthoringReferenceEntry(
-            symbol="research_kinds", description="Choose the research that answers the question.",
+            symbol="research_kinds",
+            description="Choose the research that answers the question.",
             notes=(
                 "Factor Evaluation evaluates a Formula's predictive scores. Strategy Backtest "
                 "simulates a long-only account, costs and execution. Framework can use builtin "
@@ -68,10 +81,12 @@ def _workflow_entries(constraints: ResearchAuthoringConstraints):
             constraints=constraints.model_dump(mode="json"),
         ),
         AuthoringReferenceEntry(
-            symbol="submission", description="Validate and admit a complete research question.",
+            symbol="submission",
+            description="Validate and admit a complete research question.",
             notes=(
                 "Use diagnose_research_spec(spec) before a new or edited submission. It checks "
-                "current data, Formula dependencies, execution budgets and Python class loading. "
+                "current data, Formula dependencies, execution budgets and Python "
+                "function loading. "
                 "It does not reserve capacity, create a Run or prove every Python branch works. "
                 "Submission independently revalidates against current conditions.",
                 "Diagnostics identify field, code, message and source range or Python line when "
@@ -86,7 +101,8 @@ def _workflow_entries(constraints: ResearchAuthoringConstraints):
             ),
         ),
         AuthoringReferenceEntry(
-            symbol="batches", description="Compare ordered child ResearchRuns on shared data.",
+            symbol="batches",
+            description="Compare ordered child ResearchRuns on shared data.",
             notes=(
                 "submit_research_batch admits ordered item_keys atomically under a common "
                 "period, universe, neutralization and data generation. The platform owns the "
@@ -98,7 +114,8 @@ def _workflow_entries(constraints: ResearchAuthoringConstraints):
             ),
         ),
         AuthoringReferenceEntry(
-            symbol="results", description="Read bounded authoritative results and resume safely.",
+            symbol="results",
+            description="Read bounded authoritative results and resume safely.",
             notes=(
                 "get_research_run returns status, normalized inputs and available sections. "
                 "After success, get_research_run_result reads a chosen section. Follow "
@@ -119,7 +136,8 @@ def _workflow_entries(constraints: ResearchAuthoringConstraints):
             ),
         ),
         AuthoringReferenceEntry(
-            symbol="daily_tracks", description="Continue a succeeded Strategy Backtest.",
+            symbol="daily_tracks",
+            description="Continue a succeeded Strategy Backtest.",
             notes=(
                 "start_daily_track requires a succeeded Strategy Run; reuse its existing Track. "
                 "get_daily_track returns lifecycle and current action eligibility. View reloads "
@@ -203,75 +221,100 @@ def _formula_entries(constraints: ResearchAuthoringConstraints):
 
 
 def _examples(constraints: ResearchAuthoringConstraints):
-    examples = [AuthoringExample(
+    examples = [("direct", AuthoringExample(
         title="Direct strategy", language="python",
         source=constraints.python_program.source_template,
-        entrypoint="Strategy",
-    )]
-    bases = ("UniverseSelection", "Alpha", "PortfolioConstruction", "RiskManagement")
-    for stage, base in zip(constraints.framework.stages, bases, strict=True):
-        examples.append(AuthoringExample(
-            title=stage.stage, language="python", source=stage.source_template, entrypoint=base,
-        ))
+        entrypoint="compute",
+    ))]
+    for stage in constraints.framework.stages:
+        examples.append((stage.stage, AuthoringExample(
+            title=stage.stage, language="python", source=stage.source_template,
+            entrypoint="compute" if stage.stage == "alpha" else "decide",
+        )))
     examples.extend((
-        AuthoringExample(title="Momentum Alpha", language="formula", context="signal",
-                         source="rank(pct_change(close, 20))"),
-        AuthoringExample(title="Common daily exposure", language="formula", context="exposure",
-                         source="if_else(universe_return() > 0, 1, 0.3)"),
+        ("signal", AuthoringExample(title="Momentum Alpha", language="formula", context="signal",
+                                   source="rank(pct_change(close, 20))")),
+        ("exposure", AuthoringExample(
+            title="Common daily exposure", language="formula", context="exposure",
+            source="if_else(universe_return() > 0, 1, 0.3)",
+        )),
     ))
     return tuple(AuthoringReferenceEntry(
-        symbol=example.entrypoint or example.context, description=example.title,
+        symbol=symbol, description=example.title,
         examples=(example,),
         notes=("An executable authoring example, not a claim about profitability. "
                "Check current data readiness and diagnose your complete configuration.",),
-    ) for example in examples)
+    ) for symbol, example in examples)
 
 
 def authoring_reference(
-    query: AuthoringReferenceQuery, constraints: ResearchAuthoringConstraints,
+    query: AuthoringReferenceQuery,
+    constraints: ResearchAuthoringConstraints,
 ) -> AuthoringReference:
     overview = AUTHORING_GUIDE.steps
     if query.topic == "workflow":
         entries = _workflow_entries(constraints)
     elif query.topic == "formula":
         entries = _formula_entries(constraints)
-        overview = ("Read syntax and contexts, then query the current field/function catalog. "
-                    "Alpha Formulae are compiled expressions; Python strategies use "
-                    "a separate SDK.",)
+        overview = (
+            "Read syntax and contexts, then query the current field/function catalog. "
+            "Alpha Formulae are compiled expressions; Python strategies use "
+            "a separate SDK.",
+        )
     elif query.topic == "examples":
         entries = _examples(constraints)
-        overview = ("Select an example symbol for complete source. Python examples declare the "
-                    "required entrypoint; Formula examples declare signal/exposure context.",)
+        overview = (
+            "Select an example symbol for complete source. Python examples declare the "
+            "required entrypoint; Formula examples declare signal/exposure context.",
+        )
     else:
         limits = constraints.python_program.model_dump(mode="json", exclude={"source_template"})
-        limits.update({
-            "fuel": FUEL, "maximum_json_depth": MAX_JSON_DEPTH,
-            "maximum_history_cells_per_request": HISTORY_CELLS,
-            "maximum_history_cells_per_invocation": HISTORY_TOTAL_CELLS,
-            "maximum_history_response_bytes_per_request": (
-                constraints.python_program.maximum_input_bytes
+        limits.update(
+            {
+                "fuel": FUEL,
+                "maximum_json_depth": MAX_JSON_DEPTH,
+                "maximum_history_cells_per_request": HISTORY_CELLS,
+                "maximum_history_cells_per_invocation": HISTORY_TOTAL_CELLS,
+                "maximum_history_response_bytes_per_request": (HISTORY_RESPONSE_BYTES),
+                "maximum_history_response_bytes_per_invocation": HISTORY_RESPONSE_BYTES,
+                "maximum_active_signals": constraints.framework.maximum_active_signals,
+                "signal_validity_sessions": (
+                    constraints.framework.signal_validity_sessions.model_dump()
+                ),
+            }
+        )
+        entries = (
+            *sdk_reference_entries(),
+            AuthoringReferenceEntry(
+                symbol="limits",
+                description="Current Python environment and bounded execution limits.",
+                constraints=limits,
+                notes=(
+                    "Only the listed installed modules are available; there is no package "
+                    "installation, filesystem or network access. State accepts JSON "
+                    "containers and bounded numeric arrays, with "
+                    "string object keys; integers must fit ±(2**53 - 1). "
+                    "Date/time is fixed to this Session's 15:00 UTC+08:00, monotonic clocks are "
+                    "zero. Use data.rng addressed by date and purpose for "
+                    "partition-independent randomness. No sleeping.",
+                ),
             ),
-            "maximum_history_response_bytes_per_invocation": HISTORY_RESPONSE_BYTES,
-            "maximum_active_signals": constraints.framework.maximum_active_signals,
-            "signal_validity_sessions": constraints.framework.signal_validity_sessions.model_dump(),
-        })
-        entries = (*sdk_reference_entries(), AuthoringReferenceEntry(
-            symbol="limits", description="Current Python environment and bounded execution limits.",
-            constraints=limits,
-            notes=("Only the listed installed modules are available; there is no package "
-                   "installation, filesystem or network access. State must be finite JSON with "
-                   "string object keys; integers must fit ±(2**53 - 1). "
-                   "Date/time is fixed to this Session's 15:00 UTC+08:00, monotonic clocks are "
-                   "zero, and random input is deterministic for the invocation. No sleeping.",),
-        ))
+        )
         overview = SDK_OVERVIEW
     entry = next((entry for entry in entries if entry.symbol == query.symbol), None)
     result = AuthoringReference(
         topic=query.topic,
         title=next(item.title for item in AUTHORING_GUIDE.topics if item.topic == query.topic),
-        overview=overview, found=query.symbol is None or entry is not None,
-        symbols=(tuple(AuthoringSymbolSummary(symbol=item.symbol, description=item.description)
-                       for item in entries) if entry is None else ()),
+        overview=overview,
+        found=query.symbol is None or entry is not None,
+        symbols=(
+            tuple(
+                AuthoringSymbolSummary(symbol=item.symbol, description=item.description)
+                for item in entries
+            )
+            if entry is None
+            else ()
+        ),
         entry=entry,
     )
     # Fixed topics and individual symbols keep every read bounded; never silently truncate docs.

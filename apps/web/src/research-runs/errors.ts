@@ -2,7 +2,7 @@ import { z } from "zod";
 import { i18n } from "../i18n";
 import { formatNumber } from "../i18n/format";
 
-export type RunError = { code: "loadError" | "runNotFound" | "runForbidden" | "trackingError" | "trackingExists" | "trackingResult" | "trackingNotCompleted" | "trackingStrategy" | "trackingRequestConflict" }
+export type RunError = { code: "loadError" | "runNotFound" | "runForbidden" | "trackingError" | "trackingExists" | "trackingResult" | "trackingNotCompleted" | "trackingStrategy" | "trackingProgram" | "trackingRequestConflict" }
   | { code: "trackingLimit"; limit: number };
 export type CancelError = "cancelError" | "cancelBatch" | "cancelConflict" | "cancelState";
 export type HttpActionError = { status: number | null };
@@ -19,6 +19,7 @@ export async function readTrackingError(response: Response): Promise<RunError> {
     case "TRACKING_RESULT_UNAVAILABLE": return { code: "trackingResult" };
     case "TRACKING_RUN_NOT_SUCCEEDED": return { code: "trackingNotCompleted" };
     case "TRACKING_STRATEGY_REQUIRED": return { code: "trackingStrategy" };
+    case "TRACKING_PROGRAM_ENVIRONMENT_OBSOLETE": return { code: "trackingProgram" };
     case "TRACKING_REQUEST_CONFLICT": return { code: "trackingRequestConflict" };
     default: return { code: "trackingError" };
   }

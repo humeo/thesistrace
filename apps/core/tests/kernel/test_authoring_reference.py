@@ -9,6 +9,7 @@ import pytest
 from thesistrace.alpha_language import alpha_language
 from thesistrace.research_authoring import ResearchAuthoringService
 from thesistrace.research_history import HistoryWindow
+from thesistrace.research_kernel.program_wire import array_from_wire, array_to_wire
 from thesistrace.research_kernel.strategy_decision import program_target
 from thesistrace.research_kernel.strategy_program_runtime import get_strategy_runtime
 
@@ -69,9 +70,14 @@ def test_documented_examples_execute_in_the_real_guest_and_use_legal_decisions()
     service = ResearchAuthoringService()
     runtime = get_strategy_runtime()
     context = {
-        "session": "2026-09-01", "completed_sessions": 1,
-        "account": {"positions": [], "cash_cny": "100000",
-                    "post_open_net_nav_cny": "100000", "close_risk_nav_cny": "100000"},
+        "session": "2026-09-01",
+        "completed_sessions": 1,
+        "account": {
+            "positions": [],
+            "cash_cny": "100000",
+            "post_open_net_nav_cny": "100000",
+            "close_risk_nav_cny": "100000",
+        },
         "candidates": [{"instrument_id": "equity:600001.SH", "board": "main", "industry": None}],
         "framework": {"signals": [{"instrument_id": "equity:600001.SH", "value": 1.0}]},
     }
@@ -82,21 +88,55 @@ def test_documented_examples_execute_in_the_real_guest_and_use_legal_decisions()
                 if example.language == "formula":
                     assert alpha_language.diagnose(example.source, context=example.context).valid
                     continue
-                runtime.validate(example.source, entrypoint=example.entrypoint)
-                result = runtime.invoke(
-                    example.source, entrypoint=example.entrypoint, state={}, context=context,
-                    read_history=lambda _request: HistoryWindow(
-                        ("2026-08-31", "2026-09-01"), ("equity:600001.SH",),
-                        np.array([[10.0, 11.0]]),
-                    ),
-                )
-                if example.entrypoint in {"Strategy", "PortfolioConstruction"}:
-                    program_target(result.output, context, "a" * 64)
+                assert example.entrypoint in {"compute", "decide"}
+                entries = runtime.validate(example.source)
+                assert entries[example.entrypoint]
+                values_context = dict(context)
+                if entries["compute"]:
+                    block_context = {
+                        **context,
+                        "block": {
+                            "sessions": [context["session"]],
+                            "instruments": ["equity:600001.SH"],
+                            "session_index": [0],
+                            "eligible": array_to_wire(np.array([[True]])),
+                        },
+                    }
+                    result = runtime.invoke(
+                        example.source,
+                        operation="compute",
+                        state={},
+                        context=block_context,
+                        read_history=lambda _: HistoryWindow(
+                            ("2026-08-31", "2026-09-01"),
+                            ("equity:600001.SH",),
+                            np.array([[10.0, 11.0]]),
+                        ),
+                    )
+                    if entries["decide"]:
+                        values_context["value_instruments"] = ["equity:600001.SH"]
+                        values_context["values"] = {
+                            name: array_to_wire(array_from_wire(value)[:, -1])
+                            for name, value in result.output["values"].items()
+                        }
+                if entries["decide"]:
+                    result = runtime.invoke(
+                        example.source,
+                        state={},
+                        context=values_context,
+                        read_history=lambda _request: HistoryWindow(
+                            ("2026-08-31", "2026-09-01"),
+                            ("equity:600001.SH",),
+                            np.array([[10.0, 11.0]]),
+                        ),
+                    )
+                    if result.output and "allocation" in result.output:
+                        program_target(result.output, context, "a" * 64)
                 observed[symbol.symbol] = result.output
-    assert observed["Strategy.increase_to_weights"]["allocation"]["mode"] == "increase"
-    assert observed["Strategy.reduce_exposure"]["allocation"]["mode"] == "reduce"
-    assert observed["Strategy.with_limits"]["maximum_stock_exposure"] == 0.5
-    assert observed["RiskManagement.replace"]["target"]["allocation"]["instrument_ids"] == []
+    assert observed["increase_to_weights"]["allocation"]["mode"] == "increase"
+    assert observed["reduce_exposure"]["allocation"]["mode"] == "reduce"
+    assert observed["with_limits"]["maximum_stock_exposure"] == 0.5
+    assert observed["replace"]["target"]["allocation"]["instrument_ids"] == []
 
 
 def test_reference_results_do_not_share_mutable_document_state():

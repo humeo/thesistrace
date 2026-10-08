@@ -116,14 +116,10 @@ def test_maximum_framework_batch_reaches_authorization_over_chunked_real_http(tm
     app = _app(settings, issuer)
     constraints = ResearchAuthoringService().constraints()
     modules = {}
-    entrypoints = {
-        "universe_selection": "UniverseSelection", "alpha": "Alpha",
-        "portfolio_construction": "PortfolioConstruction", "risk_management": "RiskManagement",
-    }
     for stage in constraints.framework.stages:
         prefix = stage.source_template + "#"
         source = prefix + "\x01" * (constraints.python_program.maximum_source_bytes - len(prefix))
-        get_strategy_runtime().validate(source, entrypoint=entrypoints[stage.stage])
+        get_strategy_runtime().validate(source)
         modules[stage.stage] = {"kind": "python", "program": {"source": source}}
     batch = {
         "batch_kind": "strategy_sweep", "request_id": "legal-chunked-framework-batch",

@@ -10,9 +10,11 @@ from dataclasses import dataclass
 
 import numpy as np
 
-MAX_BYTES = 4 * 1024 * 1024
-MAX_CELLS = 262_144
-MAX_SESSIONS = 253
+# The wire accommodates the largest current compute block. The host capability
+# applies the smaller decide budgets before materializing or encoding a read.
+MAX_BYTES = 32 * 1024 * 1024
+MAX_CELLS = 2_097_152
+MAX_SESSIONS = 380
 
 
 @dataclass(frozen=True)

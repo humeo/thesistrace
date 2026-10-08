@@ -16,8 +16,8 @@ export function ResearchFieldBrowser({ catalog, onInsert, python = false }: {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const visible = catalog.fields.filter((field) => matchesResearchField(field, query));
   const selected = visible.find((field) => field.field_id === selectedId) ?? visible[0];
-  const expression = (field: AlphaCatalog["fields"][number]) => python
-    ? `data.history(${JSON.stringify(field.field_id)}, 10)` : field.identifier;
+  const expression = (field: AlphaCatalog["fields"][number], batch = true) => python
+    ? `data.history(${JSON.stringify(field.field_id)}, ${batch ? "lookback=10" : "10"})` : field.identifier;
 
   return (
     <div className="grid min-h-0 gap-4">
@@ -32,7 +32,7 @@ export function ResearchFieldBrowser({ catalog, onInsert, python = false }: {
             aria-pressed={selected?.field_id === field.field_id}
             className="grid min-h-11 w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-md px-3 py-2 text-left text-sm text-foreground hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring aria-pressed:bg-muted"
             onClick={() => setSelectedId(field.field_id)}
-            onDoubleClick={() => onInsert(expression(field))}>
+            onDoubleClick={python ? undefined : () => onInsert(expression(field))}>
             <span className="truncate">{fieldDisplay(field.field_id).name}</span>
             <code className="truncate text-xs text-muted-foreground">{field.identifier}</code>
           </Button>
@@ -46,8 +46,16 @@ export function ResearchFieldBrowser({ catalog, onInsert, python = false }: {
             <code className="text-xs text-muted-foreground">{selected.identifier}</code>
           </div>
           <p className="m-0 text-muted-foreground">{fieldDisplay(selected.field_id).description}</p>
-          {python && <code className="break-all text-xs">{expression(selected)}</code>}
-          <Button type="button" onClick={() => onInsert(expression(selected))}>{t(python ? "insertPythonField" : "insertField")}</Button>
+          {python ? <div className="grid gap-3">
+            <div className="grid gap-2">
+              <code className="break-all text-xs">{expression(selected)}</code>
+              <Button type="button" onClick={() => onInsert(expression(selected))}>{t("insertComputeField")}</Button>
+            </div>
+            <div className="grid gap-2">
+              <code className="break-all text-xs">{expression(selected, false)}</code>
+              <Button type="button" onClick={() => onInsert(expression(selected, false))}>{t("insertDecideField")}</Button>
+            </div>
+          </div> : <Button type="button" onClick={() => onInsert(expression(selected))}>{t("insertField")}</Button>}
         </section>
       ) : null}
     </div>

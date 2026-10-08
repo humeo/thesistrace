@@ -337,30 +337,28 @@ def test_additions_before_first_trigger_use_updated_cost_and_freeze_the_larger_b
     definition["strategy"]["environment"] = get_strategy_runtime().identity()
     definition["costs"] = dict.fromkeys(definition["costs"], "0")
     definition["strategy"]["modules"]["portfolio_construction"] = python_module(
-        """
-from quantgrove import Strategy, Decision
+        """from quantgrove import Decision
 
 SETTINGS = {}
 
 
-class Fixture(Strategy):
-    def on_close(self, data, account):
-        index = data.completed_sessions
-        output = None
-        if index <= 2:
-            output = {
-                "reason": "ordinary_addition",
-                "position_limits": {},
-                "allocation": {
-                    "mode": "rebalance",
-                    "instrument_ids": ["equity:600001.SH"],
-                    "relative_weights": {"equity:600001.SH": "1"},
-                    "exposure": 0.5 if index == 1 else 1.0,
-                },
-            }
-        self.state = {}
-        decision = output
-        return None if decision is None else Decision(decision)
+def decide(data, account, state):
+    index = data.completed_sessions
+    output = None
+    if index <= 2:
+        output = {
+            "reason": "ordinary_addition",
+            "position_limits": {},
+            "allocation": {
+                "mode": "rebalance",
+                "instrument_ids": ["equity:600001.SH"],
+                "relative_weights": {"equity:600001.SH": "1"},
+                "exposure": 0.5 if index == 1 else 1.0,
+            },
+        }
+    state = {}
+    decision = output
+    return None if decision is None else Decision(decision)
 """,
         stage="portfolio_construction",
     )
@@ -546,36 +544,34 @@ def test_stricter_portfolio_reduction_satisfies_take_profit_without_an_extra_sal
     definition["strategy"]["environment"] = get_strategy_runtime().identity()
     definition["costs"] = dict.fromkeys(definition["costs"], "0")
     definition["strategy"]["modules"]["portfolio_construction"] = python_module(
-        """
-from quantgrove import Strategy, Decision
+        """from quantgrove import Decision
 
 SETTINGS = {}
 
 
-class Fixture(Strategy):
-    def on_close(self, data, account):
-        index = data.completed_sessions
-        output = None
-        if index == 1:
-            output = {
-                "reason": "initial",
-                "position_limits": {},
-                "allocation": {
-                    "mode": "rebalance",
-                    "instrument_ids": ["equity:600001.SH"],
-                    "relative_weights": {"equity:600001.SH": "1"},
-                    "exposure": 1.0,
-                },
-            }
-        elif index == 2:
-            output = {
-                "reason": "ordinary_reduction",
-                "allocation": None,
-                "position_limits": {"equity:600001.SH": 200},
-            }
-        self.state = {}
-        decision = output
-        return None if decision is None else Decision(decision)
+def decide(data, account, state):
+    index = data.completed_sessions
+    output = None
+    if index == 1:
+        output = {
+            "reason": "initial",
+            "position_limits": {},
+            "allocation": {
+                "mode": "rebalance",
+                "instrument_ids": ["equity:600001.SH"],
+                "relative_weights": {"equity:600001.SH": "1"},
+                "exposure": 1.0,
+            },
+        }
+    elif index == 2:
+        output = {
+            "reason": "ordinary_reduction",
+            "allocation": None,
+            "position_limits": {"equity:600001.SH": 200},
+        }
+    state = {}
+    decision = output
+    return None if decision is None else Decision(decision)
 """,
         stage="portfolio_construction",
     )

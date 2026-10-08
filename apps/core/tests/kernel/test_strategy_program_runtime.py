@@ -14,8 +14,9 @@ pytestmark = pytest.mark.bounded_process
 
 def strategy(body):
     return (
-        "from quantgrove import Strategy\nclass Test(Strategy):\n"
-        "    def on_close(self, data, account):\n" + textwrap.indent(body, "        ")
+        "from quantgrove import target_weights, increase_to_weights, reduce_exposure, "
+        "with_limits, limit_positions, limit_exposure\n"
+        "def decide(data, account, state):\n" + textwrap.indent(body, "    ")
     )
 
 
@@ -26,10 +27,10 @@ def runtime():
 
 def test_python_strategy_restores_only_explicit_state_in_a_fresh_guest(runtime):
     source = strategy(
-        "self.counter = getattr(self, 'counter', 0) + 1\n"
-        "self.state['days'] = self.state.get('days', 0) + 1\n"
-        "self.state['counter'] = self.counter\n"
-        "self.state['session'] = data.session"
+        "global counter\ncounter = globals().get('counter', 0) + 1\n"
+        "state['days'] = state.get('days', 0) + 1\n"
+        "state['counter'] = counter\n"
+        "state['session'] = data.session"
     )
     first = runtime.invoke(source, context={"session": "2026-08-03"}, state={})
     second = runtime.invoke(source, context={"session": "2026-08-04"}, state=first.state)
@@ -42,12 +43,14 @@ def test_prepared_library_never_reuses_mutated_modules_or_builtins(runtime):
         "import math, builtins\n"
         "math.sqrt = lambda value: -999\n"
         "builtins.abs = lambda value: -999\n"
-        "self.state['explicit'] = 1"
+        "state['explicit'] = 1"
     )
     state = runtime.invoke(poisoning, context={}, state={}).state
-    result = runtime.invoke(strategy(
-        "import math\nself.state['sqrt'] = math.sqrt(9)\nself.state['abs'] = abs(-2)"
-    ), context={}, state=state)
+    result = runtime.invoke(
+        strategy("import math\nstate['sqrt'] = math.sqrt(9)\nstate['abs'] = abs(-2)"),
+        context={},
+        state=state,
+    )
     assert result.state == {"explicit": 1, "sqrt": 3.0, "abs": 2}
 
 
@@ -75,7 +78,7 @@ def test_trusted_bootstrap_does_not_consume_the_user_program_wall_budget(monkeyp
             pass
 
     monkeypatch.setattr(execution.threading, "Timer", StartupPauseTimer)
-    result = runtime.invoke(strategy("self.state['ok'] = True"), context={}, state={})
+    result = runtime.invoke(strategy("state['ok'] = True"), context={}, state={})
     assert result.state == {"ok": True}
 
 
@@ -93,7 +96,7 @@ def test_bootstrap_deadline_is_bounded_and_does_not_poison_next_invocation(runti
 def test_simulated_clock_and_randomness_repeat_in_another_runtime(runtime):
     source = strategy(
         "import datetime, random, time\n"
-        "self.state.update(time=datetime.datetime.now(datetime.UTC).isoformat(),\n"
+        "state.update(time=datetime.datetime.now(datetime.UTC).isoformat(),\n"
         "                  monotonic=time.monotonic(),\n"
         "                  random=[random.random(), random.SystemRandom().randint(1, 1000000)])"
     )
@@ -104,19 +107,18 @@ def test_simulated_clock_and_randomness_repeat_in_another_runtime(runtime):
     assert first.state["monotonic"] == 0
 
 
-def test_random_input_preserves_the_pinned_eager_runtime_sequence(runtime):
-    source = strategy(
-        "import os\nself.state['before'] = os.urandom(16).hex()\n"
-        "import random\n"
-        "self.state['draws'] = [random.random(), random.SystemRandom().randint(1, 1000000)]\n"
-        "self.state['after'] = os.urandom(16).hex()"
+def test_date_addressed_randomness_survives_partition_and_recovery(runtime):
+    source = strategy("state['draw'] = data.rng('selection').integers(1000000).item()")
+    context = {"session": "2026-08-03", "random_seed": "source-identity"}
+    expected = runtime.invoke(source, context=context, state={}).state
+    with runtime.open_session(source) as execution:
+        execution.invoke(context={**context, "session": "2026-08-02"}, state={})
+        assert execution.invoke(context=context, state={}).state == expected
+    assert runtime.invoke(source, context=context, state=expected).state == expected
+    assert (
+        runtime.invoke(source, context={**context, "session": "2026-08-04"}, state={}).state
+        != expected
     )
-    # Recorded from the pinned pre-optimization runtime for this exact invocation.
-    assert runtime.invoke(source, context={"session": "2026-08-03"}, state={}).state == {
-        "before": "b40dfaa953cc2361728d7dcde8789ad5",
-        "draws": [0.8702406777544645, 339109],
-        "after": "8de1b4605e7992b83d0a16d3f3d7bee4",
-    }
 
 
 def test_actual_guest_cannot_read_host_resources_or_open_network(runtime, tmp_path, monkeypatch):
@@ -130,26 +132,26 @@ def test_actual_guest_cannot_read_host_resources_or_open_network(runtime, tmp_pa
         + """
 for path in paths:
     try:
-        self.state[path] = open(path).read()
+        state[path] = open(path).read()
     except OSError:
-        self.state[path] = "denied"
+        state[path] = "denied"
 for name in ("socket", "subprocess", "ctypes"):
     try:
         __import__(name)
-        self.state[name] = "available"
+        state[name] = "available"
     except ImportError:
-        self.state[name] = "unavailable"
+        state[name] = "unavailable"
 try:
     open(paths[0], "w").write("changed")
-    self.state["write"] = "allowed"
+    state["write"] = "allowed"
 except OSError:
-    self.state["write"] = "denied"
+    state["write"] = "denied"
 try:
     os.write(3, b'thesistrace-python-ready/v1')
-    self.state["restart_deadline"] = "allowed"
+    state["restart_deadline"] = "allowed"
 except OSError:
-    self.state["restart_deadline"] = "denied"
-self.state["environment"] = dict(os.environ)
+    state["restart_deadline"] = "denied"
+state["environment"] = dict(os.environ)
 """
     )
     result = runtime.invoke(source, context={}, state={})
@@ -177,19 +179,21 @@ def test_account_is_read_only_and_host_values_are_unchanged(runtime, body):
         runtime.invoke(strategy(body), context=context, state={})
     assert context == original
     assert caught.value.session == "2026-08-03"
-    assert caught.value.line == 4
+    assert caught.value.line == 3
 
 
 @pytest.mark.parametrize(
     "body",
     [
         "while True:\n    pass",
-        ("import os\nwhile True:\n    try: os.write(3, b'thesistrace-python-ready/v1')\n"
-         "    except OSError: pass"),
+        (
+            "import os\nwhile True:\n    try: os.write(3, b'thesistrace-python-ready/v1')\n"
+            "    except OSError: pass"
+        ),
         "bytearray(512 * 1024 * 1024)",
         "__import__('os').write(1, b'x' * (2 * 1024 * 1024))",
         "__import__('time').sleep(3600)",
-        "self.state['large'] = 'x' * (300 * 1024)",
+        "state['large'] = 'x' * (300 * 1024)",
     ],
 )
 def test_resource_failure_is_bounded_and_next_guest_still_completes(runtime, body):
@@ -197,7 +201,7 @@ def test_resource_failure_is_bounded_and_next_guest_still_completes(runtime, bod
     with pytest.raises(StrategyProgramError):
         runtime.invoke(strategy(body), context={}, state={})
     assert time.monotonic() - started < 15
-    result = runtime.invoke(strategy("self.state['ok'] = True"), context={}, state={})
+    result = runtime.invoke(strategy("state['ok'] = True"), context={}, state={})
     assert result.state == {"ok": True}
 
 
@@ -206,9 +210,9 @@ def test_resource_failure_is_bounded_and_next_guest_still_completes(runtime, bod
     [
         "return {}",
         "return {'output': None, 'state': {}}",
-        "self.state = None",
-        "self.state['bad'] = float('nan')",
-        "self.state['bad'] = 2**53",
+        "state['bad'] = object()",
+        "state['bad'] = float('nan')",
+        "state['bad'] = 2**53",
     ],
 )
 def test_invalid_output_never_becomes_successful_state(runtime, body):

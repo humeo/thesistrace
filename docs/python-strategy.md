@@ -1,342 +1,252 @@
-# Python strategy SDK
+# Python 策略编写指南
 
-The live **Research Authoring Reference** is available in Connections → MCP →
-Research preparation → Read the authoring reference. It reads the same contract
-as `get_authoring_reference(topic="python_sdk")`: omit `symbol` for the index,
-then select e.g. `symbol="Data.history"` for signatures, parameter constraints,
-return values and examples. Topics `workflow`, `formula` and `examples` cover the
-other authoring steps. `get_alpha_catalog(kind="fields", query="close")` finds
-currently available fields; `kind="functions"` browses Formula functions without
-paging through fields. Diagnose the complete configuration with
-`diagnose_research_spec` before submitting. These reads do not create research.
+当前协议为 `python-strategy/v5`。用户手写和其他客户端提交的程序使用同一接口：
+提交 Python 源码，再设置研究日期、股票池、资金、费用与滑点。业务参数写在源码中，
+没有额外的数据声明表。编辑器的「编写参考」可查看当前 SDK、字段约束和完整示例。
 
-The platform supplies data and the actual simulated account. Your class decides
-what should change. The platform then applies trading rules, costs and fills at
-the next research trading session's Open. A returned target is not a guaranteed
-fill. Rule configuration remains the default; Python implements custom logic.
+## 先选择需要的入口
 
-## Write one strategy class
+| 需要表达的规则 | 写什么 | 返回什么 |
+| --- | --- | --- |
+| 根据行情直接生成各日目标组合 | `compute(data, state)` | `Targets` |
+| 批量计算指标，再根据真实持仓、成交作决定 | `compute` 和 `decide(data, account, state)` | `Values`；`Decision` 或 `None` |
+| 只依赖账户事件或少量当日观察 | 只有 `decide` | `Decision` 或 `None` |
 
-```python
-from quantgrove import Strategy
+不需要继承平台类、实现回测循环、写存储代码或返回状态协议包。
+`compute` 中是普通 Python 和 NumPy，不会把代码翻译成公式。
+批量计算不需要每日 Python 回调；平台仍按日期推进共享交易模拟器。
 
-class Momentum(Strategy):
-    def on_close(self, data, account):
-        lookback = 10
-        improvement = 0.01
-        prices = data.close_prices(lookback)
-        if len(prices.sessions) < lookback:
-            return None
-        scores = {
-            stock: closes[-1] / closes[0] - 1
-            for stock, closes in prices.items()
-            if closes[0] is not None and closes[-1] is not None and closes[0] > 0
-        }
-        eligible = [stock for stock in data.candidates if stock in scores]
-        if not eligible:
-            return None
-        best = max(eligible, key=lambda stock: (scores[stock], stock))
-        held = [position["instrument_id"] for position in account.positions]
-        held_score = max((scores.get(stock, -1) for stock in held), default=-1)
-        if best not in held and (not held or scores[best] > held_score + improvement):
-            return self.target_weights({best: 1.0})
-        return None
-```
+## 一个完整的批量策略
 
-`10` and `0.01` are ordinary strategy constants. Change them or calculate them
-using ordinary Python. They are not required platform parameters. Ten observations
-cover nine adjacent trading-session intervals. This example is a template, not
-a recommendation or a platform rule.
-
-Define exactly one locally defined subclass of the required base, with a
-zero-argument constructor and `on_close(self, data, account)`. Helpers and ordinary
-imports are allowed within the installed environment. Class loading, top-level
-code and construction all execute in the isolated guest, including during Check
-configuration. Checking verifies syntax, the class and callback signature; it
-does not execute every branch or certify future data requests. Runtime failures
-include the source digest, decision date and author source line when available.
-
-## System input
-
-### Data
-
-| Access | Meaning |
-| --- | --- |
-| `data.session` | Current Close decision date, ISO string |
-| `data.completed_sessions` | Decision number since the original research start |
-| `data.candidates` | Current permitted candidate instrument IDs |
-| `data.candidate_details` | Read-only rows with instrument ID, board and industry |
-| `data.close_prices(days, instruments=None)` | Causally adjusted Close history |
-| `data.history(field_id, days, instruments=None)` | Numeric research field history |
-
-Pass `instruments` by keyword to either history method. With no instrument
-argument the scope is current candidates plus actual holdings. An explicit list
-must contain unique IDs within that scope. Field IDs come from Browse fields,
-which inserts a `data.history("price.close.adjusted", 10)` call at the editor's
-selection. No separate declaration or history-window form exists.
-
-Reads are real guest-to-host requests. `days` may be a variable or expression.
-Each read uses the Run's pinned data generation and host-owned decision date;
-the program cannot supply another as-of date or dataset. Financial values retain
-the field's disclosure-time visibility. Current and earlier published research
-sessions are available, including history before the research start or execution
-chunk. No future calendar or future universe members are supplied.
-
-The returned `History` has a read-only NumPy `array`, with instruments on rows and
-oldest-to-newest sessions on columns. `history.instruments` and `history.sessions`
-name those axes. Explicit instrument requests retain their row order; the default
-scope is sorted by instrument ID. Missing observations are `NaN` in the array.
-Use `array.copy()` for writable calculations.
-
-The keyed `values`, `history[stock]` and `history.items()` views expose tuples of
-floats or `None`, with keys in canonical instrument-ID order. They use the same
-observations as the array and only materialize tuples when accessed.
-If the generation starts too recently, fewer than `days` sessions are returned;
-the strategy decides whether to wait or use them. Reading does not shift the
-research start or create additional decisions. Unknown/unavailable fields and
-out-of-scope stocks raise a source-located error rather than receiving substitute
-data. Empty stock lists return no instrument values.
-
-For example, compute every instrument's return in one NumPy operation:
+以下示例按 60 日动量选前 30 只股票，每 5 个研究交易日提交等权目标。
+60、30、5 是作者的业务规则，不是平台固定参数。
 
 ```python
 import numpy as np
+from quantgrove import Targets
 
-history = data.close_prices(61)
-if len(history.sessions) == 61:
-    prices = history.array
-    valid = np.isfinite(prices[:, 0]) & np.isfinite(prices[:, -1]) & (prices[:, 0] > 0)
-    scores = prices[valid, -1] / prices[valid, 0] - 1
-    instruments = np.asarray(history.instruments)[valid]
+
+def compute(data, state):
+    close = data.history("price.close.adjusted", lookback=60)
+    now, before = close[:, 60:], close[:, :-60]
+    valid = data.eligible & np.isfinite(now) & np.isfinite(before) & (before > 0)
+    scores = np.full(now.shape, -np.inf)
+    np.divide(now, before, out=scores, where=valid)
+    scores -= 1
+
+    order = np.argsort(-scores, axis=0, kind="stable")[:30]
+    selected = np.zeros(scores.shape, dtype=bool)
+    np.put_along_axis(selected, order, True, axis=0)
+    selected &= valid
+
+    return Targets.equal_weight(
+        selected,
+        priority=scores,
+        update=(data.session_index % 5 == 0) & selected.any(axis=0),
+        reason="60-day momentum",
+    )
 ```
 
-The execution layer does not infer a strategy category or translate Python into
-a formula. NumPy operates on the requested, bounded window. Decisions that use
-the actual account or explicit state still run in Close order. Convert NumPy
-values to finite JSON with `tolist()` or `item()` before saving them in `self.state`.
+`axis=0` 表示在同一日期内比较不同股票，稳定排序让同分股票按规范 ID 顺序选择。
+`data.session_index` 从研究起点连续计数，不能用 `np.arange(T) % 5` 替代，
+否则每个数据块都会重新启动调仓周期。
 
-### Account
+NumPy 不是强制要求。也可以用 Python 循环构造同样的矩阵，但平台不能自动把任意
+逐元素循环变成向量化计算。以上示例同时处理股票和日期两个轴。
 
-`account` is recursively read-only. It exposes `cash_cny`, `positions`,
-`post_open_net_nav_cny`, `close_risk_nav_cny`, `fills` and `rejections`.
-Positions are actual holdings, including their `instrument_id`, execution shares,
-adjusted units and holding-cycle facts. Fills and rejections concern the current
-session. Money and exact accounting quantities retain the platform's decimal
-string representation; use `Decimal` for arithmetic. Mutating a local variable
-or constructing a decision cannot alter these authoritative account facts.
+## 批量数据的轴与缺失值
 
-## Strategy output
+设本块有 N 只股票、T 个输出日期：
 
-| Return | Meaning |
+| 属性或方法 | 含义 |
 | --- | --- |
-| `None` or bare `return` | No update; do not replay the last target |
-| `self.target_weights({stock: 0.8})` | Complete new portfolio: 80% stock, 20% cash; omitted holdings exit |
-| `self.target_weights({})` | Explicit liquidation target |
-| `self.increase_to_weights(weights)` | Only buy toward target weights; do not sell other holdings |
-| `self.reduce_exposure(0.5)` | Proportionally reduce actual holdings toward an exposure ceiling; never buy |
-| `self.limit_positions({stock: 100})` | Cap remaining execution shares of the named actual holding; leave others alone |
-| `self.limit_exposure(0.5)` | Apply a portfolio exposure cap without a new allocation |
-| `self.with_limits(decision, maximum_shares=..., maximum_exposure=...)` | Intersect caps with a decision; existing tighter caps remain |
+| `data.sessions` | T 个输出日期，按时间递增，ISO 字符串元组 |
+| `data.instruments` | N 个规范股票 ID，稳定排序；不同块的股票轴可能改变 |
+| `data.session_index` | T 个从研究起点开始的零基交易日序号，跟踪时继续累加 |
+| `data.eligible` | N×T 的只读布尔候选资格；不保证下一开盘可成交 |
+| `data.history(field_id, lookback=L)` | N×(L+T) 的只读 float64 矩阵 |
+| `data.common(name, lookback=L, industry=None)` | L+T 的公共市场时间序列 |
+| `data.rng(purpose, session=日期)` | 按源码、日期和用途定位的 NumPy 随机生成器 |
 
-Helpers construct a decision. **Only the decision returned by `on_close` is
-submitted.** Calling two helpers does not submit two orders. Portfolio weights
-must be positive and total at most one; omit zero-weight entries. Local share
-caps cannot increase a holding. Optional `reason="..."` labels the decision.
-The host validates all outputs and visible IDs independently of the SDK and
-supplies execution coordinates. Exact internal ratio strings are not an authoring
-requirement. Board lots, tradability, costs and cash can prevent full execution.
+输出块最多 128 日；L 为 0–252。64 日输出加 60 日回看需要 124 列，
+128 日输出加 60 日回看需要 188 列，这不表示输出块超限。
+历史矩阵最后 T 列严格对应 `data.sessions`，前 L 列是首个输出日前的历史位置。
+历史不足、尚未上市、缺失价格或财报值均用 NaN 表示；不足的前置位置不会伪造日期或填零。
+批量历史的日期坐标可通过 `data.history_sessions("price.close.adjusted", lookback=L)` 读取，
+与同一字段的 `history` 数组逐列对齐。不足的预热日期为 `None`；该调用复用相同的历史读取。
+对输入作修改前使用 `.copy()`。
 
-## Optional cross-session memory
+字段 ID 可从编辑器「浏览字段」查找；按入口选择「插入 compute 批量读取」或
+「插入 decide 当日读取」。数据读取可由 Python 变量动态决定。
+财务字段按每列对应日期的披露与修订可见性读取，不把批末财报回填到早期日期。
+字段、数据版本、日期范围、股票范围和读取预算由宿主独立校验。
 
-Use `self.state`, a bounded JSON object, when a strategy needs memory:
+公共输入包括 `universe_return`、`universe_advancing_fraction`、`industry_return`、
+`industry_advancing_fraction`。行业输入必须传规范 SW2021 一级行业代码。
+公共序列与公式共用聚合实现，逐日采用基础股票池和历史行业成员；
+不受 Framework 某个下游阶段缩小候选列表的影响。
+
+## 目标与不更新
+
+`Targets(weights, update=flags, priority=None, reason="...")` 的 weights 为 N×T，flags 为 T 个布尔值。
+权重必须有限、非负，每个提交日期的总权重不超过 1；剩余权重留为现金。
+没有列出的持仓退出。平台不自动归一化、裁剪或给超额权重留容差。
+`priority` 可选，为 N×T 数值矩阵，已选股票的值必须有限；数值越大，买入顺序越靠前，
+同值按规范股票 ID 排序。省略时按股票 ID 顺序买入。资金或交易单位受限时，顺序会影响
+成交，因此要复现公式的按排名选股策略，应像上例传 `priority=scores`，只匹配权重还不够。
+每日 `target_weights` 等辅助函数按传入映射的插入顺序表达同样的买入优先级。
+等权组合优先使用 `Targets.equal_weight`，平台按被选股票数构造精确份额。
+
+- `update[t] = False`：本日没有新目标，不重放上一个目标。
+- `update[t] = True` 且整列为零：明确要求清仓。
+- `update[t] = True` 且有正权重：提交新的完整组合。
+
+收盘形成目标，下一交易日开盘尝试成交。停牌、涨跌停、交易单位、现金和费用都可能
+使实际成交不同于目标。最终研究日的目标作为待执行目标保存，逐日跟踪继续处理。
+
+## 需要真实账户反馈时
+
+计算与账户决策必须分别表达。以下完整示例批量计算动量，只在每 5 日检查时，
+将当前实际持仓与当日最优股票比较；相同持仓不重复提交目标。
 
 ```python
-self.state["decisions"] = self.state.get("decisions", 0) + 1
+import numpy as np
+from quantgrove import Values, target_weights
+
+
+def compute(data, state):
+    close = data.history("price.close.adjusted", lookback=60)
+    now, before = close[:, 60:], close[:, :-60]
+    valid = data.eligible & np.isfinite(now) & np.isfinite(before) & (before > 0)
+    scores = np.full(now.shape, np.nan)
+    np.divide(now, before, out=scores, where=valid)
+    scores -= 1
+    return Values({"momentum": scores, "rebalance": data.session_index % 5 == 0})
+
+
+def decide(data, account, state):
+    if not data.values["rebalance"].item():
+        return None
+    scores = data.values["momentum"]
+    valid = np.isfinite(scores)
+    if not valid.any():
+        return None
+    best = data.instruments[int(np.argmax(np.where(valid, scores, -np.inf)))]
+    held = [position["instrument_id"] for position in account.positions]
+    if held == [best]:
+        return None
+    state["changes"] = state.get("changes", 0) + 1
+    return target_weights({best: 1.0})
 ```
 
-The class is recreated in every isolated invocation. State is restored after
-construction and before `on_close`; other instance attributes, globals and
-objects do not survive. Do not rely on `self.state` inside the constructor.
-State is separate from the account, and need not be returned explicitly.
-An exception, invalid target or resource failure commits neither new state nor
-the new decision. Each Run, Batch item and Framework module has independent
-state; DailyTrack resumes the same frozen program and accepted state.
+有 `decide` 时，`compute` 必须返回 `Values`，不能同时提交 Targets。
+Values 可包含命名的 N×T 股票矩阵或 T 元素时间向量；允许 NaN 表示缺失，禁止无穷值。
+`decide` 的 `data.values` 只有当日列，股票值按其 `data.instruments` 排列；
+该轴包含当日可见候选及实际持仓。决策实例与计算实例不共享作者对象或 ndarray 的底层缓冲。
 
-## Framework Python modules
+`decide` 中还有 `data.session`、`completed_sessions`、`candidates`、`candidate_details`，
+以及截至当前收盘的 `data.history(field_id, days, instruments=...)` / `close_prices(days)`。
+这些每日读取返回 `History`，其 `.array` 为股票×实际返回日期，`.sessions`、`.instruments`
+提供坐标；键控视图 `history[股票]` 的缺失值为 None。每日读取可能少于请求的天数。
+每日显式股票列表只能来自当前候选和持仓，不能申请未来日期。
 
-Each stage uses `on_close(data, account)` and its own base class:
+`account` 是只读的真实模拟账户，提供 `cash_cny`、`positions`、`fills`、`rejections`、
+`post_open_net_nav_cny`、`close_risk_nav_cny`。持仓包括实际股数 `execution_shares`、
+成本、收盘价格和 `holding_age`。金额和精确账务量用十进制字符串表示，算术可用 `Decimal`。
 
-| Stage | Import / inherit | Return helper |
-| --- | --- | --- |
-| Candidate selection | `UniverseSelection` | `self.select(instruments)` |
-| Scoring | `Alpha` | `self.signals({stock: score}, valid_for_sessions=1)` |
-| Portfolio construction | `PortfolioConstruction` | Portfolio helpers above |
-| Risk management | `RiskManagement` | `self.limit_positions(caps)` or `self.replace(decision)` |
+每日决策辅助函数均从 `quantgrove` 导入，只构造结果；最终返回的结果才被提交：
 
-`data.framework` is a read-only view of the selected universe, active signals,
-universe/signal change facts, expired/removed signals, this Close's proposal and
-the retained prior proposal. The retained proposal is a reference; it is never
-implicitly replayed. Downstream candidate and history scopes follow Universe
-Selection; actual holdings stay visible.
-
-Universe `None` retains still-available selected candidates (initially empty).
-Alpha outputs replace the signal snapshot; signal lifetime is 1–252 sessions.
-Alpha `None` keeps unexpired signals. Expiry or removal does not itself sell.
-Portfolio `None` creates no new proposal. Risk runs even without a new proposal:
-`None` leaves it alone, `replace(None)` cancels it, and local caps intersect it.
-For a full risk replacement use e.g.
-`return self.replace(self.target_weights({}))`. The host rejects a helper result
-that does not belong to its stage. Only the composed decision reaches execution.
-
-## Submit, inspect and reuse
-
-Web, HTTP and MCP submit `program: {"source": "..."}` plus simulation conditions.
-Framework slots use `{"kind": "python", "program": {"source": "..."}}`.
-There are no `parameters` or `data_requirements` properties. The current contract
-is `python-strategy/v4`; the old function ABI is not an execution fallback.
-
-Dates, universe, initial capital, fees and slippage remain backtest conditions.
-The Run freezes source, execution identity and data generation. Results expose
-that source for inspection and copying to a new draft. Copying or editing never
-changes an existing Run or DailyTrack. Batch items retain separate states and
-accounts, even when they share prepared market data.
-
-Trading details → **Python data reads** records successful reads from accepted
-decisions: module, field, requested/returned sessions, stock count, actual date
-range and response bytes. It follows the same retention and ownership rules as
-other event evidence and is not continuation state. A failed invocation does not
-publish partial read records. No static data-use summary is inferred from Python.
-
-## Dynamic read limits
-
-Each invocation allows at most 64 requests, 253 sessions per request, 262,144
-requested stock/session cells per request, and 1,048,576 cumulatively. The request
-message is at most 64 KiB; each encoded response is at most 4 MiB and cumulative
-responses at most 16 MiB. Requests cannot overlap unread responses. The host
-checks scope and cell budgets before loading data and encoded size before giving
-it to the guest. Reads share the invocation's wall-time budget. The supervised
-worker remains responsible for bounding host work; guest fuel alone does not
-bound storage access. Capacity planning reserves guest, host read and event buffers.
-
-## Frozen environment
-
-The current environment is a preinitialized **CPython 3.14.0 + NumPy 2.5.0**
-WASI component, executed by Wasmtime 49.0.0. It uses componentize-py's pinned
-WASI interpreter fork, rather than the previous CPython 3.14.7 command archive.
-The portable component, source hashes, toolchain revision and dependency hashes
-are packaged in `research_kernel/python_runtime/manifest.json`. The explicit
-[build recipe](../tooling/python-runtime/README.md) records its source inputs,
-patches and licenses. Execution verifies the packaged component; it never
-fetches packages or inherits the host Python environment.
-
-The runtime identity includes these versions, the component archive, actual
-bootstrap and module-source hashes (including the SDK and history codec),
-available modules, limits and deterministic-input policies. New admissions use
-`python-strategy/v4`. Historical inputs and results remain unchanged; executing
-an old frozen environment still fails explicitly. API and all Python-capable
-Worker pools must use the same revision. Drain pending work and resolve affected
-DailyTracks before a cutover.
-
-Programs can import `numpy`, including its prepared `fft`, `linalg`, `ma`,
-`polynomial`, `random`, `rec` and `strings` modules, and the supported standard
-library: `bisect`, `calendar`, `collections`, `copy`, `dataclasses`, `datetime`,
-`decimal`, `enum`, `fractions`, `functools`, `heapq`, `itertools`, `json`, `math`,
-`operator`, `random`, `re`, `statistics`, `string`, `time` and `typing`, with their
-prepared dependencies. Pandas and package installation are unavailable. NumPy
-runs compiled array kernels inside WASI; this build has no external BLAS or
-host CPU-specific dispatch. Batch arithmetic does not imply native BLAS speed.
-
-Only trusted libraries are initialized in the component image. Every invocation
-gets a fresh Store and component instance before receiving strategy source,
-input, data or explicit state. Wasmtime shares compiled code and copy-on-write
-initial memory; Python globals, module mutations and arrays never survive calls.
-The executor receives opaque input and bounded host capabilities, without knowing
-whether the caller is a Direct Strategy or any Framework stage.
-
-The host grants no filesystem, network, subprocess or native-library authority.
-The SDK's history callback returns only authorized observations up to this Close,
-as a bounded, non-pickled float64 NPY matrix plus explicit axes. The guest exposes
-an immutable bytes-backed ndarray and lazily creates keyed tuples for code using
-`history[instrument]`. No Python object graph is serialized cell by cell on the
-array path. Arrays expose missing values as NaN; keyed tuples retain None.
-The only environment variables are fixed `PYTHONHOME=/runtime`,
-`PYTHONHASHSEED=0` and `TZ=UTC`.
-
-Wall-clock APIs, including NumPy's `datetime64("now")`, return 15:00 UTC+08:00 on
-the decision session; monotonic and CPU clocks return zero. Random bytes,
-including `SystemRandom` and unseeded NumPy generators, derive from the canonical
-invocation. NumPy's legacy global RNG receives a separate domain-separated seed;
-it does not consume the standard-library RNG stream. Explicit NumPy seeds retain
-their usual meaning. Identical source, context and state receive identical random
-input. Sleeping and blocking timer subscriptions are unavailable. The initialized
-stdlib `random` is reseeded once before researcher source, preserving the prior
-entropy sequence even when user code calls `os.urandom` first.
-
-## Invocation limits
-
-| Resource | Limit |
+| 返回 | 行为 |
 | --- | --- |
-| Source / diagnostics | 65,536 UTF-8 bytes each |
-| Complete input | 4 MiB |
-| Complete output, including raw stdout and stderr | 1 MiB |
-| Explicit state | 256 KiB |
-| Guest linear memory | 128 MiB |
-| Wasmtime fuel | 16,000,000,000 units |
-| Trusted guest startup | 10 seconds |
-| User program wall time | 3 seconds |
-| JSON nesting | 32 levels |
+| `None` | 不更新 |
+| `target_weights(weights)` | 整体组合目标；`{}` 明确清仓 |
+| `increase_to_weights(weights)` | 只向目标加仓，不卖出其他持仓 |
+| `reduce_exposure(maximum)` | 按比例降低现有持仓，不买入 |
+| `limit_positions({股票: 股数})` | 限制指定实际持仓，其余不变 |
+| `limit_exposure(maximum)` | 追加总仓位上限 |
+| `with_limits(decision, maximum_shares=..., maximum_exposure=...)` | 与已有更严格的限制取交集 |
 
-Fuel bounds CPU work across the complete invocation. The trusted bootstrap
-has its own bounded startup time for setting up the prepared environment. After
-it prepares the SDK and immutable input, the user-program deadline starts;
-source compilation, top-level code, the callback and serialization share that
-3-second budget. Repeating the bootstrap readiness signal cannot restart it. Both budgets are
-frozen in the execution identity, and wall deadlines also apply on overloaded
-hosts. A deadline failure is an explicit failed invocation, not a different
-successful result. The next invocation starts with a new guest and unchanged
-platform authority. JSON permits finite numbers, strings, booleans, null, arrays
-and string-keyed objects. Integers must be within ±(2^53−1); strings must be valid
-UTF-8. Duplicate output keys and implicit or unserializable state are rejected.
+## 连续记忆、恢复和跟踪
 
-MCP transport accepts requests up to 64 MiB, including JSON escaping for a
-20-item Framework Batch with four Python programs per item, and responses up
-to 16 MiB for complete targets and explicit state. HTTP request bodies have a
-single 60-second read deadline independent of transport chunk count; oversized
-bodies return 413 and incomplete bodies that exceed the deadline return 408.
-`get_research_context` includes the `quantgrove` SDK module and complete Direct
-and Framework source templates in its authoring constraints. Target evidence records
-have a 2 MiB limit; their pages reserve that capacity plus the ordinary
-32 KiB page budget. Framework event records have a 4 MiB limit; other event
-records retain their 24 KiB limit. Worker event frames carry at most 512
-records or 8 MiB of record bytes, within the existing 64 MiB acknowledged
-segment limit. DailyTrack origin pages reserve the full current decision
-state (3 MiB for Framework modules or 256 KiB for Direct) and a 2 MiB pending
-target in addition to the ordinary 32 KiB page budget. These transport bounds
-do not increase the program's source, state or execution limits.
+修改平台传入的 `state` 映射，例如 `state["days"] = state.get("days", 0) + T`。
+支持 JSON 标量、列表、字符串键字典，以及受限的数值/布尔 ndarray；不用 pickle。
+JSON 数值必须有限，整数范围为 `-(2**53-1)` 至 `2**53-1`；更大的标识值可保存为字符串。
+ndarray 保留数值 dtype，最多 4 个轴；对象数组和任意 Python 对象不接受。
+不要通过 `state = {...}` 重新绑定局部变量来保存记忆，应使用索引赋值或 `state.update(...)`。
 
-Verification selection and commands are maintained only in
-[AGENTS.md](../AGENTS.md#testing).
+compute 和 decide 分别有独立 state。块末计算状态不会提前暴露给本块早期的账户决策。
+影响将来输出的记忆必须放进 state；全局变量、闭包、生成器、文件句柄和进程现场不持久化。
+数字数组的行号也不是永久股票身份：跨块保存按股票组织的数组时，同时保存对应 ID 并重新对齐。
 
-### Framework decision evidence
+程序的私有执行会话可复用已装载代码和缓存；检查点或恢复可能重新装载它。
+平台在完成一个块后原子保存账户、待执行目标和程序状态；失败时丢弃未提交部分，
+从上个检查点重算。因此不要依赖「源码只执行一次」或自行产生外部副作用。
+每日跟踪追加一天就是同一接口的 T=1，使用同一数据口径、状态和交易模拟器。
 
-`strategy_framework` is a Trading Event section on Run and DailyTrack, with the
-same ownership, retention and cursor rules as the execution sections. One record
-per completed Close contains the four frozen module identities, current Universe
-selection and update reason, the Alpha module's observed output, the new portfolio
-proposal or `null`, and the explicit Risk Adjustment or `null`. Builtin Alpha
-records the formula values consumed by the portfolio; Python Alpha records active
-Strategy Signals with their creation Session and lifetime, new-output status,
-expired instruments and instruments removed by Universe selection. An expired
-signal is evidence of lifecycle processing, not an instruction to sell.
+## 因果性和可重复性
 
-A `replace` Risk Adjustment with a null target is explicit cancellation; a null
-Risk Adjustment leaves the current proposal alone. Position limits are recorded
-before intersection with the proposal. `target_id` links the final Target Decision
-when one exists, and is null for NoUpdate or cancellation. The final target and
-actual orders/fills remain separate event sections. Direct emits no Framework
-records. The result UI shows these stages separately and can follow the target
-to actual execution.
+每个日期的输出只能使用截至该日期的观察和先前状态。多日原生 NumPy 能读取整个块，
+所以只读属性不能阻止偷看未来。例如用 `close[:, -1]` 生成本块所有日期的选择，
+或沿整个时间轴求均值后回填早期日期，都会产生未来信息偏差。
+只给 decide 当日计算值也无法修正 compute 中已经混入的未来信息。
 
-Records are complete, typed and limited to 4 MiB each; worker frames and business
-pages preserve whole records. They are never added to authoritative continuation
-state and are not required to advance after Trading Event retention expires.
+平台对每个多日计算块额外重算首日和中点前缀，并拒绝已发现的输出差异；验证调用不提交状态。
+这增加少量计算开销，不能覆盖所有未来信息偏差。发布前还应扰动未来价格/成员，并比较 64、128、逐日追加与恢复的
+规范目标、状态及账户轨迹。有限样本通过不等于任意 Python 程序的因果性证明。
+「检查配置」校验语法、入口和装载，不执行全部动态分支，也不证明因果性。
+
+随机策略使用 `data.rng("selection", session=日期)` 为每个日期取得独立、可重放的源。
+批量入口必须明确日期；每日入口默认当前日期。用途名称应稳定且非空。
+不要依赖全局 RNG 的批量消耗顺序，否则改变 T 会改变路径。
+时钟固定在操作末日的模拟收盘，不能用当前时钟代替批量日期轴。
+
+相同 Python 程序应不受切分影响。公式与 Python 的数学表达即使等价，浮点归约顺序、
+缺失处理和并列排序不同仍可能改变临界排名；平台不会仅凭策略名称承诺两种源码逐项精确相等。
+
+## 限制与错误
+
+| 资源 | 当前限制 |
+| --- | --- |
+| 输出日期 / 额外回看位置 | 128 / 252 |
+| compute 单次 / 累计读取数据格 | 2,097,152 / 4,194,304 |
+| decide 单次 / 累计读取数据格 | 262,144 / 1,048,576 |
+| 每调用读取次数 / 累计编码响应 | 64 / 32 MiB |
+| 源码 / 诊断输出 | 各 64 KiB |
+| 完整调用输入 / 输出 | 4 MiB / 16 MiB |
+| 持久状态 | 编码后 256 KiB；计算与决策状态还受终端状态总预算约束 |
+| 单 guest 线性内存 | 128 MiB |
+| 初始化 / 用户执行时限 | 10 秒 / 3 秒 |
+| 整个研究任务内存硬上限 | 2 GiB；监督进程另有更早的保护阈值 |
+
+128 日不是内存保证。股票数量、字段数量、回看窗口、临时数组、输出和状态共同占用预算。
+超限调用明确失败，已提交检查点保留；不要用无界全历史驻留换取速度。
+可导入固定环境中的 NumPy 及支持的标准库；不支持网络、宿主文件、安装包、Pandas、子进程或 ctypes。
+环境为 CPython 3.14.0 / NumPy 2.5.0 WASI / Wasmtime 49.0.0，无外部 BLAS。
+
+错误尽量包含源码摘要、日期和作者行号。结果的「交易明细 → Python 数据读取」
+记录已接受读取的字段、范围和字节数，并区分 compute 与 decide。
+
+## Framework、版本和复用
+
+Framework 的四个业务步骤都使用同一个函数协议，可选 compute 返回 Values，必需 decide：
+选股返回 `select(...)`；信号返回 `signals(..., valid_for_sessions=...)`；组合返回目标辅助函数；
+风控返回 `risk_limits(...)` 或 `replace(...)`。`replace(None)` 取消本次组合建议，None 放行。
+`data.framework` 提供本步可见的选股、信号和组合建议；保留的旧建议仅供观察，不自动重放。
+这四个步骤不决定底层 Python 的计算方式。
+
+HTTP/MCP 使用 `program: {"source": "..."}`；Framework 槽位使用
+`{"kind": "python", "program": {"source": "..."}}`。无需提交参数或数据声明对象。
+Run 冻结源码、数据和环境身份，编辑或复制为草稿不会修改历史结果或已有跟踪。
+新环境拒绝旧版 class/on_close 源码及旧冻结运行环境，不在运行时自动转换、清库或回退。
+升级前应完成待处理任务并显式处理旧 DailyTrack，API 和 Worker 必须使用同一版本。
+旧 Python 研究结果仍可查看；若其冻结环境已经过期，开始跟踪会明确拒绝，
+提示先更新源码、运行新草稿，再基于新结果开始跟踪。
+
+手动更新旧程序时，把 `on_close` 中依赖账户的逻辑移到模块级
+`def decide(data, account, state)`；将 `self.target_weights(...)` 等调用改为导入同名函数，
+将需要保存的 `self` 属性改为传入的 `state`。只做这一步仍是逐日决策；
+要获得批量收益，应把与账户无关的历史计算移入 `compute`，返回多日 Targets，
+或返回 Values 供 decide 读取。用新草稿检查并运行，保留旧研究结果作为对照。
+
+实现决策见 [ADR-0258](adr/0258-batch-python-computation-and-account-decisions.md)。
+验证入口和选择只维护在 [AGENTS.md](../AGENTS.md#testing)。

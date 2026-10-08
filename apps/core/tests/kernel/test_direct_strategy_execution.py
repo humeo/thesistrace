@@ -10,17 +10,16 @@ from thesistrace.research_series import slice_research_sessions
 
 pytestmark = pytest.mark.bounded_process
 
-SOURCE = """
-from quantgrove import Strategy
-class BestClose(Strategy):
-    def on_close(self, data, account):
-        prices = data.close_prices(1)
-        selected = max(prices.values, key=lambda stock: prices[stock][-1])
-        self.state['count'] = self.state.get('count', 0) + 1
-        held = [row['instrument_id'] for row in account.positions]
-        if held != [selected]:
-            return self.target_weights({selected: 1.0}, reason='better_candidate')
-        return None
+SOURCE = """from quantgrove import target_weights
+
+def decide(data, account, state):
+    prices = data.close_prices(1)
+    selected = max(prices.values, key=lambda stock: prices[stock][-1])
+    state['count'] = state.get('count', 0) + 1
+    held = [row['instrument_id'] for row in account.positions]
+    if held != [selected]:
+        return target_weights({selected: 1.0}, reason='better_candidate')
+    return None
 """
 
 
@@ -80,11 +79,12 @@ def test_direct_uses_one_shared_account_for_condition_triggered_next_open_execut
         Decimal("100000"),
         Decimal("200000"),
     ]
-    assert result["decision_state"]["state"] == {"count": 4}
+    assert result["decision_state"]["state"]["decision"] == {"count": 4}
     assert result["pending_target"]["decision_session"] == SESSIONS[3]
     assert result["pending_target"]["allocation"]["instrument_ids"] == [A]
     assert "target_selection" not in result
     from thesistrace.research_kernel.strategy_events import strategy_event_rows
+
     reads = strategy_event_rows(result, sessions=SESSIONS)["strategy_history_reads"]
     assert len(reads) == 4
     assert all(row["field_id"] == "price.close.adjusted" for row in reads)
@@ -114,14 +114,14 @@ def test_direct_replays_exactly_from_an_explicit_midrun_boundary():
 def test_direct_program_observes_cost_age_and_independent_close_account():
     data, definition = inputs()
     definition["strategy"]["program"]["source"] = SOURCE.replace(
-        "self.state['count'] = self.state.get('count', 0) + 1",
-        "self.state['observed_account'] = {"
+        "state['count'] = state.get('count', 0) + 1",
+        "state['observed_account'] = {"
         "'close_risk_nav_cny': account.close_risk_nav_cny,"
         "'post_open_net_nav_cny': account.post_open_net_nav_cny,"
         "'positions': [dict(p) for p in account.positions]}",
     )
     result = transition_strategy(data, None, definition, origin_session=SESSIONS[0]).finalized
-    observed = result["decision_state"]["state"]["observed_account"]
+    observed = result["decision_state"]["state"]["decision"]["observed_account"]
     assert Decimal(observed["close_risk_nav_cny"]) == 300000
     assert Decimal(observed["post_open_net_nav_cny"]) == 200000
     position = observed["positions"][0]
@@ -173,7 +173,7 @@ def test_direct_public_kernel_input_does_not_invent_an_alpha_formula():
     full_run = run(run_input)
     output = full_run.artifacts_snapshot()
     assert "alpha_matrix" not in output
-    assert output["strategy_backtest"]["decision_state"]["state"] == {"count": 4}
+    assert output["strategy_backtest"]["decision_state"]["state"]["decision"] == {"count": 4}
     assert Decimal(output["strategy_backtest"]["daily"][-1]["net_nav"]) == Decimal("200000")
     prefix_input = run_input.with_research_data(
         slice_research_sessions(data, SESSIONS[:2]),
@@ -263,13 +263,12 @@ def test_python_strategy_columnar_chunks_match_the_public_run_without_alpha_comp
         modules["alpha"] = {
             "kind": "python",
             "program": {
-                "source": """
-from quantgrove import Alpha
-class TwoDaySignal(Alpha):
-    def on_close(self, data, account):
-        if data.completed_sessions == 1:
-            return self.signals({data.candidates[0]: 1.0}, valid_for_sessions=2)
-        return None
+                "source": """from quantgrove import signals
+
+def decide(data, account, state):
+    if data.completed_sessions == 1:
+        return signals({data.candidates[0]: 1.0}, valid_for_sessions=2)
+    return None
 """,
             },
         }

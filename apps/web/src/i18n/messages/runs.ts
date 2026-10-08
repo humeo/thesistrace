@@ -1,6 +1,7 @@
 export const runsEn = {
   "trackingNotCompleted": "Start Tracking requires a completed ResearchRun.",
   "trackingStrategy": "Start Tracking requires a Strategy Backtest result.",
+  "trackingProgram": "This Python program uses an older execution interface. Update and run a new draft before starting tracking. Your historical result is preserved.",
   "title": "Research Runs",
   "run": "ResearchRun",
   "history": "Research history",
@@ -232,6 +233,7 @@ export const runsEn = {
 export const runsZh = {
   "trackingNotCompleted": "开始跟踪需要已完成的研究运行。",
   "trackingStrategy": "开始跟踪需要策略回测结果。",
+  "trackingProgram": "此 Python 程序使用旧版执行接口。请更新并运行新草稿后再开始跟踪，历史结果会保留。",
   "title": "研究记录",
   "run": "研究运行",
   "history": "研究历史",

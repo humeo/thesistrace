@@ -4,7 +4,7 @@ import { buildProductFixture } from "./build-product-fixture";
 let script: string;
 let styles: string;
 const draftKey = "thesistrace.research-draft.exposure-test.folder_default";
-const source = "from quantgrove import Strategy\nclass Example(Strategy):\n    def on_close(self, data, account):\n        return None";
+const source = "def decide(data, account, state):\n    return None";
 
 test.beforeAll(async () => {
   test.setTimeout(120_000);
@@ -118,4 +118,31 @@ test("Direct storage failure keeps editable source, reports unsaved work and blo
   await expect(editor).toHaveText(source, { useInnerText: true });
   const storedSource = await page.evaluate(key => JSON.parse(localStorage.getItem(key)!).programSource, draftKey);
   expect(storedSource).not.toBe(source);
+});
+
+test("Python editor opens current writing reference without changing source", async ({ page }) => {
+  const reads: string[] = [];
+  await page.route("https://exposure.test/**", route => {
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith("/authoring-reference")) {
+      reads.push(url.searchParams.get("topic") ?? "");
+      return route.fulfill({ json: {
+        topic: "python_sdk", title: "Python SDK", found: true,
+        overview: ["compute(data, state) returns multi-date Targets or Values."],
+        symbols: [{ symbol: "BatchData.history", description: "Read a block." }], entry: null,
+      } });
+    }
+    return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+  });
+  await mountDirect(page);
+  const editor = page.locator("#python-source");
+  await editor.fill(source);
+  await page.getByRole("button", { name: "Writing reference", exact: true }).click();
+  const reference = page.getByRole("dialog", { name: "Writing reference", exact: true });
+  await expect(reference.getByText("compute(data, state) returns multi-date Targets or Values.")).toBeVisible();
+  await expect(reference.getByRole("combobox", { name: "Reference member" })).toBeVisible();
+  expect(reads).toEqual(["python_sdk"]);
+  await page.keyboard.press("Escape");
+  await expect(reference).toHaveCount(0);
+  await expect(editor).toHaveText(source, { useInnerText: true });
 });

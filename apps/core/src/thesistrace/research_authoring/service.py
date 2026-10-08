@@ -62,42 +62,72 @@ from thesistrace.research_run.models import (
     RESEARCH_UNIVERSES,
 )
 
-DIRECT_SOURCE_TEMPLATE = """from quantgrove import Strategy
+DIRECT_SOURCE_TEMPLATE = """import numpy as np
+from quantgrove import Targets
 
-class FirstCandidate(Strategy):
-    def on_close(self, data, account):
-        if not data.candidates:
-            return None
-        return self.target_weights({data.candidates[0]: 1.0})
+
+def compute(data, state):
+    lookback = 60
+    close = data.history("price.close.adjusted", lookback=lookback)
+    now, before = close[:, lookback:], close[:, :-lookback]
+    valid = data.eligible & np.isfinite(now) & np.isfinite(before) & (before > 0)
+    scores = np.full(now.shape, -np.inf)
+    np.divide(now, before, out=scores, where=valid)
+    scores -= 1
+    order = np.argsort(-scores, axis=0, kind="stable")[:30]
+    selected = np.zeros(scores.shape, dtype=bool)
+    np.put_along_axis(selected, order, True, axis=0)
+    selected &= valid
+    return Targets.equal_weight(
+        selected, priority=scores,
+        update=(data.session_index % 5 == 0) & selected.any(axis=0)
+    )
 """
 
 FRAMEWORK_SOURCE_TEMPLATES = {
-    "universe_selection": """from quantgrove import UniverseSelection
+    "universe_selection": """from quantgrove import select
 
-class SelectCandidates(UniverseSelection):
-    def on_close(self, data, account):
-        return self.select(data.candidates)
+
+def decide(data, account, state):
+    return select(data.candidates)
 """,
-    "alpha": """from quantgrove import Alpha
+    "alpha": """import numpy as np
+from quantgrove import Values, signals
 
-class CandidateSignals(Alpha):
-    def on_close(self, data, account):
-        return self.signals({stock: 1.0 for stock in data.candidates}, valid_for_sessions=1)
+
+def compute(data, state):
+    close = data.history("price.close.adjusted", lookback=60)
+    now, before = close[:, 60:], close[:, :-60]
+    scores = np.full(now.shape, np.nan)
+    valid = data.eligible & np.isfinite(now) & np.isfinite(before) & (before > 0)
+    np.divide(now, before, out=scores, where=valid)
+    scores -= 1
+    return Values({"score": scores})
+
+
+def decide(data, account, state):
+    scores = data.values["score"]
+    return signals({stock: float(value) for stock, value in zip(data.instruments, scores)
+                    if stock in data.candidates and np.isfinite(value)}, valid_for_sessions=1)
 """,
-    "portfolio_construction": """from quantgrove import PortfolioConstruction
+    "portfolio_construction": """from quantgrove import target_weights
 
-class FirstSignal(PortfolioConstruction):
-    def on_close(self, data, account):
-        signals = data.framework["signals"]
-        if not signals:
-            return None
-        return self.target_weights({signals[0]["instrument_id"]: 1.0})
-""",
-    "risk_management": """from quantgrove import RiskManagement
 
-class PassProposal(RiskManagement):
-    def on_close(self, data, account):
+def decide(data, account, state):
+    scores = {row["instrument_id"]: row["value"] for row in data.framework["signals"]}
+    if not scores:
         return None
+    best = min(scores, key=lambda stock: (-scores[stock], stock))
+    if [row["instrument_id"] for row in account.positions] != [best]:
+        return target_weights({best: 1})
+    return None
+""",
+    "risk_management": """from quantgrove import risk_limits
+
+
+def decide(data, account, state):
+    exits = {row["instrument_id"]: 0 for row in account.positions if row["holding_age"] >= 20}
+    return risk_limits(exits) if exits else None
 """,
 }
 
@@ -108,39 +138,47 @@ CURRENT_RESEARCH_AUTHORING_CONSTRAINTS = ResearchAuthoringConstraints(
     python_program=PythonProgramConstraints(
         source_template=DIRECT_SOURCE_TEMPLATE,
         maximum_source_bytes=SOURCE_BYTES,
-        maximum_state_bytes=STATE_BYTES, maximum_input_bytes=INPUT_BYTES,
-        maximum_output_bytes=OUTPUT_BYTES, maximum_memory_bytes=MEMORY_BYTES,
+        maximum_state_bytes=STATE_BYTES,
+        maximum_input_bytes=INPUT_BYTES,
+        maximum_output_bytes=OUTPUT_BYTES,
+        maximum_memory_bytes=MEMORY_BYTES,
         maximum_wall_seconds=WALL_SECONDS,
         maximum_bootstrap_wall_seconds=BOOTSTRAP_WALL_SECONDS,
         maximum_history_requests=HISTORY_REQUESTS,
         history_sessions=IntegerRange(minimum=1, maximum=HISTORY_SESSIONS),
-        python_version=PYTHON_VERSION, modules=AVAILABLE_MODULES,
+        python_version=PYTHON_VERSION,
+        modules=AVAILABLE_MODULES,
     ),
     framework=FrameworkAuthoringConstraints(
-        stages=tuple(FrameworkStageConstraints(
-            stage=stage, builtin_identity=identity,
-            source_template=FRAMEWORK_SOURCE_TEMPLATES[stage],
-            output_contract={
-                "universe_selection": (
-                    "Subclass UniverseSelection. Return self.select(instruments) to replace "
-                    "selected candidates; None retains the prior selection."
-                ),
-                "alpha": (
-                    "Subclass Alpha. Return self.signals({instrument_id: score}, "
-                    "valid_for_sessions=2) to update signals; None retains unexpired signals. "
-                    "Validity is in Research Sessions."
-                ),
-                "portfolio_construction": (
-                    "Subclass PortfolioConstruction. Return self.target_weights(weights) "
-                    "or None for NoUpdate. Signals do not execute orders."
-                ),
-                "risk_management": (
-                    "Subclass RiskManagement. Return None to pass the current proposal, "
-                    "self.limit_positions(caps) for local caps, or self.replace(decision) "
-                    "to replace the proposal; self.replace(None) cancels it."
-                ),
-            }[stage],
-        ) for stage, identity in BUILTIN_FRAMEWORK_MODULES.items()),
+        stages=tuple(
+            FrameworkStageConstraints(
+                stage=stage,
+                builtin_identity=identity,
+                source_template=FRAMEWORK_SOURCE_TEMPLATES[stage],
+                output_contract={
+                    "universe_selection": (
+                        "Implement decide. Return select(instruments) to replace "
+                        "selected candidates; None retains the prior selection."
+                    ),
+                    "alpha": (
+                        "Implement decide, optionally compute for batch values. Return "
+                        "signals({instrument_id: score}, "
+                        "valid_for_sessions=2) to update signals; None retains unexpired signals. "
+                        "Validity is in Research Sessions."
+                    ),
+                    "portfolio_construction": (
+                        "Implement decide. Return target_weights(weights) "
+                        "or None for NoUpdate. Signals do not execute orders."
+                    ),
+                    "risk_management": (
+                        "Implement decide. Return None to pass the current proposal, "
+                        "risk_limits(caps) for local caps, or replace(decision) "
+                        "to replace the proposal; replace(None) cancels it."
+                    ),
+                }[stage],
+            )
+            for stage, identity in BUILTIN_FRAMEWORK_MODULES.items()
+        ),
         builtin_risk_schema=BuiltinRiskModule.model_json_schema(),
         builtin_portfolio_schema=BuiltinPortfolioModule.model_json_schema(),
         account_observation=(

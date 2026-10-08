@@ -6,9 +6,29 @@ import sys
 import types
 
 AVAILABLE_MODULES = (
-    "bisect", "calendar", "collections", "copy", "dataclasses", "datetime", "decimal",
-    "enum", "fractions", "functools", "heapq", "itertools", "json", "math", "operator",
-    "random", "re", "statistics", "string", "time", "typing", "_strptime", "numpy",
+    "bisect",
+    "calendar",
+    "collections",
+    "copy",
+    "dataclasses",
+    "datetime",
+    "decimal",
+    "enum",
+    "fractions",
+    "functools",
+    "heapq",
+    "itertools",
+    "json",
+    "math",
+    "operator",
+    "random",
+    "re",
+    "statistics",
+    "string",
+    "time",
+    "typing",
+    "_strptime",
+    "numpy",
 )
 
 
@@ -39,41 +59,62 @@ def main():
     request = json.loads(sys.stdin.buffer.read())
     sys.path.clear()
     sys.path_importer_cache.clear()
-    output = sys.stdout
+    response_stream = sys.stdout
     diagnostics = Diagnostics()
     sys.stdout = diagnostics
     sys.stderr = diagnostics
     ready()
     try:
-        code = compile(request["source"], "strategy.py", "exec")
-        sdk = sys.modules["quantgrove"]
-        module = types.ModuleType("strategy")
-        sys.modules["strategy"] = module
-        exec(code, module.__dict__)
-        expected = getattr(sdk, request["entrypoint"])
-        classes = {value for value in module.__dict__.values()
-                   if isinstance(value, type) and value.__module__ == "strategy"
-                   and issubclass(value, expected)}
-        if len(classes) != 1:
-            raise ValueError("Define exactly one " + request["entrypoint"] + " subclass")
-        strategy = classes.pop()()
-        strategy.state = request["state"]
-        if type(strategy).on_close is sdk.Strategy.on_close:
-            raise ValueError("Implement on_close(self, data, account)")
-        data, account = sdk.Data(request["context"]), sdk.Account(request["context"])
-        decision = None
-        if request["operation"] == "invoke":
-            decision = strategy.on_close(data, account)
-            if decision is not None and not isinstance(decision, sdk.Decision):
-                raise TypeError("Return None or a decision built by a strategy helper")
-        else:
-            import inspect
+        import inspect
 
-            inspect.signature(strategy.on_close).bind(data, account)
-        result = {"output": None if decision is None else decision.value, "state": strategy.state}
+        from _program_wire import decode_state, encode_state
+
+        sdk = sys.modules["quantgrove"]
+        module = sys.modules.get("strategy")
+        if module is None:
+            code = compile(request["source"], "strategy.py", "exec")
+            module = types.ModuleType("strategy")
+            sys.modules["strategy"] = module
+            exec(code, module.__dict__)
+        if request["state"] is not None:
+            module.__program_state__ = decode_state(request["state"])
+        compute, decide = getattr(module, "compute", None), getattr(module, "decide", None)
+        if compute is None and decide is None:
+            raise ValueError("Define compute(data, state) and/or decide(data, account, state)")
+        for function, arity in ((compute, 2), (decide, 3)):
+            if function is not None:
+                if not inspect.isfunction(function):
+                    raise TypeError("Program entrypoints must be Python functions")
+                inspect.signature(function).bind(*([None] * arity))
+        state = module.__program_state__
+        output = None
+        if request["operation"] == "compute":
+            if compute is None:
+                raise ValueError("Program has no compute entrypoint")
+            value = compute(sdk.BatchData(request["context"]), state)
+            expected = sdk.Values if decide is not None else sdk.Targets
+            if not isinstance(value, expected):
+                raise TypeError("compute must return " + expected.__name__)
+            output = value._to_wire()
+        elif request["operation"] == "invoke":
+            if decide is None:
+                raise ValueError("Program has no decide entrypoint")
+            value = decide(sdk.Data(request["context"]), sdk.Account(request["context"]), state)
+            if value is not None and not isinstance(value, sdk.Decision):
+                raise TypeError("Return None or a decision built by a strategy helper")
+            output = None if value is None else value.value
+        else:
+            output = {"compute": compute is not None, "decide": decide is not None}
+        result = {
+            "output": output,
+            "state": encode_state(state) if request.get("checkpoint", True) else None,
+        }
         encoded = json.dumps(
             {"ok": True, "result": result, "diagnostics": "".join(diagnostics.parts)},
-            allow_nan=False, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+            allow_nan=False,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
         )
     except BaseException as error:
         import traceback
@@ -82,13 +123,21 @@ def main():
         for frame in traceback.extract_tb(error.__traceback__):
             if frame.filename == "strategy.py":
                 line = frame.lineno
-        encoded = json.dumps({
-            "ok": False, "error": {
-                "type": type(error).__name__, "message": str(error)[:4096], "line": line,
+        encoded = json.dumps(
+            {
+                "ok": False,
+                "error": {
+                    "type": type(error).__name__,
+                    "message": str(error)[:4096],
+                    "line": line,
+                },
             },
-        }, allow_nan=False, ensure_ascii=False, separators=(",", ":"))
-    output.write(encoded)
-    output.flush()
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+    response_stream.write(encoded)
+    response_stream.flush()
 
 
 if __name__ == "__main__":

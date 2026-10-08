@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from thesistrace.research_history import (
+    MAX_BYTES,
     HistoryWindow,
     decode_history,
     encode_history,
@@ -68,6 +69,6 @@ def test_decoder_rejects_pickle_and_mismatched_axes_without_loading_objects():
 
 def test_decoder_rejects_trailing_bytes_and_oversized_frames():
     wire = encode_history(HistoryWindow(("2026-08-03",), ("A",), np.ones((1, 1))))
-    for invalid in (wire + b"extra", wire[:-1], b"x" * (4 * 1024**2 + 1)):
+    for invalid in (wire + b"extra", wire[:-1], b"x" * (MAX_BYTES + 1)):
         with pytest.raises(ValueError):
             decode_history(invalid)

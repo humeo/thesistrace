@@ -130,61 +130,58 @@ def test_blocked_combined_sale_does_not_consume_progress_or_substitute_another_s
     assert Decimal(result["daily"][-1]["net_cash"]) == 35000
 
 
-DIRECT_SOURCE = """
-from quantgrove import Strategy, Decision
+DIRECT_SOURCE = """from quantgrove import Decision
 
 SETTINGS = {}
 
 
-class Fixture(Strategy):
-    def on_close(self, data, account):
-        day = data.completed_sessions - 1
-        holdings = {
-            p["instrument_id"]: p["execution_shares"]
-            for p in account._values["positions"]
+def decide(data, account, state):
+    day = data.completed_sessions - 1
+    holdings = {
+        p["instrument_id"]: p["execution_shares"] for p in account._values["positions"]
+    }
+    a, b = SETTINGS["ids"]
+    output = None
+    if day in (0, 10):
+        output = {
+            "reason": "fresh_portfolio",
+            "allocation": {
+                "mode": "rebalance",
+                "instrument_ids": [a, b],
+                "relative_weights": {a: "1/2", b: "1/2"},
+                "exposure": 1.0,
+            },
+            "position_limits": {},
         }
-        a, b = SETTINGS["ids"]
-        output = None
-        if day in (0, 10):
-            output = {
-                "reason": "fresh_portfolio",
-                "allocation": {
-                    "mode": "rebalance",
-                    "instrument_ids": [a, b],
-                    "relative_weights": {a: "1/2", b: "1/2"},
-                    "exposure": 1.0,
-                },
-                "position_limits": {},
-            }
-        elif day == 1:
-            output = {
-                "reason": "first_local_cap",
-                "allocation": None,
-                "position_limits": {b: 3500},
-            }
-        elif day in (2, 3, 4):
-            output = {
-                "reason": "combined_constraints",
-                "allocation": None,
-                "position_limits": {
-                    item: min(shares, 3500) for item, shares in holdings.items()
-                },
-                "maximum_stock_exposure": 0.3,
-            }
-        elif day == 5:
-            output = {
-                "reason": "expiry",
-                "allocation": None,
-                "position_limits": {item: 0 for item in holdings},
-            }
-        sold = dict(self.state.get("sold", {}))
-        for fill in account.fills:
-            if fill["side"] == "sell":
-                item = fill["instrument_id"]
-                sold[item] = sold.get(item, 0) + fill["quantity"]
-        self.state = {"completed": day + 1, "sold": sold}
-        decision = output
-        return None if decision is None else Decision(decision)
+    elif day == 1:
+        output = {
+            "reason": "first_local_cap",
+            "allocation": None,
+            "position_limits": {b: 3500},
+        }
+    elif day in (2, 3, 4):
+        output = {
+            "reason": "combined_constraints",
+            "allocation": None,
+            "position_limits": {
+                item: min(shares, 3500) for item, shares in holdings.items()
+            },
+            "maximum_stock_exposure": 0.3,
+        }
+    elif day == 5:
+        output = {
+            "reason": "expiry",
+            "allocation": None,
+            "position_limits": {item: 0 for item in holdings},
+        }
+    sold = dict(state.get("sold", {}))
+    for fill in account.fills:
+        if fill["side"] == "sell":
+            item = fill["instrument_id"]
+            sold[item] = sold.get(item, 0) + fill["quantity"]
+    state = {"completed": day + 1, "sold": sold}
+    decision = output
+    return None if decision is None else Decision(decision)
 """
 
 
@@ -208,30 +205,24 @@ def test_combined_account_state_and_pending_restore_at_every_boundary_in_new_pro
 
         definition["strategy"]["environment"] = get_strategy_runtime().identity()
         definition["strategy"]["modules"]["alpha"] = python_module(
-            """
-from quantgrove import Strategy, Decision
+            """from quantgrove import Decision
 
 SETTINGS = {}
 
 
-class Fixture(Strategy):
-    def on_close(self, data, account):
-        output = None
-        if data.completed_sessions in (1, 6, 11):
-            output = {
-                "reason": "fresh_rankings",
-                "signals": [
-                    {
-                        "instrument_id": item,
-                        "value": 2.0 - index,
-                        "valid_for_sessions": 2,
-                    }
-                    for index, item in enumerate(SETTINGS["ids"])
-                ],
-            }
-        self.state = {"count": data.completed_sessions}
-        decision = output
-        return None if decision is None else Decision(decision)
+def decide(data, account, state):
+    output = None
+    if data.completed_sessions in (1, 6, 11):
+        output = {
+            "reason": "fresh_rankings",
+            "signals": [
+                {"instrument_id": item, "value": 2.0 - index, "valid_for_sessions": 2}
+                for index, item in enumerate(SETTINGS["ids"])
+            ],
+        }
+    state = {"count": data.completed_sessions}
+    decision = output
+    return None if decision is None else Decision(decision)
 """,
             parameters={"ids": [A, B]},
             stage="alpha",
@@ -324,48 +315,46 @@ def test_local_risk_composes_with_proposal_without_selling_untargeted_names(prop
     definition["strategy"]["environment"] = get_strategy_runtime().identity()
     definition["costs"] = dict.fromkeys(definition["costs"], "0")
     definition["strategy"]["modules"]["portfolio_construction"] = python_module(
-        """
-from quantgrove import Strategy, Decision
+        """from quantgrove import Decision
 
 SETTINGS = {}
 
 
-class Fixture(Strategy):
-    def on_close(self, data, account):
-        day = data.completed_sessions
-        output = None
-        if day == 1:
-            output = {
-                "reason": "initial",
-                "allocation": {
-                    "mode": "rebalance",
-                    "instrument_ids": SETTINGS["ids"],
-                    "relative_weights": {item: "1/3" for item in SETTINGS["ids"]},
-                    "exposure": 0.5,
-                },
-                "position_limits": {},
-            }
-        elif day == 2 and SETTINGS["proposal"] == "stricter_cap":
-            output = {
-                "reason": "ordinary_400_cap",
-                "allocation": None,
-                "position_limits": {SETTINGS["ids"][0]: 400},
-            }
-        elif day == 2 and SETTINGS["proposal"] == "increase":
-            a = SETTINGS["ids"][0]
-            output = {
-                "reason": "ordinary_increase",
-                "allocation": {
-                    "mode": "increase",
-                    "instrument_ids": [a],
-                    "relative_weights": {a: "1"},
-                    "exposure": 0.8,
-                },
-                "position_limits": {},
-            }
-        self.state = {}
-        decision = output
-        return None if decision is None else Decision(decision)
+def decide(data, account, state):
+    day = data.completed_sessions
+    output = None
+    if day == 1:
+        output = {
+            "reason": "initial",
+            "allocation": {
+                "mode": "rebalance",
+                "instrument_ids": SETTINGS["ids"],
+                "relative_weights": {item: "1/3" for item in SETTINGS["ids"]},
+                "exposure": 0.5,
+            },
+            "position_limits": {},
+        }
+    elif day == 2 and SETTINGS["proposal"] == "stricter_cap":
+        output = {
+            "reason": "ordinary_400_cap",
+            "allocation": None,
+            "position_limits": {SETTINGS["ids"][0]: 400},
+        }
+    elif day == 2 and SETTINGS["proposal"] == "increase":
+        a = SETTINGS["ids"][0]
+        output = {
+            "reason": "ordinary_increase",
+            "allocation": {
+                "mode": "increase",
+                "instrument_ids": [a],
+                "relative_weights": {a: "1"},
+                "exposure": 0.8,
+            },
+            "position_limits": {},
+        }
+    state = {}
+    decision = output
+    return None if decision is None else Decision(decision)
 """,
         parameters={"ids": [A, B, c], "proposal": proposal},
         stage="portfolio_construction",
@@ -468,30 +457,24 @@ def test_combined_columnar_chunks_preserve_complete_result_and_terminal_state(mo
     else:
         modules = definition["strategy"]["modules"]
         modules["alpha"] = python_module(
-            """
-from quantgrove import Strategy, Decision
+            """from quantgrove import Decision
 
 SETTINGS = {}
 
 
-class Fixture(Strategy):
-    def on_close(self, data, account):
-        output = None
-        if data.completed_sessions in (1, 6, 11):
-            output = {
-                "reason": "rankings",
-                "signals": [
-                    {
-                        "instrument_id": item,
-                        "value": 2.0 - index,
-                        "valid_for_sessions": 2,
-                    }
-                    for index, item in enumerate(SETTINGS["ids"])
-                ],
-            }
-        self.state = {"count": data.completed_sessions}
-        decision = output
-        return None if decision is None else Decision(decision)
+def decide(data, account, state):
+    output = None
+    if data.completed_sessions in (1, 6, 11):
+        output = {
+            "reason": "rankings",
+            "signals": [
+                {"instrument_id": item, "value": 2.0 - index, "valid_for_sessions": 2}
+                for index, item in enumerate(SETTINGS["ids"])
+            ],
+        }
+    state = {"count": data.completed_sessions}
+    decision = output
+    return None if decision is None else Decision(decision)
 """,
             parameters={"ids": [A, B]},
             stage="alpha",

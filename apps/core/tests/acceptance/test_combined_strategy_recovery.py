@@ -35,65 +35,62 @@ pytestmark = pytest.mark.skipif(
     reason="isolated Core runtime is not configured",
 )
 
-COMBINED_DIRECT = """
-from quantgrove import Strategy, Decision
+COMBINED_DIRECT = """from quantgrove import Decision
 
 SETTINGS = {}
 
 
-class Fixture(Strategy):
-    def on_close(self, data, account):
-        if data.session == SETTINGS.get("fail_session"):
-            raise ValueError("combined sibling failure")
-        day = data.completed_sessions
-        positions = account._values["positions"]
-        output = None
-        if day == 1:
-            item = data.candidate_details[0]["instrument_id"]
-            output = {
-                "reason": "enter",
-                "allocation": {
-                    "mode": "rebalance",
-                    "instrument_ids": [item],
-                    "relative_weights": {item: "1"},
-                    "exposure": 1.0,
-                },
-                "position_limits": {},
-            }
-        elif day in (2, 3):
-            output = {
-                "reason": "local_and_global_caps",
-                "allocation": None,
-                "position_limits": {
-                    p["instrument_id"]: p["execution_shares"] * 7 // 10
-                    for p in positions
-                },
-                "maximum_stock_exposure": 0.3,
-            }
-        elif day == 4:
-            output = {
-                "reason": "exit",
-                "allocation": None,
-                "position_limits": {p["instrument_id"]: 0 for p in positions},
-            }
-        elif day == 5:
-            item = data.candidate_details[0]["instrument_id"]
-            output = {
-                "reason": "fresh_entry",
-                "allocation": {
-                    "mode": "rebalance",
-                    "instrument_ids": [item],
-                    "relative_weights": {item: "1"},
-                    "exposure": 0.5,
-                },
-                "position_limits": {},
-            }
-        sold = self.state.get("sold", 0) + sum(
-            (f["quantity"] for f in account.fills if f["side"] == "sell")
-        )
-        self.state = {"count": day, "sold": sold}
-        decision = output
-        return None if decision is None else Decision(decision)
+def decide(data, account, state):
+    if data.session == SETTINGS.get("fail_session"):
+        raise ValueError("combined sibling failure")
+    day = data.completed_sessions
+    positions = account._values["positions"]
+    output = None
+    if day == 1:
+        item = data.candidate_details[0]["instrument_id"]
+        output = {
+            "reason": "enter",
+            "allocation": {
+                "mode": "rebalance",
+                "instrument_ids": [item],
+                "relative_weights": {item: "1"},
+                "exposure": 1.0,
+            },
+            "position_limits": {},
+        }
+    elif day in (2, 3):
+        output = {
+            "reason": "local_and_global_caps",
+            "allocation": None,
+            "position_limits": {
+                p["instrument_id"]: p["execution_shares"] * 7 // 10 for p in positions
+            },
+            "maximum_stock_exposure": 0.3,
+        }
+    elif day == 4:
+        output = {
+            "reason": "exit",
+            "allocation": None,
+            "position_limits": {p["instrument_id"]: 0 for p in positions},
+        }
+    elif day == 5:
+        item = data.candidate_details[0]["instrument_id"]
+        output = {
+            "reason": "fresh_entry",
+            "allocation": {
+                "mode": "rebalance",
+                "instrument_ids": [item],
+                "relative_weights": {item: "1"},
+                "exposure": 0.5,
+            },
+            "position_limits": {},
+        }
+    sold = state.get("sold", 0) + sum(
+        (f["quantity"] for f in account.fills if f["side"] == "sell")
+    )
+    state.update({"count": day, "sold": sold})
+    decision = output
+    return None if decision is None else Decision(decision)
 """
 
 
@@ -172,11 +169,12 @@ def test_combined_batch_sibling_failure_matches_run_and_segmented_track(tmp_path
             else bad["program"]
         )
         if mode == "framework":
+            assert "def decide(data, account, state):\n" in program["source"]
             program["source"] = program["source"].replace(
-                "    def on_close(self, data, account):\n",
-                "    def on_close(self, data, account):\n"
-                "        if data.session == SETTINGS['fail_session']:\n"
-                "            raise ValueError('combined sibling failure')\n",
+                "def decide(data, account, state):\n",
+                "def decide(data, account, state):\n"
+                "    if data.session == SETTINGS['fail_session']:\n"
+                "        raise ValueError('combined sibling failure')\n",
                 1,
             )
         program["source"] = program["source"].replace(
@@ -443,27 +441,21 @@ def test_invalid_alpha_output_preserves_combined_account_and_blocks_without_fall
     submitted["modules"]["alpha"] = {
         "kind": "python",
         "program": {
-            "source": """
-from quantgrove import Strategy, Decision
+            "source": """from quantgrove import Decision
 
 SETTINGS = {}
 
 
-class Fixture(Strategy):
-    def on_close(self, data, account):
-        signals = [
-            {
-                "instrument_id": item["instrument_id"],
-                "value": 1.0,
-                "valid_for_sessions": 2,
-            }
-            for item in data.candidate_details
-        ]
-        if data.session == SETTINGS["fail_session"]:
-            signals = "invalid signal output"
-        self.state = {"count": self.state.get("count", 0) + 1}
-        decision = {"reason": "opportunities", "signals": signals}
-        return None if decision is None else Decision(decision)
+def decide(data, account, state):
+    signals = [
+        {"instrument_id": item["instrument_id"], "value": 1.0, "valid_for_sessions": 2}
+        for item in data.candidate_details
+    ]
+    if data.session == SETTINGS["fail_session"]:
+        signals = "invalid signal output"
+    state.update({"count": state.get("count", 0) + 1})
+    decision = {"reason": "opportunities", "signals": signals}
+    return None if decision is None else Decision(decision)
 """.replace("Strategy", "Alpha").replace(
                 "SETTINGS = {}", f"SETTINGS = {dict(fail_session=SESSIONS[3])!r}"
             ),

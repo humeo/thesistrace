@@ -33,30 +33,34 @@
     },
     "python": {
       "source": "Python source",
-      "signature": "class MyStrategy(Strategy): on_close(self, data, account)",
-      "directExample": "The example uses ordinary Python variables for the lookback and improvement threshold. Edit them directly in the source.",
-      "historyContext": "data.close_prices(days) reads adjusted closing prices. data.history(field_id, days) reads other fields. Results contain sessions (oldest first) and values keyed by instrument ID. Missing values are None; check len(result.sessions) when history is short. Each request accepts 1–253 trading sessions, including the current Close.",
+      "signature": "compute(data, state) → Targets / Values; decide(data, account, state) → Decision / None",
+      "directExample": "The example computes 60-day momentum for all output dates, selects 30 stocks, and updates every 5 research sessions. Edit these business rules in source.",
+      "historyContext": "In compute, data.history(field_id, lookback=L) returns a read-only NumPy matrix: instruments × (L+T dates). The last T columns match data.sessions; missing or unavailable history is NaN. In decide, data.history(field_id, days) returns History through the current Close.",
       "frameworkContext": "data.framework provides the selected universe, active signals and current proposal for this stage. retained_proposal is a reference and is never automatically replayed.",
-      "state": "Optional self.state stores JSON-compatible memory across sessions. Other instance attributes are recreated. Helpers construct decisions; only the returned decision is applied. A failed invocation commits neither its state nor its target. Data access has bounded fields, instruments, reads and execution time.",
+      "state": "Mutate the supplied state mapping to save JSON values or numeric NumPy arrays. Compute and decision memories are separate. Globals and caches may disappear on recovery. Failed blocks publish no partial state or account progress.",
       "framework": {
-        "universe_selection": "Subclass UniverseSelection. Return self.select(instruments) to replace the selection. None retains the previous available selection.",
-        "alpha": "Subclass Alpha. Return self.signals({stock: score}, valid_for_sessions=2). None retains unexpired signals. Signals do not submit orders.",
-        "portfolio_construction": "Subclass PortfolioConstruction. Return self.target_weights(weights) for a full portfolio target, or None for no update.",
-        "risk_management": "Subclass RiskManagement. Return self.limit_positions({stock: maximum_shares}) to cap actual holdings, or self.replace(decision) to replace the proposal. self.replace(None) cancels the proposal; None passes it through."
+        "universe_selection": "Define decide and return select(instruments). None retains the previous available selection.",
+        "alpha": "Optionally precompute Values in compute. Return signals({stock: score}, valid_for_sessions=2) from decide. None retains unexpired signals; signals do not submit orders.",
+        "portfolio_construction": "Define decide and return target_weights(weights) for a complete target, or None for no update. Optional compute returns Values.",
+        "risk_management": "Return risk_limits({stock: maximum_shares}) or replace(decision) from decide. replace(None) cancels the proposal; None passes it through."
       },
       "systemInput": "System input",
-      "systemInputHelp": "data provides the decision date, candidates and history methods. account contains actual cash, positions, fills and rejections.",
+      "systemInputHelp": "compute receives a block of dates, instrument IDs, historical eligibility and bounded data reads. Optional decide receives only current values and the actual account.",
       "strategyOutput": "Strategy output",
-      "strategyOutputHelp": "Return self.target_weights({stock: 0.8}) for a full portfolio target, {} inside target_weights to exit all holdings, or None to make no update. Unlisted holdings exit; unallocated weight stays in cash.",
+      "strategyOutputHelp": "Return Targets(weights, update=flags), or Targets.equal_weight(selection, update=flags). False means no update; a true all-zero column requests liquidation. If decide is defined, compute returns Values and decide returns a helper-built decision or None.",
       "systemExecution": "System execution",
       "systemExecutionHelp": "Decide after Close; attempt trades at the next trading session’s Open. The platform simulates fills, costs, cash and performance. A target is not a guaranteed fill.",
       "accountReference": "account.cash_cny is actual cash; account.positions contains instrument_id, execution_shares and holding_age. account.fills and account.rejections contain this session’s execution facts. Money is represented as decimal strings. These observations are read-only.",
-      "targetReference": "For local changes, return self.increase_to_weights(weights) to buy only, self.reduce_exposure(maximum) to reduce exposure proportionally, or self.limit_positions({stock: shares}) to cap named holdings. self.with_limits(decision, maximum_shares=..., maximum_exposure=...) adds caps without relaxing existing ones.",
-      "readLimits": "Data is pinned to this run and ends at the current Close. Each invocation allows 64 reads, up to 262,144 stock/session cells per read and 1,048,576 in total. Results → Trading details → Python data reads shows actual successful reads. Configuration checking does not verify every dynamic branch."
+      "targetReference": "For local changes, return increase_to_weights(weights) to buy only, reduce_exposure(maximum) to reduce exposure proportionally, or limit_positions({stock: shares}) to cap named holdings. with_limits(decision, maximum_shares=..., maximum_exposure=...) adds caps without relaxing existing ones.",
+      "readLimits": "Up to 128 output dates per block, plus 0–252 lookback dates. Compute allows 2,097,152 cells per read and 4,194,304 total; decide allows 262,144 and 1,048,576. Each call allows 64 reads. Batch code must use only current/past information for each output: raw NumPy can accidentally look ahead. Configuration checking verifies loading, not causality.",
+      "writingReference": "Writing reference"
     },
     "cost": {
       "title": "Fees and slippage",
-      "groups": { "commission": "Commission", "taxes": "Taxes and transfer fees" },
+      "groups": {
+        "commission": "Commission",
+        "taxes": "Taxes and transfer fees"
+      },
       "compactLabels": {
         "commission_rate_all_in": "Commission rate",
         "commission_min_cny": "Minimum (CNY)",
@@ -331,30 +335,34 @@
     },
     "python": {
       "source": "Python 源码",
-      "signature": "class MyStrategy(Strategy): on_close(self, data, account)",
-      "directExample": "示例的回看周期和改善阈值都是普通 Python 变量，直接在源码中修改。",
-      "historyContext": "data.close_prices(days) 读取复权收盘价；data.history(字段 ID, days) 读取其他字段。结果的 sessions 按时间从早到晚排列，values 按股票 ID 索引，缺失值为 None。历史不足时检查 len(result.sessions)。每次可读取 1–253 个交易日，包含当前收盘。",
+      "signature": "compute(data, state) → Targets / Values; decide(data, account, state) → Decision / None",
+      "directExample": "示例一次计算多个输出日的 60 日动量，选前 30 只，每 5 个研究交易日调仓。这些业务规则直接在源码中修改。",
+      "historyContext": "compute 中 data.history(字段 ID, lookback=L) 返回只读 NumPy 矩阵：股票 × (L+T 个日期位置)，末尾 T 列对应 data.sessions；缺失或不足的历史为 NaN。decide 中 data.history(字段 ID, days) 返回截至当前收盘的 History。",
       "frameworkContext": "data.framework 提供本步骤的选股结果、活跃信号和当前组合建议。retained_proposal 仅供参考，不会自动重复执行。",
-      "state": "需要跨日记忆时使用 self.state，内容必须可序列化为 JSON；其他实例属性每次重新创建。辅助方法只构造决策，最终返回的决策才会执行。调用失败时不接受新状态和新目标。字段、股票范围、累计读取量和执行时间由平台限制。",
+      "state": "修改传入的 state 映射即可保存 JSON 值或数值 NumPy 数组；计算与账户决策的记忆分别保存。全局变量和缓存恢复时可能消失。块中失败时，不发布部分状态或账户进展。",
       "framework": {
-        "universe_selection": "继承 UniverseSelection，返回 self.select(股票列表) 更新选股；None 保留上次仍可用的选择。",
-        "alpha": "继承 Alpha，返回 self.signals({股票: 分数}, valid_for_sessions=2) 更新信号；None 保留未过期信号。信号不会直接下单。",
-        "portfolio_construction": "继承 PortfolioConstruction，返回 self.target_weights(权重) 设置整体目标组合；None 表示不更新。",
-        "risk_management": "继承 RiskManagement，返回 self.limit_positions({股票: 最大股数}) 限制实际持仓，或 self.replace(决策) 替换组合建议。self.replace(None) 取消建议；None 让本次建议继续执行。"
+        "universe_selection": "定义 decide，返回 select(股票列表) 更新选股；None 保留上次仍可用的选择。",
+        "alpha": "可在 compute 中批量预计算 Values；decide 返回 signals({股票: 分数}, valid_for_sessions=2)。None 保留未过期信号，信号不会直接下单。",
+        "portfolio_construction": "decide 返回 target_weights(权重) 设置整体目标组合，或 None 表示不更新；可选 compute 返回 Values。",
+        "risk_management": "decide 返回 risk_limits({股票: 最大股数}) 或 replace(决策)。replace(None) 取消组合建议；None 让建议继续执行。"
       },
       "systemInput": "系统传入",
-      "systemInputHelp": "data 提供决策日期、候选股票和历史数据读取方法；account 提供实际现金、持仓、成交和拒单记录。",
+      "systemInputHelp": "compute 接收一块输出日期、股票 ID、逐日候选资格和受限数据读取能力；可选 decide 只接收当天计算值及实际账户。",
       "strategyOutput": "策略返回",
-      "strategyOutputHelp": "return self.target_weights({股票: 0.8}) 设置整体目标组合；传入 {} 表示清仓；return None 表示本次不更新。未列出的持仓退出，未分配的权重保留为现金。",
+      "strategyOutputHelp": "返回 Targets(weights, update=标记) 或 Targets.equal_weight(选择矩阵, update=标记)。False 表示不更新；True 且整列为零表示清仓。若定义了 decide，compute 返回 Values，decide 返回辅助函数构造的决策或 None。",
       "systemExecution": "系统执行",
       "systemExecutionHelp": "收盘后运行策略，下一交易日开盘尝试成交。平台负责交易模拟、费用、账户和收益计算；目标持仓不等于实际成交。",
       "accountReference": "account.cash_cny 是实际现金；account.positions 包含 instrument_id（股票 ID）、execution_shares（实际股数）和 holding_age（持仓交易日数）。account.fills 和 account.rejections 是当日成交与拒单事实。金额采用十进制字符串表示。以上观察均为只读。",
-      "targetReference": "局部调整可返回 self.increase_to_weights(weights) 只加仓、self.reduce_exposure(maximum) 按比例降低总仓位，或 self.limit_positions({股票: 股数}) 限制指定持仓。self.with_limits(decision, maximum_shares=..., maximum_exposure=...) 追加限制，已有更严格的限制继续有效。",
-      "readLimits": "数据固定于本次回测版本，最晚到当前收盘。每次回调最多读取 64 次，单次最多 262,144 个“股票 × 交易日”数据格，累计最多 1,048,576 个。回测结果的“交易明细 → Python 数据读取”展示实际成功读取记录。检查配置不会验证所有动态分支。"
+      "targetReference": "局部调整可返回 increase_to_weights(weights) 只加仓、reduce_exposure(maximum) 按比例降低总仓位，或 limit_positions({股票: 股数}) 限制指定持仓。with_limits(decision, maximum_shares=..., maximum_exposure=...) 追加限制，已有更严格的限制继续有效。",
+      "readLimits": "每块最多 128 个输出日，另加 0–252 个回看位置。compute 单次/累计最多 2,097,152 / 4,194,304 个数据格；decide 为 262,144 / 1,048,576；每次调用最多读取 64 次。每个输出只能使用当日及过去的信息；原生 NumPy 可能写出偷看未来的代码，检查配置只验证装载，不证明因果性。",
+      "writingReference": "编写参考"
     },
     "cost": {
       "title": "费用与滑点",
-      "groups": { "commission": "佣金", "taxes": "税费" },
+      "groups": {
+        "commission": "佣金",
+        "taxes": "税费"
+      },
       "compactLabels": {
         "commission_rate_all_in": "佣金费率",
         "commission_min_cny": "最低佣金（元）",

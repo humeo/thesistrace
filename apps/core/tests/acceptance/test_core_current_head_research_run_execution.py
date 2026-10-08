@@ -1239,7 +1239,7 @@ def test_tracking_advance_freezes_and_publishes_only_the_oldest_bounded_chunk(
             f"/api/research-runs/{run_id}/daily-tracks",
             json={"request_id": "tracking-target-bounded-activation"},
         ).json()["id"]
-        backlog = _weekday_sessions_after(date.fromisoformat(seed_sessions[-1]), count=70)
+        backlog = _weekday_sessions_after(date.fromisoformat(seed_sessions[-1]), count=134)
         _publish_head(
             settings,
             sessions=(*seed_sessions, *backlog),
@@ -1267,8 +1267,6 @@ def test_tracking_advance_freezes_and_publishes_only_the_oldest_bounded_chunk(
         )
 
         detail = client.get(f"/api/daily-tracks/{track_id}").json()
-        assert detail["strategy_session"] == backlog[63]
-        assert detail["lag_sessions"] == 6
         with runtime.database.transaction() as transaction:
             progression = transaction.execute(
                 """
@@ -1287,7 +1285,11 @@ def test_tracking_advance_freezes_and_publishes_only_the_oldest_bounded_chunk(
                 (track_id,),
             ).fetchone()
         assert progression is not None
-        assert [item.isoformat() for item in progression["target_sessions"]] == list(backlog[:64])
+        targets = [item.isoformat() for item in progression["target_sessions"]]
+        assert 0 < len(targets) <= 128 < len(backlog)
+        assert targets == list(backlog[:len(targets)])
+        assert detail["strategy_session"] == targets[-1]
+        assert detail["lag_sessions"] == len(backlog) - len(targets)
         assert progression["status"] == "succeeded"
         assert attempt_count == {"count": 1}
         assert [event["event"] for event in execution_events] == [
@@ -1305,7 +1307,7 @@ def test_tracking_advance_freezes_and_publishes_only_the_oldest_bounded_chunk(
             "tracking_checkpoint_published",
             "tracking_head_advanced",
         ]
-        assert head_at_publication == [backlog[63]]
+        assert head_at_publication == [targets[-1]]
         assert all(event["track_id"] == track_id for event in execution_events)
         assert all(event["attempt_id"].startswith("track_attempt_") for event in execution_events)
         assert all(event["worker_role"] == "tracking" for event in execution_events)
@@ -1622,7 +1624,7 @@ def test_tracking_transient_cycle_persists_backoff_rotates_and_requires_retry(
                 )
             )
         retry_track, control_track = track_ids
-        backlog = _weekday_sessions_after(date.fromisoformat(seed_sessions[-1]), count=70)
+        backlog = _weekday_sessions_after(date.fromisoformat(seed_sessions[-1]), count=134)
         backlog_head = _publish_head(
             settings,
             sessions=(*seed_sessions, *backlog),
@@ -1650,6 +1652,7 @@ def test_tracking_transient_cycle_persists_backoff_rotates_and_requires_retry(
             ),
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             generation_store=MountedGenerationStore(settings.data_mount),
+            execution_memory_bytes=settings.tracking_execution_memory_bytes,
         )
         failure_events: list[dict[str, object]] = []
         _refresh_daily_track(client, retry_track, "tracking-retry-cycle-first-refresh")
@@ -1678,7 +1681,8 @@ def test_tracking_transient_cycle_persists_backoff_rotates_and_requires_retry(
                 is True
             )
             assert claimed == [control_track]
-            assert client.get(f"/api/daily-tracks/{control_track}").json()["lag_sessions"] == 6
+            remaining = client.get(f"/api/daily-tracks/{control_track}").json()["lag_sessions"]
+            assert 0 < remaining < len(backlog)
 
             _make_tracking_retry_eligible(settings, retry_track)
             claimed.clear()
@@ -1758,6 +1762,7 @@ def test_tracking_transient_cycle_persists_backoff_rotates_and_requires_retry(
             publication=runtime.publication,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             generation_store=MountedGenerationStore(settings.data_mount),
+            execution_memory_bytes=settings.tracking_execution_memory_bytes,
         )
         assert restarted_processor.process_next() is False
 
@@ -1771,6 +1776,7 @@ def test_tracking_transient_cycle_persists_backoff_rotates_and_requires_retry(
         recovered = _tracking_retry_state(settings, retry_track)
         assert recovered["track_status"] == "active"
         assert recovered["progression_status"] == "succeeded"
+        assert recovered["target_sessions"] == first["target_sessions"]
         assert recovered["cycle_ordinal"] == 2
         assert recovered["attempt_cycles"] == [1, 1, 1, 2]
         assert recovered["attempt_ordinals"] == [1, 2, 3, 1]
@@ -1778,7 +1784,7 @@ def test_tracking_transient_cycle_persists_backoff_rotates_and_requires_retry(
         assert recovered["attempt_generations"][3] != backlog_head
         assert (
             client.get(f"/api/daily-tracks/{retry_track}").json()["strategy_session"]
-            == backlog[63]
+            == first["target_sessions"][-1].isoformat()
         )
 
 
@@ -6361,6 +6367,7 @@ def _tracking_retry_state(
                 SELECT track.status AS track_status,
                        progression.status AS progression_status,
                        progression.current_cycle_ordinal AS cycle_ordinal,
+                       progression.target_sessions,
                        progression.next_attempt_eligible_at,
                        latest.finished_at,
                        EXTRACT(

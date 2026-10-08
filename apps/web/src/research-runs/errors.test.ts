@@ -20,6 +20,16 @@ test("cancellation causes are stable codes and unknown details stay private", as
 });
 
 
+test("obsolete Python tracking explains how to continue while keeping historical results", async () => {
+  const error = await readTrackingError(Response.json({ detail: { code: "TRACKING_PROGRAM_ENVIRONMENT_OBSOLETE" } }, { status: 409 }));
+  expect(error).toEqual({ code: "trackingProgram" });
+  expect(formatRunError(error)).toContain("new draft");
+  await i18n.changeLanguage("zh-CN");
+  expect(formatRunError(error)).toContain("新草稿");
+  await i18n.changeLanguage("en");
+});
+
+
 test("known execution failures retain their cause while unrecognized diagnostics remain private", async () => {
   expect(formatExecutionFailure("CheckpointIntegrityFailure")).toContain("integrity verification");
   await i18n.changeLanguage("zh-CN");

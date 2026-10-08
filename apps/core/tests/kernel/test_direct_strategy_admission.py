@@ -12,8 +12,9 @@ from thesistrace.research_run.service import ResearchRunAdmissionRejected, Resea
 
 pytestmark = pytest.mark.bounded_process
 
-SOURCE = ("from quantgrove import Strategy\nclass NoUpdate(Strategy):\n"
-          "    def on_close(self, data, account): return None\n")
+SOURCE = """def decide(data, account, state):
+    return None
+"""
 
 
 def direct_spec():
@@ -78,7 +79,7 @@ def test_direct_diagnosis_and_admission_freeze_only_the_active_program():
     assert frozen["strategy"]["program"] == values["program"]
     assert "holdings_count" not in frozen["strategy"]
     assert "modules" not in frozen["strategy"]
-    assert frozen["strategy"]["environment"]["contract"] == "python-strategy/v4"
+    assert frozen["strategy"]["environment"]["contract"] == "python-strategy/v5"
     assert admitted.expression_admission.effective_lookback == 0
     assert admitted.execution_plan.calculation_sessions[0].isoformat() == "2026-08-07"
     values["program"]["source"] = "changed outside the admitted snapshot"
@@ -165,7 +166,7 @@ def test_authoring_discovery_publishes_program_contract_and_limits():
     value = ResearchAuthoringService().constraints().model_dump(mode="json")
     assert value["strategy_modes"] == ["framework", "direct"]
     program = value["python_program"]
-    assert program["callback"] == "Strategy.on_close(self, data, account)"
+    assert program["callback"] == "compute(data, state); optional decide(data, account, state)"
     assert program["maximum_source_bytes"] == 65536
     assert program["maximum_state_bytes"] == 262144
     assert program["history_sessions"] == {"minimum": 1, "maximum": 253}

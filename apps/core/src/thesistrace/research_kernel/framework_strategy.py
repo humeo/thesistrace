@@ -139,7 +139,19 @@ class ReplacementAdjustment(ModuleOutput):
 
 
 class FrameworkStrategy:
-    def __init__(self, data, alpha_matrix, strategy, checksum, *, observe_common=None):
+    def __init__(
+        self,
+        data,
+        alpha_matrix,
+        strategy,
+        checksum,
+        *,
+        observe_common=None,
+        output_sessions=None,
+        first_session_index=0,
+    ):
+        from thesistrace.research_kernel.batch_program import PreparedProgramBlock
+
         self._data = data
         self._checksum = checksum
         self._modules = FrameworkModules.model_validate(strategy["modules"])
@@ -147,13 +159,44 @@ class FrameworkStrategy:
         self._runtime = get_strategy_runtime()
         if self._programs and strategy["environment"] != self._runtime.identity():
             raise ValueError("Python execution environment differs from its frozen identity")
+        self._sessions = tuple(output_sessions or data.sessions)
+        self._checkpoint_each = output_sessions is None
+        self._blocks = {}
+        for stage, program in self._programs.items():
+            try:
+                self._blocks[stage] = PreparedProgramBlock(
+                    data,
+                    program,
+                    self._runtime,
+                    self._sessions,
+                    first_session_index,
+                )
+            except ValueError as error:
+                self._fail(stage, self._sessions[0], error)
+        if any(not block.entrypoints["decide"] for block in self._blocks.values()):
+            raise ValueError("Framework modules require decide; optional compute returns Values")
+        self._computed = {}
+        self._executions = {
+            stage: self._runtime.open_session(program.source)
+            for stage, program in self._programs.items()
+        }
         if "alpha" not in self._programs and alpha_matrix is None:
             raise ValueError("Builtin Alpha module requires an Alpha matrix")
         self._alpha = alpha_values_by_session(alpha_matrix)
-        self._portfolio = (None if "portfolio_construction" in self._programs else
-                           PreparedBuiltinPortfolio(
-                               data, strategy, checksum, observe_common=observe_common,
-                           ))
+        self._portfolio = (
+            None
+            if "portfolio_construction" in self._programs
+            else PreparedBuiltinPortfolio(
+                data,
+                strategy,
+                checksum,
+                observe_common=observe_common,
+            )
+        )
+
+    def close(self):
+        for execution in self._executions.values():
+            execution.close()
 
     def validate_continuation(self, continuation):
         """Validate resumable risk facts before any Open, including empty refreshes."""
@@ -197,33 +240,87 @@ class FrameworkStrategy:
                 raise ValueError("Take-profit continuation differs from its actual holding cycle")
 
     def _invoke(self, stage, view, daily, module_states, diagnostics):
+        from thesistrace.research_kernel.batch_program import current_values
+
         program = self._programs[stage]
         try:
             context = program_context(self._data, **daily)
             if stage != "universe_selection":
                 selected = set(view["universe"])
-                context["candidates"] = [row for row in context["candidates"]
-                                         if row["instrument_id"] in selected]
+                context["candidates"] = [
+                    row for row in context["candidates"] if row["instrument_id"] in selected
+                ]
             context["framework"] = view
-            result = self._runtime.invoke(
-                program.source, context=context, state=module_states[stage],
-                entrypoint={"universe_selection": "UniverseSelection", "alpha": "Alpha",
-                            "portfolio_construction": "PortfolioConstruction",
-                            "risk_management": "RiskManagement"}[stage],
+            context["random_seed"] = program.source_sha256
+            state = module_states[stage]
+            if set(state) != {"compute", "decision"}:
+                raise ValueError("Python module state requires compute and decision state")
+            computed_state = state["compute"]
+            if self._blocks[stage].entrypoints["compute"]:
+                if stage not in self._computed or daily["session"] not in self._computed[stage][0]:
+                    self._computed[stage] = self._blocks[stage].compute(
+                        daily["session"],
+                        state["compute"],
+                        daily["account"],
+                    )
+                sessions, instruments, output, computed = self._computed[stage]
+                current_values(
+                    context, output["values"], instruments, sessions.index(daily["session"])
+                )
+                if daily["session"] == sessions[-1]:
+                    computed_state = computed.state
+                    diagnostics.extend(
+                        {
+                            "session": daily["session"],
+                            "reason": "python_history",
+                            "module": stage,
+                            "phase": "compute",
+                            "program_sha256": program.source_sha256,
+                            "request_index": index,
+                            **read,
+                        }
+                        for index, read in enumerate(computed.history_reads, 1)
+                    )
+                    if computed.diagnostics:
+                        diagnostics.append(
+                            {
+                                "session": daily["session"],
+                                "reason": "python_diagnostics",
+                                "program_sha256": program.source_sha256,
+                                "text": computed.diagnostics,
+                            }
+                        )
+            result = self._executions[stage].invoke(
+                context=context,
+                state=state["decision"],
                 read_history=program_history(self._data, context),
+                checkpoint=self._checkpoint_each or daily["session"] == self._sessions[-1],
             )
         except ValueError as error:
             self._fail(stage, daily["session"], error)
-        module_states[stage] = result.state
-        diagnostics.extend({
-            "session": daily["session"], "reason": "python_history", "module": stage,
-            "program_sha256": program.source_sha256, "request_index": index, **read,
-        } for index, read in enumerate(result.history_reads, 1))
+        module_states[stage] = {"compute": computed_state, "decision": result.state}
+        diagnostics.extend(
+            {
+                "session": daily["session"],
+                "reason": "python_history",
+                "module": stage,
+                "phase": "decide",
+                "program_sha256": program.source_sha256,
+                "request_index": index,
+                **read,
+            }
+            for index, read in enumerate(result.history_reads, 1)
+        )
         if result.diagnostics:
-            diagnostics.append({
-                "session": daily["session"], "reason": "python_diagnostics", "module": stage,
-                "program_sha256": program.source_sha256, "text": result.diagnostics,
-            })
+            diagnostics.append(
+                {
+                    "session": daily["session"],
+                    "reason": "python_diagnostics",
+                    "module": stage,
+                    "program_sha256": program.source_sha256,
+                    "text": result.diagnostics,
+                }
+            )
         return result.output, context
 
     def _fail(self, stage, session, error):
@@ -247,16 +344,30 @@ class FrameworkStrategy:
                 session=self._data.sessions[self._data.sessions.index(session) - 1],
                 completed_sessions=report_index,
             )
-        module_states = (dict(previous["module_states"]) if previous else
-                         {name: {} for name in BUILTIN_FRAMEWORK_MODULES})
-        daily = {"session": session, "completed_sessions": report_index + 1,
-                 "account": account, "fills": fills, "rejections": rejections}
+        module_states = (
+            dict(previous["module_states"])
+            if previous
+            else {
+                name: ({"compute": {}, "decision": {}} if name in self._programs else {})
+                for name in BUILTIN_FRAMEWORK_MODULES
+            }
+        )
+        daily = {
+            "session": session,
+            "completed_sessions": report_index + 1,
+            "account": account,
+            "fills": fills,
+            "rejections": rejections,
+        }
         diagnostics = []
         view = {
             "universe": list(previous["universe"]) if previous else [],
             "signals": list(previous["signals"]) if previous else [],
-            "universe_changed": False, "signals_updated": False,
-            "expired_signals": [], "removed_signals": [], "proposal": None,
+            "universe_changed": False,
+            "signals_updated": False,
+            "expired_signals": [],
+            "removed_signals": [],
+            "proposal": None,
             "retained_proposal": previous["retained_proposal"] if previous else None,
         }
         universe_evidence = self._universe(view, daily, module_states, diagnostics)
@@ -266,7 +377,11 @@ class FrameworkStrategy:
         alpha_evidence = self._signals(view, daily, module_states, diagnostics)
         if self._portfolio is None:
             output, context = self._invoke(
-                "portfolio_construction", view, daily, module_states, diagnostics,
+                "portfolio_construction",
+                view,
+                daily,
+                module_states,
+                diagnostics,
             )
             try:
                 target = program_target(output, context, self._checksum)
@@ -274,7 +389,9 @@ class FrameworkStrategy:
                 self._fail("portfolio_construction", session, error)
         else:
             result = self._portfolio.decide(
-                session=session, report_index=report_index, alpha_values=view["signals"],
+                session=session,
+                report_index=report_index,
+                alpha_values=view["signals"],
                 previous=module_states["portfolio_construction"],
                 account=account,
             )
@@ -287,36 +404,56 @@ class FrameworkStrategy:
         proposal = target.model_dump(mode="json") if target else None
         retentions = []
         portfolio_module = self._modules.portfolio_construction
-        if (isinstance(portfolio_module, BuiltinPortfolioModule)
-                and target is not None and target.allocation is not None):
+        if (
+            isinstance(portfolio_module, BuiltinPortfolioModule)
+            and target is not None
+            and target.allocation is not None
+        ):
             retained = set(target.allocation.retained_instrument_ids)
-            retentions = [{
-                "instrument_id": position["instrument_id"],
-                "execution_shares": position["execution_shares"],
-                "holding_age": position["holding_age"],
-                "minimum_holding_sessions": portfolio_module.minimum_holding_sessions,
-            } for position in account["positions"] if position["instrument_id"] in retained]
+            retentions = [
+                {
+                    "instrument_id": position["instrument_id"],
+                    "execution_shares": position["execution_shares"],
+                    "holding_age": position["holding_age"],
+                    "minimum_holding_sessions": portfolio_module.minimum_holding_sessions,
+                }
+                for position in account["positions"]
+                if position["instrument_id"] in retained
+            ]
         view["proposal"] = proposal
         risk_evidence = None
         if "risk_management" in self._programs:
             output, context = self._invoke(
-                "risk_management", view, daily, module_states, diagnostics,
+                "risk_management",
+                view,
+                daily,
+                module_states,
+                diagnostics,
             )
             target = self._risk(output, context, target)
             if output is not None:
                 risk_evidence = (
                     ReplacementEvidence(mode="replace", reason=output["reason"], target=target)
-                    if output["mode"] == "replace" else PositionLimitEvidence.model_validate(output)
+                    if output["mode"] == "replace"
+                    else PositionLimitEvidence.model_validate(output)
                 )
         elif isinstance(self._modules.risk_management, BuiltinRiskModule):
             observations = self._modules.risk_management.holding_observations(account)
             risk_limits = {row["instrument_id"]: 0 for row in observations}
             if self._modules.risk_management.take_profit_tiers:
                 risk_state, profit_limits, profit_observations = take_profit_decision(
-                    tiers=self._modules.risk_management.take_profit_tiers, account=account,
-                    previous=({"take_profit_cycles": module_states["risk_management"][
-                        "take_profit_cycles"
-                    ]} if module_states["risk_management"] else {}), fills=fills,
+                    tiers=self._modules.risk_management.take_profit_tiers,
+                    account=account,
+                    previous=(
+                        {
+                            "take_profit_cycles": module_states["risk_management"][
+                                "take_profit_cycles"
+                            ]
+                        }
+                        if module_states["risk_management"]
+                        else {}
+                    ),
+                    fills=fills,
                 )
                 module_states["risk_management"].update(risk_state)
                 observations.extend(profit_observations)
@@ -326,8 +463,10 @@ class FrameworkStrategy:
             if self._modules.risk_management.portfolio_drawdown is not None:
                 drawdown_state, cap, observation = portfolio_drawdown_decision(
                     policy=self._modules.risk_management.portfolio_drawdown,
-                    nav=account["close_risk_nav_cny"], session=session,
-                    session_number=report_index + 1, new_proposal=target is not None,
+                    nav=account["close_risk_nav_cny"],
+                    session=session,
+                    session_number=report_index + 1,
+                    new_proposal=target is not None,
                     previous=module_states["risk_management"].get("portfolio_drawdown"),
                 )
                 module_states["risk_management"]["portfolio_drawdown"] = drawdown_state
@@ -341,38 +480,58 @@ class FrameworkStrategy:
                     limits[item] = min(maximum, limits.get(item, maximum))
                 if risk_limits or exposure_cap is not None:
                     target = PendingTarget(
-                        decision_session=session, execution="next_research_session_open",
-                        contract_checksum=self._checksum, reason=reason,
-                        allocation=target.allocation if target else None, position_limits=limits,
+                        decision_session=session,
+                        execution="next_research_session_open",
+                        contract_checksum=self._checksum,
+                        reason=reason,
+                        allocation=target.allocation if target else None,
+                        position_limits=limits,
                         maximum_stock_exposure=exposure_cap,
                     )
                 risk_evidence = BuiltinRiskEvidence(
-                    reason=reason, position_limits=limits, observations=observations,
+                    reason=reason,
+                    position_limits=limits,
+                    observations=observations,
                 )
         state = {
-            "mode": "framework", "contract_checksum": self._checksum,
+            "mode": "framework",
+            "contract_checksum": self._checksum,
             "selection_interval": (
                 self._portfolio.policy.selection_interval if self._portfolio else None
             ),
-            "module_states": module_states, "universe": universe, "signals": view["signals"],
-            "retained_proposal": proposal if proposal is not None else (
-                previous["retained_proposal"] if previous else None
-            ),
+            "module_states": module_states,
+            "universe": universe,
+            "signals": view["signals"],
+            "retained_proposal": proposal
+            if proposal is not None
+            else (previous["retained_proposal"] if previous else None),
         }
         state = FrameworkModulesDecisionState.model_validate(state).model_dump(mode="json")
         return DailyDecision(
-            state=state, target=target, diagnostics=tuple(diagnostics),
+            state=state,
+            target=target,
+            diagnostics=tuple(diagnostics),
             framework=FrameworkEvidence(
-                modules={name: ("python:" + module.program.source_sha256
-                                if isinstance(module, PythonModule) else (
-                                    module.kind if isinstance(
-                                        module, (BuiltinRiskModule, BuiltinPortfolioModule),
-                                    ) else module
-                                ))
-                         for name in BUILTIN_FRAMEWORK_MODULES
-                         for module in (getattr(self._modules, name),)},
-                universe=universe_evidence, alpha=alpha_evidence,
-                proposal=proposal, risk_adjustment=risk_evidence,
+                modules={
+                    name: (
+                        "python:" + module.program.source_sha256
+                        if isinstance(module, PythonModule)
+                        else (
+                            module.kind
+                            if isinstance(
+                                module,
+                                (BuiltinRiskModule, BuiltinPortfolioModule),
+                            )
+                            else module
+                        )
+                    )
+                    for name in BUILTIN_FRAMEWORK_MODULES
+                    for module in (getattr(self._modules, name),)
+                },
+                universe=universe_evidence,
+                alpha=alpha_evidence,
+                proposal=proposal,
+                risk_adjustment=risk_evidence,
                 portfolio_retentions=retentions,
             ),
         )

@@ -29,7 +29,7 @@ def test_http_serves_the_same_authoring_reference_with_current_query_validation(
     assert client.get(path).status_code == 401
     client.headers["Cookie"] = "test-session"
     for topic, symbol in (("workflow", None), ("formula", "syntax"),
-                          ("python_sdk", "Data.history"), ("examples", "Strategy")):
+                          ("python_sdk", "Data.history"), ("examples", "direct")):
         params = {"topic": topic, **({"symbol": symbol} if symbol else {})}
         response = client.get(path, params=params)
         assert response.status_code == 200

@@ -2740,3 +2740,31 @@ def test_daily_basic_refresh_base_preserves_normalized_source_values(tmp_path: P
 
     reopened = MountedGenerationStore(tmp_path).open_refresh_base(generation.manifest_sha256)
     assert reopened.canonical["daily_basic"] == source_rows
+
+
+def test_python_common_loader_uses_preceding_prices_and_its_original_universe(tmp_path):
+    canonical = _canonical(3)
+    store = MountedGenerationStore(tmp_path)
+    generation = store.materialize(
+        canonical, prepared_at=datetime(2026, 8, 9, tzinfo=UTC),
+        source_name="deterministic-test", source_lineage={"snapshot": "fixed"},
+    )
+    calendar = canonical["research_calendar"]
+    data = store.read_columnar_slice(
+        generation.manifest_sha256, sessions=calendar[1:], universe_name="top300",
+        neutralization=None, field_bindings={"price.close.adjusted": "close"},
+        fact_instrument_ids=frozenset(),
+    )
+    reference = {
+        "kind": "common", "identifier": "universe_advancing_fraction", "industry_code": None,
+    }
+    loaded, cells = data.strategy_common_loader(calendar[-1], 2, False, 6)
+    from thesistrace.research_kernel.program_common import common_window
+    history, _ = common_window(
+        loaded, session=calendar[-1], days=2, reference=reference, max_cells=6
+    )
+    assert history.sessions == tuple(calendar[1:])
+    assert history.array.tolist() == [[1.0, 1.0]]
+    assert cells == 6
+    with pytest.raises(ValueError, match="budget"):
+        data.strategy_common_loader(calendar[-1], 2, False, 5)

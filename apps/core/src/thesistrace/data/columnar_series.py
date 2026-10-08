@@ -253,6 +253,7 @@ class ColumnarResearchData:
     _family_values: pa.Table | None
     _field_columns: Mapping[str, str]
     strategy_history_loader: Callable | None = field(default=None, repr=False, compare=False)
+    strategy_common_loader: Callable | None = field(default=None, repr=False, compare=False)
 
     @cached_property
     def _instrument_axis(self) -> tuple[str, ...]:
@@ -468,6 +469,7 @@ class ColumnarResearchData:
             _family_values=family_values,
             _field_columns=self._field_columns,
             strategy_history_loader=self.strategy_history_loader,
+            strategy_common_loader=self.strategy_common_loader,
         )
 
 

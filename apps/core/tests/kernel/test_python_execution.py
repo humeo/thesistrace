@@ -46,13 +46,17 @@ print(json.dumps(output))
         environment.invoke(request, clock_time_ns=0)
 
 
-@pytest.mark.parametrize("body, response", [
-    ("read_request(b'request')", b"x" * (5 * 1024**2)),
-    ("read_request(b'x' * 65537)", b""),
-    ("[read_request(b'x') for _ in range(65)]", b""),
-    ("[read_request(b'x') for _ in range(5)]", b"x" * (4 * 1024**2)),
-    ("ready()", b""),
-])
+@pytest.mark.parametrize(
+    "body, response",
+    [
+        ("read_request(b'request')", b"x" * (33 * 1024**2)),
+        ("read_request(b'x' * 65537)", b""),
+        ("[read_request(b'x') for _ in range(65)]", b""),
+        ("[read_request(b'x') for _ in range(9)]", b"x" * (4 * 1024**2)),
+        ("ready()", b""),
+    ],
+    ids=["response_bytes", "request_bytes", "request_count", "total_response_bytes", "readiness"],
+)
 def test_prepared_python_enforces_capability_limits(body, response):
     with PreparedPythonEnvironment(
         "from _thesistrace_execution import ready, read_request\nready()\n" + body,
@@ -81,10 +85,40 @@ except OSError:
 
 def test_prepared_output_handles_short_wasi_writes_and_bounds_total_output():
     with PreparedPythonEnvironment(
-        "from _thesistrace_execution import ready, payload\nready()\n"
-        "print('数值' * int(payload))",
+        "from _thesistrace_execution import ready, payload\nready()\nprint('数值' * int(payload))",
     ) as environment:
         assert environment.invoke(b"12000", clock_time_ns=0) == ("数值" * 12000 + "\n").encode()
         with pytest.raises(ValueError):
-            environment.invoke(b"200000", clock_time_ns=0)
+            environment.invoke(b"3000000", clock_time_ns=0)
         assert environment.invoke(b"1", clock_time_ns=0) == "数值\n".encode()
+
+
+def test_rejected_guests_do_not_delay_collection_inside_a_later_healthy_call():
+    import gc
+
+    def collect(_request):
+        gc.collect()
+        return b'healthy'
+
+    enabled = gc.isenabled()
+    gc.disable()
+    try:
+        for _ in range(3):
+            with PreparedPythonEnvironment(
+                'from _thesistrace_execution import ready\nready()\nready()',
+            ) as environment:
+                try:
+                    environment.invoke(b'', clock_time_ns=0)
+                except ValueError as error:
+                    assert 'resource or capability' in str(error)
+                else:
+                    pytest.fail('Repeated readiness must be rejected')
+        with PreparedPythonEnvironment(
+            'from _thesistrace_execution import ready, read_request\n'
+            'ready()\nprint(read_request(b"collect").decode())',
+        ) as environment:
+            assert environment.invoke(b'', clock_time_ns=0, read_request=collect) == b'healthy\n'
+    finally:
+        if enabled:
+            gc.enable()
+        gc.collect()

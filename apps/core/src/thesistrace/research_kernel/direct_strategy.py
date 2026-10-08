@@ -82,7 +82,14 @@ def program_context(
     }
 
 
-def program_history(research_data, context):
+def program_history(
+    research_data,
+    context,
+    *,
+    max_sessions=HISTORY_SESSIONS,
+    max_cells=HISTORY_CELLS,
+    total_cells=HISTORY_TOTAL_CELLS,
+):
     """Bind data authority outside guest-controlled memory for one decision."""
     session = context["session"]
     visible = frozenset(row["instrument_id"] for row in context["candidates"]) | frozenset(
@@ -95,26 +102,53 @@ def program_history(research_data, context):
         if type(request) is not dict or set(request) != {"field_id", "days", "instruments"}:
             raise ValueError("History requires field_id, days and instruments")
         field_id, days, instruments = (
-            request["field_id"], request["days"], request["instruments"],
+            request["field_id"],
+            request["days"],
+            request["instruments"],
         )
         if type(field_id) is not str or not 1 <= len(field_id) <= 200:
             raise ValueError("History field ID is invalid")
-        if type(days) is not int or not 1 <= days <= HISTORY_SESSIONS:
-            raise ValueError("History days must be an integer between 1 and 253")
+        if type(days) is not int or not 1 <= days <= max_sessions:
+            raise ValueError(f"History days must be an integer between 1 and {max_sessions}")
+        if field_id.startswith("common."):
+            from thesistrace.research_kernel.program_common import common_identity, common_window
+
+            if instruments is not None:
+                raise ValueError("Common inputs use governed historical membership")
+            reference = common_identity(field_id)
+            loader = getattr(research_data, "strategy_common_loader", None)
+            budget = min(max_cells, total_cells - cells_read)
+            if loader is None:
+                result, cells = common_window(
+                    research_data, session=session, days=days, reference=reference, max_cells=budget
+                )
+            else:
+                loaded, cells = loader(
+                    session, days, reference["industry_code"] is not None, budget
+                )
+                result, _ = common_window(
+                    loaded, session=session, days=days, reference=reference, max_cells=budget
+                )
+            cells_read += cells
+            return result
         if instruments is None:
             instruments = sorted(visible)
-        if (type(instruments) is not list or any(type(item) is not str for item in instruments)
-                or len(instruments) != len(set(instruments)) or not set(instruments) <= visible):
+        if (
+            type(instruments) is not list
+            or any(type(item) is not str for item in instruments)
+            or len(instruments) != len(set(instruments))
+            or not set(instruments) <= visible
+        ):
             raise ValueError("History instruments must be unique visible candidates or holdings")
         cells_read += len(instruments) * days
-        if len(instruments) * days > HISTORY_CELLS or cells_read > HISTORY_TOTAL_CELLS:
+        if len(instruments) * days > max_cells or cells_read > total_cells:
             raise ValueError("History cell budget exceeded")
         loader = getattr(research_data, "strategy_history_loader", None)
         if loader is not None:
             result = loader(session, field_id, days, tuple(instruments))
         else:
             end = research_data.sessions.index(session) + 1
-            sessions = research_data.sessions[max(0, end - days):end]
+            sessions = research_data.sessions[max(0, end - days) : end]
             if isinstance(research_data, ColumnarResearchSeries):
                 scoped = slice_research_sessions(research_data, sessions)
                 matrix = scoped.numeric_field_matrices((field_id,), tuple(instruments))[field_id]
@@ -123,11 +157,16 @@ def program_history(research_data, context):
             else:
                 if field_id not in research_data.fields:
                     raise ValueError("History field unavailable in the pinned data")
-                matrix = np.asarray([
-                    [_numeric(research_data.fields[field_id].get((date, item)))
-                     for date in sessions]
-                    for item in instruments
-                ], dtype="<f8").reshape(len(instruments), len(sessions))
+                matrix = np.asarray(
+                    [
+                        [
+                            _numeric(research_data.fields[field_id].get((date, item)))
+                            for date in sessions
+                        ]
+                        for item in instruments
+                    ],
+                    dtype="<f8",
+                ).reshape(len(instruments), len(sessions))
             result = HistoryWindow(tuple(sessions), tuple(instruments), matrix)
         return result
 
@@ -161,17 +200,34 @@ class DirectStrategy:
         self._runtime = runtime
         self._contract_checksum = contract_checksum
 
-    def decide(self, context: dict[str, object], *, previous: dict[str, object],
-               read_history=None) -> DirectDecision:
-        result = self._runtime.invoke(
-            self._program.source, context=context, state=previous,
-            read_history=read_history,
-        )
+    def decide(
+        self,
+        context: dict[str, object],
+        *,
+        previous: dict[str, object],
+        read_history=None,
+        execution=None,
+        checkpoint=True,
+    ) -> DirectDecision:
+        if execution is None:
+            result = self._runtime.invoke(
+                self._program.source, context=context, state=previous, read_history=read_history
+            )
+        else:
+            result = execution.invoke(
+                context=context, state=previous, read_history=read_history, checkpoint=checkpoint
+            )
         try:
             target = program_target(result.output, context, self._contract_checksum)
         except ValueError as error:
             raise StrategyProgramError(
-                str(error), source=self._program.source, session=context["session"],
+                str(error),
+                source=self._program.source,
+                session=context["session"],
             ) from error
-        return DirectDecision(state=result.state, target=target, diagnostics=result.diagnostics,
-                              history_reads=result.history_reads)
+        return DirectDecision(
+            state=result.state,
+            target=target,
+            diagnostics=result.diagnostics,
+            history_reads=result.history_reads,
+        )

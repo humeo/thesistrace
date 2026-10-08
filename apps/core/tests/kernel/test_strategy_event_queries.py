@@ -52,7 +52,8 @@ def test_history_read_evidence_roundtrips_numeric_counts_and_empty_history():
         strategy_event_payload,
     )
     row = {
-        "read_id": "2026-08-03:direct:1", "session": "2026-08-03", "module": "direct",
+        "read_id": "2026-08-03:direct:decide:1", "session": "2026-08-03",
+        "module": "direct", "phase": "decide",
         "program_sha256": "a" * 64, "field_id": "price.close.adjusted", "request_index": 1,
         "requested_sessions": 10, "returned_sessions": 0, "instrument_count": 0,
         "first_session": None, "last_session": None, "response_bytes": 27,

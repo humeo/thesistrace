@@ -319,10 +319,12 @@ _避免混用_: Alpha, Factor, Investment Hypothesis
 
 **Strategy Program**:
 Researcher-authored code expressing a Strategy's portfolio decision rules.
-Python programs implement an isolated class callback with bounded data/account
-inputs, one returned decision and optional explicit cross-session state.
-Numerical work may use array operations over bounded completed-session history;
-the generic Python executor does not choose Strategy rules or callback frequency.
+Python programs implement batch `compute(data, state)` returning Targets or Values,
+with optional actual-account `decide(data, account, state)`. Each phase has separate
+explicit durable memory. Numerical work uses bounded multi-date NumPy arrays;
+author code must remain causal and invariant to partitioning. The generic Python
+executor owns private sessions and resources, while the Strategy Adapter owns
+trading observations, coordinates and outputs. See ADR-0258 and the Python guide.
 _避免混用_: Alpha Formula, Strategy parameters, Simulation Conditions
 
 **Direct Strategy**:

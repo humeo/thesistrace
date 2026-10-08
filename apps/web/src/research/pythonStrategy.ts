@@ -11,29 +11,21 @@ export function programInputIssues(input: ProgramInputs): { field: ProgramInputF
     ? [{ field: "programSource", code: "programSource" }] : [];
 }
 
-export const DIRECT_EXAMPLE = `from quantgrove import Strategy
+export const DIRECT_EXAMPLE = `import numpy as np
+from quantgrove import Targets
 
-class Momentum(Strategy):
-    def on_close(self, data, account):
-        lookback = 10
-        improvement = 0.01
-        prices = data.close_prices(lookback)
-        if len(prices.sessions) < lookback:
-            return None
 
-        scores = {
-            stock: closes[-1] / closes[0] - 1
-            for stock, closes in prices.items()
-            if closes[0] is not None and closes[-1] is not None and closes[0] > 0
-        }
-        eligible = [stock for stock in data.candidates if stock in scores]
-        if not eligible:
-            return None
-
-        best = max(eligible, key=lambda stock: (scores[stock], stock))
-        held = [position["instrument_id"] for position in account.positions]
-        held_score = max((scores.get(stock, -1) for stock in held), default=-1)
-        if best not in held and (not held or scores[best] > held_score + improvement):
-            return self.target_weights({best: 1.0})
-        return None
+def compute(data, state):
+    lookback = 60
+    close = data.history("price.close.adjusted", lookback=lookback)
+    now, before = close[:, lookback:], close[:, :-lookback]
+    valid = data.eligible & np.isfinite(now) & np.isfinite(before) & (before > 0)
+    scores = np.full(now.shape, -np.inf)
+    np.divide(now, before, out=scores, where=valid)
+    scores -= 1
+    order = np.argsort(-scores, axis=0, kind="stable")[:30]
+    selected = np.zeros(scores.shape, dtype=bool)
+    np.put_along_axis(selected, order, True, axis=0)
+    selected &= valid
+    return Targets.equal_weight(selected, priority=scores, update=(data.session_index % 5 == 0) & selected.any(axis=0))
 `;

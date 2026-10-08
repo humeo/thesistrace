@@ -11,10 +11,10 @@ import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group";
 import { authoringTopics, loadAuthoringReference, type AuthoringReference as Reference, type AuthoringTopic } from "./api";
 import { CopyButton } from "./CopyButton";
 
-export function AuthoringReference() {
+export function AuthoringReference({ initialTopic = "workflow" }: { initialTopic?: AuthoringTopic }) {
   const { t } = useTranslation("mcp");
   const memberId = useId();
-  const [query, setQuery] = useState<{ topic: AuthoringTopic; symbol: string | null }>({ topic: "workflow", symbol: null });
+  const [query, setQuery] = useState<{ topic: AuthoringTopic; symbol: string | null }>({ topic: initialTopic, symbol: null });
   const [reference, setReference] = useState<Reference | null>(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);

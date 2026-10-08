@@ -114,9 +114,9 @@ def test_cumulative_read_budget_is_enforced_before_allocating_history():
 
 def test_direct_returns_final_targets_and_restores_only_explicit_state():
     source = strategy(
-        "self.state['count'] = self.state.get('count', 0) + 1\n"
-        "selected = data.candidates[self.state['count'] % 2]\n"
-        "return self.target_weights({selected: 1})"
+        "state['count'] = state.get('count', 0) + 1\n"
+        "selected = data.candidates[state['count'] % 2]\n"
+        "return target_weights({selected: 1})"
     )
     runtime = PythonStrategyRuntime()
     program = PythonProgram(source=source)
@@ -142,13 +142,15 @@ def test_direct_returns_final_targets_and_restores_only_explicit_state():
         "{'allocation': None, 'position_limits': {}, 'reason': 'empty'}",
         "{'allocation': None, 'position_limits': {'equity:future.SH': 0}, 'reason': 'guessed'}",
         f"{{'allocation': None, 'position_limits': {{{A!r}: 101}}, 'reason': 'increase'}}",
-        (f"{{'allocation': None, 'position_limits': {{{A!r}: 0}}, 'reason': 'exit', "
-         "'decision_session': '2099-01-01'}"),
+        (
+            f"{{'allocation': None, 'position_limits': {{{A!r}: 0}}, 'reason': 'exit', "
+            "'decision_session': '2099-01-01'}"
+        ),
     ],
 )
 def test_host_rejects_forged_empty_unknown_increasing_or_backdated_targets(output):
     source = strategy(
-        "from quantgrove import Decision\nself.state['changed'] = True\n"
+        "from quantgrove import Decision\nstate['changed'] = True\n"
         + "return Decision("
         + output
         + ")"
@@ -167,7 +169,7 @@ def test_host_rejects_forged_empty_unknown_increasing_or_backdated_targets(outpu
 
 
 def test_no_update_keeps_diagnostics_private():
-    source = strategy("print('private reason')\nself.state['wait'] = True\nreturn None")
+    source = strategy("print('private reason')\nstate['wait'] = True\nreturn None")
     decision = DirectStrategy(
         PythonProgram(source=source), runtime=PythonStrategyRuntime(), contract_checksum="a" * 64
     ).decide(context(data()), previous={})

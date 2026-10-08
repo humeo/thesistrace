@@ -1478,7 +1478,8 @@ class MountedGenerationStore:
             reader, family_manifest = self._series_family_reader(descriptor, family_id)
             values = reader.resolve_table(
                 manifest_sha256=family_manifest,
-                field_ids=tuple(family_bindings), sessions=tuple(sessions),
+                field_ids=tuple(family_bindings),
+                sessions=tuple(sessions),
                 instrument_ids=tuple(sorted(instrument_ids)),
             )
             if family_values is None:
@@ -1503,17 +1504,61 @@ class MountedGenerationStore:
                 **market_field_column_bindings(market_bindings),
                 **{field_id: field_id for family in bindings.values() for field_id in family},
             },
+            strategy_common_loader=lambda session, days, require_industry, max_cells: (
+                self.read_strategy_common_history(
+                    manifest_sha256,
+                    universe_name=universe_name,
+                    session=session,
+                    days=days,
+                    require_industry=require_industry,
+                    max_cells=max_cells,
+                )
+            ),
             strategy_history_loader=lambda session, field_id, days, instruments: (
                 self.read_strategy_history(
-                    manifest_sha256, session=session, field_id=field_id,
-                    days=days, instruments=instruments,
+                    manifest_sha256,
+                    session=session,
+                    field_id=field_id,
+                    days=days,
+                    instruments=instruments,
                 )
             ),
         )
 
+    def read_strategy_common_history(
+        self, manifest_sha256, *, universe_name, session, days, require_industry, max_cells
+    ):
+        root = self._read_family_generation_root(manifest_sha256)
+        descriptor = _family_generation_descriptor_from_root(manifest_sha256, root)
+        end = descriptor.research_sessions.index(session) + 1
+        sessions = descriptor.research_sessions[max(0, end - days - 1) : end]
+        spec, table = self._family_table_reference(
+            root, "equity.liquidity_universe", "liquidity_universes"
+        )
+        universes = self._open_table_sessions_columnar(
+            spec,
+            table,
+            selected_sessions=set(sessions),
+            columns={"session", "universe", "instrument_ids"},
+        )
+        universes = universes.filter(pc.equal(universes["universe"], universe_name))
+        instruments = set().union(*(set(row) for row in universes["instrument_ids"].to_pylist()))
+        if len(instruments) * len(sessions) > max_cells:
+            raise ValueError("Common history cell budget exceeded")
+        data = self.read_columnar_slice(
+            manifest_sha256,
+            sessions=list(sessions),
+            universe_name=universe_name,
+            neutralization=None,
+            field_bindings={"price.close.adjusted": "close"},
+            require_industry=require_industry,
+            fact_instrument_ids=frozenset(),
+        )
+        return data, len(instruments) * len(sessions)
+
     def read_strategy_history(self, manifest_sha256, *, session, field_id, days, instruments):
         """Resolve one bounded field request against a fixed generation and Close."""
-        if type(days) is not int or not 1 <= days <= 253 or len(instruments) * days > 262144:
+        if type(days) is not int or not 1 <= days <= 380 or len(instruments) * days > 2_097_152:
             raise ValueError("History request exceeds the data budget")
         root = self._read_family_generation_root(manifest_sha256)
         descriptor = _family_generation_descriptor_from_root(manifest_sha256, root)
@@ -1521,7 +1566,7 @@ class MountedGenerationStore:
             raise ValueError("History field unavailable in the pinned data")
         calendar = descriptor.research_sessions
         end = calendar.index(session) + 1
-        sessions = tuple(calendar[max(0, end - days):end])
+        sessions = tuple(calendar[max(0, end - days) : end])
         definition = next((item for item in field_definitions() if item.field_id == field_id), None)
         if definition is None or definition.alpha is None:
             raise ValueError("History requires a numeric research field")
@@ -1534,7 +1579,9 @@ class MountedGenerationStore:
             column = market_field_column_bindings(binding)[field_id]
             spec, reference = self._family_table_reference(root, family_id, "eod_prices")
             table = self._open_table_sessions_columnar(
-                spec, reference, selected_sessions=set(sessions),
+                spec,
+                reference,
+                selected_sessions=set(sessions),
                 columns={"session_date", "instrument_id", column},
                 instrument_ids=frozenset(instruments),
                 history_projections=self._history_projections,
@@ -1543,14 +1590,17 @@ class MountedGenerationStore:
         else:
             reader, manifest = self._series_family_reader(descriptor, family_id)
             table = reader.resolve_table(
-                manifest_sha256=manifest, field_ids=(field_id,),
-                sessions=sessions, instrument_ids=tuple(sorted(instruments)),
+                manifest_sha256=manifest,
+                field_ids=(field_id,),
+                sessions=sessions,
+                instrument_ids=tuple(sorted(instruments)),
             )
             column, session_column = field_id, "session"
         # Align columns directly. Materializing a dict (and date/string objects)
         # for every observation dominated overlapping daily history reads.
         dates = pc.index_in(
-            pc.cast(table[session_column], pa.string()), value_set=pa.array(sessions),
+            pc.cast(table[session_column], pa.string()),
+            value_set=pa.array(sessions),
         )
         stocks = pc.index_in(table["instrument_id"], value_set=pa.array(instruments, pa.string()))
         # Arrow's direct Decimal -> float cast scales in floating point and can

@@ -23,10 +23,10 @@ def test_authoring_discovery_publishes_the_four_framework_module_contracts():
         ("portfolio_construction", "periodic_top_n/v1"),
         ("risk_management", "no_risk/v1"),
     ]
-    assert "self.select" in framework["stages"][0]["output_contract"]
+    assert "select(instruments)" in framework["stages"][0]["output_contract"]
     assert "valid_for_sessions" in framework["stages"][1]["output_contract"]
     assert "NoUpdate" in framework["stages"][2]["output_contract"]
-    assert "limit_positions" in framework["stages"][3]["output_contract"]
+    assert "risk_limits" in framework["stages"][3]["output_contract"]
     threshold = framework["builtin_risk_schema"]["properties"]["stop_loss_threshold"]
     assert threshold["anyOf"][0]["exclusiveMaximum"] == 1
     portfolio = framework["builtin_portfolio_schema"]
@@ -57,17 +57,25 @@ def test_framework_admission_freezes_only_active_modules_and_unions_declared_req
     )
     values = framework_spec()
     values["costs"] = {
-        "commission_rate_all_in": "0.0002", "commission_min_cny": "1",
-        "stamp_duty_sell_rate": "0.0004", "transfer_fee_rate": "0.00002",
+        "commission_rate_all_in": "0.0002",
+        "commission_min_cny": "1",
+        "stamp_duty_sell_rate": "0.0004",
+        "transfer_fee_rate": "0.00002",
         "slippage_bps": "10",
     }
     spec = TypeAdapter(ResearchSpec).validate_python(values)
     assert service.diagnose_research_spec(spec).valid
-    command = TypeAdapter(ResearchRunAdmissionCommand).validate_python({
-        **values, "request_id": "framework", "folder_id": "folder_default",
-    })
+    command = TypeAdapter(ResearchRunAdmissionCommand).validate_python(
+        {
+            **values,
+            "request_id": "framework",
+            "folder_id": "folder_default",
+        }
+    )
     admitted = service.prepare_child_admission(
-        UUID(int=1), command, dataset=snapshot,
+        UUID(int=1),
+        command,
+        dataset=snapshot,
     ).immutable_input
     frozen = admitted.canonical_value()
     assert frozen["costs"] == values["costs"]
@@ -77,7 +85,7 @@ def test_framework_admission_freezes_only_active_modules_and_unions_declared_req
     assert frozen["strategy"]["modules"] == values["modules"]
     assert "holdings_count" not in frozen["strategy"]
     assert "exposure_expression" not in frozen["strategy"]
-    assert frozen["strategy"]["environment"]["contract"] == "python-strategy/v4"
+    assert frozen["strategy"]["environment"]["contract"] == "python-strategy/v5"
     assert admitted.expression_admission.effective_lookback == 0
     assert admitted.field_bindings == {
         "price.close.adjusted": "close",
@@ -87,8 +95,10 @@ def test_framework_admission_freezes_only_active_modules_and_unions_declared_req
     assert altered_command.name == "changed"
     assert admitted.canonical_value() == frozen
     assert admitted.authorable_value() == {
-        **values, "hypothesis": None,
-        "start_date": date(2026, 8, 7), "end_date": date(2026, 8, 7),
+        **values,
+        "hypothesis": None,
+        "start_date": date(2026, 8, 7),
+        "end_date": date(2026, 8, 7),
     }
     kernel = admitted.kernel_strategy()
     assert kernel.slippage_bps == "10"
@@ -106,10 +116,17 @@ def test_framework_admission_freezes_only_active_modules_and_unions_declared_req
     assert track_input.model_dump(mode="json")["costs"] == values["costs"]
 
 
-@pytest.mark.parametrize("extra", [
-    {"formula": "close"}, {"neutralization": "none"}, {"holdings_count": 10},
-    {"selection_every_sessions": 5}, {"exposure_expression": "1"}, {"weighting": "equal_weight"},
-])
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"formula": "close"},
+        {"neutralization": "none"},
+        {"holdings_count": 10},
+        {"selection_every_sessions": 5},
+        {"exposure_expression": "1"},
+        {"weighting": "equal_weight"},
+    ],
+)
 def test_framework_rejects_inactive_builtin_configuration(extra):
     with pytest.raises(ValidationError):
         TypeAdapter(ResearchSpec).validate_python({**framework_spec(), **extra})
@@ -135,10 +152,11 @@ def test_framework_diagnostics_identify_the_failing_stage(stage):
 def test_framework_dynamic_fields_are_validated_when_read_not_guessed_at_admission():
     service, _ = service_and_snapshot()
     values = framework_spec()
-    values["modules"]["portfolio_construction"]["program"]["source"] = (
-        "from quantgrove import PortfolioConstruction\nclass Dynamic(PortfolioConstruction):\n"
-        "    def on_close(self, data, account):\n        data.history('unknown', 10)\n"
-    )
+    values["modules"]["portfolio_construction"]["program"][
+        "source"
+    ] = """def decide(data, account, state):
+    data.history('unknown', 10)
+"""
     diagnostic = service.diagnose_research_spec(TypeAdapter(ResearchSpec).validate_python(values))
     assert diagnostic.valid
 
@@ -217,7 +235,8 @@ def test_builtin_holding_rules_freeze_and_reuse_the_same_modules(minimum):
 
 
 @pytest.mark.parametrize(
-    "threshold", [None, 0, -0.1, 1, 1.1, float("nan"), float("inf"), "0.1", True],
+    "threshold",
+    [None, 0, -0.1, 1, 1.1, float("nan"), float("inf"), "0.1", True],
 )
 def test_builtin_stop_loss_rejects_invalid_thresholds(threshold):
     values = framework_spec()

@@ -64,7 +64,8 @@ def _weekday_sessions(start: date, count: int) -> tuple[str, ...]:
     return tuple(sessions)
 
 
-LONG_SESSIONS = _weekday_sessions(date(2025, 1, 2), 140)
+# Leave uncommitted work after two full 128-date checkpoints.
+LONG_SESSIONS = _weekday_sessions(date(2025, 1, 2), 270)
 ADVISORY_KEY = 150015
 
 
@@ -212,7 +213,7 @@ def test_rolling_warmup_chunks_complete_and_recover(
             accepted = client.post("/api/research-runs", json=command)
             assert accepted.status_code == 202, accepted.text
             resumed_id = accepted.json()["id"]
-            with _blocked_worker(settings, resumed_id, after_checkpoint_count=2) as blocked:
+            with _blocked_worker(settings, resumed_id, after_checkpoint_count=1) as blocked:
                 blocked.wait_until_blocked()
                 progress = client.get(f"/api/research-runs/{resumed_id}").json()["progress"]
                 assert progress["phase"] == "warmup"
