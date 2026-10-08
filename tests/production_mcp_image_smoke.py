@@ -47,6 +47,7 @@ from thesistrace.researcher import ResearcherIdentity, ResearcherService
 
 SAFE_STDIO_TOOL_ORDER = (
     "get_research_context",
+    "get_authoring_reference",
     "get_alpha_catalog",
     "diagnose_alpha_formula",
     "diagnose_research_spec",
@@ -69,6 +70,7 @@ READ_TOOLS = {
     "diagnose_alpha_formula",
     "diagnose_research_spec",
     "get_alpha_catalog",
+    "get_authoring_reference",
     "get_research_batch",
     "get_research_context",
     "get_research_run",
@@ -82,7 +84,7 @@ DANGEROUS_TOOLS = {
     "cancel_research_run",
     "stop_daily_track",
 }
-RESEARCH_CONTEXT_KEYS = {"authoring_constraints", "data_overview", "folders"}
+RESEARCH_CONTEXT_KEYS = {"authoring_constraints", "authoring_guide", "data_overview", "folders"}
 FORBIDDEN_TOOL_FRAGMENTS = {
     "data_operator",
     "delete",
