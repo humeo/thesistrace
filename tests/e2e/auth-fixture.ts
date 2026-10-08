@@ -326,7 +326,7 @@ export async function ensureOperatorDataBaseline(page: Page): Promise<void> {
     );
   }
 
-  const idempotencyKey = "browser-operator-baseline-market-refresh";
+  const idempotencyKey = "browser-operator-baseline-dataset-refresh";
   const accepted = runDataOperator(
     "refresh",
     "--idempotency-key",
@@ -335,20 +335,19 @@ export async function ensureOperatorDataBaseline(page: Page): Promise<void> {
     "2026-08-11T18:00:00+08:00",
   );
   if (!isRecord(accepted) || accepted.status !== "accepted") {
-    throw new Error("Operator browser market baseline was not accepted");
+    throw new Error("Operator browser Dataset baseline was not accepted");
   }
 
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     const receipt = runDataOperator("inspect-refresh", "--idempotency-key", idempotencyKey);
     if (!isRecord(receipt) || typeof receipt.status !== "string") {
-      throw new Error("Operator browser market baseline receipt is invalid");
+      throw new Error("Operator browser Dataset baseline receipt is invalid");
     }
     if (receipt.status === "succeeded") {
       if (receipt.data_through_session !== "2026-08-11") {
-        throw new Error("Operator browser market baseline published the wrong Research Session");
+        throw new Error("Operator browser Dataset baseline published the wrong Research Session");
       }
-      publishOperatorFinancialBaseline();
       const readyResponse = await page.request.get("/api/data");
       const ready = await readyResponse.json() as unknown;
       const readyFinancial = isRecord(ready) ? ready.financial_coverage : null;
@@ -359,18 +358,18 @@ export async function ensureOperatorDataBaseline(page: Page): Promise<void> {
         || !isRecord(readyFinancial)
         || readyFinancial.discovery_complete_through_session !== "2026-08-11"
       ) {
-        throw new Error("Operator browser Financial baseline was not published");
+        throw new Error("Operator browser Dataset refresh did not publish Financial coverage");
       }
       return;
     }
     if (receipt.status === "failed" || receipt.status === "cancelled") {
       throw new Error(
-        `Operator browser market baseline ${receipt.status}: ${String(receipt.failure_code)}`,
+        `Operator browser Dataset baseline ${receipt.status}: ${String(receipt.failure_code)}`,
       );
     }
     await new Promise<void>((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error("Operator browser market baseline did not reach a terminal state");
+  throw new Error("Operator browser Dataset baseline did not reach a terminal state");
 }
 
 export function assertDataOperatorWorkerLeaseReleased(): void {
@@ -479,18 +478,6 @@ export function runDataOperator(...args: string[]): unknown {
   return JSON.parse(output) as unknown;
 }
 
-function publishOperatorFinancialBaseline(): void {
-  execFileSync(
-    "uv",
-    [
-      "run",
-      "python",
-      "tests/e2e/support/publish_financial_track_head.py",
-      "recovered",
-    ],
-    { cwd: process.cwd(), env: process.env, stdio: ["ignore", "pipe", "pipe"] },
-  );
-}
 
 function assertDataRefreshKey(idempotencyKey: string): void {
   if (!/^[a-z0-9-]+$/.test(idempotencyKey)) {

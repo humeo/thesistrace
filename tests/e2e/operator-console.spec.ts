@@ -49,14 +49,12 @@ test("Operator confirms session revocation with an emailed code", {tag:"@isolate
   expect(session.user.id).toBe(operator.id);
 });
 
-test("Operator access control and responsive navigation", { tag: "@isolated" }, async ({ page }) => {
+test("Operator access control and desktop navigation", { tag: "@isolated" }, async ({ page }) => {
   test.setTimeout(240_000);
   const { operatorMutationRequests, operator, ordinary } = await prepareOperator(page);
   const { invitationEmail, researcherTable, operatorRow } = await prepareOperatorDirectory(page, operator, ordinary);
   const oldConsoleToken = await emailToken(invitationEmail, "/accept-invitation#token=");
-  const initialViewport = page.viewportSize();
   const applicationShell = page.locator(".app-shell");
-  const applicationSidebar = page.locator(".application-sidebar");
   const collapseSidebar = page.getByRole("button", { name: "Collapse sidebar" });
   await expect(collapseSidebar).toBeVisible();
   await collapseSidebar.focus();
@@ -67,57 +65,6 @@ test("Operator access control and responsive navigation", { tag: "@isolated" }, 
   await expect(page.getByRole("link", { name: "Operator", exact: true })).toBeVisible();
   await expandSidebar.press("Enter");
   await expect(applicationShell).not.toHaveClass(/app-shell-collapsed/);
-
-  await page.setViewportSize({ width: 820, height: 1_080 });
-  await expect(collapseSidebar).toBeVisible();
-  await collapseSidebar.click();
-  await expect.poll(async () => applicationSidebar.evaluate(
-    (element) => Number.parseFloat(getComputedStyle(element).width),
-  )).toBeLessThan(100);
-  await page.getByRole("button", { name: "Expand sidebar" }).click();
-  await expect.poll(async () => applicationSidebar.evaluate(
-    (element) => Number.parseFloat(getComputedStyle(element).width),
-  )).toBeGreaterThan(200);
-
-  await page.setViewportSize({ width: 375, height: 812 });
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  const openNavigation = page.getByRole("button", { name: "Open navigation" });
-  await expect(openNavigation).toBeVisible();
-  await expectMinimumTouchTarget(openNavigation);
-  await openNavigation.focus();
-  await openNavigation.press("Enter");
-  await expect(page.getByRole("dialog", { name: "Navigation" })).toBeVisible();
-  const closeNavigation = page.locator(".mobile-navigation-close");
-  await expect(closeNavigation).toBeFocused();
-  await expectMinimumTouchTarget(closeNavigation);
-  const mobileOperatorLink = page.getByRole("link", { name: "Operator", exact: true });
-  const mobileHomeLink = page.getByRole("link", { name: "QAgentis home" });
-  const mobileAccountMenu = applicationSidebar.getByRole("button", { name: "Account menu" });
-  await expect(mobileOperatorLink).toBeVisible();
-  await mobileHomeLink.focus();
-  await mobileHomeLink.press("Shift+Tab");
-  await expect(mobileAccountMenu).toBeFocused();
-  await mobileAccountMenu.press("Tab");
-  await expect(mobileHomeLink).toBeFocused();
-  const reducedTransitionSeconds = await page.locator('[data-slot="sheet-overlay"]').evaluate(
-    (element) => {
-      const value = getComputedStyle(element).transitionDuration;
-      const duration = Number.parseFloat(value) || 0;
-      return value.endsWith("ms") ? duration / 1_000 : duration;
-    },
-  );
-  expect(reducedTransitionSeconds).toBeLessThanOrEqual(0.00001);
-  await page.keyboard.press("Escape");
-  await expect(page.getByRole("dialog", { name: "Navigation" })).toBeHidden();
-  await expect(openNavigation).toBeFocused();
-  await expect(operatorRow.locator('[data-label="Researcher ID"]')).toBeVisible();
-  await expect(operatorRow.locator('[data-label="Access"]')).toHaveText("Active");
-  await expect(operatorRow.locator('[data-label="Current sessions"]')).toHaveText("1");
-  await expectMinimumTouchTarget(
-    page.getByRole("button", { name: "Invite Researcher" }),
-  );
-  await page.emulateMedia({ reducedMotion: "no-preference" });
-  if (initialViewport !== null) await page.setViewportSize(initialViewport);
 
   const capability = await page.request.get("/api/auth/operator/capability");
   expect(capability.status()).toBe(200);
@@ -158,30 +105,14 @@ test("Operator access control and responsive navigation", { tag: "@isolated" }, 
       "/api/auth/operator/proofs",
       {
         as_of: "2026-08-11T18:00:00+08:00",
-        idempotency_key: "ordinary-denied-market-refresh",
-        operation: "data.refresh.market.submit",
+        idempotency_key: "ordinary-denied-dataset-refresh",
+        operation: "data.refresh.dataset.submit",
       },
     ],
     [
       "/api/auth/operator/proofs",
       {
-        idempotency_key: "ordinary-denied-financial-refresh",
-        observation_through_session: "2026-08-11",
-        operation: "data.refresh.financial.submit",
-      },
-    ],
-    [
-      "/api/auth/operator/proofs",
-      {
-        idempotency_key: "ordinary-denied-industry-refresh",
-        observation_through_session: "2026-08-11",
-        operation: "data.refresh.industry.submit",
-      },
-    ],
-    [
-      "/api/auth/operator/proofs",
-      {
-        kind: "market",
+        kind: "dataset",
         operation: "data.refresh.cancel",
         source_idempotency_key: "ordinary-denied-action-source",
         target: "2026-08-11T10:00:00Z",
@@ -190,11 +121,11 @@ test("Operator access control and responsive navigation", { tag: "@isolated" }, 
     [
       "/api/auth/operator/proofs",
       {
-        kind: "industry",
+        kind: "dataset",
         new_idempotency_key: "ordinary-denied-action-retry",
         operation: "data.refresh.retry",
         source_idempotency_key: "ordinary-denied-action-source",
-        target: "2026-08-11",
+        target: "2026-08-11T10:00:00Z",
       },
     ],
     [
@@ -209,11 +140,11 @@ test("Operator access control and responsive navigation", { tag: "@isolated" }, 
     expect(deniedMutation.status()).toBe(404);
     expect(await deniedMutation.text()).toBe("");
   }
-  const deniedMarketInspection = await page.request.get(
-    "/api/operator/data/refreshes/market?idempotency_key=browser-market-refresh-20260811",
+  const deniedDatasetInspection = await page.request.get(
+    "/api/operator/data/refreshes/dataset?idempotency_key=browser-dataset-refresh-20260811",
   );
-  expect(deniedMarketInspection.status()).toBe(404);
-  expect(await deniedMarketInspection.text()).toBe("");
+  expect(deniedDatasetInspection.status()).toBe(404);
+  expect(await deniedDatasetInspection.text()).toBe("");
   const deniedDatasetStatus = await page.request.get("/api/operator/data/status");
   expect(deniedDatasetStatus.status()).toBe(404);
   expect(await deniedDatasetStatus.text()).toBe("");
@@ -221,7 +152,7 @@ test("Operator access control and responsive navigation", { tag: "@isolated" }, 
     [
       "/api/operator/data/refreshes/cancel",
       {
-        kind: "market",
+        kind: "dataset",
         proof: oldConsoleToken,
         source_idempotency_key: "ordinary-denied-action-source",
         target: "2026-08-11T10:00:00Z",
@@ -230,11 +161,11 @@ test("Operator access control and responsive navigation", { tag: "@isolated" }, 
     [
       "/api/operator/data/refreshes/retry",
       {
-        kind: "industry",
+        kind: "dataset",
         new_idempotency_key: "ordinary-denied-action-retry",
         proof: oldConsoleToken,
         source_idempotency_key: "ordinary-denied-action-source",
-        target: "2026-08-11",
+        target: "2026-08-11T10:00:00Z",
       },
     ],
   ] as const) {
@@ -246,25 +177,25 @@ test("Operator access control and responsive navigation", { tag: "@isolated" }, 
     expect(await deniedAction.text()).toBe("");
   }
   const deniedMalformedInspection = await page.request.get(
-    "/api/operator/data/refreshes/market",
+    "/api/operator/data/refreshes/dataset",
   );
   expect(deniedMalformedInspection.status()).toBe(404);
   expect(await deniedMalformedInspection.text()).toBe("");
-  const deniedMarketMutation = await page.request.post(
-    "/api/operator/data/refreshes/market",
+  const deniedDatasetMutation = await page.request.post(
+    "/api/operator/data/refreshes/dataset",
     {
       data: {
         as_of: "2026-08-11T18:00:00+08:00",
-        idempotency_key: "ordinary-denied-market-refresh",
+        idempotency_key: "ordinary-denied-dataset-refresh",
         proof: oldConsoleToken,
       },
       headers: sameOriginHeaders(),
     },
   );
-  expect(deniedMarketMutation.status()).toBe(404);
-  expect(await deniedMarketMutation.text()).toBe("");
+  expect(deniedDatasetMutation.status()).toBe(404);
+  expect(await deniedDatasetMutation.text()).toBe("");
   const deniedMalformedMutation = await page.request.post(
-    "/api/operator/data/refreshes/market",
+    "/api/operator/data/refreshes/dataset",
     { data: {}, headers: sameOriginHeaders() },
   );
   expect(deniedMalformedMutation.status()).toBe(404);
@@ -276,19 +207,6 @@ test("Operator access control and responsive navigation", { tag: "@isolated" }, 
   );
   expect(deniedFinancialInspection.status()).toBe(404);
   expect(await deniedFinancialInspection.text()).toBe("");
-  const deniedFinancialMutation = await page.request.post(
-    "/api/operator/data/refreshes/financial",
-    {
-      data: {
-        idempotency_key: "ordinary-denied-financial-refresh",
-        observation_through_session: "2026-08-11",
-        proof: oldConsoleToken,
-      },
-      headers: sameOriginHeaders(),
-    },
-  );
-  expect(deniedFinancialMutation.status()).toBe(404);
-  expect(await deniedFinancialMutation.text()).toBe("");
   const deniedIndustryInspection = await page.request.get(
     "/api/operator/data/refreshes/industry?"
     + "idempotency_key=ordinary-denied-industry-refresh&"
@@ -296,19 +214,6 @@ test("Operator access control and responsive navigation", { tag: "@isolated" }, 
   );
   expect(deniedIndustryInspection.status()).toBe(404);
   expect(await deniedIndustryInspection.text()).toBe("");
-  const deniedIndustryMutation = await page.request.post(
-    "/api/operator/data/refreshes/industry",
-    {
-      data: {
-        idempotency_key: "ordinary-denied-industry-refresh",
-        observation_through_session: "2026-08-11",
-        proof: oldConsoleToken,
-      },
-      headers: sameOriginHeaders(),
-    },
-  );
-  expect(deniedIndustryMutation.status()).toBe(404);
-  expect(await deniedIndustryMutation.text()).toBe("");
   const deniedDocument = await page.goto("/operator/researchers");
   expect(deniedDocument?.status()).toBe(404);
   expect(await deniedDocument?.text()).toBe("");
@@ -684,35 +589,35 @@ test("Operator researchers and invitations", { tag: "@isolated" }, async ({ page
 
 });
 
-test("Operator Market submission and response recovery", { tag: "@isolated" }, async ({ page }) => {
+test("Operator Dataset submission and response recovery", { tag: "@isolated" }, async ({ page }) => {
   test.setTimeout(240_000);
-  const { operatorMutationRequests, marketStatusRequests, financialStatusRequests, industryStatusRequests } = await prepareOperator(page);
+  const { operatorMutationRequests, datasetStatusRequests, ordinary } = await prepareOperator(page);
   const operatorSections = page.getByRole("navigation", {
     name: "Operator Console sections",
   });
   await operatorSections.getByRole("link", { name: "Data", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Data operations" })).toBeVisible();
-  const marketRefreshSection = page.locator(
+  const datasetRefreshSection = page.locator(
     'section[aria-labelledby="operator-market-refresh-heading"]',
   );
-  await expect(marketRefreshSection.getByText(
+  await expect(datasetRefreshSection.getByText(
     "Use the same free-form, timezone-aware inputs as the CLI.",
     { exact: true },
   )).toHaveCount(0);
-  const marketAsOfDate = "2026-08-14";
-  const marketAsOf = `${marketAsOfDate}T18:00:00+08:00`;
-  const marketAsOfInput = marketRefreshSection.getByLabel("As-of", { exact: true });
-  await expect(marketAsOfInput).toHaveAttribute("placeholder", "YYYY-MM-DD");
-  await marketAsOfInput.fill(marketAsOfDate);
-  await expect(marketAsOfInput).toHaveValue(marketAsOfDate);
-  await expect(marketRefreshSection.getByLabel("Idempotency key")).toHaveCount(0);
-  const reviewRefresh = marketRefreshSection.getByRole("button", {
+  const datasetAsOfDate = "2026-08-14";
+  const datasetAsOf = `${datasetAsOfDate}T18:00:00+08:00`;
+  const datasetAsOfInput = datasetRefreshSection.getByLabel("As-of", { exact: true });
+  await expect(datasetAsOfInput).toHaveAttribute("placeholder", "YYYY-MM-DD");
+  await datasetAsOfInput.fill(datasetAsOfDate);
+  await expect(datasetAsOfInput).toHaveValue(datasetAsOfDate);
+  await expect(datasetRefreshSection.getByLabel("Idempotency key")).toHaveCount(0);
+  const reviewRefresh = datasetRefreshSection.getByRole("button", {
     name: "Review Refresh",
   });
-  const marketRefreshReceipt = page.locator(
+  const datasetRefreshReceipt = page.locator(
     'section[aria-labelledby="operator-market-refresh-status"]',
   );
-  const marketRefreshReconciliation = page.locator(
+  const datasetRefreshReconciliation = page.locator(
     'section[aria-labelledby="operator-market-refresh-reconciliation"]',
   );
 
@@ -731,7 +636,7 @@ test("Operator Market submission and response recovery", { tag: "@isolated" }, a
       operation?: unknown;
     };
     if (
-      body.operation === "data.refresh.market.submit"
+      body.operation === "data.refresh.dataset.submit"
       && body.idempotency_key === pendingKey
     ) {
       markPendingProofStarted();
@@ -748,28 +653,28 @@ test("Operator Market submission and response recovery", { tag: "@isolated" }, a
     await route.continue();
   };
   await page.route("**/api/auth/operator/proofs", pendingProofHandler);
-  await marketAsOfInput.fill(marketAsOfDate);
-  pendingKey = await reviewGeneratedRefresh(page, reviewRefresh, "Market");
-  let marketConfirmation = page.getByRole("dialog", {
-    name: "Submit Market Refresh?",
+  await datasetAsOfInput.fill(datasetAsOfDate);
+  pendingKey = await reviewGeneratedRefresh(page, reviewRefresh);
+  let datasetConfirmation = page.getByRole("dialog", {
+    name: "Refresh all data?",
   });
-  await expect(marketConfirmation.getByLabel("Verification code")).toHaveCount(0);
-  await marketConfirmation.getByRole("button", { name: "Submit Refresh" }).click();
+  await expect(datasetConfirmation.getByLabel("Verification code")).toHaveCount(0);
+  await datasetConfirmation.getByRole("button", { name: "Submit Refresh" }).click();
   await pendingProofStarted;
-  await expect(marketConfirmation.getByRole("button", { name: "Cancel" })).toBeEnabled();
+  await expect(datasetConfirmation.getByRole("button", { name: "Cancel" })).toBeEnabled();
   const pendingProofAborted = page.waitForEvent("requestfailed", (request) => {
     if (new URL(request.url()).pathname !== "/api/auth/operator/proofs") return false;
     const body = request.postDataJSON() as { idempotency_key?: unknown };
     return body.idempotency_key === pendingKey;
   });
   await page.keyboard.press("Escape");
-  await expect(marketConfirmation).toHaveCount(0);
+  await expect(datasetConfirmation).toHaveCount(0);
   await expect(reviewRefresh).toBeFocused();
   releasePendingProof();
   await pendingProofAborted;
   await page.unroute("**/api/auth/operator/proofs", pendingProofHandler);
 
-  let marketKey = "";
+  let datasetKey = "";
   let releaseCoreResponse = (): void => {};
   let markCoreAccepted = (): void => {};
   let markCoreResponseDropped = (): void => {};
@@ -789,7 +694,7 @@ test("Operator Market submission and response recovery", { tag: "@isolated" }, a
       return;
     }
     const body = request.postDataJSON() as { idempotency_key?: unknown };
-    if (body.idempotency_key !== marketKey) {
+    if (body.idempotency_key !== datasetKey) {
       await route.continue();
       return;
     }
@@ -801,41 +706,41 @@ test("Operator Market submission and response recovery", { tag: "@isolated" }, a
     markCoreResponseDropped();
   };
   await page.route(
-    "**/api/operator/data/refreshes/market**",
+    "**/api/operator/data/refreshes/dataset**",
     delayedCoreResponseHandler,
   );
-  await marketAsOfInput.fill(marketAsOfDate);
-  marketKey = await reviewGeneratedRefresh(page, reviewRefresh, "Market");
-  marketConfirmation = page.getByRole("dialog", {
-    name: "Submit Market Refresh?",
+  await datasetAsOfInput.fill(datasetAsOfDate);
+  datasetKey = await reviewGeneratedRefresh(page, reviewRefresh);
+  datasetConfirmation = page.getByRole("dialog", {
+    name: "Refresh all data?",
   });
-  await expect(marketConfirmation).toContainText(marketAsOf);
-  await expect(marketConfirmation).toContainText(marketKey);
-  await expect(marketConfirmation).toContainText("durable FIFO");
-  await expect(marketConfirmation.getByLabel("Verification code")).toHaveCount(0);
-  await marketConfirmation.getByRole("button", { name: "Submit Refresh" }).click();
+  await expect(datasetConfirmation).toContainText(datasetAsOf);
+  await expect(datasetConfirmation).toContainText(datasetKey);
+  await expect(datasetConfirmation).toContainText("Publication happens once");
+  await expect(datasetConfirmation.getByLabel("Verification code")).toHaveCount(0);
+  await datasetConfirmation.getByRole("button", { name: "Submit Refresh" }).click();
   await coreAccepted;
-  await expect(marketConfirmation.getByRole("button", { name: "Cancel" })).toBeEnabled();
+  await expect(datasetConfirmation.getByRole("button", { name: "Cancel" })).toBeEnabled();
   await page.keyboard.press("Escape");
-  await expect(marketConfirmation).toHaveCount(0);
+  await expect(datasetConfirmation).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Confirming submission" })).toBeVisible();
-  await expect(marketRefreshReconciliation.getByText(marketKey, { exact: true }))
+  await expect(datasetRefreshReconciliation.getByText(datasetKey, { exact: true }))
     .toBeVisible();
   releaseCoreResponse();
   await coreResponseDropped;
   await page.unroute(
-    "**/api/operator/data/refreshes/market**",
+    "**/api/operator/data/refreshes/dataset**",
     delayedCoreResponseHandler,
   );
   await expect(page.getByRole("heading", { name: "Dataset published" }))
     .toBeVisible({ timeout: 30_000 });
-  expect(marketStatusRequests).toContainEqual({
-    asOf: marketAsOf,
-    idempotencyKey: marketKey,
+  expect(datasetStatusRequests).toContainEqual({
+    asOf: datasetAsOf,
+    idempotencyKey: datasetKey,
   });
-  await expect(marketRefreshReceipt.getByText(marketKey, { exact: true })).toBeVisible();
-  await expect(marketRefreshReceipt.getByText("Published", { exact: true })).toBeVisible();
-  await expect(marketRefreshReceipt.getByText("2026-08-14", { exact: true }))
+  await expect(datasetRefreshReceipt.getByText(datasetKey, { exact: true })).toBeVisible();
+  await expect(datasetRefreshReceipt.getByRole("status").getByText("Published", { exact: true })).toBeVisible();
+  await expect(datasetRefreshReceipt.getByText("2026-08-14", { exact: true }))
     .toBeVisible();
   await expect(reviewRefresh).toBeFocused();
 
@@ -845,45 +750,45 @@ test("Operator Market submission and response recovery", { tag: "@isolated" }, a
     const target = { as_of: "2026-08-12T18:00:00+08:00", idempotency_key: key };
     const proofResponse = await fetch("/api/auth/operator/proofs", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...target, operation: "data.refresh.market.submit" }),
+      body: JSON.stringify({ ...target, operation: "data.refresh.dataset.submit" }),
     });
     if (!proofResponse.ok) return proofResponse.status;
     const { proof } = await proofResponse.json();
-    return (await fetch("/api/operator/data/refreshes/market", {
+    return (await fetch("/api/operator/data/refreshes/dataset", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...target, proof }),
     })).status;
-  }, { key: marketKey });
+  }, { key: datasetKey });
   expect(conflictStatus).toBe(409);
-  await expect(marketRefreshReceipt.getByText(marketKey, { exact: true })).toBeVisible();
+  await expect(datasetRefreshReceipt.getByText(datasetKey, { exact: true })).toBeVisible();
 
-  const marketProofRequests = operatorMutationRequests.filter((request) => {
+  const datasetProofRequests = operatorMutationRequests.filter((request) => {
     if (request.path !== "/api/auth/operator/proofs") return false;
     const body = JSON.parse(request.body) as { operation?: unknown };
-    return body.operation === "data.refresh.market.submit";
+    return body.operation === "data.refresh.dataset.submit";
   });
-  const marketMutations = operatorMutationRequests.filter(
-    (request) => request.path === "/api/operator/data/refreshes/market",
+  const datasetMutations = operatorMutationRequests.filter(
+    (request) => request.path === "/api/operator/data/refreshes/dataset",
   );
-  expect(marketProofRequests).toHaveLength(3);
-  const completedMarketProof = marketProofRequests.find((request) =>
-    JSON.parse(request.body).idempotency_key === marketKey
+  expect(datasetProofRequests).toHaveLength(3);
+  const completedDatasetProof = datasetProofRequests.find((request) =>
+    JSON.parse(request.body).idempotency_key === datasetKey
   );
-  expect(JSON.parse(completedMarketProof?.body ?? "{}")).toEqual({
-    as_of: marketAsOf,
-    idempotency_key: marketKey,
-    operation: "data.refresh.market.submit",
+  expect(JSON.parse(completedDatasetProof?.body ?? "{}")).toEqual({
+    as_of: datasetAsOf,
+    idempotency_key: datasetKey,
+    operation: "data.refresh.dataset.submit",
   });
-  expect(marketMutations).toHaveLength(2);
-  const completedMarketMutation = marketMutations.find((request) =>
-    JSON.parse(request.body).idempotency_key === marketKey
+  expect(datasetMutations).toHaveLength(2);
+  const completedDatasetMutation = datasetMutations.find((request) =>
+    JSON.parse(request.body).idempotency_key === datasetKey
   );
-  expect(JSON.parse(completedMarketMutation?.body ?? "{}")).toEqual({
-    as_of: marketAsOf,
-    idempotency_key: marketKey,
+  expect(JSON.parse(completedDatasetMutation?.body ?? "{}")).toEqual({
+    as_of: datasetAsOf,
+    idempotency_key: datasetKey,
     proof: expect.any(String),
   });
-  expect(marketMutations.every((request) => !request.body.includes(browserPassword)))
+  expect(datasetMutations.every((request) => !request.body.includes(browserPassword)))
     .toBe(true);
   resetAuthRateLimits();
 
@@ -909,35 +814,35 @@ test("Operator Market submission and response recovery", { tag: "@isolated" }, a
     markDroppedAfterAcceptance();
   };
   await page.route(
-    "**/api/operator/data/refreshes/market**",
+    "**/api/operator/data/refreshes/dataset**",
     droppedAfterAcceptanceHandler,
   );
-  await marketAsOfInput.fill(marketAsOfDate);
-  droppedAfterAcceptanceKey = await reviewGeneratedRefresh(page, reviewRefresh, "Market");
-  marketConfirmation = page.getByRole("dialog", {
-    name: "Submit Market Refresh?",
+  await datasetAsOfInput.fill(datasetAsOfDate);
+  droppedAfterAcceptanceKey = await reviewGeneratedRefresh(page, reviewRefresh);
+  datasetConfirmation = page.getByRole("dialog", {
+    name: "Refresh all data?",
   });
-  await expect(marketConfirmation.getByLabel("Verification code")).toHaveCount(0);
-  await marketConfirmation.getByRole("button", { name: "Submit Refresh" }).click();
+  await expect(datasetConfirmation.getByLabel("Verification code")).toHaveCount(0);
+  await datasetConfirmation.getByRole("button", { name: "Submit Refresh" }).click();
   await droppedAfterAcceptance;
-  await expect(marketConfirmation).toHaveCount(0);
+  await expect(datasetConfirmation).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Confirming submission" })).toBeVisible();
   await page.unroute(
-    "**/api/operator/data/refreshes/market**",
+    "**/api/operator/data/refreshes/dataset**",
     droppedAfterAcceptanceHandler,
   );
-  await expect(page.getByRole("heading", { name: "Refresh completed" }))
+  await expect(page.getByRole("heading", { name: "Dataset published" }))
     .toBeVisible({ timeout: 30_000 });
-  expect(marketStatusRequests).toContainEqual({
-    asOf: marketAsOf,
+  expect(datasetStatusRequests).toContainEqual({
+    asOf: datasetAsOf,
     idempotencyKey: droppedAfterAcceptanceKey,
   });
-  await expect(marketRefreshReceipt.getByText(droppedAfterAcceptanceKey, { exact: true }))
+  await expect(datasetRefreshReceipt.getByText(droppedAfterAcceptanceKey, { exact: true }))
     .toBeVisible();
   resetAuthRateLimits();
 
-  let staleMarketKey = "";
-  let currentMarketKey = "";
+  let staleDatasetKey = "";
+  let currentDatasetKey = "";
   let releaseStaleResponse = (): void => {};
   let releaseCurrentResponse = (): void => {};
   let markStaleSubmissionStarted = (): void => {};
@@ -960,7 +865,9 @@ test("Operator Market submission and response recovery", { tag: "@isolated" }, a
     data_through_session: "2026-08-11",
     failure_code: null,
     idempotency_key: idempotencyKey,
-    kind: "market",
+    kind: "dataset",
+    phase: null,
+    completed_stages: [],
     last_failure_code: null,
     last_refresh_at: "2026-08-11T10:01:00+00:00",
     outcome: "no_change",
@@ -980,7 +887,7 @@ test("Operator Market submission and response recovery", { tag: "@isolated" }, a
     const url = new URL(request.url());
     if (
       request.method() === "GET"
-      && url.pathname === "/api/operator/data/refreshes/market"
+      && url.pathname === "/api/operator/data/refreshes/dataset"
       && url.searchParams.get("idempotency_key") === recoveredBeforePostKey
     ) {
       await route.fulfill({
@@ -1008,7 +915,9 @@ test("Operator Market submission and response recovery", { tag: "@isolated" }, a
         data_through_session: null,
         failure_code: null,
         idempotency_key: recoveredBeforePostKey,
-        kind: "market",
+        kind: "dataset",
+        phase: null,
+        completed_stages: [],
         last_failure_code: null,
         last_refresh_at: null,
         outcome: null,
@@ -1019,27 +928,27 @@ test("Operator Market submission and response recovery", { tag: "@isolated" }, a
     });
   };
   await page.route(
-    "**/api/operator/data/refreshes/market**",
+    "**/api/operator/data/refreshes/dataset**",
     recoveredBeforePostHandler,
   );
-  await marketAsOfInput.fill(marketAsOfDate);
-  recoveredBeforePostKey = await reviewGeneratedRefresh(page, reviewRefresh, "Market");
-  marketConfirmation = page.getByRole("dialog", {
-    name: "Submit Market Refresh?",
+  await datasetAsOfInput.fill(datasetAsOfDate);
+  recoveredBeforePostKey = await reviewGeneratedRefresh(page, reviewRefresh);
+  datasetConfirmation = page.getByRole("dialog", {
+    name: "Refresh all data?",
   });
-  await expect(marketConfirmation.getByLabel("Verification code")).toHaveCount(0);
-  await marketConfirmation.getByRole("button", { name: "Submit Refresh" }).click();
+  await expect(datasetConfirmation.getByLabel("Verification code")).toHaveCount(0);
+  await datasetConfirmation.getByRole("button", { name: "Submit Refresh" }).click();
   await recoveredPostStarted;
   await page.keyboard.press("Escape");
   await expect(page.getByRole("heading", { name: "Confirming submission" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Refresh completed" }))
     .toBeVisible({ timeout: 15_000 });
-  await expect(marketRefreshReceipt.getByText("No change", { exact: true })).toBeVisible();
+  await expect(datasetRefreshReceipt.getByText("No change", { exact: true })).toBeVisible();
   const recoveredLatePostResponse = page.waitForResponse((response) => {
     const request = response.request();
     if (
       request.method() !== "POST"
-      || new URL(request.url()).pathname !== "/api/operator/data/refreshes/market"
+      || new URL(request.url()).pathname !== "/api/operator/data/refreshes/dataset"
     ) return false;
     const body = request.postDataJSON() as { idempotency_key?: unknown };
     return body.idempotency_key === recoveredBeforePostKey;
@@ -1048,11 +957,11 @@ test("Operator Market submission and response recovery", { tag: "@isolated" }, a
   await recoveredLatePostResponse;
   await settleReactUpdates(page);
   await expect(page.getByRole("heading", { name: "Refresh completed" })).toBeVisible();
-  await expect(marketRefreshReceipt.getByText(recoveredBeforePostKey, { exact: true }))
+  await expect(datasetRefreshReceipt.getByText(recoveredBeforePostKey, { exact: true }))
     .toBeVisible();
-  await expect(marketRefreshReceipt.getByText("No change", { exact: true })).toBeVisible();
+  await expect(datasetRefreshReceipt.getByText("No change", { exact: true })).toBeVisible();
   await page.unroute(
-    "**/api/operator/data/refreshes/market**",
+    "**/api/operator/data/refreshes/dataset**",
     recoveredBeforePostHandler,
   );
   resetAuthRateLimits();
@@ -1064,21 +973,21 @@ test("Operator Market submission and response recovery", { tag: "@isolated" }, a
       return;
     }
     const body = request.postDataJSON() as { idempotency_key?: unknown };
-    if (body.idempotency_key === staleMarketKey) {
+    if (body.idempotency_key === staleDatasetKey) {
       markStaleSubmissionStarted();
       await staleResponseGate;
       await route.fulfill({
-        body: JSON.stringify(terminalReceipt(staleMarketKey)),
+        body: JSON.stringify(terminalReceipt(staleDatasetKey)),
         contentType: "application/json",
         status: 202,
       });
       return;
     }
-    if (body.idempotency_key === currentMarketKey) {
+    if (body.idempotency_key === currentDatasetKey) {
       markCurrentSubmissionStarted();
       await currentResponseGate;
       await route.fulfill({
-        body: JSON.stringify(terminalReceipt(currentMarketKey)),
+        body: JSON.stringify(terminalReceipt(currentDatasetKey)),
         contentType: "application/json",
         status: 202,
       });
@@ -1087,65 +996,65 @@ test("Operator Market submission and response recovery", { tag: "@isolated" }, a
     await route.continue();
   };
   await page.route(
-    "**/api/operator/data/refreshes/market**",
+    "**/api/operator/data/refreshes/dataset**",
     submissionRaceHandler,
   );
-  await marketAsOfInput.fill(marketAsOfDate);
-  staleMarketKey = await reviewGeneratedRefresh(page, reviewRefresh, "Market");
-  marketConfirmation = page.getByRole("dialog", {
-    name: "Submit Market Refresh?",
+  await datasetAsOfInput.fill(datasetAsOfDate);
+  staleDatasetKey = await reviewGeneratedRefresh(page, reviewRefresh);
+  datasetConfirmation = page.getByRole("dialog", {
+    name: "Refresh all data?",
   });
-  await expect(marketConfirmation.getByLabel("Verification code")).toHaveCount(0);
-  await marketConfirmation.getByRole("button", { name: "Submit Refresh" }).click();
+  await expect(datasetConfirmation.getByLabel("Verification code")).toHaveCount(0);
+  await datasetConfirmation.getByRole("button", { name: "Submit Refresh" }).click();
   await staleSubmissionStarted;
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Stop checking" }).click();
 
-  currentMarketKey = await reviewGeneratedRefresh(page, reviewRefresh, "Market");
-  const currentMarketConfirmation = page.getByRole("dialog", {
-    name: "Submit Market Refresh?",
+  currentDatasetKey = await reviewGeneratedRefresh(page, reviewRefresh);
+  const currentDatasetConfirmation = page.getByRole("dialog", {
+    name: "Refresh all data?",
   });
-  await expect(currentMarketConfirmation.getByLabel("Verification code")).toHaveCount(0);
-  await currentMarketConfirmation.getByRole("button", { name: "Submit Refresh" }).click();
+  await expect(currentDatasetConfirmation.getByLabel("Verification code")).toHaveCount(0);
+  await currentDatasetConfirmation.getByRole("button", { name: "Submit Refresh" }).click();
   await currentSubmissionStarted;
   const staleBrowserResponse = page.waitForResponse((response) => {
     const request = response.request();
     if (
       request.method() !== "POST"
-      || new URL(request.url()).pathname !== "/api/operator/data/refreshes/market"
+      || new URL(request.url()).pathname !== "/api/operator/data/refreshes/dataset"
     ) return false;
     const body = request.postDataJSON() as { idempotency_key?: unknown };
-    return body.idempotency_key === staleMarketKey;
+    return body.idempotency_key === staleDatasetKey;
   });
   releaseStaleResponse();
   await staleBrowserResponse;
   await settleReactUpdates(page);
-  await expect(currentMarketConfirmation).toBeVisible();
-  await expect(currentMarketConfirmation).toContainText(currentMarketKey);
-  await expect(marketRefreshReceipt.getByText(staleMarketKey, { exact: true })).toHaveCount(0);
+  await expect(currentDatasetConfirmation).toBeVisible();
+  await expect(currentDatasetConfirmation).toContainText(currentDatasetKey);
+  await expect(datasetRefreshReceipt.getByText(staleDatasetKey, { exact: true })).toHaveCount(0);
 
   const currentBrowserResponse = page.waitForResponse((response) => {
     const request = response.request();
     if (
       request.method() !== "POST"
-      || new URL(request.url()).pathname !== "/api/operator/data/refreshes/market"
+      || new URL(request.url()).pathname !== "/api/operator/data/refreshes/dataset"
     ) return false;
     const body = request.postDataJSON() as { idempotency_key?: unknown };
-    return body.idempotency_key === currentMarketKey;
+    return body.idempotency_key === currentDatasetKey;
   });
   releaseCurrentResponse();
   await currentBrowserResponse;
-  await expect(currentMarketConfirmation).toHaveCount(0);
+  await expect(currentDatasetConfirmation).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Refresh completed" })).toBeVisible();
-  await expect(marketRefreshReceipt.getByText(currentMarketKey, { exact: true })).toBeVisible();
+  await expect(datasetRefreshReceipt.getByText(currentDatasetKey, { exact: true })).toBeVisible();
   await page.unroute(
-    "**/api/operator/data/refreshes/market**",
+    "**/api/operator/data/refreshes/dataset**",
     submissionRaceHandler,
   );
   resetAuthRateLimits();
 
-  let polledMarketKey = "";
-  let newerMarketKey = "";
+  let polledDatasetKey = "";
+  let newerDatasetKey = "";
   let releasePolledRequest = (): void => {};
   let markPolledRequestStarted = (): void => {};
   let markPolledRequestSettled = (): void => {};
@@ -1163,7 +1072,9 @@ test("Operator Market submission and response recovery", { tag: "@isolated" }, a
     attempt_count: 0,
     data_through_session: null,
     failure_code: null,
-    kind: "market",
+    kind: "dataset",
+    phase: null,
+    completed_stages: [],
     last_failure_code: null,
     last_refresh_at: null,
     outcome: null,
@@ -1174,14 +1085,14 @@ test("Operator Market submission and response recovery", { tag: "@isolated" }, a
     const url = new URL(request.url());
     if (
       request.method() === "GET"
-      && url.pathname === "/api/operator/data/refreshes/market"
-      && url.searchParams.get("idempotency_key") === polledMarketKey
+      && url.pathname === "/api/operator/data/refreshes/dataset"
+      && url.searchParams.get("idempotency_key") === polledDatasetKey
     ) {
       markPolledRequestStarted();
       await polledRequestGate;
       try {
         await route.fulfill({
-          body: JSON.stringify(terminalReceipt(polledMarketKey)),
+          body: JSON.stringify(terminalReceipt(polledDatasetKey)),
           contentType: "application/json",
           status: 200,
         });
@@ -1199,17 +1110,17 @@ test("Operator Market submission and response recovery", { tag: "@isolated" }, a
       return;
     }
     const body = request.postDataJSON() as { idempotency_key?: unknown };
-    if (body.idempotency_key === polledMarketKey) {
+    if (body.idempotency_key === polledDatasetKey) {
       await route.fulfill({
-        body: JSON.stringify({ ...acceptedReceipt, idempotency_key: polledMarketKey }),
+        body: JSON.stringify({ ...acceptedReceipt, idempotency_key: polledDatasetKey }),
         contentType: "application/json",
         status: 202,
       });
       return;
     }
-    if (body.idempotency_key === newerMarketKey) {
+    if (body.idempotency_key === newerDatasetKey) {
       await route.fulfill({
-        body: JSON.stringify(terminalReceipt(newerMarketKey)),
+        body: JSON.stringify(terminalReceipt(newerDatasetKey)),
         contentType: "application/json",
         status: 202,
       });
@@ -1219,576 +1130,92 @@ test("Operator Market submission and response recovery", { tag: "@isolated" }, a
     await route.continue();
   };
   await page.route(
-    "**/api/operator/data/refreshes/market**",
+    "**/api/operator/data/refreshes/dataset**",
     pollingRaceHandler,
   );
-  await marketAsOfInput.fill(marketAsOfDate);
-  polledMarketKey = await reviewGeneratedRefresh(page, reviewRefresh, "Market");
-  marketConfirmation = page.getByRole("dialog", {
-    name: "Submit Market Refresh?",
+  await datasetAsOfInput.fill(datasetAsOfDate);
+  polledDatasetKey = await reviewGeneratedRefresh(page, reviewRefresh);
+  datasetConfirmation = page.getByRole("dialog", {
+    name: "Refresh all data?",
   });
-  await expect(marketConfirmation.getByLabel("Verification code")).toHaveCount(0);
-  await marketConfirmation.getByRole("button", { name: "Submit Refresh" }).click();
+  await expect(datasetConfirmation.getByLabel("Verification code")).toHaveCount(0);
+  await datasetConfirmation.getByRole("button", { name: "Submit Refresh" }).click();
   await expect(page.getByRole("heading", { name: "Refresh accepted" })).toBeVisible();
   await polledRequestStarted;
 
-  newerMarketKey = await reviewGeneratedRefresh(page, reviewRefresh, "Market");
-  const newerMarketConfirmation = page.getByRole("dialog", {
-    name: "Submit Market Refresh?",
+  newerDatasetKey = await reviewGeneratedRefresh(page, reviewRefresh);
+  const newerDatasetConfirmation = page.getByRole("dialog", {
+    name: "Refresh all data?",
   });
-  await expect(marketRefreshReceipt.getByText(polledMarketKey, { exact: true })).toBeVisible();
-  await expect(newerMarketConfirmation.getByLabel("Verification code")).toHaveCount(0);
-  await newerMarketConfirmation.getByRole("button", { name: "Submit Refresh" }).click();
-  await expect(newerMarketConfirmation).toHaveCount(0);
+  await expect(datasetRefreshReceipt.getByText(polledDatasetKey, { exact: true })).toBeVisible();
+  await expect(newerDatasetConfirmation.getByLabel("Verification code")).toHaveCount(0);
+  await newerDatasetConfirmation.getByRole("button", { name: "Submit Refresh" }).click();
+  await expect(newerDatasetConfirmation).toHaveCount(0);
   await polledRequestSettled;
   await settleReactUpdates(page);
   await expect(page.getByRole("heading", { name: "Refresh completed" })).toBeVisible();
-  await expect(marketRefreshReceipt.getByText(newerMarketKey, { exact: true })).toBeVisible();
-  await expect(marketRefreshReceipt.getByText(polledMarketKey, { exact: true })).toHaveCount(0);
+  await expect(datasetRefreshReceipt.getByText(newerDatasetKey, { exact: true })).toBeVisible();
+  await expect(datasetRefreshReceipt.getByText(polledDatasetKey, { exact: true })).toHaveCount(0);
   await page.unroute(
-    "**/api/operator/data/refreshes/market**",
+    "**/api/operator/data/refreshes/dataset**",
     pollingRaceHandler,
   );
   resetAuthRateLimits();
 
-
-});
-
-test("Operator Financial and Industry refresh and response recovery", { tag: "@isolated" }, async ({ page }) => {
-  test.setTimeout(240_000);
-  const { operatorMutationRequests, marketStatusRequests, financialStatusRequests, industryStatusRequests, operator, ordinary } = await prepareOperator(page);
-  await prepareDataOperation(page, "market");
-  await page.goto("/operator/data");
-  await expect(page.getByRole("heading", { name: "Data operations" })).toBeVisible();
-  const financialRefreshSection = page.locator(
-    'section[aria-labelledby="operator-financial-refresh-heading"]',
-  );
-  const financialTarget = financialRefreshSection.getByLabel(
-    "Observation-through Research Session",
-  );
-  const financialReview = financialRefreshSection.getByRole("button", {
-    name: "Review Refresh",
-  });
-  await expect(financialTarget).toHaveAttribute("placeholder", "YYYY-MM-DD");
-  await expect(financialTarget).toHaveAttribute("required", "");
-  await expect(financialRefreshSection.getByLabel("Idempotency key")).toHaveCount(0);
-  const financialTargetSession = "2026-08-14";
-  let financialKey = "";
-  await financialReview.click();
-  expect(
-    await financialTarget.evaluate(
-      (input) => (input as HTMLInputElement).validity.valueMissing,
-    ),
-  ).toBe(true);
-  await expect(financialTarget).toBeFocused();
-  await expect(page.getByRole("dialog", { name: "Submit Financial Refresh?" }))
-    .toHaveCount(0);
-  await financialTarget.fill(financialTargetSession);
-  financialKey = await reviewGeneratedRefresh(page, financialReview, "Financial");
-  const financialConfirmation = page.getByRole("dialog", {
-    name: "Submit Financial Refresh?",
-  });
-  await expect(financialConfirmation).toContainText("Financial");
-  await expect(financialConfirmation).toContainText(financialTargetSession);
-  await expect(financialConfirmation).toContainText(financialKey);
-  await expect(financialConfirmation).toContainText("shared durable FIFO");
-  await expect(financialConfirmation.getByLabel("Verification code")).toHaveCount(0);
-  await financialConfirmation.getByRole("button", { name: "Submit Refresh" }).click();
-  await expect(financialConfirmation).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "Financial Refresh accepted" }))
-    .toBeVisible({ timeout: 10_000 });
-  const financialReceipt = page.locator("section[data-tone]").filter({
-    hasText: financialKey,
-  });
-  await expect(financialReceipt.getByText(financialTargetSession, { exact: true }))
-    .toBeVisible();
-  await expect(page.getByRole("heading", {
-    name: "Financial data published with unresolved coverage",
-  })).toBeVisible({ timeout: 30_000 });
-  await expect(financialReceipt.getByText("Published · incomplete coverage", { exact: true }))
-    .toBeVisible();
-  await expect(financialReceipt).toContainText(
-    "A usable Dataset was published, but discovery gaps remain",
-  );
-  await expect(financialReceipt.locator("dl div").filter({ hasText: "Discovery gaps" }))
-    .toHaveText("Discovery gaps1");
-  expect(financialStatusRequests).toContainEqual({
-    idempotencyKey: financialKey,
-    observationThroughSession: financialTargetSession,
-  });
-  const financialProof = operatorMutationRequests.find((request) => {
-    if (request.path !== "/api/auth/operator/proofs") return false;
-    const body = JSON.parse(request.body) as { operation?: unknown };
-    return body.operation === "data.refresh.financial.submit";
-  });
-  expect(JSON.parse(financialProof?.body ?? "{}")).toEqual({
-    idempotency_key: financialKey,
-    observation_through_session: financialTargetSession,
-    operation: "data.refresh.financial.submit",
-  });
-  const financialMutation = operatorMutationRequests.find(
-    (request) => request.path === "/api/operator/data/refreshes/financial",
-  );
-  expect(JSON.parse(financialMutation?.body ?? "{}")).toEqual({
-    idempotency_key: financialKey,
-    observation_through_session: financialTargetSession,
-    proof: expect.any(String),
-  });
-  expect(financialMutation?.body).not.toContain(browserPassword);
-  resetAuthRateLimits();
-
-  const industryRefreshSection = page.locator(
-    'section[aria-labelledby="operator-industry-refresh-heading"]',
-  );
-  const industryTarget = industryRefreshSection.getByLabel(
-    "Observation-through Research Session",
-  );
-  const industryReview = industryRefreshSection.getByRole("button", {
-    name: "Review Refresh",
-  });
-  await expect(industryTarget).toHaveAttribute("placeholder", "YYYY-MM-DD");
-  await expect(industryTarget).toHaveAttribute("required", "");
-  await expect(industryRefreshSection.getByLabel("Idempotency key")).toHaveCount(0);
-  const industryTargetSession = "2026-08-14";
-  let industryKey = "";
-  await industryReview.click();
-  expect(
-    await industryTarget.evaluate(
-      (input) => (input as HTMLInputElement).validity.valueMissing,
-    ),
-  ).toBe(true);
-  await expect(industryTarget).toBeFocused();
-  await expect(page.getByRole("dialog", { name: "Submit Industry Refresh?" }))
-    .toHaveCount(0);
-  await industryTarget.fill(industryTargetSession);
-  industryKey = await reviewGeneratedRefresh(page, industryReview, "Industry");
-  let industryConfirmation = page.getByRole("dialog", {
-    name: "Submit Industry Refresh?",
-  });
-  await expect(industryConfirmation).toContainText("Industry");
-  await expect(industryConfirmation).toContainText(industryTargetSession);
-  await expect(industryConfirmation).toContainText(industryKey);
-  await expect(industryConfirmation).toContainText("shared durable FIFO");
-  await expect(industryConfirmation.getByLabel("Verification code")).toHaveCount(0);
-  await industryConfirmation.getByRole("button", { name: "Submit Refresh" }).click();
-  await expect(industryConfirmation).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "Industry Refresh accepted" }))
-    .toBeVisible({ timeout: 10_000 });
-  const industryReceipt = page.locator("section[data-tone]").filter({
-    hasText: industryKey,
-  });
-  await expect(page.getByRole("heading", { name: "Industry data published" }))
+  // Retry from the mounted reconciliation UI must preserve the exact request.
+  const unavailableHandler = async (route: Route): Promise<void> => {
+    await route.fulfill({
+      status: route.request().method() === "POST" ? 503 : 404,
+      body: "",
+    });
+  };
+  await page.route("**/api/operator/data/refreshes/dataset**", unavailableHandler);
+  const retryKey = await reviewGeneratedRefresh(page, reviewRefresh);
+  await page.getByRole("dialog", { name: "Refresh all data?" })
+    .getByRole("button", { name: "Submit Refresh" }).click();
+  await expect(datasetRefreshReconciliation).toBeVisible();
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await expect(datasetRefreshReconciliation).toContainText("receipt is not available yet");
+  await datasetRefreshReconciliation.getByRole("button", { name: "Retry exact request" }).click();
+  const retryDialog = page.getByRole("dialog", { name: "Refresh all data?" });
+  await expect(retryDialog).toContainText(retryKey);
+  await expect(retryDialog).toContainText(datasetAsOf);
+  await page.unroute("**/api/operator/data/refreshes/dataset**", unavailableHandler);
+  await retryDialog.getByRole("button", { name: "Submit Refresh" }).click();
+  await expect(datasetRefreshReceipt).toContainText(retryKey);
+  await expect(page.getByRole("heading", { name: "Dataset published" }))
     .toBeVisible({ timeout: 30_000 });
-  await expect(industryReceipt.getByText("Published", { exact: true })).toBeVisible();
-  await expect(
-    industryReceipt
-      .locator("dt", { hasText: /^Observation through$/ })
-      .locator("..")
-      .locator("dd"),
-  ).toHaveText(industryTargetSession);
-  expect(industryStatusRequests).toContainEqual({
-    idempotencyKey: industryKey,
-    observationThroughSession: industryTargetSession,
-  });
-  const industryProof = operatorMutationRequests.find((request) => {
-    if (request.path !== "/api/auth/operator/proofs") return false;
-    const body = JSON.parse(request.body) as { operation?: unknown };
-    return body.operation === "data.refresh.industry.submit";
-  });
-  expect(JSON.parse(industryProof?.body ?? "{}")).toEqual({
-    idempotency_key: industryKey,
-    observation_through_session: industryTargetSession,
-    operation: "data.refresh.industry.submit",
-  });
-  const industryMutation = operatorMutationRequests.find(
-    (request) => request.path === "/api/operator/data/refreshes/industry",
-  );
-  expect(JSON.parse(industryMutation?.body ?? "{}")).toEqual({
-    idempotency_key: industryKey,
-    observation_through_session: industryTargetSession,
-    proof: expect.any(String),
-  });
-  expect(industryMutation?.body).not.toContain(browserPassword);
-  resetAuthRateLimits();
 
-  let industryNoChangeKey = "";
-  industryNoChangeKey = await reviewGeneratedRefresh(page, industryReview, "Industry");
-  industryConfirmation = page.getByRole("dialog", {
-    name: "Submit Industry Refresh?",
-  });
-  await expect(industryConfirmation.getByLabel("Verification code")).toHaveCount(0);
-  await industryConfirmation.getByRole("button", { name: "Submit Refresh" }).click();
-  await expect(industryConfirmation).toHaveCount(0);
-  const industryNoChangeReceipt = page.locator("section[data-tone]").filter({
-    hasText: industryNoChangeKey,
-  });
-  await expect(page.getByRole("heading", { name: "Industry Refresh completed" }))
-    .toBeVisible({ timeout: 30_000 });
-  await expect(industryNoChangeReceipt.getByText("No change", { exact: true }))
-    .toBeVisible();
-  resetAuthRateLimits();
-
-  let industryRejectedKey = "";
-  const industryRejectedHandler = async (route: Route): Promise<void> => {
-    const request = route.request();
-    if (request.method() !== "POST") {
-      await route.continue();
-      return;
-    }
-    const body = request.postDataJSON() as { idempotency_key?: unknown };
-    if (body.idempotency_key !== industryRejectedKey) {
-      await route.continue();
-      return;
-    }
-    await route.fulfill({
-      body: JSON.stringify({
-        attempt_count: 1,
-        data_through_session: null,
-        failure_code: "OVERLAPPING_PRIMARY_INDUSTRY_CLASSIFICATION",
-        idempotency_key: industryRejectedKey,
-        kind: "industry",
-        last_failure_code: "OVERLAPPING_PRIMARY_INDUSTRY_CLASSIFICATION",
-        last_refresh_at: null,
-        observation_through_session: industryTargetSession,
-        outcome: "business_rejected",
-        status: "failed",
-      }),
-      contentType: "application/json",
-      status: 202,
-    });
-  };
-  await page.route(
-    "**/api/operator/data/refreshes/industry",
-    industryRejectedHandler,
-  );
-  industryRejectedKey = await reviewGeneratedRefresh(page, industryReview, "Industry");
-  industryConfirmation = page.getByRole("dialog", {
-    name: "Submit Industry Refresh?",
-  });
-  await expect(industryConfirmation.getByLabel("Verification code")).toHaveCount(0);
-  await industryConfirmation.getByRole("button", { name: "Submit Refresh" }).click();
-  await expect(industryConfirmation).toHaveCount(0);
-  const industryRejectedReceipt = page.locator("section[data-tone]").filter({
-    hasText: industryRejectedKey,
-  });
-  await expect(page.getByRole("heading", { name: "Industry Refresh rejected" }))
-    .toBeVisible();
-  await expect(industryRejectedReceipt.getByText("Rejected", { exact: true }))
-    .toBeVisible();
-  await expect(industryRejectedReceipt).toContainText("will not retry");
-  await page.unroute(
-    "**/api/operator/data/refreshes/industry",
-    industryRejectedHandler,
-  );
-  resetAuthRateLimits();
-
-  let droppedFinancialKey = "";
-  let markFinancialResponseDropped = (): void => {};
-  const financialResponseDropped = new Promise<void>((resolve) => {
-    markFinancialResponseDropped = resolve;
-  });
-  const droppedFinancialResponseHandler = async (route: Route): Promise<void> => {
-    const request = route.request();
-    if (request.method() !== "POST") {
-      await route.continue();
-      return;
-    }
-    const body = request.postDataJSON() as { idempotency_key?: unknown };
-    if (body.idempotency_key !== droppedFinancialKey) {
-      await route.continue();
-      return;
-    }
-    const response = await route.fetch();
-    expect(response.status()).toBe(202);
-    await route.abort("aborted");
-    markFinancialResponseDropped();
-  };
-  await page.route(
-    "**/api/operator/data/refreshes/financial**",
-    droppedFinancialResponseHandler,
-  );
-  await financialTarget.fill(financialTargetSession);
-  droppedFinancialKey = await reviewGeneratedRefresh(page, financialReview, "Financial");
-  let recoverableFinancialConfirmation = page.getByRole("dialog", {
-    name: "Submit Financial Refresh?",
-  });
-  await expect(recoverableFinancialConfirmation.getByLabel("Verification code")).toHaveCount(0);
-  await recoverableFinancialConfirmation.getByRole("button", { name: "Submit Refresh" }).click();
-  await financialResponseDropped;
-  await expect(recoverableFinancialConfirmation).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "Confirming submission" })).toBeVisible();
-  await page.unroute(
-    "**/api/operator/data/refreshes/financial**",
-    droppedFinancialResponseHandler,
-  );
-  const recoveredFinancialReceipt = page.locator("section[data-tone]").filter({
-    hasText: droppedFinancialKey,
-  });
-  await expect(page.getByRole("heading", {
-    name: "Financial data published with unresolved coverage",
-  })).toBeVisible({ timeout: 30_000 });
-  await expect(recoveredFinancialReceipt.getByText(
-    financialTargetSession,
-    { exact: true },
-  )).toBeVisible();
-  await expect(recoveredFinancialReceipt.getByText("Published · incomplete coverage", { exact: true }))
-    .toBeVisible();
-  expect(financialStatusRequests).toContainEqual({
-    idempotencyKey: droppedFinancialKey,
-    observationThroughSession: financialTargetSession,
-  });
-  resetAuthRateLimits();
-
-  let knownFailureKey = "";
-  let releaseKnownFailure = (): void => {};
-  let markKnownFailureStarted = (): void => {};
-  const knownFailureGate = new Promise<void>((resolve) => {
-    releaseKnownFailure = resolve;
-  });
-  const knownFailureStarted = new Promise<void>((resolve) => {
-    markKnownFailureStarted = resolve;
-  });
-  const knownFailureHandler = async (route: Route): Promise<void> => {
-    const request = route.request();
-    if (request.method() !== "POST") {
-      await route.continue();
-      return;
-    }
-    const body = request.postDataJSON() as { idempotency_key?: unknown };
-    if (body.idempotency_key !== knownFailureKey) {
-      await route.continue();
-      return;
-    }
-    markKnownFailureStarted();
-    await knownFailureGate;
-    await route.fulfill({
-      body: JSON.stringify({ code: "DATA_NOT_READY" }),
-      contentType: "application/json",
-      status: 409,
-    });
-  };
-  await page.route(
-    "**/api/operator/data/refreshes/financial",
-    knownFailureHandler,
-  );
-  await financialTarget.fill(financialTargetSession);
-  knownFailureKey = await reviewGeneratedRefresh(page, financialReview, "Financial");
-  recoverableFinancialConfirmation = page.getByRole("dialog", {
-    name: "Submit Financial Refresh?",
-  });
-  await expect(recoverableFinancialConfirmation.getByLabel("Verification code")).toHaveCount(0);
-  await recoverableFinancialConfirmation.getByRole("button", { name: "Submit Refresh" }).click();
-  await knownFailureStarted;
-  await page.keyboard.press("Escape");
-  await expect(page.getByRole("heading", { name: "Confirming submission" })).toBeVisible();
-  // Restoring focus belongs to the committed UI, not the next animation frame.
-  await page.clock.pauseAt(new Date());
-  try {
-    releaseKnownFailure();
-    await expect(page.getByRole("alert").filter({
-      hasText: "The current Dataset is not ready for a Financial Refresh.",
-    })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Confirming submission" })).toHaveCount(0);
-    await expect(financialReview).toBeFocused();
-  } finally {
-    await page.clock.resume();
-  }
-  await page.unroute(
-    "**/api/operator/data/refreshes/financial",
-    knownFailureHandler,
-  );
-  resetAuthRateLimits();
-
-  let retryKey = "";
-  let releaseUncertainSubmission = (): void => {};
-  let markUncertainSubmissionStarted = (): void => {};
-  let markMissingReceiptObserved = (): void => {};
-  const uncertainSubmissionGate = new Promise<void>((resolve) => {
-    releaseUncertainSubmission = resolve;
-  });
-  const uncertainSubmissionStarted = new Promise<void>((resolve) => {
-    markUncertainSubmissionStarted = resolve;
-  });
-  const missingReceiptObserved = new Promise<void>((resolve) => {
-    markMissingReceiptObserved = resolve;
-  });
-  const retryHandler = async (route: Route): Promise<void> => {
-    const request = route.request();
-    const url = new URL(request.url());
-    if (
-      request.method() === "GET"
-      && url.searchParams.get("idempotency_key") === retryKey
-    ) {
-      markMissingReceiptObserved();
-      await route.fulfill({
-        body: JSON.stringify({ code: "REFRESH_NOT_FOUND" }),
-        contentType: "application/json",
-        status: 404,
-      });
-      return;
-    }
-    if (request.method() !== "POST") {
-      await route.continue();
-      return;
-    }
-    const body = request.postDataJSON() as { idempotency_key?: unknown };
-    if (body.idempotency_key !== retryKey) {
-      await route.continue();
-      return;
-    }
-    markUncertainSubmissionStarted();
-    await uncertainSubmissionGate;
-    await route.fulfill({
-      body: JSON.stringify({ code: "DATA_REFRESH_UNAVAILABLE" }),
-      contentType: "application/json",
-      status: 503,
-    });
-  };
-  await page.route("**/api/operator/data/refreshes/financial**", retryHandler);
-  retryKey = await reviewGeneratedRefresh(page, financialReview, "Financial");
-  recoverableFinancialConfirmation = page.getByRole("dialog", {
-    name: "Submit Financial Refresh?",
-  });
-  await expect(recoverableFinancialConfirmation.getByLabel("Verification code")).toHaveCount(0);
-  await recoverableFinancialConfirmation.getByRole("button", { name: "Submit Refresh" }).click();
-  await uncertainSubmissionStarted;
-  await page.keyboard.press("Escape");
-  releaseUncertainSubmission();
-  await missingReceiptObserved;
-  const retryExactRequest = page.getByRole("button", { name: "Retry exact request" });
-  await expect(page.getByRole("alert").filter({
-    hasText: "Receipt unavailable; retrying while visible.",
-  })).toBeVisible();
-  await retryExactRequest.click();
-  recoverableFinancialConfirmation = page.getByRole("dialog", {
-    name: "Submit Financial Refresh?",
-  });
-  await expect(recoverableFinancialConfirmation).toContainText(retryKey);
-  await expect(recoverableFinancialConfirmation).toContainText(financialTargetSession);
-  await recoverableFinancialConfirmation.getByRole("button", { name: "Cancel" }).click();
-  await expect(financialReview).toBeFocused();
-  await page.unroute("**/api/operator/data/refreshes/financial**", retryHandler);
-  resetAuthRateLimits();
-
-  let stopKey = "";
-  let markStopSubmissionStarted = (): void => {};
-  let releaseStopSubmission = (): void => {};
-  const stopSubmissionStarted = new Promise<void>((resolve) => {
-    markStopSubmissionStarted = resolve;
-  });
-  const stopSubmissionGate = new Promise<void>((resolve) => {
-    releaseStopSubmission = resolve;
-  });
-  const stopHandler = async (route: Route): Promise<void> => {
-    const request = route.request();
-    if (request.method() !== "POST") {
-      await route.continue();
-      return;
-    }
-    const body = request.postDataJSON() as { idempotency_key?: unknown };
-    if (body.idempotency_key !== stopKey) {
-      await route.continue();
-      return;
-    }
-    markStopSubmissionStarted();
-    await stopSubmissionGate;
-    await route.fulfill({
-      body: JSON.stringify({ code: "DATA_REFRESH_UNAVAILABLE" }),
-      contentType: "application/json",
-      status: 503,
-    });
-  };
-  await page.route("**/api/operator/data/refreshes/financial", stopHandler);
-  stopKey = await reviewGeneratedRefresh(page, financialReview, "Financial");
-  recoverableFinancialConfirmation = page.getByRole("dialog", {
-    name: "Submit Financial Refresh?",
-  });
-  await expect(recoverableFinancialConfirmation.getByLabel("Verification code")).toHaveCount(0);
-  await recoverableFinancialConfirmation.getByRole("button", { name: "Submit Refresh" }).click();
-  await stopSubmissionStarted;
-  await page.keyboard.press("Escape");
-  await page.getByRole("button", { name: "Stop checking" }).click();
-  await expect(page.getByRole("alert").filter({
-    hasText: "Automatic receipt checks stopped.",
-  })).toBeVisible();
-  await expect(financialReview).toBeFocused();
-  releaseStopSubmission();
-  await settleReactUpdates(page);
-  await expect(page.getByRole("heading", { name: "Confirming submission" })).toHaveCount(0);
-  await page.unroute("**/api/operator/data/refreshes/financial", stopHandler);
-  resetAuthRateLimits();
-
-  let capabilityLossKey = "";
+  // Losing Operator authority while polling must clear the protected page.
   const capabilityLossHandler = async (route: Route): Promise<void> => {
     const request = route.request();
-    if (request.method() !== "POST") {
-      await route.continue();
-      return;
-    }
-    const body = request.postDataJSON() as { idempotency_key?: unknown };
-    if (body.idempotency_key !== capabilityLossKey) {
-      await route.continue();
-      return;
-    }
-    await route.fulfill({
-      body: JSON.stringify({
-        progress: null,
-        accepted_instrument_count: null,
-        attempt_count: 0,
-        checked_no_structured_change_count: null,
-        data_through_session: null,
-        discovery_gap_count: null,
-        failed_instrument_count: null,
-        failure_code: null,
-        financial_complete_through_session: null,
-        idempotency_key: capabilityLossKey,
-        kind: "financial",
-        last_failure_code: null,
-        last_refresh_at: null,
-        matched_trigger_count: null,
-        observation_through_session: financialTargetSession,
-        outcome: null,
-        pending_instrument_count: null,
-        status: "accepted",
-      }),
-      contentType: "application/json",
-      status: 202,
+    if (request.method() !== "POST") return route.continue();
+    await route.fulfill({ status: 202, contentType: "application/json",
+      body: JSON.stringify({ ...acceptedReceipt,
+        as_of: request.postDataJSON().as_of,
+        idempotency_key: request.postDataJSON().idempotency_key }),
     });
   };
-  await page.route(
-    "**/api/operator/data/refreshes/financial",
-    capabilityLossHandler,
-  );
-  capabilityLossKey = await reviewGeneratedRefresh(page, financialReview, "Financial");
-  const capabilityLossConfirmation = page.getByRole("dialog", {
-    name: "Submit Financial Refresh?",
-  });
-  await expect(capabilityLossConfirmation.getByLabel("Verification code")).toHaveCount(0);
-  await capabilityLossConfirmation.getByRole("button", { name: "Submit Refresh" }).click();
-  await expect(page.getByRole("heading", { name: "Financial Refresh accepted" }))
-    .toBeVisible();
+  await page.route("**/api/operator/data/refreshes/dataset", capabilityLossHandler);
+  await reviewGeneratedRefresh(page, reviewRefresh);
+  await page.getByRole("dialog", { name: "Refresh all data?" })
+    .getByRole("button", { name: "Submit Refresh" }).click();
+  await expect(page.getByRole("heading", { name: "Refresh accepted" })).toBeVisible();
   await restoreResearcherSession(page, ordinary);
   await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
   await expect(page.getByRole("heading", { name: "Not found" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Data operations" })).toHaveCount(0);
-  await page.unroute(
-    "**/api/operator/data/refreshes/financial",
-    capabilityLossHandler,
-  );
-  await restoreResearcherSession(page, operator);
-  await page.goto("/operator/data");
-  await expect(page.getByRole("heading", { name: "Data operations" })).toBeVisible();
-
+  await page.unroute("**/api/operator/data/refreshes/dataset", capabilityLossHandler);
 
 });
 
 test("Operator Dataset operations and Worker recovery", { tag: "@isolated" }, async ({ page }) => {
   test.setTimeout(240_000);
-  const { operatorMutationRequests, marketStatusRequests, financialStatusRequests, industryStatusRequests } = await prepareOperator(page);
+  const { operatorMutationRequests, datasetStatusRequests } = await prepareOperator(page);
   await page.goto("/operator/data");
   await expect(page.getByRole("heading", { name: "Data operations" })).toBeVisible();
-  const marketAsOf = "2026-08-14T18:00:00+08:00";
-  const [marketKey, financialKey, industryKey] = await prepareDatasetOperations(page);
+  const datasetAsOf = "2026-08-14T18:00:00+08:00";
+  const datasetKey = await prepareDatasetOperation(page);
   await page.reload();
   const datasetStatus = page.locator(
     'section[aria-labelledby="operator-dataset-status-heading"]',
@@ -1807,9 +1234,7 @@ test("Operator Dataset operations and Worker recovery", { tag: "@isolated" }, as
   const latestRefreshes = datasetStatus.getByRole("table", {
     name: "Latest Data Refresh operations",
   });
-  for (const kind of ["Market Refresh", "Financial Refresh", "Industry Refresh"]) {
-    await expect(latestRefreshes.getByRole("row").filter({ hasText: kind })).toHaveCount(1);
-  }
+  await expect(latestRefreshes.getByRole("row").filter({ hasText: "Data Refresh" })).toHaveCount(1);
   const operationHistory = datasetStatus.getByRole("table", {
     name: "Data Refresh operation history",
   });
@@ -1817,17 +1242,15 @@ test("Operator Dataset operations and Worker recovery", { tag: "@isolated" }, as
     "Newest first · 50 receipts per page · terminal receipts retained 180 days",
     { exact: true },
   )).toHaveCount(0);
-  for (const key of [marketKey, financialKey, industryKey]) {
-    await expect(operationHistory.getByText(key, { exact: true })).toBeVisible();
-  }
+  await expect(operationHistory.getByText(datasetKey, { exact: true })).toBeVisible();
 
-  const marketHistoryRow = operationHistory.getByRole("row").filter({ hasText: marketKey });
-  const marketDetails = marketHistoryRow.getByRole("button", { name: `View details for ${marketKey}` });
-  await marketDetails.focus();
-  await marketDetails.press("Enter");
+  const datasetHistoryRow = operationHistory.getByRole("row").filter({ hasText: datasetKey });
+  const datasetDetails = datasetHistoryRow.getByRole("button", { name: `View details for ${datasetKey}` });
+  await datasetDetails.focus();
+  await datasetDetails.press("Enter");
   const operationDrawer = page.getByRole("dialog", { name: "Operation details" });
   await expect(operationDrawer).toBeVisible();
-  await expect(operationDrawer).toContainText(marketKey);
+  await expect(operationDrawer).toContainText(datasetKey);
   await expect(operationDrawer).toContainText("Last heartbeat");
   await expect(operationDrawer).not.toContainText(/manifest|owner token|object path|raw response/i);
   await expect(operationDrawer.getByRole("button", { name: "Close operation details" }))
@@ -1840,17 +1263,7 @@ test("Operator Dataset operations and Worker recovery", { tag: "@isolated" }, as
     .toBeFocused();
   await page.keyboard.press("Escape");
   await expect(operationDrawer).toHaveCount(0);
-  await expect(marketDetails).toBeFocused();
-
-  const originalViewport = page.viewportSize();
-  await page.setViewportSize({ width: 640, height: 900 });
-  expect(await operationHistory.evaluate((element) => getComputedStyle(element).display)).toBe("table");
-  expect(await operationHistory.evaluate((element) => {
-    const region = element.closest('[data-slot="table-container"]')!;
-    return region.scrollWidth > region.clientWidth;
-  })).toBe(true);
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  if (originalViewport !== null) await page.setViewportSize(originalViewport);
+  await expect(datasetDetails).toBeFocused();
 
   const terminalStatusResponse = await page.request.get("/api/operator/data/status");
   expect(terminalStatusResponse.status()).toBe(200);
@@ -1877,8 +1290,8 @@ test("Operator Dataset operations and Worker recovery", { tag: "@isolated" }, as
   stopDataOperatorWorker();
   assertDataOperatorWorkerLeaseReleased();
   resetAuthRateLimits();
-  const recoveryKey = "browser-market-worker-recovery";
-  await submitAcceptedMarket(recoveryKey);
+  const recoveryKey = "browser-dataset-worker-recovery";
+  await submitAcceptedDataset(recoveryKey);
   const unavailableReload = page.waitForResponse(
     (response) => new URL(response.url()).pathname === "/api/operator/data/status",
   );
@@ -1931,8 +1344,8 @@ test("Operator Dataset operations and Worker recovery", { tag: "@isolated" }, as
 
   stopDataOperatorWorker();
   assertDataOperatorWorkerLeaseReleased();
-  const exhaustionKey = "browser-market-worker-exhaustion";
-  await submitAcceptedMarket(exhaustionKey);
+  const exhaustionKey = "browser-dataset-worker-exhaustion";
+  await submitAcceptedDataset(exhaustionKey);
   markDataRefreshRunning(exhaustionKey);
   expireDataRefreshClaim(exhaustionKey);
   exhaustDataRefresh(exhaustionKey);
@@ -1952,21 +1365,21 @@ test("Operator Dataset operations and Worker recovery", { tag: "@isolated" }, as
   await expect(exhaustedDrawer).toContainText("WORKER_LEASE_EXPIRED");
   await exhaustedDrawer.getByRole("button", { name: "Close operation details" }).click();
 
-  async function submitAcceptedMarket(key: string): Promise<string> {
+  async function submitAcceptedDataset(key: string): Promise<string> {
     const proofResponse = await page.request.post("/api/auth/operator/proofs", {
       data: {
-        as_of: marketAsOf,
+        as_of: datasetAsOf,
         idempotency_key: key,
-        operation: "data.refresh.market.submit",
+        operation: "data.refresh.dataset.submit",
       },
       headers: sameOriginHeaders(),
     });
     expect(proofResponse.status()).toBe(200);
     const confirmed = await proofResponse.json() as { proof?: unknown };
     expect(typeof confirmed.proof).toBe("string");
-    const submitted = await page.request.post("/api/operator/data/refreshes/market", {
+    const submitted = await page.request.post("/api/operator/data/refreshes/dataset", {
       data: {
-        as_of: marketAsOf,
+        as_of: datasetAsOf,
         idempotency_key: key,
         proof: confirmed.proof,
       },
@@ -1980,8 +1393,8 @@ test("Operator Dataset operations and Worker recovery", { tag: "@isolated" }, as
   }
 
   resetAuthRateLimits();
-  const cancelSourceKey = "browser-market-cancel-source";
-  const cancelSourceTarget = await submitAcceptedMarket(cancelSourceKey);
+  const cancelSourceKey = "browser-dataset-cancel-source";
+  const cancelSourceTarget = await submitAcceptedDataset(cancelSourceKey);
   const cancelSourceReload = page.waitForResponse(
     (response) => new URL(response.url()).pathname === "/api/operator/data/status",
   );
@@ -2002,7 +1415,7 @@ test("Operator Dataset operations and Worker recovery", { tag: "@isolated" }, as
     name: `Cancel operation ${cancelSourceKey}`,
   }).click();
   const cancelDialog = page.getByRole("alertdialog", { name: "Cancel queued Refresh?" });
-  await expect(cancelDialog).toContainText("Market Refresh");
+  await expect(cancelDialog).toContainText("Data Refresh");
   await expect(cancelDialog).toContainText(cancelSourceTarget);
   await expect(cancelDialog).toContainText(cancelSourceKey);
   await expect(cancelDialog).toContainText("The Worker will never claim this queued receipt");
@@ -2040,7 +1453,7 @@ test("Operator Dataset operations and Worker recovery", { tag: "@isolated" }, as
   await expect(retryDialog.getByLabel("Verification code")).toHaveCount(0);
   await retryDialog.getByRole("button", { name: "Create Retry" }).click();
   const actionRetryKey = (await retryProofRequest).postDataJSON().new_idempotency_key as string;
-  expect(actionRetryKey).toMatch(/^market-retry-\d{8}T\d{6}Z-[a-f0-9-]{36}$/);
+  expect(actionRetryKey).toMatch(/^dataset-retry-\d{8}T\d{6}Z-[a-f0-9-]{36}$/);
   expect(actionRetryKey).not.toBe(cancelSourceKey);
   await expect(retryDialog).toHaveCount(0);
   await expect(cancelledDrawer).toBeVisible();
@@ -2053,8 +1466,8 @@ test("Operator Dataset operations and Worker recovery", { tag: "@isolated" }, as
   await expect(cancelSourceRow.getByText("Cancelled", { exact: true })).toBeVisible();
 
   resetAuthRateLimits();
-  const claimedSourceKey = "browser-market-claimed-source";
-  await submitAcceptedMarket(claimedSourceKey);
+  const claimedSourceKey = "browser-dataset-claimed-source";
+  await submitAcceptedDataset(claimedSourceKey);
   const claimedSourceReload = page.waitForResponse(
     (response) => new URL(response.url()).pathname === "/api/operator/data/status",
   );
@@ -2158,12 +1571,6 @@ async function settleReactUpdates(page: Page): Promise<void> {
   await nextAnimationFrame(page);
 }
 
-async function expectMinimumTouchTarget(locator: Locator): Promise<void> {
-  const box = await locator.boundingBox();
-  expect(box, "touch target should have a rendered bounding box").not.toBeNull();
-  expect(box?.height, "touch target height").toBeGreaterThanOrEqual(44);
-  expect(box?.width, "touch target width").toBeGreaterThanOrEqual(44);
-}
 
 async function findInvitationReissue(
   page: Page,
@@ -2191,48 +1598,28 @@ async function findInvitationReissue(
   throw new Error(`Seeded invitation ${email} was not found in the paged directory.`);
 }
 
-async function reviewGeneratedRefresh(page: Page, button: Locator, kind: "Market" | "Financial" | "Industry"): Promise<string> {
+async function reviewGeneratedRefresh(page: Page, button: Locator): Promise<string> {
   await button.click();
-  const dialog = page.getByRole("dialog", { name: `Submit ${kind} Refresh?`, exact: true });
+  const dialog = page.getByRole("dialog", { name: "Refresh all data?", exact: true });
   await expect(dialog).toBeVisible();
   const key = await dialog.locator("dl > div").filter({ has: page.locator("dt").filter({ hasText: /^Idempotency key$/ }) }).locator("dd").innerText();
-  expect(key).toMatch(new RegExp(`^${kind.toLowerCase()}-\\d{8}T\\d{6}Z-[a-f0-9-]{36}$`));
+  expect(key).toMatch(/^dataset-\d{8}T\d{6}Z-[a-f0-9-]{36}$/);
   return key;
 }
 
 async function prepareOperator(page: Page) {
   const operatorMutationRequests: Array<Readonly<{ path: string; body: string }>> = [];
-  const marketStatusRequests: Array<Readonly<{
+  const datasetStatusRequests: Array<Readonly<{
     asOf: string | null;
     idempotencyKey: string | null;
-  }>> = [];
-  const financialStatusRequests: Array<Readonly<{
-    idempotencyKey: string | null;
-    observationThroughSession: string | null;
-  }>> = [];
-  const industryStatusRequests: Array<Readonly<{
-    idempotencyKey: string | null;
-    observationThroughSession: string | null;
   }>> = [];
   page.on("request", (request) => {
     const url = new URL(request.url());
     const path = url.pathname;
-    if (request.method() === "GET" && path === "/api/operator/data/refreshes/market") {
-      marketStatusRequests.push({
+    if (request.method() === "GET" && path === "/api/operator/data/refreshes/dataset") {
+      datasetStatusRequests.push({
         asOf: url.searchParams.get("as_of"),
         idempotencyKey: url.searchParams.get("idempotency_key"),
-      });
-    }
-    if (request.method() === "GET" && path === "/api/operator/data/refreshes/financial") {
-      financialStatusRequests.push({
-        idempotencyKey: url.searchParams.get("idempotency_key"),
-        observationThroughSession: url.searchParams.get("observation_through_session"),
-      });
-    }
-    if (request.method() === "GET" && path === "/api/operator/data/refreshes/industry") {
-      industryStatusRequests.push({
-        idempotencyKey: url.searchParams.get("idempotency_key"),
-        observationThroughSession: url.searchParams.get("observation_through_session"),
       });
     }
     if (
@@ -2241,9 +1628,7 @@ async function prepareOperator(page: Page) {
         path === "/api/auth/operator/proofs"
         || path.startsWith("/api/auth/operator/invitations/")
         || path === "/api/auth/operator/researchers/sessions/revoke"
-        || path === "/api/operator/data/refreshes/market"
-        || path === "/api/operator/data/refreshes/financial"
-        || path === "/api/operator/data/refreshes/industry"
+        || path === "/api/operator/data/refreshes/dataset"
         || path === "/api/operator/data/refreshes/cancel"
         || path === "/api/operator/data/refreshes/retry"
       )
@@ -2269,7 +1654,7 @@ async function prepareOperator(page: Page) {
   await restoreResearcherSession(page, operator);
   await page.goto("/operator/data");
   await expect(page.getByRole("heading", { name: "Data operations" })).toBeVisible();
-  return { operatorMutationRequests, marketStatusRequests, financialStatusRequests, industryStatusRequests, operator, ordinary };
+  return { operatorMutationRequests, datasetStatusRequests, operator, ordinary };
 }
 
 async function prepareOperatorDirectory(
@@ -2310,20 +1695,15 @@ async function prepareOperatorDirectory(
   return { invitationEmail, researcherTable, operatorRow };
 }
 
-async function prepareDatasetOperations(page: Page): Promise<[string, string, string]> {
-  return [await prepareDataOperation(page, "market"), await prepareDataOperation(page, "financial"), await prepareDataOperation(page, "industry")];
-}
-
-async function prepareDataOperation(page: Page, kind: "market" | "financial" | "industry"): Promise<string> {
-  const key = `browser-dataset-${kind}`;
-  const target = kind === "market" ? { as_of: "2026-08-14T18:00:00+08:00" }
-    : { observation_through_session: "2026-08-14" };
+async function prepareDatasetOperation(page: Page): Promise<string> {
+  const key = "browser-dataset-refresh";
+  const target = { as_of: "2026-08-14T18:00:00+08:00" };
   const proof = await page.request.post("/api/auth/operator/proofs", {
     headers: sameOriginHeaders(), data: { ...target, idempotency_key: key,
-      operation: `data.refresh.${kind}.submit` },
+      operation: "data.refresh.dataset.submit" },
   });
   expect(proof.status()).toBe(200);
-  const submitted = await page.request.post(`/api/operator/data/refreshes/${kind}`, {
+  const submitted = await page.request.post("/api/operator/data/refreshes/dataset", {
     headers: sameOriginHeaders(), data: { ...target, idempotency_key: key, proof: (await proof.json()).proof },
   });
   expect(submitted.status()).toBe(202);

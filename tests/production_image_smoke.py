@@ -37,7 +37,7 @@ EXPECTED_OVERVIEW = {
         "discovery_attempted_through_session": "2026-08-05",
         "discovery_complete_through_session": "2026-08-05",
         "historical_reconciliation_watermark": "2026-08-05",
-        "revision_coverage": "source-dated-and-first-observed-corrections",
+        "revision_coverage": "tushare-disclosure-periods-with-rotating-reconciliation",
         "seed_policy": "annual-stock-and-ttm-dependency-seeds",
         "readiness_status": "ready",
         "pending_instrument_count": 0,
@@ -71,8 +71,8 @@ UNAVAILABLE_DEPENDENCY_CODES = {
     "auth": "AUTH_UNAVAILABLE",
 }
 HTTP_REQUEST_TIMEOUT_SECONDS = 10
-OPERATOR_IMAGE_SMOKE_MARKET_KEY = "image-smoke-operator-market-refresh"
-OPERATOR_IMAGE_SMOKE_MARKET_AS_OF = "2026-08-06T15:00:00+08:00"
+OPERATOR_IMAGE_SMOKE_DATASET_KEY = "image-smoke-operator-dataset-refresh"
+OPERATOR_IMAGE_SMOKE_DATASET_AS_OF = "2026-08-06T15:00:00+08:00"
 
 BATCH_PERFORMANCE_WARMUP_SAMPLES = 1
 BATCH_PERFORMANCE_MEASURED_SAMPLES = 4
@@ -340,29 +340,29 @@ def _qualify_operator_while_worker_unavailable(
     assert preserved_status == 200
     assert preserved_capability == {"operator": True}
 
-    market_proof = _operator_proof(
+    dataset_proof = _operator_proof(
         gateway_origin,
         operator["cookie"],
         {
-            "as_of": OPERATOR_IMAGE_SMOKE_MARKET_AS_OF,
-            "idempotency_key": OPERATOR_IMAGE_SMOKE_MARKET_KEY,
-            "operation": "data.refresh.market.submit",
+            "as_of": OPERATOR_IMAGE_SMOKE_DATASET_AS_OF,
+            "idempotency_key": OPERATOR_IMAGE_SMOKE_DATASET_KEY,
+            "operation": "data.refresh.dataset.submit",
         },
     )
     submit_status, submitted, submit_request_id = _gateway_json(
         gateway_origin,
         "POST",
-        "/api/operator/data/refreshes/market",
+        "/api/operator/data/refreshes/dataset",
         cookie=operator["cookie"],
         body={
-            "as_of": OPERATOR_IMAGE_SMOKE_MARKET_AS_OF,
-            "idempotency_key": OPERATOR_IMAGE_SMOKE_MARKET_KEY,
-            "proof": market_proof,
+            "as_of": OPERATOR_IMAGE_SMOKE_DATASET_AS_OF,
+            "idempotency_key": OPERATOR_IMAGE_SMOKE_DATASET_KEY,
+            "proof": dataset_proof,
         },
     )
     assert submit_status == 202
     assert isinstance(submitted, dict)
-    assert submitted.get("idempotency_key") == OPERATOR_IMAGE_SMOKE_MARKET_KEY
+    assert submitted.get("idempotency_key") == OPERATOR_IMAGE_SMOKE_DATASET_KEY
     assert submitted.get("status") == "accepted"
     data_status_code, data_status, status_request_id = _gateway_json(
         gateway_origin,
@@ -382,11 +382,11 @@ def _qualify_operator_while_worker_unavailable(
         item
         for item in operations
         if isinstance(item, dict)
-        and item.get("idempotency_key") == OPERATOR_IMAGE_SMOKE_MARKET_KEY
+        and item.get("idempotency_key") == OPERATOR_IMAGE_SMOKE_DATASET_KEY
     )
     assert accepted.get("status") == "accepted"
     return {
-        "accepted_operation": OPERATOR_IMAGE_SMOKE_MARKET_KEY,
+        "accepted_operation": OPERATOR_IMAGE_SMOKE_DATASET_KEY,
         "assignment_researcher_id": operator["researcher_id"],
         "invitation_ids": [invitation_id, reissued_invitation_id],
         "ordinary_404_verified": True,
@@ -410,8 +410,8 @@ def _qualify_operator_refresh_processed(gateway_origin: str) -> dict[str, object
     operator = _operator_sessions()["initial_operator"]
     query = urlencode(
         {
-            "as_of": OPERATOR_IMAGE_SMOKE_MARKET_AS_OF,
-            "idempotency_key": OPERATOR_IMAGE_SMOKE_MARKET_KEY,
+            "as_of": OPERATOR_IMAGE_SMOKE_DATASET_AS_OF,
+            "idempotency_key": OPERATOR_IMAGE_SMOKE_DATASET_KEY,
         }
     )
     deadline = time.monotonic() + 60
@@ -422,7 +422,7 @@ def _qualify_operator_refresh_processed(gateway_origin: str) -> dict[str, object
         status, candidate, request_id = _gateway_json(
             gateway_origin,
             "GET",
-            f"/api/operator/data/refreshes/market?{query}",
+            f"/api/operator/data/refreshes/dataset?{query}",
             cookie=operator["cookie"],
         )
         assert status == 200
@@ -535,14 +535,14 @@ def _qualify_operator_receipt_cleanup(
     assert isinstance(expected_head, dict)
     query = urlencode(
         {
-            "as_of": OPERATOR_IMAGE_SMOKE_MARKET_AS_OF,
-            "idempotency_key": OPERATOR_IMAGE_SMOKE_MARKET_KEY,
+            "as_of": OPERATOR_IMAGE_SMOKE_DATASET_AS_OF,
+            "idempotency_key": OPERATOR_IMAGE_SMOKE_DATASET_KEY,
         }
     )
     receipt_status, receipt, receipt_request_id = _gateway_json(
         gateway_origin,
         "GET",
-        f"/api/operator/data/refreshes/market?{query}",
+        f"/api/operator/data/refreshes/dataset?{query}",
         cookie=successor["cookie"],
     )
     assert receipt_status == 404
@@ -560,7 +560,7 @@ def _qualify_operator_receipt_cleanup(
     assert isinstance(operations, list)
     assert not any(
         isinstance(item, dict)
-        and item.get("idempotency_key") == OPERATOR_IMAGE_SMOKE_MARKET_KEY
+        and item.get("idempotency_key") == OPERATOR_IMAGE_SMOKE_DATASET_KEY
         for item in operations
     )
     return {
@@ -3131,7 +3131,9 @@ def _assert_private_operator_installed() -> None:
     assert result.returncode == 0, result.stderr
     assert "bootstrap" in result.stdout
     assert "bootstrap-financial" in result.stdout
-    assert "refresh-financial" in result.stdout
+    assert "inspect-refresh" in result.stdout
+    assert "refresh-financial" not in result.stdout
+    assert "refresh-industry" not in result.stdout
     assert "inspect-financial-refresh" in result.stdout
 
 
@@ -3504,7 +3506,7 @@ def _operator_proof(
     request_body: dict[str, object],
 ) -> str:
     body = request_body
-    if request_body["operation"] != "data.refresh.market.submit":
+    if request_body["operation"] != "data.refresh.dataset.submit":
         mailbox_url = "http://resend-fake:8300/__test/emails"
         with urllib.request.urlopen(
             mailbox_url, timeout=HTTP_REQUEST_TIMEOUT_SECONDS

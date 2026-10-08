@@ -93,6 +93,21 @@ services:
     volumes:
       - ${THESISTRACE_TEST_DATA_MOUNT}:/smoke-data/canonical-data
 
+  data-operator-worker:
+    command:
+      - thesistrace-data-operator
+      - worker
+      - --replay
+      - /test-fixtures/tushare-financial-dataset-refresh-replay.json
+      - --replay
+      - /test-fixtures/tushare-operator-console-dataset-refresh-replay.json
+      - --replay
+      - /test-fixtures/tushare-operator-console-dataset-no-change-replay.json
+      - --replay
+      - /smoke-evidence/tushare-image-smoke-dataset-refresh-replay.json
+    volumes:
+      - ${THESISTRACE_TEST_EVIDENCE_DIR}:/smoke-evidence:ro
+
   web:
     networks:
       - default

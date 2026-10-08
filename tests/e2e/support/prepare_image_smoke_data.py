@@ -44,6 +44,15 @@ def main() -> None:
     settings = CoreSettings.from_environment()
     if mode == "initial":
         _ensure_bucket(settings)
+        # Dataset Refresh validates every financial identity in this 30-stock
+        # qualification universe. Use the same expansion as its bootstrap.
+        fixture_root = Path(__file__).resolve().parents[2] / "fixtures"
+        refresh_replay = _qualification_financial_replay(
+            fixture_root / "tushare-image-smoke-dataset-refresh-replay.json"
+        )
+        Path("/smoke-evidence/tushare-image-smoke-dataset-refresh-replay.json").write_text(
+            json.dumps(refresh_replay, sort_keys=True), encoding="utf-8"
+        )
     if mode == "recovered":
         _publish_financial_candidate(settings, LAGGED_END, "recovered")
         return

@@ -291,9 +291,9 @@ def test_base_compose_has_one_single_slot_data_refresh_runtime() -> None:
     assert "data-operator-worker:" in test_overlay
     assert "worker\n      - --replay" in test_overlay
     assert "--once" not in _service(test_overlay, "data-operator-worker", "web")
-    assert "tushare-financial-market-refresh-replay.json" in test_overlay
-    assert "tushare-operator-console-market-refresh-replay.json" in test_overlay
-    assert "tushare-image-smoke-market-refresh-replay.json" in test_overlay
+    assert "tushare-financial-dataset-refresh-replay.json" in test_overlay
+    assert "tushare-operator-console-dataset-refresh-replay.json" in test_overlay
+    assert "tushare-image-smoke-dataset-refresh-replay.json" in test_overlay
     assert '"THESISTRACE_TUSHARE_TOKEN": "tushare_test_token"' in runner
     assert "verify_tushare_secret_scope" in runner
     assert "image-smoke-tushare-secret-scope" in runner

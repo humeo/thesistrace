@@ -83,7 +83,7 @@ def test_operator_console_replay_matches_the_post_publication_head(
         TushareDataSource(
             checkpoint_root=tmp_path / "daily-basic",
             provider=ReplayTushareProvider(
-                fixture_root / "tushare-financial-market-refresh-replay.json"
+                fixture_root / "tushare-financial-dataset-refresh-replay.json"
             ),
         )
         .collect(refresh_collection_plan(first_as_of, initial, collection_key="test-first"))
@@ -98,7 +98,7 @@ def test_operator_console_replay_matches_the_post_publication_head(
         TushareDataSource(
             checkpoint_root=tmp_path / "daily-basic",
             provider=ReplayTushareProvider(
-                fixture_root / "tushare-operator-console-market-refresh-replay.json"
+                fixture_root / "tushare-operator-console-dataset-refresh-replay.json"
             ),
         )
         .collect(extension_plan)
@@ -111,7 +111,7 @@ def test_operator_console_replay_matches_the_post_publication_head(
         TushareDataSource(
             checkpoint_root=tmp_path / "daily-basic",
             provider=ReplayTushareProvider(
-                fixture_root / "tushare-operator-console-market-no-change-replay.json"
+                fixture_root / "tushare-operator-console-dataset-no-change-replay.json"
             ),
         )
         .collect(no_change_plan)
@@ -125,12 +125,12 @@ def test_operator_console_replay_matches_the_post_publication_head(
 
 def test_refresh_bundle_selects_each_exact_worker_window_and_rejects_duplicates() -> None:
     fixture_root = Path(__file__).resolve().parents[4] / "tests/fixtures"
-    financial = fixture_root / "tushare-financial-market-refresh-replay.json"
-    console = fixture_root / "tushare-operator-console-market-refresh-replay.json"
+    financial = fixture_root / "tushare-financial-dataset-refresh-replay.json"
+    console = fixture_root / "tushare-operator-console-dataset-refresh-replay.json"
     console_no_change = (
-        fixture_root / "tushare-operator-console-market-no-change-replay.json"
+        fixture_root / "tushare-operator-console-dataset-no-change-replay.json"
     )
-    image_smoke = fixture_root / "tushare-image-smoke-market-refresh-replay.json"
+    image_smoke = fixture_root / "tushare-image-smoke-dataset-refresh-replay.json"
     provider = ReplayTushareRefreshBundle(
         (financial, console, console_no_change, image_smoke)
     )
@@ -171,8 +171,8 @@ def test_refresh_bundle_selects_each_exact_worker_window_and_rejects_duplicates(
         allowed_ts_codes={"000001.SZ"},
     )
     assert discovery.reports == ()
-    assert len(discovery.gaps) == 1
-    assert discovery.gaps[0].failure_code == "UPSTREAM_UNAVAILABLE"
+    assert discovery.gaps == ()
+    assert discovery.completed_periods == ("2025-12-31", "2026-03-31", "2026-06-30")
 
     resumed = ReplayTushareRefreshBundle(
         (financial, console, console_no_change, image_smoke)
@@ -181,7 +181,7 @@ def test_refresh_bundle_selects_each_exact_worker_window_and_rejects_duplicates(
     with pytest.raises(TushareSourceError) as selected_missing_response:
         resumed.query_raw(
             "income",
-            params={"ts_code": "000001.SZ"},
+            params={"ts_code": "999999.SZ"},
             fields=(
                 "ts_code",
                 "ann_date",

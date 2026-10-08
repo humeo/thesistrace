@@ -46,7 +46,7 @@ def test_shared_worker_publishes_and_then_records_replay_no_change(
             ReplayTushareProvider(
                 Path(__file__).resolve().parents[4]
                 / "tests/fixtures"
-                / "tushare-operator-console-market-refresh-replay.json"
+                / "tushare-operator-console-dataset-refresh-replay.json"
             )
         )
         refresh = DataRefreshService(

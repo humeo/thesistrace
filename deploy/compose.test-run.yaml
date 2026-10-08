@@ -199,13 +199,13 @@ services:
       - thesistrace-data-operator
       - worker
       - --replay
-      - /test-fixtures/tushare-financial-market-refresh-replay.json
+      - /test-fixtures/tushare-financial-dataset-refresh-replay.json
       - --replay
-      - /test-fixtures/tushare-operator-console-market-refresh-replay.json
+      - /test-fixtures/tushare-operator-console-dataset-refresh-replay.json
       - --replay
-      - /test-fixtures/tushare-operator-console-market-no-change-replay.json
+      - /test-fixtures/tushare-operator-console-dataset-no-change-replay.json
       - --replay
-      - /test-fixtures/tushare-image-smoke-market-refresh-replay.json
+      - /test-fixtures/tushare-image-smoke-dataset-refresh-replay.json
     environment:
       <<: *test-environment
       THESISTRACE_TUSHARE_TOKEN: ${THESISTRACE_TUSHARE_TOKEN}

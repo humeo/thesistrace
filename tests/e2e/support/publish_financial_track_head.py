@@ -57,7 +57,7 @@ def main() -> None:
         outcome["generation_manifest_sha256"] = publish_indicator_fixture(
             settings, str(outcome["generation_manifest_sha256"]),
             Path(__file__).resolve().parents[2] / "fixtures"
-            / "tushare-financial-market-refresh-replay.json",
+            / "tushare-financial-dataset-refresh-replay.json",
         )
     print(json.dumps({"mode": mode, "operator_outcome": outcome}, sort_keys=True))
 
