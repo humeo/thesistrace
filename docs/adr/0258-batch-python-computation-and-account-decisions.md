@@ -38,6 +38,11 @@ at the owner's checkpoint. Failed sessions close and cannot be reused.
 The Strategy Adapter owns observation scope, batch coordinates, output
 validation, compute/decision separation and state/checkpoint policy.
 
+Session closure releases its native Store and waits, within a bounded deadline,
+for WASIp2 output callbacks to be released. Store destruction alone does not
+finish asynchronous stream cleanup. This keeps foreign callbacks out of host
+interpreter finalization, without a global garbage collection or arbitrary delay.
+
 Calculation and decision heaps are separate. Decisions receive copied current
 columns, without a future ndarray base or compute globals. Financial history
 uses the existing generation resolver per observation date. Common market

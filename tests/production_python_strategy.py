@@ -253,15 +253,18 @@ def main():
         assert result.output["numpy"]["fft"] == [10, -2, -2, -2]
         assert result.output["numpy"]["clock"] == "2026-08-03T07:00:00"
         assert result.state == {"count": 2}
-        replay = subprocess.run(
-            [sys.executable, __file__, json.dumps(parameters)], check=False,
-            text=True, capture_output=True, timeout=20,
-        )
-        if replay.returncode:
-            raise RuntimeError(
-                f"Installed guest replay exited {replay.returncode}: {replay.stderr[-65536:]}"
+        for replay_index in range(30):
+            replay = subprocess.run(
+                [sys.executable, __file__, json.dumps(parameters)], check=False,
+                text=True, capture_output=True, timeout=20,
+                env={**os.environ, "PYTHONFAULTHANDLER": "1"},
             )
-        assert json.loads(replay.stdout) == json.loads(json.dumps(asdict(result)))
+            if replay.returncode:
+                raise RuntimeError(
+                    f"Installed guest replay {replay_index} exited {replay.returncode}: "
+                    f"{replay.stderr[-65536:]}"
+                )
+            assert json.loads(replay.stdout) == json.loads(json.dumps(asdict(result)))
         try:
             runtime.invoke(
                 "def decide(data, account, state):\n    while True: pass",

@@ -5,6 +5,8 @@ import hashlib
 import importlib.metadata
 import json
 import threading
+import time
+import weakref
 from contextlib import ExitStack
 
 import wasmtime
@@ -192,8 +194,8 @@ class PreparedPythonEnvironment:
             wasi.env = [("PYTHONHOME", "/runtime"), ("PYTHONHASHSEED", "0"), ("TZ", "UTC")]
             wasi.argv = ["python", "-c"]
             # No inherited descriptors, environment, preopened directories or network grants.
-            wasi.stdout_custom = lambda data: session.callbacks["stdout"](data)
-            wasi.stderr_custom = lambda data: session.callbacks["stderr"](data)
+            wasi.stdout_custom = session.output_callback("stdout")
+            wasi.stderr_custom = session.output_callback("stderr")
             store.set_wasi(wasi)
             linker.add_wasip2()
             linker.allow_shadowing = True
@@ -297,7 +299,21 @@ class PreparedPythonSession:
         self.store = self.linker = self.instance = None
         self.callbacks = {}
         self.inputs = {}
+        self._output_releases = []
         self.closed = False
+
+    def output_callback(self, name):
+        def callback(data):
+            return self.callbacks[name](data)
+
+        released = threading.Event()
+        # WASIp2 owns this callback until its asynchronous output task drops.
+        # Store.close() can return first. Observe actual native release so no
+        # foreign thread enters Python after the interpreter starts finalizing.
+        finalizer = weakref.finalize(callback, released.set)
+        finalizer.atexit = False
+        self._output_releases.append(released)
+        return callback
 
     def invoke(self, payload, *, clock_time_ns, read_request=None):
         with self.environment._lock:
@@ -318,9 +334,15 @@ class PreparedPythonSession:
         with self.environment._lock:
             if not self.closed:
                 self.closed = True
-                self.resources.close()
-                self.callbacks.clear()
-                self.inputs.clear()
+                try:
+                    self.resources.close()
+                    deadline = time.monotonic() + WALL_SECONDS
+                    for released in self._output_releases:
+                        if not released.wait(max(0, deadline - time.monotonic())):
+                            raise ValueError("Python output cleanup exceeded its wall time limit")
+                finally:
+                    self.callbacks.clear()
+                    self.inputs.clear()
 
     def __enter__(self):
         return self

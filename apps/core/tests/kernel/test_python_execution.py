@@ -1,10 +1,33 @@
 import json
+import os
+import subprocess
+import sys
 
 import pytest
 
 from thesistrace.research_kernel.python_execution import PreparedPythonEnvironment
 
 pytestmark = pytest.mark.bounded_process
+
+
+def test_output_sessions_finish_before_the_host_interpreter_exits():
+    # Native WASIp2 output cleanup can outlive Store.close(). A fresh process
+    # must exit normally immediately after its last successful guest call.
+    source = """
+import json, subprocess, sys
+from pathlib import Path
+from thesistrace.research_kernel.python_execution import PreparedPythonEnvironment
+environment = PreparedPythonEnvironment('print(42)')
+assert environment.invoke(b'', clock_time_ns=0) == b'42\\n'
+print('completed', flush=True)
+"""
+    for iteration in range(50):
+        child = subprocess.run(
+            [sys.executable, "-c", source], capture_output=True, text=True,
+            timeout=20, env={**os.environ, "PYTHONFAULTHANDLER": "1"},
+        )
+        assert child.returncode == 0, (iteration, child.returncode, child.stderr)
+        assert child.stdout == "completed\n"
 
 
 def test_prepared_identity_tracks_the_actual_bootstrap_and_module_sources():
