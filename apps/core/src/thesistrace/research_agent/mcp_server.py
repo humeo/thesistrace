@@ -42,6 +42,7 @@ from thesistrace.research_agent.safe_context import (
     digested_identifier,
     safe_tool_call_context,
 )
+from thesistrace.research_authoring.reference import EXECUTION_RECOMMENDATIONS
 
 type ResearchAgentRegistryFactory = Callable[
     [ServerRequestContext[object]],
@@ -63,6 +64,7 @@ RESEARCH_AGENT_INSTRUCTIONS = (
     "For new research, use available get_research_context/get_alpha_catalog information, "
     "read get_authoring_reference for unfamiliar Formula syntax or Python SDK members, "
     "then diagnose_research_spec before submit_research_run or submit_research_batch. "
+    f"{' '.join(EXECUTION_RECOMMENDATIONS)} "
     "Use only tools exposed to this caller. Reuse request_id with identical arguments when "
     "retrying an uncertain submission; use a new request_id for changed research or a new action. "
     "Acceptance is not completion: follow next_tool and retry_after_seconds until terminal, "

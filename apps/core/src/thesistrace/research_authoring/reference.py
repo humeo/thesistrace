@@ -27,11 +27,31 @@ from thesistrace.research_kernel.strategy_program_runtime import (
     MAX_JSON_DEPTH,
 )
 
+EXECUTION_RECOMMENDATIONS = (
+    "Prefer catalog Formulae and builtin Strategy rules when they express the intended logic. "
+    "Use Python when the Researcher requests code or needs custom computation or account "
+    "decisions beyond those rules.",
+    "For research sharing the same start/end dates, universe and compatible neutralization, "
+    "consider a supported Batch: factor_evaluation prepares common Data, Universe and Labels "
+    "once per chunk for multiple Formula Alphas; strategy_sweep computes one shared Formula "
+    "Alpha for multiple Strategy configurations. Each Strategy account still runs independently "
+    "and reads its required execution Data in bounded chunks.",
+    "Submit separate ResearchRuns for complete Strategy Backtests with different Formula "
+    "Alphas. Equal dates alone do not make a supported Batch. Preserve the requested research "
+    "kind and logic; do not rewrite Formulae as Python merely to place them in a Batch.",
+    "For Python numerical work, use compute(data, state) and NumPy over the provided multi-date "
+    "arrays. Load each required history window once per compute invocation and reuse it. "
+    "Use decide(data, account, state) for decisions needing actual account state. Keep "
+    "computation causal and invariant to chunk boundaries; let the platform choose bounded "
+    "chunk sizes and own persistence and recovery.",
+)
+
 AUTHORING_GUIDE = AuthoringGuide(
     steps=(
         "Read get_research_context for current data coverage, readiness and research folders.",
         "Read get_authoring_reference for the relevant workflow, formula syntax or Python SDK. "
         "Browse get_alpha_catalog(kind='fields' or 'functions', query=...) for available inputs.",
+        *EXECUTION_RECOMMENDATIONS,
         "Write the complete ResearchSpec using current schemas. Diagnose formulas with "
         "diagnose_alpha_formula and the complete configuration with diagnose_research_spec; "
         "correct the reported field paths or source locations before submission.",
@@ -75,6 +95,7 @@ def _workflow_entries(constraints: ResearchAuthoringConstraints):
                 "Factor Evaluation evaluates a Formula's predictive scores. Strategy Backtest "
                 "simulates a long-only account, costs and execution. Framework can use builtin "
                 "rules and/or Python stages; Direct supplies one Strategy program.",
+                *EXECUTION_RECOMMENDATIONS,
                 "Dates and universe must fit current Data Overview. initial_cash_cny and costs "
                 "are decimal strings. Use the current tool schema for required configuration.",
             ),
@@ -104,6 +125,7 @@ def _workflow_entries(constraints: ResearchAuthoringConstraints):
             symbol="batches",
             description="Compare ordered child ResearchRuns on shared data.",
             notes=(
+                *EXECUTION_RECOMMENDATIONS[1:3],
                 "submit_research_batch admits ordered item_keys atomically under a common "
                 "period, universe, neutralization and data generation. The platform owns the "
                 "Batch Research Folder; do not supply folder_id. Keep item_keys and request_id "
