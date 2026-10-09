@@ -451,7 +451,11 @@ export function ResearchRunProgressView({
   const phaseNotice = status === "running" && ["shared_alpha_factor", "warmup", "research", "strategy"].includes(progress.phase)
     ? null : progressLabel(status, progress.phase);
   const executionTiming = (
-    <dl className="m-0 grid w-full min-w-0 gap-4 sm:grid-cols-2 [&_dt]:text-muted-foreground [&_dd]:m-0 [&_dd]:font-mono [&_dd]:break-words">
+    <dl className="m-0 grid w-full min-w-0 gap-4 sm:grid-cols-3 [&_dt]:text-muted-foreground [&_dd]:m-0 [&_dd]:font-mono [&_dd]:break-words">
+      <div>
+        <dt>{t("executionTime")}</dt>
+        <dd>{formatDuration(timing?.elapsed_seconds ?? null)}</dd>
+      </div>
       <div>
         <dt>{t("started")}</dt>
         <dd><ExecutionTimestamp value={timing?.started_at ?? null} /></dd>

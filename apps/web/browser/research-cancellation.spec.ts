@@ -42,13 +42,14 @@ async function openResearch(page: Page, expectFacts = true) {
 }
 
 for (const language of ["English", "简体中文"]) {
-  test(`desktop running progress keeps the count and estimate without redundant timing in ${language}`, async ({ page }, testInfo) => {
+  test(`desktop running progress shows execution time with the count and estimate in ${language}`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 1315, height: 944 });
+    let elapsedSeconds = 162;
     await page.route("**/api/research-runs/run_cancel", route => route.fulfill({ json: {
       ...detail, progress: { ...detail.progress, phase: "shared_alpha_factor",
         completed_research_sessions: 463, total_research_sessions: 727,
         remaining_duration_estimate_seconds: 93 },
-      execution_timing: { started_at: "2026-10-06T14:56:51Z", finished_at: null, elapsed_seconds: 162, is_final: false },
+      execution_timing: { started_at: "2026-10-06T14:56:51Z", finished_at: null, elapsed_seconds: elapsedSeconds, is_final: false },
     } }));
     await openResearch(page);
     await page.getByRole("button", { name: language, exact: true }).click();
@@ -58,9 +59,14 @@ for (const language of ["English", "简体中文"]) {
     await expect(progress).toContainText("463 / 727");
     await expect(progress).toContainText(zh ? "预计还需 1分 33秒" : "About 1m 33s remaining");
     await expect(progress).not.toContainText(zh ? "已用时间" : "Elapsed");
+    await expect(progress).toContainText(zh ? "执行用时" : "Execution time");
+    await expect(progress).toContainText(zh ? "2分 42秒" : "2m 42s");
     await expect(progress).not.toContainText(zh ? "正在计算共享 Alpha" : "Computing shared Alpha");
     await expect(progress.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "463");
     await expect(progress.getByRole("progressbar")).toHaveAttribute("aria-valuemax", "727");
+    elapsedSeconds = 201;
+    await page.getByRole("button", { name: zh ? "刷新" : "Refresh", exact: true }).click();
+    await expect(progress).toContainText(zh ? "3分 21秒" : "3m 21s");
     await page.screenshot({ path: testInfo.outputPath(`running-progress-${zh ? "zh" : "en"}.png`) });
   });
 }
