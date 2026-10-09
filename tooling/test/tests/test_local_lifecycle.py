@@ -2054,14 +2054,9 @@ def test_operator_console_release_qualification_runs_inside_final_images(
     assert "phase=image-smoke-operator-browser-bootstrap " in metadata
     assert "python /smoke/tests/e2e/support/prepare_current_data.py" in runtime
     assert "phase=image-smoke-operator-browser-worker " in metadata
-    assert (
-        "python /smoke/tests/e2e/support/publish_financial_track_head.py lagged"
-        in runtime
-    )
-    assert (
-        "python /smoke/tests/e2e/support/publish_financial_track_head.py recovered"
-        in runtime
-    )
+    # This image phase qualifies Operator submission/recovery. Financial Track
+    # head transitions belong to the separate financial-daily-track E2E group.
+    assert "--grep Operator Dataset submission and response recovery" in runtime
     assert metadata.index(
         "phase=image-smoke-operator-browser-auth-fixture-ready "
     ) < metadata.index("phase=image-smoke-operator-browser ")
