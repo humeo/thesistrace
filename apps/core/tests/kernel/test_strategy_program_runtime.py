@@ -88,9 +88,30 @@ def test_bootstrap_deadline_is_bounded_and_does_not_poison_next_invocation(runti
     source = strategy("return None")
     with monkeypatch.context() as limits:
         limits.setattr(execution, "BOOTSTRAP_WALL_SECONDS", 0.001)
-        with pytest.raises(StrategyProgramError, match="bootstrap exceeded its wall time"):
+        with pytest.raises(StrategyProgramError, match="bootstrap exceeded its wall time") as error:
             runtime.invoke(source, context={}, state={})
+        assert error.value.code == "PYTHON_BOOTSTRAP_TIMEOUT"
+        assert error.value.public_reason.startswith("PYTHON_BOOTSTRAP_TIMEOUT: program ")
     assert runtime.invoke(source, context={}, state={}).state == {}
+
+
+def test_program_timeout_has_a_host_owned_identity(runtime, monkeypatch):
+    from thesistrace.research_kernel import python_execution as execution
+
+    with monkeypatch.context() as limits:
+        limits.setattr(execution, "WALL_SECONDS", 0.05)
+        with pytest.raises(StrategyProgramError) as error:
+            runtime.invoke(strategy("while True: pass"), context={}, state={})
+        assert error.value.code == "PYTHON_EXECUTION_TIMEOUT"
+        assert error.value.public_reason.startswith("PYTHON_EXECUTION_TIMEOUT: program ")
+    with pytest.raises(StrategyProgramError) as author_error:
+        runtime.invoke(
+            strategy("class PythonExecutionTimeout(ValueError): pass\n"
+                     "raise PythonExecutionTimeout('Python program exceeded its wall time limit')"),
+            context={}, state={},
+        )
+    assert author_error.value.code is None
+    assert author_error.value.public_reason.startswith("program ")
 
 
 def test_simulated_clock_and_randomness_repeat_in_another_runtime(runtime):

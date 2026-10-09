@@ -39,7 +39,10 @@ from thesistrace.research_kernel.research_chunks import (
     execute_research_chunk,
     execute_strategy_chunk_from_alpha_factor_outcome,
 )
-from thesistrace.research_kernel.strategy_program_runtime import StrategyProgramError
+from thesistrace.research_kernel.strategy_program_runtime import (
+    StrategyProgramError,
+    StrategyProgramFailure,
+)
 from thesistrace.research_kernel.terminal_state_schema import PendingTarget
 from thesistrace.research_run.execution import (
     ResearchExecutionCalculationFailed,
@@ -1490,6 +1493,7 @@ def _item_failed_message(
         "message": (str(error) if isinstance(error, StrategyProgramError)
                     else f"{task_role.title()} item calculation failed."),
         "error_type": type(error).__name__,
+        "program_failure_code": error.code if isinstance(error, StrategyProgramError) else None,
         "item_ordinal": item.ordinal,
         "item_key": item.item_key,
         "run_id": item.run_id,
@@ -1648,6 +1652,10 @@ def _child_stderr_detail(process: subprocess.Popen[str]) -> str:
 
 
 def item_failure_error(message: Mapping[str, object]) -> Exception:
+    if message.get("error_type") == "StrategyProgramError":
+        return StrategyProgramFailure(
+            str(message["message"]), code=message["program_failure_code"],
+        )
     if message.get("category") == "calculation":
         return ResearchExecutionCalculationFailed("Factor item calculation failed")
     return ResearchExecutionError("Factor item execution failed")

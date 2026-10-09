@@ -38,6 +38,26 @@ test("known execution failures retain their cause while unrecognized diagnostics
   await i18n.changeLanguage("en");
 });
 
+test("public Python failures explain timeout and retain the failing date and author error", async () => {
+  const timeout = "PYTHON_EXECUTION_TIMEOUT: program d57e161165ea on 2023-09-01: PythonExecutionTimeout: computation budget exceeded";
+  const invalid = "program 77f900359c48 on 2023-09-06, line 12: ValueError: weights must be positive";
+  await i18n.changeLanguage("zh-CN");
+  expect(formatExecutionFailure(timeout)).toContain("Python 执行超时");
+  expect(formatExecutionFailure(timeout)).toContain("2023-09-01");
+  expect(formatExecutionFailure(invalid)).toContain("weights must be positive");
+  expect(formatExecutionFailure("private worker error: Python program exceeded its wall time limit")).toBe("研究执行失败。");
+  await i18n.changeLanguage("en");
+  expect(formatExecutionFailure(timeout)).toContain("Python execution timed out");
+  expect(formatExecutionFailure(invalid)).toContain("line 12");
+  const authorMessage = "program d57e161165ea on 2023-09-01: ValueError: Python program exceeded its wall time limit";
+  expect(formatExecutionFailure(authorMessage)).toContain("Python program failed");
+  expect(formatExecutionFailure(authorMessage)).not.toContain("Python execution timed out");
+  expect(formatExecutionFailure("PYTHON_EXECUTION_TIMEOUT: private worker error")).toBe("Research execution failed.");
+  for (const errorType of ["_ValidationError", "策略错误"]) {
+    expect(formatExecutionFailure(`program 77f900359c48, line 12: ${errorType}: invalid weight`)).toContain(`${errorType}: invalid weight`);
+  }
+});
+
 
 test("folder and batch rejections retain distinct reasons and malformed conflicts stay generic", async () => {
   expect(await readOrganizationError(Response.json({ detail: { code: "FOLDER_NOT_FOUND" } }, { status: 409 }))).toEqual({ code: "folderMissing" });

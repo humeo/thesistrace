@@ -2,10 +2,14 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 import pytest
 
-from thesistrace.research_kernel.python_execution import PreparedPythonEnvironment
+from thesistrace.research_kernel.python_execution import (
+    PreparedPythonEnvironment,
+    PythonExecutionTimeout,
+)
 
 pytestmark = pytest.mark.bounded_process
 
@@ -67,6 +71,51 @@ print(json.dumps(output))
     environment.close()
     with pytest.raises(ValueError, match="closed"):
         environment.invoke(request, clock_time_ns=0)
+
+
+def test_controlled_host_reads_do_not_consume_the_python_execution_budget():
+    def slow_read(request):
+        # Deliberately exceed the real 3-second compute budget inside the
+        # platform capability, without spending it in the guest program.
+        time.sleep(3.2)
+        return request.upper()
+
+    with PreparedPythonEnvironment(
+        "from _thesistrace_execution import ready, read_request\n"
+        "ready()\nprint(read_request(b'hello').decode())",
+    ) as environment:
+        assert environment.invoke(b"", clock_time_ns=0, read_request=slow_read) == b"HELLO\n"
+
+
+def test_repeated_host_reads_cannot_replenish_compute_time(monkeypatch):
+    from thesistrace.research_kernel import python_execution as execution
+
+    # Isolate the cumulative wall budget from the separately tested request cap.
+    monkeypatch.setattr(execution, "WALL_SECONDS", 0.25)
+    monkeypatch.setattr(execution, "REQUESTS", 5001)
+    with PreparedPythonEnvironment(
+        "from _thesistrace_execution import ready, read_request, payload\nready()\n"
+        "if payload:\n    for _ in range(5000): read_request(b'hello')\n"
+        "print('healthy')",
+    ) as environment:
+        with pytest.raises(PythonExecutionTimeout) as error:
+            environment.invoke(b"run", clock_time_ns=0, read_request=bytes.upper)
+        assert error.value.phase == "program"
+        assert environment.invoke(b"", clock_time_ns=0) == b"healthy\n"
+
+
+def test_host_read_failure_does_not_poison_a_later_call():
+    def rejected_read(_request):
+        raise OSError("private host detail")
+
+    with PreparedPythonEnvironment(
+        "from _thesistrace_execution import ready, read_request\n"
+        "ready()\nprint(read_request(b'hello').decode())",
+    ) as environment:
+        with pytest.raises(ValueError, match="resource or capability") as error:
+            environment.invoke(b"", clock_time_ns=0, read_request=rejected_read)
+        assert "private host detail" not in str(error.value)
+        assert environment.invoke(b"", clock_time_ns=0, read_request=bytes.upper) == b"HELLO\n"
 
 
 @pytest.mark.parametrize(

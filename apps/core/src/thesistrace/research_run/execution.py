@@ -442,7 +442,10 @@ def execute_request_chunks(
             "message": str(error),
         }
     except StrategyProgramError as error:
-        yield {"status": "failed", "category": "strategy_program", "message": str(error)}
+        yield {
+            "status": "failed", "category": "strategy_program", "message": str(error),
+            "program_failure_code": error.code,
+        }
     except KernelRunError as error:
         yield {"status": "failed", "category": "calculation", "message": str(error)}
     except MemoryError:
@@ -831,7 +834,7 @@ def _chunk_from_response(
         if category == "calculation":
             raise ResearchExecutionCalculationFailed(message)
         if category == "strategy_program":
-            raise StrategyProgramFailure(message)
+            raise StrategyProgramFailure(message, code=response["program_failure_code"])
         if category == "resource_exhausted":
             raise ResearchExecutionResourceExhausted(message)
         raise ResearchExecutionError(message)

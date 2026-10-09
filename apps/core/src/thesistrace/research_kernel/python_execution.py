@@ -29,6 +29,12 @@ WALL_SECONDS = 3
 BOOTSTRAP_WALL_SECONDS = 10
 
 
+class PythonExecutionTimeout(ValueError):
+    def __init__(self, phase: str):
+        self.phase = phase
+        super().__init__(f"Python {phase} exceeded its wall time limit")
+
+
 class PreparedPythonEnvironment:
     def __init__(self, bootstrap: str, *, module_sources: dict[str, str] | None = None):
         if importlib.metadata.version("wasmtime") != WASMTIME_VERSION:
@@ -117,12 +123,21 @@ class PreparedPythonEnvironment:
         expired = threading.Event()
         phase = "bootstrap"
         failure = None
+        remaining_program_seconds = WALL_SECONDS
+        program_started = 0.0
 
         def interrupt():
             expired.set()
             self._engine.increment_epoch()
 
         timeout = threading.Timer(BOOTSTRAP_WALL_SECONDS, interrupt)
+
+        def resume_program():
+            nonlocal timeout, program_started
+            program_started = time.monotonic()
+            timeout = threading.Timer(remaining_program_seconds, interrupt)
+            timeout.daemon = True
+            timeout.start()
 
         def ready(_store):
             nonlocal timeout, phase
@@ -133,9 +148,7 @@ class PreparedPythonEnvironment:
             if expired.is_set():
                 raise wasmtime.WasmtimeError('Python bootstrap wall time exceeded')
             phase = 'program'
-            timeout = threading.Timer(WALL_SECONDS, interrupt)
-            timeout.daemon = True
-            timeout.start()
+            resume_program()
 
         def write(target, data):
             nonlocal failure
@@ -151,7 +164,7 @@ class PreparedPythonEnvironment:
         request_count, response_bytes = 0, 0
 
         def read(_store, encoded):
-            nonlocal request_count, response_bytes
+            nonlocal request_count, response_bytes, remaining_program_seconds
             request_count += 1
             if (
                 phase != "program"
@@ -166,10 +179,21 @@ class PreparedPythonEnvironment:
                 raise wasmtime.WasmtimeError("Invalid host request encoding") from error
             if len(raw) > REQUEST_BYTES:
                 raise wasmtime.WasmtimeError("Host request exceeds size limit")
+            # The guest is suspended in this controlled host capability. Stop
+            # and join the timer before reading so an old callback cannot
+            # interrupt the resumed guest. Reads never replenish compute time.
+            timeout.cancel()
+            timeout.join()
+            remaining_program_seconds -= time.monotonic() - program_started
+            if expired.is_set() or remaining_program_seconds <= 0:
+                interrupt()
+                raise wasmtime.WasmtimeError("Python program wall time exceeded")
             try:
                 value = read_request(raw)
             except Exception as error:
                 raise wasmtime.WasmtimeError("Host request failed") from error
+            finally:
+                resume_program()
             if type(value) is not bytes or len(value) > RESPONSE_BYTES:
                 raise wasmtime.WasmtimeError("RPC response exceeds size limit")
             response_bytes += len(value)
@@ -221,15 +245,12 @@ class PreparedPythonEnvironment:
             if error.code != 0:
                 raise ValueError("Python guest exited without a valid result") from None
         except (wasmtime.Trap, wasmtime.WasmtimeError) as error:
-            message = (
-                f"Python {phase} exceeded its wall time limit"
-                if expired.is_set()
-                else "Python guest exceeded its resource or capability limits"
-            )
             # Native errors retain compiled guest resources. Release them outside
             # a future guest callback, where deferred GC can exhaust its deadline.
             error.close()
-            raise ValueError(message) from None
+            if expired.is_set():
+                raise PythonExecutionTimeout(phase) from None
+            raise ValueError("Python guest exceeded its resource or capability limits") from None
         finally:
             timeout.cancel()
             timeout.join()

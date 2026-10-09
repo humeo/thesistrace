@@ -327,6 +327,10 @@ class FrameworkStrategy:
         raise StrategyProgramError(
             f"{stage}: {error}", source=self._programs[stage].source, session=session,
             line=error.line if isinstance(error, StrategyProgramError) else None,
+            error_type=(
+                error.error_type if isinstance(error, StrategyProgramError) else "ProgramError"
+            ),
+            code=error.code if isinstance(error, StrategyProgramError) else None,
         ) from error
 
     def decide(self, *, session, report_index, account, fills, rejections, previous):

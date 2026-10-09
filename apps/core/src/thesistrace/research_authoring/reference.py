@@ -123,9 +123,13 @@ def _workflow_entries(constraints: ResearchAuthoringConstraints):
         ),
         AuthoringReferenceEntry(
             symbol="batches",
-            description="Compare ordered child ResearchRuns on shared data.",
+            description="Submit ordered child ResearchRuns with compatible shared inputs.",
             notes=(
                 *EXECUTION_RECOMMENDATIONS[1:3],
+                "A Python strategy_sweep accepts independent programs per item, all in the same "
+                "Framework or Direct mode. It shares the frozen scope and common input artifact, "
+                "not program signal computation. Each account still performs its own bounded "
+                "Data reads; a Batch does not guarantee that Python history is loaded only once.",
                 "submit_research_batch admits ordered item_keys atomically under a common "
                 "period, universe, neutralization and data generation. The platform owns the "
                 "Batch Research Folder; do not supply folder_id. Keep item_keys and request_id "

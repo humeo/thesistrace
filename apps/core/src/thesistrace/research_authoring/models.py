@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from thesistrace.research_batch.models import ResearchBatchKind
 from thesistrace.research_definition import SimulationCosts
@@ -73,7 +73,11 @@ class PythonProgramConstraints(BaseModel):
     maximum_output_bytes: int
     maximum_memory_bytes: int
     maximum_bootstrap_wall_seconds: int
-    maximum_wall_seconds: int
+    maximum_wall_seconds: int = Field(
+        description=(
+            "Cumulative Python execution time per invocation, excluding controlled host Data reads."
+        ),
+    )
     maximum_history_requests: int
     history_sessions: IntegerRange
     python_version: str

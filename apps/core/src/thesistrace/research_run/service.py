@@ -4575,7 +4575,9 @@ def _chunk_completes_phase(
 
 def _failure_policy(error: Exception) -> _FailurePolicy:
     if isinstance(error, StrategyProgramFailure):
-        return _FailurePolicy(attempt_reason="StrategyProgramFailure", public_reason=str(error))
+        return _FailurePolicy(
+            attempt_reason="StrategyProgramFailure", public_reason=error.public_reason,
+        )
     if isinstance(error, ResearchRunInsufficientWarmup):
         return _FailurePolicy(
             attempt_reason="InsufficientCalculationWarmup",

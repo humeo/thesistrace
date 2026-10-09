@@ -55,7 +55,26 @@ const executionFailures = {
 } as const;
 
 export function formatExecutionFailure(reason: string): string {
-  return Object.hasOwn(executionFailures, reason) ? i18n.t(`runs:${executionFailures[reason as keyof typeof executionFailures]}`) : i18n.t("runs:executionFailure");
+  if (Object.hasOwn(executionFailures, reason)) return i18n.t(`runs:${executionFailures[reason as keyof typeof executionFailures]}`);
+  // Only host-owned protocol codes select a specific cause. Guest exception
+  // names and English messages are displayed as detail, never classified.
+  let detail = reason;
+  let key: "pythonTimeout" | "pythonBootstrapTimeout" | "pythonFailure" = "pythonFailure";
+  for (const [code, translation] of [
+    ["PYTHON_EXECUTION_TIMEOUT", "pythonTimeout"],
+    ["PYTHON_BOOTSTRAP_TIMEOUT", "pythonBootstrapTimeout"],
+  ] as const) {
+    if (reason.startsWith(`${code}: `)) {
+      key = translation;
+      detail = reason.slice(code.length + 2);
+      break;
+    }
+  }
+  // Validate the existing bounded public program envelope before displaying it.
+  if (reason.length <= 512 && /^program [a-f0-9]{12}(?: on \d{4}-\d{2}-\d{2})?(?:, line [1-9]\d*)?: \S/.test(detail)) {
+    return i18n.t(`runs:${key}`, { detail });
+  }
+  return i18n.t("runs:executionFailure");
 }
 
 export type OrganizationError = HttpActionError | { code: "folderMissing" };

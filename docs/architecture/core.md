@@ -845,6 +845,31 @@ output partition immediately and keeps only an Attempt-local disk ledger until
 the complete Result Bundle is atomically recorded. No Strategy Artifact domain
 resource exists, and a Batch has no Batch-level Result.
 
+The Formula branch requires one shared Alpha. The Python branch admits a distinct
+program per item in the same Framework or Direct mode; it shares the frozen scope
+and common input artifact, not those programs' signal calculations. Each program
+still executes inside its own Strategy account, with its own bounded history
+requests. Equal dates do not turn those requests into one common materialized Data
+slice; only the mounted store's bounded projection cache may reuse source objects.
+
+Prepared Python measures a cumulative three-second program wall budget per
+invocation. It pauses and joins the program timer around controlled host reads,
+then resumes only the remaining allowance. Data reads retain capability, cell,
+byte and task resource bounds and supervisor cancellation; they do not acquire a
+new three-second deadline. Bootstrap keeps its separate ten-second deadline.
+The frozen environment records `program_excludes_host_reads/v1`, so obsolete
+environments are rejected explicitly while historical Results remain readable.
+
+Native deadlines carry host-owned `PYTHON_EXECUTION_TIMEOUT` or
+`PYTHON_BOOTSTRAP_TIMEOUT` codes through Framework wrapping and child messages.
+The existing bounded public `failure_reason` uses `<code>: <program diagnostic>`
+for these failures; ordinary author errors retain their program diagnostic.
+Batch item diagnostics retain the same reason and code, and a failed item does
+not discard the cause when closing its child ResearchRun. Presentation translates
+reserved codes and preserves diagnostic locations; it never infers timeout from
+an author's exception name or English text. Historical diagnostics remain as
+recorded and display their available detail without inventing an error code.
+
 Chunk files, continuations, and output ledgers are Attempt scratch rather than
 checkpoints. Worker/process loss or an allowlisted transient infrastructure
 failure discards them and creates a new Attempt from the earliest incomplete

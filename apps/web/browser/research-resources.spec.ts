@@ -8,6 +8,32 @@ test.beforeAll(async () => {
   ({ script: timelineScript, styles } = await buildProductFixture(new URL("./fixtures/research-resources.tsx", import.meta.url), "ChatTimelineFixture"));
 });
 
+test("desktop research cards retain public Python timeout and source diagnostics", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await page.route("http://research.test/**", route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    const timedOut = path.endsWith("run_0123456789abcdef0123");
+    return route.fulfill({ json: {
+      id: timedOut ? "run_0123456789abcdef0123" : "run_1123456789abcdef0123",
+      name: timedOut ? "Cashflow strategy" : "Dividend strategy", status: "failed",
+      formula_summary: "Framework · Python Signals", start_date: "2023-09-01", end_date: "2026-09-01",
+      research_kind: "strategy_backtest",
+      failure_reason: timedOut
+        ? "PYTHON_EXECUTION_TIMEOUT: program d57e161165ea on 2023-09-01: PythonExecutionTimeout: alpha: Python program exceeded its wall time limit"
+        : "program 77f900359c48 on 2023-09-06, line 12: ValueError: weights must be positive",
+    } });
+  });
+  await page.goto("http://research.test/");
+  await page.addStyleTag({ content: styles });
+  await page.addScriptTag({ content: timelineScript });
+  await expect(page.getByRole("alert").filter({ hasText: "Python execution timed out" })).toContainText("2023-09-01");
+  await expect(page.getByRole("alert").filter({ hasText: "weights must be positive" })).toContainText("line 12");
+  await page.getByRole("button", { name: "简体中文" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "Python 执行超时" })).toContainText("d57e161165ea");
+  await expect(page.getByRole("alert").filter({ hasText: "Python 程序执行失败" })).toContainText("weights must be positive");
+});
+
 
 test("A2UI resource references read Core and isolate an unavailable sibling", async ({ page }) => {
   let status = "running";

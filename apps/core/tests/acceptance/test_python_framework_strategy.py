@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 from copy import deepcopy
 from dataclasses import replace
 from hashlib import sha256
@@ -25,6 +27,7 @@ from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_co
 from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.research_definition import default_simulation_costs
 from thesistrace.research_run.models import RunStrategyFrameworkInput
+from thesistrace.research_run.supervised_child import SupervisedChildTransport, child_environment
 
 pytestmark = pytest.mark.skipif(
     not core_environment_is_configured(),
@@ -621,7 +624,35 @@ def test_framework_run_reuse_and_track_preserve_frozen_modules_and_account(
 
 
 @pytest.mark.parametrize("builtin_alpha", [False, True])
-def test_framework_batch_failure_keeps_sibling_module_state_independent(tmp_path, builtin_alpha):
+@pytest.mark.parametrize("timeout", [False, True], ids=["author_error", "timeout"])
+def test_framework_batch_failure_keeps_sibling_module_state_independent(
+    tmp_path, builtin_alpha, timeout, monkeypatch,
+):
+    if timeout:
+        normal_spawn = SupervisedChildTransport.spawn
+
+        def spawn(module):
+            if module not in {
+                "thesistrace.entrypoints.batch_research_child",
+                "thesistrace.entrypoints.research_child",
+            }:
+                return normal_spawn(module)
+            # Fault-inject a short wall deadline in the real child so it wins
+            # before the independent fuel guard, regardless of host CPU speed.
+            source = (
+                f"import {module} as child\n"
+                "from thesistrace.research_kernel import python_execution\n"
+                "python_execution.WALL_SECONDS = 0.25\nchild.main()\n"
+            )
+            return SupervisedChildTransport(
+                subprocess.Popen(
+                    [sys.executable, "-c", source], stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                    env=child_environment(),
+                ), None,
+            )
+
+        monkeypatch.setattr(SupervisedChildTransport, "spawn", staticmethod(spawn))
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
@@ -630,6 +661,11 @@ def test_framework_batch_failure_keeps_sibling_module_state_independent(tmp_path
         runtime = client.app.state.core_runtime
         good = command("good", builtin_alpha=builtin_alpha)
         bad = command("bad", builtin_alpha=builtin_alpha, fail_session=SESSIONS[1])
+        if timeout:
+            risk = bad["modules"]["risk_management"]["program"]
+            risk["source"] = risk["source"].replace(
+                "raise ValueError('deliberate risk failure')", "while True: pass",
+            )
         batch = client.post(
             "/api/research-batches",
             json={
@@ -670,6 +706,15 @@ def test_framework_batch_failure_keeps_sibling_module_state_independent(tmp_path
         assert SESSIONS[1] in items["bad"]["diagnostic"]["message"]
         good_run = client.get(f"/api/research-runs/{items['good']['research_run_id']}").json()
         bad_run = client.get(f"/api/research-runs/{items['bad']['research_run_id']}").json()
+        assert bad_run["failure_reason"] == items["bad"]["diagnostic"]["message"]
+        if timeout:
+            assert items["bad"]["diagnostic"]["code"] == "PYTHON_EXECUTION_TIMEOUT"
+            assert bad_run["failure_reason"].startswith("PYTHON_EXECUTION_TIMEOUT: program ")
+            assert "PythonExecutionTimeout" in bad_run["failure_reason"]
+            assert "Python program exceeded its wall time limit" in bad_run["failure_reason"]
+        else:
+            assert "deliberate risk failure" in bad_run["failure_reason"]
+            assert "line " in bad_run["failure_reason"]
         assert "result" not in bad_run
         standalone = client.post("/api/research-runs", json=good)
         assert standalone.status_code == 202, standalone.text
@@ -680,6 +725,14 @@ def test_framework_batch_failure_keeps_sibling_module_state_independent(tmp_path
             good_run["result"]["terminal_strategy_state"]
             == (reference["result"]["terminal_strategy_state"])
         )
+        if timeout and not builtin_alpha:
+            failed = client.post("/api/research-runs", json=bad)
+            assert failed.status_code == 202, failed.text
+            assert runtime.research_runs.process_next()
+            failed_run = client.get(f"/api/research-runs/{failed.json()['id']}").json()
+            assert failed_run["status"] == "failed", failed_run
+            assert failed_run["failure_reason"] == bad_run["failure_reason"]
+            assert "result" not in failed_run
 
 
 def test_framework_failed_refresh_does_not_replace_the_authoritative_head(tmp_path):

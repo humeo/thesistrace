@@ -1,4 +1,7 @@
 export const runsEn = {
+  "pythonTimeout": "Python execution timed out. Error details: {{detail}}",
+  "pythonBootstrapTimeout": "Python initialization timed out. Error details: {{detail}}",
+  "pythonFailure": "Python program failed. Error details: {{detail}}",
   "trackingNotCompleted": "Start Tracking requires a completed ResearchRun.",
   "trackingStrategy": "Start Tracking requires a Strategy Backtest result.",
   "trackingProgram": "This Python program uses an older execution interface. Update and run a new draft before starting tracking. Your historical result is preserved.",
@@ -231,6 +234,9 @@ export const runsEn = {
 } as const;
 
 export const runsZh = {
+  "pythonTimeout": "Python 执行超时。错误详情：{{detail}}",
+  "pythonBootstrapTimeout": "Python 初始化超时。错误详情：{{detail}}",
+  "pythonFailure": "Python 程序执行失败。错误详情：{{detail}}",
   "trackingNotCompleted": "开始跟踪需要已完成的研究运行。",
   "trackingStrategy": "开始跟踪需要策略回测结果。",
   "trackingProgram": "此 Python 程序使用旧版执行接口。请更新并运行新草稿后再开始跟踪，历史结果会保留。",

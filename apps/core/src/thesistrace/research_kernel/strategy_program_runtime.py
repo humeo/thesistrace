@@ -18,6 +18,7 @@ from thesistrace.research_kernel.python_execution import (
     OUTPUT_BYTES,
     WALL_SECONDS,
     PreparedPythonEnvironment,
+    PythonExecutionTimeout,
 )
 from thesistrace.research_kernel.python_execution import (
     REQUESTS as HISTORY_REQUESTS,
@@ -48,14 +49,23 @@ MAX_JSON_DEPTH = 32
 class StrategyProgramFailure(ValueError):
     """A bounded, owner-visible program diagnostic, including across a child wire."""
 
-    def __init__(self, message: str) -> None:
+    def __init__(self, message: str, *, code: str | None = None) -> None:
+        if code not in {None, "PYTHON_EXECUTION_TIMEOUT", "PYTHON_BOOTSTRAP_TIMEOUT"}:
+            raise ValueError("Invalid Python failure code")
+        self.code = code
         super().__init__(message[:512])
+
+    @property
+    def public_reason(self) -> str:
+        # Reserved host-owned codes precede the bounded public diagnostic.
+        # Guest exception names/messages never select a reserved code.
+        return (f"{self.code}: {self}" if self.code is not None else str(self))[:512]
 
 
 class StrategyProgramError(StrategyProgramFailure):
     def __init__(
         self, message: str, *, source: str, session: str | None, line: int | None = None,
-        error_type: str = "ProgramError",
+        error_type: str = "ProgramError", code: str | None = None,
     ) -> None:
         self.program_sha256 = hashlib.sha256(
             source.encode(errors="backslashreplace") if isinstance(source, str) else b""
@@ -68,7 +78,7 @@ class StrategyProgramError(StrategyProgramFailure):
             location += f" on {session}"
         if line is not None:
             location += f", line {line}"
-        super().__init__(f"{location}: {error_type}: {message}")
+        super().__init__(f"{location}: {error_type}: {message}", code=code)
 
 
 @dataclass(frozen=True)
@@ -163,6 +173,7 @@ class PythonStrategyRuntime:
             "memory_bytes": MEMORY_BYTES,
             "fuel": FUEL,
             "wall_seconds": WALL_SECONDS,
+            "wall_time_policy": "program_excludes_host_reads/v1",
             "bootstrap_wall_seconds": BOOTSTRAP_WALL_SECONDS,
             "json_depth": MAX_JSON_DEPTH,
             "clock": "operation_end_session_15:00_UTC+08:00",
@@ -316,7 +327,12 @@ class PythonStrategyRuntime:
             raise
         except (ValueError, KeyError, TypeError, RecursionError, UnicodeError) as error:
             raise StrategyProgramError(
-                str(error), source=source, session=session, error_type=type(error).__name__
+                str(error), source=source, session=session, error_type=type(error).__name__,
+                code=(
+                    ("PYTHON_BOOTSTRAP_TIMEOUT" if error.phase == "bootstrap"
+                     else "PYTHON_EXECUTION_TIMEOUT")
+                    if isinstance(error, PythonExecutionTimeout) else None
+                ),
             ) from error
 
 

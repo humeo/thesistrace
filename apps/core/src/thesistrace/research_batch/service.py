@@ -82,6 +82,7 @@ from thesistrace.research_batch.private_artifact import (
 )
 from thesistrace.research_folder import BATCH_RESEARCH_FOLDER_ID
 from thesistrace.research_kernel.research_chunks import AlphaFactorExecutionBinding
+from thesistrace.research_kernel.strategy_program_runtime import StrategyProgramFailure
 from thesistrace.research_run.evidence import ResultEvidence
 from thesistrace.research_run.execution import ResearchExecutionResourceExhausted
 from thesistrace.research_run.models import (
@@ -4282,18 +4283,22 @@ def _message_diagnostic(message: Mapping[str, object]) -> ResearchBatchDiagnosti
     program_error = (
         message.get("error_type") == "StrategyProgramError"
         and candidate.startswith("program ")
-        and len(candidate) <= 8192
+        and len(candidate) <= 512
     )
+    program_failure = item_failure_error(message) if program_error else None
     public_message = (
-        candidate if candidate in public_messages or program_error
+        candidate if candidate in public_messages
         else "Research Batch item execution failed."
     )
+    code = (
+        "RESEARCH_ITEM_CALCULATION_FAILED" if category == "calculation"
+        else "RESEARCH_ITEM_EXECUTION_FAILED"
+    )
+    if isinstance(program_failure, StrategyProgramFailure):
+        public_message = program_failure.public_reason
+        code = program_failure.code or code
     return ResearchBatchDiagnostic(
-        code=(
-            "RESEARCH_ITEM_CALCULATION_FAILED"
-            if category == "calculation"
-            else "RESEARCH_ITEM_EXECUTION_FAILED"
-        ),
+        code=code,
         category="calculation" if category == "calculation" else "execution",
         message=public_message,
     )
