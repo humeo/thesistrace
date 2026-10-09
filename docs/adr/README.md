@@ -75,6 +75,7 @@ The current Strategy contract in [ADR-0250](0250-admit-strategy-programs-with-ex
 - [ADR-0109 — Pin one canonical numeric execution and serialization contract](0109-pin-one-canonical-numeric-execution-and-serialization-contract.md)
 - [ADR-0214 — Select Factor Evaluation or Strategy Backtest within ResearchRun](0214-select-factor-evaluation-or-strategy-backtest-within-researchrun.md)
 - [ADR-0216 — Share bounded Batch calculation and recover complete tasks](0216-share-bounded-batch-calculation-and-recover-complete-tasks.md)
+- [ADR-0259 — Group independent Strategies within a Research Batch](0259-group-independent-strategies-within-a-research-batch.md)
 - [ADR-0234 — Require explicit DailyTrack Refresh](0234-require-explicit-dailytrack-refresh.md)
 
 ## Core runtime, storage, and data lifecycle

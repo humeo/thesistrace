@@ -179,7 +179,6 @@ def test_batch_schema_keeps_membership_separate_and_claims_structural() -> None:
     assert "project_child_statuses_in_transaction" in batch_service
     assert 'elif batch_kind == "strategy_sweep"' in batch_service
     assert 'raise RuntimeError("Research Batch Kind is invalid")' in batch_service
-    assert 'elif batch_kind == "strategy_sweep"' in run_service
     assert 'raise ResearchRunInputInvalid("Batch Kind is invalid")' in run_service
 
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -104,6 +104,15 @@ _COLUMNAR_RECORD_BATCH_ROWS = 65_536
 
 class GenerationStoreError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class ColumnarDependencyFailure:
+    """An optional input that a shared reader could not prepare."""
+
+    error: Exception
+    field_ids: frozenset[str] = frozenset()
+    industry: bool = False
 
 
 @dataclass(frozen=True)
@@ -1378,7 +1387,14 @@ class MountedGenerationStore:
         field_bindings: Mapping[str, str],
         require_industry: bool = False,
         fact_instrument_ids: frozenset[str],
+        on_dependency_failure: Callable[[ColumnarDependencyFailure], None] | None = None,
     ):
+        """Read common execution Data once, optionally isolating optional dependencies.
+
+        An independent Batch supplies a failure sink and excludes affected consumers.
+        Ordinary reads fail immediately. Mandatory execution Data and memory errors
+        always abort the read; an optional dependency is never silently substituted.
+        """
         from thesistrace.data.columnar_series import ColumnarResearchData
 
         if not sessions or sessions != sorted(set(sessions)):
@@ -1435,37 +1451,46 @@ class MountedGenerationStore:
             if family.family_id not in required_families:
                 continue
             for table_name in family.table_names:
-                spec, reference = self._family_table_reference(root, family.family_id, table_name)
-                if spec.session_field is not None:
-                    columns = None
-                    if table_name == "eod_prices":
-                        columns = {
-                            "session_date",
-                            "instrument_id",
-                            "open_raw",
-                            "open_adj",
-                            "turnover_amount_cny",
-                            *requested_columns,
-                        }
-                    tables[table_name] = self._open_table_sessions_columnar(
-                        spec,
-                        reference,
-                        selected_sessions=selected,
-                        columns=columns,
-                        instrument_ids=instrument_ids,
+                try:
+                    spec, reference = self._family_table_reference(
+                        root, family.family_id, table_name,
                     )
-                else:
-                    columns = (
-                        {"instrument_id", "board", "listed_to"}
-                        if table_name == "instruments"
-                        else {"instrument_id", "active_from", "active_to", "sw2021_l1"}
-                    )
-                    tables[table_name] = self._open_table_instruments_columnar(
-                        spec,
-                        reference,
-                        instrument_ids=instrument_ids,
-                        columns=columns,
-                    )
+                    if spec.session_field is not None:
+                        columns = None
+                        if table_name == "eod_prices":
+                            columns = {
+                                "session_date",
+                                "instrument_id",
+                                "open_raw",
+                                "open_adj",
+                                "turnover_amount_cny",
+                                *requested_columns,
+                            }
+                        tables[table_name] = self._open_table_sessions_columnar(
+                            spec,
+                            reference,
+                            selected_sessions=selected,
+                            columns=columns,
+                            instrument_ids=instrument_ids,
+                        )
+                    else:
+                        columns = (
+                            {"instrument_id", "board", "listed_to"}
+                            if table_name == "instruments"
+                            else {"instrument_id", "active_from", "active_to", "sw2021_l1"}
+                        )
+                        tables[table_name] = self._open_table_instruments_columnar(
+                            spec,
+                            reference,
+                            instrument_ids=instrument_ids,
+                            columns=columns,
+                        )
+                except MemoryError:
+                    raise
+                except Exception as error:
+                    if table_name != "industry_membership" or on_dependency_failure is None:
+                        raise
+                    on_dependency_failure(ColumnarDependencyFailure(error, industry=True))
         industries = tables.get(
             "industry_membership",
             pa.table(
@@ -1477,22 +1502,29 @@ class MountedGenerationStore:
         )
         family_values = None
         for family_id, family_bindings in bindings.items():
-            reader, family_manifest = self._series_family_reader(descriptor, family_id)
-            values = reader.resolve_table(
-                manifest_sha256=family_manifest,
-                field_ids=tuple(family_bindings),
-                sessions=tuple(sessions),
-                instrument_ids=tuple(sorted(instrument_ids)),
-            )
-            if family_values is None:
-                family_values = values
-            else:
-                coordinates = ("session", "instrument_id")
-                if not family_values.select(coordinates).equals(values.select(coordinates)):
-                    raise GenerationStoreError("Research Series family coordinates disagree")
-                for column in values.column_names:
-                    if column not in coordinates:
-                        family_values = family_values.append_column(column, values[column])
+            try:
+                reader, family_manifest = self._series_family_reader(descriptor, family_id)
+                values = reader.resolve_table(
+                    manifest_sha256=family_manifest,
+                    field_ids=tuple(family_bindings),
+                    sessions=tuple(sessions),
+                    instrument_ids=tuple(sorted(instrument_ids)),
+                )
+                if family_values is None:
+                    family_values = values
+                else:
+                    coordinates = ("session", "instrument_id")
+                    if not family_values.select(coordinates).equals(values.select(coordinates)):
+                        raise GenerationStoreError("Research Series family coordinates disagree")
+                    for column in values.column_names:
+                        if column not in coordinates:
+                            family_values = family_values.append_column(column, values[column])
+            except MemoryError:
+                raise
+            except Exception as error:
+                if on_dependency_failure is None:
+                    raise
+                on_dependency_failure(ColumnarDependencyFailure(error, frozenset(family_bindings)))
         return ColumnarResearchData(
             sessions=tuple(sessions),
             _instruments=tables["instruments"],

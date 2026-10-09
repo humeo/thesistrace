@@ -104,3 +104,10 @@ def execution_opportunity_target_schemas():
     from thesistrace.migrations.execution_opportunities_0004 import TARGET
 
     return _migration_release_schemas("execution-opportunities-target.zip", TARGET)
+
+
+@pytest.fixture
+def unified_refresh_target_schemas():
+    from thesistrace.migrations.unified_refresh_0006 import TARGET
+
+    return _migration_release_schemas("unified-refresh-target.zip", TARGET)

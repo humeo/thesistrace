@@ -19,7 +19,8 @@ def project_batch_run_execution(
     item = transaction.execute(
         """
         SELECT item.batch_id, item.item_key, item.dependency_role, item.outcome,
-               batch.status AS batch_status, timing.started_at, timing.finished_at,
+               batch.status AS batch_status, batch.batch_kind,
+               timing.started_at, timing.finished_at,
                CURRENT_TIMESTAMP AS observed_at
         FROM research_batches.items AS item
         JOIN research_batches.batches AS batch ON batch.id = item.batch_id
@@ -73,7 +74,7 @@ def project_batch_run_execution(
 
     attempt = transaction.execute(
         """
-        SELECT status, ordinal, lease_expires_at, current_task_role, current_item_key,
+        SELECT id, status, ordinal, lease_expires_at, current_task_role, current_item_key,
                current_phase, completed_research_sessions, total_research_sessions,
                task_started_at, live_progress_updated_at, CURRENT_TIMESTAMP AS observed_at
         FROM research_batches.attempts
@@ -89,7 +90,25 @@ def project_batch_run_execution(
     warmup_complete = False
     remaining = None
     if live is not None:
-        if live.task_role == "preparation":
+        if item["batch_kind"] == "independent_strategies":
+            task = transaction.execute(
+                """
+                SELECT live_completed_sessions
+                FROM research_batches.task_attempts
+                WHERE batch_id = %s AND batch_attempt_id = %s AND task_key = %s
+                  AND task_role = 'independent_strategy' AND status = 'running'
+                """,
+                (item["batch_id"], attempt["id"], item["item_key"]),
+            ).fetchone()
+            if task is None:
+                phase = "preparing_data"
+            else:
+                completed = int(task["live_completed_sessions"] or 0)
+                phase = (
+                    "finalizing" if completed == progress.total_research_sessions else "strategy"
+                )
+                warmup_complete = completed > 0
+        elif live.task_role == "preparation":
             phase = "preparing_data"
         elif live.task_role == "shared_alpha_factor":
             phase = "shared_alpha_factor"

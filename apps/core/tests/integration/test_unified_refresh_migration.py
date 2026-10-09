@@ -10,6 +10,17 @@ from thesistrace.entrypoints.schema import verify_core_schema
 from thesistrace.migrations.unified_refresh_0006 import SOURCE, TARGET, migrate
 
 
+@pytest.fixture(autouse=True)
+def release_contract(monkeypatch, unified_refresh_target_schemas):
+    monkeypatch.setattr(
+        "thesistrace.migrations.unified_refresh_0006.CORE_SCHEMA_DEFINITIONS",
+        unified_refresh_target_schemas,
+    )
+    monkeypatch.setattr(
+        "thesistrace.entrypoints.schema.CORE_SCHEMA_DEFINITIONS", unified_refresh_target_schemas
+    )
+
+
 @pytest.fixture
 def source_database(core_settings, financial_disclosures_target_schemas):
     name = "unified_migration_" + uuid4().hex

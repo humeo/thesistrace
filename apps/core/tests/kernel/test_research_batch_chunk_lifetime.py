@@ -169,7 +169,7 @@ def test_shared_window_read_is_bounded_by_chunk_and_continuation_context(
     monkeypatch.setattr(
         execution,
         "_SharedFactorResearchData",
-        lambda source, *, field_ids: (source, field_ids),
+        lambda source, *, field_ids, on_dependency_failure: (source, field_ids),
     )
 
     result = execution._read_shared_window(

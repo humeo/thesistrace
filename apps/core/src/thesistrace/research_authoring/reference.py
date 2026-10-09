@@ -31,14 +31,18 @@ EXECUTION_RECOMMENDATIONS = (
     "Prefer catalog Formulae and builtin Strategy rules when they express the intended logic. "
     "Use Python when the Researcher requests code or needs custom computation or account "
     "decisions beyond those rules.",
-    "For research sharing the same start/end dates, universe and compatible neutralization, "
-    "consider a supported Batch: factor_evaluation prepares common Data, Universe and Labels "
-    "once per chunk for multiple Formula Alphas; strategy_sweep computes one shared Formula "
-    "Alpha for multiple Strategy configurations. Each Strategy account still runs independently "
-    "and reads its required execution Data in bounded chunks.",
-    "Submit separate ResearchRuns for complete Strategy Backtests with different Formula "
-    "Alphas. Equal dates alone do not make a supported Batch. Preserve the requested research "
-    "kind and logic; do not rewrite Formulae as Python merely to place them in a Batch.",
+    "For research sharing the same start/end dates and universe, consider a supported Batch. "
+    "factor_evaluation prepares common Data, Universe and Labels for multiple Formula Alphas "
+    "with shared evaluation settings. strategy_sweep reuses one Formula Alpha for several "
+    "Strategy configurations. independent_strategies shares bounded Data windows among an "
+    "explicit list of complete strategies, including different Formulae, Python programs, "
+    "Framework/Direct modes and per-item neutralization. Accounts and Results stay independent.",
+    "Choose the existing single-Alpha strategy_sweep for a parameter sweep. For several Alphas "
+    "with several configurations, submit that sweep separately per Alpha; the API never expands "
+    "an Alpha-by-configuration product. Independent strategies may reuse compatible Formula "
+    "computation and bounded source reads; Python programs and account decisions still execute "
+    "separately. Sharing dates alone does not guarantee a speedup. Preserve the intended logic; "
+    "do not rewrite Formulae as Python merely to fit a Batch.",
     "For Python numerical work, use compute(data, state) and NumPy over the provided multi-date "
     "arrays. Load each required history window once per compute invocation and reuse it. "
     "Use decide(data, account, state) for decisions needing actual account state. Keep "
@@ -131,13 +135,73 @@ def _workflow_entries(constraints: ResearchAuthoringConstraints):
                 "not program signal computation. Each account still performs its own bounded "
                 "Data reads; a Batch does not guarantee that Python history is loaded only once.",
                 "submit_research_batch admits ordered item_keys atomically under a common "
-                "period, universe, neutralization and data generation. The platform owns the "
+                "period, universe and data generation. factor_evaluation and strategy_sweep "
+                "keep their existing shared neutralization rules. independent_strategies puts "
+                "formula, applicable neutralization, modules/program, cash and costs inside "
+                "each complete item; omit shared alpha and neutralization. The platform owns the "
                 "Batch Research Folder; do not supply folder_id. Keep item_keys and request_id "
                 "stable on retries. Use the current constraints for batch size and kinds.",
+                "New Batch submission is an Agent/MCP workflow; the website displays, refreshes "
+                "and cancels Batches. A permanent item failure does not invalidate other Results. "
+                "Cancellation stops unfinished tasks and preserves completed Results. An "
+                "infrastructure retry resumes incomplete complete tasks, not saved day-level work. "
+                "Batch-local sharing is not a cache shared across separate Batches.",
                 "get_research_batch returns ordered child run IDs and lifecycle. Read each "
                 "child's get_research_run_result sections; a Batch has no synthetic aggregate "
                 "Result. Describe partial failures without inventing metrics.",
+                "Atomic rejection example: replace the second Formula with unknown_field. "
+                "submit_research_batch returns outcome='rejected' with item_key='reversal' "
+                "and field='strategies[1].formula'; neither Run is created. Correct the "
+                "formula and submit using a new request_id.",
+                "Partial failure example: if the Python item raises ValueError during compute, "
+                "poll the Batch until completed_with_failures; inspect that item's diagnostic "
+                "and read the successful Formula item's Result. Do not resubmit successful work.",
+                "Cancellation example: call cancel_research_batch(batch_id=<accepted batch_id>, "
+                "request_id='stop-independent-1'), then get_research_batch with the same batch_id "
+                "until terminal. Successful items remain succeeded; unfinished items become "
+                "cancelled. A repeated cancellation uses the same request_id.",
             ),
+            examples=(AuthoringExample(
+                title="Two independent Formula strategies sharing one research period",
+                language="json",
+                source=json.dumps({
+                    "request_id": "independent-strategies-1",
+                    "batch_kind": "independent_strategies",
+                    "start_date": "2024-01-02", "end_date": "2024-12-31", "universe": "top300",
+                    "strategies": [
+                        {"item_key": "momentum", "formula": "pct_change(close, 60)",
+                         "neutralization": "industry", "initial_cash_cny": "1000000",
+                         "holdings_count": 30, "selection_every_sessions": 5},
+                        {"item_key": "reversal", "formula": "-pct_change(close, 5)",
+                         "neutralization": "none", "initial_cash_cny": "1000000",
+                         "holdings_count": 20, "selection_every_sessions": 5},
+                    ],
+                }, indent=2),
+            ), AuthoringExample(
+                title="Mixed Formula and vectorized Direct Python strategies",
+                language="json",
+                source=json.dumps({
+                    "request_id": "mixed-strategies-1",
+                    "batch_kind": "independent_strategies",
+                    "start_date": "2024-01-02", "end_date": "2024-12-31", "universe": "top300",
+                    "strategies": [
+                        {"item_key": "momentum", "formula": "pct_change(close, 60)",
+                         "neutralization": "industry", "initial_cash_cny": "1000000",
+                         "holdings_count": 30, "selection_every_sessions": 5},
+                        {"item_key": "equal_weight", "strategy_mode": "direct",
+                         "initial_cash_cny": "1000000", "program": {"source": (
+                             "from quantgrove import Targets\n\n"
+                             "def compute(data, state):\n"
+                             "    return Targets.equal_weight(\n"
+                             "        data.eligible,\n"
+                             "        update=(data.session_index % 5 == 0)"
+                             " & data.eligible.any(axis=0),\n"
+                             "        reason='Equal-weight eligible universe',\n"
+                             "    )\n"
+                         )}},
+                    ],
+                }, indent=2),
+            )),
         ),
         AuthoringReferenceEntry(
             symbol="results",

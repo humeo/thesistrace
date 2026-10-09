@@ -1,6 +1,9 @@
 from thesistrace.research_batch.models import (
     FactorBatchItem,
     FactorEvaluationBatchAdmissionCommand,
+    IndependentDirectStrategyItem,
+    IndependentFrameworkStrategyItem,
+    IndependentStrategyBatchAdmissionCommand,
     ResearchBatchAdmissionAccepted,
     ResearchBatchAdmissionCommand,
     ResearchBatchAdmissionIssue,
@@ -45,6 +48,9 @@ from thesistrace.research_batch.service import (
 __all__ = (
     "FactorBatchItem",
     "FactorEvaluationBatchAdmissionCommand",
+    "IndependentDirectStrategyItem",
+    "IndependentFrameworkStrategyItem",
+    "IndependentStrategyBatchAdmissionCommand",
     "ResearchBatchAdmissionAccepted",
     "ResearchBatchAdmissionCommand",
     "ResearchBatchAdmissionConflict",

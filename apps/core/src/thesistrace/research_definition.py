@@ -259,12 +259,13 @@ class FrameworkConfiguration(BaseModel):
         return self.modules.has_builtin_portfolio
 
 
-class StrategyBacktestSpec(_ResearchSpecBase, FrameworkConfiguration):
+class FrameworkStrategyConfiguration(FrameworkConfiguration):
+    """One complete Framework definition, independent of its submission scope."""
+
     model_config = ConfigDict(json_schema_extra={
         "allOf": [_PORTFOLIO_SETTINGS_SCHEMA, _ALPHA_SETTINGS_SCHEMA],
     })
 
-    research_kind: Literal["strategy_backtest"]
     formula: Formula | None = Field(default=None, description=(
         "Required for builtin Alpha (including default modules); omit for Python Signal."
     ))
@@ -284,6 +285,10 @@ class StrategyBacktestSpec(_ResearchSpecBase, FrameworkConfiguration):
         elif self.formula is not None or self.neutralization is not None:
             raise ValueError("Python Signal cannot contain builtin Alpha settings")
         return self
+
+
+class StrategyBacktestSpec(_ResearchSpecBase, FrameworkStrategyConfiguration):
+    research_kind: Literal["strategy_backtest"]
 
 
 class DirectStrategyBacktestSpec(_ResearchSpecBase):

@@ -167,13 +167,13 @@ Research Period, and Data Generation, followed through completion, failure, or c
 _避免混用_: Research Folder, Browser Draft, Result Bundle
 
 **Research Batch**:
-An ordered group of ResearchRuns sharing one Research Period, Liquidity Universe, Industry Neutralization choice, and Data Generation, admitted together and managed as one research request. Each item remains a separate ResearchRun with its own result.
+An ordered group of ResearchRuns sharing one Research Period, Liquidity Universe, and Data Generation, admitted together and managed as one research request. Each item remains a separate ResearchRun with its own accepted inputs, applicable Industry Neutralization choice, and Result.
 _避免混用_: Research Folder, one combined Result Bundle, Batch-Incremental Equivalence
 
 **Research Batch Kind**:
-The immutable choice between evaluating several Alphas independently and
-scanning parameter combinations of one Strategy.
-_避免混用_: Research Kind, mixed Batch, inferred Batch type
+The immutable choice between a group of Factor Evaluations and a group of
+Strategy Backtests, including independent Strategies and configurations sharing one Alpha.
+_避免混用_: Research Kind, mixed Research Kinds, inferred Batch type
 
 **Research Batch Item**:
 The association between one submitted batch item and its ResearchRun and execution outcome, preserved even when the completed ResearchRun is deleted.

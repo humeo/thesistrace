@@ -13,7 +13,9 @@ CREATE TABLE research_batches.batches (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT batches_kind_check CHECK (
-        batch_kind = ANY (ARRAY['factor_evaluation'::text, 'strategy_sweep'::text])
+        batch_kind = ANY (ARRAY[
+            'factor_evaluation'::text, 'strategy_sweep'::text, 'independent_strategies'::text
+        ])
     ),
     CONSTRAINT batches_status_check CHECK (
         status = ANY (ARRAY[
@@ -232,6 +234,14 @@ CREATE TABLE research_batches.task_attempts (
     finished_at timestamp with time zone,
     failure_reason text,
     failure_diagnostic jsonb,
+    live_completed_sessions integer,
+    live_total_sessions integer,
+    CONSTRAINT task_attempts_live_sessions_check CHECK (
+        (live_completed_sessions IS NULL AND live_total_sessions IS NULL)
+        OR (live_completed_sessions IS NOT NULL AND live_total_sessions IS NOT NULL
+            AND live_completed_sessions >= 0 AND live_total_sessions > 0
+            AND live_completed_sessions <= live_total_sessions)
+    ),
     CONSTRAINT task_attempts_item_ordinal_check CHECK (
         item_ordinal IS NULL OR item_ordinal > 0
     ),
@@ -241,7 +251,7 @@ CREATE TABLE research_batches.task_attempts (
     CONSTRAINT task_attempts_role_check CHECK (
         (task_role = 'shared_alpha_factor' AND item_ordinal IS NULL)
         OR (
-            task_role = ANY (ARRAY['factor'::text, 'strategy'::text])
+            task_role = ANY (ARRAY['factor'::text, 'strategy'::text, 'independent_strategy'::text])
             AND item_ordinal IS NOT NULL
         )
     ),
@@ -433,7 +443,9 @@ CREATE TABLE research_batches.cancel_receipts (
             AND outcome ->> 'id' = batch_id
             AND jsonb_typeof(outcome -> 'id') = 'string'
             AND jsonb_typeof(outcome -> 'batch_kind') = 'string'
-            AND outcome ->> 'batch_kind' IN ('factor_evaluation', 'strategy_sweep')
+            AND outcome ->> 'batch_kind' IN (
+                'factor_evaluation', 'strategy_sweep', 'independent_strategies'
+            )
             AND jsonb_typeof(outcome -> 'status') = 'string'
             AND outcome ->> 'status' IN ('cancelled', 'cancelling')
             AND jsonb_typeof(outcome -> 'created_at') = 'string'
@@ -459,4 +471,8 @@ ON research_batches.attempts (batch_id, ordinal DESC);
 
 CREATE UNIQUE INDEX research_batch_task_attempts_running_idx
 ON research_batches.task_attempts (batch_id)
-WHERE status = 'running';
+WHERE status = 'running' AND task_role <> 'independent_strategy';
+
+CREATE UNIQUE INDEX research_batch_independent_task_attempts_running_idx
+ON research_batches.task_attempts (batch_id, item_ordinal)
+WHERE status = 'running' AND task_role = 'independent_strategy';

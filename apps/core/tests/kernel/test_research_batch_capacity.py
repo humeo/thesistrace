@@ -129,6 +129,23 @@ def test_strategy_sweep_capacity_prices_one_streamed_artifact_chunk() -> None:
     assert long_plan.estimated_peak_bytes == short_plan.estimated_peak_bytes
 
 
+def test_independent_batch_reserves_all_accounts_and_allows_each_neutralization() -> None:
+    children = [
+        _prepared_child(
+            field_id="price.close.adjusted", execution_memory_bytes=2 * 1024**3,
+            chunk_session_count=128, calculation_session_count=256,
+            maximum_universe_cardinality=300,
+        ) for _ in range(3)
+    ]
+    for index, child in enumerate(children):
+        child.immutable_input.neutralization = "industry" if index == 0 else "none"
+        child.immutable_input.programs = {"alpha": object()}
+    solo = _validate_research_batch_capacity("independent_strategies", children[:1])
+    batch = _validate_research_batch_capacity("independent_strategies", children)
+    assert 1 <= batch.session_count <= solo.session_count <= 128
+    assert solo.estimated_peak_bytes < batch.estimated_peak_bytes < 2 * 1024**3
+
+
 def test_strategy_sweep_capacity_prices_pending_overlap_for_small_chunks() -> None:
     common = {
         "field_id": "price.close.adjusted",

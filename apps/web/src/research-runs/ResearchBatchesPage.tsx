@@ -21,12 +21,12 @@ import { AlertDialog, AlertDialogTrigger, AlertDialogContent, AlertDialogHeader,
 type BatchStatus = "queued" | "running" | "cancelling" | "succeeded" | "completed_with_failures" | "failed" | "cancelled";
 export type ResearchBatch = {
   id: string;
-  batch_kind: "factor_evaluation" | "strategy_sweep";
+  batch_kind: "factor_evaluation" | "strategy_sweep" | "independent_strategies";
   status: BatchStatus;
   created_at: string;
-  scope: { start_date: string; end_date: string; universe: string; neutralization: string };
+  scope: { start_date: string; end_date: string; universe: string; neutralization: string | null };
   progress: { completed_factor_tasks: number; total_factor_tasks: number }
-    | { completed_strategy_tasks: number; total_strategy_tasks: number; shared_alpha_factor_status: string };
+    | { completed_strategy_tasks: number; total_strategy_tasks: number; shared_alpha_factor_status?: string };
 };
 type BatchItem = {
   ordinal: number;
@@ -44,7 +44,10 @@ type BatchList = { items: ResearchBatch[]; next_cursor: string | null };
 function batchPath(id: string) { return `/research-runs/batches/${encodeURIComponent(id)}`; }
 function active(status: BatchStatus) { return ["queued", "running", "cancelling"].includes(status); }
 function cancellable(status: BatchStatus) { return status === "queued" || status === "running"; }
-function kindLabel(batch: ResearchBatch) { return i18n.t(batch.batch_kind === "factor_evaluation" ? "batches:factor" : "batches:strategy"); }
+function kindLabel(batch: ResearchBatch) {
+  return i18n.t(batch.batch_kind === "factor_evaluation" ? "batches:factor"
+    : batch.batch_kind === "independent_strategies" ? "batches:independent" : "batches:strategy");
+}
 function createdLabel(batch: ResearchBatch) { return formatUtcTimestamp(batch.created_at, true); }
 function taskCounts(batch: ResearchBatch) {
   const progress = batch.progress;
@@ -113,6 +116,7 @@ export function ResearchBatchesPage({ batchId }: { batchId?: string }) {
       {batchId ? batch?.id === batchId ? <>
         <Section title={kindLabel(batch)} actions={<>
           <BatchStatusLabel status={batch.status} />
+          <Button variant="outline" onClick={refresh} disabled={detailQuery.isFetching}>{t("reload")}</Button>
           {active(batch.status) && <ResearchBatchCancelButton key={batch.id} batchId={batch.id} status={batch.status} onAccepted={accepted} />}
         </>}>
           <p className="m-0 text-sm text-muted-foreground">{createdLabel(batch)}</p>
@@ -121,7 +125,7 @@ export function ResearchBatchesPage({ batchId }: { batchId?: string }) {
           <dl className="m-0 grid gap-4 border-y border-border py-4 sm:grid-cols-3">
             <div><dt className="text-xs text-muted-foreground">{t("period")}</dt><dd className="m-0 text-sm">{batch.scope.start_date} — {batch.scope.end_date}</dd></div>
             <div><dt className="text-xs text-muted-foreground">{t("universe")}</dt><dd className="m-0 text-sm">{i18n.t("research:top", { count: Number(batch.scope.universe.slice(3)) })}</dd></div>
-            <div><dt className="text-xs text-muted-foreground">{t("neutralization")}</dt><dd className="m-0 text-sm">{i18n.t(batch.scope.neutralization === "industry" ? "research:industry" : "research:none")}</dd></div>
+            <div><dt className="text-xs text-muted-foreground">{t("neutralization")}</dt><dd className="m-0 text-sm">{batch.batch_kind === "independent_strategies" ? t("perItem") : i18n.t(batch.scope.neutralization === "industry" ? "research:industry" : "research:none")}</dd></div>
           </dl>
         </Section>
         {batch.status === "cancelling" && <p role="status">{t("cancellationRequested")}</p>}

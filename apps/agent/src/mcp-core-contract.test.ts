@@ -90,6 +90,19 @@ it("consumes Core instructions, recoverable rejections and bounded Result pages 
     };
     expect(validateBatch(batch).valid).toBe(true);
     expect(validateBatch({ ...batch, alpha: null }).valid).toBe(false);
+    const independent = {
+      request_id: "independent", batch_kind: "independent_strategies",
+      start_date: batch.start_date, end_date: batch.end_date, universe: batch.universe,
+      strategies: [
+        { ...batch.strategies[0], formula: "close", neutralization: "industry" },
+        { item_key: "direct", strategy_mode: "direct", initial_cash_cny: "100000",
+          program: { source: "def decide(data, account, state):\n    return None\n" } },
+      ],
+    };
+    expect(validateBatch(independent).valid).toBe(true);
+    expect(validateBatch({ ...independent, alpha: batch.alpha }).valid).toBe(false);
+    expect(validateBatch({ ...independent, neutralization: "none" }).valid).toBe(false);
+    expect(validateBatch({ ...independent, combinations: "all" }).valid).toBe(false);
     const rejected = await submit.execute?.({
       request_id: "rejected", folder_id: "folder_default", research_kind: "factor_evaluation",
       start_date: "2024-01-02", end_date: "2024-01-31", universe: "top300",

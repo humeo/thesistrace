@@ -16,6 +16,39 @@ test.beforeAll(async () => {
   ({ script, styles } = await buildProductFixture(new URL("./fixtures/research-batches.tsx", import.meta.url), "ResearchBatchesFixture"));
 });
 
+test("desktop independent strategy batch shows per-item settings and refreshes results", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  let detail = {
+    ...batch, id: "batch_independent", batch_kind: "independent_strategies",
+    scope: { ...batch.scope, neutralization: null },
+    progress: { completed_strategy_tasks: 1, total_strategy_tasks: 2 },
+    items: [
+      { ...batch.items[0]!, item_key: "Formula momentum" },
+      { ...batch.items[1]!, item_key: "Python reversal" },
+    ],
+  };
+  await page.route("http://127.0.0.1/research-runs/batches", route => route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' }));
+  await page.route("**/api/research-batches?**", route => route.fulfill({ json: { items: [detail], next_cursor: null } }));
+  await page.route("**/api/research-batches/batch_independent", route => route.fulfill({ json: detail }));
+  await page.goto("http://127.0.0.1/research-runs/batches");
+  await page.addStyleTag({ content: styles });
+  await page.addScriptTag({ content: script });
+  await page.getByRole("link").filter({ hasText: "Independent strategies" }).click();
+  await expect(page.getByRole("heading", { name: "Independent strategies" })).toBeVisible();
+  await expect(page.getByText("Defined per research item")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Python reversal" })).toHaveAttribute("href", "/research-runs/run_running");
+  await page.getByRole("button", { name: "Cancel batch", exact: true }).click();
+  await expect(page.getByRole("alertdialog")).toContainText("1 unfinished research run");
+  await page.getByRole("button", { name: "Keep batch" }).click();
+  detail = { ...detail, status: "completed_with_failures", progress: { completed_strategy_tasks: 2, total_strategy_tasks: 2 }, items: [detail.items[0]!, { ...detail.items[1]!, status: "failed" }] };
+  await page.getByRole("button", { name: "Reload", exact: true }).click();
+  await expect(page.getByText("Completed with failures", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Cancel batch", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "简体中文", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "独立策略批次" })).toBeVisible();
+  await expect(page.getByText("按研究项设置")).toBeVisible();
+});
+
 async function openBatches(page: Page) {
   await page.route("http://127.0.0.1/research-runs/batches", route => route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' }));
   await page.route("**/api/research-batches?**", route => route.fulfill({ json: { items: [batch], next_cursor: null } }));

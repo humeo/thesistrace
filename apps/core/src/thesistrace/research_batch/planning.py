@@ -82,7 +82,7 @@ def validate_research_batch_capacity(
         or value.requested_start_date != first.requested_start_date
         or value.requested_end_date != first.requested_end_date
         or value.universe != first.universe
-        or value.neutralization != first.neutralization
+        or (batch_kind != "independent_strategies" and value.neutralization != first.neutralization)
         for value in inputs[1:]
     ):
         raise ValueError("Research Batch child scope is inconsistent")
@@ -139,18 +139,20 @@ def validate_research_batch_capacity(
             * _STRATEGY_SWEEP_CAPACITY_UTILIZATION_NUMERATOR
             // _STRATEGY_SWEEP_CAPACITY_UTILIZATION_DENOMINATOR
         )
-    alpha_continuation_count = len(inputs) if batch_kind == "factor_evaluation" else 1
+    alpha_continuation_count = len(inputs) if batch_kind != "strategy_sweep" else 1
     maximum_daily_universe_cardinality = max(
         value.data_admission.universe_instrument_count for value in inputs
     )
     pending_alpha_session_count = min(_MAX_PENDING_ALPHA_SESSIONS, len(research_sessions))
-    strategy_held_instrument_count = (
-        0
-        if batch_kind != "strategy_sweep"
-        else max(
+    strategy_holdings = (
+        [] if batch_kind == "factor_evaluation" else [
             value.data_admission.universe_instrument_count if value.programs
             else int(value.strategy["holdings_count"]) for value in inputs if value.strategy
-        )
+        ]
+    )
+    strategy_held_instrument_count = (
+        sum(strategy_holdings) if batch_kind == "independent_strategies"
+        else max(strategy_holdings, default=0)
     )
     for session_count, windows in candidate_windows.items():
         maximum_slice_union = max(count_by_window[window] for window in windows)
@@ -183,7 +185,7 @@ def validate_research_batch_capacity(
             )
             for value in inputs
         )
-        if batch_kind == "strategy_sweep":
+        if batch_kind != "factor_evaluation":
             ordinary_chunk_work += estimate_python_program_work(
                 program_count=sum(len(value.programs) for value in inputs),
                 session_count=session_count,
@@ -209,8 +211,8 @@ def validate_research_batch_capacity(
         strategy_private_bytes = 0
         strategy_output_bytes = 0
         retained_decision_state_bytes = 0
-        if batch_kind == "strategy_sweep":
-            strategy_private_bytes = strategy_sweep_private_artifact_capacity_bytes(
+        if batch_kind != "factor_evaluation":
+            strategy_private_bytes = (strategy_sweep_private_artifact_capacity_bytes(
                 encoded_outcome_cell_count=(
                     min(
                         len(research_sessions),
@@ -219,7 +221,7 @@ def validate_research_batch_capacity(
                     * maximum_slice_union
                 ),
                 chunk_count=1,
-            )
+            ) if batch_kind == "strategy_sweep" else 0)
             strategy_output_bytes = session_count * _STRATEGY_OBSERVATION_BYTES_PER_SESSION
             states = [FRAMEWORK_STATE_BYTES if value.strategy["kind"] == "framework"
                       else STATE_BYTES for value in inputs]

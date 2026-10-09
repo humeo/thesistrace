@@ -15,6 +15,7 @@ from pydantic import (
 from thesistrace.alpha_language.models import DiagnosticDetails, SourceRange
 from thesistrace.research_definition import (
     FrameworkConfiguration,
+    FrameworkStrategyConfiguration,
     SimulationCosts,
     default_simulation_costs,
     python_module_selection_schema,
@@ -41,10 +42,11 @@ ItemKey = Annotated[
     BeforeValidator(_normalized_item_key),
     Field(strict=True, min_length=1, max_length=200),
 ]
-type ResearchBatchKind = Literal["factor_evaluation", "strategy_sweep"]
+type ResearchBatchKind = Literal["factor_evaluation", "strategy_sweep", "independent_strategies"]
 RESEARCH_BATCH_KINDS: tuple[ResearchBatchKind, ...] = (
     "factor_evaluation",
     "strategy_sweep",
+    "independent_strategies",
 )
 type ResearchBatchStatus = Literal[
     "queued",
@@ -66,7 +68,6 @@ class _ResearchBatchAdmissionBase(BaseModel):
     start_date: NaturalDate
     end_date: NaturalDate
     universe: ResearchUniverse
-    neutralization: ResearchNeutralization | None = None
 
     @model_validator(mode="after")
     def validate_research_period(self) -> _ResearchBatchAdmissionBase:
@@ -152,6 +153,7 @@ class StrategySweepBatchAdmissionCommand(_ResearchBatchAdmissionBase):
     ]})
 
     batch_kind: Literal["strategy_sweep"]
+    neutralization: ResearchNeutralization | None = None
     alpha: StrategySweepAlpha | None = Field(default=None, description=(
         "Required with neutralization when every item uses builtin Alpha; "
         "omit both for Python Signal or direct strategies. All items must use one strategy "
@@ -186,8 +188,32 @@ class StrategySweepBatchAdmissionCommand(_ResearchBatchAdmissionBase):
         return self
 
 
+class IndependentFrameworkStrategyItem(FrameworkStrategyConfiguration):
+    item_key: ItemKey
+    name: ResearchName | None = None
+    hypothesis: ResearchHypothesis | None = None
+
+
+class IndependentDirectStrategyItem(DirectStrategySweepItem):
+    hypothesis: ResearchHypothesis | None = None
+
+
+class IndependentStrategyBatchAdmissionCommand(_ResearchBatchAdmissionBase):
+    batch_kind: Literal["independent_strategies"]
+    strategies: list[IndependentFrameworkStrategyItem | IndependentDirectStrategyItem] = Field(
+        min_length=MIN_RESEARCH_BATCH_ITEMS,
+        max_length=MAX_RESEARCH_BATCH_ITEMS,
+        description=(
+            "Explicit independent Strategy definitions sharing these dates and Universe. "
+            "Each item owns its formula or Python program, settings and applicable neutralization; "
+            "Framework and Direct may be mixed. No automatic combinations."
+        ),
+    )
+
+
 type ResearchBatchAdmissionCommand = Annotated[
-    FactorEvaluationBatchAdmissionCommand | StrategySweepBatchAdmissionCommand,
+    FactorEvaluationBatchAdmissionCommand | StrategySweepBatchAdmissionCommand
+    | IndependentStrategyBatchAdmissionCommand,
     Field(discriminator="batch_kind"),
 ]
 
@@ -270,7 +296,16 @@ class StrategySweepBatchProgress(BaseModel):
     total_strategy_tasks: int
 
 
-type ResearchBatchProgress = FactorEvaluationBatchProgress | StrategySweepBatchProgress
+class IndependentStrategyBatchProgress(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    completed_strategy_tasks: int
+    total_strategy_tasks: int
+
+
+type ResearchBatchProgress = (
+    FactorEvaluationBatchProgress | StrategySweepBatchProgress | IndependentStrategyBatchProgress
+)
 
 
 class ResearchBatchExecutionTiming(BaseModel):

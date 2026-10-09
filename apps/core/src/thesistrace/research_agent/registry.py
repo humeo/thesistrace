@@ -732,8 +732,12 @@ class ResearchAgentCapabilityRegistry:
             ResearchAgentCapability(
                 name="submit_research_batch",
                 description=(
-                    "Atomically submit a fully specified Factor Evaluation Batch or Strategy "
-                    "Sweep with 1 to 20 caller-keyed items; requires research:execute, is "
+                    "Atomically submit a Factor Evaluation Batch, single-Alpha Strategy Sweep, "
+                    "or independent_strategies list of complete Strategy Backtests sharing dates "
+                    "and universe. Independent items may mix Formula/Python and Framework/Direct; "
+                    "each owns its applicable neutralization and account configuration. "
+                    "No automatic Alpha-by-configuration combinations. Accepts 1 to 20 "
+                    "caller-keyed items; requires research:execute, is "
                     "non-destructive, and is idempotent by request_id. Invalid research is a "
                     "structured rejected outcome with isError=true and actionable issues; "
                     "after acceptance, poll "

@@ -266,3 +266,21 @@ proceeding. This is destructive retirement, not a reversible schema downgrade;
 once exclusive bytes are reclaimed, its metadata-only backup cannot restore those
 bytes. Stop writers and preserve a separate full database/object-store backup if
 post-commit restoration is required.
+
+## 0007: Independent Strategy Batches
+
+- Source: `84827a4b8a6c9bb9d0171e4a7aa42cfefb061216a98295a1e7d784632c237070`
+- Target: `423422281705fa7018c712268141c15fc58de13de7d1b46523a449e84a66c00d`
+- Preflight: `python -m thesistrace.migrations.independent_strategies_0007`.
+- Apply: add `--apply --database-backup /restricted/path/database.dump` as database owner.
+
+Drain active Batches, stop Core writers and verify a restorable PostgreSQL backup.
+The migration preserves existing Batches, ResearchRuns, Results and timestamps. It
+extends Batch and cancellation constraints, permits separate active independent
+Strategy task attempts, and adds nullable per-task live progress. Live progress is
+not a recovery checkpoint. The affected tables and indexes are verified against
+the pinned release before and after changing them. DDL, migration receipt and
+schema fingerprint commit atomically; failure rolls everything back. Repeating
+the command verifies the target without rewriting rows. Unknown versions, structural
+drift and active Batches reject the upgrade. Post-commit rollback requires the
+verified backup and matching old application; initialization never migrates itself.

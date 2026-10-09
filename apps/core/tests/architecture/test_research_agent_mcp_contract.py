@@ -2205,9 +2205,9 @@ def test_v1_inventory_scopes_descriptions_annotations_and_schemas_are_exact() ->
     canonical = _canonical_v1_contract()
 
     assert sha256(canonical).hexdigest() == (
-        "75ac5ea31d30b96f1b6a7c78553c46e7d4fa10161e446ffa04eb0d19745fe1a0"
+        "3948a27f42c998748184b28afb024c1a20f9c58e756947b7a8bfa7faddf00870"
     )
-    assert len(canonical) == 345159
+    assert len(canonical) == 351622
 
 
 def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None:
@@ -2827,7 +2827,10 @@ async def _exercise_in_memory_protocol() -> None:
                     assert "formula" not in direct["properties"]
                 else:
                     assert schema["discriminator"]["propertyName"] == discriminator
-                    assert len(schema["oneOf"]) == 2
+                    assert set(schema["discriminator"]["mapping"]) == {
+                        "factor_evaluation", "strategy_sweep", "independent_strategies",
+                    }
+                    assert len(schema["oneOf"]) == 3
                 for branch in schema["oneOf"]:
                     definition = tool.input_schema["$defs"][branch["$ref"].rsplit("/", 1)[-1]]
                     assert definition["additionalProperties"] is False

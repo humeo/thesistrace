@@ -45,6 +45,8 @@ from thesistrace.research_batch.execution import (
 from thesistrace.research_batch.models import (
     FactorEvaluationBatchAdmissionCommand,
     FactorEvaluationBatchProgress,
+    IndependentStrategyBatchAdmissionCommand,
+    IndependentStrategyBatchProgress,
     ResearchBatchAdmissionAccepted,
     ResearchBatchAdmissionCommand,
     ResearchBatchAdmissionIssue,
@@ -385,6 +387,8 @@ class ResearchBatchService:
         try:
             with self._maintain_claim(claim, emit), self._publication.staging():
                 reuse_private_artifact = False
+                if claim.batch_kind == "independent_strategies":
+                    private_artifact_path = self._private_artifact_path(claim.attempt_id)
                 if claim.batch_kind == "strategy_sweep":
                     private_artifact_path = self._private_artifact_path(claim.attempt_id)
                     reuse_private_artifact = self._materialize_private_artifact(
@@ -508,7 +512,7 @@ class ResearchBatchService:
                         execution.advance("acknowledge_item")
                         continue
                     if message.get("status") == "item_succeeded":
-                        if claim.batch_kind != "strategy_sweep":
+                        if claim.batch_kind not in {"strategy_sweep", "independent_strategies"}:
                             raise RuntimeError("Research Batch item response Kind is invalid")
                         chunk = message.get("chunk")
                         if not isinstance(chunk, Mapping):
@@ -603,6 +607,7 @@ class ResearchBatchService:
                     in {
                         "factor_evaluation",
                         "strategy_sweep",
+                        "independent_strategies",
                     }
                 ):
                     external_emit(
@@ -1527,6 +1532,8 @@ class ResearchBatchService:
                 dependency_role = "factor"
             elif batch_kind == "strategy_sweep":
                 dependency_role = "strategy"
+            elif batch_kind == "independent_strategies":
+                dependency_role = "strategy"
             else:
                 raise RuntimeError("Research Batch Kind is invalid")
             fence = int(row["execution_fence"]) + 1
@@ -1725,6 +1732,7 @@ class ResearchBatchService:
                 retryable=True,
             ),
             require_expired=True,
+            independent=row["batch_kind"] == "independent_strategies",
         )
         return True
 
@@ -2140,7 +2148,7 @@ class ResearchBatchService:
                     item_ordinal,
                 )
             elif (
-                claim.batch_kind == "strategy_sweep"
+                claim.batch_kind in {"strategy_sweep", "independent_strategies"}
                 and name == "research_batch_execution_item_started"
             ):
                 item_ordinal = event.get("item_ordinal")
@@ -2161,6 +2169,22 @@ class ResearchBatchService:
                     claim,
                     item_ordinal=None,
                 )
+            if (
+                claim.batch_kind == "independent_strategies"
+                and item_key is not None and completed is not None and total is not None
+            ):
+                updated_task = transaction.execute(
+                    """
+                    UPDATE research_batches.task_attempts
+                    SET live_completed_sessions = %s, live_total_sessions = %s
+                    WHERE batch_id = %s AND batch_attempt_id = %s AND fence = %s
+                      AND task_key = %s AND task_role = 'independent_strategy'
+                      AND status = 'running'
+                    """,
+                    (completed, total, claim.batch_id, claim.attempt_id, claim.fence, item_key),
+                )
+                if updated_task.rowcount != 1:
+                    raise RuntimeError("Independent Strategy progress was fenced")
             current = transaction.execute(
                 """
                 SELECT current_task_role, current_item_key, current_phase,
@@ -2378,15 +2402,19 @@ class ResearchBatchService:
         *,
         item_ordinal: int | None,
     ) -> None:
-        role = "shared_alpha_factor" if item_ordinal is None else "strategy"
+        role = (
+            "independent_strategy" if claim.batch_kind == "independent_strategies"
+            else "shared_alpha_factor" if item_ordinal is None else "strategy"
+        )
         running = transaction.execute(
             """
             SELECT task_role, item_ordinal
             FROM research_batches.task_attempts
             WHERE batch_id = %s AND status = 'running'
+              AND (%s = false OR item_ordinal = %s)
             FOR UPDATE
             """,
-            (claim.batch_id,),
+            (claim.batch_id, claim.batch_kind == "independent_strategies", item_ordinal),
         ).fetchone()
         if running is not None:
             if running != {"task_role": role, "item_ordinal": item_ordinal}:
@@ -2913,8 +2941,12 @@ class ResearchBatchService:
                 category="execution",
                 message=public_reason,
             )
-        if claim.batch_kind in {"factor_evaluation", "strategy_sweep"}:
-            task_role = "factor" if claim.batch_kind == "factor_evaluation" else "strategy"
+        if claim.batch_kind in {"factor_evaluation", "strategy_sweep", "independent_strategies"}:
+            task_role = (
+                "factor" if claim.batch_kind == "factor_evaluation"
+                else "independent_strategy" if claim.batch_kind == "independent_strategies"
+                else "strategy"
+            )
             task_attempt = transaction.execute(
                 """
                 UPDATE research_batches.task_attempts
@@ -2937,7 +2969,7 @@ class ResearchBatchService:
                 ),
             )
             if task_attempt.rowcount != 1:
-                if claim.batch_kind == "factor_evaluation":
+                if claim.batch_kind != "strategy_sweep":
                     raise RuntimeError("Research Batch task Attempt completion was fenced")
                 shared = transaction.execute(
                     """
@@ -3183,6 +3215,7 @@ class ResearchBatchService:
                 diagnostic=_exception_diagnostic(error),
                 policy=policy,
                 require_expired=False,
+                independent=claim.batch_kind == "independent_strategies",
             )
 
     def _close_strategy_attempt_in_transaction(
@@ -3197,8 +3230,9 @@ class ResearchBatchService:
         diagnostic: ResearchBatchDiagnostic,
         policy: _TaskFailurePolicy,
         require_expired: bool,
+        independent: bool = False,
     ) -> None:
-        task, incomplete, batch_attempt_ordinal = self._close_interrupted_attempt_in_transaction(
+        tasks, incomplete, batch_attempt_ordinal = self._close_interrupted_attempt_in_transaction(
             transaction,
             researcher_id=researcher_id,
             batch_id=batch_id,
@@ -3208,6 +3242,25 @@ class ResearchBatchService:
             policy=policy,
             require_expired=require_expired,
         )
+        if independent:
+            by_item = {int(task["item_ordinal"]): task for task in tasks}
+            for item in incomplete:
+                task = by_item.get(int(item["ordinal"]))
+                retry_ordinal = batch_attempt_ordinal if task is None else int(task["ordinal"])
+                if not policy.retryable or retry_ordinal >= MAX_TASK_ATTEMPTS:
+                    self._fail_recovered_item_in_transaction(
+                        transaction, researcher_id=researcher_id, batch_id=batch_id,
+                        item_ordinal=int(item["ordinal"]), run_id=str(item["research_run_id"]),
+                        diagnostic=diagnostic,
+                    )
+            self._finish_interrupted_attempt_in_transaction(
+                transaction, batch_id=batch_id, attempt_id=attempt_id, fence=fence,
+                generation_pin_id=generation_pin_id, release_private_artifact_when_terminal=False,
+            )
+            return
+        if len(tasks) > 1:
+            raise RuntimeError("Strategy Sweep has multiple active tasks")
+        task = next(iter(tasks), None)
         retry_ordinal = batch_attempt_ordinal if task is None else int(task["ordinal"])
         exhausted = not policy.retryable or retry_ordinal >= MAX_TASK_ATTEMPTS
         if task is None and exhausted:
@@ -3317,8 +3370,8 @@ class ResearchBatchService:
         diagnostic: ResearchBatchDiagnostic,
         policy: _TaskFailurePolicy,
         require_expired: bool,
-    ) -> tuple[Mapping[str, object] | None, Sequence[Mapping[str, object]], int]:
-        task = transaction.execute(
+    ) -> tuple[Sequence[Mapping[str, object]], Sequence[Mapping[str, object]], int]:
+        tasks = transaction.execute(
             """
             SELECT id, item_ordinal, task_role, ordinal
             FROM research_batches.task_attempts
@@ -3327,8 +3380,8 @@ class ResearchBatchService:
             FOR UPDATE
             """,
             (batch_id, attempt_id, fence),
-        ).fetchone()
-        if task is not None:
+        ).fetchall()
+        for task in tasks:
             closed_task = transaction.execute(
                 """
                 UPDATE research_batches.task_attempts
@@ -3389,7 +3442,7 @@ class ResearchBatchService:
             researcher_id,
             [str(item["research_run_id"]) for item in incomplete],
         )
-        return task, incomplete, int(closed_attempt_row["ordinal"])
+        return tasks, incomplete, int(closed_attempt_row["ordinal"])
 
     def _finish_interrupted_attempt_in_transaction(
         self,
@@ -3445,7 +3498,7 @@ class ResearchBatchService:
         diagnostic: ResearchBatchDiagnostic,
         require_expired: bool,
     ) -> None:
-        task_attempt, incomplete, batch_attempt_ordinal = (
+        tasks, incomplete, batch_attempt_ordinal = (
             self._close_interrupted_attempt_in_transaction(
                 transaction,
                 researcher_id=researcher_id,
@@ -3457,6 +3510,9 @@ class ResearchBatchService:
                 require_expired=require_expired,
             )
         )
+        if len(tasks) > 1:
+            raise RuntimeError("Factor Batch has multiple active tasks")
+        task_attempt = next(iter(tasks), None)
         retry_ordinal = (
             batch_attempt_ordinal if task_attempt is None else int(task_attempt["ordinal"])
         )
@@ -3719,7 +3775,6 @@ def _child_commands(
         "start_date": command.start_date,
         "end_date": command.end_date,
         "universe": command.universe,
-        "neutralization": command.neutralization,
     }
     if isinstance(command, FactorEvaluationBatchAdmissionCommand):
         return [
@@ -3731,10 +3786,22 @@ def _child_commands(
                     name=item.name,
                     formula=item.formula,
                     hypothesis=item.hypothesis,
+                    neutralization=command.neutralization,
                     **common,
                 ),
             )
             for ordinal, item in enumerate(command.factors, start=1)
+        ]
+    if isinstance(command, IndependentStrategyBatchAdmissionCommand):
+        return [
+            (item.item_key, (
+                DirectStrategyAdmissionCommand if item.strategy_mode == "direct"
+                else StrategyBacktestAdmissionCommand
+            )(
+                request_id=f"batch-strategy-{ordinal}", research_kind="strategy_backtest",
+                **item.model_dump(exclude={"item_key"}, exclude_none=True), **common,
+            ))
+            for ordinal, item in enumerate(command.strategies, start=1)
         ]
     assert isinstance(command, StrategySweepBatchAdmissionCommand)
     children = []
@@ -3810,11 +3877,14 @@ def _validate_duplicate_computation(
                 )
             seen[identity] = item.item_key
         return
-    assert isinstance(command, StrategySweepBatchAdmissionCommand)
+    assert isinstance(command, (StrategySweepBatchAdmissionCommand,
+                                IndependentStrategyBatchAdmissionCommand))
     seen_strategy: dict[bytes, str] = {}
     for item, child in zip(command.strategies, prepared, strict=True):
         identity = canonical_json_bytes({
             "strategy": child.immutable_input.strategy, "costs": child.immutable_input.costs,
+            "alpha": child.immutable_input.alpha_expression,
+            "neutralization": child.immutable_input.neutralization,
         })
         conflicting = seen_strategy.get(identity)
         if conflicting is not None:
@@ -3842,7 +3912,9 @@ def _child_issues(
 ) -> list[ResearchBatchAdmissionIssue]:
     if isinstance(command, FactorEvaluationBatchAdmissionCommand):
         prefix = f"factors[{ordinal - 1}]"
-    elif any(issue.field == "formula" for issue in error.issues):
+    elif isinstance(command, StrategySweepBatchAdmissionCommand) and any(
+        issue.field == "formula" for issue in error.issues
+    ):
         prefix = "alpha"
     else:
         prefix = f"strategies[{ordinal - 1}]"
@@ -3850,7 +3922,7 @@ def _child_issues(
         ResearchBatchAdmissionIssue(
             code=issue.code,
             field=f"{prefix}.{issue.field}",
-            item_key=(item_key if prefix.startswith("factors") else None),
+            item_key=(item_key if prefix != "alpha" else None),
             message=issue.message,
             range=issue.range,
             details=issue.details,
@@ -3877,7 +3949,11 @@ def _scope(children: Sequence[PreparedResearchRunAdmission]) -> ResearchBatchSto
         start_date=frozen.requested_start_date,
         end_date=frozen.requested_end_date,
         universe=frozen.universe,
-        neutralization=frozen.neutralization,
+        neutralization=(
+            frozen.neutralization if all(
+                child.immutable_input.neutralization == frozen.neutralization for child in children
+            ) else None
+        ),
         numeric_execution_contract=frozen.numeric_execution_contract,
         semantic_versions=frozen.semantic_versions,
         data_generation_id=frozen.data_admission.generation_manifest_sha256,
@@ -4113,7 +4189,7 @@ def _batch_projection_row(
 
 def _public_progress(
     row: Mapping[str, object],
-) -> FactorEvaluationBatchProgress | StrategySweepBatchProgress:
+) -> FactorEvaluationBatchProgress | StrategySweepBatchProgress | IndependentStrategyBatchProgress:
     if row["batch_kind"] == "factor_evaluation":
         return FactorEvaluationBatchProgress(
             completed_factor_tasks=int(row["completed_items"]),
@@ -4122,6 +4198,11 @@ def _public_progress(
     if row["batch_kind"] == "strategy_sweep":
         return StrategySweepBatchProgress(
             shared_alpha_factor_status=str(row["shared_alpha_factor_status"]),
+            completed_strategy_tasks=int(row["completed_items"]),
+            total_strategy_tasks=int(row["total_items"]),
+        )
+    if row["batch_kind"] == "independent_strategies":
+        return IndependentStrategyBatchProgress(
             completed_strategy_tasks=int(row["completed_items"]),
             total_strategy_tasks=int(row["total_items"]),
         )

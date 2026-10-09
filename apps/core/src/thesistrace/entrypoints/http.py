@@ -1654,7 +1654,9 @@ def _batch_validation_components(location: object) -> list[str | int]:
         component
         for component in location
         if isinstance(component, (str, int))
-        and component not in {"body", "factor_evaluation", "strategy_sweep"}
+        and component not in {
+            "body", "factor_evaluation", "strategy_sweep", "independent_strategies",
+        }
     ]
 
 

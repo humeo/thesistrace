@@ -21,8 +21,8 @@
     "cursor_characters": 1024
   },
   "deterministic_payloads": {
-    "v1_contract_sha256": "75ac5ea31d30b96f1b6a7c78553c46e7d4fa10161e446ffa04eb0d19745fe1a0",
-    "v1_contract_bytes": 345159,
+    "v1_contract_sha256": "3948a27f42c998748184b28afb024c1a20f9c58e756947b7a8bfa7faddf00870",
+    "v1_contract_bytes": 351622,
     "maximum_factor_batch_call_bytes": 84536,
     "maximum_framework_batch_call_bytes": 31444214
   },
@@ -38,10 +38,10 @@
     "swaps": 0
   },
   "measurement_context": {
-    "date": "2026-10-08",
+    "date": "2026-10-09",
     "transport": "in-process deterministic MCP client",
     "network_access": false,
     "real_model": false,
-    "note": "Deterministic contract sizes refreshed for shared authoring references, startup guide, catalog filters, conditional Framework inputs, safe validation issues, business rejection semantics, bounded Result pages and current seed names on DailyTrack list items. Observed performance remains the 2026-09-07 measurement; this is not a new performance qualification. Request and complete event-page wire envelopes have independent deterministic regressions in test_research_agent_mcp_contract.py. Python batch compute/decide contract and function-source payload sizes refreshed on 2026-10-08; observed timings were not remeasured."
+    "note": "Deterministic contract sizes refreshed for shared authoring references, startup guide, catalog filters, conditional Framework inputs, safe validation issues, business rejection semantics, bounded Result pages and current seed names on DailyTrack list items. Observed performance remains the 2026-09-07 measurement; this is not a new performance qualification. Request and complete event-page wire envelopes have independent deterministic regressions in test_research_agent_mcp_contract.py. Python batch compute/decide contract and function-source payload sizes refreshed on 2026-10-08; observed timings were not remeasured. Independent Strategy Batch schemas and descriptions refreshed on 2026-10-09; historical performance observations remain unchanged."
   }
 }

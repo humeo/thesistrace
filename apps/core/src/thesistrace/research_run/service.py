@@ -487,7 +487,7 @@ class ResearchRunService:
         immutable_input = ImmutableRunInput.model_validate(row["immutable_input"])
         if batch_kind == "factor_evaluation":
             expected_kind = "factor_evaluation"
-        elif batch_kind == "strategy_sweep":
+        elif batch_kind in {"strategy_sweep", "independent_strategies"}:
             expected_kind = "strategy_backtest"
         else:
             raise ResearchRunInputInvalid("Batch Kind is invalid")
