@@ -580,10 +580,16 @@ they do not reduce Chunk size. Batch capacity may reduce the shared size further
 when its resident data, retained state, and event buffers need more memory.
 Changing the setting never replans an admitted Run or retry.
 
-Python history reads reuse verified, immutable market-column projections in a
-32 MiB LRU cache owned by the mounted Generation store. Each call still applies
-its exact permitted instruments and completed-session range. The planner
-reserves the cache budget. A private pinned standard library is bytecode-prepared
+Research financial-indicator reads and Python market-history reads share a
+32 MiB LRU cache owned by the mounted Generation store. Cached Arrow projections
+are verified on first load and bound to immutable content, selected columns and
+any validated partition dimensions and security identity. Each call still applies
+its exact permitted instruments and as-of range; oversized projections are not
+retained. Financial indicators group row indices once and decode one security at
+a time, rather than filtering the full table for every stock. All Research
+capacity estimates reserve the shared cache once, including formula execution.
+Publication validation independently rechecks current addressed files and never
+uses this research cache as authority. A private pinned standard library is bytecode-prepared
 once per Python runtime; every user invocation still receives a fresh WASI Store
 and only explicit JSON state survives. No user module or mutable guest is reused.
 

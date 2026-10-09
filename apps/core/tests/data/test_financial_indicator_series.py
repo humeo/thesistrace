@@ -350,3 +350,49 @@ def test_free_cashflow_fields_read_supplier_values_without_reconstruction_or_sha
     )
     for name, expected in zip(names, (-125000, 300000, -2.5, 4.25), strict=True):
         assert result[catalog[name].field_id].to_pylist() == [expected, None]
+
+
+def test_interleaved_instruments_and_chunk_boundaries_preserve_asof_conflicts_and_nulls():
+    rows = [
+        fact("20191231", "2020-04-21", eps="2", roe="15"),
+        fact("20191231", "2020-04-21", instrument_id="stock-2", eps="7", roe="20"),
+        fact("20200331", "2020-04-30", eps=None, roe="3"),
+        fact("20200331", "2020-04-30", instrument_id="stock-2", eps="8", roe="30"),
+        fact("20200331", "2020-04-30", instrument_id="stock-2", eps="9", roe="30"),
+        fact("20200331", "2020-05-04", eps="4", roe="5"),
+    ]
+    request = dict(manifest_sha256="a" * 64,
+                   field_ids=("financial.indicator.eps", "financial.indicator.roe"),
+                   instrument_ids=("stock-2", "missing", "stock-1"))
+    sessions = ("2020-04-21", "2020-04-30", "2020-05-04")
+    reader = resolver(rows)
+    whole = reader.resolve_table(**request, sessions=sessions)
+    assert whole["financial.indicator.eps"].to_pylist() == [
+        None, 2, 7, None, None, None, None, 4, None,
+    ]
+    assert whole["financial.indicator.roe"].to_pylist() == [
+        None, .15, .2, None, .03, .3, None, .05, .3,
+    ]
+    # A later slice must not make an earlier decision see a future report.
+    later = reader.resolve_table(**request, sessions=sessions[1:])
+    earlier = reader.resolve_table(**request, sessions=sessions[:1])
+    assert pa.concat_tables([earlier, later]).equals(whole)
+    assert resolver(list(reversed(rows))).resolve_table(**request, sessions=sessions).equals(whole)
+
+
+def test_empty_indicator_projection_keeps_all_requested_coordinates_null():
+    reader = FinancialIndicatorSeriesResolver(
+        "a" * 64,
+        lambda columns, _instruments, _through: pa.table({
+            column: pa.array([], type=pa.string()) for column in sorted(columns)
+        }),
+    )
+    table = reader.resolve_table(
+        manifest_sha256="a" * 64, field_ids=("financial.indicator.eps",),
+        sessions=("2020-04-21", "2020-04-30"), instrument_ids=("stock-2", "stock-1"),
+    )
+    assert table.to_pydict() == {
+        "session": ["2020-04-21", "2020-04-21", "2020-04-30", "2020-04-30"],
+        "instrument_id": ["stock-1", "stock-2", "stock-1", "stock-2"],
+        "financial.indicator.eps": [None, None, None, None],
+    }

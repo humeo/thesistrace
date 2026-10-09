@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from functools import partial
 from pathlib import Path
 from time import perf_counter
 
@@ -32,6 +33,7 @@ from thesistrace.data.financial_indicator_evidence import (
 from thesistrace.data.financial_indicator_series import normalize_indicator_value
 from thesistrace.data.financial_indicator_source import FINANCIAL_INDICATOR_SOURCE_FIELDS
 from thesistrace.data.generation_files import AddressedFileError, AddressedFileStore
+from thesistrace.data.history_projection import HistoryProjectionCache
 from thesistrace.data.io_metrics import record_indicator_projection
 from thesistrace.publication.serialization import (
     ParquetWriterContract,
@@ -74,6 +76,7 @@ class _CheckedCollection:
 class FinancialIndicatorCandidateStore:
     def __init__(
         self, root: Path, *, progress: Callable[[dict[str, object]], None] | None = None,
+        projection_cache: HistoryProjectionCache | None = None,
     ) -> None:
         self._progress = progress or (lambda _event: None)
         self._root = root
@@ -81,6 +84,7 @@ class FinancialIndicatorCandidateStore:
         self._raw = RawFinancialBatchStore(root)
         self._observations = FinancialIndicatorObservationStore(self._raw)
         self._validation = None
+        self._projection_cache = projection_cache
 
     @contextmanager
     def validation_session(self):
@@ -334,11 +338,12 @@ class FinancialIndicatorCandidateStore:
         if not isinstance(partitions, list):
             raise ValueError("Invalid indicator partitions")
         seen = set()
+        identity_ids = set(identities.values())
         for partition in partitions:
             if (
                 not isinstance(partition, dict)
                 or set(partition) != {"instrument_id", "sha256", "row_count", "byte_count"}
-                or partition["instrument_id"] not in identities.values()
+                or partition["instrument_id"] not in identity_ids
                 or type(partition["row_count"]) is not int
                 or not 1 <= partition["row_count"] <= 4096
                 or type(partition["byte_count"]) is not int
@@ -828,7 +833,15 @@ class FinancialIndicatorCandidateStore:
         for partition in manifest["partitions"]:
             if partition["instrument_id"] not in instrument_ids:
                 continue
-            table = self._read_partition(partition, selected_columns)
+            load = partial(self._read_partition, partition, selected_columns)
+            # A cached proof is valid only for the same content, dimensions and
+            # declared security. Keep as-of filtering outside this bounded cache.
+            identity = tuple(partition[key] for key in (
+                "sha256", "byte_count", "row_count", "instrument_id",
+            ))
+            table = (load() if self._projection_cache is None else self._projection_cache.read(
+                identity, frozenset(selected_columns), load,
+            ))
             table = table.filter(pc.less_equal(table["state_effective_session"], through))
             tables.append(table.select(sorted(columns)))
         if tables:

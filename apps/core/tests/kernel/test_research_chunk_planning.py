@@ -132,6 +132,18 @@ def test_planner_rejects_when_one_complete_universe_session_cannot_fit() -> None
         )
 
 
+def test_formula_plan_reserves_the_bounded_projection_cache_before_admission() -> None:
+    # Even a one-stock formula needs runtime overhead plus the shared 32 MiB
+    # cache, before allocating any continuation or calculation rows.
+    with pytest.raises(ResearchChunkCapacityError, match="one complete full-Universe"):
+        plan_research_chunks(
+            calculation_sessions=_sessions(2), research_session_offset=0,
+            formula_work=1, node_count=1, field_count=1,
+            maximum_universe_cardinality=1, effective_lookback=0,
+            execution_memory_bytes=96 * 1024**2,
+        )
+
+
 def test_framework_plan_reserves_four_isolated_invocations_and_bounded_evidence() -> None:
     common = dict(
         calculation_sessions=_sessions(65), research_session_offset=1,

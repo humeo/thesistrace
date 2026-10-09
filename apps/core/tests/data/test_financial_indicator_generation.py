@@ -96,13 +96,23 @@ def test_generation_composes_indicator_without_changing_original_root(
     assert result.research_data.fields["financial.indicator.roe"] == {
         ("2026-08-07", "equity:000001.SZ"): 0.15
     }
-    columnar = market_store.read_columnar_slice(
-        combined.manifest_sha256,
+    from thesistrace.data.io_metrics import measure_data_io
+
+    reader = MountedGenerationStore(tmp_path)
+    request = dict(
         sessions=["2026-08-07"],
         universe_name="top3000",
         neutralization="none",
         field_bindings={"financial.indicator.roe": "roe"},
         fact_instrument_ids=frozenset({"equity:000001.SZ"}),
+    )
+    with measure_data_io() as first_read:
+        columnar = reader.read_columnar_slice(combined.manifest_sha256, **request)
+    with measure_data_io() as repeated_read:
+        repeated = reader.read_columnar_slice(combined.manifest_sha256, **request)
+    assert repeated_read.parquet_object_opens < first_read.parquet_object_opens
+    assert dict(repeated.fields["financial.indicator.roe"]) == dict(
+        columnar.fields["financial.indicator.roe"]
     )
     assert (
         dict(columnar.fields["financial.indicator.roe"])

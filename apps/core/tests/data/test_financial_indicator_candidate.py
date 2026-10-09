@@ -113,6 +113,79 @@ def test_candidate_rejects_source_identity_outside_history(tmp_path):
         )
 
 
+def _read_candidate(root, *, eps=2.5):
+    source = {"ts_code": "000001.SZ", "ann_date": "20200420", "end_date": "20191231",
+              "eps": eps, "roe": 15.0}
+    receipt = FinancialIndicatorObservationStore(RawFinancialBatchStore(root)).save(
+        RawSourceResponse(
+            fields=FINANCIAL_INDICATOR_SOURCE_FIELDS,
+            items=(tuple(source.get(field) for field in FINANCIAL_INDICATOR_SOURCE_FIELDS),),
+        ), observed_at=datetime(2020, 5, 1, tzinfo=UTC),
+    )
+    return FinancialIndicatorCandidateStore(root).build(
+        collection_evidence_sha256s=(_collection_evidence(root, receipt),),
+        instrument_ids={"000001.SZ": "stock-1"},
+        sessions=("2020-04-20", "2020-04-21", "2020-05-04"),
+    )
+
+
+def test_research_projection_reuses_objects_without_freezing_date_columns_or_content(tmp_path):
+    from thesistrace.data.history_projection import HistoryProjectionCache
+    from thesistrace.data.io_metrics import measure_data_io
+
+    digest = _read_candidate(tmp_path)
+    cache = HistoryProjectionCache()
+
+    def read(address=digest, *, through="2020-05-04", columns=None, instruments=None):
+        # Mounted readers can be recreated between slices; reuse belongs to their owner.
+        return FinancialIndicatorCandidateStore(tmp_path, projection_cache=cache).read_table(
+            address, columns=columns or {"eps"},
+            instrument_ids=frozenset({"stock-1"} if instruments is None else instruments),
+            through=through,
+        )
+
+    with measure_data_io() as cold:
+        assert read().to_pydict() == {"eps": ["2.5"]}
+    with measure_data_io() as warm:
+        assert read(through="2020-04-20").num_rows == 0
+        assert read(through="2020-04-21").to_pydict() == {"eps": ["2.5"]}
+        assert read(instruments={"unknown"}).num_rows == 0
+    assert cold.parquet_object_opens > 0
+    assert warm.parquet_object_opens == 0
+    assert read(columns={"roe"}).to_pydict() == {"roe": ["15.0"]}
+    revised = _read_candidate(tmp_path, eps=9.0)
+    assert read(revised).to_pydict() == {"eps": ["9.0"]}
+    assert read().to_pydict() == {"eps": ["2.5"]}
+
+
+@pytest.mark.parametrize("fault", ["byte_count", "row_count", "instrument_id"])
+def test_cached_projection_does_not_authorize_a_different_partition_declaration(tmp_path, fault):
+    import hashlib
+
+    from thesistrace.data.generation_files import AddressedFileError, AddressedFileStore
+    from thesistrace.data.history_projection import HistoryProjectionCache
+    from thesistrace.publication.serialization import canonical_json_bytes
+
+    digest = _read_candidate(tmp_path)
+    store = FinancialIndicatorCandidateStore(tmp_path, projection_cache=HistoryProjectionCache())
+    request = dict(columns={"eps"}, instrument_ids=frozenset({"stock-1"}), through="2020-05-04")
+    assert store.read_table(digest, **request).to_pydict() == {"eps": ["2.5"]}
+    manifest = store.reopen(digest)
+    if fault == "instrument_id":
+        manifest["instrument_ids"]["000001.SZ"] = "stock-2"
+        manifest["partitions"][0][fault] = "stock-2"
+        request["instrument_ids"] = frozenset({"stock-2"})
+    else:
+        manifest["partitions"][0][fault] += 1
+    content = canonical_json_bytes(manifest)
+    altered = hashlib.sha256(content).hexdigest()
+    AddressedFileStore(tmp_path).store(
+        tmp_path / "manifests" / "sha256" / altered[:2] / f"{altered}.json", altered, content,
+    )
+    with pytest.raises((ValueError, AddressedFileError)):
+        store.read_table(altered, **request)
+
+
 def test_refresh_validation_session_reuses_evidence_but_rechecks_current_bytes(tmp_path):
     import pytest
 

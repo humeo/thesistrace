@@ -72,7 +72,8 @@ def plan_session_capacity(
         formula_work=formula_work,
         additional_live_columns=additional_live_columns,
     )
-    fixed_bytes = (_FIXED_EXECUTION_OVERHEAD_BYTES + continuation_bytes
+    fixed_bytes = (_FIXED_EXECUTION_OVERHEAD_BYTES + HISTORY_PROJECTION_CACHE_BYTES
+                   + continuation_bytes
                    + _decision_fixed_bytes(decision_mode, python_program_count))
     per_session_bytes += _decision_session_bytes(decision_mode, python_program_count)
     if fixed_bytes + per_session_bytes > execution_memory_bytes:
@@ -125,7 +126,7 @@ def estimate_session_peak_bytes(
         additional_live_columns=additional_live_columns,
     )
     return (
-        _FIXED_EXECUTION_OVERHEAD_BYTES + continuation_bytes
+        _FIXED_EXECUTION_OVERHEAD_BYTES + HISTORY_PROJECTION_CACHE_BYTES + continuation_bytes
         + _decision_fixed_bytes(decision_mode, python_program_count)
         + (per_session_bytes + _decision_session_bytes(decision_mode, python_program_count))
         * session_count
@@ -168,7 +169,7 @@ def _decision_fixed_bytes(mode: DecisionMode, programs: int) -> int:
     # One bounded read may overlap Arrow buffers, Python numeric rows and its
     # encoded response. Programs execute sequentially, so reserve this once.
     guest = (MEMORY_BYTES + 2 * INPUT_BYTES + OUTPUT_BYTES
-             + HISTORY_CELLS * 128 + HISTORY_PROJECTION_CACHE_BYTES) if programs else 0
+             + HISTORY_CELLS * 128) if programs else 0
     return state + MAX_TARGET_RECORD_BYTES + guest
 
 

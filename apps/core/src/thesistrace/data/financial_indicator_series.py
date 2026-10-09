@@ -77,15 +77,28 @@ class FinancialIndicatorSeriesResolver:
             _METADATA | {field.source_column for field in fields},
             frozenset(instrument_ids),
             sessions[-1],
-        )
+        ).combine_chunks()
         ordered_instruments = tuple(sorted(instrument_ids))
         width = len(ordered_instruments)
         values = {
             field.field_id: np.full(len(sessions) * width, np.nan, dtype=np.float64)
             for field in fields
         }
-        for instrument_index, instrument in enumerate(ordered_instruments):
-            facts = table.filter(pc.equal(table["instrument_id"], instrument)).to_pylist()
+        # Group row indices once instead of rescanning the full table per stock.
+        # Decode only one security at a time, retaining the Arrow projection.
+        order = pc.sort_indices(table, sort_keys=[("instrument_id", "ascending")])
+        groups = pc.run_end_encode(pc.take(table["instrument_id"], order).combine_chunks())
+        instrument_indices = {instrument: index for index, instrument in
+                              enumerate(ordered_instruments)}
+        start = 0
+        for instrument, end in zip(groups.values.to_pylist(), groups.run_ends.to_pylist(),
+                                   strict=True):
+            indices = order.slice(start, end - start)
+            start = end
+            if instrument not in instrument_indices:
+                continue
+            instrument_index = instrument_indices[instrument]
+            facts = table.take(indices).to_pylist()
             facts = [row for row in facts if row["state_effective_session"] is not None]
             facts = _agreeing_observation_states(
                 facts, tuple(field.source_column for field in fields),

@@ -16,11 +16,15 @@ also applies to Tracking Targets through the shared capacity planner. Existing
 admitted inputs stay frozen. Batch recovery still uses completed Alpha/Strategy
 units; this change does not introduce finer durable recovery state.
 
-Reuse verified market-column Arrow projections in a bounded 32 MiB LRU cache
-per mounted Generation store. Immutable object hashes and projected fields are
-the cache identity; each returned history applies its own permitted instruments
-and date range. Oversized projections are read normally without retention. The
-planner includes the cache allowance in Python decision memory.
+Reuse verified market-history and financial-indicator Arrow projections in one
+bounded 32 MiB LRU cache per mounted Generation store. Immutable object hashes,
+projected fields, and any validated partition dimensions and security declaration
+form the cache identity; each returned slice applies its own permitted instruments
+and date range. Oversized projections are read normally without retention.
+Financial-indicator resolution groups row indices once, then decodes one security
+at a time instead of rescanning the full projection for each stock. Research
+capacity includes the shared cache allowance once for formula and Python paths.
+Publication validation retains its independent current-byte checks.
 
 Prepare standard-library bytecode once with the pinned WASI interpreter in its
 private directory, before user source can execute. User calls retain fresh Stores,

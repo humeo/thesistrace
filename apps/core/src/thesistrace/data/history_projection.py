@@ -1,6 +1,6 @@
-"""Bounded reuse of verified immutable market projections for Strategy history."""
+"""Bounded reuse of verified immutable projections within a mounted reader."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Hashable
 from threading import RLock
 
 import pyarrow as pa
@@ -24,13 +24,13 @@ class HistoryProjectionCache:
 
     def read(
         self,
-        object_sha256: str,
+        object_identity: Hashable,
         columns: frozenset[str],
         load: Callable[[], pa.Table],
     ) -> pa.Table:
-        # Content identity binds the Generation's object; candidates and decision
-        # dates are filtered by the caller after retrieving this immutable table.
-        key = (object_sha256, columns)
+        # Identity includes content and any declarations validated by the loader.
+        # Candidates and decision dates are filtered after retrieving the table.
+        key = (object_identity, columns)
         with self._lock:
             if key in self._cache:
                 return self._cache[key]

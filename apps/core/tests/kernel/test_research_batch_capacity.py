@@ -155,12 +155,12 @@ def test_strategy_sweep_capacity_prices_pending_overlap_for_small_chunks() -> No
 def test_factor_batch_capacity_peak_is_bounded_by_chunk_not_total_history() -> None:
     short = _prepared_child(
         field_id="price.close.adjusted",
-        execution_memory_bytes=512 * 1024**2,
+        execution_memory_bytes=768 * 1024**2,
         calculation_session_count=64,
     )
     long = _prepared_child(
         field_id="price.close.adjusted",
-        execution_memory_bytes=512 * 1024**2,
+        execution_memory_bytes=768 * 1024**2,
         calculation_session_count=8_000,
     )
 

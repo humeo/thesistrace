@@ -1334,7 +1334,9 @@ class MountedGenerationStore:
         family = next(
             f for f in generation.families if f.family_id == "equity.financial_indicator"
         )
-        store = FinancialIndicatorCandidateStore(self._root)
+        store = FinancialIndicatorCandidateStore(
+            self._root, projection_cache=self._history_projections,
+        )
         return FinancialIndicatorSeriesResolver(
             family.manifest_sha256,
             lambda columns, instruments, through: store.read_table(
