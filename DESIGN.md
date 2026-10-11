@@ -1,5 +1,5 @@
 ---
-version: 11
+version: 12
 name: QAgentis
 status: implementing
 referenceImage: "docs/design/qhypo-brand-reference.png"
@@ -89,7 +89,7 @@ The [approved homepage](docs/design/qhypo-homepage-reference.png) and [E1-B bran
 ## Brand assets and naming
 
 - The visible product name is **QAgentis** in both languages. The website domain remains **qhypo.com**; omit .com from wordmarks, interface names and email branding. Do not introduce a Chinese transliteration or retain the old Chinese product name. This naming refinement supersedes text in the earlier reference images.
-- Use the approved E1-B mark: two equal near-circular vertical lobes, with the right lobe slightly higher and their overlap cut out. Pair it with the QAgentis wordmark (uppercase Q and A): locally hosted Inter, weight 550 and -.02em tracking, matching the former QuantTrace homepage wordmark. This font choice supersedes the reference image's illustrative lettering. The homepage header uses 28px type with a 12px mark gap, the preview uses 20px and the footer uses 24px. Use an inverse mark on dark surfaces and a white mark on a dark app icon. Master assets are SVG; email and favicon exports include PNG.
+- Use the E1-B mark with the user's 2026-10-07 refinement: align both near-circular vertical lobes horizontally and widen their transparent central overlap. The two ellipses retain radii 27 × 29, with centers at (35, 36) and (61, 36) in the 96 × 72 canvas. The centerline is level and the cutout is 28 units wide at its midpoint, compared with about 22.6 previously. This geometry supersedes the offset silhouette in the earlier reference image. Pair it with the QAgentis wordmark (uppercase Q and A): locally hosted Inter, weight 550 and -.02em tracking, matching the former QuantTrace homepage wordmark. This font choice supersedes the reference image's illustrative lettering. The homepage header uses a 32px-high mark (42⅔px wide), 28px type and a 12px mark gap; the preview uses 20px type and the footer uses 24px. Use an inverse mark on dark surfaces and a white mark on a dark app icon. Master assets are SVG; email and favicon exports include PNG.
 - Preserve proportions and check the mark at 16, 24 and 32px. Use real assets without blend modes, stretched dimensions or the whole reference board as a background.
 - Reuse the Web brand component for marks and wordmarks. A linked brand has an accessible name; its decorative mark has empty alternative text.
 - The new Chat introduction uses the shared inverse mark at 36px and sans-serif QAgentis wordmark at 32px/40px, with a 12px gap. This brand line is larger than the native 24px research-question heading below it, with 24px between the two lines.

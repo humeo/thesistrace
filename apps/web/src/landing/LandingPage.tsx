@@ -50,7 +50,7 @@ export default function Landing() {
   return <div className="landing-page">
     <a className="qh-skip" href="#top">{t.product}</a>
     <header className="qh-header qh-container">
-      <a className="qh-brand" href="#top" aria-label={t.home}><Brand size={24} inverse /></a>
+      <a className="qh-brand" href="#top" aria-label={t.home}><Brand size={32} inverse /></a>
       <nav aria-label={t.navigation} className="qh-nav">{navLinks}</nav>
       <div className="qh-header-actions">
         <TooltipProvider><Tooltip>
