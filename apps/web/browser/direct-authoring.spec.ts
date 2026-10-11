@@ -18,6 +18,40 @@ async function mountDirect(page: Page) {
   await page.getByRole("radio", { name: "Python authoring", exact: true }).click();
 }
 
+test("Python Tab indents source, Shift+Tab dedents and Escape then Tab moves focus out", async ({ page }) => {
+  await page.route("https://exposure.test/**", route => route.fulfill({
+    contentType: "text/html", body: '<div id="root"></div>',
+  }));
+  await mountDirect(page);
+  const editor = page.locator("#python-source");
+  await editor.fill(source);
+  await editor.press("ControlOrMeta+End");
+  await editor.press("Tab");
+  await expect(editor).toBeFocused();
+  await expect.poll(() => editor.innerText()).toBe("def decide(data, account, state):\n        return None");
+  await editor.press("ControlOrMeta+z");
+  await expect.poll(() => editor.innerText()).toBe(source);
+  await editor.press("ControlOrMeta+Shift+z");
+  await expect.poll(() => editor.innerText()).toBe("def decide(data, account, state):\n        return None");
+  await editor.press("Shift+Tab");
+  await expect(editor).toBeFocused();
+  await expect.poll(() => editor.innerText()).toBe(source);
+
+  await editor.press("ControlOrMeta+a");
+  await editor.press("Tab");
+  await expect.poll(() => editor.innerText()).toBe("    def decide(data, account, state):\n        return None");
+  await editor.press("Shift+Tab");
+  await expect.poll(() => editor.innerText()).toBe(source);
+  await expect(editor).toBeFocused();
+  // CodeMirror first uses Escape to clear the selection before enabling Tab navigation.
+  await editor.press("Escape");
+  await expect.poll(() => editor.evaluate(() => window.getSelection()?.toString())).toBe("");
+  await editor.press("Escape");
+  await page.keyboard.press("Tab");
+  await expect(editor).not.toBeFocused();
+  await expect.poll(() => editor.innerText()).toBe(source);
+});
+
 test("Direct source survives checking and submission failures, with one pending request and safe retry", async ({ page }) => {
   const commands: Record<string, unknown>[] = [];
   let finish!: () => void;

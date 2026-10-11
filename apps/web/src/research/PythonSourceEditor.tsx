@@ -1,5 +1,5 @@
 import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap, type CompletionContext } from "@codemirror/autocomplete";
-import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { python, pythonLanguage } from "@codemirror/lang-python";
 import { bracketMatching, HighlightStyle, indentOnInput, indentUnit, syntaxHighlighting } from "@codemirror/language";
 import { setDiagnostics } from "@codemirror/lint";
@@ -70,7 +70,7 @@ export function PythonSourceEditor({ id, label, describedBy, source, error, erro
             "select", "signals", "replace", "risk_limits",
           ].map(label => ({ label, type: "property" })) };
         } }), history(),
-        keymap.of([...closeBracketsKeymap, ...completionKeymap, ...defaultKeymap, ...historyKeymap]),
+        keymap.of([...closeBracketsKeymap, ...completionKeymap, indentWithTab, ...defaultKeymap, ...historyKeymap]),
         presentation.current.of([]),
         EditorView.updateListener.of(update => {
           if (update.docChanged && !applyingExternal.current) onChangeRef.current(update.state.doc.toString());

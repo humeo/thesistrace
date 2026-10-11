@@ -33,6 +33,7 @@
     },
     "python": {
       "source": "Python source",
+      "shortcuts": "Tab indents by 4 spaces; Shift+Tab removes one indentation level. To move focus out, press Esc then Tab. If a selection or completion popup is active, press Esc to dismiss it first.",
       "signature": "compute(data, state) → Targets / Values; decide(data, account, state) → Decision / None",
       "directExample": "The example computes 60-day momentum for all output dates, selects 30 stocks, and updates every 5 research sessions. Edit these business rules in source.",
       "historyContext": "In compute, data.history(field_id, lookback=L) returns a read-only NumPy matrix: instruments × (L+T dates). The last T columns match data.sessions; missing or unavailable history is NaN. In decide, data.history(field_id, days) returns History through the current Close.",
@@ -335,6 +336,7 @@
     },
     "python": {
       "source": "Python 源码",
+      "shortcuts": "Tab 缩进 4 个空格，Shift+Tab 减少一级缩进。按 Esc 后再按 Tab 可移出编辑器；如有选区或补全提示，先按 Esc 取消。",
       "signature": "compute(data, state) → Targets / Values; decide(data, account, state) → Decision / None",
       "directExample": "示例一次计算多个输出日的 60 日动量，选前 30 只，每 5 个研究交易日调仓。这些业务规则直接在源码中修改。",
       "historyContext": "compute 中 data.history(字段 ID, lookback=L) 返回只读 NumPy 矩阵：股票 × (L+T 个日期位置)，末尾 T 列对应 data.sessions；缺失或不足的历史为 NaN。decide 中 data.history(字段 ID, days) 返回截至当前收盘的 History。",

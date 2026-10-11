@@ -34,6 +34,7 @@ export function PythonStrategyAuthoring({ active, inputs, onChange, error, field
           <FieldLabel htmlFor={id("source")}>{t("python.source")}</FieldLabel>
           <ResearchInfotip label={t("workbench.programHelp")} buttonLabel={t("workbench.programHelp")}>
             <div className="grid gap-3">
+              <p className="m-0">{t("python.shortcuts")}</p>
               <dl className="m-0 grid gap-3 text-sm">
                 <div><dt className="font-medium">{t("python.systemInput")}</dt><dd className="m-0 text-muted-foreground">{t("python.systemInputHelp")}</dd></div>
                 <div><dt className="font-medium">{t("python.strategyOutput")}</dt><dd className="m-0 text-muted-foreground">{stage ? t(`python.framework.${stage}`) : t("python.strategyOutputHelp")}</dd></div>
