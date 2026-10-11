@@ -11,7 +11,7 @@ const TURN_ID = "00000000-0000-4000-8000-000000000002";
 const COMMAND_ID = "00000000-0000-4000-8000-000000000003";
 
 describe("Mastra Turn control", () => {
-  it("delivers Steer as one user signal to the exact active Run", async () => {
+  it("delivers Steer with a server-owned message identity to the exact active Run", async () => {
     const acceptSteer = vi.fn(async () => receipt("steer", "accepted"));
     const sendSignal = vi.fn(() => ({
       accepted: Promise.resolve({ action: "deliver" as const, runId: TURN_ID }),
@@ -22,7 +22,6 @@ describe("Mastra Turn control", () => {
       .resolves.toEqual(receipt("steer", "accepted"));
     expect(sendSignal).toHaveBeenCalledWith({
       contents: "Compare turnover.",
-      id: COMMAND_ID,
       type: "user",
     }, {
       ifActive: { behavior: "deliver" },

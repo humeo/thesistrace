@@ -1,0 +1,144 @@
+diff --git a/dist/index.cjs b/dist/index.cjs
+index fbcc18837a79771ff601cd64abd0a64efd476c6a..9f19ebf0507c3f36638b0d34dc592d54b699cb16 100644
+--- a/dist/index.cjs
++++ b/dist/index.cjs
+@@ -11109,14 +11109,16 @@ var MemoryPG = class MemoryPG extends _mastra_core_storage.MemoryStorage {
+ 						const paramOffset = messageIndex * MESSAGE_INSERT_BIND_PARAMETERS;
+ 						return `(${Array.from({ length: MESSAGE_INSERT_BIND_PARAMETERS }, (_, paramIndex) => `$${paramOffset + paramIndex + 1}`).join(", ")})`;
+ 					}).join(", ");
+-					await t.none(`INSERT INTO ${tableName} (id, thread_id, content, "createdAt", "createdAtZ", role, type, "resourceId")
++					const saved = await t.manyOrNone(`INSERT INTO ${tableName} AS stored (id, thread_id, content, "createdAt", "createdAtZ", role, type, "resourceId")
+              VALUES ${valuePlaceholders}
+              ON CONFLICT (id) DO UPDATE SET
+-              thread_id = EXCLUDED.thread_id,
+               content = EXCLUDED.content,
+               role = EXCLUDED.role,
+-              type = EXCLUDED.type,
+-              "resourceId" = EXCLUDED."resourceId"`, values);
++              type = EXCLUDED.type
++             WHERE stored.thread_id = EXCLUDED.thread_id
++               AND stored."resourceId" = EXCLUDED."resourceId"
++             RETURNING id`, values);
++					if (saved.length !== batch.length) throw new Error("Message ownership conflict");
+ 				}
+ 				const threadTableName = getTableName$3({
+ 					indexName: _mastra_core_storage.TABLE_THREADS,
+@@ -11172,6 +11174,13 @@ var MemoryPG = class MemoryPG extends _mastra_core_storage.MemoryStorage {
+ 		});
+ 		const threadIdsToUpdate = /* @__PURE__ */ new Set();
+ 		await this.#db.client.tx(async (t) => {
++			for (const existingMessage of existingMessages) {
++				const update = messages.find((message) => message.id === existingMessage.id);
++				if ((update?.threadId !== undefined && update.threadId !== existingMessage.threadId)
++					|| (update?.resourceId !== undefined && update.resourceId !== existingMessage.resourceId)) {
++					throw new Error("Message ownership conflict");
++				}
++			}
+ 			const queries = [];
+ 			const columnMapping = { threadId: "thread_id" };
+ 			for (const existingMessage of existingMessages) {
+@@ -11180,11 +11189,12 @@ var MemoryPG = class MemoryPG extends _mastra_core_storage.MemoryStorage {
+ 				const { id, ...fieldsToUpdate } = updatePayload;
+ 				if (Object.keys(fieldsToUpdate).length === 0) continue;
+ 				threadIdsToUpdate.add(existingMessage.threadId);
+-				if (updatePayload.threadId && updatePayload.threadId !== existingMessage.threadId) threadIdsToUpdate.add(updatePayload.threadId);
+ 				const setClauses = [];
+ 				const values = [];
+ 				let paramIndex = 1;
+ 				const updatableFields = { ...fieldsToUpdate };
++				delete updatableFields.threadId;
++				delete updatableFields.resourceId;
+ 				if (updatableFields.content) {
+ 					const newContent = {
+ 						...existingMessage.content,
+@@ -11204,12 +11214,15 @@ var MemoryPG = class MemoryPG extends _mastra_core_storage.MemoryStorage {
+ 					values.push(updatableFields[key]);
+ 				}
+ 				if (setClauses.length > 0) {
+-					values.push(id);
++					values.push(id, existingMessage.threadId, existingMessage.resourceId);
+ 					const sql = `UPDATE ${getTableName$3({
+ 						indexName: _mastra_core_storage.TABLE_MESSAGES,
+ 						schemaName: getSchemaName$3(this.#schema)
+-					})} SET ${setClauses.join(", ")} WHERE id = $${paramIndex}`;
+-					queries.push(t.none(sql, values));
++					})} SET ${setClauses.join(", ")} WHERE id = $${paramIndex}
++						AND thread_id = $${paramIndex + 1} AND "resourceId" = $${paramIndex + 2} RETURNING id`;
++					queries.push(t.manyOrNone(sql, values).then((updated) => {
++						if (updated.length !== 1) throw new Error("Message ownership conflict");
++					}));
+ 				}
+ 			}
+ 			if (threadIdsToUpdate.size > 0) {
+diff --git a/dist/index.js b/dist/index.js
+index f4d9212db13ea9e892bb4b8916149563169210fc..8e90455e491ddcc00b7239c4f1fece20f7d1fdc8 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -11085,14 +11085,16 @@ var MemoryPG = class MemoryPG extends MemoryStorage {
+ 						const paramOffset = messageIndex * MESSAGE_INSERT_BIND_PARAMETERS;
+ 						return `(${Array.from({ length: MESSAGE_INSERT_BIND_PARAMETERS }, (_, paramIndex) => `$${paramOffset + paramIndex + 1}`).join(", ")})`;
+ 					}).join(", ");
+-					await t.none(`INSERT INTO ${tableName} (id, thread_id, content, "createdAt", "createdAtZ", role, type, "resourceId")
++					const saved = await t.manyOrNone(`INSERT INTO ${tableName} AS stored (id, thread_id, content, "createdAt", "createdAtZ", role, type, "resourceId")
+              VALUES ${valuePlaceholders}
+              ON CONFLICT (id) DO UPDATE SET
+-              thread_id = EXCLUDED.thread_id,
+               content = EXCLUDED.content,
+               role = EXCLUDED.role,
+-              type = EXCLUDED.type,
+-              "resourceId" = EXCLUDED."resourceId"`, values);
++              type = EXCLUDED.type
++             WHERE stored.thread_id = EXCLUDED.thread_id
++               AND stored."resourceId" = EXCLUDED."resourceId"
++             RETURNING id`, values);
++					if (saved.length !== batch.length) throw new Error("Message ownership conflict");
+ 				}
+ 				const threadTableName = getTableName$3({
+ 					indexName: TABLE_THREADS,
+@@ -11148,6 +11150,13 @@ var MemoryPG = class MemoryPG extends MemoryStorage {
+ 		});
+ 		const threadIdsToUpdate = /* @__PURE__ */ new Set();
+ 		await this.#db.client.tx(async (t) => {
++			for (const existingMessage of existingMessages) {
++				const update = messages.find((message) => message.id === existingMessage.id);
++				if ((update?.threadId !== undefined && update.threadId !== existingMessage.threadId)
++					|| (update?.resourceId !== undefined && update.resourceId !== existingMessage.resourceId)) {
++					throw new Error("Message ownership conflict");
++				}
++			}
+ 			const queries = [];
+ 			const columnMapping = { threadId: "thread_id" };
+ 			for (const existingMessage of existingMessages) {
+@@ -11156,11 +11165,12 @@ var MemoryPG = class MemoryPG extends MemoryStorage {
+ 				const { id, ...fieldsToUpdate } = updatePayload;
+ 				if (Object.keys(fieldsToUpdate).length === 0) continue;
+ 				threadIdsToUpdate.add(existingMessage.threadId);
+-				if (updatePayload.threadId && updatePayload.threadId !== existingMessage.threadId) threadIdsToUpdate.add(updatePayload.threadId);
+ 				const setClauses = [];
+ 				const values = [];
+ 				let paramIndex = 1;
+ 				const updatableFields = { ...fieldsToUpdate };
++				delete updatableFields.threadId;
++				delete updatableFields.resourceId;
+ 				if (updatableFields.content) {
+ 					const newContent = {
+ 						...existingMessage.content,
+@@ -11180,12 +11190,15 @@ var MemoryPG = class MemoryPG extends MemoryStorage {
+ 					values.push(updatableFields[key]);
+ 				}
+ 				if (setClauses.length > 0) {
+-					values.push(id);
++					values.push(id, existingMessage.threadId, existingMessage.resourceId);
+ 					const sql = `UPDATE ${getTableName$3({
+ 						indexName: TABLE_MESSAGES,
+ 						schemaName: getSchemaName$3(this.#schema)
+-					})} SET ${setClauses.join(", ")} WHERE id = $${paramIndex}`;
+-					queries.push(t.none(sql, values));
++					})} SET ${setClauses.join(", ")} WHERE id = $${paramIndex}
++						AND thread_id = $${paramIndex + 1} AND "resourceId" = $${paramIndex + 2} RETURNING id`;
++					queries.push(t.manyOrNone(sql, values).then((updated) => {
++						if (updated.length !== 1) throw new Error("Message ownership conflict");
++					}));
+ 				}
+ 			}
+ 			if (threadIdsToUpdate.size > 0) {

@@ -1,5 +1,6 @@
 import type { AgentTelemetryEvent } from "./run-telemetry.js";
 import { randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
 
 import type { AGUIEvent, Message, RunAgentInput } from "@ag-ui/core";
 import { createTool } from "@mastra/core/tools";
@@ -181,6 +182,70 @@ describe.sequential("durable Research Agent runtime", () => {
     await owner.query("DROP SCHEMA IF EXISTS agent CASCADE");
     await owner.query("DROP SCHEMA IF EXISTS core CASCADE");
     await owner.end();
+  });
+
+  it.each(["foreign owner", "other thread", "foreign owner in same thread"])("protects message ownership and rolls back a colliding batch: %s", async (scope) => {
+    const storage = new PostgresStore({ id: "message-ownership-fixture", pool: agentStore, schemaName: "agent", disableInit: true });
+    const memory = await storage.getStore("memory");
+    if (!memory) throw new Error("Memory storage is required");
+    const threadId = randomUUID(), otherThreadId = randomUUID(), id = randomUUID(), freshId = randomUUID();
+    const createdAt = new Date("2026-10-11T00:00:00Z");
+    for (const [thread, resourceId] of [[threadId, primaryResearcher.researcher_id], [otherThreadId,
+      scope === "other thread" ? primaryResearcher.researcher_id : foreignResearcher.researcher_id]]) {
+      await memory.saveThread({ thread: { id: thread!, resourceId: resourceId!, title: "Ownership fixture", createdAt, updatedAt: createdAt } });
+    }
+    const message = { id, threadId, resourceId: primaryResearcher.researcher_id, role: "user" as const,
+      createdAt, content: { format: 2 as const, parts: [{ type: "text" as const, text: "Original private history" }] } };
+    await memory.saveMessages({ messages: [message] });
+    const before = (await owner.query('SELECT * FROM agent.mastra_messages WHERE id = $1', [id])).rows;
+    const collision = { ...message, threadId: scope === "foreign owner in same thread" ? threadId : otherThreadId,
+      resourceId: scope === "other thread" ? primaryResearcher.researcher_id : foreignResearcher.researcher_id,
+      content: { format: 2 as const, parts: [{ type: "text" as const, text: "Injected history" }] } };
+    await expect(memory.saveMessages({ messages: [{ ...collision, id: freshId }, collision] })).rejects.toThrow();
+    expect((await owner.query('SELECT * FROM agent.mastra_messages WHERE id = $1', [id])).rows).toEqual(before);
+    expect((await owner.query('SELECT id FROM agent.mastra_messages WHERE id = $1', [freshId])).rows).toEqual([]);
+  });
+
+  it.each(["esm", "commonjs"])("protects message ownership during updates while allowing same-scope history changes: %s", async (format) => {
+    const PgStore = format === "esm" ? PostgresStore : (createRequire(import.meta.url)("@mastra/pg") as typeof import("@mastra/pg")).PostgresStore;
+    const storage = new PgStore({ id: "message-update-fixture", pool: agentStore, schemaName: "agent", disableInit: true });
+    const memory = await storage.getStore("memory");
+    if (!memory) throw new Error("Memory storage is required");
+    const threadId = randomUUID(), otherThreadId = randomUUID(), id = randomUUID(), secondId = randomUUID();
+    const createdAt = new Date("2026-10-11T00:00:00Z");
+    for (const thread of [threadId, otherThreadId]) await memory.saveThread({ thread: { id: thread,
+      resourceId: primaryResearcher.researcher_id, title: "Update fixture", createdAt, updatedAt: createdAt } });
+    const message = { id, threadId, resourceId: primaryResearcher.researcher_id, role: "user" as const,
+      createdAt, content: { format: 2 as const, parts: [{ type: "text" as const, text: "Original history" }] } };
+    await memory.saveMessages({ messages: [message, { ...message, id: secondId }] });
+    const before = (await owner.query('SELECT * FROM agent.mastra_messages ORDER BY id')).rows;
+    for (const change of [{ threadId: otherThreadId }, { resourceId: foreignResearcher.researcher_id }]) {
+      await expect(memory.updateMessages({ messages: [{ id: secondId, role: "assistant" }, { id, ...change }] })).rejects.toThrow();
+      expect((await owner.query('SELECT * FROM agent.mastra_messages ORDER BY id')).rows).toEqual(before);
+    }
+    const updated = { ...message, content: { format: 2 as const, parts: [{ type: "text" as const, text: "Updated own history" }] } };
+    await memory.saveMessages({ messages: [updated] });
+    await memory.updateMessages({ messages: [{ id, threadId, resourceId: primaryResearcher.researcher_id, role: "assistant" }] });
+    expect((await owner.query('SELECT thread_id, "resourceId", role, content FROM agent.mastra_messages WHERE id = $1', [id])).rows)
+      .toEqual([{ thread_id: threadId, resourceId: primaryResearcher.researcher_id, role: "assistant", content: JSON.stringify(updated.content) }]);
+  });
+
+  it.each(["esm", "commonjs"])("protects message ownership when concurrent users choose the same message identity: %s", async (format) => {
+    const PgStore = format === "esm" ? PostgresStore : (createRequire(import.meta.url)("@mastra/pg") as typeof import("@mastra/pg")).PostgresStore;
+    const storage = new PgStore({ id: "message-race-fixture", pool: agentStore, schemaName: "agent", disableInit: true });
+    const memory = await storage.getStore("memory");
+    if (!memory) throw new Error("Memory storage is required");
+    const id = randomUUID(), createdAt = new Date("2026-10-11T00:00:00Z");
+    const candidates = [primaryResearcher, foreignResearcher].map(researcher => ({ id, threadId: randomUUID(),
+      resourceId: researcher.researcher_id, role: "user" as const, createdAt,
+      content: { format: 2 as const, parts: [{ type: "text" as const, text: researcher.researcher_id }] } }));
+    for (const message of candidates) await memory.saveThread({ thread: { id: message.threadId,
+      resourceId: message.resourceId, title: "Race fixture", createdAt, updatedAt: createdAt } });
+    const outcomes = await Promise.allSettled(candidates.map(message => memory.saveMessages({ messages: [message] })));
+    expect(outcomes.filter(outcome => outcome.status === "fulfilled")).toHaveLength(1);
+    const winner = candidates[outcomes.findIndex(outcome => outcome.status === "fulfilled")]!;
+    expect((await owner.query('SELECT thread_id, "resourceId", content FROM agent.mastra_messages WHERE id = $1', [id])).rows)
+      .toEqual([{ thread_id: winner.threadId, resourceId: winner.resourceId, content: JSON.stringify(winner.content) }]);
   });
 
   it.each(["http", "stream", "deadline"])("retries a failed provider step twice while retaining one completed research operation: %s", async (failure) => {

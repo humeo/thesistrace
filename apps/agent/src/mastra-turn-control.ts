@@ -23,7 +23,6 @@ export class MastraTurnControl {
     try {
       const result = this.agent.sendSignal({
         contents: input.content,
-        id: input.inputId,
         type: "user",
       }, {
         ifActive: { behavior: "deliver" },

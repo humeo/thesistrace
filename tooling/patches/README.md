@@ -1,3 +1,17 @@
+# PostgreSQL message ownership
+
+The pinned `@mastra/pg@1.22.1` patch preserves message `threadId` and `resourceId`
+in both ESM and CommonJS distributions. `saveMessages` permits a conflicting ID
+only when both identities match, and checks every returned row inside the
+existing transaction. Any conflict rolls back the whole batch. `updateMessages`
+rejects identity changes and verifies the stored scope during each update.
+Same-scope content updates remain supported.
+
+`apps/agent/src/research-runtime.integration.test.ts` exercises cross-owner and
+cross-thread collisions, batch rollback, concurrent inserts, and legitimate
+updates through the installed storage using isolated PostgreSQL. Keep these
+regressions when upgrading the dependency.
+
 # AG-UI/Mastra content-free logging
 
 The pinned `@ag-ui/mastra@1.1.1` bridge calls `console.warn` directly in eight
