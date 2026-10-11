@@ -1,7 +1,7 @@
 import { expect, test } from "./workbench-fixture";
 import { exampleDailyTrack } from "./fixtures/daily-track";
 
-for (const count of [1, 5, 20]) test(`Daily comparison loads ${count} curves with one selected account`, async ({ page }, testInfo) => {
+for (const count of [1, 5, 20]) test(`Daily comparison loads ${count} curves and reads an account on demand`, async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1440, height: 960 });
   await page.addInitScript(() => {
     const counts = { added: 0, removed: 0 };
@@ -77,17 +77,17 @@ for (const count of [1, 5, 20]) test(`Daily comparison loads ${count} curves wit
   await page.goto("/daily-tracks");
   const rows = page.getByRole("region", { name: "Strategy comparison table" });
   await expect(rows.getByRole("row", { name: new RegExp(`Strategy ${count} `) })).toContainText("49.90%");
-  await expect(page.getByRole("region", { name: "Largest holdings", exact: true })).toContainText("000001.SZ");
+  await expect(page.getByRole("region", { name: "Largest holdings", exact: true })).toHaveCount(0);
   await expect(page.getByRole("figure", { name: "Strategy comparison chart" }).locator("canvas").first()).toBeVisible();
-  expect(fullReads).toEqual([summaries[0].id]);
+  expect(fullReads).toEqual([]);
   expect(nameReads).toEqual([]);
   expect(comparisons).toBe(1);
   const initial = { tracks: count, points: 500, fullReads: fullReads.length, comparisons, nameReads: nameReads.length,
     apiRequests: requests.length, responseBytes: bytes, readyMs: Date.now() - start,
     canvases: await page.evaluate(() => (window as typeof window & { dailyComparisonCanvases: { added: number; removed: number } }).dailyComparisonCanvases) };
   await rows.getByRole("button", { name: `Strategy ${count}`, exact: true }).click();
-  await expect(rows.getByRole("button", { name: `Strategy ${count}`, exact: true })).toHaveAttribute("aria-pressed", "true");
-  await expect.poll(() => fullReads.length).toBe(count === 1 ? 1 : 2);
+  await expect(page.getByRole("dialog")).toContainText("000001.SZ");
+  await expect.poll(() => fullReads).toEqual([summaries.at(-1)!.id]);
   expect(comparisons).toBe(1);
   await testInfo.attach("daily-comparison-metrics", { body: JSON.stringify(initial, null, 2), contentType: "application/json" });
   console.info(`Daily comparison measurement: ${JSON.stringify(initial)}`);
@@ -96,7 +96,7 @@ for (const count of [1, 5, 20]) test(`Daily comparison loads ${count} curves wit
     holdDetail = summaries.at(-1)!.id;
     const revalidation = page.waitForRequest(request => new URL(request.url()).pathname === `/api/daily-tracks/${holdDetail}`);
     const revalidated = page.waitForResponse(response => new URL(response.url()).pathname === `/api/daily-tracks/${holdDetail}`);
-    await rows.getByRole("link", { name: holdDetail, exact: true }).click();
+    await page.getByRole("dialog").getByRole("link", { name: "Open strategy", exact: true }).click();
     await revalidation;
     try {
       await expect(page.getByRole("button", { name: "Manage", exact: true })).toBeVisible();
@@ -104,7 +104,7 @@ for (const count of [1, 5, 20]) test(`Daily comparison loads ${count} curves wit
       await expect(page.getByText("Loading DailyTrack…", { exact: true })).toHaveCount(0);
     } finally { releaseDetail(); }
     await revalidated;
-  }
+  } else await page.getByRole("dialog").getByRole("button", { name: "Close", exact: true }).click();
   await page.getByRole("link", { name: "Data", exact: true }).click();
   await expect(page.locator(".data-field-table")).toBeVisible();
   holdList = true;

@@ -122,7 +122,7 @@ test("comparison keeps its canvas and zoom as curves arrive, hide and refresh", 
     expect([await observation(0.3), await observation(0.5), await observation(0.7)]).toEqual(before);
     value.observation.returns.push({ session: "2025-10-28", net_return: 0.3 });
     value.observation.net_return = 0.3;
-    const refreshed = page.waitForResponse("**/api/daily-tracks/track_first");
+    const refreshed = page.waitForResponse(response => new URL(response.url()).pathname === "/api/daily-tracks/comparison");
     await page.getByRole("button", { name: "Reload status", exact: true }).click();
     await refreshed;
     await expect(page.getByRole("region", { name: "Strategy comparison table" }).getByRole("row", { name: /First/ })).toContainText("30.00%");
@@ -415,14 +415,19 @@ test("comparison selects real account previews and leaves failed observations un
   await page.setViewportSize({ width: 1440, height: 960 });
   const summaries = ["track_ui", "track_other", "track_failed"].map(id => ({ id, status: "active", seed_name: id === "track_ui" ? "Momentum" : "Quality", seed_run_id: id === "track_ui" ? "run_momentum" : "run_quality", result_checksum_sha256: "a".repeat(64), origin_session: "2026-08-01", strategy_session: "2026-08-20" }));
   let mutations = 0;
-  await page.route("https://daily-compare.test/**", route => {
+  let releaseComparison!: () => void;
+  const comparisonReady = new Promise<void>(resolve => { releaseComparison = resolve; });
+  await page.route("https://daily-compare.test/**", async route => {
     const pathname = new URL(route.request().url()).pathname;
     if (pathname === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
     if (route.request().method() !== "GET") { mutations++; return route.fulfill({ status: 503 }); }
     if (pathname === "/api/daily-tracks") return route.fulfill({ json: { items: summaries, next_cursor: null } });
-    if (pathname === "/api/daily-tracks/comparison") return route.fulfill({ json: {
+    if (pathname === "/api/daily-tracks/comparison") {
+      await comparisonReady;
+      return route.fulfill({ json: {
       items: summaries.map(item => ({ id: item.id, values: item.id === "track_failed" ? null : comparisonValues(track) })),
-    } });
+      } });
+    }
     if (pathname.startsWith("/api/research-runs/")) return route.fulfill({ json: { name: pathname.endsWith("run_momentum") ? "Momentum" : "Quality" } });
     if (pathname.endsWith("track_failed")) return route.fulfill({ status: 503 });
     const value = structuredClone(track);
@@ -431,10 +436,15 @@ test("comparison selects real account previews and leaves failed observations un
   });
   await page.goto("https://daily-compare.test/?list"); await page.addStyleTag({ content: styles }); await page.addScriptTag({ content: script });
   const rows = page.getByRole("region", { name: "Strategy comparison table" });
+  try {
+    await expect(rows.getByRole("row", { name: /track_ui/ })).toContainText("Reading status");
+  } finally { releaseComparison(); }
   await expect(rows.getByRole("row", { name: /track_failed/ })).toContainText("Observation unavailable");
+  await expect(rows.getByRole("row", { name: /track_failed/ })).toContainText("Status unconfirmed");
   await expect(rows.getByRole("row", { name: /track_failed/ })).not.toContainText("0.00%");
   await rows.getByRole("button", { name: "Quality", exact: true }).first().click();
   await expect(page.getByRole("region", { name: "Largest holdings", exact: true })).toContainText("600000.SH");
+  await page.getByRole("dialog").getByRole("button", { name: "Close", exact: true }).click();
   await expect(page.getByRole("figure", { name: "Strategy comparison chart" }).locator("canvas").first()).toBeVisible();
   const visible = page.getByRole("group", { name: "Visible strategies", exact: true });
   await visible.getByRole("button", { name: "Momentum", exact: true }).click();

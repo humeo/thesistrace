@@ -58,6 +58,22 @@
   --chart-3: #d0d6e0;
   --chart-4: #8a8f98;
   --chart-5: #6f75a4;
+  /* IBM Carbon dark categorical sequence for comparisons with variable series counts.
+     https://carbondesignsystem.com/data-visualization/color-palettes/ */
+  --chart-categorical-1: #8a3ffc;
+  --chart-categorical-2: #33b1ff;
+  --chart-categorical-3: #007d79;
+  --chart-categorical-4: #ff7eb6;
+  --chart-categorical-5: #fa4d56;
+  --chart-categorical-6: #fff1f1;
+  --chart-categorical-7: #6fdc8c;
+  --chart-categorical-8: #4589ff;
+  --chart-categorical-9: #d02670;
+  --chart-categorical-10: #d2a106;
+  --chart-categorical-11: #08bdba;
+  --chart-categorical-12: #bae6ff;
+  --chart-categorical-13: #ba4e00;
+  --chart-categorical-14: #d4bbff;
   --radius: 0.5rem;
   --sidebar: #111216;
   --sidebar-foreground: var(--foreground);
@@ -1225,7 +1241,7 @@ body:has(.app-shell) [data-slot="input-group"] [data-slot="input-group-control"]
 }
 
 /* Shared console tabs and filters retain their desktop geometry. */
-body:has(.app-shell) [data-slot="toggle-group-item"]:not([data-variant="chart"]) {
+body:has(.app-shell) [data-slot="toggle-group-item"]:not([data-variant="chart"]):not([data-size="sm"]) {
   height: 40px;
   padding-inline: 16px;
   border-radius: 8px;

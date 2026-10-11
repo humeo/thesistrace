@@ -13,8 +13,8 @@ export class DailyTrackReadError extends Error {
   constructor(readonly status: number) { super("DailyTrack unavailable"); }
 }
 
-export async function readDailyTrackList(signal: AbortSignal): Promise<DailyTrackList> {
-  const response = await coreFetch("/api/daily-tracks", { signal });
+export async function readDailyTrackList(signal: AbortSignal, cursor?: string): Promise<DailyTrackList> {
+  const response = await coreFetch(`/api/daily-tracks${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`, { signal });
   if (!response.ok) throw new DailyTrackReadError(response.status);
   return await response.json() as DailyTrackList;
 }

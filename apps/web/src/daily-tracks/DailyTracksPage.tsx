@@ -9,6 +9,9 @@ import type { DailyTrackAnalysis } from "./DailyTrackAnalysisView";
 import type { DailyTrackObservation } from "./DailyTrackObservationView";
 import { DailyTrackWorkspace } from "./DailyTrackWorkspace";
 import { DailyTrackComparison } from "./DailyTrackComparison";
+import { BulkRefreshFeedback } from "./BulkRefreshFeedback";
+import { dailyTrackCanRefresh, dailyTrackNeedsPolling } from "./progress";
+import { refreshAllDailyTracks, type BulkRefreshItem } from "./refreshAll";
 import { DailyTrackReadError, dailyTrackDetailOptions, dailyTrackKeys, readDailyTrackList } from "./queries";
 import type { TerminalStrategyState } from "../research-runs/ResearchRunsPage";
 import { Page, PageHeader, PageContent } from "../components/layout/Page";
@@ -73,26 +76,7 @@ type RetryState = "submitting" | "accepted" | null;
 type ActionError = "refreshError" | "retryError" | "stopError";
 type StopState = "submitting" | "accepted" | null;
 
-export function dailyTrackNeedsPolling(
-  track: Pick<DailyTrackDetail, "status" | "progress">,
-): boolean {
-  return track.status === "stopping" || [
-    "queued",
-    "retry_wait",
-    "starting",
-    "calculating",
-    "result_ready",
-    "staging",
-  ].includes(track.progress.phase);
-}
-
-export function dailyTrackCanRefresh(
-  track: Pick<DailyTrackDetail, "status" | "lag_sessions" | "progress">,
-): boolean {
-  return track.status === "active"
-    && track.lag_sessions > 0
-    && track.progress.phase === "waiting";
-}
+export { dailyTrackCanRefresh, dailyTrackNeedsPolling } from "./progress";
 
 export function DailyTracksPage({ trackId }: { trackId?: string }) {
   const { t } = useTranslation("daily");
@@ -123,6 +107,8 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
   const mutationPending = useRef(false);
   const mutationController = useRef<AbortController | null>(null);
   const [advanceState, setAdvanceState] = useState<RefreshState>(null);
+  const [bulkResult, setBulkResult] = useState<BulkRefreshItem[] | null>(null);
+  const [bulkError, setBulkError] = useState(false);
   const [retryState, setRetryState] = useState<RetryState>(null);
   const [stopState, setStopState] = useState<StopState>(null);
   const [deleting, setDeleting] = useState(false);
@@ -132,6 +118,8 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
 
   useEffect(() => {
     setAdvanceState(null);
+    setBulkResult(null);
+    setBulkError(false);
     setRetryState(null);
     setStopState(null);
     setDeleteError(null);
@@ -190,6 +178,26 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
       setActionError("refreshError");
     } finally {
       mutationPending.current = false;
+    }
+  }
+
+  async function refreshAllTracks() {
+    if (mutationPending.current) return;
+    mutationPending.current = true;
+    const controller = new AbortController();
+    mutationController.current = controller;
+    setAdvanceState("submitting");
+    setBulkResult(null);
+    setBulkError(false);
+    try {
+      const result = await refreshAllDailyTracks(controller.signal);
+      setBulkResult(result);
+      void reloadFacts();
+    } catch {
+      if (!controller.signal.aborted) setBulkError(true);
+    } finally {
+      mutationPending.current = false;
+      if (!controller.signal.aborted) setAdvanceState(null);
     }
   }
 
@@ -331,7 +339,14 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
     </>;
   }
   return <Page className="console-workspace" aria-label={t("title")}><PageContent className="flex flex-col gap-6">
-    <PageHeader variant="console" title={t("title")} className="mb-0" actions={reloadAction} />
+    <PageHeader variant="console" title={t("title")} description={t("overviewDescription")} className="mb-0" actions={<>
+      <Button size="lg" disabled={submitting || !items?.length} aria-busy={advanceState === "submitting"}
+        onClick={() => void refreshAllTracks()}>{advanceState === "submitting" && <Spinner data-icon="inline-start" />}{t(advanceState === "submitting" ? "queuingAll" : "refreshAll")}</Button>
+      {reloadAction}
+    </>} />
+    {advanceState === "submitting" && <p role="status">{t("bulkSubmitting")}</p>}
+    {bulkError && <Alert variant="destructive"><AlertDescription>{t("bulkError")}</AlertDescription></Alert>}
+    {bulkResult && <BulkRefreshFeedback items={bulkResult} />}
     {error ? <Alert variant="destructive"><AlertDescription>{t("listReloadFailed")}</AlertDescription></Alert> : null}
     {items?.length === 0 ? <Empty variant="page"><EmptyHeader><EmptyTitle role="heading" aria-level={2}>{t("emptyTitle")}</EmptyTitle><EmptyDescription>{t("emptyDescription")}</EmptyDescription></EmptyHeader>
       <Button nativeButton={false} role="link" render={<a href="/research-runs" onClick={followCoreLink} />}>{t("browseRuns")}</Button>
