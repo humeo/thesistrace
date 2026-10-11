@@ -111,9 +111,11 @@ function ResourceRow({ kind, id }: { kind: "run" | "track"; id: string }) {
       }
     },
     staleTime: query => {
-      const resource = query.state.data?.snapshot?.resource;
-      // A new reference to ongoing work must be able to observe its completion.
-      return resource && !["succeeded", "failed", "cancelled", "stopped"].includes(resource.value.status) ? 0 : Infinity;
+      const read = query.state.data;
+      const resource = read?.snapshot?.resource;
+      // Only successful reads of terminal resources stay fresh on short revisits.
+      // Ongoing work and failed reads must be able to recover on the next mount.
+      return !read?.errorCode && resource && ["succeeded", "failed", "cancelled", "stopped"].includes(resource.value.status) ? 30_000 : 0;
     },
   });
   const snapshot = data?.snapshot;
@@ -128,16 +130,16 @@ function ResourceRow({ kind, id }: { kind: "run" | "track"; id: string }) {
             <Typography.Link href={href} onClick={followCoreLink} strong>{title}</Typography.Link>
             {resource ? <ResourceStatus resource={resource} /> : null}
           </Flex>
-          <Space size="small">
+          <Flex gap="small" align="center">
             {snapshot ? <Tooltip title={<Trans i18nKey="a2ui.readAt" ns="chat" values={{ time: readAt }} components={{ time: <span /> }} />}>
               <Typography.Text type="secondary"><time dateTime={snapshot.loadedAt}>{t("a2ui.readTime", { time: readAt })}</time></Typography.Text>
             </Tooltip> : null}
             <Tooltip title={t("a2ui.reload")}><Button type="text" size="small" loading={loading}
-              icon={<ArrowClockwiseIcon size={16} />} aria-label={`${t("a2ui.reload")}: ${title}`}
+              icon={<ArrowClockwiseIcon size={16} />} aria-label={`${t("a2ui.reload")}: ${title}`} aria-busy={loading}
               onClick={() => { void refetch({ cancelRefetch: false }); }} /></Tooltip>
-          </Space>
+          </Flex>
         </Flex>
-        {loading ? <Flex gap={8} align="center" role="status"><Spin size="small" /><Typography.Text>{t("a2ui.loadingData")}</Typography.Text></Flex> : null}
+        {loading && !snapshot ? <Flex gap={8} align="center" role="status"><Spin size="small" /><Typography.Text>{t("a2ui.loadingData")}</Typography.Text></Flex> : null}
         {errorCode ? <Alert type="error" role="alert" title={t(`a2ui.${errorCode}`)} /> : null}
         {resource ? <ResourceFacts resource={resource} /> : null}
       </Flex>

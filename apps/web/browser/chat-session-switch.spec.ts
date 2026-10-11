@@ -1,5 +1,6 @@
 import { expect, test } from './workbench-fixture';
 import type { Page } from '@playwright/test';
+import { createResearchA2UIView } from '@thesistrace/contracts/research-a2ui';
 
 const A = '00000000-0000-4000-8000-000000000111';
 const B = '00000000-0000-4000-8000-000000000112';
@@ -7,7 +8,7 @@ test.use({ viewport: { width: 1440, height: 960 } });
 
 const time = '2026-10-06T00:00:00.000000Z';
 
-async function install(page: Page, running = false, longHistory = false) {
+async function install(page: Page, running = false, longHistory = false, researchRuns: string[] = []) {
   let complete = !running;
   let holdA = false;
   let releaseA = () => {};
@@ -50,6 +51,9 @@ async function install(page: Page, running = false, longHistory = false) {
           entries: [
             { entry_id: `prompt-${id}`, turn_id: turn.id, created_at: time, kind: 'user_input',
               payload: { content: id === A ? 'Question A' : 'Question B', inputId: id, source: 'prompt' } },
+            ...(id === A && researchRuns.length ? [{ entry_id: 'a2ui-surface-results', turn_id: turn.id, created_at: time, kind: 'a2ui',
+              payload: { activityType: 'a2ui-surface', status: 'ready',
+                content: createResearchA2UIView({ view: 'research_runs', runIds: researchRuns }, 'results') } }] : []),
             { entry_id: `answer-${id}`, turn_id: turn.id, created_at: time, kind: 'assistant_message',
               payload: { content: id === A ? (complete ? 'Answer A complete' : 'Answer A pending')
                 + (longHistory ? Array.from({ length: 40 }, (_, index) => `\n\nHistory paragraph ${index + 1}. This is a deterministic conversation reading-position fixture.`).join('') : '')
@@ -199,4 +203,170 @@ test('first opening keeps the composer height stable while settings arrive', asy
     await expect(page.getByText('Answer A complete', { exact: true })).toBeVisible();
     expect(await page.locator('.ant-sender').boundingBox()).toEqual(opening);
   } finally { release(); }
+});
+
+test('short conversations never jump from the bottom when opened or revisited', async ({ page }, info) => {
+  const fixture = await install(page);
+  await page.goto(`/chat?session=${A}`);
+  await expect(page.getByText('Answer A complete', { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => PerformanceObserver.supportedEntryTypes)).toContain('layout-shift');
+  const probe = await page.evaluateHandle(() => {
+    type LayoutShift = PerformanceEntry & {
+      sources: { node?: Node; previousRect: DOMRectReadOnly; currentRect: DOMRectReadOnly }[];
+    };
+    const shifts: { session: string | null; before: number; after: number }[] = [];
+    const record = (entries: PerformanceEntry[]) => {
+      for (const entry of entries as LayoutShift[]) {
+        for (const source of entry.sources) {
+          if (!(source.node instanceof Element) || !source.node.closest('.ant-bubble-list')) continue;
+          if (Math.abs(source.currentRect.y - source.previousRect.y) <= 1) continue;
+          shifts.push({ session: source.node.closest('main')?.getAttribute('aria-label') ?? null,
+            before: source.previousRect.y, after: source.currentRect.y });
+        }
+      }
+    };
+    const observer = new PerformanceObserver(list => record(list.getEntries()));
+    // User-triggered shifts still flash, even though they do not count toward CLS.
+    observer.observe({ type: 'layout-shift' });
+    return { finish: () => { record(observer.takeRecords()); observer.disconnect(); return shifts; } };
+  });
+  for (const id of [B, A, B, A]) await fixture.open(id);
+  const shifts = await probe.evaluate(async state => {
+    // Include layout-shift entries from the final presented frame.
+    await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    return state.finish();
+  });
+  await probe.dispose();
+  await info.attach('conversation-layout-shifts', { body: JSON.stringify(shifts), contentType: 'application/json' });
+  expect(shifts).toEqual([]);
+});
+
+test('reopening research reuses fresh reads until an explicit refresh', async ({ page }, info) => {
+  await page.clock.setFixedTime(new Date('2026-10-09T08:00:00Z'));
+  const runId = 'run_0123456789abcdef0123';
+  const fixture = await install(page, false, false, [runId]);
+  let reads = 0;
+  await page.route(`https://workbench.fixture/api/research-runs/${runId}`, async route => {
+    reads++;
+    await route.fulfill({ json: { id: runId, name: `Research read ${reads}`, status: 'succeeded', research_kind: 'factor_evaluation',
+      formula_summary: 'rank(close)', start_date: '2026-01-01', end_date: '2026-09-01',
+      result: { factor: { horizons: Object.fromEntries(['1', '5', '20'].map(h => [h, { summary: { rank_ic: { mean: 0.125 } } }])) } },
+    } });
+  });
+  await page.goto(`/chat?session=${A}`);
+  const card = page.getByRole('region', { name: `ResearchRun ${runId}`, exact: true });
+  await expect(card.locator('time')).toBeVisible();
+  const readAt = await card.locator('time').getAttribute('datetime');
+  await page.clock.setFixedTime(new Date('2026-10-09T08:00:10Z'));
+  for (let index = 0; index < 3; index++) {
+    await fixture.open(B);
+    await fixture.open(A);
+    await expect(card.getByRole('link', { name: 'Research read 1', exact: true })).toBeVisible();
+    await expect(card.locator('time')).toHaveAttribute('datetime', readAt!);
+    await expect(card.getByRole('button')).toHaveAttribute('aria-busy', 'false');
+  }
+  expect(reads).toBe(1);
+  await card.getByRole('button').click();
+  await expect(card.getByRole('link', { name: 'Research read 2', exact: true })).toBeVisible();
+  await expect(card.locator('time')).toHaveAttribute('datetime', '2026-10-09T08:00:10.000Z');
+  expect(reads).toBe(2);
+  await info.attach('fresh-cache-reads', { body: JSON.stringify({ switches: 3, readsBeforeManualRefresh: 1, readsAfterManualRefresh: reads }), contentType: 'application/json' });
+});
+
+test('reopening expired research keeps the last read visible until current facts replace it', async ({ page }, info) => {
+  await page.setViewportSize({ width: 928, height: 944 });
+  await page.clock.setFixedTime(new Date('2026-10-09T08:00:00Z'));
+  const runId = 'run_0123456789abcdef0123';
+  const fixture = await install(page, false, false, [runId]);
+  let held = false, inaccessible = false;
+  let name = 'Recorded research result';
+  let release = () => {};
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  await page.route(`https://workbench.fixture/api/research-runs/${runId}`, async route => {
+    if (held) await gate;
+    if (inaccessible) return route.fulfill({ status: 403, body: '' });
+    await route.fulfill({ json: { id: runId, name, status: 'succeeded', research_kind: 'factor_evaluation',
+      formula_summary: 'rank(close)', start_date: '2026-01-01', end_date: '2026-09-01',
+      result: { factor: { horizons: Object.fromEntries(['1', '5', '20'].map(h => [h, { summary: { rank_ic: { mean: 0.125 } } }])) } },
+    } });
+  });
+  try {
+    await page.goto(`/chat?session=${A}`);
+    const card = page.getByRole('region', { name: `ResearchRun ${runId}`, exact: true });
+    await expect(card.locator('time')).toBeVisible();
+    const before = await card.boundingBox();
+    await fixture.open(B);
+    await expect(card).toHaveCount(0);
+    await page.clock.setFixedTime(new Date('2026-10-09T08:00:31Z'));
+    name = 'Current research result';
+    held = true;
+    const probe = await page.evaluateHandle(() => {
+      let stopped = false;
+      const frames: { chat: string | null; facts: boolean }[] = [];
+      const frame = () => {
+        const main = document.querySelector('main.quantgrove-chat');
+        frames.push({ chat: main?.getAttribute('aria-label') ?? null,
+          facts: main?.textContent?.includes('Recorded research result') ?? false });
+        if (!stopped) requestAnimationFrame(frame);
+      };
+      requestAnimationFrame(frame);
+      return { finish: () => { stopped = true; return frames; } };
+    });
+    const request = page.waitForRequest(request => request.url().endsWith(`/research-runs/${runId}`));
+    await fixture.open(A);
+    await request;
+    await expect(card.getByRole('link', { name: 'Recorded research result', exact: true })).toBeVisible();
+    await expect(card.getByText('Loading research data…', { exact: true })).toHaveCount(0);
+    const frames = await probe.evaluate(async probe => {
+      await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+      return probe.finish();
+    });
+    await probe.dispose();
+    await info.attach('research-frames', { body: JSON.stringify(frames), contentType: 'application/json' });
+    expect(frames.filter(frame => frame.chat === 'Chat A' && !frame.facts)).toEqual([]);
+    expect(await card.boundingBox()).toEqual(before);
+    await page.screenshot({ path: info.outputPath('research-during-refresh.png') });
+    release();
+    await expect(card.getByRole('link', { name, exact: true })).toBeVisible();
+    await fixture.open(B);
+    inaccessible = true;
+    await page.clock.setFixedTime(new Date('2026-10-09T08:01:02Z'));
+    await fixture.open(A);
+    await expect(card.getByRole('alert')).toBeVisible();
+    await expect(card.getByRole('link', { name, exact: true })).toHaveCount(0);
+    await expect(card.locator('time')).toHaveCount(0);
+  } finally { release(); }
+});
+
+test('reopening a scrolled conversation restores its reading position before presentation', async ({ page }, info) => {
+  await page.setViewportSize({ width: 928, height: 944 });
+  const fixture = await install(page, false, true);
+  await page.goto(`/chat?session=${A}`);
+  const viewport = page.locator('.ant-bubble-list-scroll-box');
+  await expect.poll(() => viewport.evaluate(element => element.scrollHeight - element.clientHeight)).toBeGreaterThan(900);
+  await viewport.hover();
+  await page.mouse.wheel(0, -900);
+  await expect.poll(() => viewport.evaluate(element => element.scrollTop)).toBeLessThan(-500);
+  const top = await viewport.evaluate(element => element.scrollTop);
+  await fixture.open(B);
+  const probe = await page.evaluateHandle(() => {
+    let stopped = false;
+    const frames: { chat: string | null; top: number }[] = [];
+    const frame = () => {
+      const main = document.querySelector('main.quantgrove-chat');
+      frames.push({ chat: main?.getAttribute('aria-label') ?? null, top: main?.querySelector('.ant-bubble-list-scroll-box')?.scrollTop ?? 0 });
+      if (!stopped) requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
+    return { finish: () => { stopped = true; return frames; } };
+  });
+  await fixture.open(A);
+  await expect.poll(() => viewport.evaluate(element => element.scrollTop)).toBe(top);
+  const frames = await probe.evaluate(async probe => {
+    await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    return probe.finish();
+  });
+  await probe.dispose();
+  await info.attach('reading-frames', { body: JSON.stringify({ top, frames }), contentType: 'application/json' });
+  expect(frames.filter(frame => frame.chat === 'Chat A' && Math.abs(frame.top - top) > 1)).toEqual([]);
 });

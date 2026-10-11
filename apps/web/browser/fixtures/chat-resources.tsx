@@ -1,11 +1,13 @@
 import { createRoot } from "react-dom/client";
 import { ResearchA2UIActivity } from "../../src/chat/researchA2UI";
 import { ChatUiProvider } from "../../src/chat/ChatUiProvider";
+import { ResearchResourceProvider } from "../../src/chat/ResearchResourceProvider";
+import { WorkspaceQueryProvider } from "../../src/shell/WorkspaceQueryProvider";
 import "../../src/styles.css";
 
 createRoot(document.getElementById("root")!).render(
   <main className="quantgrove-chat" style={{ width: 808, padding: 20, margin: "auto" }}>
-    <ChatUiProvider><ResearchA2UIActivity message={{
+    <WorkspaceQueryProvider researcherId="research-fixture"><ChatUiProvider><ResearchResourceProvider><ResearchA2UIActivity message={{
       id: "research-results", role: "activity", activityType: "a2ui-surface", content: {
         a2ui_operations: [
           { version: "v0.9", createSurface: { catalogId: "urn:thesistrace:a2ui:research:v0.9", surfaceId: "results" } },
@@ -17,6 +19,6 @@ createRoot(document.getElementById("root")!).render(
           ] } },
         ],
       },
-    }} /></ChatUiProvider>
+    }} /></ResearchResourceProvider></ChatUiProvider></WorkspaceQueryProvider>
   </main>,
 );

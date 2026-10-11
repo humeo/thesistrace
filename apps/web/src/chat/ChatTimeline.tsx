@@ -3,7 +3,7 @@ import XMarkdown, { type ComponentProps } from "@ant-design/x-markdown";
 import "@ant-design/x-markdown/themes/dark.css";
 import "./chatTypography.css";
 import { Alert, Button, Card, Collapse, ConfigProvider, Divider, Flex, Typography } from "antd";
-import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ArrowDown, Atom, ListChecks } from "@phosphor-icons/react";
 import markedCjkFriendly from "marked-cjk-friendly";
@@ -37,6 +37,13 @@ const TOOL_STATUS = { running: "loading", complete: "success", failed: "error", 
 export function ChatTimeline({ controller }: { controller: ChatConversationController }) {
   const { t } = useTranslation("chat");
   const list = useRef<ListRef>(null);
+  const [viewport, setViewport] = useState<HTMLDivElement | null>(null);
+  const bindList = useCallback((instance: ListRef | null) => {
+    list.current = instance;
+    // Bubble.List publishes its viewport after its own layout commit. React
+    // completes this state update and our measurement before the first paint.
+    if (instance?.scrollBoxNativeElement) setViewport(instance.scrollBoxNativeElement);
+  }, []);
   const restoringPosition = useRef(controller.viewState?.readingPosition ?? null);
   const [readingOlder, setReadingOlder] = useState((restoringPosition.current?.top ?? 0) < -80);
   const messages = chatViewMessages(controller.turns);
@@ -63,61 +70,52 @@ export function ChatTimeline({ controller }: { controller: ChatConversationContr
       setReplyMinHeight(0);
       return;
     }
-    let observer: ResizeObserver | undefined;
+    if (!viewport) return;
+    const prompt = Array.from(list.current?.nativeElement.querySelectorAll<HTMLElement>("[data-entry-id]") ?? [])
+      .find(element => element.dataset.entryId === layoutPrompt);
+    const content = prompt?.parentElement;
+    if (!prompt || !content) return;
     let scrollFrame = 0;
-    // Bubble.List initializes its scroll ref after mounting its native viewport.
-    const setupFrame = requestAnimationFrame(() => {
-      const viewport = list.current?.scrollBoxNativeElement;
-      const prompt = Array.from(list.current?.nativeElement.querySelectorAll<HTMLElement>("[data-entry-id]") ?? [])
-        .find(element => element.dataset.entryId === layoutPrompt);
-      const content = prompt?.parentElement;
-      if (!viewport || !prompt || !content) return;
-      const measureReplyMinHeight = () => {
-        const last = content.lastElementChild;
-        if (!last) return;
-        const precedingHeight = last.getBoundingClientRect().top - prompt.getBoundingClientRect().top;
-        const viewportInsets = Array.from(viewport.children)
-          .filter(element => element !== content)
-          .reduce((height, element) => height + element.getBoundingClientRect().height, 0);
-        // CSS absorbs text growth inside the reserved room in the same layout.
-        // A compensating margin would move the viewport for one frame before
-        // ResizeObserver + React could shrink that margin again.
-        setReplyMinHeight(Math.max(0, Math.round(viewport.clientHeight * (firstPrompt ? 1 : 0.8) - viewportInsets - precedingHeight)));
-      };
-      observer = new ResizeObserver(measureReplyMinHeight);
-      observer.observe(viewport);
-      observer.observe(content);
-      measureReplyMinHeight();
-      if (anchoredPrompt) scrollFrame = requestAnimationFrame(() => list.current?.scrollTo({ key: anchoredPrompt, block: "start", behavior: "instant" }));
-    });
-    return () => {
-      cancelAnimationFrame(setupFrame);
-      cancelAnimationFrame(scrollFrame);
-      observer?.disconnect();
+    const measureReplyMinHeight = () => {
+      const last = content.lastElementChild;
+      if (!last) return;
+      const precedingHeight = last.getBoundingClientRect().top - prompt.getBoundingClientRect().top;
+      const viewportInsets = Array.from(viewport.children)
+        .filter(element => element !== content)
+        .reduce((height, element) => height + element.getBoundingClientRect().height, 0);
+      // CSS absorbs text growth inside the reserved room in the same layout.
+      // A compensating margin would move the viewport for one frame before
+      // ResizeObserver + React could shrink that margin again.
+      setReplyMinHeight(Math.max(0, Math.round(viewport.clientHeight * (firstPrompt ? 1 : 0.8) - viewportInsets - precedingHeight)));
     };
-  }, [anchoredPrompt, firstPrompt, layoutPrompt]);
+    const observer = new ResizeObserver(measureReplyMinHeight);
+    observer.observe(viewport);
+    observer.observe(content);
+    measureReplyMinHeight();
+    if (anchoredPrompt) scrollFrame = requestAnimationFrame(() => list.current?.scrollTo({ key: anchoredPrompt, block: "start", behavior: "instant" }));
+    return () => {
+      cancelAnimationFrame(scrollFrame);
+      observer.disconnect();
+    };
+  }, [anchoredPrompt, firstPrompt, layoutPrompt, viewport]);
 
   useLayoutEffect(() => {
-    if (restoringPosition.current === null || controller.turns.length === 0) return;
-    const frame = requestAnimationFrame(() => {
-      const viewport = list.current?.scrollBoxNativeElement;
-      const position = restoringPosition.current;
-      if (!viewport || !position) return;
-      // Bubble.List exposes positions from the top while its native viewport
-      // counts backwards from the bottom. Keep the same content in view if
-      // the latest reply grew while this conversation was closed.
-      list.current?.scrollTo({ top: position.top < -80
-        ? position.height + position.top - viewport.clientHeight
-        : "bottom", behavior: "instant" });
-      restoringPosition.current = null;
-      setReadingOlder(viewport.scrollTop < -80);
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [controller.turns, replyMinHeight]);
+    const position = restoringPosition.current;
+    if (!viewport || !position || controller.turns.length === 0) return;
+    // Restore in the same layout commit as the mounted viewport, before it
+    // can present the native bottom position for a frame.
+    // Bubble.List's API counts from the top; its reverse viewport counts
+    // backwards from the bottom, including any reply growth while closed.
+    list.current?.scrollTo({ top: position.top < -80
+      ? position.height + position.top - viewport.clientHeight
+      : "bottom", behavior: "instant" });
+    restoringPosition.current = null;
+    setReadingOlder(viewport.scrollTop < -80);
+  }, [controller.turns, replyMinHeight, viewport]);
 
   const items = bubbleItems(messages, controller);
-  return <ResearchResourceProvider><div className="relative flex min-h-0 flex-1 flex-col">
-    <Bubble.List ref={list} className="min-h-0 flex-1"
+  return <ResearchResourceProvider conversationId={controller.threadId}><div className="relative flex min-h-0 flex-1 flex-col">
+    <Bubble.List ref={bindList} className="min-h-0 flex-1"
       styles={{ scroll: { height: "100%", scrollbarGutter: "stable both-edges",
         scrollPaddingBlockStart: firstPrompt ? "0" : "20%" } }}
       items={items.map((item, index) => ({ ...item,

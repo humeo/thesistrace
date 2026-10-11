@@ -226,6 +226,7 @@ async function mount(controller: ChatConversationController): Promise<void> {
 
 function composerController(overrides: Partial<ChatConversationController> = {}): ChatConversationController {
   return {
+    threadId: "chat-fixture",
     action: { enabled: false, kind: "send", label: "Send" },
     answerSelections: [],
     currentTurnId: null,

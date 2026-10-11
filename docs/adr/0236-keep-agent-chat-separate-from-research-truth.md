@@ -52,10 +52,18 @@ resource share an authenticated read through a conversation-scoped TanStack
 Query client, and an explicit reload updates all its visible occurrences.
 New references to ongoing research or tracking revalidate its shared state, so
 completion can appear without retaining a previous running snapshot.
-The client is discarded on conversation unmount, and resources with no remaining
-detail views are removed. Reopening the conversation reads current resource state;
-the UI never persists research snapshots or puts research truth into generated
-payloads. Deleted or inaccessible resources remain explicit per-resource errors.
+Resources with no remaining detail views are removed from the conversation client.
+On conversation unmount, its completed reads move to a Session-keyed, short-lived
+snapshot in the existing Researcher workspace cache, and the client is discarded.
+Reopening hydrates that snapshot before presentation. Successful reads of terminal
+resources remain fresh for 30 seconds from the original successful read;
+navigation does not extend that window. Expired, ongoing and failed reads
+revalidate against Core on reopening, while explicit reload always reads Core.
+The old read time remains visible until a successful refresh; refreshing does
+not replace known facts with loading rows.
+Snapshots expire with the workspace cache and are discarded on Researcher change;
+they never enter persistent browser storage or generated payloads. Deleted or
+inaccessible resources clear their previous facts and remain explicit errors.
 Reads have a 15-second deadline covering headers and body, retain previous facts
 only on transient failure, and cannot replace a newer attempt after cancellation.
 Obsolete model-authored status, metrics, and provenance components are rejected

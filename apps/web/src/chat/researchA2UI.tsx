@@ -5,7 +5,7 @@ import {
   createCatalog,
   useA2UI,
 } from "@copilotkit/a2ui-renderer";
-import { useEffect, useId, useMemo, useState } from "react";
+import { useId, useLayoutEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
 import "../i18n";
@@ -156,7 +156,7 @@ function ReadyA2UIRenderer({ operationsJson }: { operationsJson: string }) {
     JSON.parse(operationsJson) as Array<Record<string, unknown>>
   ), [operationsJson]);
   const surfaceId = useMemo(() => readySurfaceId(operations), [operations]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     processMessages(operations);
   }, [operations, processMessages]);
   return surfaceId === null ? (

@@ -333,6 +333,7 @@ test("a post-tool reply stays in its message while streaming and completing", as
 });
 function controller(overrides: Partial<ChatConversationController> = {}): ChatConversationController {
   return {
+    threadId: "chat-fixture",
     action: { enabled: false, kind: "send", label: "Send" },
     answerSelections: [],
     currentTurnId: null,

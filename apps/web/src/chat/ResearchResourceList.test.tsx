@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { WorkspaceQueryProvider } from "../shell/WorkspaceQueryProvider";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
@@ -13,7 +14,7 @@ beforeEach(() => notifyManager.setNotifyFunction(callback => { act(callback); })
 afterEach(async () => { if (root) await act(async () => root.unmount()); notifyManager.setNotifyFunction(callback => callback()); document.body.replaceChildren(); vi.useRealTimers(); vi.resetAllMocks(); });
 const first = "run_0123456789abcdef0123", second = "run_1123456789abcdef0123";
 function run(id = first) { return { id, name: "Authoritative name", status: "succeeded", formula_summary: "rank(close)", start_date: "2026-01-01", end_date: "2026-08-27", research_kind: "factor_evaluation", result: { factor: { horizons: Object.fromEntries(["1", "5", "20"].map(h => [h, { summary: { rank_ic: { mean: 0.125 } } }])) } } }; }
-async function mount(ids: string[]) { root = createRoot(document.body.appendChild(document.createElement("div"))); await act(async () => root.render(<ResearchResourceProvider><ResearchResourceList kind="run" ids={ids} /></ResearchResourceProvider>)); }
+async function mount(ids: string[]) { root = createRoot(document.body.appendChild(document.createElement("div"))); await act(async () => root.render(<WorkspaceQueryProvider researcherId="research-fixture"><ResearchResourceProvider><ResearchResourceList kind="run" ids={ids} /></ResearchResourceProvider></WorkspaceQueryProvider>)); }
 test("loads authoritative metrics and keeps ordered failures isolated", async () => {
   request.mockImplementation((url: string) => Promise.resolve(url.endsWith(first) ? new Response(JSON.stringify(run())) : new Response(null, { status: 404 })));
   await mount([second, first]);
@@ -22,6 +23,97 @@ test("loads authoritative metrics and keeps ordered failures isolated", async ()
   expect([...document.querySelectorAll('section')].map(el => el.getAttribute('aria-label'))).toEqual([`ResearchRun ${second}`, `ResearchRun ${first}`]);
   expect(document.body.textContent).toContain("rank(close)");
   expect(request.mock.calls.every(([url]) => String(url).startsWith("/api/research-runs/run_"))).toBe(true);
+});
+test("retained reads stay isolated by conversation and Researcher", async () => {
+  root = createRoot(document.body.appendChild(document.createElement("div")));
+  const show = async (researcherId: string, conversationId: string) => act(async () => root.render(
+    <WorkspaceQueryProvider researcherId={researcherId}>
+      <ResearchResourceProvider key={conversationId} conversationId={conversationId}>
+        <ResearchResourceList kind="run" ids={[first]} />
+      </ResearchResourceProvider>
+    </WorkspaceQueryProvider>,
+  ));
+  request.mockResolvedValueOnce(new Response(JSON.stringify(run())));
+  await show("researcher-a", "chat-a");
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Authoritative name"));
+  request.mockImplementation(() => new Promise(() => {}));
+  await show("researcher-a", "chat-b");
+  expect(document.body.textContent).not.toContain("Authoritative name");
+  await show("researcher-a", "chat-a");
+  expect(document.body.textContent).toContain("Authoritative name");
+  expect(document.body.textContent).not.toContain("Loading research data");
+  await show("researcher-b", "chat-a");
+  expect(document.body.textContent).not.toContain("Authoritative name");
+});
+test("reopening reuses terminal reads for thirty seconds from the actual read and still allows manual refresh", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-10-09T08:00:00Z"));
+  root = createRoot(document.body.appendChild(document.createElement("div")));
+  const show = async (conversationId: string) => act(async () => root.render(
+    <WorkspaceQueryProvider researcherId="researcher-a">
+      <ResearchResourceProvider key={conversationId} conversationId={conversationId}>
+        <ResearchResourceList kind="run" ids={conversationId === "chat-a" ? [first] : []} />
+      </ResearchResourceProvider>
+    </WorkspaceQueryProvider>,
+  ));
+  let name = "Authoritative name";
+  request.mockImplementation(async () => new Response(JSON.stringify({ ...run(), name })));
+  await show("chat-a");
+  await vi.waitFor(() => expect(document.querySelector("time")).not.toBeNull());
+  const readAt = document.querySelector("time")!.getAttribute("datetime")!;
+  for (const age of [10_000, 29_999]) {
+    await show("chat-b");
+    vi.setSystemTime(new Date(Date.parse(readAt) + age));
+    await show("chat-a");
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(document.querySelector("time")!.getAttribute("datetime")).toBe(readAt);
+    expect(document.body.textContent).not.toContain("Loading research data");
+  }
+
+  await show("chat-b");
+  vi.setSystemTime(new Date(Date.parse(readAt) + 30_000));
+  name = "Current research name";
+  await show("chat-a");
+  await vi.waitFor(() => expect(document.body.textContent).toContain(name));
+  expect(request).toHaveBeenCalledTimes(2);
+  const refreshedAt = document.querySelector("time")!.getAttribute("datetime")!;
+  expect(refreshedAt).not.toBe(readAt);
+
+  vi.setSystemTime(new Date(Date.parse(refreshedAt) + 1_000));
+  name = "Manually refreshed name";
+  await act(async () => document.querySelector("button")!.click());
+  await vi.waitFor(() => expect(document.body.textContent).toContain(name));
+  expect(request).toHaveBeenCalledTimes(3);
+  expect(document.querySelector("time")!.getAttribute("datetime")).not.toBe(refreshedAt);
+});
+test.each(["running", "unavailable", "transient"])("reopening retries a %s read even within the fresh-cache window", async state => {
+  vi.useFakeTimers();
+  root = createRoot(document.body.appendChild(document.createElement("div")));
+  const show = async (conversationId: string) => act(async () => root.render(
+    <WorkspaceQueryProvider researcherId="researcher-a">
+      <ResearchResourceProvider key={conversationId} conversationId={conversationId}>
+        <ResearchResourceList kind="run" ids={conversationId === "chat-a" ? [first] : []} />
+      </ResearchResourceProvider>
+    </WorkspaceQueryProvider>,
+  ));
+  request.mockResolvedValueOnce(state === "unavailable"
+    ? new Response(null, { status: 403 })
+    : new Response(JSON.stringify({ ...run(), status: state === "running" ? "running" : "succeeded" })));
+  await show("chat-a");
+  await vi.waitFor(() => expect(document.querySelector('button')?.getAttribute('aria-busy')).toBe("false"));
+  if (state === "transient") {
+    request.mockResolvedValueOnce(new Response(null, { status: 503 }));
+    await act(async () => document.querySelector("button")!.click());
+    await vi.waitFor(() => expect(document.querySelector('[role="alert"]')).not.toBeNull());
+    expect(document.body.textContent).toContain("Authoritative name");
+  }
+  await show("chat-b");
+  request.mockResolvedValueOnce(new Response(JSON.stringify({ ...run(), name: "Current completed research" })));
+  await show("chat-a");
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Current completed research"));
+  expect(document.body.textContent).toContain("0.125");
+  expect(document.querySelector('[role="alert"]')).toBeNull();
+  expect(request).toHaveBeenCalledTimes(state === "transient" ? 3 : 2);
 });
 test("rejects mismatched resource identity and supports an explicit retry", async () => {
   request.mockResolvedValueOnce(new Response(JSON.stringify(run(second)))).mockResolvedValueOnce(new Response(JSON.stringify(run())));
@@ -36,7 +128,7 @@ test("changing resource aborts the old load and cannot show its late response", 
   request.mockImplementationOnce(() => new Promise<Response>(r => { resolve = r; })).mockResolvedValueOnce(new Response(JSON.stringify({ ...run(second), name: "Second research" })));
   await mount([first]);
   const signal = request.mock.calls[0][1].signal as AbortSignal;
-  await act(async () => root.render(<ResearchResourceProvider><ResearchResourceList kind="run" ids={[second]} /></ResearchResourceProvider>));
+  await act(async () => root.render(<WorkspaceQueryProvider researcherId="research-fixture"><ResearchResourceProvider><ResearchResourceList kind="run" ids={[second]} /></ResearchResourceProvider></WorkspaceQueryProvider>));
   expect(signal.aborted).toBe(true);
   await act(async () => resolve(new Response(JSON.stringify(run()))));
   await vi.waitFor(() => expect(document.body.textContent).toContain("Second research"));
@@ -46,7 +138,7 @@ test("reads DailyTrack observation and reports blocked state from Core", async (
   const id = "track_0123456789abcdef0123";
   request.mockResolvedValue(new Response(JSON.stringify({ id, status: "blocked", origin: { seed_run_id: first, strategy_session: "2026-08-20" }, strategy_session: "2026-08-27", data_through_session: "2026-08-26", blocked_reason: "Required data is pending", blocked_code: "FINANCIAL_COVERAGE_UNAVAILABLE", observation: { session: "2026-08-27", net_return: 0.125, maximum_drawdown: -0.025 } })));
   root = createRoot(document.body.appendChild(document.createElement("div")));
-  await act(async () => root.render(<ResearchResourceProvider><ResearchResourceList kind="track" ids={[id]} /></ResearchResourceProvider>));
+  await act(async () => root.render(<WorkspaceQueryProvider researcherId="research-fixture"><ResearchResourceProvider><ResearchResourceList kind="track" ids={[id]} /></ResearchResourceProvider></WorkspaceQueryProvider>));
   await vi.waitFor(() => expect(document.body.textContent).toContain("Financial Coverage ends before the next Research Session."));
   expect(document.body.textContent).not.toContain("Required data is pending");
   expect(document.body.textContent).toContain("12.50%");
@@ -138,9 +230,10 @@ test.each(["headers", "body"])("a stalled %s request ends loading and allows a m
   await vi.waitFor(() => expect(document.querySelector("time")).not.toBeNull());
   const readTime = document.querySelector("time")!.getAttribute("datetime");
   await act(async () => document.querySelector("button")!.click());
-  await vi.waitFor(() => expect(document.querySelector('[role="status"]')).not.toBeNull());
-  await act(async () => { await vi.advanceTimersByTimeAsync(15_001); });
+  await vi.waitFor(() => expect(document.querySelector("button")!.getAttribute("aria-busy")).toBe("true"));
   expect(document.querySelector('[role="status"]')).toBeNull();
+  await act(async () => { await vi.advanceTimersByTimeAsync(15_001); });
+  expect(document.querySelector("button")!.getAttribute("aria-busy")).toBe("false");
   expect(document.body.textContent).toContain("Research data could not be loaded");
   expect(document.body.textContent).toContain("0.125");
   expect(document.querySelector("time")!.getAttribute("datetime")).toBe(readTime);

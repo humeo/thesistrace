@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { WorkspaceQueryProvider } from "../shell/WorkspaceQueryProvider";
 
 import type { ActivityMessage } from "@ag-ui/core";
 import {
@@ -189,7 +190,7 @@ async function mount(message: ActivityMessage): Promise<Root> {
   await act(async () => {
     root.render(
       <CopilotKitContext.Provider value={{ copilotkit, executingToolCallIds: EMPTY_SET }}>
-        <ChatUiProvider><ResearchResourceProvider><ResearchA2UIActivity message={message} /></ResearchResourceProvider></ChatUiProvider>
+        <ChatUiProvider><WorkspaceQueryProvider researcherId="research-fixture"><ResearchResourceProvider><ResearchA2UIActivity message={message} /></ResearchResourceProvider></WorkspaceQueryProvider></ChatUiProvider>
       </CopilotKitContext.Provider>,
     );
     await Promise.resolve();

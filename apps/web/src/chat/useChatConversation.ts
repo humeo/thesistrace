@@ -48,6 +48,7 @@ type TimelineLoadState = {
 };
 
 export type ChatConversationController = Readonly<{
+  threadId: string;
   viewState?: ChatSessionViewState;
   action: ChatMainAction;
   answerSelections: readonly string[];
@@ -1063,6 +1064,7 @@ export function useChatConversation(options: Readonly<{
   const statusAnnouncement = localizedError ?? statusCopy(phase, latestTurnStatus, queue.length);
   return {
     viewState: saved,
+    threadId: options.threadId,
     action,
     answerSelections,
     currentTurnId,
