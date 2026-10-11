@@ -47,13 +47,16 @@ test("A2UI resource references read Core and isolate an unavailable sibling", as
   await page.goto("http://research.test/");
   await page.addStyleTag({ content: styles });
   await page.addScriptTag({ content: timelineScript });
-  await expect(page.getByRole("heading", { name: "Core research" })).toBeVisible();
+  const card = page.getByRole("region", { name: "ResearchRun run_0123456789abcdef0123", exact: true });
+  await expect(card.getByRole("link", { name: "Core research", exact: true })).toBeVisible();
+  await expect(card.getByText("running", { exact: true })).toBeVisible();
   await expect(page.getByRole("alert")).toContainText("Resource unavailable or access denied");
   await expect(page.getByText("Results are available after this research succeeds.")).toBeVisible();
   status = "succeeded";
-  await page.getByRole("button", { name: "Reload view" }).first().click();
+  await card.getByRole("button", { name: "Reload view: Core research", exact: true }).click();
   await expect(page.getByText("0.125", { exact: true })).toHaveCount(3);
-  await expect(page.getByText("running · Factor Evaluation")).toHaveCount(0);
+  await expect(card.getByText("succeeded", { exact: true })).toBeVisible();
+  await expect(card.getByText("running", { exact: true })).toHaveCount(0);
 });
 
 for (const width of [320, 390, 768, 1280, 1440]) {
@@ -79,12 +82,14 @@ for (const width of [320, 390, 768, 1280, 1440]) {
     await page.keyboard.press("Enter");
     const table = page.getByRole("table", { name: "Research sample" });
     await expect(table.getByRole("cell")).toHaveCount(1200);
-    const scroll = page.getByRole("region", { name: "Research sample", exact: true });
+    const scroll = table.locator("..");
     await scroll.focus();
+    await expect(scroll).toBeFocused();
     await page.keyboard.press("ArrowRight");
     await expect.poll(() => scroll.evaluate(el => el.scrollLeft)).toBeGreaterThan(0);
     await page.getByRole("button", { name: "Copy", exact: true }).click();
-    await expect(page.locator('[data-slot="toast-title"]')).toContainText("Formula copied");
+    const formula = page.getByRole("region", { name: "Research formula", exact: true });
+    await expect(formula).toContainText("Formula copied");
     failure = true;
     await card.getByRole("button", { name: "Reload view" }).click();
     await expect(card.getByRole("alert")).toBeVisible();
@@ -93,7 +98,7 @@ for (const width of [320, 390, 768, 1280, 1440]) {
     await page.getByRole("button", { name: "简体中文" }).click();
     await expect(disclosure).toHaveAttribute("aria-expanded", "true");
     await expect(table.getByRole("cell")).toHaveCount(1200);
-    await expect(page.locator('[data-slot="toast-title"]')).toContainText("公式已复制");
+    await expect(formula).toContainText("公式已复制");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await disclosure.click();
     await expect(table).toBeHidden();

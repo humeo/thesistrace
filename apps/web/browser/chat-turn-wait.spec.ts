@@ -5,7 +5,7 @@ const previous = "00000000-0000-4000-8000-000000000001";
 const current = "00000000-0000-4000-8000-000000000002";
 
 test("Turn completion ignores the previous terminal state and unfinished current work", async ({ page }) => {
-  await page.setContent(`<section data-turn-id="${current}"><footer class="chat-response-footer"><time>done</time></footer></section>`);
+  await page.setContent(`<main data-agent-run-id="${current}"><span data-chat-status>Run complete</span></main>`);
   const states = [{ id: previous, status: "completed" }, { id: current, status: "running" }, { id: current, status: "completed" }];
   let observedCompletion = false;
   const fake = {
@@ -33,7 +33,7 @@ for (const status of ["running", "failed"]) {
 }
 
 test("Turn wait tolerates a delayed Session URL without reading the wrong Session", async ({ page }) => {
-  await page.setContent(`<section data-turn-id="${current}"><footer class="chat-response-footer"><time>done</time></footer></section>`);
+  await page.setContent(`<main data-agent-run-id="${current}"><span data-chat-status>Run complete</span></main>`);
   let reads = 0;
   const fake = {
     url: () => ++reads < 3 ? "http://test.invalid/chat" : `http://test.invalid/chat?session=${previous}`,
@@ -49,7 +49,7 @@ test("Turn wait tolerates a delayed Session URL without reading the wrong Sessio
 });
 
 test("Answer recovery can finish the same accepted Turn", async ({ page }) => {
-  await page.setContent(`<section data-turn-id="${current}"><footer class="chat-response-footer"><time>done</time></footer></section>`);
+  await page.setContent(`<main data-agent-run-id="${current}"><span data-chat-status>Run complete</span></main>`);
   let status = "waiting_for_user";
   const fake = {
     url: () => `http://test.invalid/chat?session=${previous}`,

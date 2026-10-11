@@ -185,7 +185,8 @@ test("Research modes keep one focused editor and expose help by hover and keyboa
   await expect(pythonInfo).toContainText("System input");
   await expect(pythonInfo).toContainText("Strategy output");
   await expect(pythonInfo).toContainText("System execution");
-  await expect(pythonInfo).toContainText("self.target_weights");
+  await expect(pythonInfo).toContainText("compute(data, state)");
+  await expect(pythonInfo).toContainText("Targets(weights, update=flags)");
   const pythonInfoBox = (await pythonInfo.boundingBox())!;
   expect(pythonInfoBox.y).toBeGreaterThanOrEqual(0);
   expect(pythonInfoBox.y + pythonInfoBox.height).toBeLessThanOrEqual(960);
