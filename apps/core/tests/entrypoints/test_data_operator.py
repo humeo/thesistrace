@@ -23,6 +23,50 @@ from thesistrace.data import (
 from thesistrace.entrypoints import data_operator
 
 
+@pytest.mark.parametrize("damage", (None, "missing", "corrupt"))
+def test_explicit_generation_audit_is_offline_and_preserves_head(
+    tmp_path, monkeypatch, capsys, damage,
+):
+    from thesistrace.data.generation_store import MountedGenerationStore
+    from thesistrace.data.head_store import MountedDatasetHeadStore
+    from thesistrace.fixture import build_minimal_canonical_fixture
+
+    store = MountedGenerationStore(tmp_path)
+    generation = store.materialize(
+        build_minimal_canonical_fixture(), prepared_at=datetime(2026, 8, 9, tzinfo=UTC),
+        source_name="fixture", source_lineage={"fixture": "audit"},
+    )
+    heads = MountedDatasetHeadStore(tmp_path)
+    with heads.resolved_pointer_candidate(generation.manifest_sha256) as candidate:
+        heads.compare_and_swap_pointer_resolved(
+            expected_generation_manifest_sha256=None, candidate=candidate,
+        )
+    head_bytes = (tmp_path / "HEAD.json").read_bytes()
+    monkeypatch.setenv("THESISTRACE_DATA_MOUNT", str(tmp_path))
+    monkeypatch.delenv("THESISTRACE_DATABASE_URL", raising=False)
+    monkeypatch.delenv("THESISTRACE_TUSHARE_TOKEN", raising=False)
+    if damage:
+        path = next((tmp_path / "objects").rglob("*.parquet"))
+        if damage == "missing":
+            path.unlink()
+        else:
+            path.write_bytes(b"corrupt previously published object")
+        with pytest.raises(SystemExit):
+            data_operator.main([
+                "audit-generation", "--generation-manifest-sha256", generation.manifest_sha256,
+            ])
+        assert json.loads(capsys.readouterr().err)["code"] == "GENERATION_AUDIT_FAILED"
+    else:
+        data_operator.main([
+            "audit-generation", "--generation-manifest-sha256", generation.manifest_sha256,
+        ])
+        assert json.loads(capsys.readouterr().out) == {
+            "status": "validated", "generation_manifest_sha256": generation.manifest_sha256,
+            "data_through_session": generation.data_through_session,
+        }
+    assert (tmp_path / "HEAD.json").read_bytes() == head_bytes
+
+
 def test_market_worker_hard_cuts_the_manual_worker_command(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

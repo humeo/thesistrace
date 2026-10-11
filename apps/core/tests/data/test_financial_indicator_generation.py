@@ -99,6 +99,12 @@ def test_generation_composes_indicator_without_changing_original_root(
     from thesistrace.data.io_metrics import measure_data_io
 
     reader = MountedGenerationStore(tmp_path)
+    with measure_data_io() as publication:
+        assert reader.validate_refresh_candidate(
+            combined.manifest_sha256,
+            predecessor_manifest_sha256=combined.manifest_sha256,
+        ) == combined
+    assert publication.indicator_securities_projected == 0
     request = dict(
         sessions=["2026-08-07"],
         universe_name="top3000",

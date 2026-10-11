@@ -761,7 +761,7 @@ The initial preparation of Canonical Data that establishes the first Data Genera
 _避免混用_: Data Refresh, research admission
 
 **Data Refresh**:
-An Operator-requested update that prepares Market, Financial and Industry data and publishes one complete validated Data Generation with its Benchmark Snapshot, confirms no change, or leaves the accepted version unchanged on failure.
+An Operator-requested update that prepares Market, Financial and Industry data, validates changed business data against the exact accepted predecessor, and publishes one complete validated Data Generation with its Benchmark Snapshot, confirms no change, or leaves the accepted version unchanged on failure. Unchanged immutable historical partitions reuse their accepted validation; a full stored-history audit is separate from Refresh.
 _避免混用_: DailyTrack Refresh, ResearchRun, completed publication on submission
 
 **Data Refresh Operation**:

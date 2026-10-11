@@ -1123,7 +1123,10 @@ class DailyFinancialRefreshService:
             )
             if operation["status"] == "prepared":
                 digest = str(operation["composed_generation_manifest_sha256"])
-                self._generations.validate_generation(digest)
+                self._generations.validate_refresh_candidate(
+                    digest,
+                    predecessor_manifest_sha256=source_generation_manifest_sha256,
+                )
                 return PreparedFinancialRefresh(digest, target)
             try:
                 indicators = FinancialIndicatorCandidateStore(self._root)
@@ -1140,8 +1143,7 @@ class DailyFinancialRefreshService:
                         raise FinancialDailyRefreshError("FINANCIAL_PREPARATION_INCOMPLETE")
                     indicator_digest = operation["indicator_candidate_manifest_sha256"]
                     if indicator_digest is not None:
-                        coverage = indicators.family_reference(indicator_digest)["dataset_coverage"]
-                        if coverage["readiness_status"] != "ready":
+                        if indicators.reopen(indicator_digest)["unresolved_sources"]:
                             raise FinancialDailyRefreshError("FINANCIAL_PREPARATION_INCOMPLETE")
                     composed = self._composition.compose(
                         source_generation_manifest_sha256,

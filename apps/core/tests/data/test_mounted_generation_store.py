@@ -1645,6 +1645,107 @@ def test_refresh_does_not_open_immutable_partitions_before_its_window(
     assert store.validate_generation(candidate.manifest_sha256) == candidate
 
 
+@pytest.mark.parametrize("session_count", (128, 4_000, 4_048))
+def test_refresh_publication_validation_scans_only_changed_session_blocks(
+    tmp_path: Path, session_count: int,
+) -> None:
+    from thesistrace.data.io_metrics import measure_data_io
+
+    store, current, candidate = _refresh_validation_fixture(tmp_path, session_count)
+    with measure_data_io() as work:
+        checked = store.validate_refresh_candidate(
+            candidate.manifest_sha256,
+            predecessor_manifest_sha256=current.manifest_sha256,
+        )
+    assert checked == candidate
+    # Two stocks, at most two changed 64-session blocks across the market tables.
+    # The bound concerns decoded business rows, not timing or private call counts.
+    # The small calendar is read for both roots; historical price/state/value
+    # rows must remain bounded by the changed block rather than history length.
+    assert work.rows_scanned - 2 * session_count < 1_500
+    assert store.validate_generation(candidate.manifest_sha256) == checked
+
+
+@pytest.mark.parametrize("damage", ("missing", "corrupt", "schema", "price_factor", "calendar"))
+def test_refresh_publication_validation_rejects_damaged_changed_data(
+    tmp_path: Path, damage: str,
+) -> None:
+    store, current, candidate = _refresh_validation_fixture(tmp_path, 128)
+    root = _manifest(tmp_path, candidate.manifest_sha256)
+    family_id = "market.research_calendar" if damage == "calendar" else "equity.eod_price"
+    family_index = next(i for i, f in enumerate(root["families"])
+                        if f["family_id"] == family_id)
+    family = _manifest(tmp_path, root["families"][family_index]["manifest_sha256"])
+    reference = family["tables"][0]
+    table = _manifest(tmp_path, reference["manifest_sha256"])
+    object_ref = table["objects"][-1]
+    path = _object_path(tmp_path, object_ref["sha256"])
+    digest = candidate.manifest_sha256
+    if damage == "missing":
+        path.unlink()
+    elif damage == "corrupt":
+        path.write_bytes(b"damaged new data")
+    else:
+        output = pa.BufferOutputStream()
+        if damage == "schema":
+            pq.write_table(pa.table({"wrong": [1]}), output)
+            content = output.getvalue().to_pybytes()
+        else:
+            rows = pq.read_table(path).to_pylist()
+            if damage == "calendar":
+                rows[-1]["session"] = "2030-01-02"
+                object_ref["last_sort_key"] = ["2030-01-02"]
+            else:
+                rows[-1]["close_adj"] += Decimal("1")
+            contract = next(s.contract for s in MARKET_CANDIDATE_TABLE_SPECS
+                            if s.name == reference["name"])
+            content = serialization_module.parquet_bytes(rows, contract)
+        sha256 = hashlib.sha256(content).hexdigest()
+        altered = _object_path(tmp_path, sha256)
+        altered.parent.mkdir(parents=True, exist_ok=True)
+        altered.write_bytes(content)
+        object_ref.update(sha256=sha256, byte_count=len(content))
+        table_sha256, table_bytes = _write_manifest(tmp_path, table)
+        reference.update(manifest_sha256=table_sha256, manifest_byte_count=len(table_bytes))
+        _replace_family_manifest(tmp_path, root, family_index, family)
+        digest = _write_candidate_root(tmp_path, root)
+    with pytest.raises(GenerationStoreError):
+        store.validate_refresh_candidate(
+            digest, predecessor_manifest_sha256=current.manifest_sha256,
+        )
+
+
+def test_refresh_reuses_published_history_but_explicit_audit_detects_its_damage(tmp_path):
+    store, current, candidate = _refresh_validation_fixture(tmp_path, 128)
+    first = _family_table_object_sha256s(
+        tmp_path, _manifest(tmp_path, current.manifest_sha256), "equity.eod_price", "eod_prices",
+    )[0]
+    _object_path(tmp_path, first).write_bytes(b"damaged previously published history")
+    assert store.validate_refresh_candidate(
+        candidate.manifest_sha256, predecessor_manifest_sha256=current.manifest_sha256,
+    ) == candidate
+    with pytest.raises(GenerationStoreError):
+        store.validate_generation(candidate.manifest_sha256)
+
+
+def _refresh_validation_fixture(root: Path, session_count: int):
+    store = MountedGenerationStore(root)
+    current = store.materialize(
+        _canonical(session_count), prepared_at=datetime(2026, 8, 9, tzinfo=UTC),
+        source_name="fixture", source_lineage={"fixture": "accepted"},
+    )
+    replacement = copy.deepcopy(store.open_refresh_base(current.manifest_sha256).canonical)
+    replacement["prices"][-1]["turnover_cny"] = "999999.00"
+    candidate = store.materialize_refresh(
+        predecessor_manifest_sha256=current.manifest_sha256,
+        replacement_canonical=replacement,
+        replace_from_session=replacement["research_calendar"][-20],
+        prepared_at=datetime(2026, 8, 10, tzinfo=UTC),
+        source_name="fixture", source_lineage={"fixture": "incremental"},
+    )
+    return store, current, candidate
+
+
 def test_reference_inventory_does_not_reopen_parquet_objects(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2699,6 +2800,9 @@ def test_price_refresh_crosses_partition_boundary_with_retained_daily_family(
     assert next(f for f in refreshed.families if f.family_id == "equity.daily_basic") == daily
     reopened = MountedGenerationStore(tmp_path)
     assert reopened.validate_generation(refreshed.manifest_sha256) == refreshed
+    assert reopened.validate_refresh_candidate(
+        refreshed.manifest_sha256, predecessor_manifest_sha256=original.manifest_sha256,
+    ) == refreshed
     sessions = advanced["research_calendar"][-2:]
     pe_id = "market.valuation.pe"
     result = reopened.read_columnar_slice(

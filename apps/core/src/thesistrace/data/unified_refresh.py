@@ -73,9 +73,13 @@ class UnifiedRefreshPreparation:
         ):
             state = {"base": baseline, "base_benchmark": head.benchmark_snapshot_sha256}
             self._save(state)
+        predecessor = baseline
         for stage in ("market", "financial", "industry"):
             if stage in state:
-                self._generations.validate_generation(str(state[stage]))
+                self._generations.validate_refresh_candidate(
+                    str(state[stage]), predecessor_manifest_sha256=predecessor,
+                )
+                predecessor = str(state[stage])
         if "benchmark" in state:
             PreparedBenchmarkSnapshots(self._benchmark_root).read(str(state["benchmark"]))
 
@@ -155,7 +159,9 @@ class UnifiedRefreshPreparation:
                 state["industry"] = prepared.generation_manifest_sha256
                 self._save(state)
         with self._phase("candidate_validation"):
-            self._generations.validate_generation(str(state["industry"]))
+            self._generations.validate_refresh_candidate(
+                str(state["industry"]), predecessor_manifest_sha256=baseline,
+            )
             self._guard()
         return state
 

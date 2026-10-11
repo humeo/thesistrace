@@ -475,12 +475,112 @@ class MountedGenerationStore:
             raise GenerationStoreError("Financial candidate exceeds Market Coverage")
         return descriptor
 
+    def validate_refresh_candidate(
+        self,
+        manifest_sha256: str,
+        *,
+        predecessor_manifest_sha256: str,
+    ) -> MountedFamilyGenerationDescriptor:
+        """Validate changes against the caller's exact accepted predecessor.
+
+        Reused immutable partitions inherit that publication's business proof.
+        Changed market blocks and financial source projections are checked anew;
+        a manifest's 'validated' summary is never publication authority. Full
+        historical auditing remains available through validate_generation().
+        """
+        predecessor = self._read_family_generation_root(predecessor_manifest_sha256)
+        root = self._read_family_generation_root(manifest_sha256)
+        if not {f["family_id"] for f in predecessor["families"]} <= {
+            f["family_id"] for f in root["families"]
+        }:
+            raise GenerationStoreError("Refresh drops an accepted Dataset Family")
+        descriptor = self.validate_market_generation(
+            manifest_sha256, predecessor_manifest_sha256=predecessor_manifest_sha256,
+        )
+        indicator = _family_reference(root, "equity.financial_indicator")
+        prior_indicator = _family_reference(predecessor, "equity.financial_indicator")
+        if indicator is not None:
+            from thesistrace.data.financial_indicator_candidate import (
+                FinancialIndicatorCandidateStore,
+            )
+
+            store = FinancialIndicatorCandidateStore(self._root)
+            try:
+                with store.validation_session():
+                    if indicator == prior_indicator:
+                        store.reopen_published(prior_indicator)
+                    else:
+                        _, checked_reference = store.validate_incremental_with_reference(
+                            str(indicator["manifest_sha256"]),
+                            published_base_reference=prior_indicator,
+                        )
+                        if checked_reference != indicator:
+                            raise GenerationStoreError(
+                                "Indicator Family differs from its candidate"
+                            )
+            except ValueError as error:
+                raise GenerationStoreError("Indicator Dataset Family is invalid") from error
+        financial = _family_reference(root, "equity.financial_pit")
+        prior_financial = _family_reference(predecessor, "equity.financial_pit")
+        if financial is not None:
+            from thesistrace.data.financial_candidate import (
+                FinancialCandidateError,
+                FinancialCandidateStore,
+            )
+
+            store = FinancialCandidateStore(self._root)
+            digest = str(financial["manifest_sha256"])
+            try:
+                if financial == prior_financial:
+                    candidate = store.reopen_against_prevalidated_market_generation(
+                        digest, manifest_sha256,
+                    )
+                else:
+                    expected = (None if prior_financial is None
+                                else str(prior_financial["manifest_sha256"]))
+                    if store.prior_candidate_manifest_sha256(digest) != expected:
+                        raise GenerationStoreError(
+                            "Financial predecessor differs from accepted Family"
+                        )
+                    candidate = store.validate_against_market_generation(digest, manifest_sha256)
+                if store.family_reference(digest) != financial:
+                    raise GenerationStoreError("Financial Family differs from its candidate")
+                if candidate.observation_through_session > descriptor.data_through_session:
+                    raise GenerationStoreError("Financial candidate exceeds Market Coverage")
+            except FinancialCandidateError as error:
+                raise GenerationStoreError("Financial Dataset Family is invalid") from error
+            finally:
+                store.close()
+        return descriptor
+
     def validate_market_generation(
         self,
         manifest_sha256: str,
+        *,
+        predecessor_manifest_sha256: str | None = None,
     ) -> MountedFamilyGenerationDescriptor:
         """Validate Market and Industry Families without reopening Financial PIT."""
         root = self._read_family_generation_root(manifest_sha256)
+        table_references, daily_evidence_dates = self._market_table_references(root)
+        predecessor_tables = None
+        if predecessor_manifest_sha256 is not None:
+            predecessor_tables, _ = self._market_table_references(
+                self._read_family_generation_root(predecessor_manifest_sha256),
+            )
+        canonical = self._validate_market_tables_streaming(
+            table_references, predecessor_tables=predecessor_tables,
+        )
+        if daily_evidence_dates is not None and daily_evidence_dates != {
+            str(row["session"]) for row in canonical["daily_basic_sessions"]
+        }:
+            raise GenerationStoreError("Daily basic source evidence does not match collected dates")
+        descriptor = _family_generation_descriptor_from_root(manifest_sha256, root)
+        _validate_candidate_projection(descriptor, canonical)
+        return descriptor
+
+    def _market_table_references(
+        self, root: Mapping[str, object],
+    ) -> tuple[dict[str, Mapping[str, object]], frozenset[str] | None]:
         references = root["families"]
         assert isinstance(references, list)
         table_references: dict[str, Mapping[str, object]] = {}
@@ -508,18 +608,13 @@ class MountedGenerationStore:
                 if not isinstance(table_reference, Mapping):
                     raise GenerationStoreError("Dataset Family table reference is incompatible")
                 table_references[table_name] = table_reference
-        canonical = self._validate_market_tables_streaming(table_references)
-        if daily_evidence_dates is not None and daily_evidence_dates != {
-            str(row["session"]) for row in canonical["daily_basic_sessions"]
-        }:
-            raise GenerationStoreError("Daily basic source evidence does not match collected dates")
-        descriptor = _family_generation_descriptor_from_root(manifest_sha256, root)
-        _validate_candidate_projection(descriptor, canonical)
-        return descriptor
+        return table_references, daily_evidence_dates
 
     def _validate_market_tables_streaming(
         self,
         table_references: Mapping[str, Mapping[str, object]],
+        *,
+        predecessor_tables: Mapping[str, Mapping[str, object]] | None = None,
     ) -> dict[str, object]:
         required = {
             table_name for family in CORE_MARKET_FAMILY_SPECS for table_name in family.table_names
@@ -565,11 +660,54 @@ class MountedGenerationStore:
         if len(sparse_partition_counts) > 1:
             raise GenerationStoreError("Daily basic tables have different partition extents")
 
+        prior_calendar: list[str] = []
+        prior_manifests: dict[str, dict[str, object]] = {}
+        reusable_identities = False
+        if predecessor_tables is not None:
+            prior_calendar = [str(row["session"]) for row in self._open_table(
+                calendar_spec, predecessor_tables["research_calendar"], None,
+            )]
+            instrument_spec = _MARKET_CANDIDATE_TABLE_SPEC_BY_NAME["instruments"]
+            prior_ids = {str(row["instrument_id"]) for row in self._open_table(
+                instrument_spec, predecessor_tables["instruments"], prior_calendar,
+            )}
+            reusable_identities = prior_ids <= {
+                str(row["instrument_id"]) for row in static_tables["instruments"]
+            }
+            prior_manifests = {
+                name: self._read_table_manifest(
+                    _MARKET_CANDIDATE_TABLE_SPEC_BY_NAME[name], predecessor_tables[name],
+                )
+                for name in session_manifests if name in predecessor_tables
+            }
+
         opened_row_counts = {name: 0 for name in session_manifests}
         daily_basic_sessions: list[dict[str, object]] = []
         for ordinal in range(partition_count):
             start = ordinal * GENERATION_SESSION_PARTITION_COUNT
             block_calendar = calendar[start : start + GENERATION_SESSION_PARTITION_COUNT]
+            if (
+                reusable_identities
+                and block_calendar == prior_calendar[
+                    start : start + GENERATION_SESSION_PARTITION_COUNT
+                ]
+                and all(
+                    name in prior_manifests
+                    and manifest["objects"][ordinal:ordinal + 1]
+                    == prior_manifests[name]["objects"][ordinal:ordinal + 1]
+                    for name, manifest in session_manifests.items()
+                )
+            ):
+                for name, manifest in session_manifests.items():
+                    objects = manifest["objects"]
+                    if ordinal >= len(objects):
+                        continue
+                    opened_row_counts[name] += int(objects[ordinal]["row_count"])
+                    if name == "daily_basic_sessions":
+                        daily_basic_sessions.extend(self._open_partition(
+                            _MARKET_CANDIDATE_TABLE_SPEC_BY_NAME[name], objects[ordinal], ordinal,
+                        ))
+                continue
             block_tables: dict[str, pa.Table] = {}
             try:
                 for name, manifest in session_manifests.items():

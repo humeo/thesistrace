@@ -63,6 +63,7 @@ from thesistrace.data import (
     validate_market_refresh_request,
 )
 from thesistrace.data.daily_basic_evidence import MARKET_SOURCE_RECEIPT_DIRECTORY
+from thesistrace.data.generation_store import GenerationStoreError, MountedGenerationStore
 from thesistrace.entrypoints.schema import verify_core_schema
 from thesistrace.operational_events import (
     emit_operational_event_data,
@@ -127,6 +128,10 @@ def _run(
     refresh.add_argument("--as-of", required=True)
     inspect = subcommands.add_parser("inspect-refresh")
     inspect.add_argument("--idempotency-key", required=True)
+    audit = subcommands.add_parser(
+        "audit-generation", help="Audit stored history without publishing",
+    )
+    audit.add_argument("--generation-manifest-sha256", required=True)
     worker = subcommands.add_parser("worker")
     worker.add_argument("--once", action="store_true")
     worker.add_argument("--replay", action="append", type=Path)
@@ -162,6 +167,17 @@ def _run(
     industry_inspect = subcommands.add_parser("inspect-industry-refresh")
     industry_inspect.add_argument("--idempotency-key", required=True)
     parsed = parser.parse_args(arguments)
+
+    if parsed.command == "audit-generation":
+        try:
+            store = MountedGenerationStore(Path(_environment("THESISTRACE_DATA_MOUNT")))
+            checked = store.validate_generation(parsed.generation_manifest_sha256)
+        except (GenerationStoreError, ValueError) as error:
+            raise DataOperatorError("GENERATION_AUDIT_FAILED") from error
+        return {
+            "status": "validated", "generation_manifest_sha256": checked.manifest_sha256,
+            "data_through_session": checked.data_through_session,
+        }
 
     if parsed.command == "worker" and parsed.once and parsed.replay is None:
         raise DataRefreshError("WORKER_REPLAY_REQUIRED")

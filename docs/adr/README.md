@@ -86,6 +86,7 @@ The current Strategy contract in [ADR-0250](0250-admit-strategy-programs-with-ex
 - [ADR-0153 — Use user-selected Research Periods and complete dependency warm-up](0153-use-user-selected-research-periods-and-derived-alpha-warm-up.md)
 - [ADR-0154 — Use a mounted current Dataset Head and temporary Data Generations](0154-use-a-mounted-current-dataset-head-and-temporary-data-generations.md)
 - [ADR-0155 — Refresh market data by validating an overlap merge](0155-refresh-market-data-by-validating-an-overlap-merge.md)
+- [ADR-0260 — Validate Refresh changes against the accepted Generation](0260-validate-refresh-changes-against-the-accepted-generation.md)
 - [ADR-0194 — Admit complete research by bounded execution footprint](0194-admit-long-research-by-peak-execution-footprint.md)
 - [ADR-0240 — Run Data Refresh through one durable Operator Worker](0240-run-data-refresh-through-one-durable-operator-worker.md)
 

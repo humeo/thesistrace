@@ -105,6 +105,7 @@ def test_financial_preparation_uses_unpublished_market_and_does_not_move_head(
         ("industry", True, "retry"),
         ("industry", False, "baseline"),
         ("industry", False, "restart"),
+        ("industry", False, "corrupt_candidate"),
     ],
 )
 def test_one_release_retries_without_exposing_partial_preparation(
@@ -281,6 +282,7 @@ def test_one_release_retries_without_exposing_partial_preparation(
         service = DataRefreshService(
             database, tmp_path, benchmark_mount_root=benchmark_root, clock=lambda: NOW,
             lifecycle_event=events.append,
+            max_attempts=1 if recovery == "corrupt_candidate" else 3,
         )
 
         def resume():
@@ -294,6 +296,32 @@ def test_one_release_retries_without_exposing_partial_preparation(
                 indicator_provider=TushareFinancialIndicatorProvider(provider),
                 industry_source=industry,
             )
+
+        if recovery == "corrupt_candidate":
+            with database.transaction() as tx:
+                saved = tx.execute(
+                    "SELECT preparation FROM data.refresh_operations WHERE idempotency_key=%s",
+                    (key,),
+                ).fetchone()["preparation"]
+            digest = saved["financial"]
+            manifest = json.loads(
+                (tmp_path / "manifests" / "sha256" / digest[:2] / f"{digest}.json").read_bytes()
+            )
+            indicator = next(f for f in manifest["families"]
+                             if f["family_id"] == "equity.financial_indicator")
+            digest = indicator["manifest_sha256"]
+            manifest = json.loads(
+                (tmp_path / "manifests" / "sha256" / digest[:2] / f"{digest}.json").read_bytes()
+            )
+            digest = manifest["partitions"][0]["sha256"]
+            (tmp_path / "objects" / "sha256" / digest[:2] / f"{digest}.parquet").write_bytes(
+                b"damaged prepared financial indicator"
+            )
+            with pytest.raises(DataRefreshError):
+                resume()
+            assert MountedDatasetHeadStore(tmp_path).current_pointer() == head
+            assert service.inspect(retry_key).status == "failed"
+            return
 
         if publication_crash:
 
@@ -338,6 +366,9 @@ def test_one_release_retries_without_exposing_partial_preparation(
         published = MountedDatasetHeadStore(tmp_path).current_pointer()
         assert published.generation_manifest_sha256 != original
         assert published.benchmark_snapshot_sha256 is not None
+        assert MountedGenerationStore(tmp_path).validate_generation(
+            published.generation_manifest_sha256,
+        ) == MountedGenerationStore(tmp_path).inspect_root(published.generation_manifest_sha256)
         if recovery == "branch_gc":
             with database.transaction() as tx:
                 tx.execute(
