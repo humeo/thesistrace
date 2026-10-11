@@ -335,7 +335,10 @@ export function createAgentApp(dependencies: AgentAppDependencies): Hono<AgentAp
     },
   );
 
-  app.all("/api/agent/copilotkit/*", (context) => {
+  app.all("/api/agent/copilotkit/*", bodyLimit({
+    maxSize: 128 * 1024,
+    onError: (context) => context.json({ code: "CHAT_INPUT_TOO_LARGE" }, 413),
+  }), (context) => {
     return dependencies.handleRuntime(
       context.req.raw,
       context.get("researcher"),

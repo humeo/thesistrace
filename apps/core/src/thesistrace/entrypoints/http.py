@@ -19,6 +19,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.responses import Response
 from starlette.routing import Route
 
+from thesistrace._http_body import BoundedRequestBody
 from thesistrace.alpha_language import AlphaAuthoringCatalog, alpha_language
 from thesistrace.benchmark import (
     INTERNAL_STRATEGY_METRIC_PATH,
@@ -161,6 +162,7 @@ from thesistrace.research_run.service import (
 from thesistrace.researcher import ResearcherBootstrapResult, ResearcherIdentity
 from thesistrace.strategy_evidence import StrategyEventPageResponse, StrategyEventQueryInput
 
+CORE_HTTP_MAX_BODY_BYTES = 64 * 1024 * 1024
 _HEALTH_PATHS = frozenset({"/health/live", "/health/ready"})
 _JSON_CONTENT_TYPE = re.compile(
     r"""^\s*application/json\s*(?:;\s*[!#$%&'*+\-.^_`|~0-9A-Za-z]+\s*=\s*(?:[!#$%&'*+\-.^_`|~0-9A-Za-z]+|"(?:[^"\\\r\n]|\\.)*"))*\s*$""",
@@ -371,6 +373,11 @@ def create_app(
                 await owned_verifier.aclose()
 
     app = FastAPI(title="ThesisTrace Core", lifespan=lifespan)
+    app.add_middleware(
+        BoundedRequestBody, max_bytes=CORE_HTTP_MAX_BODY_BYTES, timeout_seconds=60,
+        accepts=lambda scope: scope["type"] == "http" and scope.get("path", "").startswith("/api/"),
+        error_response=lambda code, message: JSONResponse({"detail": message}, status_code=code),
+    )
     if auth_verifier is not None:
         app.state.auth_verifier = auth_verifier
     if operator_authorizer is not None:

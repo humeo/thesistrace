@@ -85,6 +85,7 @@ def test_new_core_packages_do_not_import_old_or_hosted_runtime() -> None:
 
 def test_internal_import_graph_is_layered_and_acyclic() -> None:
     allowed = {
+        "_http_body": set(),
         "_memory": set(),
         "_postgres": set(),
         "_paging": set(),
@@ -170,6 +171,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
             "research_run",
         },
         "research_agent": {
+            "_http_body",
             "_paging",
             "_postgres",
             "alpha_language",
@@ -184,6 +186,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
         "fixture": {"data"},
         "adapters": {"benchmark", "data", "fixture", "operational_events"},
         "entrypoints": {
+            "_http_body",
             "daily_holding_queries",
             "strategy_event_wire",
             "strategy_evidence",

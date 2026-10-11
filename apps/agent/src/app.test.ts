@@ -87,6 +87,39 @@ function dependencies(
 }
 
 describe("Agent Host HTTP boundary", () => {
+  it.each(["run", "connect"])("bounds streamed runtime bodies before forwarding: %s", async (operation) => {
+    const appDependencies = dependencies();
+    const response = await createAgentApp(appDependencies).request(new Request(
+      `http://agent.test/api/agent/copilotkit/agent/research/${operation}`, {
+        method: "POST", headers: { origin: "http://agent.test", "content-type": "application/json" },
+        body: new ReadableStream<Uint8Array>({ start(controller) {
+          controller.enqueue(new Uint8Array(65536));
+          controller.enqueue(new Uint8Array(65537));
+          controller.close();
+        } }), duplex: "half",
+      } as RequestInit,
+    ));
+    expect(response.status).toBe(413);
+    expect(await response.json()).toEqual({ code: "CHAT_INPUT_TOO_LARGE" });
+    expect(appDependencies.handleRuntime).not.toHaveBeenCalled();
+  });
+
+  it("keeps maximum-length JSON-escaped chat text within the runtime envelope", async () => {
+    const handleRuntime = vi.fn(async (request: Request) => {
+      const input = await request.json() as { messages: { content: string }[] };
+      expect(input.messages[0]?.content).toBe("a".repeat(16384));
+      return new Response("accepted");
+    });
+    const response = await createAgentApp(dependencies({ handleRuntime })).request(
+      "http://agent.test/api/agent/copilotkit/agent/research/run", {
+        method: "POST", headers: { origin: "http://agent.test", "content-type": "application/json" },
+        body: '{"messages":[{"content":"' + "\\u0061".repeat(16384) + '"}]}',
+      },
+    );
+    expect(response.status).toBe(200);
+    expect(handleRuntime).toHaveBeenCalledOnce();
+  });
+
   it("serves context-window observations behind authentication and hides foreign sessions", async () => {
     const contextWindow = vi.fn(async (modelKey: string) => ({ model_key: modelKey, context_window: 258_000, input_tokens: 92_000, measured_at: "2026-10-02T08:00:00.000Z" }));
     const app = createAgentApp(dependencies({ contextWindow }));

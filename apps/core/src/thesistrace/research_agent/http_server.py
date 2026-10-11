@@ -7,7 +7,6 @@ from typing import Any
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
-import anyio
 from mcp.server.auth.middleware.auth_context import AuthContextMiddleware, get_access_token
 from mcp.server.auth.middleware.bearer_auth import BearerAuthBackend, RequireAuthMiddleware
 from mcp.server.auth.provider import AccessToken, TokenVerifier
@@ -18,8 +17,9 @@ from pydantic import AnyHttpUrl, TypeAdapter
 from starlette.middleware.authentication import AuthenticationMiddleware
 from starlette.responses import JSONResponse
 from starlette.routing import BaseRoute
-from starlette.types import ASGIApp, Message, Receive, Scope, Send
+from starlette.types import ASGIApp, Scope
 
+from thesistrace._http_body import BoundedRequestBody
 from thesistrace.operational_events import OperationalEventWriter
 from thesistrace.research_agent.mcp_server import (
     RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES,
@@ -109,64 +109,12 @@ class _ResearcherBoundTokenVerifier:
         return access_token
 
 
-class _BoundedMCPRequestBody:
+class _BoundedMCPRequestBody(BoundedRequestBody):
     def __init__(self, app: ASGIApp) -> None:
-        self._app = app
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if not _is_mcp_call(scope):
-            await self._app(scope, receive, send)
-            return
-        content_length = _content_length(scope)
-        if content_length is not None and content_length > RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES:
-            await _request_body_error_response(
-                scope, receive, send, status_code=413, message="Request exceeds server limit",
-            )
-            return
-
-        body = bytearray()
-        too_large = False
-        try:
-            with anyio.fail_after(RESEARCH_AGENT_HTTP_BODY_TIMEOUT_SECONDS):
-                while True:
-                    await anyio.lowlevel.checkpoint()
-                    message = await receive()
-                    if message["type"] != "http.request":
-                        break
-                    chunk = message.get("body", b"")
-                    if len(body) + len(chunk) > RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES:
-                        too_large = True
-                        break
-                    body.extend(chunk)
-                    if not message.get("more_body", False):
-                        break
-        except TimeoutError:
-            body.clear()
-            await _request_body_error_response(
-                scope, receive, send, status_code=408, message="Request body read timed out",
-            )
-            return
-        if too_large:
-            body.clear()
-            await _request_body_error_response(
-                scope, receive, send, status_code=413, message="Request exceeds server limit",
-            )
-            return
-        if message["type"] != "http.request":
-            body.clear()
-            await self._app(scope, _replay_once(message, receive), send)
-            return
-        await self._app(
-            scope,
-            _replay_once(
-                {
-                    "type": "http.request",
-                    "body": bytes(body),
-                    "more_body": False,
-                },
-                receive,
-            ),
-            send,
+        super().__init__(
+            app, max_bytes=RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES,
+            timeout_seconds=RESEARCH_AGENT_HTTP_BODY_TIMEOUT_SECONDS,
+            accepts=_is_mcp_call, error_response=_mcp_body_error,
         )
 
 
@@ -285,49 +233,9 @@ def _is_mcp_call(scope: Scope) -> bool:
     return scope["type"] == "http" and scope.get("method") == "POST" and scope.get("path") == "/mcp"
 
 
-def _content_length(scope: Scope) -> int | None:
-    for name, value in scope.get("headers", ()):
-        if name.lower() != b"content-length":
-            continue
-        try:
-            parsed = int(value)
-        except ValueError:
-            return None
-        return max(0, parsed)
-    return None
-
-
-def _replay_once(message: Message, receive: Receive) -> Receive:
-    pending: Message | None = message
-
-    async def replay() -> Message:
-        nonlocal pending
-        if pending is not None:
-            current = pending
-            pending = None
-            return current
-        return await receive()
-
-    return replay
-
-
-async def _request_body_error_response(
-    scope: Scope,
-    receive: Receive,
-    send: Send,
-    *,
-    status_code: int,
-    message: str,
-) -> None:
-    response = JSONResponse(
-        {
-            "jsonrpc": "2.0",
-            "id": None,
-            "error": {
-                "code": -32600,
-                "message": message,
-            },
-        },
+def _mcp_body_error(status_code: int, message: str) -> JSONResponse:
+    return JSONResponse(
+        {"jsonrpc": "2.0", "id": None,
+         "error": {"code": -32600, "message": message}},
         status_code=status_code,
     )
-    await response(scope, receive, send)
