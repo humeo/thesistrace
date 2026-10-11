@@ -38,7 +38,7 @@ verify_caddy_single_origin() {
   curl --fail --silent --show-error "$public_origin/chat" \
     >"$evidence_dir/caddy-chat-spa-fallback.html"
   cmp "$evidence_dir/caddy-spa.html" "$evidence_dir/caddy-chat-spa-fallback.html"
-  grep -Fi "Content-Security-Policy: default-src 'none'; script-src 'self';" \
+  grep -Fi "Content-Security-Policy: default-src 'none'; script-src 'self' https://challenges.cloudflare.com;" \
     "$evidence_dir/caddy-security-headers.txt"
   grep -Fi "style-src 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'" \
     "$evidence_dir/caddy-security-headers.txt"

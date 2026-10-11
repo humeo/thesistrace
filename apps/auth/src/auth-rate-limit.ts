@@ -21,7 +21,7 @@ export function createBetterAuthRateLimitStorage(dependencies: Readonly<{
         || !Number.isSafeInteger(rule.window) || rule.window < 1 || !Number.isSafeInteger(windowMilliseconds)) {
         throw new Error("AUTH_RATE_LIMIT_RULE_INVALID");
       }
-      const record = await consumeKey(dependencies.pool, key, now, windowMilliseconds);
+      const record = await consumeRateLimitKey(dependencies.pool, key, now, windowMilliseconds);
       return record.count <= rule.max
         ? { allowed: true, retryAfter: null }
         : { allowed: false, retryAfter: Math.min(rule.window, Math.max(1, Math.ceil((record.lastRequest + windowMilliseconds - now) / 1_000))) };
@@ -65,12 +65,12 @@ export class AuthEndpointRateLimiter {
     const client = await this.#pool.connect();
     try {
       await client.query("BEGIN");
-      const ipRecord = await consumeKey(client, ipKey, now);
+      const ipRecord = await consumeRateLimitKey(client, ipKey, now);
       if (ipRecord.count > MAX_REQUESTS) {
         await client.query("COMMIT");
         return blockedDecision([ipRecord], now);
       }
-      const tokenRecord = await consumeKey(client, tokenKey, now);
+      const tokenRecord = await consumeRateLimitKey(client, tokenKey, now);
       await client.query("COMMIT");
       if (tokenRecord.count > MAX_REQUESTS) {
         return blockedDecision([tokenRecord], now);
@@ -108,7 +108,7 @@ function blockedDecision(
   };
 }
 
-async function consumeKey(
+export async function consumeRateLimitKey(
   client: Pool | PoolClient,
   key: string,
   now: number,

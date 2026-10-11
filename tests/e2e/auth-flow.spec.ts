@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Locator, Page } from "@playwright/test";
 
 import {
@@ -15,11 +16,30 @@ import {
   securityTest as test,
 } from "./auth-fixture";
 
+test("Public email delivery enforces verification and server cooldown without invalidating the issued code", async ({page})=>{
+  const email = "browser-mail-budget@example.test";
+  const origin = process.env.THESISTRACE_TEST_WEB_ORIGIN!;
+  const token = () => "test-turnstile:" + new URL(origin).hostname + ":" + Date.now() + ":" + randomUUID();
+  const send = (captcha_token?: string) => page.request.post("/api/auth/email-otp/send-verification-otp", {headers:sameOriginHeaders(), data:{email,type:"sign-in",...(captcha_token ? {captcha_token} : {})}});
+  expect((await send()).status()).toBe(400);
+  expect((await send("invalid")).status()).toBe(403);
+  const challenge = token();
+  expect((await send(challenge)).status()).toBe(200);
+  const otp = await emailCode(email);
+  expect((await send(challenge)).status()).toBe(403);
+  const blocked = await send(token());
+  expect(blocked.status()).toBe(429);
+  expect(Number(blocked.headers()["retry-after"])).toBeGreaterThan(0);
+  const login = await page.request.post("/api/auth/sign-in/email-otp", {headers:sameOriginHeaders(),data:{email,otp}});
+  expect(login.status()).toBe(200);
+  expect((await login.json()).user.email).toBe(email);
+});
+
 test("Chinese public entry survives real email authentication and a saved console preference survives reload", async ({ page }) => {
   const email = "browser-chinese-entry@example.test";
   await page.goto("/?lang=zh");
   await expect(page.locator("html")).toHaveAttribute("lang", "zh-CN");
-  await page.getByRole("navigation", { name: "主导航" }).getByRole("link", { name: "登录", exact: true }).click();
+  await page.getByRole("banner").getByRole("link", { name: "登录", exact: true }).click();
   await expect(page).toHaveURL(/\/login\?lang=zh$/);
   await page.getByLabel("邮箱", { exact: true }).fill(email);
   await page.getByRole("button", { name: "使用邮箱继续", exact: true }).click();

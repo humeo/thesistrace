@@ -1,5 +1,10 @@
 // Canonical deployment inputs; .env.example is generated, never read as a schema.
 export const fields = {
+  THESISTRACE_TURNSTILE_SITE_KEY: {"section":"Public email sign-in protection. Turnstile credentials come from Cloudflare; production forbids test keys.","type":"string","default":"","required":true,"sensitive":false},
+  THESISTRACE_TURNSTILE_SECRET_KEY: {"section":"Public email sign-in protection. Turnstile credentials come from Cloudflare; production forbids test keys.","type":"string","default":"","required":true,"sensitive":true},
+  THESISTRACE_TURNSTILE_VERIFY_URL: {"section":"Public email sign-in protection. Turnstile credentials come from Cloudflare; production forbids test keys.","type":"string","default":"https://challenges.cloudflare.com/turnstile/v0/siteverify","required":true,"sensitive":false},
+  THESISTRACE_EMAIL_CODE_GLOBAL_HOURLY_LIMIT: {"section":"Public email sign-in protection. Turnstile credentials come from Cloudflare; production forbids test keys.","type":"integer","default":"25","required":true,"sensitive":false},
+  THESISTRACE_EMAIL_CODE_GLOBAL_DAILY_LIMIT: {"section":"Public email sign-in protection. Turnstile credentials come from Cloudflare; production forbids test keys.","type":"integer","default":"100","required":true,"sensitive":false},
   THESISTRACE_ENVIRONMENT: { "section": "Deployment identity and published loopback ports", "type": "string", "default": "development", "required": true, "sensitive": false },
   THESISTRACE_PUBLIC_ORIGIN: { "section": "Deployment identity and published loopback ports", "type": "string", "default": "http://127.0.0.1:5173", "required": true, "sensitive": false },
   THESISTRACE_DEV_POSTGRES_PORT: { "section": "Deployment identity and published loopback ports", "type": "integer", "default": "55432", "required": "development", "sensitive": false },

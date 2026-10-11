@@ -31,7 +31,7 @@ type AuthContextValue = Readonly<{
   acceptInvitation: (token: string, password: string) => Promise<AuthResult>;
   inspectInvitation: (token: string) => Promise<InvitationInspection>;
   retry: () => Promise<void>;
-  sendCode: (email: string) => Promise<AuthResult>;
+  sendCode: (email: string, captchaToken: string) => Promise<AuthResult>;
   signIn: (email: string, otp: string) => Promise<AuthResult>;
   signOut: () => Promise<AuthResult>;
 }>;
@@ -189,13 +189,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [refreshSession, invalidate, remaining, limited]);
 
-  const sendCode = useCallback(async (email: string): Promise<AuthResult> => {
+  const sendCode = useCallback(async (email: string, captchaToken: string): Promise<AuthResult> => {
     const cooling = remaining("sendCode");
     if (cooling) return cooling;
     try {
-      const result = await authJson("/api/auth/email-otp/send-verification-otp", {email: email.trim().toLowerCase(), type: "sign-in"});
+      const result = await authJson("/api/auth/email-otp/send-verification-otp", {email: email.trim().toLowerCase(), type: "sign-in", captcha_token: captchaToken});
       if (result.status === 429) return limited("sendCode", result.retryAfterSeconds);
-      if (!result.ok) return failure("codeDeliveryFailed");
+      if (!result.ok) return failure(result.status === 403 ? "challengeFailed" : result.status === 503 ? "unavailable" : "codeDeliveryFailed");
       return {ok: true};
     } catch { return failure("codeDeliveryFailed"); }
   }, [remaining, limited]);

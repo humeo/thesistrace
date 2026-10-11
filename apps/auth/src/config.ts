@@ -45,6 +45,11 @@ export type AuthSettings = Readonly<{
   mcpTokenLifetimeSeconds: number;
   port: number;
   publicOrigin: string;
+  turnstileSiteKey: string;
+  turnstileSecretKey: string;
+  turnstileVerifyUrl: string;
+  emailCodeGlobalHourlyLimit: number;
+  emailCodeGlobalDailyLimit: number;
   resendApiKey: string;
   resendApiUrl: string;
   resendFromEmail: string;
@@ -147,6 +152,21 @@ export function readAuthSettings(environment: Environment = process.env): AuthSe
     required(environment, "THESISTRACE_RESEND_API_URL"),
     parsedEnvironment.data,
   );
+  const turnstileSiteKey = required(environment, "THESISTRACE_TURNSTILE_SITE_KEY");
+  const turnstileSecretKey = required(environment, "THESISTRACE_TURNSTILE_SECRET_KEY");
+  for (const [name, value] of [["THESISTRACE_TURNSTILE_SITE_KEY", turnstileSiteKey], ["THESISTRACE_TURNSTILE_SECRET_KEY", turnstileSecretKey]]) {
+    if (!/^[A-Za-z0-9_-]{20,128}$/.test(value!) || (parsedEnvironment.data === "production" && !/^0x[A-Za-z0-9_-]{20,128}$/.test(value!))) throw new AuthConfigurationError(name + " must be a valid Turnstile key; test keys are forbidden in production");
+  }
+  const turnstileVerifyUrl = required(environment, "THESISTRACE_TURNSTILE_VERIFY_URL");
+  let verifyUrl: URL;
+  try { verifyUrl = new URL(turnstileVerifyUrl); } catch { throw new AuthConfigurationError("THESISTRACE_TURNSTILE_VERIFY_URL must be a valid URL"); }
+  if (turnstileVerifyUrl !== "https://challenges.cloudflare.com/turnstile/v0/siteverify"
+    && !(parsedEnvironment.data === "test" && verifyUrl.protocol === "http:" && (isLoopbackHostname(unbracketedHostname(verifyUrl.hostname)) || verifyUrl.hostname === "resend-fake")
+      && verifyUrl.pathname === "/turnstile/v0/siteverify" && !verifyUrl.username && !verifyUrl.password && !verifyUrl.search && !verifyUrl.hash)) {
+    throw new AuthConfigurationError("THESISTRACE_TURNSTILE_VERIFY_URL must use Cloudflare; only isolated Test allows a local verifier");
+  }
+  const emailCodeGlobalHourlyLimit = parsePositiveInteger(required(environment, "THESISTRACE_EMAIL_CODE_GLOBAL_HOURLY_LIMIT"), "THESISTRACE_EMAIL_CODE_GLOBAL_HOURLY_LIMIT");
+  const emailCodeGlobalDailyLimit = parsePositiveInteger(required(environment, "THESISTRACE_EMAIL_CODE_GLOBAL_DAILY_LIMIT"), "THESISTRACE_EMAIL_CODE_GLOBAL_DAILY_LIMIT");
   const port = parsePort(environment.THESISTRACE_AUTH_PORT ?? "8200");
 
   return {
@@ -164,6 +184,8 @@ export function readAuthSettings(environment: Environment = process.env): AuthSe
     mcpTokenLifetimeSeconds,
     port,
     publicOrigin,
+    turnstileSiteKey, turnstileSecretKey, turnstileVerifyUrl,
+    emailCodeGlobalHourlyLimit, emailCodeGlobalDailyLimit,
     resendApiKey,
     resendApiUrl,
     resendFromEmail,

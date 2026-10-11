@@ -63,15 +63,15 @@ test("carries server retry time for code delivery and does not retry during cool
   const request = vi.fn(async () => Response.json({code: "AUTH_RATE_LIMITED"}, {status: 429, headers: {"Retry-After": "37"}}));
   vi.stubGlobal("fetch", request);
   await withAuth(async auth => {
-    expect(await auth.sendCode("researcher@example.com")).toEqual({ok: false, code: "tooManyRequests", retryAfterSeconds: 37});
-    expect(await auth.sendCode("different@example.com")).toMatchObject({ok: false, code: "tooManyRequests"});
+    expect(await auth.sendCode("researcher@example.com", "test-challenge")).toEqual({ok: false, code: "tooManyRequests", retryAfterSeconds: 37});
+    expect(await auth.sendCode("different@example.com", "test-challenge")).toMatchObject({ok: false, code: "tooManyRequests"});
   });
   expect(request).toHaveBeenCalledTimes(1);
 });
 
 test.each([null, "NaN", "179082411974232", "0", "-1"])("rejects invalid retry metadata %s", async retry => {
   vi.stubGlobal("fetch", async () => Response.json({}, {status: 429, headers: retry === null ? {} : {"Retry-After": retry}}));
-  await withAuth(async auth => expect(await auth.sendCode("researcher@example.com")).toEqual({ok: false, code: "unavailable"}));
+  await withAuth(async auth => expect(await auth.sendCode("researcher@example.com", "test-challenge")).toEqual({ok: false, code: "unavailable"}));
 });
 
 test("uses the official client response hook for sign-in recovery time", async () => {
@@ -81,3 +81,8 @@ test("uses the official client response hook for sign-in recovery time", async (
   });
   await withAuth(async auth => expect(await auth.signIn("researcher@example.com", "123456")).toEqual({ok: false, code: "tooManyRequests", retryAfterSeconds: 23}));
 });
+
+ test("preserves long email-budget retry times", async()=>{
+ vi.stubGlobal("fetch", async()=>Response.json({}, {status:429,headers:{"Retry-After":"3600"}}));
+ await withAuth(async auth=>expect(await auth.sendCode("researcher@example.com", "test-challenge")).toEqual({ok:false,code:"tooManyRequests",retryAfterSeconds:3600}));
+ });

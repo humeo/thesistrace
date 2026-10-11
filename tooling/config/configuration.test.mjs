@@ -17,6 +17,8 @@ function fixture(t) {
   assert.equal(init.status, 0, init.stderr);
   const values = {
     ...parseEnv(readFileSync(file, 'utf8')),
+    THESISTRACE_TURNSTILE_SITE_KEY: "1x00000000000000000000AA",
+    THESISTRACE_TURNSTILE_SECRET_KEY: "1x0000000000000000000000000000000AA",
     RESEND_API_KEY: 're_fixture-configuration-only-12345',
     RESEND_FROM_EMAIL: 'Fixture <fixture@thesistrace.local>',
     THESISTRACE_TUSHARE_TOKEN: 'fixture-configuration-only-12345',

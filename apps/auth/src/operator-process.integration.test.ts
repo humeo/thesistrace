@@ -290,6 +290,11 @@ function runOperator(args: string[]): Promise<{
       cwd: authRoot,
       env: {
         ...mcpEnvironment,
+        THESISTRACE_TURNSTILE_SITE_KEY: "1x00000000000000000000AA",
+        THESISTRACE_TURNSTILE_SECRET_KEY: "1x0000000000000000000000000000000AA",
+        THESISTRACE_TURNSTILE_VERIFY_URL: "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+        THESISTRACE_EMAIL_CODE_GLOBAL_HOURLY_LIMIT: "25",
+        THESISTRACE_EMAIL_CODE_GLOBAL_DAILY_LIMIT: "100",
         BETTER_AUTH_SECRET: "0123456789abcdef0123456789abcdef",
         RESEND_API_KEY: "resend-fake-key",
         RESEND_FROM_EMAIL: "ThesisTrace <noreply@thesistrace.test>",

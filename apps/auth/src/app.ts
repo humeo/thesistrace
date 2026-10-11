@@ -1,6 +1,7 @@
 import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
+import { SIGN_IN_CHALLENGE_ACTION, type SignInCodeDecision } from "./sign-in-code-admission.js";
 import { ResearcherQuotaPolicy } from "./quota-policy.js";
 
 import {
@@ -225,6 +226,8 @@ export type AuthAppDependencies = Readonly<{
   isOperator: (researcherId: string) => Promise<boolean>;
   httpObserver?: AuthHttpObserver;
   inspectInvitation: (token: string) => Promise<Readonly<{ email: string }>>;
+  turnstileSiteKey?: string;
+  admitSignInCode?: (email: string, token: string, headers: Headers) => Promise<SignInCodeDecision>;
   sendSignInCode?: (email: string) => Promise<void>;
   consumeEmailCodeRateLimit?: (email: string, headers: Headers) => Promise<Readonly<{allowed: boolean; retryAfterSeconds: number}>>;
   sendOperatorCode?: (principal: OperatorPrincipal) => Promise<void>;
@@ -459,15 +462,25 @@ export function createAuthApp(dependencies: AuthAppDependencies, mcpRoutes?: Ret
     }
   });
 
+  app.get("/api/auth/email-otp/challenge", context => {
+    if (!dependencies.turnstileSiteKey) return context.json({code: "AUTH_SERVICE_UNAVAILABLE"}, 503);
+    return context.json({siteKey: dependencies.turnstileSiteKey, action: SIGN_IN_CHALLENGE_ACTION});
+  });
+
   app.post("/api/auth/email-otp/send-verification-otp", async context => {
     if (context.req.header("origin") !== dependencies.publicOrigin) return context.json({code: "ORIGIN_NOT_ALLOWED"}, 403);
-    const body = await exactJson(context.req.raw, z.object({email: z.string(), type: z.literal("sign-in")}).strict());
+    const body = await exactJson(context.req.raw, z.object({email: z.string(), type: z.literal("sign-in"), captcha_token: z.string().min(1).max(2048)}).strict());
     if (!body) return context.json({code: "AUTH_REQUEST_INVALID"}, 400);
     let email: string;
     try { email = canonicalizeEmail(body.email); } catch { return context.json({code: "INVALID_EMAIL"}, 400); }
-    if (!dependencies.sendSignInCode || !dependencies.consumeEmailCodeRateLimit) return context.json({code: "AUTH_SERVICE_UNAVAILABLE"}, 503);
-    const rate = await dependencies.consumeEmailCodeRateLimit(email, context.req.raw.headers);
-    if (!rate.allowed) { context.header("Retry-After", String(rate.retryAfterSeconds)); return context.json({code: "AUTH_RATE_LIMITED"}, 429); }
+    if (!dependencies.sendSignInCode || !dependencies.admitSignInCode) return context.json({code: "AUTH_SERVICE_UNAVAILABLE"}, 503);
+    const rate = await dependencies.admitSignInCode(email, body.captcha_token, context.req.raw.headers);
+    if (!rate.allowed) {
+      if (rate.reason === "challenge") return context.json({code: "AUTH_CHALLENGE_INVALID"}, 403);
+      if (rate.reason === "unavailable") return context.json({code: "AUTH_SERVICE_UNAVAILABLE"}, 503);
+      context.header("Retry-After", String(rate.retryAfterSeconds));
+      return context.json({code: "AUTH_RATE_LIMITED"}, 429);
+    }
     await dependencies.sendSignInCode(email);
     return context.json({success: true});
   });

@@ -505,7 +505,7 @@ if [ -f "$FAKE_BACKEND_MARKER" ]; then
 fi
 if [ -n "$headers" ]; then
   cat >"$headers" <<'HEADERS'
-Content-Security-Policy: default-src 'none'; script-src 'self'; """
+Content-Security-Policy: default-src 'none'; script-src 'self' https://challenges.cloudflare.com; """
         """style-src 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'
 Referrer-Policy: no-referrer
 X-Content-Type-Options: nosniff

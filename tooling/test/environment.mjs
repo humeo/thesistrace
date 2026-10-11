@@ -4,6 +4,11 @@ import { root } from '../config/configuration.mjs';
 
 // Deterministic test credentials and deployment identities. Never load a private .env.
 export const fixtureValues = {
+  "turnstile_site_key": "1x00000000000000000000AA",
+  "turnstile_secret_key": "1x0000000000000000000000000000000AA",
+  "turnstile_verify_url": "http://resend-fake:8300/turnstile/v0/siteverify",
+  "email_code_global_hourly_limit": "25",
+  "email_code_global_daily_limit": "100",
   "owner_database_password": "owner-test-password",
   "core_database_password": "core-test-password",
   "auth_database_password": "auth-test-password",
@@ -31,6 +36,11 @@ export const fixtureValues = {
 };
 fixtureValues.agent_model_registry = JSON.stringify(JSON.parse(readFileSync(root + '/apps/agent/fixtures/test-model-registry.json', 'utf8')));
 const composeNames = {
+  "THESISTRACE_TURNSTILE_SITE_KEY": "turnstile_site_key",
+  "THESISTRACE_TURNSTILE_SECRET_KEY": "turnstile_secret_key",
+  "THESISTRACE_TURNSTILE_VERIFY_URL": "turnstile_verify_url",
+  "THESISTRACE_EMAIL_CODE_GLOBAL_HOURLY_LIMIT": "email_code_global_hourly_limit",
+  "THESISTRACE_EMAIL_CODE_GLOBAL_DAILY_LIMIT": "email_code_global_daily_limit",
   "THESISTRACE_TEST_BUCKET": "bucket_name",
   "THESISTRACE_TEST_DATA_MOUNT": "data_mount",
   "THESISTRACE_TEST_BENCHMARK_MOUNT": "benchmark_mount",

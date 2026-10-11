@@ -1,6 +1,7 @@
 import type { AuthErrorCode } from "../../auth/errors";
 
 export const authEn = {
+  checkingHuman: "Checking your browser…",
   welcome: "Welcome to QAgentis",
   checkEmail: "Check your email",
   enterCode: "Enter the six-digit code from your email.",
@@ -37,6 +38,7 @@ export const authEn = {
   retrySetup: "Retry setup",
   setupMessage: "Your session is valid, but the Research workspace is not ready yet.",
   setupUnavailable: "Workspace setup unavailable",
+  reload: "Reload page",
   retry: "Retry",
   unavailableMessage: "Your access state could not be verified. Existing session data has been retained.",
   unavailable: "Authentication unavailable",
@@ -45,6 +47,7 @@ export const authEn = {
   redirecting: "Redirecting…",
   preparingAccess: "Preparing product access…",
   errors: {
+    challengeFailed: "Browser verification failed. Please retry the verification before requesting a code.",
     accountInactive: "This account is inactive. Please contact the operator.",
     tooManyAttempts: "Too many attempts. Please wait before trying again.",
     unavailable: "Authentication is temporarily unavailable.",
@@ -60,6 +63,7 @@ export const authEn = {
 } as const;
 
 export const authZh = {
+  checkingHuman: "正在验证浏览器…",
   welcome: "欢迎来到 QAgentis",
   checkEmail: "请查收邮件",
   enterCode: "输入邮件中的六位验证码。",
@@ -96,6 +100,7 @@ export const authZh = {
   retrySetup: "重新设置",
   setupMessage: "你的登录状态有效，但研究工作区尚未准备就绪。",
   setupUnavailable: "工作区设置暂不可用",
+  reload: "重新加载页面",
   retry: "重试",
   unavailableMessage: "无法验证访问状态，已有的会话数据已保留。",
   unavailable: "身份验证暂不可用",
@@ -104,6 +109,7 @@ export const authZh = {
   redirecting: "正在跳转…",
   preparingAccess: "正在准备访问权限…",
   errors: {
+    challengeFailed: "浏览器验证未通过，请重试验证后再获取验证码。",
     accountInactive: "此账户已停用，请联系管理员。",
     tooManyAttempts: "尝试次数过多，请稍后再试。",
     unavailable: "身份验证暂不可用。",

@@ -88,7 +88,7 @@ docker exec "$container_name" wget --server-response --spider \
   >"$evidence_root/security-headers.stdout.log" \
   2>"$evidence_root/security-headers.stderr.log"
 security_headers="$evidence_root/security-headers.stderr.log"
-grep -Fi "Content-Security-Policy: default-src 'none'; script-src 'self';" \
+grep -Fi "Content-Security-Policy: default-src 'none'; script-src 'self' https://challenges.cloudflare.com;" \
   "$security_headers"
 grep -Fi "style-src 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'" \
   "$security_headers"

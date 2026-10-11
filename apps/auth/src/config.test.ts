@@ -20,6 +20,11 @@ const mcpPublicJwk = {
   x: "3d8K_V0qubfzURRlfRFt44Yk4LeNW6HkQMaeiPIhJA8",
 };
 const baseEnvironment = {
+  THESISTRACE_TURNSTILE_SITE_KEY: "1x00000000000000000000AA",
+  THESISTRACE_TURNSTILE_SECRET_KEY: "1x0000000000000000000000000000000AA",
+  THESISTRACE_TURNSTILE_VERIFY_URL: "http://127.0.0.1:8300/turnstile/v0/siteverify",
+  THESISTRACE_EMAIL_CODE_GLOBAL_HOURLY_LIMIT: "25",
+  THESISTRACE_EMAIL_CODE_GLOBAL_DAILY_LIMIT: "100",
   BETTER_AUTH_SECRET: "0123456789abcdef0123456789abcdef",
   RESEND_API_KEY: "test-resend-key",
   RESEND_FROM_EMAIL: "ThesisTrace <noreply@thesistrace.test>",
@@ -42,6 +47,9 @@ const baseEnvironment = {
 
 const productionEnvironment = {
   ...baseEnvironment,
+  THESISTRACE_TURNSTILE_SITE_KEY: "0x4AAAAAAAAAAAAAAAAAAAAB",
+  THESISTRACE_TURNSTILE_SECRET_KEY: "0x4AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB",
+  THESISTRACE_TURNSTILE_VERIFY_URL: "https://challenges.cloudflare.com/turnstile/v0/siteverify",
   BETTER_AUTH_SECRET:
     "a4f781c2d6e9035b8a1f74c092e5bd3680c4f719a2e65b03d8f14c7a9e256bd0",
   THESISTRACE_ENVIRONMENT: "production",
@@ -51,6 +59,15 @@ const productionEnvironment = {
 };
 
 describe("readAuthSettings", () => {
+  it.each(["THESISTRACE_TURNSTILE_SITE_KEY", "THESISTRACE_TURNSTILE_SECRET_KEY"])("rejects test credentials in production: %s", name => {
+    expect(()=>readAuthSettings({...productionEnvironment,[name]:baseEnvironment[name as keyof typeof baseEnvironment]})).toThrow(name);
+  });
+  it("rejects a non-Cloudflare verifier in production",()=>{
+    expect(()=>readAuthSettings({...productionEnvironment,THESISTRACE_TURNSTILE_VERIFY_URL:baseEnvironment.THESISTRACE_TURNSTILE_VERIFY_URL})).toThrow("THESISTRACE_TURNSTILE_VERIFY_URL");
+  });
+  it.each(["THESISTRACE_EMAIL_CODE_GLOBAL_HOURLY_LIMIT", "THESISTRACE_EMAIL_CODE_GLOBAL_DAILY_LIMIT"])("requires a positive mail budget: %s", name=>{
+    expect(()=>readAuthSettings({...baseEnvironment,[name]:"0"})).toThrow(name);
+  });
   it("accepts one exact loopback origin for Test", () => {
     expect(readAuthSettings(baseEnvironment)).toMatchObject({
       environment: "test",

@@ -51,6 +51,11 @@ services:
     logging: *bounded-logging
     environment:
       BETTER_AUTH_SECRET: ${THESISTRACE_AUTH_TEST_SECRET:?THESISTRACE_AUTH_TEST_SECRET is required}
+      THESISTRACE_TURNSTILE_SITE_KEY: "1x00000000000000000000AA"
+      THESISTRACE_TURNSTILE_SECRET_KEY: "1x0000000000000000000000000000000AA"
+      THESISTRACE_TURNSTILE_VERIFY_URL: "https://challenges.cloudflare.com/turnstile/v0/siteverify"
+      THESISTRACE_EMAIL_CODE_GLOBAL_HOURLY_LIMIT: "25"
+      THESISTRACE_EMAIL_CODE_GLOBAL_DAILY_LIMIT: "100"
       RESEND_API_KEY: image-smoke-resend-key
       RESEND_FROM_EMAIL: ThesisTrace <noreply@thesistrace.test>
       THESISTRACE_AUTH_DATABASE_URL: postgresql://auth_runtime:auth-test-password@postgres:5432/thesistrace

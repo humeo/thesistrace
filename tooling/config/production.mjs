@@ -6,6 +6,8 @@ import { fail } from './errors.mjs';
 export function validateProduction(values) {
   const check = (name, valid, code) => { if (!valid) fail(code, name); };
   const matches = (name, pattern, code) => check(name, pattern.test(values[name]), code);
+  for (const name of ['THESISTRACE_TURNSTILE_SITE_KEY', 'THESISTRACE_TURNSTILE_SECRET_KEY']) matches(name, /^0x[A-Za-z0-9_-]{20,128}$/, 'PRODUCTION_TURNSTILE_KEY_INVALID');
+  check('THESISTRACE_TURNSTILE_VERIFY_URL', values.THESISTRACE_TURNSTILE_VERIFY_URL === 'https://challenges.cloudflare.com/turnstile/v0/siteverify', 'PRODUCTION_TURNSTILE_URL_INVALID');
   const origin = new URL(values.THESISTRACE_PUBLIC_ORIGIN);
   check('THESISTRACE_PUBLIC_ORIGIN', origin.protocol === 'https:' && !origin.port
     && /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/i.test(origin.hostname)

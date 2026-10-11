@@ -1,3 +1,5 @@
+import { SignInCodeAdmission } from "./sign-in-code-admission.js";
+import { createTurnstileVerifier } from "./turnstile.js";
 import { OperatorEmailCode } from "./operator-email-code.js";
 import { EmailCodeDelivery } from "./email-code.js";
 import { serve } from "@hono/node-server";
@@ -94,6 +96,13 @@ async function main(): Promise<void> {
     await auth.$context;
     const emailCodes = new EmailCodeDelivery({auth, coordinator: credentialCoordinator, sendEmail});
     const emailCodeRateLimiter = new AuthEndpointRateLimiter({authSecret: settings.secret, pool, scope: "email-code"});
+    const signInAdmission = new SignInCodeAdmission({
+      authSecret: settings.secret, pool,
+      globalHourlyLimit: settings.emailCodeGlobalHourlyLimit,
+      globalDailyLimit: settings.emailCodeGlobalDailyLimit,
+      verifyChallenge: createTurnstileVerifier({secretKey: settings.turnstileSecretKey, publicOrigin: settings.publicOrigin, verifyUrl: settings.turnstileVerifyUrl}),
+      onBudgetReached: (windowSeconds, limit) => process.stderr.write(JSON.stringify({event: "auth_email_code_budget_reached", window_seconds: windowSeconds, limit}) + "\n"),
+    });
     const issueMcpAccessToken = createMcpAccessTokenIssuer(settings, {
       sign: (payload) => auth.api.signJWT({ body: { payload } }),
     });
@@ -169,6 +178,8 @@ async function main(): Promise<void> {
         operatorDirectory.hasCapability(principal),
       httpObserver: createAuthHttpObserver(),
       inspectInvitation: (token) => invitations.inspect(token),
+      turnstileSiteKey: settings.turnstileSiteKey,
+      admitSignInCode: (email, token, headers) => signInAdmission.admit(email, token, headers),
       sendSignInCode: email => emailCodes.send(email, "sign-in"),
       consumeEmailCodeRateLimit: (email, headers) => emailCodeRateLimiter.consume(email, headers),
       sendOperatorCode: principal => operatorCodes.send(principal),

@@ -73,3 +73,7 @@ local accounts, sessions or user results. Never overwrite an active Dataset Head
 copy a live PostgreSQL data directory.
 
 Publication 孤儿维护每分钟最多检查一页 1,000 个对象，一轮完成后休息 60 分钟；明确删除队列仍独立运行。延长休息时间会推迟遗留对象的回收，不延迟研究结果发布。
+
+邮箱登录的发码入口必须通过 Cloudflare Turnstile。创建 Managed widget 并添加实际访问域名，把站点密钥和服务端密钥分别写入私有部署配置的 `THESISTRACE_TURNSTILE_SITE_KEY`、`THESISTRACE_TURNSTILE_SECRET_KEY`；服务端密钥不能进入 Git 或前端构建。服务端严格校验当前 `THESISTRACE_PUBLIC_ORIGIN` 的 hostname 和 `sign-in-code` action。生产环境只允许官方 Siteverify 地址，不接受测试密钥或本地验证服务。
+
+每个邮箱使用独立的固定窗口：60 秒内 1 封、每小时 5 封、每天 10 封；IP 每分钟 5 次请求，IPv6 按 `/64` 合并。全站发码默认为每小时 25 封、每天 100 封，分别由 `THESISTRACE_EMAIL_CODE_GLOBAL_HOURLY_LIMIT` 和 `THESISTRACE_EMAIL_CODE_GLOBAL_DAILY_LIMIT` 配置。达到全站上限记录 `auth_email_code_budget_reached` 日志，可接入运维告警。额度在数据库中原子预留，重启仍有效；发送失败也保留预留，限制失败重试产生的消耗。拒绝请求不会刷新验证码或延长邮箱冷却，验证失败只消耗 IP 请求额度。Operator 证明码仍走独立的已认证流程。相关验证入口见仓库根 [AGENTS.md](../AGENTS.md#testing)。

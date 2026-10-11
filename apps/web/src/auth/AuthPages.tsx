@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import type { TurnstileInstance } from "@marsidev/react-turnstile";
+import { lazy, Suspense, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 
 import { useAuthRetry } from "./useAuthRetry";
 import { useAuth } from "./AuthProvider";
@@ -12,11 +13,15 @@ import { Field, FieldDescription, FieldGroup, FieldLabel, FieldTitle } from "../
 import { Input } from "../components/ui/input";
 import { Spinner } from "../components/ui/spinner";
 
+const SignInChallenge = lazy(() => import("./SignInChallenge").then(module => ({default: module.SignInChallenge})));
+
 type Navigate = (path: string, options?: Readonly<{ replace?: boolean }>) => void;
 
 function LoginPage() {
   const { t } = useTranslation("auth");
   const { signIn, sendCode } = useAuth();
+  const [challengeToken, setChallengeToken] = useState<string | null>(null);
+  const challengeRef = useRef<TurnstileInstance>(null);
   const [email, setEmail] = useState("");
   const [otp, setOtp] = useState("");
   const [sent, setSent] = useState(false);
@@ -49,10 +54,12 @@ function LoginPage() {
   }
 
   async function requestCode(): Promise<void> {
-    if (submitting || cooldown > 0) return;
+    if (submitting || cooldown > 0 || challengeToken === null) return;
     setSubmitting(true);
     setError(null);
-    const result = await sendCode(email);
+    const result = await sendCode(email, challengeToken);
+    setChallengeToken(null);
+    challengeRef.current?.reset();
     setSubmitting(false);
     if (!result.ok) {
       setError(result.code);
@@ -67,7 +74,8 @@ function LoginPage() {
     setEmail(email.trim().toLowerCase());
     setOtp("");
     setSent(true);
-    setRetryAt(Date.now() + 60_000);
+    serverSendRetryAt.current = Date.now() + 60_000;
+    setRetryAt(serverSendRetryAt.current);
   }
 
   async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
@@ -153,7 +161,7 @@ function LoginPage() {
                     variant="outline"
                     className="shrink-0"
                     aria-label={cooldown > 0 ? t("resendIn", { seconds: cooldown }) : t("resendCode")}
-                    disabled={submitting || cooldown > 0}
+                    disabled={submitting || cooldown > 0 || challengeToken === null}
                     onClick={() => void requestCode()}
                     type="button"
                   >{cooldown > 0 ? t("seconds", { seconds: cooldown }) : t("resend")}</Button>
@@ -162,10 +170,13 @@ function LoginPage() {
               </Field>
             </>
           )}
+          <Suspense fallback={<p className="text-center text-sm text-muted-foreground">{t("checkingHuman")}</p>}>
+            <SignInChallenge widgetRef={challengeRef} onToken={setChallengeToken} />
+          </Suspense>
           {error !== null ? <Alert variant="destructive"><AlertDescription>{error === "tooManyRequests" && errorCooldown > 0 ? t("rateLimited", {seconds: errorCooldown}) : t(`errors.${error}`)}</AlertDescription></Alert> : null}
           <Button
             className="w-full"
-            disabled={submitting || (!sent && cooldown > 0) || (sent && (otp.length !== 6 || verificationCooldown > 0))}
+            disabled={submitting || (!sent && (cooldown > 0 || challengeToken === null)) || (sent && (otp.length !== 6 || verificationCooldown > 0))}
             size="lg"
             type="submit"
           >

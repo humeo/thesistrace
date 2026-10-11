@@ -1,3 +1,4 @@
+import { serveTurnstile } from "../fixtures/turnstile";
 import { expect, test as base, type Locator, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -36,6 +37,7 @@ export async function fillPasswordInput(
 export const securityTest = base.extend<{ cspGuard: void }>({
   cspGuard: [async ({ page }, use) => {
     resetAuthRateLimits();
+    await serveTurnstile(page);
     const violations: Array<Readonly<{
       blockedResource: string;
       columnNumber: number;

@@ -1,3 +1,4 @@
+import { SignInCodeAdmission } from "./sign-in-code-admission.js";
 import { OperatorEmailCode } from "./operator-email-code.js";
 import { OperatorAssignmentService } from "./operator-assignment.js";
 import { OperatorProofService, OperatorCodeInvalidError, OperatorProofInvalidError } from "./operator-proof.js";
@@ -24,6 +25,7 @@ const settings = authTestSettings({databaseUrl: runtimeUrl.toString()});
 const coordinator = new CredentialOperationCoordinator({authSecret: settings.secret, coordination: new AuthOperationCoordinator(coordinationPool), pool});
 const messages = new Map<string, string>();
 let ip = 0;
+let now = Date.now();
 const auth = createThesisTraceAuth(settings, pool, {
   ...createClosedAuthLifecycle(),
   isResearcherActive: async id => (await pool.query('SELECT active FROM auth."user" WHERE id=$1',[id])).rows[0]?.active === true,
@@ -35,9 +37,12 @@ const delivery = new EmailCodeDelivery({auth, coordinator, sendEmail: async emai
   messages.set(email.to, email.text.match(/\b[0-9]{6}\b/)![0]);
 }});
 const limiter = new AuthEndpointRateLimiter({authSecret: settings.secret, pool, scope: "email-code"});
+const admission = new SignInCodeAdmission({pool, authSecret: settings.secret, clock:()=>new Date(now), globalHourlyLimit:25, globalDailyLimit:100, verifyChallenge:async token=>token === "valid-challenge"});
 const unavailable = async (): Promise<never> => { throw new Error("unrelated endpoint"); };
 const deps: AuthAppDependencies = {
   isOperator: async () => false,
+  turnstileSiteKey: settings.turnstileSiteKey,
+  admitSignInCode: (email,token,headers) => admission.admit(email,token,headers),
   sendSignInCode: email => delivery.send(email, "sign-in"),
   consumeEmailCodeRateLimit: (email,headers) => limiter.consume(email,headers),
   acceptInvitation: unavailable, inspectInvitation: unavailable,
@@ -55,11 +60,22 @@ const app = createAuthApp(deps);
 async function post(path: string, body: unknown) {
   return app.request(`${settings.publicOrigin}/api/auth/${path}`, {method: "POST", headers: {origin: settings.publicOrigin, "content-type": "application/json", "x-thesistrace-client-ip": `192.0.2.${++ip}`}, body: JSON.stringify(body)});
 }
-async function send(email: string) { const response = await post("email-otp/send-verification-otp",{email,type:"sign-in"}); expect(response.status).toBe(200); return messages.get(email.trim().toLowerCase())!; }
+async function send(email: string) { const response = await post("email-otp/send-verification-otp",{email,type:"sign-in",captcha_token:"valid-challenge"}); expect(response.status).toBe(200); return messages.get(email.trim().toLowerCase())!; }
 async function signIn(email: string, otp: string) { return post("sign-in/email-otp", {email,otp}); }
 async function users(email: string) { return (await owner.query('SELECT * FROM auth."user" WHERE email=$1',[email])).rows; }
 
 describe.sequential("Email OTP public access",()=>{
+  it("rejects public delivery without human verification", async()=>{
+    expect((await post("email-otp/send-verification-otp",{email:"no-challenge@example.com",type:"sign-in"})).status).toBe(400);
+    expect(messages.has("no-challenge@example.com")).toBe(false);
+  });
+  it("enforces the email cooldown on the server across IPs", async()=>{
+    await send("cooldown@example.com");
+    const second = await post("email-otp/send-verification-otp",{email:" COOLDOWN@EXAMPLE.COM ",type:"sign-in",captcha_token:"valid-challenge"});
+    expect(second.status).toBe(429);
+    expect(second.headers.get("retry-after")).toBe("60");
+    expect((await signIn("cooldown@example.com", messages.get("cooldown@example.com")!)).status).toBe(200);
+  });
   beforeAll(async()=>{await initializeAuthSchema(owner);});
   afterAll(async()=>{await Promise.all([pool.end(), coordinationPool.end(), owner.end()]);});
   it("creates only after verification, then logs in the same canonical email",async()=>{
@@ -70,6 +86,7 @@ describe.sequential("Email OTP public access",()=>{
     const first = await signIn("OTPRESEARCHER@example.com",otp); expect(first.status).toBe(200);
     const payload = await first.json(); expect(payload.user.emailVerified).toBe(true);
     expect(first.headers.get("set-cookie")).toContain("HttpOnly");
+    now += 60_000;
     const second = await signIn(" otpresearcher@example.com ", await send("otpresearcher@example.com"));
     expect(second.status).toBe(200); expect((await second.json()).user.id).toBe(payload.user.id);
     expect(await users("otpresearcher@example.com")).toHaveLength(1);
@@ -87,6 +104,7 @@ describe.sequential("Email OTP public access",()=>{
     const email="otp-expired@example.com", otp=await send(email);
     await owner.query('UPDATE auth."verification" SET "expiresAt"=now()-interval \'1 second\' WHERE identifier=$1',[`sign-in-otp-${email}`]);
     expect((await signIn(email,otp)).status).toBe(400);
+    now += 60_000;
     const fresh=await send(email); const wrong=fresh==="000000"?"111111":"000000";
     for(let n=0;n<3;n++) expect((await signIn(email,wrong)).status).toBe(400);
     expect((await signIn(email,fresh)).status).toBe(403);
@@ -95,11 +113,12 @@ describe.sequential("Email OTP public access",()=>{
   it("does not establish sessions for deactivated accounts",async()=>{
     const email="otp-inactive@example.com"; expect((await signIn(email,await send(email))).status).toBe(200);
     await owner.query('UPDATE auth."user" SET active=false WHERE email=$1',[email]);
+    now += 60_000;
     expect((await signIn(email,await send(email))).status).toBe(403);
     expect(await users(email)).toHaveLength(1);
   });
   it("reports delivery failure and removes its undelivered code",async()=>{
-    expect((await post("email-otp/send-verification-otp",{email:"delivery-failure@example.com",type:"sign-in"})).ok).toBe(false);
+    expect((await post("email-otp/send-verification-otp",{email:"delivery-failure@example.com",type:"sign-in",captcha_token:"valid-challenge"})).ok).toBe(false);
     expect((await owner.query('SELECT * FROM auth."verification" WHERE identifier=$1',["sign-in-otp-delivery-failure@example.com"])).rowCount).toBe(0);
   });
   it("rejects other OTP purposes, profile injection and password login",async()=>{
@@ -117,6 +136,7 @@ describe.sequential("Email OTP public access",()=>{
     const codes = new OperatorEmailCode({auth, pool, delivery, coordinator});
     const proofs = new OperatorProofService({pool, verifyCode: codes.verify});
     const request = {operation: "researcher.sessions.revoke" as const, researcherId: user.id};
+    now += 60_000;
     await expect(proofs.confirm(principal, {...request, otp: await send(email)})).rejects.toBeInstanceOf(OperatorCodeInvalidError);
     await codes.send(principal);
     const otp = messages.get(email)!;
@@ -130,10 +150,10 @@ describe.sequential("Email OTP public access",()=>{
   });
 
   it("rate limits a canonical email across IPs and rejects cross-origin delivery", async () => {
-    for (let n=0; n<5; n++) await send("otp-limited@example.com");
-    const limited = await post("email-otp/send-verification-otp", {email:" OTP-LIMITED@EXAMPLE.COM ", type:"sign-in"});
+    for (let n=0; n<5; n++) { await send("otp-limited@example.com"); now += 60_000; }
+    const limited = await post("email-otp/send-verification-otp", {email:" OTP-LIMITED@EXAMPLE.COM ", type:"sign-in",captcha_token:"valid-challenge"});
     expect(limited.status).toBe(429); expect(Number(limited.headers.get("retry-after"))).toBeGreaterThan(0);
-    const crossOrigin = await app.request(`${settings.publicOrigin}/api/auth/email-otp/send-verification-otp`, {method:"POST", headers:{origin:"https://attacker.example","content-type":"application/json"},body:JSON.stringify({email:"cross-origin@example.com",type:"sign-in"})});
+    const crossOrigin = await app.request(`${settings.publicOrigin}/api/auth/email-otp/send-verification-otp`, {method:"POST", headers:{origin:"https://attacker.example","content-type":"application/json"},body:JSON.stringify({email:"cross-origin@example.com",type:"sign-in",captcha_token:"valid-challenge"})});
     expect(crossOrigin.status).toBe(403); expect(messages.has("cross-origin@example.com")).toBe(false);
   });
 
