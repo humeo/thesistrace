@@ -1,4 +1,5 @@
 import { HttpAgent, type AgentSubscriber } from "@ag-ui/client";
+import { replaceEqualDeep } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState, type SetStateAction } from "react";
 import { useTranslation } from "react-i18next";
 import { i18n } from "../i18n";
@@ -415,8 +416,9 @@ export function useChatConversation(options: Readonly<{
       watchedTitlesRef.current.add(completed);
       callbacksRef.current.onTitleMaySettle(options.threadId);
     }
-    setSession(next);
-    sessionRef.current = next;
+    const shared = replaceEqualDeep(previous, next);
+    if (shared !== previous) setSession(shared);
+    sessionRef.current = shared;
     if (
       previous !== null
       && (
@@ -492,7 +494,6 @@ export function useChatConversation(options: Readonly<{
     sessionEstablishedRef.current = true;
     callbacksRef.current.onAccepted();
     callbacksRef.current.onSessionChanged();
-    await refresh();
   }
 
   async function reconcileCommand(
@@ -510,6 +511,7 @@ export function useChatConversation(options: Readonly<{
       }
       if (receipt.status === "accepted") {
         await settleAcceptedInput(target.commandId, target.item, target.draft, target.clearAnswer, generation);
+        await refresh();
         return receipt;
       }
       if (target.item !== null) {
@@ -570,6 +572,23 @@ export function useChatConversation(options: Readonly<{
     }
   }
 
+  async function synchronizeAfterRun(runId: string, revision: number, generation: number): Promise<void> {
+    if (generationRef.current !== generation) return;
+    const next = sessionRef.current;
+    const observed = (streamedTurnsRef.current.get(runId) ?? 0) > revision;
+    const status = next?.latest_turn?.id === runId ? next.latest_turn.status : null;
+    if (next && observed && (
+      (next.current_turn === null && ["completed", "failed", "stopped"].includes(status ?? ""))
+      || (next.current_turn?.id === runId && next.current_turn.status === "waiting_for_user")
+    )) {
+      // The final projection arrived while this transport still owned the Run.
+      // Now it has exited, completion can deliver the queue without another read.
+      observeSession(next, generation);
+      return;
+    }
+    await refresh();
+  }
+
   async function startPrompt(
     content: string,
     inputId: string,
@@ -577,6 +596,7 @@ export function useChatConversation(options: Readonly<{
     frozenSelection?: ResolvedModelSelection,
   ): Promise<void> {
     const generation = generationRef.current;
+    const revision = streamRevisionRef.current;
     const selection = frozenSelection ?? selectionRef.current;
     if (selection === null || runInFlightRef.current) {
       if (item !== null) await storeRef.current?.release(item);
@@ -591,6 +611,7 @@ export function useChatConversation(options: Readonly<{
     setErrorCode(null);
     options.agent.setMessages([{ content, id: inputId, role: "user" }]);
     let accepted = false;
+    let acceptedInputSettlement = Promise.resolve();
     let authoritativeRejection = false;
     let authoritativeRejectionCode: string | null = null;
     const subscriber: AgentSubscriber = {
@@ -598,7 +619,12 @@ export function useChatConversation(options: Readonly<{
         if (generationRef.current !== generation || event.runId !== runId || accepted) return;
         accepted = true;
         observedActiveTurnsRef.current.add(runId);
-        void settleAcceptedInput(inputId, item, item === null ? content : null, false, generation);
+        acceptedInputSettlement = settleAcceptedInput(inputId, item, item === null ? content : null, false, generation).catch(() => {
+          if (generationRef.current !== generation) return;
+          queueLockedRef.current = true;
+          setQueueLocked(true);
+          setError("stageDamagedDelivery");
+        });
       },
       onRunErrorEvent: ({ event }) => {
         if (!accepted) {
@@ -608,7 +634,6 @@ export function useChatConversation(options: Readonly<{
         void loadLatestTimeline();
       },
       onRunFailed: () => { void loadLatestTimeline(); },
-      onRunFinishedEvent: () => { void refresh(); },
     };
     try {
       await options.agent.runAgent({
@@ -626,20 +651,24 @@ export function useChatConversation(options: Readonly<{
     } catch {
       // The receipt below, not transport success, owns input cleanup.
     } finally {
-      runInFlightRef.current = false;
+      // A fast Run can finish before IndexedDB removes its accepted queue entry.
+      // Join that cleanup before exposing completion to the next delivery.
+      await acceptedInputSettlement;
       if (generationRef.current !== generation) return;
+      runInFlightRef.current = false;
       if (!accepted && authoritativeRejectionCode !== null) {
         await settleRejectedInput(recoveryTarget, authoritativeRejectionCode, generation);
       } else if (!accepted) {
         await reconcileCommand(recoveryTarget, generation, authoritativeRejection);
       }
-      await refresh();
+      await synchronizeAfterRun(runId, revision, generation);
       focusComposer();
     }
   }
 
   async function startContinue(): Promise<void> {
     const generation = generationRef.current;
+    const revision = streamRevisionRef.current;
     const selection = selectionRef.current;
     if (selection === null || runInFlightRef.current) return;
     const runId = crypto.randomUUID();
@@ -670,7 +699,6 @@ export function useChatConversation(options: Readonly<{
           setLocalCommand("none");
           void refresh();
         },
-        onRunFinishedEvent: () => { void refresh(); },
         onRunErrorEvent: () => { if (!accepted) authoritativeRejection = true; void refresh(); },
       });
     } catch {
@@ -683,13 +711,14 @@ export function useChatConversation(options: Readonly<{
         generation,
         authoritativeRejection,
       );
-      await refresh();
+      await synchronizeAfterRun(runId, revision, generation);
       focusComposer();
     }
   }
 
   async function startAnswer(answer: ChatAnswer): Promise<void> {
     const generation = generationRef.current;
+    const revision = streamRevisionRef.current;
     const turn = sessionRef.current?.current_turn;
     const activeQuestion = turn?.status === "waiting_for_user" ? turn.question : null;
     if (turn === undefined || turn === null || activeQuestion === null || runInFlightRef.current) return;
@@ -725,7 +754,7 @@ export function useChatConversation(options: Readonly<{
         runId: turn.id,
       }, {
         onRunStartedEvent: () => { reconcileOnce(); },
-        onRunFinishedEvent: () => { reconcileOnce(true); void refresh(); },
+        onRunFinishedEvent: () => { reconcileOnce(true); },
         onRunErrorEvent: () => { reconcileOnce(true); void refresh(); },
       });
     } catch {
@@ -734,7 +763,7 @@ export function useChatConversation(options: Readonly<{
       runInFlightRef.current = false;
       if (generationRef.current !== generation) return;
       if (!reconciled) await reconcileCommand(target, generation);
-      await refresh();
+      await synchronizeAfterRun(turn.id, revision, generation);
       focusComposer();
     }
   }
@@ -1011,7 +1040,7 @@ export function useChatConversation(options: Readonly<{
     const controller = new AbortController();
     let requestInFlight = false;
     const poll = () => {
-      if (requestInFlight || controller.signal.aborted || runInFlightRef.current || options.agent.isRunning) return;
+      if (document.visibilityState === "hidden" || requestInFlight || controller.signal.aborted || runInFlightRef.current || options.agent.isRunning) return;
       requestInFlight = true;
       const generation = generationRef.current;
       const revision = streamRevisionRef.current;
@@ -1051,10 +1080,21 @@ export function useChatConversation(options: Readonly<{
         .catch(() => undefined)
         .finally(() => { requestInFlight = false; });
     };
-    const interval = window.setInterval(poll, 750);
+    let interval: number | undefined;
+    const schedule = () => {
+      window.clearInterval(interval);
+      interval = document.visibilityState === "hidden" ? undefined : window.setInterval(poll, 5_000);
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== "hidden") poll();
+      schedule();
+    };
+    schedule();
+    document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
       controller.abort();
       window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [loadLatestTimeline, observeSession, options.agent, options.threadId, session?.id]);
 
@@ -1108,8 +1148,8 @@ export function mergeLatestTurns(
   for (const turn of latest) turns.set(turn.id, turn);
   // Match the API's (started_at, id) order even when a delayed HTTP page
   // omits the live turn. Canonical UTC strings retain database microseconds.
-  return [...turns.values()].sort((left, right) =>
-    left.started_at.localeCompare(right.started_at) || left.id.localeCompare(right.id));
+  return replaceEqualDeep(current, [...turns.values()].sort((left, right) =>
+    left.started_at.localeCompare(right.started_at) || left.id.localeCompare(right.id)));
 }
 
 export function prependOlderTurns(

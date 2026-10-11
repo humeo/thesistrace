@@ -2,7 +2,7 @@
 
 import type { AgentSubscriber, HttpAgent } from "@ag-ui/client";
 import { EventType } from "@ag-ui/core";
-import { act, useState } from "react";
+import { act, Profiler, useState, type ProfilerOnRenderCallback } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vitest";
 
@@ -21,6 +21,7 @@ import { ChatApiError, loadCommandReceipt, loadTimelinePage, type TimelineTurn }
 import { loadAgentSession, type AgentSessionSummary } from "./sessionHistory";
 import { CHAT_TIMELINE_UPDATE } from "@thesistrace/contracts/chat-events";
 import { StagedInputStore, StagedInputStoreError, type StagedInput } from "./stagedInputStore";
+import * as stagedInputs from "./stagedInputStore";
 import { changeInterfaceLanguage } from "../i18n";
 import {
   mergeLatestTurns,
@@ -43,7 +44,154 @@ afterEach(async () => {
   root = undefined;
   latestController = undefined;
   document.body.replaceChildren();
+  vi.useRealTimers();
   vi.restoreAllMocks();
+});
+
+test("observes remote session changes every five seconds without faster background reads", async () => {
+  vi.useFakeTimers();
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  const idle = { ...session, current_turn: null, latest_turn: { ...turn, status: "completed" as const } };
+  let remote: AgentSessionSummary = idle;
+  vi.mocked(loadAgentSession).mockImplementation(async () => structuredClone(remote));
+  vi.mocked(loadTimelinePage).mockResolvedValue({ next_cursor: null, turns: [] });
+  vi.spyOn(StagedInputStore.prototype, "list").mockResolvedValue([]);
+  await mountConversation({ agent: {} as HttpAgent, existingSession: true, initialSession: idle });
+  const reads = vi.mocked(loadAgentSession).mock.calls.length;
+  remote = session;
+
+  await act(async () => { await vi.advanceTimersByTimeAsync(4_999); });
+  expect(latestController?.phase).toBe("idle");
+  expect(vi.mocked(loadAgentSession).mock.calls.length).toBe(reads);
+  await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+  expect(latestController?.phase).toBe("active");
+  expect(vi.mocked(loadAgentSession).mock.calls.length).toBe(reads + 1);
+});
+
+test.each(["completed", "waiting_for_user", "stopped", "failed"] as const)("a streamed %s advances the hidden queue only on successful completion, without waiting for HTTP", async status => {
+  vi.useFakeTimers();
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+  const idle = { ...session, current_turn: null, latest_turn: { ...turn, status: "completed" as const } };
+  vi.mocked(loadAgentSession).mockResolvedValue(idle);
+  vi.mocked(loadTimelinePage).mockResolvedValue({ next_cursor: null, turns: [] });
+  let queue: readonly StagedInput[] = [];
+  const staged = stagedInput("Continue with the queued research");
+  vi.spyOn(StagedInputStore.prototype, "list").mockImplementation(async () => queue);
+  vi.spyOn(StagedInputStore.prototype, "stage").mockImplementation(async () => { queue = [staged]; return staged; });
+  vi.spyOn(StagedInputStore.prototype, "claimHead").mockResolvedValue({ ...staged, status: "submitting", leaseOwner: researcherId, leaseUntil: Date.now() + 15_000 });
+  vi.spyOn(stagedInputs, "withStagedDeliveryLock").mockImplementation(async (_researcherId, _threadId, operation) => operation());
+  let live!: AgentSubscriber;
+  let subscriber!: AgentSubscriber;
+  let input!: Parameters<NonNullable<AgentSubscriber["onCustomEvent"]>>[0]["input"];
+  let finish!: () => void;
+  const setMessages = vi.fn();
+  const runAgent = vi.fn((parameters: Parameters<HttpAgent["runAgent"]>[0], listener?: AgentSubscriber) => {
+    if (runAgent.mock.calls.length > 1) return new Promise(() => {});
+    subscriber = listener!;
+    input = { threadId, runId: parameters!.runId!, messages: [], state: {}, tools: [], context: [] };
+    return new Promise<void>(resolve => { finish = resolve; });
+  });
+  const agent = { runAgent, setMessages, subscribe: (listener: AgentSubscriber) => {
+    live = listener; return { unsubscribe: vi.fn() };
+  } } as unknown as HttpAgent;
+  await mountConversation({ agent, existingSession: true, initialSession: idle });
+  // A stalled history endpoint must not become a prerequisite for queue delivery.
+  vi.mocked(loadAgentSession).mockImplementation(() => new Promise(() => {}));
+  await act(async () => latestController?.setDraft("Start research"));
+  act(() => { void latestController?.executeMainAction(); });
+  await act(async () => subscriber.onRunStartedEvent?.({
+    agent, input, messages: [], state: {}, event: { type: EventType.RUN_STARTED, threadId, runId: input.runId },
+  }));
+  const publish = (state: typeof status | "running") => {
+    const active = { ...turn, id: input.runId, status: state, question: state === "waiting_for_user"
+      ? { interrupt_id: `${input.runId}::question`, question: "Which objective?", options: [{ label: "Quality" }], selection_mode: "single_select" as const }
+      : null };
+    const terminal = state !== "running" && state !== "waiting_for_user";
+    return live.onCustomEvent?.({ agent, input, messages: [], state: {}, event: {
+      type: EventType.CUSTOM, name: CHAT_TIMELINE_UPDATE, value: {
+        session: { ...session, version: "2026-09-02T00:00:00.000Z", current_turn: terminal ? null : active, latest_turn: active },
+        timeline: { next_cursor: null, turns: [{ ...timelineTurn(input.runId, "Research answer"), status: active.status, completed_at: terminal ? session.created_at : null }] },
+      },
+    } });
+  };
+  await act(async () => publish("running"));
+  expect(latestController?.phase).toBe("active");
+  await act(async () => latestController?.setDraft(staged.content));
+  await act(async () => latestController?.executeMainAction());
+  expect(latestController?.queue).toEqual([staged]);
+  await act(async () => {
+    await publish(status);
+    await publish(status);
+    await subscriber.onRunFinishedEvent?.({ agent, input, messages: [], state: {}, outcome: "success",
+      event: { type: EventType.RUN_FINISHED, threadId, runId: input.runId } });
+  });
+  expect(runAgent).toHaveBeenCalledTimes(1);
+  await act(async () => finish());
+  expect(runAgent).toHaveBeenCalledTimes(status === "completed" ? 2 : 1);
+  if (status === "completed") expect(setMessages).toHaveBeenLastCalledWith([{ content: staged.content, id: staged.inputId, role: "user" }]);
+  else expect(latestController?.queue).toEqual([staged]);
+  expect(latestController?.turns[0]?.status).toBe(status);
+});
+
+test("pauses session reads while hidden and synchronizes immediately on return", async () => {
+  vi.useFakeTimers();
+  const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  const idle = { ...session, current_turn: null, latest_turn: { ...turn, status: "completed" as const } };
+  let remote: AgentSessionSummary = idle;
+  vi.mocked(loadAgentSession).mockImplementation(async () => structuredClone(remote));
+  vi.mocked(loadTimelinePage).mockResolvedValue({ next_cursor: null, turns: [] });
+  vi.spyOn(StagedInputStore.prototype, "list").mockResolvedValue([]);
+  await mountConversation({ agent: {} as HttpAgent, existingSession: true, initialSession: idle });
+  const reads = vi.mocked(loadAgentSession).mock.calls.length;
+  await act(async () => latestController?.setDraft("Keep my unsent message"));
+  visibility.mockReturnValue("hidden");
+  act(() => document.dispatchEvent(new Event("visibilitychange")));
+  remote = session;
+  await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+  expect(vi.mocked(loadAgentSession).mock.calls.length).toBe(reads);
+  expect(latestController?.phase).toBe("idle");
+  visibility.mockReturnValue("visible");
+  await act(async () => document.dispatchEvent(new Event("visibilitychange")));
+  expect(latestController?.phase).toBe("active");
+  expect(latestController?.draft).toBe("Keep my unsent message");
+  expect(vi.mocked(loadAgentSession).mock.calls.length).toBe(reads + 1);
+  await act(async () => { await vi.advanceTimersByTimeAsync(4_999); });
+  expect(vi.mocked(loadAgentSession).mock.calls.length).toBe(reads + 1);
+  await act(async () => root?.unmount());
+  root = undefined;
+  await act(async () => {
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(10_000);
+  });
+  expect(vi.mocked(loadAgentSession).mock.calls.length).toBe(reads + 1);
+});
+
+test.each([false, true])("unchanged session reads do not commit another render (waiting: %s)", async (waiting) => {
+  vi.useFakeTimers();
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  const question = { interrupt_id: `${turnId}::question`, question: "Which objective?", options: [{ label: "Quality" }], selection_mode: "single_select" as const };
+  let remote: AgentSessionSummary = {
+    ...session,
+    current_turn: waiting ? { ...turn, status: "waiting_for_user", question } : null,
+    latest_turn: { ...turn, status: waiting ? "waiting_for_user" : "completed" },
+  };
+  vi.mocked(loadAgentSession).mockImplementation(async () => structuredClone(remote));
+  vi.mocked(loadTimelinePage).mockImplementation(async () => ({ next_cursor: null, turns: [timelineTurn(turnId, "Current answer")] }));
+  vi.spyOn(StagedInputStore.prototype, "list").mockResolvedValue([]);
+  const onRender = vi.fn();
+  await mountConversation({ agent: {} as HttpAgent, existingSession: true, initialSession: remote, onRender });
+  onRender.mockClear();
+  await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+  expect(onRender).not.toHaveBeenCalled();
+
+  // A nested change still reaches the UI even when version and Turn ID match.
+  remote = waiting
+    ? { ...remote, current_turn: { ...remote.current_turn!, question: { ...question, question: "Updated objective?" } } }
+    : { ...remote, latest_turn: { ...turn, status: "failed" } };
+  await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+  expect(onRender).toHaveBeenCalled();
+  if (waiting) expect(latestController?.question?.question).toBe("Updated objective?");
+  else expect(latestController?.latestTurnStatus).toBe("failed");
 });
 
 test.each([false, true])("keeps streamed content and chronological order when stale history finishes (history: %s)", async (withHistory) => {
@@ -468,6 +616,7 @@ async function mountConversation(options: Readonly<{
   existingSession: boolean;
   initialSession?: AgentSessionSummary;
   onSessionChanged?: () => void;
+  onRender?: ProfilerOnRenderCallback;
   viewState?: ChatSessionViewState;
 }>): Promise<void> {
   const container = document.createElement("div");
@@ -525,12 +674,14 @@ function ConversationHarness({
   existingSession = true,
   initialSession,
   onSessionChanged = vi.fn(),
+  onRender = () => {},
   viewState,
 }: Readonly<{
   agent?: HttpAgent;
   existingSession?: boolean;
   initialSession?: AgentSessionSummary;
   onSessionChanged?: () => void;
+  onRender?: ProfilerOnRenderCallback;
   viewState?: ChatSessionViewState;
 }>) {
   const [testAgent] = useState(() => Object.assign({ subscribe: vi.fn(() => ({ unsubscribe: vi.fn() })) }, agent) as HttpAgent);
@@ -557,7 +708,7 @@ function ConversationHarness({
     titleMaySettle: false,
   });
   latestController = controller;
-  return <output>{controller.error}</output>;
+  return <Profiler id="conversation-output" onRender={onRender}><output>{controller.error}</output></Profiler>;
 }
 
 function stagedInput(content: string): StagedInput {

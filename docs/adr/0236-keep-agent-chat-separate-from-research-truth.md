@@ -23,7 +23,21 @@ by their original command ID before clearing a draft. The existing workspace
 Query client owns these caches and discards them when the Researcher changes.
 Model discovery and context usage share that client; the CopilotKit connection
 lives across Chat navigation while each scoped agent belongs to one Session.
-Research resource queries below still reopen against current Core truth.
+Outside an active Run stream, the current Session is reconciled every five
+seconds, including while idle so changes from elsewhere remain observable.
+Hidden pages pause this timer and synchronize immediately on becoming visible;
+the existing Run stream and server execution continue. Unchanged Session and
+timeline reads retain their existing references instead of updating the visible
+component tree. Completion observation still processes staged delivery even
+when the Session payload is unchanged. After a Run transport exits and its
+accepted input has been removed from the browser queue, the controller directly
+reprocesses that Run's final streamed projection. Successful completion advances
+the FIFO without waiting for HTTP reconciliation or a polling tick, including
+on a hidden page. Failed, stopped and waiting-for-user Turns do not advance it.
+Duplicate notifications share the existing completion guard, and browser locks
+and IndexedDB claims coordinate delivery across tabs. A missing final projection
+still requires HTTP reconciliation. Research resources use the separate bounded
+freshness policy below.
 
 Automatic Session naming is independent of the Chat Turn and has a one-minute
 deadline. The browser observes the saved title for up to one minute without
