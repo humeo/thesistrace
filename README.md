@@ -1,6 +1,6 @@
 # ThesisTrace
 
-ThesisTrace is a single-node, invite-only multi-user workspace for reproducible,
+ThesisTrace is a single-node, multi-user workspace for reproducible,
 post-close A-share factor research, strategy backtesting, and daily tracking.
 
 The active implementation is the module-first Core described in
@@ -66,7 +66,8 @@ mise exec -- pnpm dev
 Open `http://127.0.0.1:5173`. Caddy Web, Hono and Better Auth, Agent, FastAPI Core,
 the ordinary Research, Batch Research, Tracking, and Data Operator Workers,
 PostgreSQL, RustFS, and the three one-shot schema initializers belong to the canonical
-Compose project. There is no public signup; an Operator manages Researcher access.
+Compose project. Users can register and sign in by verifying an email code;
+an Operator manages Researcher access.
 For a detached start use `mise exec -- pnpm dev:up`; use
 `mise exec -- pnpm dev:stop` to stop services without deleting data, and
 `mise exec -- pnpm dev:reset` to hard-cut Product State while preserving Canonical
