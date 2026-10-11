@@ -1,4 +1,4 @@
-import { Actions, Bubble, Think, ThoughtChain } from "@ant-design/x";
+import { Actions, Bubble, CodeHighlighter, Think, ThoughtChain } from "@ant-design/x";
 import XMarkdown, { type ComponentProps } from "@ant-design/x-markdown";
 import "@ant-design/x-markdown/themes/dark.css";
 import "./chatTypography.css";
@@ -7,6 +7,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 
 import { useTranslation } from "react-i18next";
 import { ArrowDown, Atom, ListChecks } from "@phosphor-icons/react";
 import markedCjkFriendly from "marked-cjk-friendly";
+import vscDarkPlus from "react-syntax-highlighter/dist/esm/styles/prism/vsc-dark-plus";
 import { i18n } from "../i18n";
 import { followCoreLink } from "../shell/navigation";
 import { formatNumber, formatTimestamp } from "../i18n/format";
@@ -21,7 +22,9 @@ const MESSAGE_TIME_FORMAT = new Intl.DateTimeFormat("en-US", { hour: "numeric", 
 // X Markdown uses Marked 15: reuse the extension's CJK emphasis tokenizer.
 // Its separate strikethrough tokenizer requires a newer Marked grammar.
 const MARKDOWN_CONFIG = { tokenizer: { emStrong: markedCjkFriendly().tokenizer?.emStrong }, gfm: true, renderer: { html: () => "" } };
-const MARKDOWN_COMPONENTS = { a: SafeMarkdownLink, img: HiddenMarkdownImage };
+const CODE_HIGHLIGHT_PROPS = { style: vscDarkPlus, customStyle: { margin: 0, borderRadius: 0, fontSize: 16 },
+  codeTagProps: { style: { background: "transparent", fontSize: "inherit", fontFamily: "inherit", lineHeight: "inherit" } } };
+const MARKDOWN_COMPONENTS = { a: SafeMarkdownLink, img: HiddenMarkdownImage, code: MarkdownCode };
 const STREAMING_COMPONENTS = { ...MARKDOWN_COMPONENTS, "chat-markdown-preview": IncompleteMarkdown };
 const STREAMING_CONFIG = { ...MARKDOWN_CONFIG, renderer: { html: ({ text }: { text: string }) =>
   /^<chat-markdown-preview data-raw="[^"<>]*" \/>$/.test(text.trim()) ? text : "" } };
@@ -341,10 +344,20 @@ function TurnOutcome({ entry }: { entry: Extract<TimelineEntry, { kind: "turn_ou
 
 
 export const AssistantMarkdown = memo(function AssistantMarkdown({ content, streaming = false }: { content: string; streaming?: boolean }) {
+  // Keep Markdown's default code rules from overriding the theme and highlighter.
   return <XMarkdown content={content} config={streaming ? STREAMING_CONFIG : MARKDOWN_CONFIG} components={STREAMING_COMPONENTS}
-    className="x-markdown-dark chat-markdown-reading" streaming={{ hasNextChunk: streaming,
+    className="x-markdown-dark chat-markdown-reading" disableDefaultStyles={["code"]} streaming={{ hasNextChunk: streaming,
       incompleteMarkdownComponentMap: INCOMPLETE_COMPONENTS, enableAnimation: false }} />;
 });
+
+function MarkdownCode({ block, className, children }: ComponentProps) {
+  if (typeof children !== "string") return null;
+  if (!block) return <code>{children}</code>;
+  const lang = className?.match(/(?:^|\s)language-([^\s]+)/)?.[1] ?? "text";
+  // The default variable language import cannot be bundled by Vite. Full Prism
+  // uses the library's static lazy import, so highlighting also works after build.
+  return <CodeHighlighter lang={lang} prismLightMode={false} highlightProps={CODE_HIGHLIGHT_PROPS}>{children}</CodeHighlighter>;
+}
 
 /** Keep received text readable while the official renderer waits for syntax to close. */
 function IncompleteMarkdown({ "data-raw": encoded, domNode }: ComponentProps) {
@@ -354,7 +367,7 @@ function IncompleteMarkdown({ "data-raw": encoded, domNode }: ComponentProps) {
   const emphasis = content.match(/^(?:[-+*]\s{1,3})?([*_]{1,3})/)?.[1];
   if (domNode.parent?.type !== "tag" || domNode.parent.name !== "p") {
     return <XMarkdown content={content + (emphasis ?? (content.startsWith("`") ? "`" : ""))} config={MARKDOWN_CONFIG} components={MARKDOWN_COMPONENTS}
-      className="x-markdown-dark chat-markdown-reading" />;
+      className="x-markdown-dark chat-markdown-reading" disableDefaultStyles={["code"]} />;
   }
   if (emphasis) return <Typography.Text strong={emphasis.length > 1} italic={emphasis.length !== 2}>{content.slice(emphasis.length)}</Typography.Text>;
   return content.startsWith("`") ? <Typography.Text code>{content.slice(1)}</Typography.Text> : <Typography.Text>{content}</Typography.Text>;
