@@ -3,6 +3,10 @@
 import hashlib
 import json
 import math
+import threading
+import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import lru_cache
@@ -44,6 +48,39 @@ HISTORY_TOTAL_CELLS = 1_048_576
 HISTORY_SESSIONS = 253
 DIAGNOSTIC_BYTES = 65_536
 MAX_JSON_DEPTH = 32
+STRATEGY_VALIDATION_WALL_SECONDS = 30
+_VALIDATION_SLOT = threading.Lock()
+_VALIDATION_DEADLINE: ContextVar[float | None] = ContextVar(
+    "strategy_validation_deadline", default=None,
+)
+
+
+class StrategyValidationUnavailable(RuntimeError):
+    """Validation is busy or has exhausted this request's shared wall budget."""
+
+
+@contextmanager
+def strategy_validation_scope(*, enabled=True):
+    if not enabled:
+        yield None
+        return
+    deadline = _VALIDATION_DEADLINE.get()
+    if deadline is not None:
+        if time.monotonic() >= deadline:
+            raise StrategyValidationUnavailable("Python validation budget exhausted")
+        yield deadline
+        return
+    if not _VALIDATION_SLOT.acquire(blocking=False):
+        raise StrategyValidationUnavailable("Python validation is busy")
+    deadline = time.monotonic() + STRATEGY_VALIDATION_WALL_SECONDS
+    token = _VALIDATION_DEADLINE.set(deadline)
+    try:
+        yield deadline
+        if time.monotonic() >= deadline:
+            raise StrategyValidationUnavailable("Python validation budget exhausted")
+    finally:
+        _VALIDATION_DEADLINE.reset(token)
+        _VALIDATION_SLOT.release()
 
 
 class StrategyProgramFailure(ValueError):
@@ -189,13 +226,17 @@ class PythonStrategyRuntime:
         }
 
     def validate(self, source: str):
-        return self._invoke(
-            source,
-            context={},
-            state={},
-            operation="validate",
-            read_history=None,
-        ).output
+        with strategy_validation_scope() as deadline:
+            try:
+                return self._invoke(
+                    source, context={}, state={}, operation="validate", read_history=None,
+                ).output
+            except StrategyProgramError:
+                if time.monotonic() >= deadline:
+                    raise StrategyValidationUnavailable(
+                        "Python validation budget exhausted"
+                    ) from None
+                raise
 
     def open_session(self, source):
         return PythonProgramSession(self, source)
@@ -278,6 +319,7 @@ class PythonStrategyRuntime:
                 payload,
                 clock_time_ns=clock_time_ns,
                 read_request=observed_read if read_history else None,
+                deadline=_VALIDATION_DEADLINE.get() if operation == "validate" else None,
             )
             result = json.loads(raw, object_pairs_hook=_unique_object)
             _check_json(result)

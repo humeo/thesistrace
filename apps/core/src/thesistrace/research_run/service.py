@@ -77,7 +77,9 @@ from thesistrace.research_kernel.research_chunks import validated_research_conti
 from thesistrace.research_kernel.strategy_program_runtime import (
     StrategyProgramError,
     StrategyProgramFailure,
+    StrategyValidationUnavailable,
     get_strategy_runtime,
+    strategy_validation_scope,
 )
 from thesistrace.research_run.evidence import (
     ResearchCheckpointIntegrityError,
@@ -969,7 +971,8 @@ class ResearchRunService:
             self._prepare_research_input(spec, dataset=self.current_admission_dataset())
         except ResearchRunAdmissionRejected as error:
             return ResearchSpecDiagnostics(valid=False, issues=error.issues)
-        except (OperationalError, PoolTimeout, PublicationUnavailableError) as error:
+        except (OperationalError, PoolTimeout, PublicationUnavailableError,
+                StrategyValidationUnavailable) as error:
             raise ResearchRunTemporarilyUnavailable(
                 "Research specification diagnosis is temporarily unavailable"
             ) from error
@@ -1002,6 +1005,11 @@ class ResearchRunService:
             dataset,
             execution_memory_bytes=self._execution_memory_bytes,
             max_chunk_sessions=self._max_chunk_sessions,
+        )
+
+    def program_validation_scope(self, commands: Sequence[ResearchSpec]):
+        return strategy_validation_scope(
+            enabled=any(_spec_programs(command) for command in commands),
         )
 
     def prepare_child_admission(
@@ -1157,6 +1165,7 @@ class ResearchRunService:
             PoolTimeout,
             PublicationUnavailableError,
             QuotaPolicyUnavailable,
+            StrategyValidationUnavailable,
         ) as error:
             raise ResearchRunTemporarilyUnavailable(
                 "ResearchRun admission is temporarily unavailable"
@@ -4229,21 +4238,24 @@ def _admitted_input(
     environment = None
     programs = _spec_programs(command)
     if programs:
-        runtime = get_strategy_runtime()
-        for path, program in programs.items():
-            try:
-                entries = runtime.validate(program.source)
-                if not direct and not entries["decide"]:
-                    raise StrategyProgramError(
-                        "Framework modules require decide; optional compute returns Values",
-                        source=program.source, session=None,
-                    )
-            except StrategyProgramError as error:
-                raise ResearchRunAdmissionRejected([ResearchRunAdmissionIssue(
-                    code="STRATEGY_PROGRAM_INVALID", field=f"{path}.source", message=str(error),
-                    details=StrategyProgramDetails(error_type=error.error_type, line=error.line),
-                )]) from error
-        environment = runtime.identity()
+        with strategy_validation_scope():
+            runtime = get_strategy_runtime()
+            for path, program in programs.items():
+                try:
+                    entries = runtime.validate(program.source)
+                    if not direct and not entries["decide"]:
+                        raise StrategyProgramError(
+                            "Framework modules require decide; optional compute returns Values",
+                            source=program.source, session=None,
+                        )
+                except StrategyProgramError as error:
+                    raise ResearchRunAdmissionRejected([ResearchRunAdmissionIssue(
+                        code="STRATEGY_PROGRAM_INVALID", field=f"{path}.source", message=str(error),
+                        details=StrategyProgramDetails(
+                            error_type=error.error_type, line=error.line,
+                        ),
+                    )]) from error
+            environment = runtime.identity()
     requirements = _spec_data_requirements(command, compiled, exposure)
     neutralization = command.neutralization if command.has_alpha else None
     field_owners = {

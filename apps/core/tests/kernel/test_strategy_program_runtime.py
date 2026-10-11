@@ -1,6 +1,8 @@
 import copy
 import textwrap
 import time
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 
 import pytest
 
@@ -23,6 +25,50 @@ def strategy(body):
 @pytest.fixture(scope="module")
 def runtime():
     return PythonStrategyRuntime()
+
+
+def test_validation_saturation_rejects_waiters_without_waiting_for_the_guest(runtime, monkeypatch):
+    entered = Event()
+    original_invoke = runtime._execution.invoke
+
+    def observe_guest(*args, **kwargs):
+        entered.set()
+        return original_invoke(*args, **kwargs)
+
+    monkeypatch.setattr(runtime._execution, "invoke", observe_guest)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        pending = executor.submit(runtime.validate, "while True: pass\n" + strategy("return None"))
+        assert entered.wait(10), "Validation never entered guest execution"
+        started = time.monotonic()
+        with pytest.raises(RuntimeError, match="validation.*busy"):
+            runtime.validate(strategy("return None"))
+        assert time.monotonic() - started < 0.5
+        with pytest.raises(StrategyProgramError):
+            pending.result(timeout=10)
+    assert runtime.validate(strategy("return None"))["decide"]
+
+
+def test_validation_request_deadline_interrupts_guest_and_releases_capacity(runtime, monkeypatch):
+    from thesistrace.research_kernel import strategy_program_runtime as admission
+
+    with monkeypatch.context() as limits:
+        limits.setattr(admission, "STRATEGY_VALIDATION_WALL_SECONDS", 0.05)
+        started = time.monotonic()
+        with pytest.raises(admission.StrategyValidationUnavailable, match="budget exhausted"):
+            runtime.validate("while True: pass\n" + strategy("return None"))
+        assert time.monotonic() - started < 1
+    assert runtime.validate(strategy("return None"))["decide"]
+
+
+def test_validation_scope_shares_one_budget_across_programs(runtime, monkeypatch):
+    from thesistrace.research_kernel import strategy_program_runtime as admission
+
+    now = time.monotonic()
+    with pytest.raises(admission.StrategyValidationUnavailable, match="budget exhausted"):
+        with admission.strategy_validation_scope():
+            assert runtime.validate(strategy("return None"))["decide"]
+            monkeypatch.setattr(admission.time, "monotonic", lambda: now + 60)
+            runtime.validate(strategy("return None"))
 
 
 def test_python_strategy_restores_only_explicit_state_in_a_fresh_guest(runtime):

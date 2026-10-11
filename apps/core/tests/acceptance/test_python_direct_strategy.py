@@ -1,5 +1,8 @@
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
+from threading import Event
+from time import monotonic
 from uuid import UUID
 
 import anyio
@@ -66,6 +69,47 @@ def command(request_id, *, end=SESSIONS[2], parameters=None):
             "source": SOURCE.replace("SETTINGS = {}", f"SETTINGS = {parameters or {}!r}"),
         },
     }
+
+
+def test_busy_python_validation_keeps_health_responsive_and_admission_retryable(
+    tmp_path, monkeypatch,
+):
+    from thesistrace.research_kernel.strategy_program_runtime import get_strategy_runtime
+
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    _publish_head(settings, sessions=SESSIONS[:2], price_offset=0)
+    with TestClient(create_app(settings)) as client:
+        submitted = command("retry-after-validation-busy", end=SESSIONS[1])
+        spec = {key: value for key, value in submitted.items()
+                if key not in {"request_id", "folder_id", "name"}}
+        assert client.post("/api/research/diagnostics", json=spec).json()["valid"]
+        runtime = get_strategy_runtime()
+        entered = Event()
+        original_invoke = runtime._execution.invoke
+
+        def observe_guest(*args, **kwargs):
+            entered.set()
+            return original_invoke(*args, **kwargs)
+
+        monkeypatch.setattr(runtime._execution, "invoke", observe_guest)
+        malicious = {**spec, "program": {"source": "while True: pass\n" + SOURCE}}
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            pending = executor.submit(client.post, "/api/research/diagnostics", json=malicious)
+            assert entered.wait(10)
+            started = monotonic()
+            refused = client.post("/api/research-runs", json=submitted)
+            assert refused.status_code == 503, refused.text
+            assert refused.headers["Retry-After"] == "1"
+            assert client.get("/health/live").status_code == 200
+            assert monotonic() - started < 0.5
+            assert not pending.done()
+            assert client.get("/api/research-runs").json()["items"] == []
+            diagnosed = pending.result(timeout=10)
+            assert diagnosed.status_code == 200 and not diagnosed.json()["valid"]
+        accepted = client.post("/api/research-runs", json=submitted)
+        assert accepted.status_code == 202, accepted.text
 
 
 def test_obsolete_python_environment_keeps_results_but_rejects_new_tracking(tmp_path, monkeypatch):

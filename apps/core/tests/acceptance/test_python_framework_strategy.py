@@ -28,6 +28,7 @@ from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.research_definition import default_simulation_costs
 from thesistrace.research_run.models import RunStrategyFrameworkInput
 from thesistrace.research_run.supervised_child import SupervisedChildTransport, child_environment
+from thesistrace.researcher.quota import QuotaPolicy
 
 pytestmark = pytest.mark.skipif(
     not core_environment_is_configured(),
@@ -121,6 +122,58 @@ def command(request_id, *, end=SESSIONS[2], builtin_alpha=False, fail_session=No
         "modules": modules,
         **({"formula": "-close", "neutralization": "none"} if builtin_alpha else {}),
     }
+
+
+def test_python_batch_shares_one_validation_budget_and_accepts_twenty_framework_items(
+    tmp_path, monkeypatch,
+):
+    from copy import deepcopy
+    from time import monotonic
+
+    from thesistrace.research_kernel import strategy_program_runtime as admission
+
+    # Operators can submit the full Batch capacity without the daily ten-Run quota.
+    monkeypatch.setattr("thesistrace.entrypoints.runtime.quota_policy_lookup",
+        lambda _origin: lambda _researcher_id: QuotaPolicy(
+            timezone="Asia/Shanghai", daily_model_budget_nanodollars=None,
+            daily_run_limit=None, active_daily_track_limit=None,
+        ))
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    _publish_head(settings, sessions=SESSIONS[:2], price_offset=0)
+    base = command("maximum-framework", end=SESSIONS[1])
+    strategies = []
+    for index in range(20):
+        item = {key: deepcopy(value) for key, value in base.items() if key not in {
+            "request_id", "folder_id", "research_kind", "start_date", "end_date", "universe",
+        }}
+        item["item_key"] = f"framework-{index}"
+        for module in item["modules"].values():
+            module["program"]["source"] += f"\n# framework item {index}\n"
+        strategies.append(item)
+    submitted = {"request_id": "maximum-framework-batch", "batch_kind": "independent_strategies",
+        "start_date": SESSIONS[0], "end_date": SESSIONS[1], "universe": "top300",
+        "strategies": strategies}
+    with TestClient(create_app(settings)) as client:
+        started = monotonic()
+        accepted = client.post("/api/research-batches", json=submitted)
+        assert accepted.status_code == 202, accepted.text
+        assert monotonic() - started < admission.STRATEGY_VALIDATION_WALL_SECONDS
+        assert len(client.get("/api/research-runs").json()["items"]) == 20
+        malicious = deepcopy(submitted)
+        malicious["request_id"] = "exhaust-validation-budget"
+        for item in malicious["strategies"]:
+            for module in item["modules"].values():
+                module["program"]["source"] = "while True: pass\n" + module["program"]["source"]
+        with monkeypatch.context() as limits:
+            limits.setattr(admission, "STRATEGY_VALIDATION_WALL_SECONDS", 0.1)
+            started = monotonic()
+            refused = client.post("/api/research-batches", json=malicious)
+            assert refused.status_code == 503, refused.text
+            assert refused.headers["Retry-After"] == "1"
+            assert monotonic() - started < 2
+        assert len(client.get("/api/research-runs").json()["items"]) == 20
 
 
 def test_risk_only_instrument_events_survive_run_and_track_filtered_pagination(tmp_path):

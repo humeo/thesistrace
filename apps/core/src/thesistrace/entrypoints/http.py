@@ -962,6 +962,7 @@ def create_app(
             raise HTTPException(
                 status_code=503,
                 detail="Research Batch admission is temporarily unavailable",
+                headers={"Retry-After": "1"},
             ) from error
 
     @app.get("/api/research-batches", response_model=ResearchBatchList)
@@ -1032,6 +1033,7 @@ def create_app(
             raise HTTPException(
                 status_code=503,
                 detail="Research specification diagnosis temporarily unavailable",
+                headers={"Retry-After": "1"},
             ) from error
 
     @app.post(
@@ -1057,6 +1059,7 @@ def create_app(
             raise HTTPException(
                 status_code=503,
                 detail="ResearchRun admission temporarily unavailable",
+                headers={"Retry-After": "1"},
             ) from error
 
     @app.get("/api/research-runs", response_model=ResearchRunPage)

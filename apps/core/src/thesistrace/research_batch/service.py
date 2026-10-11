@@ -84,7 +84,10 @@ from thesistrace.research_batch.private_artifact import (
 )
 from thesistrace.research_folder import BATCH_RESEARCH_FOLDER_ID
 from thesistrace.research_kernel.research_chunks import AlphaFactorExecutionBinding
-from thesistrace.research_kernel.strategy_program_runtime import StrategyProgramFailure
+from thesistrace.research_kernel.strategy_program_runtime import (
+    StrategyProgramFailure,
+    StrategyValidationUnavailable,
+)
 from thesistrace.research_run.evidence import ResultEvidence
 from thesistrace.research_run.execution import ResearchExecutionResourceExhausted
 from thesistrace.research_run.models import (
@@ -710,6 +713,7 @@ class ResearchBatchService:
             PoolTimeout,
             PublicationUnavailableError,
             QuotaPolicyUnavailable,
+            StrategyValidationUnavailable,
         ) as error:
             raise ResearchBatchTemporarilyUnavailable(
                 "Research Batch admission is temporarily unavailable"
@@ -730,17 +734,18 @@ class ResearchBatchService:
         child_commands = _child_commands(command)
         prepared: list[PreparedResearchRunAdmission] = []
         issues: list[ResearchBatchAdmissionIssue] = []
-        for ordinal, (item_key, child_command) in enumerate(child_commands, start=1):
-            try:
-                child = self._research_runs.prepare_child_admission(
-                    researcher_id,
-                    child_command,
-                    dataset=dataset,
-                )
-            except ResearchRunAdmissionRejected as error:
-                issues.extend(_child_issues(command, ordinal, item_key, error))
-            else:
-                prepared.append(child)
+        with self._research_runs.program_validation_scope([child for _, child in child_commands]):
+            for ordinal, (item_key, child_command) in enumerate(child_commands, start=1):
+                try:
+                    child = self._research_runs.prepare_child_admission(
+                        researcher_id,
+                        child_command,
+                        dataset=dataset,
+                    )
+                except ResearchRunAdmissionRejected as error:
+                    issues.extend(_child_issues(command, ordinal, item_key, error))
+                else:
+                    prepared.append(child)
         if issues:
             raise ResearchBatchAdmissionRejected(_deduplicated_issues(issues))
         _validate_duplicate_computation(command, prepared)

@@ -86,22 +86,24 @@ class PreparedPythonEnvironment:
     def identity(self):
         return dict(self._identity)
 
-    def invoke(self, payload, *, clock_time_ns, read_request=None):
+    def invoke(self, payload, *, clock_time_ns, read_request=None, deadline=None):
         with self.open_session() as session:
-            return session.invoke(payload, clock_time_ns=clock_time_ns, read_request=read_request)
+            return session.invoke(payload, clock_time_ns=clock_time_ns, read_request=read_request,
+                                  deadline=deadline)
 
     def open_session(self):
         """A private guest heap, explicitly owned and closed by one program calculation."""
         return PreparedPythonSession(self)
 
-    def _session_invoke(self, session, payload, *, clock_time_ns, read_request=None):
+    def _session_invoke(self, session, payload, *, clock_time_ns, read_request=None, deadline=None):
         if type(payload) is not bytes or len(payload) > INPUT_BYTES:
             raise ValueError("Python input exceeds its byte limit")
         with self._lock:
             if self._closed:
                 raise ValueError("Python environment is closed")
             return self._invoke(
-                payload, clock_time_ns=clock_time_ns, read_request=read_request, session=session
+                payload, clock_time_ns=clock_time_ns, read_request=read_request, session=session,
+                deadline=deadline,
             )
 
     def close(self):
@@ -118,7 +120,7 @@ class PreparedPythonEnvironment:
     def __exit__(self, *_error):
         self.close()
 
-    def _invoke(self, payload, *, clock_time_ns, read_request, session):
+    def _invoke(self, payload, *, clock_time_ns, read_request, session, deadline=None):
         stdout, stderr = bytearray(), bytearray()
         expired = threading.Event()
         phase = "bootstrap"
@@ -130,12 +132,17 @@ class PreparedPythonEnvironment:
             expired.set()
             self._engine.increment_epoch()
 
-        timeout = threading.Timer(BOOTSTRAP_WALL_SECONDS, interrupt)
+        def bounded_seconds(seconds):
+            if deadline is None:
+                return seconds
+            return min(seconds, max(0, deadline - time.monotonic()))
+
+        timeout = threading.Timer(bounded_seconds(BOOTSTRAP_WALL_SECONDS), interrupt)
 
         def resume_program():
             nonlocal timeout, program_started
             program_started = time.monotonic()
-            timeout = threading.Timer(remaining_program_seconds, interrupt)
+            timeout = threading.Timer(bounded_seconds(remaining_program_seconds), interrupt)
             timeout.daemon = True
             timeout.start()
 
@@ -336,7 +343,7 @@ class PreparedPythonSession:
         self._output_releases.append(released)
         return callback
 
-    def invoke(self, payload, *, clock_time_ns, read_request=None):
+    def invoke(self, payload, *, clock_time_ns, read_request=None, deadline=None):
         with self.environment._lock:
             if self.closed:
                 raise ValueError("Python execution session is closed")
@@ -346,6 +353,7 @@ class PreparedPythonSession:
                     payload,
                     clock_time_ns=clock_time_ns,
                     read_request=read_request,
+                    deadline=deadline,
                 )
             except BaseException:
                 self.close()
