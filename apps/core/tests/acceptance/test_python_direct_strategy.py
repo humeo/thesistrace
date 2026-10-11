@@ -112,6 +112,64 @@ def test_busy_python_validation_keeps_health_responsive_and_admission_retryable(
         assert accepted.status_code == 202, accepted.text
 
 
+def test_track_sparse_event_pages_bound_checkpoint_scanning_and_continue_past_expiry(tmp_path):
+    from datetime import date, timedelta
+
+    sessions = tuple((date(2026, 8, 3) + timedelta(days=index)).isoformat()
+                     for index in range(30)
+                     if (date(2026, 8, 3) + timedelta(days=index)).weekday() < 5)[:19]
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    head = _publish_head(settings, sessions=sessions[:2], price_offset=0)
+    with TestClient(create_app(settings)) as client:
+        submitted = command("sparse-track-events", end=sessions[1])
+        submitted["program"]["source"] = (
+            "def decide(data, account, state):\n"
+            f"    if data.session == {sessions[-1]!r}:\n"
+            "        data.history('price.close.adjusted', days=1)\n"
+            "    return None\n"
+        )
+        accepted = client.post("/api/research-runs", json=submitted)
+        assert accepted.status_code == 202, accepted.text
+        runtime = client.app.state.core_runtime
+        assert runtime.research_runs.process_next()
+        tracked = client.post(f"/api/research-runs/{accepted.json()['id']}/daily-tracks",
+            json={"request_id": "sparse-track"})
+        assert tracked.status_code == 201, tracked.text
+        track_id = tracked.json()["id"]
+        for index in range(2, len(sessions)):
+            head = _publish_head(settings, sessions=sessions[:index + 1],
+                price_offset=0, expected_manifest=head)
+            refreshed = client.post(f"/api/daily-tracks/{track_id}/refresh",
+                json={"request_id": f"sparse-track-refresh-{index}"})
+            assert refreshed.status_code == 202, refreshed.text
+            assert runtime.daily_tracks.process_next()
+
+        def pages():
+            cursor = None
+            result = []
+            for _ in range(3):
+                response = client.post(f"/api/daily-tracks/{track_id}/events/query",
+                    json={"section": "strategy_history_reads", "cursor": cursor})
+                assert response.status_code == 200, response.text
+                result.append(response.json())
+                cursor = response.json()["next_cursor"]
+            assert cursor is None
+            assert [len(page["rows"]) for page in result] == [0, 0, 1]
+            assert result[-1]["rows"][0]["session"] == sessions[-1]
+            return result
+
+        assert all(page["status"] == "recorded" for page in pages())
+        latest = client.get(f"/api/daily-tracks/{track_id}").json()["checkpoint_manifest_sha256"]
+        with runtime.database.transaction() as tx:
+            tx.execute("UPDATE publication.payload_retention SET "
+                "published_at = now() - interval '8 days', expires_at = now() - interval '1 day' "
+                "WHERE manifest_sha256 <> %s", (latest,))
+        expired_prefix = pages()
+        assert all(page["status"] == "partially_expired" for page in expired_prefix)
+
+
 def test_obsolete_python_environment_keeps_results_but_rejects_new_tracking(tmp_path, monkeypatch):
     from thesistrace.research_kernel.strategy_program_runtime import PythonStrategyRuntime
 

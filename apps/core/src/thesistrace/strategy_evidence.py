@@ -601,14 +601,22 @@ class StrategyEventPageRead:
     expires_at: datetime | None = None
 
 
-def read_retained_strategy_events(database, publication, reference, *, query, after=None):
+@dataclass
+class StrategyEventScanBudget:
+    partitions_left: int = 8
+    checkpoints_left: int = 8
+
+
+def read_retained_strategy_events(
+    database, publication, reference, *, query, after=None, budget=None,
+):
     from dataclasses import replace
 
     from thesistrace.publication.payload_retention import PayloadRetention
 
     metadata, page = PayloadRetention(database, publication).read_detail(
         reference, lambda tx: read_strategy_event_page(
-            publication, reference, query=query, after=after, transaction=tx,
+            publication, reference, query=query, after=after, transaction=tx, budget=budget,
         ), payload_name=query.section,
     )
     if page is None:
@@ -627,7 +635,9 @@ def read_strategy_event_page(
     query: StrategyEventQuery,
     after: str | None = None,
     transaction=None,
+    budget: StrategyEventScanBudget | None = None,
 ) -> StrategyEventPageRead:
+    budget = budget if budget is not None else StrategyEventScanBudget()
     section = query.section
     if section not in EVENT_MODELS:
         raise ValueError("Unknown Strategy evidence section")
@@ -657,6 +667,7 @@ def read_strategy_event_page(
     if partition_names != {name for name in inventory if name.startswith(section + ".part-")}:
         raise ValueError("Strategy event publication partitions are incomplete")
     rows = []
+    last_scanned = boundary
     filters = query.filters()
     for part in parts:
         if boundary is not None and tuple(part["last"]) <= boundary:
@@ -665,6 +676,12 @@ def read_strategy_event_page(
             continue
         if query.end_session is not None and part["first"][0] > query.end_session:
             break
+        if budget.partitions_left == 0:
+            if last_scanned is None:
+                raise ValueError("Event scan requires an available partition budget")
+            return StrategyEventPageRead(status="recorded", rows=rows,
+                next_after=json.dumps(last_scanned, separators=(",", ":")))
+        budget.partitions_left -= 1
         bundle = read_selected(frozenset({part["name"]}))
         payload = bundle.payloads[part["name"]]
         if payload.media_type != "application/vnd.apache.parquet" or payload.serialization != {
@@ -679,6 +696,7 @@ def read_strategy_event_page(
             or list(event_order(section, values[-1])) != part["last"]
         ):
             raise ValueError("Strategy event rows differ from their partition bounds")
+        last_scanned = tuple(part["last"])
         for row in values:
             if (boundary is None or event_order(section, row) > boundary) and event_matches(
                 row, section, filters
@@ -775,17 +793,17 @@ def strategy_event_response(
     *,
     source: StrategyEvidenceSource,
     encode_cursor: Callable[[str], str],
+    cursor_after_row: Callable[[Mapping[str, object]], str] | None = None,
 ):
     from thesistrace._paging import BUSINESS_PAGE_BYTES, fit_page
     from thesistrace.strategy_event_wire import event_record_byte_limit
 
     def build(rows):
-        has_more = len(rows) < len(read.rows) or read.next_after is not None
-        cursor = (
-            encode_cursor(event_cursor_after(query.section, rows[-1]))
-            if has_more and rows
-            else None
-        )
+        position = read.next_after
+        if len(rows) < len(read.rows):
+            position = (cursor_after_row(rows[-1]) if cursor_after_row is not None
+                        else event_cursor_after(query.section, rows[-1]))
+        cursor = encode_cursor(position) if position is not None else None
         return EVENT_PAGE_MODELS[query.section](
             source=source,
             status=read.status,

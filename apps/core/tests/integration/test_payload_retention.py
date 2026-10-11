@@ -8,7 +8,7 @@ import pytest
 
 from thesistrace.entrypoints.runtime import open_core_runtime
 from thesistrace.entrypoints.schema import initialize_core
-from thesistrace.publication import JsonPayload, PublicationVerificationError
+from thesistrace.publication import JsonPayload, PublicationVerificationError, PublishedRef
 from thesistrace.publication.payload_retention import PayloadRetention
 
 
@@ -52,6 +52,46 @@ def expire(runtime, ref):
             "expires_at = now() - interval '1 day' WHERE manifest_sha256 = %s",
             (ref.manifest_sha256,),
         )
+
+
+def test_retained_reads_verify_inventory_once_and_keep_reference_and_transaction_boundaries(
+    runtime, monkeypatch,
+):
+    ref = record(runtime)
+    retention = PayloadRetention(runtime.database, runtime.publication)
+    checks = []
+    verify = runtime.publication._verify_recorded_links
+
+    def observe_verification(tx, digest, objects):
+        checks.append(digest)
+        return verify(tx, digest, objects)
+
+    monkeypatch.setattr(runtime.publication, "_verify_recorded_links", observe_verification)
+
+    def read(tx):
+        assert runtime.publication.payload_names_in_transaction(tx, ref)
+        first = runtime.publication.read_selected_in_transaction(tx, ref,
+            frozenset({"strategy_orders"}))
+        second = runtime.publication.read_selected_in_transaction(tx, ref,
+            frozenset({"strategy_orders", "strategy_summary"}))
+        assert first.payloads["strategy_orders"] == second.payloads["strategy_orders"]
+        return second
+
+    assert retention.read_detail(ref, read)[1].payloads["strategy_orders"].content
+    assert checks == [ref.manifest_sha256]
+    assert retention.read_detail(ref, read)[1].payloads["strategy_orders"].content
+    assert checks == [ref.manifest_sha256] * 2
+
+    def wrong_reference(tx):
+        foreign = PublishedRef(manifest_sha256=ref.manifest_sha256,
+            kind="daily-track.checkpoint", provenance=ref.provenance)
+        with pytest.raises(PublicationVerificationError, match="kind"):
+            runtime.publication.payload_names_in_transaction(tx, foreign)
+        return runtime.publication.read_selected_in_transaction(tx, ref,
+            frozenset({"strategy_orders"}))
+
+    assert retention.read_detail(ref, wrong_reference)[1].payloads["strategy_orders"].content
+    assert checks == [ref.manifest_sha256] * 4
 
 
 def test_only_successful_detail_reads_renew_and_expiry_reclaims_only_diagnostics(runtime):

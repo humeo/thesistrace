@@ -19,6 +19,30 @@ const order = { target_id: "target_a", order_id: "order_a", decision_session: "2
 const child = { ...order, child_order_id: "child_a", quantity: 100 };
 const fill = { ...child, fill_id: "fill_a", raw_open: "10", adjusted_open: "20", execution_price: "10.01", price_slippage: "0.01", raw_notional: "1001", research_settlement: "1001", cost: "5", commission_cny: "5", stamp_duty_cny: "0", transfer_fee_cny: "0", cash_rounding_delta: "0", net_cash_delta: "-1006", adjusted_units_delta: "50", execution_shares_delta: 100 };
 
+test("continues through empty event pages before showing matching records", async ({ page }) => {
+  await page.route("https://events.test/**", route => {
+    if (new URL(route.request().url()).pathname === "/") return route.fulfill({ contentType: "text/html", body: `${fontStylesheet}<div id="root"></div>` });
+    const query = route.request().postDataJSON() as Record<string, unknown>;
+    return route.fulfill({ json: { section: query.section, status: "recorded",
+      rows: query.cursor ? [target] : [], next_cursor: query.cursor ? null : "scanned-page-2" } });
+  });
+  await page.goto("https://events.test/");
+  await page.addStyleTag({ content: styles });
+  await page.addScriptTag({ content: script });
+  await page.getByText("Trading events", { exact: true }).click();
+  await page.getByRole("combobox", { name: "Event type" }).click();
+  await page.getByRole("option", { name: "Rebalance targets", exact: true }).click();
+  await expect(page.getByText("No matching records on this page. Continue to check the remaining events.", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Next", exact: true })).toBeEnabled();
+  await expect(page.getByText("End of results", { exact: true })).not.toBeVisible();
+  await page.getByRole("button", { name: "简体中文", exact: true }).click();
+  await expect(page.getByText("本页没有匹配记录，可以继续查看其余事件。", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "English", exact: true }).click();
+  await page.getByRole("button", { name: "Next", exact: true }).click();
+  await expect(page.getByRole("table", { name: "Rebalance targets" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Next", exact: true })).toBeDisabled();
+});
+
 test("troubleshooting table preserves unknown quantities and copies the exact record", async ({ page, context }) => {
   const reads: Record<string, unknown>[] = [];
   const recorded = { ...order, intended_value: "1000.0000000000000001", unrounded_quantity: 100 };

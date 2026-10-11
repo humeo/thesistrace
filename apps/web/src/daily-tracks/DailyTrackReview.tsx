@@ -75,7 +75,7 @@ export function DailyTrackReview({ track }: { track: DailyTrackDetail }) {
           : page === null ? <p role="status">{t("eventsLoading")}</p>
           : page.status === "expired" || page.status === "not_recorded" ? <Empty><EmptyDescription>{t(page.status === "expired" ? "eventsExpired" : "eventsNotRecorded")}</EmptyDescription></Empty>
           : <>{page.status === "partially_expired" && <Alert><AlertDescription>{t("eventsPartial")}</AlertDescription></Alert>}
-            {page.rows.length === 0 ? <Empty><EmptyDescription>{t("noSessionEvents")}</EmptyDescription></Empty> : <StrategyEventTable section={section} rows={page.rows} navigate={(next, filters, scope) => setQuery({ section: next, filters, scope })} />}
+            {page.rows.length === 0 ? <Empty><EmptyDescription>{t(page.next_cursor ? "noSessionEventsMore" : "noSessionEvents")}</EmptyDescription></Empty> : <StrategyEventTable section={section} rows={page.rows} navigate={(next, filters, scope) => setQuery({ section: next, filters, scope })} />}
             {page.next_cursor && <Button variant="outline" className="justify-self-start" onClick={() => setQuery({ section })}>{t("moreEvents")}</Button>}
           </>}
       </Section>

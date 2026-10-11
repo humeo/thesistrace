@@ -139,6 +139,7 @@ from thesistrace.strategy_event_wire import MAX_TARGET_RECORD_BYTES
 from thesistrace.strategy_evidence import (
     StrategyEventPageRead,
     StrategyEventQuery,
+    StrategyEventScanBudget,
     StrategyEvidencePublication,
     StrategyEvidenceSource,
     event_cursor_after,
@@ -1873,26 +1874,40 @@ class DailyTrackService:
         assert self._publication is not None
         with self._database.transaction() as transaction:
             secret = _cursor_secret(transaction)
+        cursor_order = query.cursor_order() + ":checkpoint-scan-v1"
         after, manifest = _decode_result_cursor(
             query.cursor, secret=secret, researcher_id=researcher_id, track_id=query.track_id,
-            section=query.section, order=query.cursor_order(),
+            section=query.section, order=cursor_order,
         )
-        lower = query.start_session
+        checkpoint_after = None
+        if query.start_session is not None and date.fromisoformat(query.start_session) > date.min:
+            checkpoint_after = (
+                date.fromisoformat(query.start_session) - timedelta(days=1)
+            ).isoformat()
+        position = {"checkpoint_after": checkpoint_after, "event_after": None,
+                    "seed_complete": False, "expired": False,
+                    "recorded": False, "unrecorded": False}
         if after is not None:
             try:
                 position = json.loads(after)
-                if not isinstance(position, list) or len(position) != 2:
+                if (not isinstance(position, dict) or set(position) != {
+                    "checkpoint_after", "event_after", "seed_complete", "expired",
+                    "recorded", "unrecorded",
+                } or any(type(position[key]) is not bool for key in (
+                    "seed_complete", "expired", "recorded", "unrecorded",
+                )) or any(position[key] is not None and not isinstance(position[key], str)
+                          for key in ("checkpoint_after", "event_after"))):
                     raise ValueError("Invalid event position")
-                lower = max(lower or position[0], position[0])
+                if position["checkpoint_after"] is not None:
+                    value = position["checkpoint_after"]
+                    if date.fromisoformat(value).isoformat() != value:
+                        raise ValueError("Invalid checkpoint date")
             except (TypeError, ValueError) as error:
                 raise DailyTrackInvalidCursor(
                     "DailyTrack event cursor position is invalid"
                 ) from error
-        checkpoint_after = None
-        if lower is not None and date.fromisoformat(lower) > date.min:
-            checkpoint_after = (date.fromisoformat(lower) - timedelta(days=1)).isoformat()
         snapshot = self._session_coordinates.load_read_snapshot(
-            researcher_id, query.track_id, after=checkpoint_after,
+            researcher_id, query.track_id, after=position["checkpoint_after"],
             checkpoint_limit=1, manifest_sha256=manifest,
         )
         if snapshot is None:
@@ -1901,75 +1916,99 @@ class DailyTrackService:
             return None
         manifest = str(snapshot["current_checkpoint_manifest_sha256"])
         origin = TrackingOrigin.model_validate(snapshot["origin"])
-        rows = []
+        if (query.start_session is not None
+            and query.start_session > origin.initial_strategy_state.session):
+            position["seed_complete"] = True
+        rows, row_positions = [], {}
         has_more = False
-        status = "recorded"
-        expired = False
         expires_at = None
+        budget = StrategyEventScanBudget()
         try:
-            refs = []
-            if lower is None or lower <= origin.initial_strategy_state.session:
-                refs.append(_seed_result_ref(origin))
             while True:
+                seed = not position["seed_complete"]
                 checkpoints = snapshot["observation_checkpoints"]
-                refs.extend(PublishedRef(
-                    manifest_sha256=item["manifest_sha256"], kind="daily-track.checkpoint",
-                    provenance=item["provenance"],
-                ) for item in checkpoints)
-                for reference in refs:
-                    read = read_retained_strategy_events(
-                        self._database, self._publication, reference,
-                        query=query.model_copy(update={
-                            "limit": min(50, query.limit + 1 - len(rows)),
-                        }),
-                        after=after,
-                    )
-                    if read.status == "not_recorded":
-                        status, rows = "not_recorded", []
-                        break
-                    if read.status == "expired":
-                        expired = True
-                        continue
+                if seed:
+                    reference = _seed_result_ref(origin)
+                elif checkpoints:
+                    checkpoint = checkpoints[0]
+                    reference = PublishedRef(manifest_sha256=checkpoint["manifest_sha256"],
+                        kind="daily-track.checkpoint", provenance=checkpoint["provenance"])
+                else:
+                    break
+                if budget.checkpoints_left == 0 or budget.partitions_left == 0:
+                    has_more = True
+                    break
+                budget.checkpoints_left -= 1
+                read = read_retained_strategy_events(
+                    self._database, self._publication, reference,
+                    query=query.model_copy(update={"limit": min(50, query.limit + 1 - len(rows))}),
+                    after=position["event_after"], budget=budget,
+                )
+                if read.status == "expired":
+                    position["expired"] = True
+                elif read.status == "not_recorded":
+                    position["unrecorded"] = True
+                else:
+                    position["recorded"] = True
                     if read.expires_at is not None:
                         expires_at = (min(expires_at, read.expires_at)
                                       if expires_at else read.expires_at)
+                    for row in read.rows:
+                        key = event_cursor_after(query.section, row)
+                        row_positions[key] = {**position, "event_after": key}
                     rows.extend(read.rows)
-                    has_more = len(rows) > query.limit or read.next_after is not None
-                    if has_more:
+                    if len(rows) > query.limit:
+                        last_key = event_cursor_after(query.section, rows[query.limit - 1])
+                        position = row_positions[last_key]
+                        rows = rows[:query.limit]
+                        has_more = True
                         break
-                if status == "not_recorded" or has_more or not checkpoints:
+                    if read.next_after is not None:
+                        position["event_after"] = read.next_after
+                        has_more = True
+                        break
+                position["event_after"] = None
+                if seed:
+                    position["seed_complete"] = True
+                    continue
+                position["checkpoint_after"] = str(checkpoint["boundary_session"])
+                if (position["checkpoint_after"] >= str(snapshot["current_strategy_session"])
+                    or (query.end_session is not None
+                        and position["checkpoint_after"] >= query.end_session)):
                     break
-                checkpoint_after = str(checkpoints[-1]["boundary_session"])
-                if (checkpoint_after >= str(snapshot["current_strategy_session"])
-                    or (query.end_session is not None and checkpoint_after >= query.end_session)):
+                if budget.checkpoints_left == 0 or budget.partitions_left == 0:
+                    has_more = True
                     break
                 snapshot = self._session_coordinates.load_read_snapshot(
-                    researcher_id, query.track_id, after=checkpoint_after,
+                    researcher_id, query.track_id, after=position["checkpoint_after"],
                     checkpoint_limit=1, manifest_sha256=manifest,
                 )
                 if snapshot is None:
                     raise DailyTrackResultUnavailable("DailyTrack event snapshot was removed")
-                refs = []
-            rows = rows[:query.limit]
-            if expired and status != "not_recorded":
-                status = "partially_expired" if rows else "expired"
+            status = "recorded"
+            if position["expired"]:
+                status = ("partially_expired" if rows or has_more or position["recorded"]
+                          else "expired")
+            elif position["unrecorded"] and not position["recorded"] and not has_more:
+                status = "not_recorded"
             return strategy_event_response(
-                query, StrategyEventPageRead(
-                    status=status, rows=rows, expires_at=expires_at,
-                    next_after=(event_cursor_after(query.section, rows[-1])
-                                if has_more and rows else None),
-                ),
+                query, StrategyEventPageRead(status=status, rows=rows, expires_at=expires_at,
+                    next_after=json.dumps(position, separators=(",", ":")) if has_more else None),
                 source=StrategyEvidenceSource.for_publication(
                     kind="daily_track", id=query.track_id, manifest_sha256=manifest,
                 ),
-                encode_cursor=lambda position: _next_daily_track_result_cursor(
-                    position, secret=secret, researcher_id=researcher_id, track_id=query.track_id,
-                    section=query.section, order=query.cursor_order(), snapshot_identity=manifest,
+                encode_cursor=lambda value: _next_daily_track_result_cursor(
+                    value, secret=secret, researcher_id=researcher_id, track_id=query.track_id,
+                    section=query.section, order=cursor_order, snapshot_identity=manifest,
+                ),
+                cursor_after_row=lambda row: json.dumps(
+                    row_positions[event_cursor_after(query.section, row)], separators=(",", ":"),
                 ),
             )
         except (KeyError, TypeError, ValueError, PublicationNotFoundError,
                 PublicationVerificationError) as error:
             raise DailyTrackResultReadFailed("DailyTrack events could not be verified") from error
+
 
     def _daily_track_result_section(
         self,

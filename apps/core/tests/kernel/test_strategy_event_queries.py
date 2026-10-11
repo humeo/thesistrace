@@ -205,7 +205,42 @@ def test_execution_constraint_queries_page_and_preserve_unrecorded_history() -> 
         read_strategy_event_page(publication, reference, query=query)
 
 
-def _publication(*, constraints=None):
+def test_sparse_event_queries_bound_scanning_and_resume_through_empty_pages():
+    from thesistrace.strategy_evidence import read_strategy_event_page
+
+    publication, reference, rows = _publication(target_count=17, part_size=1)
+    query = StrategyTargetsQuery(section="strategy_targets",
+        target_id=rows[-1]["target_id"], limit=1)
+    after = None
+    pages = []
+    for _ in range(3):
+        publication.reads.clear()
+        page = read_strategy_event_page(publication, reference, query=query, after=after)
+        partitions = [names for names in publication.reads
+                      if any(".part-" in name for name in names)]
+        assert len(partitions) <= 8
+        pages.append(page.rows)
+        after = page.next_after
+    assert pages == [[], [], rows[-1:]]
+    assert after is None
+
+
+def test_empty_event_response_preserves_the_scanning_continuation():
+    from thesistrace.strategy_evidence import (
+        StrategyEventPageRead,
+        StrategyEvidenceSource,
+        strategy_event_response,
+    )
+
+    position = '["2026-01-05","target_0000000000000007"]'
+    page = strategy_event_response(StrategyTargetsQuery(section="strategy_targets"),
+        StrategyEventPageRead(status="recorded", rows=[], next_after=position),
+        source=StrategyEvidenceSource(kind="research_run", id="run", snapshot_id="c" * 64),
+        encode_cursor=lambda value: value)
+    assert page.rows == [] and page.next_cursor == position
+
+
+def _publication(*, constraints=None, target_count=513, part_size=512):
     import json
 
     from thesistrace.publication import JsonPayload, PublishedRef, VerifiedBundle, VerifiedPayload
@@ -225,14 +260,16 @@ def _publication(*, constraints=None):
             },
             "position_limits": {},
         }
-        for index, session in enumerate(["2026-01-05"] * 512 + ["2026-01-06"])
+        for index, session in enumerate(["2026-01-05"] * min(target_count, 512)
+                                       + ["2026-01-06"] * max(0, target_count - 512))
     ]
     builder = StrategyEvidencePublication()
     if constraints:
         builder.add("strategy_execution_constraints", strategy_event_payload(
             "strategy_execution_constraints", constraints,
         ), constraints)
-    for part in (rows[:512], rows[512:]):
+    for offset in range(0, len(rows), part_size):
+        part = rows[offset:offset + part_size]
         builder.add("strategy_targets", strategy_event_payload("strategy_targets", part), part)
     payloads = {}
     for name, payload in builder.finish().items():

@@ -134,7 +134,7 @@ export function StrategyEvents({ endpoint, embedded = false, dateRange, initialQ
         : page.status === "not_recorded" ? <p>{section === "strategy_execution_constraints"
           ? t("events.constraintsNotRecorded")
           : t("events.notRecorded")}</p>
-        : page.rows.length === 0 ? <Empty><EmptyDescription>{t("events.empty", { section: eventSectionLabel(section) })}</EmptyDescription></Empty>
+        : page.rows.length === 0 ? <Empty><EmptyDescription>{t(page.next_cursor ? "events.emptyMore" : "events.empty", { section: eventSectionLabel(section) })}</EmptyDescription></Empty>
         : <StrategyEventTable key={section + ":" + JSON.stringify(filters) + ":" + cursor}
             section={section} rows={page.rows} navigate={navigate} />}
       <nav className="flex flex-wrap items-center gap-3" aria-label={t("events.pages")}>

@@ -192,6 +192,9 @@ class Publication:
         self._s3 = s3
         self._bucket = bucket
         self._bucket_ready = False
+        self._verified_read_context: ContextVar[tuple | None] = ContextVar(
+            "publication_verified_read_context", default=None,
+        )
         self._staging_connection: ContextVar[PostgresTransaction | None] = ContextVar(
             "publication_staging_connection", default=None,
         )
@@ -509,6 +512,18 @@ class Publication:
         manifest = self._validated_published_manifest(transaction, published_ref)
         return frozenset(_object_descriptor(item)[0] for item in _manifest_objects(manifest))
 
+    @contextmanager
+    def verified_read_scope(self, transaction: PostgresTransaction, reference: PublishedRef):
+        """Reuse verified immutable inventory while the caller holds its retention row lock."""
+        manifest = self._validated_published_manifest(transaction, reference)
+        identity = (reference.manifest_sha256, reference.kind,
+                    canonical_json_bytes(reference.provenance))
+        token = self._verified_read_context.set((transaction, identity, manifest))
+        try:
+            yield
+        finally:
+            self._verified_read_context.reset(token)
+
     def read_selected(
         self,
         published_ref: PublishedRef,
@@ -634,6 +649,11 @@ class Publication:
         transaction: PostgresTransaction,
         published_ref: PublishedRef,
     ) -> dict[str, object]:
+        context = self._verified_read_context.get()
+        identity = (published_ref.manifest_sha256, published_ref.kind,
+                    canonical_json_bytes(published_ref.provenance))
+        if context is not None and context[0] is transaction and context[1] == identity:
+            return context[2]
         row = transaction.execute(
             """
             SELECT schema_version, kind, manifest_bytes

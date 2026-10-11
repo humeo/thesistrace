@@ -37,33 +37,36 @@ class PayloadRetention:
                 "SELECT * FROM publication.payload_retention WHERE manifest_sha256 = %s FOR UPDATE",
                 (reference.manifest_sha256,),
             ).fetchone()
-            self._publication.payload_names_in_transaction(tx, reference)
-            if (
-                row is not None
-                and payload_name is not None
-                and payload_name not in row["payload_names"]
-            ):
-                return None, read(tx)
-            now = tx.execute("SELECT clock_timestamp() AS now").fetchone()["now"]
-            if row is not None and (row["expired_at"] is not None or row["expires_at"] <= now):
-                return {**row, "status": "expired"}, None
-            if row is not None:
-                # Keep an admitted read valid across its old deadline. This is
-                # uncommitted and rolls back with failed verification below.
-                tx.execute(
-                    "UPDATE publication.payload_retention SET expires_at = %s + interval '7 days' "
-                    "WHERE manifest_sha256 = %s", (now, reference.manifest_sha256),
-                )
-            value = read(tx)
-            if row is not None:
-                row = tx.execute(
-                    "UPDATE publication.payload_retention SET last_read_at = t.now, "
-                    "expires_at = t.now + interval '7 days' "
-                    "FROM (SELECT clock_timestamp() AS now) t WHERE manifest_sha256 = %s "
-                    "RETURNING payload_retention.*",
-                    (reference.manifest_sha256,),
-                ).fetchone()
-            return row, value
+            with self._publication.verified_read_scope(tx, reference):
+                if (
+                    row is not None
+                    and payload_name is not None
+                    and payload_name not in row["payload_names"]
+                ):
+                    return None, read(tx)
+                now = tx.execute("SELECT clock_timestamp() AS now").fetchone()["now"]
+                if row is not None and (
+                    row["expired_at"] is not None or row["expires_at"] <= now
+                ):
+                    return {**row, "status": "expired"}, None
+                if row is not None:
+                    # Keep an admitted read valid across its old deadline. This is
+                    # uncommitted and rolls back with failed verification below.
+                    tx.execute(
+                        "UPDATE publication.payload_retention "
+                        "SET expires_at = %s + interval '7 days' "
+                        "WHERE manifest_sha256 = %s", (now, reference.manifest_sha256),
+                    )
+                value = read(tx)
+                if row is not None:
+                    row = tx.execute(
+                        "UPDATE publication.payload_retention SET last_read_at = t.now, "
+                        "expires_at = t.now + interval '7 days' "
+                        "FROM (SELECT clock_timestamp() AS now) t WHERE manifest_sha256 = %s "
+                        "RETURNING payload_retention.*",
+                        (reference.manifest_sha256,),
+                    ).fetchone()
+                return row, value
 
     def expire_one_in_transaction(self, tx) -> bool:
         lock_publication_mutation(tx)
