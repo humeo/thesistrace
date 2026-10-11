@@ -94,6 +94,36 @@ function dependencies(
 }
 
 describe("Auth HTTP boundary", () => {
+  it.each([
+    "/api/auth/email-otp/send-verification-otp",
+    "/api/auth/sign-in/email-otp",
+    "/api/auth/researcher-invitation/accept",
+    "/api/auth/operator/proofs/send-code",
+  ])("rejects oversized public bodies before parsing or calling handlers: %s", async (path) => {
+    for (const streamed of [false, true]) {
+      const sendSignInCode = vi.fn(async () => undefined);
+      const appDependencies = dependencies({ sendSignInCode });
+      const encoded = new TextEncoder().encode(" ".repeat(32768) + "{}");
+      const body = streamed ? new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoded.subarray(0, 16384));
+          controller.enqueue(encoded.subarray(16384));
+          controller.close();
+        },
+      }) : encoded;
+      const response = await createAuthApp(appDependencies).request(new Request(`http://auth.test${path}`, {
+        method: "POST", body, duplex: "half",
+        headers: { origin: "http://auth.test", "content-type": "application/json",
+          ...(streamed ? {} : { "content-length": String(encoded.byteLength) }) },
+      } as RequestInit));
+      expect(response.status).toBe(413);
+      expect(await response.json()).toEqual({ code: "AUTH_REQUEST_TOO_LARGE" });
+      expect(sendSignInCode).not.toHaveBeenCalled();
+      expect(appDependencies.acceptInvitation).not.toHaveBeenCalled();
+      expect(appDependencies.authHandler).not.toHaveBeenCalled();
+    }
+  });
+
   it("returns live quota policy and fails closed when Auth cannot resolve it", async () => {
     const isOperator = vi.fn(async () => true);
     const app = createAuthApp(dependencies({ isOperator }));

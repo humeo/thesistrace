@@ -1,4 +1,5 @@
 import { Hono, type Context } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
 import { ResearcherQuotaPolicy } from "./quota-policy.js";
 
@@ -289,6 +290,10 @@ export function createAuthApp(dependencies: AuthAppDependencies, mcpRoutes?: Ret
   app.onError((_error, context) =>
     context.json({ code: "AUTH_SERVICE_UNAVAILABLE" }, 503),
   );
+  app.use("/api/auth/*", bodyLimit({
+    maxSize: 32 * 1024,
+    onError: (context) => context.json({ code: "AUTH_REQUEST_TOO_LARGE" }, 413),
+  }));
 
   app.get("/health/live", (context) => context.json({ status: "ok" }));
   app.get("/health/ready", async (context) => {

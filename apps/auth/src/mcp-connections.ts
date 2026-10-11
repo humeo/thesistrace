@@ -1,6 +1,5 @@
 import { Hono } from "hono";
 import type { AuthOperationCoordinator } from "./coordination.js";
-import { bodyLimit } from "hono/body-limit";
 import type { Pool } from "pg";
 import { z } from "zod";
 import type { ThesisTraceAuth } from "./auth.js";
@@ -13,7 +12,6 @@ import { MCP_ACCESS_PREFIX, mcpTokenHash } from "./mcp-oauth.js";
 export function createMcpConnectionsApp(auth: ThesisTraceAuth, pool: Pool, settings: AuthSettings, coordination: AuthOperationCoordinator) {
   const app = new Hono<{ Variables: { mcpResearcher: string } }>();
   app.use("*", async (c, next) => { c.header("Cache-Control", "no-store"); await next(); });
-  app.use("/api/auth/*", bodyLimit({ maxSize: 32768 }));
   // Serialize issuance and revocation for the same OAuth client across Auth
   // processes. The existing coordination pool avoids holding runtime pool
   // connections while the provider performs its own database operations.
