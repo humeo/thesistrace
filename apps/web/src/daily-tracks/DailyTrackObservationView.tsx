@@ -1,7 +1,6 @@
 import { InfoHelp } from "../components/product/InfoHelp";
 import { Metric, MetricGroup } from "../components/product/MetricGroup";
 import { Section } from "../components/layout/Page";
-import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell, TableFooter } from "../components/ui/table";
 import { Empty, EmptyHeader, EmptyTitle, EmptyDescription } from "../components/ui/empty";
@@ -117,8 +116,8 @@ export function SelectionSchedule({ observation, isStopped, isStopping, isBehind
   );
 }
 
-export function TrackingReturnChart({ observation, originSession }: {
-  observation: Pick<DailyTrackObservation, "returns">; originSession: string;
+export function TrackingReturnChart({ observation, originSession, height = 216 }: {
+  observation: Pick<DailyTrackObservation, "returns">; originSession: string; height?: number;
 }) {
   const { t, i18n } = useTranslation("daily");
   const chartRef = useRef<IChartApi | null>(null);
@@ -131,7 +130,7 @@ export function TrackingReturnChart({ observation, originSession }: {
     setSelected(null);
     const theme = chartTheme(element);
     const chart = createChart(element, {
-      width: element.clientWidth, height: 216,
+      width: element.clientWidth, height,
       layout: { background: { type: ColorType.Solid, color: theme.background }, textColor: theme.text, fontFamily: "Inter, Noto Sans SC, -apple-system, BlinkMacSystemFont, sans-serif", attributionLogo: false },
       grid: { vertLines: { visible: false }, horzLines: { color: theme.grid } },
       leftPriceScale: { visible: true, borderColor: theme.border },
@@ -153,17 +152,18 @@ export function TrackingReturnChart({ observation, originSession }: {
     });
     resize.observe(element);
     return () => { visibleRange.current = chart.timeScale().getVisibleLogicalRange(); chartRef.current = null; resize.disconnect(); chart.remove(); };
-  }, [observation.returns]);
+  }, [observation.returns, height]);
   useEffect(() => {
     chartRef.current?.applyOptions({ localization: { locale: interfaceLocale(), priceFormatter: formatReturn } });
   }, [i18n.language, observation.returns]);
   if (observation.returns.length < 2) {
     return <Empty><EmptyHeader><EmptyTitle>{t("chartEmpty")}</EmptyTitle><EmptyDescription>{t("chartEmptyDescription", { date: originSession })}</EmptyDescription></EmptyHeader></Empty>;
   }
-  return <figure className="m-0 min-w-0 overflow-hidden" aria-label={t("chartTitle") }>
+  return <figure className="relative m-0 min-w-0 overflow-hidden" aria-label={t("chartTitle") }>
     <figcaption className="sr-only mb-4 flex flex-wrap justify-between gap-2 text-xs text-muted-foreground"><span>{t("netReturnSince", { date: originSession })}</span><span>{t("observations", { count: observation.returns.length })}</span></figcaption>
-    <div ref={containerRef} className="min-h-[216px] min-w-0" />
-    <div aria-live="polite" className="mt-3 flex flex-wrap justify-between gap-2 text-xs text-muted-foreground"><span>{selected ? `${formatSessionDate(selected.session)}  ${formatReturn(selected.net_return)}` : t("chartHint")}</span>
-      <Button variant="link" nativeButton={false} role="link" render={<a href="https://www.tradingview.com/" target="_blank" rel="noreferrer" />} className="h-auto min-h-11 whitespace-normal p-0 text-xs">TradingView Lightweight Charts™</Button></div>
+    <div ref={containerRef} className="min-w-0" style={{ height }} />
+    <div aria-live="polite" className="pointer-events-none absolute right-3 top-3 text-xs tabular-nums">
+      {selected && <span className="inline-block rounded-md border border-border bg-card px-3 py-2">{formatSessionDate(selected.session)}  {formatReturn(selected.net_return)}</span>}
+    </div>
   </figure>;
 }

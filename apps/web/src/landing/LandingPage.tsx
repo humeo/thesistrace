@@ -112,6 +112,8 @@ export default function Landing() {
       </section>
       <section className="qh-closing qh-container" aria-labelledby="closing-title"><h2 id="closing-title">{t.closing}</h2>{startLink(true)}</section>
     </main>
-    <footer className="qh-footer qh-container"><a className="qh-brand" href="#top" aria-label={t.home}><Brand size={20} inverse /></a><nav aria-label={t.navigation}>{navLinks}</nav><span>© {new Date().getFullYear()} QAgentis</span></footer>
+    <footer className="qh-footer qh-container"><a className="qh-brand" href="#top" aria-label={t.home}><Brand size={20} inverse /></a><nav aria-label={t.navigation}>{navLinks}</nav><span>© {new Date().getFullYear()} QAgentis</span>
+      <span className="qh-chart-attribution"><a href="https://www.tradingview.com/" target="_blank" rel="noreferrer">TradingView Lightweight Charts™</a> · Copyright (с) 2025 TradingView, Inc.</span>
+    </footer>
   </div>;
 }

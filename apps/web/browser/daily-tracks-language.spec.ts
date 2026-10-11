@@ -235,15 +235,23 @@ test("switching retains holdings filters, open stop decision and failure state o
 });
 
 test("tracking chart retains its zoom and data while switching display language", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 944 });
   const requests = await open(page);
   await page.getByRole("button", { name: "Switch strategy" }).click();
   await expect(page.getByRole("menuitem", { name: "track_ui" })).toHaveAttribute("aria-current", "page");
   await page.keyboard.press("Escape");
   const chart = page.getByRole("figure", { name: /Return since tracking|跟踪开始以来收益/ });
+  await expect(chart.getByRole("link", { name: "TradingView Lightweight Charts™" })).toHaveCount(0);
+  await expect(chart).not.toContainText("Move across the chart to inspect a session.");
+  await page.setViewportSize({ width: 1114, height: 944 });
   const canvases = chart.locator("canvas");
   // The left price axis precedes the plot in the chart library's DOM.
   const plot = canvases.nth(await canvases.evaluateAll(elements => elements.reduce((largest, element, index) => element.clientWidth > elements[largest].clientWidth ? index : largest, 0)));
   await plot.scrollIntoViewIfNeeded();
+  await expect.poll(async () => {
+    const bounds = (await plot.boundingBox())!;
+    return bounds.x + bounds.width;
+  }).toBeLessThanOrEqual(page.viewportSize()!.width);
   const bounds = (await plot.boundingBox())!;
   await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + 100);
   await page.mouse.wheel(0, -350);
@@ -259,7 +267,6 @@ test("tracking chart retains its zoom and data while switching display language"
     }
     return result;
   };
-  expect((await chart.getByRole("link", { name: "TradingView Lightweight Charts™" }).boundingBox())?.height).toBeGreaterThanOrEqual(44);
   const before = await inspect();
   await page.getByRole("tab", { name: "Holdings" }).click();
   await page.getByRole("tab", { name: "Overview", exact: true }).click();

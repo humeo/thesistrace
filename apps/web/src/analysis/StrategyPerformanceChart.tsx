@@ -225,7 +225,6 @@ export function StrategyPerformanceChart({
   const ranges = <ToggleGroup value={[visibleRange]} onValueChange={values => { if (values[0]) selectRange(values[0] as VisibleRange); }} aria-label={t("chart.range")} className="ml-auto" variant={compact ? "chart" : "outline"}>
     {(["1Y", "3Y", "5Y", "All"] as const).map(range => <ToggleGroupItem key={range} value={range}>{t(`chart.ranges.${range}`)}</ToggleGroupItem>)}
   </ToggleGroup>;
-  const attribution = <a className="shrink-0 text-xs text-muted-foreground underline-offset-4 hover:underline" href="https://www.tradingview.com/" rel="noreferrer" target="_blank">TradingView Lightweight Charts™</a>;
   const last = points[points.length - 1];
   return (
     <figure
@@ -249,7 +248,7 @@ export function StrategyPerformanceChart({
       <div className={cn("flex items-center justify-between gap-4", compact && "min-h-5")}>
       <div className={cn("strategy-chart-readout flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground", compact ? "min-h-5 tabular-nums" : "min-h-11 w-full border-t border-border pt-3 font-mono")} aria-live="polite">
         {tooltip === null ? (
-          <span>{compact ? t("chart.sessions", { total: formatNumber(points.length) }) : t("chart.inspect")}</span>
+          compact ? <span>{t("chart.sessions", { total: formatNumber(points.length) })}</span> : null
         ) : (
           <>
             <time dateTime={tooltip.time}>{formatSessionDate(tooltip.time)}</time>
@@ -259,7 +258,6 @@ export function StrategyPerformanceChart({
         )}
       </div>
       </div>
-      {!compact ? <div className="flex justify-end">{attribution}</div> : null}
     </figure>
   );
 }

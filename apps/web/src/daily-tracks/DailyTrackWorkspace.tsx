@@ -72,16 +72,14 @@ export function DailyTrackWorkspace({ track, items, listError = false, onReloadL
       </TabsList>
       <TabsContent keepMounted value="performance" className="min-w-0">
         <div className="grid min-w-0 gap-8">
-          <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_248px] gap-8">
-            <Section title={<span className="flex items-center gap-2">{t("performance")}<InfoHelp label={t("performance")}>{period === "tracking" ? t("trackingDescription") : t("fullDescription", { date: track.origin.strategy_session })}</InfoHelp></span>} actions={<ToggleGroup value={[period]} onValueChange={values => { if (values[0]) setPeriod(values[0] as typeof period); }} variant="chart" aria-label={t("period")}><ToggleGroupItem value="tracking">{t("sinceTracking")}</ToggleGroupItem><ToggleGroupItem value="full">{t("fullStrategy")}</ToggleGroupItem></ToggleGroup>}>
-              <div hidden={period !== "tracking"}><TrackingReturnChart observation={track.observation} originSession={track.origin.strategy_session} /><p className="m-0 mt-4 text-sm text-muted-foreground">{t("sessionsObserved", { count: track.observation.session_count })} · {t("trackingCosts", { cost: formatMoney(track.observation.transaction_cost_cny) })}</p></div>
-              <div hidden={period !== "full"}><DailyTrackAnalysisView analysis={{ strategy: track.strategy }} /></div>
-            </Section>
-            <aside className="min-w-0 border-l border-border pl-6"><AccountAllocation observation={track.observation} /></aside>
-          </div>
+          <Section title={<span className="flex items-center gap-2">{t("performance")}<InfoHelp label={t("performance")}>{period === "tracking" ? t("trackingDescription") : t("fullDescription", { date: track.origin.strategy_session })}</InfoHelp></span>} actions={<ToggleGroup value={[period]} onValueChange={values => { if (values[0]) setPeriod(values[0] as typeof period); }} variant="outline" size="sm" spacing={0} aria-label={t("period")}><ToggleGroupItem value="tracking">{t("sinceTracking")}</ToggleGroupItem><ToggleGroupItem value="full">{t("fullStrategy")}</ToggleGroupItem></ToggleGroup>}>
+            <div className="min-w-0" hidden={period !== "tracking"}><TrackingReturnChart observation={track.observation} originSession={track.origin.strategy_session} height={340} /></div>
+            <div className="min-w-0" hidden={period !== "full"}><DailyTrackAnalysisView analysis={{ strategy: track.strategy }} /></div>
+          </Section>
           <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-start gap-8 border-t border-border pt-8">
+            <AccountAllocation observation={track.observation} />
             <Section title={t("holdings")} actions={<Button variant="ghost" onClick={() => setView("holdings")}>{t("allHoldings")}</Button>}><HoldingsPreview observation={track.observation} /><p className="m-0 text-sm text-muted-foreground">{t("largestHoldings", { count: Math.min(5, track.observation.holdings.length), total: track.observation.holdings.length })}</p></Section>
-            <Section title={t("recentObservation")} actions={<Button variant="ghost" onClick={() => { setView("review"); setVisited(values => values.includes("review") ? values : [...values, "review"]); }}>{t("views.review")}</Button>}>
+            <Section className="col-span-2" title={t("recentObservation")} actions={<Button variant="ghost" onClick={() => { setView("review"); setVisited(values => values.includes("review") ? values : [...values, "review"]); }}>{t("views.review")}</Button>}>
               <p className="m-0 text-sm text-muted-foreground">{track.observation.session_count === 0 ? t("originReview") : t("latestReview", { date: track.strategy_session })}</p>
               <dl className="m-0 grid gap-4 text-sm [&_dd]:m-0"><div className="flex justify-between gap-4"><dt>{t("sessionsObserved", { count: track.observation.session_count })}</dt><dd>{trackStatusLabel(track)}</dd></div><div className="flex justify-between gap-4"><dt>{t("changeLabel")}</dt><dd className="tabular-nums">{formatMoney(track.observation.net_change_cny)}</dd></div><div className="flex justify-between gap-4"><dt>{t("transactionCosts")}</dt><dd className="tabular-nums">{formatMoney(track.observation.transaction_cost_cny)}</dd></div></dl>
             </Section>

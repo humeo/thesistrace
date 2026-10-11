@@ -89,10 +89,12 @@
 .landing-page .qh-chart h3 { font-size: 14px; line-height: 22px; font-weight: 600; margin-bottom: 20px; }
 .qh-daily-note { color: var(--muted-foreground); font-size: 12px; padding-top: 16px; }
 .qh-closing { display: flex; align-items: center; justify-content: space-between; gap: 32px; padding-block: 112px 48px; }
-.qh-footer { display: flex; align-items: center; gap: 40px; border-top: 1px solid var(--border); padding-block: 40px 56px; }
+.qh-footer { display: flex; flex-wrap: wrap; align-items: center; column-gap: 40px; row-gap: 16px; border-top: 1px solid var(--border); padding-block: 40px 56px; }
 .qh-footer .quantgrove-wordmark { font-size: 24px; }
 .qh-footer nav { margin-left: auto; gap: 28px; }
 .qh-footer > span { color: var(--muted-foreground); font-size: 12px; }
+.qh-chart-attribution { flex-basis: 100%; }
+.qh-chart-attribution a { color: inherit; }
 .landing-page:lang(zh-CN) h1, .landing-page:lang(zh-CN) h2 { letter-spacing: 0; }
 @media (max-width: 1100px) {
   .qh-container { width: calc(100% - 64px); }
