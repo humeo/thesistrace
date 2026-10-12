@@ -78,6 +78,9 @@ export const mcpEn = {
   signedInAs: "Signed in as", canDo: "This app will be able to", revokeAnytime: "You can revoke access from the MCP page at any time.",
   checkingRequest: "Checking authorization request…", invalidRequest: "This authorization request is invalid or has expired. Start again from your AI client.",
   authorizationFailed: "Authorization could not be completed. Start again from your AI client.", continuing: "Continuing…", allowAccess: "Allow access",
+  accessApproved: "Access approved", accessDenied: "Access denied",
+  returnToClient: "Return to {{name}}. You can close this page.",
+  callbackFailed: "Could not return automatically. Return to your AI client to continue.",
 } as const;
 
 export const mcpZh = {
@@ -156,4 +159,7 @@ export const mcpZh = {
   signedInAs: "登录账户", canDo: "此应用将能够", revokeAnytime: "你可以随时在 MCP 页面撤销访问权限。",
   checkingRequest: "正在检查授权请求…", invalidRequest: "此授权请求无效或已过期。请从 AI 客户端重新开始。",
   authorizationFailed: "无法完成授权。请从 AI 客户端重新开始。", continuing: "正在继续…", allowAccess: "允许访问",
+  accessApproved: "已批准访问", accessDenied: "已拒绝访问",
+  returnToClient: "请返回 {{name}}，你可以关闭此页。",
+  callbackFailed: "无法自动返回客户端。请返回 AI 客户端继续操作。",
 } as const;
