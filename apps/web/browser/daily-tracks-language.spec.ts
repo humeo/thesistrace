@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { buildProductFixture } from "./build-product-fixture";
 let script: string;
 let styles: string;
@@ -7,6 +7,77 @@ import { comparisonValues, exampleDailyTrack as track } from "./fixtures/daily-t
 test.beforeAll(async () => {
   test.setTimeout(120_000);
   ({ script, styles } = await buildProductFixture(new URL("./fixtures/daily-tracks-language.tsx", import.meta.url), "DailyLanguage"));
+});
+
+async function curvePoint(chart: Locator, ratio: number, colorToken = "--chart-categorical-1") {
+  const canvases = chart.locator("canvas");
+  const plot = canvases.nth(await canvases.evaluateAll(elements => elements.reduce((largest, element, index) => element.clientWidth > elements[largest].clientWidth ? index : largest, 0)));
+  const bounds = (await plot.boundingBox())!;
+  let y: number | null = null;
+  await expect.poll(async () => {
+    y = await plot.evaluate((element, { ratio, colorToken }) => {
+      const canvas = element as HTMLCanvasElement;
+      const color = getComputedStyle(canvas).getPropertyValue(colorToken).trim();
+      const rgb = color.slice(1).match(/.{2}/g)!.map(value => parseInt(value, 16));
+      const x = Math.round(canvas.width * ratio);
+      const pixels = canvas.getContext("2d")!.getImageData(x, 0, 1, canvas.height).data;
+      for (let y = 0; y < canvas.height; y++) {
+        if (rgb.every((channel, index) => Math.abs(pixels[y * 4 + index] - channel) < 18)) return y * canvas.clientHeight / canvas.height;
+      }
+      return null;
+    }, { ratio, colorToken });
+    return y;
+  }, { message: "Wait for the strategy curve to be painted" }).not.toBeNull();
+  return { x: bounds.x + bounds.width * ratio, y: bounds.y + y! };
+}
+
+test("comparison shows only the hovered or clicked strategy point beside the curve", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  const strategies = [
+    { id: "track_reversal", seed_name: "Reversal", returns: [0, -0.0204, -0.0233] },
+    { id: "track_momentum", seed_name: "Momentum", returns: [0, 0.0128, 0.0087] },
+  ];
+  await page.route("https://daily-points.test/**", route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    if (path === "/api/daily-tracks") return route.fulfill({ json: { items: strategies.map(strategy => ({ ...strategy, status: "active", seed_run_id: strategy.id, origin_session: "2026-09-01", strategy_session: "2026-09-03" })), next_cursor: null } });
+    if (path === "/api/daily-tracks/comparison") return route.fulfill({ json: { items: strategies.map(strategy => {
+      const value = structuredClone(track);
+      value.strategy_session = "2026-09-03";
+      value.observation.session = "2026-09-03";
+      value.observation.returns = strategy.returns.map((net_return, index) => ({ session: `2026-09-0${index + 1}`, net_return }));
+      return { id: strategy.id, values: comparisonValues(value) };
+    }) } });
+    return route.fulfill({ status: 503 });
+  });
+  await page.goto("https://daily-points.test/?list");
+  await page.addStyleTag({ content: styles });
+  await page.addScriptTag({ content: script });
+  const chart = page.getByRole("figure", { name: "Strategy comparison chart" });
+  await expect(chart.locator("canvas").first()).toBeVisible();
+  const point = await curvePoint(chart, 0.5);
+  await page.mouse.move(point.x, point.y);
+  const tooltip = page.getByRole("tooltip", { name: "Reversal", exact: true, includeHidden: true });
+  await expect(tooltip.locator("time")).toHaveAttribute("datetime", "2026-09-02");
+  await expect(tooltip).toContainText("-2.04%");
+  await expect(tooltip).not.toContainText("Momentum");
+  const bounds = (await tooltip.boundingBox())!;
+  expect(Math.abs(bounds.x - point.x)).toBeLessThan(bounds.width + 24);
+  expect(Math.abs(bounds.y - point.y)).toBeLessThan(bounds.height + 24);
+  await page.getByRole("heading", { name: "Return comparison", exact: true }).hover();
+  await expect(tooltip).toBeHidden();
+  await page.mouse.click(point.x, point.y);
+  await expect(tooltip).toContainText("-2.04%");
+  await page.keyboard.press("Escape");
+  await expect(tooltip).toBeHidden();
+  await page.mouse.click(point.x, point.y);
+  await expect(tooltip).toContainText("-2.04%");
+  const otherPoint = await curvePoint(chart, 0.5, "--chart-categorical-2");
+  await page.mouse.move(otherPoint.x, otherPoint.y);
+  await expect(page.getByRole("tooltip", { name: "Momentum", exact: true, includeHidden: true })).toContainText("1.28%");
+  await expect(tooltip).toBeHidden();
+  await chart.getByRole("button", { name: "Momentum", exact: true }).press("Space");
+  await expect(page.getByRole("tooltip", { name: "Momentum", exact: true, includeHidden: true })).toBeHidden();
 });
 
 test("comparison language changes preserve zoom, canvas and translated fallback names without rereading data", async ({ page }) => {
@@ -36,12 +107,12 @@ test("comparison language changes preserve zoom, canvas and translated fallback 
   const original = await plot.elementHandle();
   await plot.scrollIntoViewIfNeeded();
   async function observation(ratio: number) {
-    const bounds = (await plot.boundingBox())!;
-    await page.mouse.move(bounds.x + bounds.width * ratio - 3, bounds.y + 100);
-    await page.mouse.move(bounds.x + bounds.width * ratio, bounds.y + 100);
-    const footer = chart.locator("p[aria-live]");
-    await expect(footer).toContainText("%");
-    return (await footer.innerText()).match(/\d{4}-\d{2}-\d{2}|-?[\d.]+%/g);
+    const point = await curvePoint(chart, ratio);
+    await page.mouse.move(point.x - 3, point.y);
+    await page.mouse.move(point.x, point.y);
+    const tooltip = page.getByRole("tooltip", { includeHidden: true });
+    await expect(tooltip).toContainText("%");
+    return await tooltip.evaluate(element => [element.querySelector("time")!.getAttribute("datetime"), ...element.textContent!.match(/-?[\d.]+%/g)!]);
   }
   const initial = await observation(0.7);
   await observation(0.3);
@@ -53,7 +124,7 @@ test("comparison language changes preserve zoom, canvas and translated fallback 
   await expect(chart).toHaveAttribute("aria-label", "策略比较曲线");
   expect(await original!.evaluate(element => element.isConnected)).toBe(true);
   expect([await observation(0.3), await observation(0.5), await observation(0.7)]).toEqual(before);
-  await expect(chart.locator("p[aria-live]")).toContainText("每日跟踪 ui");
+  await expect(page.getByRole("tooltip", { includeHidden: true })).toContainText("每日跟踪 ui");
   await page.getByRole("button", { name: "English", exact: true }).click();
   expect([await observation(0.3), await observation(0.5), await observation(0.7)]).toEqual(before);
   expect(reads).toBe(readsBefore);
@@ -76,8 +147,11 @@ test("comparison keeps its canvas and zoom as curves arrive, hide and refresh", 
     if (path === "/api/daily-tracks") return route.fulfill({ json: { items: summaries, next_cursor: null } });
     if (path === "/api/daily-tracks/comparison") {
       if (includeSecond) await secondReady;
+      const other = structuredClone(value);
+      other.observation.returns = value.observation.returns.map(point => ({ ...point, net_return: -point.net_return }));
+      other.observation.net_return = -value.observation.net_return;
       return route.fulfill({ json: { items: summaries.map(item => ({ id: item.id,
-        values: item.id === "track_first" || includeSecond ? comparisonValues(value) : null })) } });
+        values: item.id === "track_first" ? comparisonValues(value) : includeSecond ? comparisonValues(other) : null })) } });
     }
     return route.fulfill({ json: { ...value, id: path.split("/").at(-1) } });
   });
@@ -92,12 +166,12 @@ test("comparison keeps its canvas and zoom as curves arrive, hide and refresh", 
     const original = await plot.elementHandle();
     await plot.scrollIntoViewIfNeeded();
     async function observation(ratio: number) {
-      const bounds = (await plot.boundingBox())!;
-      await page.mouse.move(bounds.x + bounds.width * ratio - 3, bounds.y + 100);
-      await page.mouse.move(bounds.x + bounds.width * ratio, bounds.y + 100);
-      const footer = chart.locator("p[aria-live]");
-      await expect(footer).toContainText("First");
-      return (await footer.innerText()).match(/\d{4}-\d{2}-\d{2}/)?.[0];
+      const point = await curvePoint(chart, ratio);
+      await page.mouse.move(point.x - 3, point.y);
+      await page.mouse.move(point.x, point.y);
+      const tooltip = page.getByRole("tooltip", { name: "First", exact: true, includeHidden: true });
+      await expect(tooltip).toContainText("%");
+      return await tooltip.locator("time").getAttribute("datetime");
     }
     const initial = await observation(0.7);
     await observation(0.3);
@@ -453,12 +527,28 @@ test("comparison selects real account previews and leaves failed observations un
   await expect(page.getByRole("region", { name: "Largest holdings", exact: true })).toContainText("600000.SH");
   await page.getByRole("dialog").getByRole("button", { name: "Close", exact: true }).click();
   await expect(page.getByRole("figure", { name: "Strategy comparison chart" }).locator("canvas").first()).toBeVisible();
-  const visible = page.getByRole("group", { name: "Visible strategies", exact: true });
-  await visible.getByRole("button", { name: "Momentum", exact: true }).click();
+  const visible = page.getByRole("group", { name: /^(Visible strategies|显示的策略)$/ });
+  const momentum = visible.getByRole("button", { name: "Momentum", exact: true });
+  await momentum.hover();
+  const displayedBackground = await momentum.evaluate(element => getComputedStyle(element).backgroundColor);
+  await momentum.click();
+  await expect(momentum).toHaveAttribute("aria-pressed", "false");
+  await expect(momentum).toHaveText("Momentum");
+  await expect(momentum).not.toHaveCSS("background-color", displayedBackground);
   await visible.getByRole("button", { name: "Quality", exact: true }).click();
   await expect(page.getByText("All strategy curves are hidden", { exact: true })).toBeVisible();
   await visible.getByRole("button", { name: "Quality", exact: true }).click();
+  await expect(visible.getByRole("button", { name: "Quality", exact: true })).toHaveText("Quality");
   await expect(page.getByRole("figure", { name: "Strategy comparison chart" }).locator("canvas").first()).toBeVisible();
+  await momentum.press("Space");
+  await expect(momentum).toHaveAttribute("aria-pressed", "true");
+  await expect(momentum).toHaveText("Momentum");
+  await page.getByRole("button", { name: "简体中文", exact: true }).click();
+  await expect(momentum).toHaveText("Momentum");
+  await momentum.click();
+  await expect(momentum).toHaveText("Momentum");
+  await page.getByRole("button", { name: "English", exact: true }).click();
+  await expect(momentum).toHaveText("Momentum");
   await expect(rows.getByRole("link", { name: "track_other", exact: true })).toHaveAttribute("href", "/daily-tracks/track_other");
   expect(mutations).toBe(0);
 });

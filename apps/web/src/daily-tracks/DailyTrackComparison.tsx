@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ColorType, LineSeries, createChart, type IChartApi, type ISeriesApi, type LogicalRange, type Time } from "lightweight-charts";
+import { ColorType, LineSeries, createChart, type IChartApi, type ISeriesApi, type LogicalRange, type MouseEventParams, type Time } from "lightweight-charts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Eye, X } from "@phosphor-icons/react";
 import { dailyTrackDetailOptions, dailyTrackKeys } from "./queries";
@@ -8,12 +8,13 @@ import { coreFetch } from "../auth/coreFetch";
 import { followCoreLink } from "../shell/navigation";
 import { chartTheme } from "../analysis/chartTheme";
 import { interfaceLocale } from "../i18n";
-import { formatNumber } from "../i18n/format";
+import { formatNumber, formatSessionDate } from "../i18n/format";
 import { Section } from "../components/layout/Page";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { Empty, EmptyHeader, EmptyTitle, EmptyDescription } from "../components/ui/empty";
 import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../components/ui/tooltip";
 import { Sheet, SheetClose, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "../components/ui/sheet";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { AccountAllocation, HoldingsPreview } from "./DailyTrackPresentation";
@@ -125,6 +126,7 @@ export function DailyTrackComparison({ items }: { items: readonly DailyTrackList
 
 function ComparisonChart({ curves, period, loading }: { curves: Curve[]; period: "tracking" | "full"; loading: boolean }) {
   const { t, i18n } = useTranslation("daily");
+  const tooltipTriggerId = useId();
   const container = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const lines = useRef(new Map<string, { line: ISeriesApi<"Line">; points: Curve["points"] }>());
@@ -132,7 +134,14 @@ function ComparisonChart({ curves, period, loading }: { curves: Curve[]; period:
   const fittedPeriod = useRef<typeof period | null>(null);
   const [chartReady, setChartReady] = useState(false);
   const [hidden, setHidden] = useState<string[]>([]);
-  const [selected, setSelected] = useState<{ time: string; values: { id: string; value: number }[] } | null>(null);
+  const [selected, setSelected] = useState<{ id: string; time: string; value: number; x: number; y: number } | null>(null);
+  const tooltipAnchor = useMemo(() => selected ? {
+    contextElement: container.current ?? undefined,
+    getBoundingClientRect: () => {
+      const bounds = container.current!.getBoundingClientRect();
+      return new DOMRect(bounds.x + selected.x, bounds.y + selected.y, 0, 0);
+    },
+  } : undefined, [selected]);
   const plotted = curves.filter(curve => curve.points.length >= 2 && !hidden.includes(curve.id));
   const allHidden = plotted.length === 0 && curves.some(curve => curve.points.length >= 2);
   const hasData = curves.some(curve => curve.points.length >= 2);
@@ -145,16 +154,20 @@ function ComparisonChart({ curves, period, loading }: { curves: Curve[]; period:
     chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
       if (range) visibleRange.current = range;
     });
-    chart.subscribeCrosshairMove(event => {
-      if (!event.time) { setSelected(null); return; }
-      const values = [...lines.current].flatMap(([id, { line }]) => {
-        if (!line.options().visible) return [];
-        const row = event.seriesData.get(line);
-        return row && "value" in row ? [{ id, value: row.value }] : [];
-      });
-      setSelected({ time: String(event.time), values });
-    });
-    return () => { chart.remove(); chartRef.current = null; lines.current.clear(); visibleRange.current = null; fittedPeriod.current = null; };
+    const inspectPoint = (event: MouseEventParams<Time>) => {
+      const entry = [...lines.current].find(([, { line }]) => line === event.hoveredInfo?.series);
+      if (!event.time || !event.point || !entry || !entry[1].line.options().visible) { setSelected(null); return; }
+      const [id, { line }] = entry;
+      const row = event.seriesData.get(line);
+      if (!row || !("value" in row)) { setSelected(null); return; }
+      const x = chart.timeScale().timeToCoordinate(event.time);
+      const y = line.priceToCoordinate(row.value);
+      if (x === null || y === null) { setSelected(null); return; }
+      setSelected({ id, time: String(event.time), value: row.value, x, y });
+    };
+    chart.subscribeCrosshairMove(inspectPoint);
+    chart.subscribeClick(inspectPoint);
+    return () => { chart.unsubscribeCrosshairMove(inspectPoint); chart.unsubscribeClick(inspectPoint); chart.remove(); chartRef.current = null; lines.current.clear(); visibleRange.current = null; fittedPeriod.current = null; };
   }, [chartReady]);
   useEffect(() => {
     const chart = chartRef.current;
@@ -196,16 +209,29 @@ function ComparisonChart({ curves, period, loading }: { curves: Curve[]; period:
       locale: interfaceLocale(), priceFormatter: (value: number) => formatReturn(value),
     } });
   }, [i18n.language, chartReady]);
-  const readout = selected ? `${selected.time} · ${selected.values.map(({ id, value }) =>
-    `${curves.find(curve => curve.id === id)?.name} ${formatReturn(value)}`).join(" · ")}` : "";
-  return <figure aria-label={t("comparisonChart")} className="m-0 grid min-w-0 gap-4">
+  const selectedCurve = selected && curves.find(curve => curve.id === selected.id);
+  return <figure aria-label={t("comparisonChart")} className="m-0 grid min-w-0 gap-2">
     <div className={`relative min-w-0 ${hasData || chartReady ? "h-[240px]" : "h-[160px]"}`}>
-      <div ref={container} aria-hidden={!plotted.length} style={{ visibility: plotted.length ? "visible" : "hidden" }} className="h-full min-w-0 overflow-hidden" />
+      <TooltipProvider><Tooltip open={!!selectedCurve} triggerId={tooltipTriggerId} disableHoverablePopup onOpenChange={(open, details) => { if (!open && details.reason === "escape-key") setSelected(null); }}>
+        <TooltipTrigger id={tooltipTriggerId} closeOnClick={false} render={<div ref={container} aria-hidden={!plotted.length} style={{ visibility: plotted.length ? "visible" : "hidden" }} className="h-full min-w-0 overflow-hidden" />} />
+        {selected && selectedCurve && <TooltipContent anchor={tooltipAnchor} side="right" sideOffset={12} role="tooltip" aria-label={selectedCurve.name}>
+          <div className="grid gap-1">
+            <time dateTime={selected.time}>{formatSessionDate(selected.time)}</time>
+            <strong className="whitespace-normal [overflow-wrap:anywhere]">{selectedCurve.name}</strong>
+            <span className="tabular-nums">{t("periodReturn")} {formatReturn(selected.value)}</span>
+          </div>
+        </TooltipContent>}
+      </Tooltip></TooltipProvider>
       {!plotted.length && <Empty className="absolute inset-0"><EmptyHeader><EmptyTitle>{t(allHidden ? "curvesHidden" : "compareEmpty")}</EmptyTitle><EmptyDescription>{t(allHidden ? "showCurves" : loading ? "compareLoading" : "compareEmptyDescription")}</EmptyDescription></EmptyHeader></Empty>}
-      <p aria-live="polite" className="pointer-events-none absolute inset-x-0 top-0 z-10 m-0 bg-card/90 text-xs text-muted-foreground">{readout}</p>
     </div>
-    <ToggleGroup variant="outline" size="sm" multiple value={curves.filter(curve => !hidden.includes(curve.id)).map(curve => curve.id)} onValueChange={values => setHidden(curves.filter(curve => !values.includes(curve.id)).map(curve => curve.id))} aria-label={t("visibleStrategies")} className="flex-wrap justify-start">
-      {curves.map((curve, index) => <ToggleGroupItem key={curve.id} value={curve.id} className="rounded-md text-xs"><span aria-hidden="true" className="h-0.5 w-3 shrink-0 rounded-full" style={{ background: `var(${COMPARISON_COLOR_TOKENS[index % COMPARISON_COLOR_TOKENS.length]})` }} />{curve.name}</ToggleGroupItem>)}
+    <ToggleGroup variant="chart" size="xs" spacing={1} multiple value={curves.filter(curve => !hidden.includes(curve.id)).map(curve => curve.id)} onValueChange={values => setHidden(curves.filter(curve => !values.includes(curve.id)).map(curve => curve.id))} aria-label={t("visibleStrategies")} className="flex-wrap justify-start">
+      {curves.map((curve, index) => {
+        const visible = !hidden.includes(curve.id);
+        return <ToggleGroupItem key={curve.id} value={curve.id} className="max-w-full rounded-md">
+          <span aria-hidden="true" className="h-0.5 w-3 shrink-0 rounded-full" style={{ background: visible ? `var(${COMPARISON_COLOR_TOKENS[index % COMPARISON_COLOR_TOKENS.length]})` : "var(--muted-foreground)" }} />
+          <span className="min-w-0 whitespace-normal text-left [overflow-wrap:anywhere]">{curve.name}</span>
+        </ToggleGroupItem>;
+      })}
     </ToggleGroup>
   </figure>;
 }

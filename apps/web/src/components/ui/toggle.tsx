@@ -13,6 +13,7 @@ const toggleVariants = cva(
         chart: "min-w-16 border-border bg-card aria-pressed:bg-primary aria-pressed:text-primary-foreground data-pressed:bg-primary data-pressed:text-primary-foreground",
       },
       size: {
+        xs: "min-h-6 min-w-6 px-2 py-0.5 text-xs!",
         default:
           "h-9 min-w-9 px-2.5 has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2",
         sm: "h-8 min-w-8 rounded-none px-2.5 has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5",
