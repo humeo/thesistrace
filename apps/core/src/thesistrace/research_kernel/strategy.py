@@ -580,11 +580,12 @@ def _execute_strategy(
                 alpha_order = {
                     instrument_id: index for index, instrument_id in enumerate(candidates)
                 }
+                buy_candidates = [] if mode == "reduce" else candidates
                 buy_deficits = {
                     item: target_values[item] - (
                         money(positions[item].adjusted_units * marks[item])
                         if item in positions else Decimal(0)
-                    ) for item in candidates
+                    ) for item in buy_candidates
                 }
 
                 for instrument_id in sorted(positions):
@@ -684,9 +685,7 @@ def _execute_strategy(
                 buy_budget = max(
                     Decimal(0), target_capital - sum_position_values(positions, marks),
                 )
-                for instrument_id in ([] if mode == "reduce" else sorted(
-                    candidates, key=lambda value: alpha_order[value],
-                )):
+                for instrument_id in sorted(buy_candidates, key=lambda value: alpha_order[value]):
                     price = prices.get((session, instrument_id))
                     # One frozen decision has one direction per stock. A slipped sale
                     # must not create a new opposite intent from the post-sale value.

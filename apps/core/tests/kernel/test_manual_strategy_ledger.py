@@ -1178,6 +1178,47 @@ def test_rank_weighted_selection_survives_cash_and_drives_exposure_restore():
     _assert_ledger_reconciles(ledger)
 
 
+@pytest.mark.parametrize('weighting', ['rank_weight', 'equal_weight'])
+@pytest.mark.parametrize('reduced_exposure', [0, 0.5])
+@pytest.mark.parametrize('board,price', [('main', '1000'), ('star', '30')])
+def test_exposure_reduction_handles_selected_stocks_that_never_filled(
+    weighting, reduced_exposure, board, price,
+):
+    from thesistrace.alpha_language import alpha_language
+
+    canonical = _canonical(opens={session: {A: '10', B: price} for session in SESSIONS})
+    next(row for row in canonical['instruments'] if row['instrument_id'] == B)['board'] = board
+    _set_alpha_closes(canonical, {
+        session: {A: close, B: str(Decimal(close) * 100)}
+        for session, close in zip(SESSIONS, ('10', '11', '10', '10'), strict=True)
+    })
+    definition = _definition(holdings_count=2, selection_interval=5)
+    definition['strategy'].update(weighting=weighting, initial_cash_cny='10000')
+    definition['strategy']['exposure_expression'] = alpha_language.compile(
+        f'if_else(universe_return() > 0, 1, {reduced_exposure})', context='exposure',
+    ).expression
+    definition['costs'] = dict.fromkeys(definition['costs'], '0')
+    ledger = []
+
+    result = run_strategy(
+        aligned_market_data(canonical, universe='manual'),
+        _alpha_matrix({session: ((A, 2), (B, 1)) for session in SESSIONS}),
+        definition, origin_session=SESSIONS[1], ledger=ledger,
+    )
+
+    assert result['decision_state']['selection']['selected_instrument_ids'] == [A, B]
+    assert all(row['instrument_id'] != B for day in ledger for row in day['positions'])
+    final_positions = [
+        (row['instrument_id'], row['execution_shares']) for row in ledger[-1]['positions']
+    ]
+    assert final_positions == ([(A, 500)] if reduced_exposure else [])
+    assert Decimal(ledger[-1]['net_cash']) == (
+        Decimal('5000') if reduced_exposure else Decimal('10000')
+    )
+    assert all(order['side'] == 'sell' for order in ledger[-1]['submitted_orders'])
+    _assert_ledger_reconciles(ledger)
+
+
 @pytest.mark.parametrize('future_close', ['10', '999'])
 def test_inverse_volatility_targets_use_only_decision_close_history(future_close):
     canonical = _canonical(opens={session: {A: '10', B: '10'} for session in SESSIONS})
