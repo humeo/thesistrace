@@ -9,6 +9,7 @@ from thesistrace.data.canonical_mapping import (
     adjusted_price_string,
 )
 from thesistrace.data.fields import DAILY_BASIC_FIELDS
+from thesistrace.data.industry_source import validate_industry_membership_codes
 
 UNIVERSE_NAMES = ("top300", "top1000", "top2000", "top3000")
 
@@ -201,6 +202,10 @@ def _validate_classification(
     instrument_set: set[str],
 ) -> None:
     industries = _rows(canonical, "industry_membership")
+    try:
+        validate_industry_membership_codes(industries)
+    except ValueError as error:
+        raise GenerationValidationError(str(error)) from error
     prior_end_by_instrument: dict[str, date] = {}
     for row in industries:
         instrument_id = str(row["instrument_id"])

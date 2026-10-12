@@ -139,7 +139,21 @@ def test_recorded_industry_intervals_keep_the_inclusive_supplier_end_date() -> N
     actual = TushareIndustrySource(RecordedProvider()).collect(
         allowed_codes=set(case["codes"]),
     )
-    assert list(actual.memberships) == case["expected"]
+    # The frozen audit uses supplier index identities. Keep that baseline and
+    # all original source values unchanged; Canonical stores six-digit codes.
+    fields = ("sw2021_l1", "sw2021_l2", "sw2021_l3")
+    assert all(
+        len(row[field]) == 6 and row[field].isascii() and row[field].isdigit()
+        for row in actual.memberships for field in fields
+    )
+    assert [
+        {**row, **{field: f"{row[field]}.SI" for field in fields}}
+        for row in actual.memberships
+    ] == case["expected"]
+    assert list(actual.raw_memberships) == [
+        row for partition in ("Y", "N")
+        for row in case["memberships"] if row["is_new"] == partition
+    ]
 
 
 def test_recorded_csi300_benchmark_preserves_all_historical_open_levels() -> None:

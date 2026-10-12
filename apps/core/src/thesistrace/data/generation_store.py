@@ -63,6 +63,7 @@ from thesistrace.data.generation_validation import (
     validate_canonical_generation,
 )
 from thesistrace.data.history_projection import HistoryProjectionCache
+from thesistrace.data.industry_source import validate_industry_membership_codes
 from thesistrace.data.io_metrics import record_parquet_scan
 from thesistrace.data.market_series import (
     MarketSeriesError,
@@ -1109,6 +1110,10 @@ class MountedGenerationStore:
         *,
         observation_through_session: str,
     ) -> MountedDatasetFamilyDescriptor:
+        try:
+            validate_industry_membership_codes(rows)
+        except ValueError as error:
+            raise GenerationStoreError(str(error)) from error
         market = self.inspect_root(market_generation_manifest_sha256)
         try:
             through = date.fromisoformat(observation_through_session).isoformat()

@@ -10,6 +10,7 @@ from thesistrace.data.industry_source import (
     IndustrySourceError,
     IndustrySourceSnapshot,
     industry_source_payload_bytes,
+    validate_industry_membership_codes,
 )
 
 INDUSTRY_SOURCE_CONTRACT_VERSION = "tushare-industry-v1"
@@ -106,9 +107,9 @@ def _normalize_primary_classification(
             "active_to": (
                 date.fromisoformat(iso_date(str(row["out_date"]))) + timedelta(days=1)
             ).isoformat() if row.get("out_date") else "",
-            "sw2021_l1": str(row.get("l1_code", "")),
-            "sw2021_l2": str(row.get("l2_code", "")),
-            "sw2021_l3": str(row.get("l3_code", "")),
+            "sw2021_l1": str(row.get("l1_code", "")).removesuffix(".SI"),
+            "sw2021_l2": str(row.get("l2_code", "")).removesuffix(".SI"),
+            "sw2021_l3": str(row.get("l3_code", "")).removesuffix(".SI"),
         }
         for row in rows
         if row.get("ts_code")
@@ -125,6 +126,10 @@ def _normalize_primary_classification(
             item["sw2021_l3"],
         )
     )
+    try:
+        validate_industry_membership_codes(intervals)
+    except ValueError as error:
+        raise IndustrySourceError("INVALID_PRIMARY_INDUSTRY_CLASSIFICATION") from error
     previous: dict[str, dict[str, str]] = {}
     overlaps: list[dict[str, str]] = []
     for interval in intervals:

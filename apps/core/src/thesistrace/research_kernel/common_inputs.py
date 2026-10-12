@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from types import MappingProxyType
 
-from thesistrace.research_kernel.industry_catalog import validate_sw2021_l1
+from thesistrace.industry_catalog import validate_sw2021_l1
 
 CLOSE_FIELD_ID = "price.close.adjusted"
 COMMON_INPUTS = MappingProxyType(

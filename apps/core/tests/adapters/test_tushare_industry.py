@@ -99,6 +99,20 @@ def test_industry_source_requests_and_retains_complete_primary_classification() 
     assert snapshot.memberships[0]["active_to"] == ""
 
 
+def test_supplier_index_suffix_is_normalized_without_changing_raw_evidence() -> None:
+    raw = {
+        "l1_code": "801780.SI", "l2_code": "801783.SI", "l3_code": "851911.SI",
+        "ts_code": "000001.SZ", "in_date": "20210101", "out_date": "", "is_new": "Y",
+    }
+    snapshot = TushareIndustrySource(RecordingProvider([raw])).collect(allowed_codes={"000001.SZ"})
+
+    assert snapshot.memberships == ({
+        "instrument_id": "equity:000001.SZ", "active_from": "2021-01-01", "active_to": "",
+        "sw2021_l1": "801780", "sw2021_l2": "801783", "sw2021_l3": "851911",
+    },)
+    assert snapshot.raw_memberships == (raw,)
+
+
 @pytest.mark.parametrize("historical", [False, True])
 def test_industry_source_fails_closed_on_overlapping_primary_classification(historical) -> None:
     provider = RecordingProvider(

@@ -68,9 +68,9 @@ def build_minimal_canonical_fixture(*, price_offset: int = 0) -> dict[str, objec
                 "instrument_id": instrument_id,
                 "active_from": "2021-01-01",
                 "active_to": "",
-                "sw2021_l1": "Bank",
-                "sw2021_l2": "Bank",
-                "sw2021_l3": "Bank",
+                "sw2021_l1": "801780",
+                "sw2021_l2": "801783",
+                "sw2021_l3": "851911",
             }
         ],
         "field_catalog": [
@@ -289,9 +289,9 @@ def industry_membership(
             "instrument_id": instrument["instrument_id"],
             "active_from": sessions[0],
             "active_to": "",
-            "sw2021_l1": f"L1-{index % 5 + 1}",
-            "sw2021_l2": f"L2-{index % 10 + 1}",
-            "sw2021_l3": f"L3-{index % 15 + 1}",
+            "sw2021_l1": ("801010", "801030", "801040", "801050", "801080")[index % 5],
+            "sw2021_l2": f"{801001 + index % 10:06d}",
+            "sw2021_l3": f"{850101 + index % 15:06d}",
         }
         for index, instrument in enumerate(instruments)
     ]

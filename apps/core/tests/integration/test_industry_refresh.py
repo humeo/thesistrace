@@ -5,7 +5,9 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
+from zipfile import ZipFile
 
+import numpy as np
 import pytest
 from benchmark_support import FixtureBenchmarkSource, benchmark_mount_for_data_mount
 
@@ -29,8 +31,91 @@ from thesistrace.entrypoints.runtime import CoreSettings
 from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.fixture import build_fixture, build_minimal_canonical_fixture
 from thesistrace.publication.serialization import canonical_json_bytes
+from thesistrace.research_kernel.common_market import compute_common_market_series
 
 NOW = datetime(2026, 8, 14, 1, tzinfo=UTC)
+
+
+def test_industry_refresh_repairs_suffixed_release_without_rewriting_history(
+    core_settings: CoreSettings, tmp_path: Path,
+) -> None:
+    archive_path = (
+        Path(__file__).resolve().parents[1]
+        / "fixtures/industry-suffixed-generation-a2e4e2c.zip"
+    )
+    assert hashlib.sha256(archive_path.read_bytes()).hexdigest() == (
+        "c8975590e400afd844c0a1ad8841370b2f22f66d1f6f09d1cf1a802ec187e750"
+    )
+    with ZipFile(archive_path) as archive:
+        archive.extractall(tmp_path)
+    database = _database(core_settings)
+    try:
+        lifecycle = DatasetLifecycle(database, tmp_path)
+        before = lifecycle.current_pointer()
+        assert before is not None
+        generations = MountedGenerationStore(tmp_path)
+        original = generations.inspect_root(before.generation_manifest_sha256)
+        sessions = list(original.research_sessions)
+
+        def read(generation: str):
+            return generations.read_market_slice(
+                generation, sessions=sessions, universe_name="top3000",
+                neutralization="industry", field_bindings={"price.close.adjusted": "close"},
+            ).research_data
+
+        old_data = read(original.manifest_sha256)
+        assert old_data.industries == {(sessions[0], "equity:000001.SZ"): "801780.SI"}
+        with pytest.raises(IndustryRefreshError, match="OVERLAPPING_PRIMARY"):
+            IndustryRefreshService(
+                database, tmp_path, ConflictingIndustrySource(), clock=lambda: NOW,
+            ).publish(idempotency_key="repair-failed", observation_through_session=sessions[-1])
+        assert lifecycle.current_pointer() == before
+
+        class Provider:
+            def query_paginated(self, api_name, *, params, fields, primary_key):
+                if api_name == "index_classify":
+                    return [{"index_code": "801780.SI", "industry_name": "银行",
+                             "level": "L1", "src": "SW2021"}]
+                return [] if params["is_new"] == "N" else [{
+                    "ts_code": "000001.SZ", "in_date": "20210101", "out_date": "",
+                    "l1_code": "801780.SI", "l2_code": "801783.SI", "l3_code": "851911.SI",
+                    "is_new": "Y",
+                }]
+
+        service = IndustryRefreshService(
+            database, tmp_path, TushareIndustrySource(Provider()), clock=lambda: NOW,
+        )
+        repaired = service.publish(
+            idempotency_key="repair-suffixed-v1", observation_through_session=sessions[-1],
+        )
+        assert service.publish(
+            idempotency_key="repair-suffixed-v1", observation_through_session=sessions[-1],
+        ) == repaired
+        current = lifecycle.current_pointer()
+        assert current is not None
+        assert current.generation_manifest_sha256 == repaired.generation_manifest_sha256
+        updated = generations.validate_generation(current.generation_manifest_sha256)
+        assert updated.manifest_sha256 != original.manifest_sha256
+        assert {
+            family.family_id: family.manifest_sha256 for family in updated.families
+            if family.family_id != "equity.industry_membership"
+        } == {
+            family.family_id: family.manifest_sha256 for family in original.families
+            if family.family_id != "equity.industry_membership"
+        }
+        new_data = read(updated.manifest_sha256)
+        assert new_data.fields == old_data.fields
+        assert new_data.industries == {(sessions[0], "equity:000001.SZ"): "801780"}
+        assert read(original.manifest_sha256).industries == old_data.industries
+        for data, expected_members in [(old_data, (0,)), (new_data, (1,))]:
+            result = compute_common_market_series(
+                sessions=tuple(sessions), instruments=("equity:000001.SZ",),
+                adjusted_close=np.array([[10.5]]), universe_members=data.universe_members,
+                industries=data.industries, industry_code="801780",
+            )
+            assert result.member_count == expected_members
+    finally:
+        database.close()
 
 
 def test_shared_worker_publishes_and_then_records_replay_no_change(
@@ -270,15 +355,15 @@ def test_refreshed_source_history_reaches_research_without_backfilling_gaps(
         class Provider:
             def query_paginated(self, api_name, *, params, fields, primary_key):
                 if api_name == "index_classify":
-                    return [{"index_code": "801010", "industry_name": "Historical",
+                    return [{"index_code": "801010.SI", "industry_name": "Historical",
                              "level": "L1", "src": "SW2021"}]
-                row = {"ts_code": instrument["ts_code"], "l1_code": "801010",
-                       "l2_code": "801011", "l3_code": "850111", "is_new": params["is_new"]}
+                row = {"ts_code": instrument["ts_code"], "l1_code": "801010.SI",
+                       "l2_code": "801011.SI", "l3_code": "850111.SI", "is_new": params["is_new"]}
                 if params["is_new"] == "N":
                     return [{**row, "in_date": sessions[0].replace("-", ""),
                              "out_date": sessions[1].replace("-", "")}]
                 return [{**row, "in_date": sessions[3].replace("-", ""), "out_date": "",
-                         "l1_code": "801780", "l2_code": "801783", "l3_code": "851911"}]
+                         "l1_code": "801780.SI", "l2_code": "801783.SI", "l3_code": "851911.SI"}]
 
         outcome = IndustryRefreshService(
             database, tmp_path, TushareIndustrySource(Provider()), clock=lambda: NOW,

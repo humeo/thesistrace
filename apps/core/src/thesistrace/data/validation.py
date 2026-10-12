@@ -1,6 +1,7 @@
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
+from thesistrace.data.industry_source import validate_industry_membership_codes
 from thesistrace.data.source import CanonicalSourceBatch
 from thesistrace.publication.serialization import canonical_json_bytes
 
@@ -158,6 +159,7 @@ def validate_release_batch(
     if "industry_membership" in canonical:
         industries = _required_rows(canonical, "industry_membership")
         _validate_point_in_time(industries, instrument_ids, "industry_membership")
+        validate_industry_membership_codes(industries)
         if any(
             not all(row.get(field) for field in ("sw2021_l1", "sw2021_l2", "sw2021_l3"))
             for row in industries

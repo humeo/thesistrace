@@ -28,6 +28,7 @@ from thesistrace.alpha_language.syntax import (
     UNARY_OPERATORS,
 )
 from thesistrace.data.fields import FieldDefinition
+from thesistrace.industry_catalog import SW2021_L1
 from thesistrace.research_kernel.alpha_builtins import (
     BUILTIN_DEFINITIONS,
     BuiltinDefinition,
@@ -52,7 +53,6 @@ from thesistrace.research_kernel.expression_types import (
     conditional_result_type,
     unary_result_type,
 )
-from thesistrace.research_kernel.industry_catalog import SW2021_L1
 
 ALPHA_IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]*$")
 

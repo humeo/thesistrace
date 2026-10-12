@@ -63,7 +63,7 @@ def test_invalid_observations_are_explained_and_future_changes_preserve_prefix()
 
 
 def test_industry_identity_accepts_only_formal_literal_codes():
-    from thesistrace.research_kernel.industry_catalog import SW2021_L1, validate_sw2021_l1
+    from thesistrace.industry_catalog import SW2021_L1, validate_sw2021_l1
 
     assert len(SW2021_L1) == 31
     assert validate_sw2021_l1(801010) == "801010"

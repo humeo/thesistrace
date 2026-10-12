@@ -1,9 +1,27 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol
+
+from thesistrace.industry_catalog import SW2021_L1
+
+
+def validate_industry_membership_codes(rows: Sequence[Mapping[str, object]]) -> None:
+    for row in rows:
+        codes = [row.get(field) for field in ("sw2021_l1", "sw2021_l2", "sw2021_l3")]
+        if (
+            any(
+                not isinstance(code, str)
+                or len(code) != 6
+                or not code.isascii()
+                or not code.isdigit()
+                for code in codes
+            )
+            or codes[0] not in SW2021_L1
+        ):
+            raise ValueError("Canonical Industry Membership codes are invalid")
 
 
 class IndustrySourceError(RuntimeError):
@@ -58,4 +76,5 @@ __all__ = (
     "IndustrySourceError",
     "IndustrySourceSnapshot",
     "industry_source_payload_bytes",
+    "validate_industry_membership_codes",
 )

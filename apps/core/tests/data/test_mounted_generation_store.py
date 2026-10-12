@@ -678,6 +678,40 @@ def test_industry_candidate_replaces_only_industry_family(tmp_path: Path) -> Non
     } == {family.family_id: family.manifest_sha256 for family in market.families}
 
 
+@pytest.mark.parametrize("field,value", [
+    ("sw2021_l1", "801780.SI"),
+    ("sw2021_l1", "999999"),
+    ("sw2021_l2", "801783.SI"),
+    ("sw2021_l3", "invalid"),
+])
+@pytest.mark.parametrize("publication", ["bootstrap", "industry_candidate"])
+def test_industry_publication_rejects_codes_outside_canonical_contract(
+    tmp_path: Path, field: str, value: str, publication: str,
+) -> None:
+    canonical = _canonical()
+    rows = canonical["industry_membership"]
+    rows[0][field] = value
+    store = MountedGenerationStore(tmp_path)
+
+    if publication == "bootstrap":
+        with pytest.raises(GenerationStoreError, match="Industry Membership codes are invalid"):
+            store.materialize(
+                canonical, prepared_at=datetime(2026, 8, 13, tzinfo=UTC),
+                source_name="invalid-industry", source_lineage={"snapshot": "fixed"},
+            )
+    else:
+        del canonical["industry_membership"]
+        market = store.materialize(
+            canonical, prepared_at=datetime(2026, 8, 13, tzinfo=UTC),
+            source_name="market", source_lineage={"snapshot": "fixed"},
+        )
+        with pytest.raises(GenerationStoreError, match="Industry Membership codes are invalid"):
+            store.materialize_industry_candidate(
+                market.manifest_sha256, rows,
+                observation_through_session=canonical["research_calendar"][-1],
+            )
+
+
 def test_industry_candidate_coverage_cannot_exceed_market(tmp_path: Path) -> None:
     canonical = _canonical()
     del canonical["industry_membership"]
@@ -2322,9 +2356,9 @@ def _canonical(
                 "instrument_id": instrument["instrument_id"],
                 "active_from": sessions[0],
                 "active_to": "",
-                "sw2021_l1": "L1",
-                "sw2021_l2": "L2",
-                "sw2021_l3": "L3",
+                "sw2021_l1": "801780",
+                "sw2021_l2": "801783",
+                "sw2021_l3": "851911",
             }
             for instrument in instruments
         ],
