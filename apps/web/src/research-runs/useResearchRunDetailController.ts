@@ -17,7 +17,7 @@ export function useResearchRunDetailController(runId: string | undefined) {
   const [startingTracking, setStartingTracking] = useState(false);
   const [trackingError, setTrackingError] = useState<RunError | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<HttpActionError | null>(null);
   const [refreshGeneration, setRefreshGeneration] = useState(0);
   const loadGeneration = useRef(0);
@@ -81,6 +81,9 @@ export function useResearchRunDetailController(runId: string | undefined) {
     setCanceling(false);
     setStartingTracking(false);
     setTrackingError(null);
+    setDeleting(false);
+    setDeleteTargetId(null);
+    setDeleteError(null);
     return () => {
       cancelGeneration.current += 1;
       cancelController.current?.abort();
@@ -181,31 +184,33 @@ export function useResearchRunDetailController(runId: string | undefined) {
   }
 
   function openDeleteDialog(): void {
+    if (run === null || run.id !== runId || !isTerminal(run.status)) return;
     setDeleteError(null);
-    setDeleteDialogOpen(true);
+    setDeleteTargetId(run.id);
   }
 
   function closeDeleteDialog(): void {
     if (deleting) return;
-    setDeleteDialogOpen(false);
+    setDeleteTargetId(null);
     setDeleteError(null);
     window.requestAnimationFrame(() => deleteTrigger.current?.focus());
   }
 
   async function performResearchDeletion(): Promise<void> {
-    if (run === null || !isTerminal(run.status) || deleting || startingTracking || trackingController.current || deleteController.current) return;
+    if (run === null || deleteTargetId === null || deleteTargetId !== runId || run.id !== deleteTargetId || !isTerminal(run.status) || deleting || startingTracking || trackingController.current || deleteController.current) return;
     const generation = ++deleteGeneration.current;
     const controller = new AbortController();
     deleteController.current = controller;
     setDeleting(true);
     setDeleteError(null);
     try {
-      const response = await coreFetch(`/api/research-runs/${run.id}`, { method: "DELETE", signal: controller.signal });
+      const response = await coreFetch(`/api/research-runs/${deleteTargetId}`, { method: "DELETE", signal: controller.signal });
       if (!response.ok) {
         if (generation === deleteGeneration.current) setDeleteError({ status: response.status });
         return;
       }
       if (generation !== deleteGeneration.current) return;
+      setDeleteTargetId(null);
       navigateCorePath("/research-runs");
     } catch (reason: unknown) {
       if (reason instanceof DOMException && reason.name === "AbortError") return;
@@ -221,7 +226,8 @@ export function useResearchRunDetailController(runId: string | undefined) {
 
   return {
     run, setRun, error, loadState, canceling, cancelError, startingTracking, trackingError, deleting,
-    deleteDialogOpen, deleteError, deleteTrigger, refresh, cancel, startTracking,
+    deleteDialogOpen: deleteTargetId !== null && deleteTargetId === runId && deleteTargetId === run?.id,
+    deleteError, deleteTrigger, refresh, cancel, startTracking,
     openDeleteDialog, closeDeleteDialog, performResearchDeletion,
   };
 }
