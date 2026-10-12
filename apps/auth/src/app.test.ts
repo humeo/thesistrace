@@ -73,7 +73,8 @@ describe("Auth HTTP boundary", () => {
     ["POST", "/api/auth/operator/invitations/issue"],
     ["POST", "/api/auth/operator/invitations/reissue"],
     ["POST", "/api/auth/sign-up/email"],
-  ])("retired provisioning endpoint is unavailable: %s %s", async (method, path) => {
+    ["POST", "/api/auth/oauth2/revoke"],
+  ])("retired public endpoint is unavailable: %s %s", async (method, path) => {
     const inputs = dependencies();
     const response = await createAuthApp(inputs).request(`http://auth.test${path}`, {
       method, headers: {origin: "http://auth.test", "content-type": "application/json"},

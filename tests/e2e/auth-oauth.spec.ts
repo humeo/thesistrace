@@ -54,11 +54,25 @@ test("External OAuth authentication completes login, consent, token refresh and 
       grant_type: "refresh_token", client_id: client.client_id, refresh_token: tokens.refresh_token, resource: `${base}/mcp`,
     }});
     expect(refreshed.status()).toBe(200);
-    const next = await refreshed.json();
+    const next = await refreshed.json() as { access_token: string; refresh_token: string };
     expect(typeof next.access_token).toBe("string");
-    const revoked = await external.post("/api/auth/oauth2/revoke", {form: {client_id: client.client_id, token: next.refresh_token}});
-    expect(revoked.status()).toBe(200);
-    const denied = await external.post("/api/auth/oauth2/token", {form: {grant_type: "refresh_token", client_id: client.client_id, refresh_token: next.refresh_token, resource: `${base}/mcp`}});
+    const publicRevoke = await external.post("/api/auth/oauth2/revoke", {form: {client_id: client.client_id, token: next.refresh_token}});
+    expect(publicRevoke.status()).toBe(404);
+    const stillValid = await external.post("/api/auth/oauth2/token", {form: {
+      grant_type: "refresh_token", client_id: client.client_id, refresh_token: next.refresh_token, resource: `${base}/mcp`,
+    }});
+    expect(stillValid.status()).toBe(200);
+    const active = await stillValid.json() as { refresh_token: string };
+    const connections = await page.request.get(`${base}/api/auth/mcp/connections`);
+    expect(connections.status()).toBe(200);
+    const { apps } = await connections.json() as { apps: { id: string; client_id: string }[] };
+    const owned = apps.find(app => app.client_id === client.client_id);
+    expect(owned).toBeDefined();
+    const revoked = await page.request.post(`${base}/api/auth/mcp/revoke`, {
+      headers: { origin: base }, data: { id: owned!.id },
+    });
+    expect(revoked.status()).toBe(204);
+    const denied = await external.post("/api/auth/oauth2/token", {form: {grant_type: "refresh_token", client_id: client.client_id, refresh_token: active.refresh_token, resource: `${base}/mcp`}});
     expect(denied.status()).toBe(400);
   } finally {
     await external.dispose();

@@ -1,3 +1,5 @@
 # Own external MCP authorization and revocation in Auth
 
 Auth owns external MCP client consent and credentials, and Core verifies resource-bound external tokens through a private Auth call before applying Research Ownership and scope checks. Serialized credential issuance and revocation make withdrawal of consent, deactivation, and credential invalidation effective on subsequent verification, accepting a per-request call instead of waiting for a self-contained token to expire. Built-in Agent session-exchange credentials remain a distinct trust path, selected by explicit format rather than tried after another verifier rejects a token.
+
+The public OAuth surface does not expose or advertise client-initiated token revocation. Researchers withdraw an application's access through the authenticated MCP page; credential expiry, refresh rotation and account lifecycle invalidation remain owned by Auth.

@@ -30,6 +30,7 @@ const disabledBetterAuthPaths = [
   "/link-social",
   "/list-accounts",
   "/list-sessions",
+  "/oauth2/revoke",
   "/refresh-token",
   "/reset-password",
   "/reset-password/:token",

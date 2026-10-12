@@ -656,7 +656,6 @@ describe.sequential("Auth database-backed HTTP contract", () => {
     ["/oauth2/authorize", "GET", 30, 302],
     ["/oauth2/register", "POST", 5, 400],
     ["/oauth2/introspect", "POST", 100, 415],
-    ["/oauth2/revoke", "POST", 30, 415],
     ["/oauth2/consent", "POST", 60, 400],
     ["/oauth2/continue", "POST", 60, 401],
     ["/oauth2/public-client", "GET", 60, 400],

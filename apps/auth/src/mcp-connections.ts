@@ -46,10 +46,17 @@ export function createMcpConnectionsApp(auth: ThesisTraceAuth, pool: Pool, setti
     if (typeof clientId !== "string" || !clientId || clientId.length > 2048) return next();
     return coordination.run([`mcp-oauth-client:${clientId}`], () => next());
   });
-  app.get("/.well-known/oauth-authorization-server/api/auth", async (c) =>
-    c.json(await auth.api.getOAuthServerConfig()));
-  app.get("/api/auth/.well-known/oauth-authorization-server", async (c) =>
-    c.json(await auth.api.getOAuthServerConfig()));
+  const readPublicOAuthMetadata = async () => {
+    const metadata = { ...await auth.api.getOAuthServerConfig() };
+    // The public OAuth surface does not offer client-initiated revocation.
+    // Researchers revoke access through the authenticated MCP page instead.
+    delete metadata.revocation_endpoint;
+    delete metadata.revocation_endpoint_auth_methods_supported;
+    delete metadata.revocation_endpoint_auth_signing_alg_values_supported;
+    return metadata;
+  };
+  app.get("/.well-known/oauth-authorization-server/api/auth", async (c) => c.json(await readPublicOAuthMetadata()));
+  app.get("/api/auth/.well-known/oauth-authorization-server", async (c) => c.json(await readPublicOAuthMetadata()));
   app.post("/internal/mcp/verify", async (c) => {
     const parsed = z.object({ token: z.string().min(1).max(4096) }).strict().safeParse(await c.req.json());
     if (!parsed.success || !parsed.data.token.startsWith(MCP_ACCESS_PREFIX)) return c.json({ active: false });

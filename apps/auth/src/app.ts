@@ -169,7 +169,6 @@ const publicBetterAuthPaths = new Set([
   "/api/auth/oauth2/consent",
   "/api/auth/oauth2/continue",
   "/api/auth/oauth2/public-client",
-  "/api/auth/oauth2/revoke",
   "/api/auth/oauth2/introspect",
   "/api/auth/get-session",
   "/api/auth/ok",

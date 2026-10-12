@@ -83,14 +83,25 @@ async function verify(accessToken: string) { return (await request("/internal/mc
 
 describe.sequential("External MCP OAuth", () => {
   it("discovers, authorizes with PKCE, lists only owned apps and revokes access and refresh tokens", async () => {
-    const metadata = await request("/.well-known/oauth-authorization-server/api/auth");
-    expect(metadata.status).toBe(200);
-    expect(await metadata.json()).toMatchObject({ issuer: `${settings.publicOrigin}/api/auth`, code_challenge_methods_supported: ["S256"] });
+    for (const path of ["/.well-known/oauth-authorization-server/api/auth", "/api/auth/.well-known/oauth-authorization-server"]) {
+      const metadata = await request(path);
+      expect(metadata.status).toBe(200);
+      const discovery = await metadata.json();
+      expect(discovery).toMatchObject({ issuer: `${settings.publicOrigin}/api/auth`, code_challenge_methods_supported: ["S256"] });
+      expect(discovery).not.toHaveProperty("revocation_endpoint");
+      expect(discovery).not.toHaveProperty("revocation_endpoint_auth_methods_supported");
+      expect(discovery).not.toHaveProperty("revocation_endpoint_auth_signing_alg_values_supported");
+    }
     const cookie = await signIn("mcp-owner@example.com");
     const other = await signIn("mcp-other@example.com");
     const client = await registeredClient();
     const issued = await connected(cookie, client.client_id);
     expect(await verify(issued.access_token)).toMatchObject({ active: true, client_id: client.client_id, resource: settings.mcpAudience });
+    const publicRevoke = await app.request(`${settings.publicOrigin}/api/auth/oauth2/revoke`, { method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ client_id: client.client_id, token: issued.refresh_token, token_type_hint: "refresh_token" }).toString() });
+    expect(publicRevoke.status).toBe(404);
+    expect(await verify(issued.access_token)).toMatchObject({ active: true });
     expect(await (await request("/api/auth/mcp/connections", undefined, other)).json()).toMatchObject({ apps: [] });
     const list = await (await request("/api/auth/mcp/connections", undefined, cookie)).json() as { apps: { id: string }[] };
     expect(list.apps).toHaveLength(1);
