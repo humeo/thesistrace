@@ -17,9 +17,9 @@ describe("direct Resend delivery", () => {
     await sendResendEmail(
       settings,
       {
-        html: '<a href="https://thesistrace.test/reset-password#token=secret">Reset</a>',
-        subject: "Reset your ThesisTrace password",
-        text: "Reset from the link in this email.",
+        html: "<p>Your verification code is <strong>123456</strong>.</p>",
+        subject: "Your verification code",
+        text: "Your verification code is 123456.",
         to: "researcher@example.com",
       },
       fetcher,
@@ -34,9 +34,9 @@ describe("direct Resend delivery", () => {
     );
     expect(JSON.parse(String(init?.body))).toEqual({
       from: settings.fromEmail,
-      html: expect.stringContaining("#token=secret"),
-      subject: "Reset your ThesisTrace password",
-      text: "Reset from the link in this email.",
+      html: "<p>Your verification code is <strong>123456</strong>.</p>",
+      subject: "Your verification code",
+      text: "Your verification code is 123456.",
       to: ["researcher@example.com"],
     });
     expect(init?.signal).toBeInstanceOf(AbortSignal);

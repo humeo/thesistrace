@@ -3,10 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import { ResearcherNotFoundError } from "./access.js";
 import { createAuthApp, type AuthAppDependencies } from "./app.js";
 import {
-  InvitationRejectedError,
-  InvitationServiceUnavailableError,
-} from "./invitation.js";
-import {
   createAuthHttpObserver,
   type AuthHttpEvent,
 } from "./http-observability.js";
@@ -26,34 +22,25 @@ const activeSession = {
     name: "researcher",
   },
 };
-const opaqueInvitationToken =
+const opaqueProofToken =
   "00000000-0000-4000-8000-000000000001." + "a".repeat(43);
 
 function dependencies(
   overrides: Partial<AuthAppDependencies> = {},
 ): AuthAppDependencies {
   return {
-    acceptInvitation: vi.fn(async () => ({
-      setCookies: [
-        "thesistrace.session_token=session-value; Path=/; HttpOnly; SameSite=Lax",
-      ],
-    })),
     authHandler: vi.fn(async () =>
       Response.json({ status: "ok" }, { headers: { "set-cookie": "unexpected=1" } }),
     ),
     confirmOperatorProof: vi.fn(async () => ({
       expiresAt: "2026-08-29T06:01:00.000Z",
-      proof: opaqueInvitationToken,
+      proof: opaqueProofToken,
     })),
     consumeOperatorProof: vi.fn(async () => undefined),
     issueMcpAccessToken: vi.fn(async () => ({
       access_token: "opaque-signed-token",
       expires_in: 360,
       token_type: "Bearer" as const,
-    })),
-    consumeInvitationRateLimit: vi.fn(async () => ({
-      allowed: true,
-      retryAfterSeconds: 0,
     })),
     consumeOperatorProofRateLimit: vi.fn(async () => ({
       allowed: true,
@@ -63,27 +50,12 @@ function dependencies(
     getSession: vi.fn(async () => activeSession),
     isOperator: vi.fn(async () => false),
     hasOperatorCapability: vi.fn(async () => true),
-    inspectInvitation: vi.fn(async () => ({ email: "researcher@example.com" })),
-    issueOperatorInvitation: vi.fn(async (_principal, input) => ({
-      email: input.email,
-      invitationId: "00000000-0000-4000-8000-000000000041",
-      status: "delivered" as const,
-    })),
-    listOperatorInvitations: vi.fn(async () => ({
-      items: [],
-      nextCursor: null,
-    })),
     listOperatorResearchers: vi.fn(async () => ({
       items: [],
       nextCursor: null,
     })),
     publicOrigin: "http://auth.test",
     readiness: vi.fn(async () => true),
-    reissueOperatorInvitation: vi.fn(async (_principal, input) => ({
-      email: input.email,
-      invitationId: "00000000-0000-4000-8000-000000000042",
-      status: "delivered" as const,
-    })),
     revokeOperatorResearcherSessions: vi.fn(async (_principal, input) => ({
       researcherId: input.researcherId,
       revokedSessionCount: 2,
@@ -95,9 +67,33 @@ function dependencies(
 
 describe("Auth HTTP boundary", () => {
   it.each([
+    ["POST", "/api/auth/researcher-invitation/inspect"],
+    ["POST", "/api/auth/researcher-invitation/accept"],
+    ["GET", "/api/auth/operator/invitations"],
+    ["POST", "/api/auth/operator/invitations/issue"],
+    ["POST", "/api/auth/operator/invitations/reissue"],
+    ["POST", "/api/auth/sign-up/email"],
+  ])("retired provisioning endpoint is unavailable: %s %s", async (method, path) => {
+    const inputs = dependencies();
+    const response = await createAuthApp(inputs).request(`http://auth.test${path}`, {
+      method, headers: {origin: "http://auth.test", "content-type": "application/json"},
+      ...(method === "POST" ? {body: "{}"} : {}),
+    });
+    expect(response.status).toBe(404);
+    expect(inputs.authHandler).not.toHaveBeenCalled();
+  });
+  it.each(["invitation.issue", "invitation.reissue"])("rejects removed provisioning operation %s", async operation => {
+    const inputs = dependencies();
+    const response = await createAuthApp(inputs).request("http://auth.test/api/auth/operator/proofs", {
+      method: "POST", headers: {origin: "http://auth.test", "content-type": "application/json"},
+      body: JSON.stringify({email: "new@example.com", operation, otp: "123456"}),
+    });
+    expect(response.status).toBe(400);
+    expect(inputs.confirmOperatorProof).not.toHaveBeenCalled();
+  });
+  it.each([
     "/api/auth/email-otp/send-verification-otp",
     "/api/auth/sign-in/email-otp",
-    "/api/auth/researcher-invitation/accept",
     "/api/auth/operator/proofs/send-code",
   ])("rejects oversized public bodies before parsing or calling handlers: %s", async (path) => {
     for (const streamed of [false, true]) {
@@ -119,7 +115,6 @@ describe("Auth HTTP boundary", () => {
       expect(response.status).toBe(413);
       expect(await response.json()).toEqual({ code: "AUTH_REQUEST_TOO_LARGE" });
       expect(sendSignInCode).not.toHaveBeenCalled();
-      expect(appDependencies.acceptInvitation).not.toHaveBeenCalled();
       expect(appDependencies.authHandler).not.toHaveBeenCalled();
     }
   });
@@ -200,241 +195,6 @@ describe("Auth HTTP boundary", () => {
     expect(appDependencies.authHandler).toHaveBeenCalledOnce();
   });
 
-  it("rejects direct email signup before Better Auth handles it", async () => {
-    const appDependencies = dependencies();
-    const response = await createAuthApp(appDependencies).request(
-      "http://auth.test/api/auth/sign-up/email",
-      { method: "POST", body: JSON.stringify({ email: "researcher@example.com" }) },
-    );
-
-    expect(response.status).toBe(403);
-    expect(await response.json()).toEqual({ code: "RESEARCHER_INVITATION_REQUIRED" });
-    expect(appDependencies.authHandler).not.toHaveBeenCalled();
-  });
-
-  it("inspects only a server-bound Invitation email", async () => {
-    const appDependencies = dependencies();
-    const response = await createAuthApp(appDependencies).request(
-      "http://auth.test/api/auth/researcher-invitation/inspect",
-      {
-        body: JSON.stringify({ token: opaqueInvitationToken }),
-        headers: {
-          "content-type": "application/json",
-          origin: "http://auth.test",
-        },
-        method: "POST",
-      },
-    );
-
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ email: "researcher@example.com" });
-    expect(appDependencies.inspectInvitation).toHaveBeenCalledWith(
-      opaqueInvitationToken,
-    );
-    expect(appDependencies.consumeInvitationRateLimit).toHaveBeenCalledWith(
-      opaqueInvitationToken,
-      expect.any(Headers),
-    );
-    expect(appDependencies.authHandler).not.toHaveBeenCalled();
-  });
-
-  it.each(["application/jsonp", "application/jsonevil", "application/json; invalid"])(
-    "rejects the non-JSON Invitation media type %s before account work",
-    async (contentType) => {
-      const appDependencies = dependencies();
-      const response = await createAuthApp(appDependencies).request(
-        "http://auth.test/api/auth/researcher-invitation/inspect",
-        {
-          body: JSON.stringify({ token: opaqueInvitationToken }),
-          headers: {
-            "content-type": contentType,
-            origin: "http://auth.test",
-          },
-          method: "POST",
-        },
-      );
-
-      expect(response.status).toBe(400);
-      expect(await response.json()).toEqual({ code: "INVITATION_INVALID" });
-      expect(appDependencies.inspectInvitation).not.toHaveBeenCalled();
-      expect(appDependencies.consumeInvitationRateLimit).not.toHaveBeenCalled();
-    },
-  );
-
-  it("accepts an Invitation without client-supplied identity and forwards only Cookies", async () => {
-    const appDependencies = dependencies();
-    const response = await createAuthApp(appDependencies).request(
-      "http://auth.test/api/auth/researcher-invitation/accept",
-      {
-        body: JSON.stringify({
-          password: "correct-horse-battery-staple",
-          token: opaqueInvitationToken,
-        }),
-        headers: {
-          "content-type": "application/json",
-          origin: "http://auth.test",
-        },
-        method: "POST",
-      },
-    );
-
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ status: true });
-    expect(response.headers.get("set-cookie")).toContain(
-      "thesistrace.session_token=session-value",
-    );
-    expect(appDependencies.acceptInvitation).toHaveBeenCalledWith(
-      opaqueInvitationToken,
-      "correct-horse-battery-staple",
-      expect.any(Headers),
-    );
-    expect(appDependencies.consumeInvitationRateLimit).toHaveBeenCalledWith(
-      opaqueInvitationToken,
-      expect.any(Headers),
-    );
-    expect(appDependencies.authHandler).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["inspect", { email: "attacker@example.com", token: opaqueInvitationToken }],
-    [
-      "accept",
-      {
-        name: "attacker-controlled",
-        password: "correct-horse-battery-staple",
-        token: opaqueInvitationToken,
-      },
-    ],
-    ["accept", { password: "too-short", token: opaqueInvitationToken }],
-  ])("rejects a non-exact Invitation %s request", async (path, body) => {
-    const appDependencies = dependencies();
-    const response = await createAuthApp(appDependencies).request(
-      `http://auth.test/api/auth/researcher-invitation/${path}`,
-      {
-        body: JSON.stringify(body),
-        headers: {
-          "content-type": "application/json",
-          origin: "http://auth.test",
-        },
-        method: "POST",
-      },
-    );
-
-    expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ code: "INVITATION_INVALID" });
-    expect(appDependencies.inspectInvitation).not.toHaveBeenCalled();
-    expect(appDependencies.acceptInvitation).not.toHaveBeenCalled();
-  });
-
-  it("sanitizes an invalid Invitation without reflecting a token", async () => {
-    const tokenCanary =
-      "00000000-0000-4000-8000-000000000001." +
-      "token-canary".padEnd(43, "a");
-    const response = await createAuthApp(
-      dependencies({
-        inspectInvitation: vi.fn(async () => {
-          throw new InvitationRejectedError();
-        }),
-      }),
-    ).request("http://auth.test/api/auth/researcher-invitation/inspect", {
-      body: JSON.stringify({ token: tokenCanary }),
-      headers: {
-        "content-type": "application/json",
-        origin: "http://auth.test",
-      },
-      method: "POST",
-    });
-
-    const body = await response.text();
-    expect(response.status).toBe(400);
-    expect(JSON.parse(body)).toEqual({ code: "INVITATION_INVALID" });
-    expect(body).not.toContain(tokenCanary);
-  });
-
-  it("maps an Invitation database failure to a sanitized 503", async () => {
-    const response = await createAuthApp(
-      dependencies({
-        acceptInvitation: vi.fn(async () => {
-          throw new InvitationServiceUnavailableError();
-        }),
-      }),
-    ).request("http://auth.test/api/auth/researcher-invitation/accept", {
-      body: JSON.stringify({
-        password: "correct-horse-battery-staple",
-        token: opaqueInvitationToken,
-      }),
-      headers: {
-        "content-type": "application/json",
-        origin: "http://auth.test",
-      },
-      method: "POST",
-    });
-
-    expect(response.status).toBe(503);
-    expect(await response.json()).toEqual({ code: "AUTH_SERVICE_UNAVAILABLE" });
-  });
-
-  it("rejects a cross-origin Invitation credential request", async () => {
-    const appDependencies = dependencies();
-    const response = await createAuthApp(appDependencies).request(
-      "http://auth.test/api/auth/researcher-invitation/accept",
-      {
-        body: JSON.stringify({
-          password: "correct-horse-battery-staple",
-          token: opaqueInvitationToken,
-        }),
-        headers: {
-          "content-type": "application/json",
-          origin: "https://attacker.example",
-        },
-        method: "POST",
-      },
-    );
-
-    expect(response.status).toBe(403);
-    expect(await response.json()).toEqual({ code: "ORIGIN_NOT_ALLOWED" });
-    expect(appDependencies.acceptInvitation).not.toHaveBeenCalled();
-    expect(appDependencies.consumeInvitationRateLimit).not.toHaveBeenCalled();
-  });
-
-  it.each(["inspect", "accept"])(
-    "rate limits the Invitation %s endpoint before doing account work",
-    async (path) => {
-      const appDependencies = dependencies({
-        consumeInvitationRateLimit: vi.fn(async () => ({
-          allowed: false,
-          retryAfterSeconds: 37,
-        })),
-      });
-      const body =
-        path === "accept"
-          ? {
-              password: "correct-horse-battery-staple",
-              token: opaqueInvitationToken,
-            }
-          : { token: opaqueInvitationToken };
-
-      const response = await createAuthApp(appDependencies).request(
-        `http://auth.test/api/auth/researcher-invitation/${path}`,
-        {
-          body: JSON.stringify(body),
-          headers: {
-            "content-type": "application/json",
-            origin: "http://auth.test",
-            "x-thesistrace-client-ip": "192.0.2.44",
-          },
-          method: "POST",
-        },
-      );
-
-      expect(response.status).toBe(429);
-      expect(response.headers.get("retry-after")).toBe("37");
-      expect(await response.json()).toEqual({ code: "AUTH_RATE_LIMITED" });
-      expect(appDependencies.inspectInvitation).not.toHaveBeenCalled();
-      expect(appDependencies.acceptInvitation).not.toHaveBeenCalled();
-    },
-  );
-
   it("confirms one target-bound Session proof and never forwards its otp", async () => {
     const appDependencies = dependencies();
     const app = createAuthApp(appDependencies);
@@ -474,7 +234,7 @@ describe("Auth HTTP boundary", () => {
       "http://auth.test/api/auth/operator/researchers/sessions/revoke",
       {
         body: JSON.stringify({
-          proof: opaqueInvitationToken,
+          proof: opaqueProofToken,
           researcher_id: researcherId,
         }),
         headers: {
@@ -497,7 +257,7 @@ describe("Auth HTTP boundary", () => {
         researcherId: "00000000-0000-4000-8000-000000000001",
         sessionId: "00000000-0000-4000-8000-000000000010",
       },
-      { proof: opaqueInvitationToken, researcherId },
+      { proof: opaqueProofToken, researcherId },
     );
     expect(
       JSON.stringify(
@@ -513,7 +273,7 @@ describe("Auth HTTP boundary", () => {
       {
         body: JSON.stringify({
           password: "must-not-cross-this-boundary",
-          proof: opaqueInvitationToken,
+          proof: opaqueProofToken,
           researcher_id: "00000000-0000-4000-8000-000000000002",
         }),
         headers: {
@@ -561,7 +321,7 @@ describe("Auth HTTP boundary", () => {
         "http://auth.test/api/auth/operator/researchers/sessions/revoke",
         {
           body: JSON.stringify({
-            proof: opaqueInvitationToken,
+            proof: opaqueProofToken,
             researcher_id: "00000000-0000-4000-8000-000000000002",
           }),
           headers: {
@@ -581,19 +341,11 @@ describe("Auth HTTP boundary", () => {
     for (const { body, path } of [
       {
         body: {
-          email: "researcher@example.com",
-          operation: "invitation.issue",
+          researcher_id: "00000000-0000-4000-8000-000000000002",
+          operation: "researcher.sessions.revoke",
           otp: "123456",
         },
         path: "/api/auth/operator/proofs",
-      },
-      {
-        body: { email: "researcher@example.com", proof: opaqueInvitationToken },
-        path: "/api/auth/operator/invitations/issue",
-      },
-      {
-        body: { email: "researcher@example.com", proof: opaqueInvitationToken },
-        path: "/api/auth/operator/invitations/reissue",
       },
     ]) {
       const appDependencies = dependencies();
@@ -612,8 +364,6 @@ describe("Auth HTTP boundary", () => {
       expect(response.status).toBe(403);
       expect(await response.json()).toEqual({ code: "ORIGIN_NOT_ALLOWED" });
       expect(appDependencies.confirmOperatorProof).not.toHaveBeenCalled();
-      expect(appDependencies.issueOperatorInvitation).not.toHaveBeenCalled();
-      expect(appDependencies.reissueOperatorInvitation).not.toHaveBeenCalled();
     }
   });
 
@@ -628,8 +378,8 @@ describe("Auth HTTP boundary", () => {
       "http://auth.test/api/auth/operator/proofs",
       {
         body: JSON.stringify({
-          email: "researcher@example.com",
-          operation: "invitation.issue",
+          researcher_id: "00000000-0000-4000-8000-000000000002",
+          operation: "researcher.sessions.revoke",
           otp: "123456",
         }),
         headers: {
@@ -800,7 +550,6 @@ describe("Auth HTTP boundary", () => {
           createdAt: "2026-08-28T00:00:00.000Z",
           currentSessionCount: 2,
           displayLabel: "Researcher",
-          effectiveInvitation: null,
           email: "researcher@example.com",
           id: "00000000-0000-4000-8000-000000000001",
           latestSuccessfulLoginAt: null,
@@ -831,7 +580,6 @@ describe("Auth HTTP boundary", () => {
         created_at: "2026-08-28T00:00:00.000Z",
         current_session_count: 2,
         display_label: "Researcher",
-        effective_invitation: null,
         email: "researcher@example.com",
         latest_successful_login_at: null,
         researcher_id: "00000000-0000-4000-8000-000000000001",
@@ -886,7 +634,7 @@ describe("Auth HTTP boundary", () => {
     const consumed = await app.request(
       "http://auth.test/internal/operator/proofs/consume",
       {
-        body: JSON.stringify({ ...request, proof: opaqueInvitationToken }),
+        body: JSON.stringify({ ...request, proof: opaqueProofToken }),
         headers: {
           "content-type": "application/json",
           cookie: "operator=fake",
@@ -905,7 +653,7 @@ describe("Auth HTTP boundary", () => {
         asOf: request.as_of,
         idempotencyKey: request.idempotency_key,
         operation: request.operation,
-        proof: opaqueInvitationToken,
+        proof: opaqueProofToken,
       },
     );
   });
@@ -949,7 +697,7 @@ describe("Auth HTTP boundary", () => {
     const consumed = await app.request(
       "http://auth.test/internal/operator/proofs/consume",
       {
-        body: JSON.stringify({ ...request, proof: opaqueInvitationToken }),
+        body: JSON.stringify({ ...request, proof: opaqueProofToken }),
         headers: {
           "content-type": "application/json",
           cookie: "operator=fake",
@@ -968,7 +716,7 @@ describe("Auth HTTP boundary", () => {
         idempotencyKey: request.idempotency_key,
         observationThroughSession: request.observation_through_session,
         operation: request.operation,
-        proof: opaqueInvitationToken,
+        proof: opaqueProofToken,
       },
     );
   });
@@ -1012,7 +760,7 @@ describe("Auth HTTP boundary", () => {
     const consumed = await app.request(
       "http://auth.test/internal/operator/proofs/consume",
       {
-        body: JSON.stringify({ ...request, proof: opaqueInvitationToken }),
+        body: JSON.stringify({ ...request, proof: opaqueProofToken }),
         headers: {
           "content-type": "application/json",
           cookie: "operator=fake",
@@ -1031,7 +779,7 @@ describe("Auth HTTP boundary", () => {
         idempotencyKey: request.idempotency_key,
         observationThroughSession: request.observation_through_session,
         operation: request.operation,
-        proof: opaqueInvitationToken,
+        proof: opaqueProofToken,
       },
     );
   });
@@ -1098,7 +846,7 @@ describe("Auth HTTP boundary", () => {
     const consumed = await app.request(
       "http://auth.test/internal/operator/proofs/consume",
       {
-        body: JSON.stringify({ ...request, proof: opaqueInvitationToken }),
+        body: JSON.stringify({ ...request, proof: opaqueProofToken }),
         headers: {
           "content-type": "application/json",
           cookie: "operator=fake",
@@ -1113,7 +861,7 @@ describe("Auth HTTP boundary", () => {
         researcherId: "00000000-0000-4000-8000-000000000001",
         sessionId: "00000000-0000-4000-8000-000000000010",
       },
-      { ...expected, proof: opaqueInvitationToken },
+      { ...expected, proof: opaqueProofToken },
     );
   });
 
@@ -1143,7 +891,7 @@ describe("Auth HTTP boundary", () => {
     const consumption = await app.request(
       "http://auth.test/internal/operator/proofs/consume",
       {
-        body: JSON.stringify({ ...request, proof: opaqueInvitationToken }),
+        body: JSON.stringify({ ...request, proof: opaqueProofToken }),
         headers,
         method: "POST",
       },
@@ -1182,7 +930,7 @@ describe("Auth HTTP boundary", () => {
     const consumption = await app.request(
       "http://auth.test/internal/operator/proofs/consume",
       {
-        body: JSON.stringify({ ...request, proof: opaqueInvitationToken }),
+        body: JSON.stringify({ ...request, proof: opaqueProofToken }),
         headers,
         method: "POST",
       },
@@ -1221,7 +969,7 @@ describe("Auth HTTP boundary", () => {
     const consumption = await app.request(
       "http://auth.test/internal/operator/proofs/consume",
       {
-        body: JSON.stringify({ ...request, proof: opaqueInvitationToken }),
+        body: JSON.stringify({ ...request, proof: opaqueProofToken }),
         headers,
         method: "POST",
       },
@@ -1260,137 +1008,9 @@ describe("Auth HTTP boundary", () => {
     expect(appDependencies.confirmOperatorProof).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["issue", "invitation.issue"],
-    ["reissue", "invitation.reissue"],
-  ] as const)(
-    "confirms the exact %s request and never forwards the otp to mutation",
-    async (path, operation) => {
-      const appDependencies = dependencies();
-      const app = createAuthApp(appDependencies);
-      const otp = "123456";
-      const confirmation = await app.request(
-        "http://auth.test/api/auth/operator/proofs",
-        {
-          body: JSON.stringify({
-            email: " Researcher@Example.COM ",
-            operation,
-            otp,
-          }),
-          headers: {
-            "content-type": "application/json",
-            cookie: "operator=fake",
-            origin: "http://auth.test",
-          },
-          method: "POST",
-        },
-      );
-
-      expect(confirmation.status).toBe(200);
-      expect(await confirmation.json()).toEqual({
-        expires_at: "2026-08-29T06:01:00.000Z",
-        proof: opaqueInvitationToken,
-      });
-      expect(appDependencies.confirmOperatorProof).toHaveBeenCalledWith(
-        {
-          researcherId: "00000000-0000-4000-8000-000000000001",
-          sessionId: "00000000-0000-4000-8000-000000000010",
-        },
-        { email: "researcher@example.com", operation, otp },
-      );
-
-      const mutation = await app.request(
-        `http://auth.test/api/auth/operator/invitations/${path}`,
-        {
-          body: JSON.stringify({
-            email: " Researcher@Example.COM ",
-            proof: opaqueInvitationToken,
-          }),
-          headers: {
-            "content-type": "application/json",
-            cookie: "operator=fake",
-            origin: "http://auth.test",
-          },
-          method: "POST",
-        },
-      );
-
-      expect(mutation.status).toBe(200);
-      expect(await mutation.json()).toMatchObject({
-        email: "researcher@example.com",
-        status: "delivered",
-      });
-      const mutationHandler = path === "issue"
-        ? appDependencies.issueOperatorInvitation
-        : appDependencies.reissueOperatorInvitation;
-      expect(mutationHandler).toHaveBeenCalledWith(
-        {
-          researcherId: "00000000-0000-4000-8000-000000000001",
-          sessionId: "00000000-0000-4000-8000-000000000010",
-        },
-        { email: "researcher@example.com", proof: opaqueInvitationToken },
-      );
-      expect(JSON.stringify(vi.mocked(mutationHandler).mock.calls)).not.toContain(
-        otp,
-      );
-    },
-  );
-
-  it("maps otp and proof rejection without exposing an Operator surface", async () => {
-    const invalidPassword = dependencies({
-      confirmOperatorProof: vi.fn(async () => {
-        throw new OperatorCodeInvalidError();
-      }),
-    });
-    const otpResponse = await createAuthApp(invalidPassword).request(
-      "http://auth.test/api/auth/operator/proofs",
-      {
-        body: JSON.stringify({
-          email: "researcher@example.com",
-          operation: "invitation.issue",
-          otp: "000000",
-        }),
-        headers: {
-          "content-type": "application/json",
-          origin: "http://auth.test",
-        },
-        method: "POST",
-      },
-    );
-    expect(otpResponse.status).toBe(400);
-    expect(await otpResponse.json()).toEqual({
-      code: "OPERATOR_CODE_INVALID",
-    });
-
-    const invalidProof = dependencies({
-      issueOperatorInvitation: vi.fn(async () => {
-        throw new OperatorProofInvalidError();
-      }),
-    });
-    const proofResponse = await createAuthApp(invalidProof).request(
-      "http://auth.test/api/auth/operator/invitations/issue",
-      {
-        body: JSON.stringify({
-          email: "researcher@example.com",
-          proof: opaqueInvitationToken,
-        }),
-        headers: {
-          "content-type": "application/json",
-          origin: "http://auth.test",
-        },
-        method: "POST",
-      },
-    );
-    expect(proofResponse.status).toBe(400);
-    expect(await proofResponse.json()).toEqual({ code: "OPERATOR_PROOF_INVALID" });
-  });
-
   it("returns an empty 404 for every ordinary-Researcher Operator boundary", async () => {
     const appDependencies = dependencies({
       hasOperatorCapability: vi.fn(async () => false),
-      listOperatorInvitations: vi.fn(async () => {
-        throw new OperatorAccessNotFoundError();
-      }),
       listOperatorResearchers: vi.fn(async () => {
         throw new OperatorAccessNotFoundError();
       }),

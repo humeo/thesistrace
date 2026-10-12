@@ -505,7 +505,8 @@ if [ -f "$FAKE_BACKEND_MARKER" ]; then
 fi
 if [ -n "$headers" ]; then
   cat >"$headers" <<'HEADERS'
-Content-Security-Policy: default-src 'none'; script-src 'self' https://challenges.cloudflare.com; """
+Content-Security-Policy: default-src 'none'; """
+        """script-src 'self' https://challenges.cloudflare.com; """
         """style-src 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'
 Referrer-Policy: no-referrer
 X-Content-Type-Options: nosniff
@@ -1334,7 +1335,7 @@ def test_shared_browser_control_fixtures_do_not_depend_on_docker_exec() -> None:
     assert 'THESISTRACE_ENVIRONMENT !== "test"' in auth_control
     assert '"/__test/provision-session"' in auth_control
     assert '"/__test/operator"' in auth_control
-    assert '"/__test/expire-invitation"' in auth_control
+    assert '"/__test/expire-invitation"' not in auth_control
     assert '"/__test/reset-rate-limits"' in auth_control
     assert '"/__test/seed-operator-directory"' in auth_control
     assert '"/__test/resend-emails"' in auth_control

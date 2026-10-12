@@ -9,31 +9,6 @@ export type AuthenticatedResearcher = Readonly<{
   id: string;
 }>;
 
-export const browserPassword = "Browser-acceptance-password-2026";
-
-// Playwright renders locator.fill(value) arguments into HTML report step titles.
-// Drive the password control without putting the private value in that title.
-export async function fillPasswordInput(
-  passwordInput: Locator,
-  password = browserPassword,
-): Promise<void> {
-  await passwordInput.evaluate((element, password) => {
-    if (!(element instanceof HTMLInputElement) || element.type !== "password") {
-      throw new Error("Browser password helper requires an input[type=password]");
-    }
-    const valueSetter = Object.getOwnPropertyDescriptor(
-      HTMLInputElement.prototype,
-      "value",
-    )?.set;
-    if (!valueSetter) {
-      throw new Error("Browser password input has no native value setter");
-    }
-    element.focus();
-    valueSetter.call(element, password);
-    element.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
-  }, password);
-}
-
 export const securityTest = base.extend<{ cspGuard: void }>({
   cspGuard: [async ({ page }, use) => {
     resetAuthRateLimits();
@@ -135,19 +110,9 @@ export async function openDataOverview(page: Page): Promise<void> {
   await expect(page.getByRole("heading", { name: "Data", exact: true })).toBeVisible();
 }
 
-export async function issueInvitation(email: string): Promise<string> {
-  const cleared = requestResendFixture("DELETE");
-  if (!isRecord(cleared) || cleared.status !== true) {
-    throw new Error("Could not reset the local Resend acceptance fixture");
-  }
-  runAuthOperator("invite", "--email", email);
-  return emailToken(email, "/accept-invitation#token=");
-}
-
 export async function createResearcher(
   page: Page,
   email: string,
-  password = browserPassword,
 ): Promise<AuthenticatedResearcher> {
   const ipSuffix = Number.parseInt(
     createHash("sha256").update(email).digest("hex").slice(0, 2),
@@ -156,7 +121,6 @@ export async function createResearcher(
   const provisioned = authFixtureRequest("/__test/provision-session", {
     client_ip: `198.51.100.${ipSuffix}`,
     email,
-    password,
   });
   if (
     !isRecord(provisioned)
@@ -185,30 +149,6 @@ export async function restoreResearcherSession(
     };
   });
   await page.context().addCookies(cookies);
-}
-
-export async function emailToken(email: string, path: string): Promise<string> {
-  const deadline = Date.now() + 5_000;
-  let lastEmailCount = 0;
-  while (Date.now() < deadline) {
-    const payload = requestResendFixture("GET");
-    if (!isRecord(payload) || !Array.isArray(payload.emails)) {
-      throw new Error("Local Resend acceptance fixture response is invalid");
-    }
-    lastEmailCount = payload.emails.length;
-    for (const candidate of [...payload.emails].reverse()) {
-      if (!isRecord(candidate) || !Array.isArray(candidate.to) || !candidate.to.includes(email)) {
-        continue;
-      }
-      if (typeof candidate.html !== "string") break;
-      const marker = candidate.html.indexOf(path);
-      if (marker === -1) continue;
-      const match = candidate.html.slice(marker + path.length).match(/^([^"'<\s]+)/);
-      if (match?.[1] !== undefined) return decodeURIComponent(match[1]);
-    }
-    await new Promise<void>((resolve) => setTimeout(resolve, 50));
-  }
-  throw new Error(`Invitation email was not delivered; observed ${lastEmailCount} email(s)`);
 }
 
 export async function emailCode(email: string): Promise<string> {
@@ -258,18 +198,10 @@ export function runAuthOperator(...args: string[]): unknown {
   return authFixtureRequest("/__test/operator", { args });
 }
 
-export function expireInvitation(token: string): void {
-  const result = authFixtureRequest("/__test/expire-invitation", { token });
-  if (!isRecord(result) || result.status !== "expired") {
-    throw new Error("Private Auth expiry fixture returned an invalid result");
-  }
-}
-
 export function seedOperatorDirectory(): void {
   const result = authFixtureRequest("/__test/seed-operator-directory", {});
   if (
     !isRecord(result)
-    || result.invitations !== 55
     || result.researchers !== 55
     || result.status !== "seeded"
   ) {

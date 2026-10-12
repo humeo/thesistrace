@@ -35,18 +35,6 @@ function dependencies(): OperatorCommandDependencies {
         status: "transferred" as const,
       })),
     },
-    invitations: {
-      issue: vi.fn(async () => ({
-        email: "researcher@example.com",
-        invitationId: "00000000-0000-4000-8000-000000000002",
-        status: "delivered" as const,
-      })),
-      reissue: vi.fn(async () => ({
-        email: "researcher@example.com",
-        invitationId: "00000000-0000-4000-8000-000000000003",
-        status: "delivered" as const,
-      })),
-    },
   };
 }
 
@@ -110,26 +98,6 @@ describe("Auth operator command contract", () => {
       status: "resolved",
     });
   });
-
-  it.each(["invite", "reissue"])(
-    "returns a token-free structured %s result",
-    async (command) => {
-      const result = await runOperatorCommand(
-        [command, "--email", "researcher@example.com"],
-        dependencies(),
-      );
-      const output = `${JSON.stringify(result)}\n`;
-
-      expect(result).toMatchObject({
-        command,
-        email: "researcher@example.com",
-        status: "delivered",
-      });
-      expect(output.trim().split("\n")).toHaveLength(1);
-      expect(output).not.toContain("#token=");
-      expect(output).not.toContain("accept-invitation");
-    },
-  );
 
   it.each(["deactivate", "reactivate", "revoke-sessions"])(
     "resolves an explicit email then runs %s",

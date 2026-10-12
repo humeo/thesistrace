@@ -25,7 +25,6 @@ export const fields = {
   THESISTRACE_MCP_VERIFYING_PUBLIC_JWK: { "section": "Generated once by config:init. Preserve passwords for an existing database.", "type": "string", "default": "", "required": true, "sensitive": false },
   THESISTRACE_DEV_RESEARCHER_EMAIL: { "section": "Created only when this Development identity is absent; never resets an account.", "type": "string", "default": "operator@thesistrace.local", "required": "development", "sensitive": false },
   THESISTRACE_DEV_RESEARCHER_NAME: { "section": "Created only when this Development identity is absent; never resets an account.", "type": "string", "default": "Local Operator", "required": "development", "sensitive": false },
-  THESISTRACE_DEV_RESEARCHER_PASSWORD: { "section": "Created only when this Development identity is absent; never resets an account.", "type": "string", "default": "", "required": "development", "sensitive": true },
   RESEND_API_KEY: { "section": "External services. Supply your own credentials; these are never generated.", "type": "string", "default": "", "required": true, "sensitive": true },
   RESEND_FROM_EMAIL: { "section": "External services. Supply your own credentials; these are never generated.", "type": "string", "default": "", "required": true, "sensitive": false },
   THESISTRACE_RESEND_API_URL: { "section": "External services. Supply your own credentials; these are never generated.", "type": "string", "default": "https://api.resend.com", "required": true, "sensitive": false },

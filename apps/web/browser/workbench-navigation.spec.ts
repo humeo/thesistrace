@@ -42,7 +42,6 @@ test("Operator section links keep the authenticated document", async ({ page }) 
   await page.setViewportSize({ width: 1440, height: 960 });
   await page.route("**/api/auth/operator/capability", route => route.fulfill({ json: { operator: true } }));
   await page.route("**/api/auth/operator/researchers*", route => route.fulfill({ json: { items: [], next_cursor: null } }));
-  await page.route("**/api/auth/operator/invitations*", route => route.fulfill({ json: { items: [], next_cursor: null } }));
   // The navigation remains available while operational status is temporarily unavailable.
   await page.route("**/api/operator/data/status", route => route.fulfill({ status: 503, json: { code: "UNAVAILABLE" } }));
   await page.goto("/operator/researchers");

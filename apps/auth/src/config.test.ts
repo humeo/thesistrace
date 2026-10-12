@@ -339,13 +339,11 @@ describe("readDevelopmentAccountSettings", () => {
   const account = {
     THESISTRACE_DEV_RESEARCHER_EMAIL: "Operator@Fixture.test",
     THESISTRACE_DEV_RESEARCHER_NAME: "Configured Operator",
-    THESISTRACE_DEV_RESEARCHER_PASSWORD: "configured-private-password-123",
   };
 
-  it("requires an explicit identity and password", () => {
+  it("requires an explicit identity for email login", () => {
     expect(readDevelopmentAccountSettings(account)).toEqual({
       email: "operator@fixture.test", name: "Configured Operator",
-      password: "configured-private-password-123",
     });
   });
 
@@ -353,9 +351,9 @@ describe("readDevelopmentAccountSettings", () => {
     expect(() => readDevelopmentAccountSettings({ ...account, [key]: "" })).toThrow(key);
   });
 
-  it("rejects invalid credentials without exposing their value", () => {
+  it("rejects invalid identity without exposing its value", () => {
     expect(() => readDevelopmentAccountSettings({
-      ...account, THESISTRACE_DEV_RESEARCHER_PASSWORD: "short",
+      ...account, THESISTRACE_DEV_RESEARCHER_EMAIL: "invalid-email",
     })).toThrow("Development account configuration is invalid");
   });
 });

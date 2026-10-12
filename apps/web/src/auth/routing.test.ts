@@ -1,7 +1,6 @@
 import { describe, expect, test } from "vitest";
 
 import {
-  extractInitialAuthSecret,
   isAuthPath,
   isProductPath,
   locationHref,
@@ -24,7 +23,6 @@ describe("browser auth routing", () => {
 
   test.each([
     "/login",
-    "/accept-invitation",
   ])("recognizes the Auth route %s", (pathname) => {
     expect(isAuthPath(pathname)).toBe(true);
     expect(isProductPath(pathname)).toBe(false);
@@ -43,36 +41,6 @@ describe("browser auth routing", () => {
   ])("recognizes the product route %s", (pathname) => {
     expect(isProductPath(pathname)).toBe(true);
     expect(isAuthPath(pathname)).toBe(false);
-  });
-
-  test("extracts an Invitation token once and removes the fragment", () => {
-    expect(
-      extractInitialAuthSecret({
-        pathname: "/accept-invitation",
-        search: "?returnTo=%2Fresearch",
-        hash: "#token=invitation-secret",
-      }),
-    ).toEqual({
-      location: {
-        pathname: "/accept-invitation",
-        search: "?returnTo=%2Fresearch",
-        hash: "",
-      },
-      secret: { kind: "invitation", token: "invitation-secret" },
-    });
-  });
-
-  test("clears malformed Invitation fragments without retaining them", () => {
-    expect(
-      extractInitialAuthSecret({
-        pathname: "/accept-invitation",
-        search: "",
-        hash: "#unexpected=value",
-      }),
-    ).toEqual({
-      location: { pathname: "/accept-invitation", search: "", hash: "" },
-      secret: null,
-    });
   });
 
   test.each([

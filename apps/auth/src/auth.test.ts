@@ -6,8 +6,6 @@ import {
   type AuthLifecycleDependencies,
 } from "./auth.js";
 import { authTestSettings } from "../test-fixtures/auth-settings.js";
-import { InvitationAdmission } from "./invitation-admission.js";
-import { passwordResetIdentifier } from "./password-reset-token.js";
 
 // Configuration unit tests do not start the provider's database resource seeding.
 // The real plugin is exercised against PostgreSQL in mcp-connections.integration.test.
@@ -22,16 +20,29 @@ function lifecycle(
 ): AuthLifecycleDependencies {
   return {
     backgroundTask: vi.fn(),
-    invitationAdmission: new InvitationAdmission(),
     isResearcherActive: vi.fn(async () => true),
-    recordPasswordResetCredential: vi.fn(),
     recordSession: vi.fn(),
-    sendResetPassword: vi.fn(async () => undefined),
     ...overrides,
   };
 }
 
 describe("ThesisTrace Better Auth configuration", () => {
+  it("creates a verified canonical identity only through email OTP", async () => {
+    const pool = new Pool({connectionString: settings.databaseUrl});
+    try {
+      const auth = createThesisTraceAuth(settings, pool, lifecycle());
+      const before = auth.options.databaseHooks?.user?.create?.before;
+      const user = {id: "00000000-0000-4000-8000-000000000001", active: true,
+        name: "untrusted", email: " Researcher.Label@Example.COM ", emailVerified: false,
+        image: null, createdAt: new Date(), updatedAt: new Date()};
+      expect(await before?.(user, null)).toBe(false);
+      expect(await before?.(user, {path: "/sign-up/email"} as never)).toBe(false);
+      expect(await before?.(user, {path: "/sign-in/email-otp"} as never)).toMatchObject({
+        data: {email: "researcher.label@example.com", name: "researcher.label", emailVerified: true, active: true},
+      });
+      expect(auth.options.emailAndPassword?.enabled).toBe(false);
+    } finally { await pool.end(); }
+  });
   const ambientOverrideNames = [
     "BETTER_AUTH_SECRETS",
     "BETTER_AUTH_TELEMETRY",
@@ -72,15 +83,7 @@ describe("ThesisTrace Better Auth configuration", () => {
       expect(auth.options.basePath).toBe("/api/auth");
       expect(auth.options.trustedOrigins).toEqual([settings.publicOrigin]);
       expect(auth.options.plugins?.map((plugin) => plugin.id)).toEqual(["email-otp", "oauth-provider", "jwt"]);
-      expect(auth.options.emailAndPassword).toMatchObject({
-        enabled: true,
-        maxPasswordLength: 128,
-        minPasswordLength: 12,
-        resetPasswordTokenExpiresIn: 30 * 60,
-      });
-      expect(auth.options.emailAndPassword?.sendResetPassword).toBe(
-        dependencies.sendResetPassword,
-      );
+      expect(auth.options.emailAndPassword).toEqual({enabled: false});
       expect(auth.options.session).toEqual({
         cookieCache: { enabled: false },
         expiresIn: 60 * 60 * 24 * 7,
@@ -135,73 +138,6 @@ describe("ThesisTrace Better Auth configuration", () => {
       }
     },
   );
-
-  it("creates a Researcher only inside the matching Invitation admission scope", async () => {
-    const pool = new Pool({ connectionString: settings.databaseUrl });
-    const invitationAdmission = new InvitationAdmission();
-    try {
-      const auth = createThesisTraceAuth(
-        settings,
-        pool,
-        lifecycle({ invitationAdmission }),
-      );
-      const before = auth.options.databaseHooks?.user?.create?.before;
-      expect(before).toBeDefined();
-      const user = {
-        active: true,
-        createdAt: new Date("2026-08-28T00:00:00.000Z"),
-        email: " Researcher.Label@Example.COM ",
-        emailVerified: false,
-        id: "00000000-0000-4000-8000-000000000001",
-        image: null,
-        name: "untrusted label",
-        updatedAt: new Date("2026-08-28T00:00:00.000Z"),
-      };
-
-      expect(await before?.(user, null)).toBe(false);
-      await invitationAdmission.run("researcher.label@example.com", async () => {
-        expect(await before?.(user, null)).toMatchObject({
-          data: {
-            active: true,
-            email: "researcher.label@example.com",
-            emailVerified: true,
-            name: "researcher.label",
-          },
-        });
-      });
-      await invitationAdmission.run("other@example.com", async () => {
-        expect(await before?.(user, null)).toBe(false);
-      });
-    } finally {
-      await pool.end();
-    }
-  });
-
-  it("hashes a Password Reset identifier before the database adapter sees it", async () => {
-    const pool = new Pool({ connectionString: settings.databaseUrl });
-    try {
-      const auth = createThesisTraceAuth(settings, pool, lifecycle());
-      const before = auth.options.databaseHooks?.verification?.create?.before;
-      expect(before).toBeDefined();
-      const token = "reset-token-canary";
-      const verification = {
-        createdAt: new Date("2026-08-28T00:00:00.000Z"),
-        expiresAt: new Date("2026-08-28T00:30:00.000Z"),
-        id: "00000000-0000-4000-8000-000000000003",
-        identifier: `reset-password:${token}`,
-        updatedAt: new Date("2026-08-28T00:00:00.000Z"),
-        value: "00000000-0000-4000-8000-000000000001",
-      };
-
-      const result = await before?.(verification);
-      expect(result).toMatchObject({
-        data: { identifier: passwordResetIdentifier(token) },
-      });
-      expect(JSON.stringify(result)).not.toContain(token);
-    } finally {
-      await pool.end();
-    }
-  });
 
   it("refuses Session creation when the Researcher is inactive", async () => {
     const isResearcherActive = vi.fn(async () => false);

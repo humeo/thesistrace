@@ -24,12 +24,6 @@ _避免混用_: User, account, tenant, Personal Workspace
 A revocable, time-bounded grant allowing one person to act as an active Researcher.
 _避免混用_: Agent Chat Session, Research Session, ResearchRun
 
-**Researcher Invitation**:
-An optional single-use, expiring, email-bound grant issued by the Operator that allows one
-person to create one Researcher. Public email verification also creates a Researcher
-without an Invitation.
-_避免混用_: Public signup, shared invitation code, Organization invitation
-
 **Research Ownership**:
 The invariant that binds every private Research resource to exactly one
 Researcher and excludes every other Researcher.

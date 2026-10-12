@@ -73,7 +73,7 @@ Custom Research folder rows show one ellipsis action. Clicking it opens the exis
 | Surface | Required treatment |
 | --- | --- |
 | Public landing | Use the approved dark, product-led homepage below, with historical research examples and English/Chinese switching. |
-| Login, invitation, access and MCP consent states | Use the dark surface system and shared controls while preserving existing fields, validation and authentication behavior. |
+| Login, access and MCP consent states | Use the dark surface system and shared controls while preserving existing fields, validation and authentication behavior. |
 | Console, including Chat, Data, Research, Research Runs, batches, Daily Tracks, MCP and Operator | Use one evidence-first workspace while preserving capabilities, navigation, URLs, resource identities and service contracts. |
 | Email, browser title, metadata, accessible names and favicon | Use QAgentis consistently. Email uses its own email-safe markup and system fonts. |
 
@@ -156,7 +156,7 @@ Multi-strategy comparison charts use the [IBM Carbon dark categorical palette](h
 - Use lines, typographic hierarchy and whitespace to separate information. Cards contain genuinely grouped controls or evidence; avoid card wrappers around every paragraph or metric.
 - Define normal, hover, focus, disabled, pending, error and long-text states for controls and overlays. Fold secondary information instead of shrinking important text.
 - Follow the approved QAgentis homepage composition and historical examples above. Clearly label the preview as a demonstration. No invented results, pricing, navigation or feature claims.
-- Authentication retains its fields and interaction states. Keep errors, resend countdowns, invitation details, consent scopes and recovery actions legible.
+- Authentication retains its fields and interaction states. Keep errors, resend countdowns, consent scopes and recovery actions legible.
 - All product surfaces use `color-scheme: dark`. Do not introduce a parallel legacy theme or theme toggle.
 
 ## Console layout and behavior contract

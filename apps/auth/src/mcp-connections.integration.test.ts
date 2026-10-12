@@ -1,3 +1,4 @@
+import { emailSession } from "../test-fixtures/email-session.js";
 import { createHash, randomBytes } from "node:crypto";
 import { Hono } from "hono";
 import { Pool } from "pg";
@@ -10,7 +11,6 @@ import { enforceAuthSecretContract } from "./secret-contract.js";
 import { AuthOperationCoordinator, CredentialOperationCoordinator } from "./coordination.js";
 import { createAuthPool, createAuthCoordinationPool } from "./database.js";
 import { createMcpConnectionsApp } from "./mcp-connections.js";
-import { InvitationAdmission } from "./invitation-admission.js";
 
 const url = process.env.THESISTRACE_AUTH_TEST_OWNER_DATABASE_URL;
 if (!url) throw Error("isolated Auth test database required");
@@ -20,7 +20,6 @@ const pool = createAuthPool(runtimeUrl.toString());
 const coordinationPool = createAuthCoordinationPool(runtimeUrl.toString());
 const coordination = new AuthOperationCoordinator(coordinationPool);
 const settings = authTestSettings({ databaseUrl: runtimeUrl.toString() });
-const admission = new InvitationAdmission();
 let auth: ReturnType<typeof createThesisTraceAuth>;
 let app: Hono;
 
@@ -30,7 +29,7 @@ beforeAll(async () => {
 });
 beforeEach(async () => {
   await owner.query('TRUNCATE auth."oauthClient", auth."user", auth."verification", auth."rateLimit" CASCADE');
-  auth = createThesisTraceAuth(settings, pool, { ...createClosedAuthLifecycle(), invitationAdmission: admission,
+  auth = createThesisTraceAuth(settings, pool, { ...createClosedAuthLifecycle(),
     isResearcherActive: async id => (await pool.query('SELECT active FROM auth."user" WHERE id = $1', [id])).rows[0]?.active === true });
   app = new Hono().route("/", createMcpConnectionsApp(auth, pool, settings, coordination));
   app.all("/api/auth/*", c => auth.handler(c.req.raw));
@@ -41,14 +40,6 @@ function request(path: string, body?: Record<string, unknown>, cookie?: string) 
   return app.request(`${settings.publicOrigin}${path}`, { method: body ? "POST" : "GET",
     headers: { origin: settings.publicOrigin, ...(body ? { "content-type": "application/json" } : {}), ...(cookie ? { cookie } : {}) },
     ...(body ? { body: JSON.stringify(body) } : {}) });
-}
-async function signIn(email: string) {
-  const response = await admission.run(email, () => auth.handler(new Request(`${settings.publicOrigin}/api/auth/sign-up/email`, {
-    method: "POST", headers: { origin: settings.publicOrigin, "content-type": "application/json", "x-thesistrace-client-ip": email.includes("other") ? "192.0.2.2" : "192.0.2.1" },
-    body: JSON.stringify({ email, name: "Researcher", password: "correct-horse-battery-staple" }),
-  })));
-  expect(response.status).toBe(200);
-  return response.headers.getSetCookie().map(value => value.split(";")[0]).join("; ");
 }
 async function registeredClient() {
   const response = await request("/api/auth/oauth2/register", { client_name: "Codex", application_type: "native",
@@ -156,3 +147,9 @@ describe.sequential("External MCP OAuth", () => {
     expect((await request("/api/auth/mcp/connections", undefined, cookie)).status).toBe(401);
   });
 });
+
+async function signIn(email: string) {
+  const response = await emailSession(auth, email, new Headers({origin: settings.publicOrigin}));
+  expect(response.status).toBe(200);
+  return response.headers.getSetCookie().map(value => value.split(";")[0]).join("; ");
+}

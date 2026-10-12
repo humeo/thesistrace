@@ -6,12 +6,13 @@ import re
 import subprocess
 from dataclasses import dataclass
 from threading import Event
-from time import monotonic
-from urllib.parse import unquote
+from time import monotonic, time
+from urllib.parse import urlsplit
+from uuid import uuid4
 
 import httpx
 
-_INVITATION_TOKEN = re.compile(r"#token=([^\"'<\s]+)")
+_EMAIL_CODE = re.compile(r"\b[0-9]{6}\b")
 
 
 @dataclass(frozen=True)
@@ -21,31 +22,38 @@ class LiveLoginSession:
     researcher_id: str
 
 
-def create_live_login_session(
-    email: str,
-    *,
-    password: str = "correct-horse-battery-staple",
-) -> LiveLoginSession:
+def create_live_login_session(email: str) -> LiveLoginSession:
     auth_origin, resend_origin, public_origin = _origins()
     with httpx.Client(timeout=5) as client:
         cleared = client.delete(f"{resend_origin}/__test/emails")
         if cleared.status_code != 200:
             raise AssertionError(f"Resend fake clear failed: HTTP {cleared.status_code}")
-        run_auth_operator("invite", "--email", email)
-        token = _await_invitation_token(client, resend_origin)
-        accepted = client.post(
-            f"{auth_origin}/api/auth/researcher-invitation/accept",
-            headers={
-                "origin": public_origin,
-                "x-thesistrace-client-ip": "127.0.0.1",
+        headers = {"origin": public_origin, "x-thesistrace-client-ip": "127.0.0.1"}
+        sent = client.post(
+            f"{auth_origin}/api/auth/email-otp/send-verification-otp",
+            headers=headers,
+            json={
+                "email": email,
+                "type": "sign-in",
+                "captcha_token": (
+                    f"test-turnstile:{urlsplit(public_origin).hostname}:"
+                    f"{int(time() * 1000)}:{uuid4()}"
+                ),
             },
-            json={"token": token, "password": password},
+        )
+        if sent.status_code != 200:
+            raise AssertionError(f"Email code delivery failed: HTTP {sent.status_code}")
+        otp = _await_email_code(client, resend_origin)
+        accepted = client.post(
+            f"{auth_origin}/api/auth/sign-in/email-otp",
+            headers=headers,
+            json={"email": email, "otp": otp},
         )
     if accepted.status_code != 200:
-        raise AssertionError(f"Invitation accept failed: HTTP {accepted.status_code}")
+        raise AssertionError(f"Email code sign-in failed: HTTP {accepted.status_code}")
     cookie = _request_cookie(accepted.headers.get_list("set-cookie"))
     if not cookie:
-        raise AssertionError("Invitation accept did not establish a Login Session")
+        raise AssertionError("Email code sign-in did not establish a Login Session")
     with httpx.Client(timeout=5) as client:
         verified = client.post(
             f"{auth_origin}/internal/session/verify",
@@ -167,7 +175,7 @@ def _service_container(service: str) -> str:
     return containers[0]
 
 
-def _await_invitation_token(client: httpx.Client, resend_origin: str) -> str:
+def _await_email_code(client: httpx.Client, resend_origin: str) -> str:
     deadline = monotonic() + 10
     interval = Event()
     saw_email = False
@@ -179,14 +187,14 @@ def _await_invitation_token(client: httpx.Client, resend_origin: str) -> str:
             if isinstance(emails, list) and emails:
                 saw_email = True
                 email = emails[-1]
-                html = email.get("html") if isinstance(email, dict) else None
-                match = _INVITATION_TOKEN.search(html) if isinstance(html, str) else None
+                text = email.get("text") if isinstance(email, dict) else None
+                match = _EMAIL_CODE.search(text) if isinstance(text, str) else None
                 if match is not None:
-                    return unquote(match.group(1))
+                    return match.group(0)
         interval.wait(0.05)
     if saw_email:
-        raise AssertionError("Invitation email contained no valid fragment token")
-    raise AssertionError("Invitation email was not delivered")
+        raise AssertionError("Email contained no valid verification code")
+    raise AssertionError("Verification email was not delivered")
 
 
 def _request_cookie(set_cookie_headers: list[str]) -> str:

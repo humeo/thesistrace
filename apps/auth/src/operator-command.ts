@@ -3,10 +3,6 @@ import type {
   ResearcherAccessService,
 } from "./access.js";
 import type {
-  InvitationIssueResult,
-  ResearcherInvitationService,
-} from "./invitation.js";
-import type {
   OperatorAssignmentService,
   OperatorIdentity,
 } from "./operator-assignment.js";
@@ -42,11 +38,6 @@ type AccessOperations = Pick<
   | "revokeSessions"
 >;
 
-type InvitationOperations = Pick<
-  ResearcherInvitationService,
-  "issue" | "reissue"
->;
-
 type AssignmentOperations = Pick<
   OperatorAssignmentService,
   "assign" | "transfer"
@@ -55,7 +46,6 @@ type AssignmentOperations = Pick<
 export type OperatorCommandDependencies = Readonly<{
   access: AccessOperations;
   assignment: AssignmentOperations;
-  invitations: InvitationOperations;
 }>;
 
 export type OperatorCommandResult =
@@ -74,12 +64,6 @@ export type OperatorCommandResult =
       former_researcher_id: string;
       researcher_id: string;
       status: "no_change" | "transferred";
-    }>
-  | Readonly<{
-      command: "invite" | "reissue";
-      email: string;
-      invitation_id: string;
-      status: "delivered";
     }>
   | Readonly<{
       command:
@@ -120,17 +104,6 @@ export async function runOperatorCommand(
       researcher_id: result.operatorResearcherId,
       status: result.status,
     };
-  }
-  if (command === "invite" || command === "reissue") {
-    const flags = parseFlags(args.slice(1), new Set(["--email"]));
-    if (flags.size !== 1 || !flags.has("--email")) {
-      throw new OperatorArgumentError();
-    }
-    const email = requiredFlag(flags, "--email");
-    const result = await (command === "invite"
-      ? dependencies.invitations.issue(email)
-      : dependencies.invitations.reissue(email));
-    return invitationResult(command, result);
   }
 
   if (command === "resolve") {
@@ -227,18 +200,6 @@ function requiredFlag(flags: ReadonlyMap<string, string>, name: string): string 
     throw new OperatorArgumentError();
   }
   return value;
-}
-
-function invitationResult(
-  command: "invite" | "reissue",
-  result: InvitationIssueResult,
-): OperatorCommandResult {
-  return {
-    command,
-    email: result.email,
-    invitation_id: result.invitationId,
-    status: result.status,
-  };
 }
 
 function runAccessMutation(

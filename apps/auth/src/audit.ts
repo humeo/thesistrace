@@ -4,13 +4,6 @@ import { unknownEmailHmac } from "./security.js";
 
 export type SecurityAuditEvent =
   | "display_label_corrected"
-  | "invitation_accepted"
-  | "invitation_issued"
-  | "invitation_revoked"
-  | "password_changed"
-  | "password_reset_failed"
-  | "password_reset_requested"
-  | "password_reset_succeeded"
   | "researcher_deactivated"
   | "researcher_reactivated"
   | "sessions_revoked"

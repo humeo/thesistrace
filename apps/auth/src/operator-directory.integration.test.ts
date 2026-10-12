@@ -41,8 +41,8 @@ describe.sequential("Auth Operator directory", () => {
       TRUNCATE
         auth.operator_assignment,
         auth.security_audit,
-        auth.password_reset,
-        auth.researcher_invitation,
+
+
         auth."rateLimit",
         auth."verification",
         auth."user"
@@ -82,7 +82,7 @@ describe.sequential("Auth Operator directory", () => {
     ).rejects.toBeInstanceOf(OperatorAccessNotFoundError);
   });
 
-  it("projects bounded Researcher and Invitation fields with literal search", async () => {
+  it("projects bounded Researcher fields with literal search", async () => {
     await insertResearcher(
       targetId,
       "target@example.com",
@@ -119,26 +119,6 @@ describe.sequential("Auth Operator directory", () => {
       new Date("2026-08-28T10:00:00.000Z"),
       "failed",
     );
-    await insertInvitation({
-      createdAt: new Date("2026-08-27T06:00:00.000Z"),
-      deliveredAt: new Date("2026-08-27T06:01:00.000Z"),
-      email: "target@example.com",
-      expiresAt: new Date("2026-08-30T06:00:00.000Z"),
-      id: "00000000-0000-4000-8000-000000000041",
-      status: "delivered",
-      terminalAt: null,
-      userId: null,
-    });
-    await insertInvitation({
-      createdAt: new Date("2026-08-20T06:00:00.000Z"),
-      deliveredAt: new Date("2026-08-20T06:01:00.000Z"),
-      email: "target@example.com",
-      expiresAt: new Date("2026-08-22T06:00:00.000Z"),
-      id: "00000000-0000-4000-8000-000000000042",
-      status: "consumed",
-      terminalAt: new Date("2026-08-20T07:00:00.000Z"),
-      userId: targetId,
-    });
 
     const directory = service();
     const byEmail = await directory.listResearchers(operatorPrincipal(), {
@@ -158,17 +138,6 @@ describe.sequential("Auth Operator directory", () => {
       createdAt: "2026-08-28T06:00:00.000Z",
       currentSessionCount: 1,
       displayLabel: "Alpha % Lead",
-      effectiveInvitation: {
-        createdAt: "2026-08-27T06:00:00.000Z",
-        deliveredAt: "2026-08-27T06:01:00.000Z",
-        effective: true,
-        email: "target@example.com",
-        expiresAt: "2026-08-30T06:00:00.000Z",
-        id: "00000000-0000-4000-8000-000000000041",
-        researcherId: targetId,
-        status: "delivered",
-        terminalAt: null,
-      },
       email: "target@example.com",
       id: targetId,
       latestSuccessfulLoginAt: "2026-08-28T09:00:00.000Z",
@@ -176,16 +145,6 @@ describe.sequential("Auth Operator directory", () => {
     expect(Object.keys(byEmail.items[0] ?? {})).not.toEqual(
       expect.arrayContaining(["ipAddress", "userAgent", "securityHistory"]),
     );
-
-    const invitations = await directory.listInvitations(operatorPrincipal(), {
-      cursor: null,
-    });
-    expect(invitations.items.map((item) => item.status)).toEqual([
-      "delivered",
-      "consumed",
-    ]);
-    expect(invitations.items.every((item) => item.researcherId === targetId)).toBe(true);
-    expect(JSON.stringify(invitations)).not.toMatch(/token|ipAddress|userAgent/);
   });
 
   it("paginates Researchers in stable 50-row pages and binds the cursor to search", async () => {
@@ -219,86 +178,6 @@ describe.sequential("Auth Operator directory", () => {
         search: "different",
       }),
     ).rejects.toBeInstanceOf(OperatorCursorInvalidError);
-  });
-
-  it("paginates Invitations and omits terminal records outside 30 days", async () => {
-    for (let index = 1; index <= 55; index += 1) {
-      await insertInvitation({
-        createdAt: new Date("2026-08-28T00:00:00.000Z"),
-        deliveredAt: null,
-        email: `invitation-${index}@example.com`,
-        expiresAt: new Date("2026-08-29T00:00:00.000Z"),
-        id: numberedInvitationId(index),
-        status: "revoked",
-        terminalAt: new Date("2026-08-28T01:00:00.000Z"),
-        userId: null,
-      });
-    }
-    await insertInvitation({
-      createdAt: new Date("2026-07-01T00:00:00.000Z"),
-      deliveredAt: null,
-      email: "outside-retention@example.com",
-      expiresAt: new Date("2026-07-03T00:00:00.000Z"),
-      id: "00000000-0000-4000-8002-000000000099",
-      status: "revoked",
-      terminalAt: new Date("2026-07-03T00:00:00.000Z"),
-      userId: null,
-    });
-    const directory = service();
-    const first = await directory.listInvitations(operatorPrincipal(), { cursor: null });
-    expect(first.items).toHaveLength(50);
-    expect(first.nextCursor).not.toBeNull();
-    if (first.nextCursor === null) throw new Error("expected Invitation cursor");
-
-    const second = await directory.listInvitations(operatorPrincipal(), {
-      cursor: first.nextCursor,
-    });
-    expect(second.items).toHaveLength(5);
-    expect(second.nextCursor).toBeNull();
-    expect([...first.items, ...second.items].map((item) => item.email)).not.toContain(
-      "outside-retention@example.com",
-    );
-  });
-
-  it("projects cleanup-lagged effective rows as recently expired terminal Invitations", async () => {
-    await insertInvitation({
-      createdAt: new Date("2026-08-27T06:00:00.000Z"),
-      deliveredAt: new Date("2026-08-27T06:01:00.000Z"),
-      email: "recently-expired@example.com",
-      expiresAt: new Date("2026-08-28T06:00:00.000Z"),
-      id: "00000000-0000-4000-8002-000000000101",
-      status: "delivered",
-      terminalAt: null,
-      userId: null,
-    });
-    await insertInvitation({
-      createdAt: new Date("2026-07-27T06:00:00.000Z"),
-      deliveredAt: new Date("2026-07-27T06:01:00.000Z"),
-      email: "expired-outside-retention@example.com",
-      expiresAt: new Date("2026-07-29T05:59:59.000Z"),
-      id: "00000000-0000-4000-8002-000000000102",
-      status: "delivered",
-      terminalAt: null,
-      userId: null,
-    });
-
-    const page = await service().listInvitations(operatorPrincipal(), {
-      cursor: null,
-    });
-
-    expect(page.items).toEqual([
-      {
-        createdAt: "2026-08-27T06:00:00.000Z",
-        deliveredAt: "2026-08-27T06:01:00.000Z",
-        effective: false,
-        email: "recently-expired@example.com",
-        expiresAt: "2026-08-28T06:00:00.000Z",
-        id: "00000000-0000-4000-8002-000000000101",
-        researcherId: null,
-        status: "expired",
-        terminalAt: "2026-08-28T06:00:00.000Z",
-      },
-    ]);
   });
 });
 
@@ -372,50 +251,12 @@ async function insertSuccessfulLogin(
   );
 }
 
-type InvitationFixture = Readonly<{
-  createdAt: Date;
-  deliveredAt: Date | null;
-  email: string;
-  expiresAt: Date;
-  id: string;
-  status: "consumed" | "delivered" | "revoked";
-  terminalAt: Date | null;
-  userId: string | null;
-}>;
-
-async function insertInvitation(input: InvitationFixture): Promise<void> {
-  await owner.query(
-    `
-      INSERT INTO auth.researcher_invitation (
-        id, email, token_hash, status, expires_at, created_at,
-        delivered_at, terminal_at, user_id
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-    `,
-    [
-      input.id,
-      input.email,
-      tokenHash(input.id),
-      input.status,
-      input.expiresAt,
-      input.createdAt,
-      input.deliveredAt,
-      input.terminalAt,
-      input.userId,
-    ],
-  );
-}
-
 function tokenHash(id: string): Buffer {
   return Buffer.from(id.replaceAll("-", "").padEnd(64, "0").slice(0, 64), "hex");
 }
 
 function numberedId(index: number): string {
   return `00000000-0000-4000-8001-${String(index).padStart(12, "0")}`;
-}
-
-function numberedInvitationId(index: number): string {
-  return `00000000-0000-4000-8002-${String(index).padStart(12, "0")}`;
 }
 
 function roleDatabaseUrl(base: string, username: string, password: string): string {

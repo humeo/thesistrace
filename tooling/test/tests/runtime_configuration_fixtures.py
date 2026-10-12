@@ -22,6 +22,8 @@ def development_environment(path: Path) -> dict[str, str]:
     assert initialized.returncode == 0, initialized.stderr
     source = path.read_text()
     for key, value in {
+        "THESISTRACE_TURNSTILE_SITE_KEY": "1x00000000000000000000AA",
+        "THESISTRACE_TURNSTILE_SECRET_KEY": "1x0000000000000000000000000000000AA",
         "RESEND_API_KEY": "re_fixture-configuration-only-12345",
         "RESEND_FROM_EMAIL": "ThesisTrace <noreply@fixture.test>",
         "THESISTRACE_TUSHARE_TOKEN": "fixture-configuration-only-12345",

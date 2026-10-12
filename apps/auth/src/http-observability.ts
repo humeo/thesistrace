@@ -5,7 +5,6 @@ const trustedRequestId =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 const exactRoutes = new Set([
-  "/api/auth/change-password",
   "/api/auth/get-session",
   "/api/auth/ok",
   "/api/auth/oauth2/authorize",
@@ -16,15 +15,10 @@ const exactRoutes = new Set([
   "/api/auth/oauth2/public-client",
   "/api/auth/oauth2/revoke",
   "/api/auth/oauth2/introspect",
-  "/api/auth/request-password-reset",
-  "/api/auth/researcher-invitation/accept",
-  "/api/auth/researcher-invitation/inspect",
-  "/api/auth/reset-password",
   "/api/auth/sign-in/email-otp",
   "/api/auth/email-otp/send-verification-otp",
   "/api/auth/operator/proofs/send-code",
   "/api/auth/sign-out",
-  "/api/auth/sign-up/email",
   "/health/live",
   "/health/ready",
   "/internal/session/verify",

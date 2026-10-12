@@ -1,6 +1,4 @@
 import { ResearcherAccessService } from "./access.js";
-import { createThesisTraceAuth } from "./auth.js";
-import { AuthBackgroundTasks } from "./background-tasks.js";
 import { readAuthSettings } from "./config.js";
 import {
   AuthOperationCoordinator,
@@ -8,12 +6,8 @@ import {
 } from "./coordination.js";
 import { createAuthCoordinationPool, createAuthPool } from "./database.js";
 import { diagnoseAuthFailure } from "./failure.js";
-import { ResearcherInvitationService } from "./invitation.js";
-import { InvitationAdmission } from "./invitation-admission.js";
 import { OperatorAssignmentService } from "./operator-assignment.js";
 import { runOperatorCommand } from "./operator-command.js";
-import { PasswordResetLifecycle } from "./password-reset.js";
-import { sendResendEmail } from "./resend.js";
 import { verifyAuthSchema } from "./schema-contract.js";
 import { enforceAuthSecretContract } from "./secret-contract.js";
 
@@ -35,41 +29,12 @@ async function main(): Promise<void> {
   try {
     await verifyAuthSchema(pool);
     await enforceAuthSecretContract(pool, settings.secret);
-    const backgroundTasks = new AuthBackgroundTasks();
     const coordination = new AuthOperationCoordinator(coordinationPool);
     const credentialCoordinator = new CredentialOperationCoordinator({
       authSecret: settings.secret,
       coordination,
       pool,
     });
-    const invitationAdmission = new InvitationAdmission();
-    const sendEmail = (email: Parameters<typeof sendResendEmail>[1]) =>
-      sendResendEmail(
-        {
-          apiKey: settings.resendApiKey,
-          apiUrl: settings.resendApiUrl,
-          fromEmail: settings.resendFromEmail,
-        },
-        email,
-      );
-    const passwordReset = new PasswordResetLifecycle({
-      authSecret: settings.secret,
-      backgroundTask: backgroundTasks.handler,
-      credentialCoordinator,
-      pool,
-      publicOrigin: settings.publicOrigin,
-      sendEmail,
-    });
-    const auth = createThesisTraceAuth(settings, pool, {
-      backgroundTask: backgroundTasks.handler,
-      invitationAdmission,
-      isResearcherActive: passwordReset.isResearcherActive,
-      recordPasswordResetCredential:
-        credentialCoordinator.recordPasswordResetCredential,
-      recordSession: credentialCoordinator.recordSession,
-      sendResetPassword: passwordReset.sendResetPassword,
-    });
-    await auth.$context;
     const result = await runOperatorCommand(process.argv.slice(2), {
       access: new ResearcherAccessService({
         authSecret: settings.secret,
@@ -77,15 +42,6 @@ async function main(): Promise<void> {
         pool,
       }),
       assignment: new OperatorAssignmentService({ pool }),
-      invitations: new ResearcherInvitationService({
-        auth,
-        authSecret: settings.secret,
-        credentialCoordinator,
-        invitationAdmission,
-        pool,
-        publicOrigin: settings.publicOrigin,
-        sendEmail,
-      }),
     });
     process.stdout.write(`${JSON.stringify(result)}\n`);
     process.stderr.write(
@@ -95,7 +51,6 @@ async function main(): Promise<void> {
         status: result.status,
       })}\n`,
     );
-    await backgroundTasks.drain();
   } finally {
     await Promise.allSettled([coordinationPool.end(), pool.end()]);
   }

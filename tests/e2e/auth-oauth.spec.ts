@@ -35,8 +35,8 @@ test("External OAuth authentication completes login, consent, token refresh and 
     await expect(page.getByRole("heading", { name: "Welcome to QAgentis" })).toBeVisible();
     await page.getByLabel("Email", { exact: true }).fill(researcher.email);
     await page.getByRole("button", { name: "Continue with email", exact: true }).click();
-    await expect(page.getByLabel("Verification code")).toBeVisible();
-    await page.getByLabel("Verification code").fill(await emailCode(researcher.email));
+    await expect(page.getByRole("textbox", {name: "Verification code", exact: true})).toBeVisible();
+    await page.getByRole("textbox", {name: "Verification code", exact: true}).fill(await emailCode(researcher.email));
     await page.getByRole("button", { name: "Verify and continue", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Allow OAuth acceptance client to access QAgentis?" })).toBeVisible();
     await expect(page.getByText("Create research runs and batches", { exact: true })).toHaveCount(0);

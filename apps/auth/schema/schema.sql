@@ -84,8 +84,6 @@ CREATE TABLE auth.operator_proof (
     ),
     CONSTRAINT operator_proof_operation_check CHECK (
         operation = ANY (ARRAY[
-            'invitation.issue'::text,
-            'invitation.reissue'::text,
             'researcher.sessions.revoke'::text,
             'data.refresh.market.submit'::text,
             'data.refresh.dataset.submit'::text,
@@ -131,88 +129,6 @@ CREATE TABLE auth."rateLimit" (
     CONSTRAINT rateLimit_key_key UNIQUE ("key")
 );
 
-CREATE TABLE auth.researcher_invitation (
-    id uuid DEFAULT pg_catalog.gen_random_uuid() NOT NULL,
-    email text NOT NULL,
-    token_hash bytea NOT NULL,
-    status text NOT NULL,
-    expires_at timestamp with time zone NOT NULL,
-    created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    delivered_at timestamp with time zone,
-    terminal_at timestamp with time zone,
-    user_id uuid,
-    CONSTRAINT researcher_invitation_pkey PRIMARY KEY (id),
-    CONSTRAINT researcher_invitation_token_hash_key UNIQUE (token_hash),
-    CONSTRAINT researcher_invitation_user_id_fkey FOREIGN KEY (user_id)
-        REFERENCES auth."user" (id) ON DELETE CASCADE,
-    CONSTRAINT researcher_invitation_email_canonical_check CHECK (
-        email = pg_catalog.lower(pg_catalog.btrim(email))
-        AND pg_catalog.char_length(email) <= 254
-    ),
-    CONSTRAINT researcher_invitation_token_hash_check CHECK (
-        pg_catalog.octet_length(token_hash) = 32
-    ),
-    CONSTRAINT researcher_invitation_status_check CHECK (
-        status = ANY (ARRAY[
-            'delivery_pending'::text,
-            'replacement_pending'::text,
-            'delivered'::text,
-            'delivery_failed'::text,
-            'consumed'::text,
-            'revoked'::text
-        ])
-    ),
-    CONSTRAINT researcher_invitation_lifecycle_check CHECK (
-        (status = 'delivery_pending' AND delivered_at IS NULL
-            AND terminal_at IS NULL AND user_id IS NULL)
-        OR (status = 'replacement_pending' AND delivered_at IS NULL
-            AND terminal_at IS NULL AND user_id IS NULL)
-        OR (status = 'delivered' AND delivered_at IS NOT NULL
-            AND terminal_at IS NULL AND user_id IS NULL)
-        OR (status IN ('delivery_failed', 'revoked')
-            AND terminal_at IS NOT NULL AND user_id IS NULL)
-        OR (status = 'consumed' AND delivered_at IS NOT NULL
-            AND terminal_at IS NOT NULL AND user_id IS NOT NULL)
-    )
-);
-
-CREATE TABLE auth.password_reset (
-    id uuid DEFAULT pg_catalog.gen_random_uuid() NOT NULL,
-    user_id uuid NOT NULL,
-    token_hash bytea NOT NULL,
-    status text NOT NULL,
-    expires_at timestamp with time zone NOT NULL,
-    created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    delivered_at timestamp with time zone,
-    terminal_at timestamp with time zone,
-    CONSTRAINT password_reset_pkey PRIMARY KEY (id),
-    CONSTRAINT password_reset_token_hash_key UNIQUE (token_hash),
-    CONSTRAINT password_reset_user_id_fkey FOREIGN KEY (user_id)
-        REFERENCES auth."user" (id) ON DELETE CASCADE,
-    CONSTRAINT password_reset_token_hash_check CHECK (
-        pg_catalog.octet_length(token_hash) = 32
-    ),
-    CONSTRAINT password_reset_status_check CHECK (
-        status = ANY (ARRAY[
-            'delivery_pending'::text,
-            'delivered'::text,
-            'delivery_failed'::text,
-            'consumed'::text,
-            'revoked'::text
-        ])
-    ),
-    CONSTRAINT password_reset_lifecycle_check CHECK (
-        (status = 'delivery_pending' AND delivered_at IS NULL
-            AND terminal_at IS NULL)
-        OR (status = 'delivered' AND delivered_at IS NOT NULL
-            AND terminal_at IS NULL)
-        OR (status IN ('delivery_failed', 'revoked')
-            AND terminal_at IS NOT NULL)
-        OR (status = 'consumed' AND delivered_at IS NOT NULL
-            AND terminal_at IS NOT NULL)
-    )
-);
-
 CREATE TABLE auth.security_audit (
     id uuid DEFAULT pg_catalog.gen_random_uuid() NOT NULL,
     occurred_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
@@ -225,15 +141,8 @@ CREATE TABLE auth.security_audit (
         REFERENCES auth."user" (id) ON DELETE RESTRICT,
     CONSTRAINT security_audit_event_check CHECK (
         event = ANY (ARRAY[
-            'invitation_issued'::text,
-            'invitation_revoked'::text,
-            'invitation_accepted'::text,
             'sign_in_succeeded'::text,
             'sign_in_failed'::text,
-            'password_reset_requested'::text,
-            'password_reset_succeeded'::text,
-            'password_reset_failed'::text,
-            'password_changed'::text,
             'sessions_revoked'::text,
             'researcher_deactivated'::text,
             'researcher_reactivated'::text,
@@ -308,14 +217,6 @@ CREATE INDEX operator_proof_expires_at_idx
 CREATE INDEX "verification_identifier_idx" ON auth."verification" ("identifier");
 CREATE UNIQUE INDEX "account_issuer_accountId_uidx"
     ON auth."account" ("issuer", "accountId");
-CREATE UNIQUE INDEX researcher_invitation_effective_email_uidx
-    ON auth.researcher_invitation (email)
-    WHERE status IN ('delivery_pending', 'delivered');
-CREATE INDEX researcher_invitation_user_id_idx
-    ON auth.researcher_invitation (user_id);
-CREATE UNIQUE INDEX password_reset_effective_user_id_uidx
-    ON auth.password_reset (user_id)
-    WHERE status IN ('delivery_pending', 'delivered');
 CREATE INDEX security_audit_occurred_at_idx
     ON auth.security_audit (occurred_at);
 CREATE INDEX security_audit_researcher_id_idx

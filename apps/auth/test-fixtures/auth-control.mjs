@@ -15,9 +15,7 @@ const pool = new Pool({ connectionString: databaseUrl, max: 1 });
 const operatorCommands = new Map([
   ["assign-operator", "--researcher-id"],
   ["deactivate", "--email"],
-  ["invite", "--email"],
   ["reactivate", "--email"],
-  ["reissue", "--email"],
   ["revoke-sessions", "--email"],
 ]);
 
@@ -55,11 +53,6 @@ const server = http.createServer(async (request, response) => {
     if (url.pathname === "/__test/operator") {
       const result = await runOperator(body);
       json(response, 200, result);
-      return;
-    }
-    if (url.pathname === "/__test/expire-invitation") {
-      await expireInvitation(body);
-      json(response, 200, { status: "expired" });
       return;
     }
     if (url.pathname === "/__test/reset-rate-limits") {
@@ -120,13 +113,9 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 
 async function provisionSession(body) {
   const email = validEmail(body.email);
-  const password = body.password;
   const clientIp = body.client_ip;
   if (
-    typeof password !== "string"
-    || password.length < 12
-    || password.length > 128
-    || typeof clientIp !== "string"
+    typeof clientIp !== "string"
     || !/^\d{1,3}(?:\.\d{1,3}){3}$/.test(clientIp)
   ) {
     throw new Error("AUTH_FIXTURE_INPUT_INVALID");
@@ -136,7 +125,6 @@ async function provisionSession(body) {
     [
       "/test-fixtures/provision-image-smoke-session.mjs",
       email,
-      password,
       clientIp,
     ],
     commandOptions(),
@@ -167,27 +155,6 @@ async function runOperator(body) {
     commandOptions(),
   );
   return parsedObject(stdout);
-}
-
-async function expireInvitation(body) {
-  if (typeof body.token !== "string" || body.token.length > 1024) {
-    throw new Error("AUTH_FIXTURE_INPUT_INVALID");
-  }
-  const invitationId = body.token.split(".", 1)[0];
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(invitationId)) {
-    throw new Error("AUTH_FIXTURE_INPUT_INVALID");
-  }
-  const result = await pool.query(
-    `
-      UPDATE auth.researcher_invitation
-      SET expires_at = clock_timestamp() - INTERVAL '1 second'
-      WHERE id = $1 AND status = 'delivered'
-    `,
-    [invitationId],
-  );
-  if (result.rowCount !== 1) {
-    throw new Error("AUTH_FIXTURE_INVITATION_NOT_FOUND");
-  }
 }
 
 function commandOptions() {

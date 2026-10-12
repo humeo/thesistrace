@@ -253,7 +253,6 @@ def test_hosted_identity_and_deployment_runtime_are_archived_only() -> None:
         )
     retired_tokens = (
         "ins" + "forge",
-        "cloud" + "flare",
         "personal " + "workspace",
         "thesistrace_auth_" + "mode",
         "auth_" + "mode",

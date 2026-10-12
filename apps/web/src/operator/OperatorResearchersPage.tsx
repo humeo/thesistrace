@@ -2,21 +2,16 @@ import { Fragment } from "react";
 import { CaretRight } from "@phosphor-icons/react";
 import { MagnifyingGlass } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { i18n, useTranslation } from "../i18n";
+import { useTranslation } from "../i18n";
 import { formatNumber, formatTimestamp as formatLocaleTimestamp } from "../i18n/format";
 
 import {
-  loadInvitationPage,
   loadResearcherPage,
   OperatorPageNotFoundError,
-  type InvitationStatus,
-  type OperatorInvitation,
   type OperatorPage,
   type OperatorResearcher,
 } from "./operatorDirectoryClient";
-import { OperatorInvitationDialog } from "./OperatorInvitationDialog";
 import { OperatorConsoleNavigation } from "./OperatorConsoleNavigation";
-import type { InvitationMutationOperation } from "./operatorMutationClient";
 import {
   OperatorSessionRevocationDialog,
   type SessionRevocationTarget,
@@ -29,16 +24,8 @@ import { Field, FieldLabel } from "../components/ui/field";
 import { Alert, AlertDescription } from "../components/ui/alert";
 import { PageHeader } from "../components/layout/Page";
 import { PageNavigation } from "../components/layout/PageNavigation";
-import { Disclosure } from "../components/layout/Disclosure";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell, TableCaption } from "../components/ui/table";
 import { operatorAccessLayout } from "./operatorAccessLayout";
-
-type InvitationAction = Readonly<{
-  email: string;
-  operation: InvitationMutationOperation;
-}>;
-
-const inviteResearcherButtonId = "operator-invite-researcher";
 const operatorRetryButtonId = "operator-console-retry";
 const operatorPageFallbackId = "operator-console-focus-fallback";
 
@@ -47,41 +34,31 @@ export function OperatorResearchersPage({ operatorResearcherId }: Readonly<{
 }>) {
   const { t } = useTranslation("operator");
   const [researchers, setResearchers] = useState<OperatorPage<OperatorResearcher> | null>(null);
-  const [invitations, setInvitations] = useState<OperatorPage<OperatorInvitation> | null>(null);
   const [search, setSearch] = useState("");
   const [researcherCursor, setResearcherCursor] = useState<string | null>(null);
   const [researcherHistory, setResearcherHistory] = useState<Array<string | null>>([]);
-  const [invitationCursor, setInvitationCursor] = useState<string | null>(null);
-  const [invitationHistory, setInvitationHistory] = useState<Array<string | null>>([]);
   const [reloadGeneration, setReloadGeneration] = useState(0);
   const [state, setState] = useState<"loading" | "not-found" | "ready" | "unavailable">("loading");
-  const [invitationAction, setInvitationAction] = useState<InvitationAction | null>(null);
   const [sessionTarget, setSessionTarget] = useState<SessionRevocationTarget | null>(null);
-  const [mutationNotice, setMutationNotice] = useState<{ kind: "sent" | "reissued"; email: string } | null>(null);
   const [sessionMutationNotice, setSessionMutationNotice] = useState<{ count: number; email: string } | null>(null);
   const mutationFocusTargetId = useRef<string | null>(null);
-  const mutationFocusFallbackId = useRef<string>(inviteResearcherButtonId);
+  const mutationFocusFallbackId = useRef<string>(operatorPageFallbackId);
   const restoreMutationFocusAfterLoad = useRef(false);
 
   const load = useCallback(async (signal: AbortSignal) => {
     setState("loading");
     try {
-      const [researcherPage, invitationPage] = await Promise.all([
-        loadResearcherPage(search, researcherCursor, signal),
-        loadInvitationPage(invitationCursor, signal),
-      ]);
+      const researcherPage = await loadResearcherPage(search, researcherCursor, signal);
       if (signal.aborted) return;
       setResearchers(researcherPage);
-      setInvitations(invitationPage);
     } catch (error) {
       if (signal.aborted) return;
       setResearchers(null);
-      setInvitations(null);
       setState(error instanceof OperatorPageNotFoundError ? "not-found" : "unavailable");
       return;
     }
     setState("ready");
-  }, [invitationCursor, researcherCursor, search]);
+  }, [researcherCursor, search]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -115,31 +92,6 @@ export function OperatorResearchersPage({ operatorResearcherId }: Readonly<{
     );
   }
 
-  function closeInvitationDialog(afterReload = false): void {
-    setInvitationAction(null);
-    if (afterReload) {
-      restoreMutationFocusAfterLoad.current = true;
-      return;
-    }
-    restoreMutationFocusAfterLoad.current = false;
-    window.requestAnimationFrame(() => {
-      restoreMutationFocus(
-        mutationFocusTargetId.current,
-        mutationFocusFallbackId.current,
-      );
-    });
-  }
-
-  function openInvitationDialog(
-    trigger: HTMLButtonElement,
-    action: InvitationAction,
-  ): void {
-    mutationFocusTargetId.current = trigger.id || null;
-    mutationFocusFallbackId.current = inviteResearcherButtonId;
-    setMutationNotice(null);
-    setInvitationAction(action);
-  }
-
   function closeSessionDialog(afterReload = false): void {
     setSessionTarget(null);
     if (afterReload) {
@@ -168,29 +120,7 @@ export function OperatorResearchersPage({ operatorResearcherId }: Readonly<{
   return (
     <>
       <OperatorResearchersView
-        invitationCursorDepth={invitationHistory.length}
-        invitations={invitations}
-        mutationNotice={mutationNotice}
         operatorResearcherId={operatorResearcherId}
-        onInvitationAction={(trigger, action) => {
-          openInvitationDialog(trigger, action);
-        }}
-        onInvitationNext={() => {
-          if (state !== "ready" || invitations === null || invitations.next_cursor === null) {
-            return;
-          }
-          setState("loading");
-          setInvitationHistory((history) => [...history, invitationCursor]);
-          setInvitationCursor(invitations.next_cursor);
-        }}
-        onInvitationPrevious={() => {
-          if (state !== "ready") return;
-          const previous = invitationHistory.at(-1);
-          if (previous === undefined) return;
-          setState("loading");
-          setInvitationHistory((history) => history.slice(0, -1));
-          setInvitationCursor(previous);
-        }}
         onResearcherNext={() => {
           if (state !== "ready" || researchers === null || researchers.next_cursor === null) {
             return;
@@ -228,21 +158,7 @@ export function OperatorResearchersPage({ operatorResearcherId }: Readonly<{
         sessionMutationNotice={sessionMutationNotice}
         state={state}
       />
-      {invitationAction === null ? null : (
-        <OperatorInvitationDialog
-          email={invitationAction.email}
-          onDismiss={closeInvitationDialog}
-          onSucceeded={({ email, operation }) => {
-            setMutationNotice({ kind: operation === "issue" ? "sent" : "reissued", email });
-            setInvitationCursor(null);
-            setInvitationHistory([]);
-            setState("loading");
-            setReloadGeneration((value) => value + 1);
-            closeInvitationDialog(true);
-          }}
-          operation={invitationAction.operation}
-        />
-      )}
+
       {sessionTarget === null ? null : (
         <OperatorSessionRevocationDialog
           onDismiss={closeSessionDialog}
@@ -262,13 +178,7 @@ export function OperatorResearchersPage({ operatorResearcherId }: Readonly<{
 }
 
 export function OperatorResearchersView({
-  invitationCursorDepth,
-  invitations,
-  mutationNotice,
   operatorResearcherId,
-  onInvitationAction,
-  onInvitationNext,
-  onInvitationPrevious,
   onResearcherNext,
   onResearcherPrevious,
   onSessionRevocation,
@@ -280,16 +190,7 @@ export function OperatorResearchersView({
   sessionMutationNotice,
   state = "ready",
 }: Readonly<{
-  invitationCursorDepth: number;
-  invitations: OperatorPage<OperatorInvitation> | null;
-  mutationNotice?: { kind: "sent" | "reissued"; email: string } | null;
   operatorResearcherId: string;
-  onInvitationAction?: (
-    trigger: HTMLButtonElement,
-    action: InvitationAction,
-  ) => void;
-  onInvitationNext: () => void;
-  onInvitationPrevious: () => void;
   onResearcherNext: () => void;
   onResearcherPrevious: () => void;
   onSessionRevocation?: (
@@ -315,12 +216,12 @@ export function OperatorResearchersView({
       id={operatorPageFallbackId}
       tabIndex={-1}
     >
-      <PageHeader variant="console" title={t("researchers.directory.title")} className="mb-0" actions={onInvitationAction === undefined ? null : <Button size="xl" disabled={state !== "ready"} id={inviteResearcherButtonId} onClick={(event) => onInvitationAction(event.currentTarget, { email: "", operation: "issue" })} type="button">{t("researchers.directory.inviteResearcher")}</Button>} />
+      <PageHeader variant="console" title={t("researchers.directory.title")} className="mb-0" />
 
       <OperatorConsoleNavigation current="researchers" />
 
       <OperatorLoadState
-        hasData={researchers !== null || invitations !== null}
+        hasData={researchers !== null}
         onRetry={onRetry}
         state={state}
       />
@@ -381,41 +282,7 @@ export function OperatorResearchersView({
         />
       </section>
 
-      <section
-        aria-busy={busy}
-        aria-labelledby="operator-invitations-title"
-        className={operatorAccessLayout.section}
-      >
-        <header className={operatorAccessLayout.header}>
-          <div>
-            <h2 id="operator-invitations-title">{t("researchers.directory.invitations")}</h2>
-          </div>
-        </header>
-        {mutationNotice === null || mutationNotice === undefined ? null : (
-          <p aria-live="polite" className="inline-status" role="status">
-            {t(mutationNotice.kind === "sent" ? "researchers.directory.invitationSent" : "researchers.directory.invitationReissued", { email: mutationNotice.email })}
-          </p>
-        )}
-        <InvitationTable
-          disabled={state !== "ready"}
-          items={invitations?.items ?? null}
-          onReissue={onInvitationAction === undefined
-            ? undefined
-            : (trigger, email) => onInvitationAction(trigger, {
-                email,
-                operation: "reissue",
-              })}
-          state={state}
-        />
-        <Pagination
-          disabled={state !== "ready" || invitations === null}
-          depth={invitationCursorDepth}
-          hasNext={invitations !== null && invitations.next_cursor !== null}
-          label={t("researchers.directory.invitations")}
-          onNext={onInvitationNext}
-          onPrevious={onInvitationPrevious}
-        />
-      </section>
+
     </section>
   );
 }
@@ -531,83 +398,11 @@ function ResearcherTable({
                   )}
                 </TableCell>
               )}
-            </TableRow>{expanded === researcher.researcher_id ? <TableRow id={`researcher-details-${researcher.researcher_id}`}><TableCell /><TableCell colSpan={onRevoke === undefined ? 4 : 5}><dl className="m-0 grid grid-cols-3 gap-6 rounded-md border border-border bg-muted/40 p-4 text-sm [&_dd]:m-0 [&_dt]:text-muted-foreground">
+            </TableRow>{expanded === researcher.researcher_id ? <TableRow id={`researcher-details-${researcher.researcher_id}`}><TableCell /><TableCell colSpan={onRevoke === undefined ? 4 : 5}><dl className="m-0 grid grid-cols-2 gap-6 rounded-md border border-border bg-muted/40 p-4 text-sm [&_dd]:m-0 [&_dt]:text-muted-foreground">
                     <div><dt>{t("researchers.directory.researcherId")}</dt><dd><code className="break-all">{researcher.researcher_id}</code></dd></div>
                     <div><dt>{t("researchers.directory.created")}</dt><dd><Timestamp value={researcher.created_at} /></dd></div>
-                    <div><dt>{t("researchers.directory.effectiveInvitation")}</dt><dd>{researcher.effective_invitation === null ? t("researchers.directory.none") : <>{statusLabel(researcher.effective_invitation.status)} · {t("researchers.directory.expiresAt", { time: formatTimestamp(researcher.effective_invitation.expires_at) })}</>}</dd></div>
-                  </dl></TableCell></TableRow> : null}</Fragment>
-          ))}
-        </TableBody>
-      </Table>
-    </div>
-  );
-}
 
-function InvitationTable({ disabled, items, onReissue, state }: Readonly<{
-  disabled: boolean;
-  items: readonly OperatorInvitation[] | null;
-  onReissue?: (trigger: HTMLButtonElement, email: string) => void;
-  state: "loading" | "ready" | "unavailable";
-}>) {
-  const { t } = useTranslation("operator");
-  if (items === null) {
-    return (
-      <p className="m-0 py-4 text-sm text-muted-foreground">
-        {state === "unavailable" ? t("researchers.directory.invitationsUnavailable") : t("researchers.directory.invitationsLoading")}
-      </p>
-    );
-  }
-  if (items.length === 0) return <p className="m-0 py-4 text-sm text-muted-foreground">{t("researchers.directory.noInvitations")}</p>;
-  return (
-    <div className="min-w-0 overflow-hidden rounded-xl border border-border bg-card [&_thead]:bg-muted/50">
-      <Table density="comfortable" scrollLabel={t("researchers.directory.invitations")}>
-        <TableCaption className="sr-only">{t("researchers.directory.invitations")}</TableCaption>
-        <TableHeader>
-          <TableRow>
-            <TableHead scope="col">{t("researchers.directory.email")}</TableHead>
-            <TableHead scope="col">{t("researchers.directory.state")}</TableHead>
-            <TableHead scope="col">{t("researchers.directory.expires")}</TableHead>
-            <TableHead scope="col">{t("researchers.directory.details")}</TableHead>
-            {onReissue === undefined ? null : <TableHead scope="col">{t("researchers.directory.action")}</TableHead>}
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {items.map((invitation) => (
-            <TableRow key={invitation.invitation_id}>
-              <TableHead data-label={t("researchers.directory.email")} scope="row">
-                <strong className="break-all font-medium">{invitation.email}</strong>
-              </TableHead>
-              <TableCell data-label={t("researchers.directory.state")}>
-                <Badge variant={invitation.effective ? "default" : "secondary"}>
-                  {invitation.effective ? t("researchers.directory.effective") : t("researchers.directory.terminalState")} · {statusLabel(invitation.status)}
-                </Badge>
-              </TableCell>
-              <TableCell data-label={t("researchers.directory.expires")}><Timestamp value={invitation.expires_at} /></TableCell>
-              <TableCell data-label={t("researchers.directory.details")}><Disclosure title={t("researchers.directory.details")}>
-                <dl className="mt-3 grid gap-2 text-xs [&_dd]:m-0 [&_dt]:text-muted-foreground">
-                  <div><dt>{t("researchers.directory.researcherId")}</dt><dd>{invitation.researcher_id === null ? t("researchers.directory.notCreated") : <code className="break-all">{invitation.researcher_id}</code>}</dd></div>
-                  <div><dt>{t("researchers.directory.created")}</dt><dd><Timestamp value={invitation.created_at} /></dd></div>
-                  <div><dt>{t("researchers.directory.terminal")}</dt><dd>{invitation.terminal_at === null ? "—" : <Timestamp value={invitation.terminal_at} />}</dd></div>
-                  <div><dt>ID</dt><dd><code className="break-all">{invitation.invitation_id}</code></dd></div>
-                </dl>
-              </Disclosure></TableCell>
-              {onReissue === undefined ? null : (
-                <TableCell data-label={t("researchers.directory.action")}>
-                  <Button variant="outline"
-                    aria-label={t("researchers.directory.reissueAria", { email: invitation.email })}
-                    disabled={disabled}
-                    id={`operator-invitation-reissue-${invitation.invitation_id}`}
-                    onClick={(event) => onReissue(
-                      event.currentTarget,
-                      invitation.email,
-                    )}
-                    type="button"
-                  >
-                    {t("researchers.directory.reissue")}
-                  </Button>
-                </TableCell>
-              )}
-            </TableRow>
+                  </dl></TableCell></TableRow> : null}</Fragment>
           ))}
         </TableBody>
       </Table>
@@ -634,10 +429,6 @@ function Pagination({ depth, disabled, hasNext, label, onNext, onPrevious }: Rea
 
 function Timestamp({ value }: { value: string }) {
   return <time dateTime={value}>{formatTimestamp(value)}</time>;
-}
-
-function statusLabel(status: InvitationStatus): string {
-  return i18n.t(`operator:researchers.directory.statuses.${status}`);
 }
 
 function formatTimestamp(value: string): string {

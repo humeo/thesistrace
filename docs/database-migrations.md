@@ -284,3 +284,34 @@ schema fingerprint commit atomically; failure rolls everything back. Repeating
 the command verifies the target without rewriting rows. Unknown versions, structural
 drift and active Batches reject the upgrade. Post-commit rollback requires the
 verified backup and matching old application; initialization never migrates itself.
+
+## Auth 0002: Email-only identity
+
+- Source: `d64b69665b7454cd602a81295df4deb99b5f336a6df58a6cb66dc3b35aa3a4eb`.
+- Target: `1726410065771dea71f1f81b83deee4de87f219c08b86c649d8d0c479b7eec7e`.
+- Preflight: `node apps/auth/dist/migrate-retire-invitations.js --backup-directory /restricted/path/backup`.
+- Apply: add `--apply` after saving a restorable PostgreSQL backup as `database.dump` in that directory. Set `THESISTRACE_OWNER_DATABASE_URL` to the intended database owner connection.
+
+Stop Auth writers before applying and keep the backup private. The command rejects
+unknown releases and verifies the complete source and target catalogs. Existing
+identities, account rows, Sessions, Operator assignment and research ownership are
+preserved. Invitation and password-reset tables move to the owner-only
+`thesistrace_auth_migrations` schema; their foreign keys are detached so later
+identity cleanup cannot erase archived history. Retired Operator proofs, security
+audit events and reset verification records are copied there before removal from
+live tables. Current sign-in and Operator email-verification codes remain intact.
+Auth and Core runtime roles have no archive access.
+
+Before starting the new release, remove `THESISTRACE_DEV_RESEARCHER_PASSWORD`
+from an existing private configuration file. New configurations no longer define
+it; Development identities use the same email-verification login as other users.
+
+Archive moves, row changes, constraints, the database migration receipt and schema
+fingerprint commit in one transaction. Failure rolls them back together. Repeating
+an applied migration verifies the target without rewriting records. The command
+also writes a private `auth-0002-receipt.json` recording the backup SHA-256 and the
+source and target fingerprints. Post-commit restoration requires the verified
+backup and the matching previous application. Initialization never applies this
+upgrade automatically. Older Auth releases first use the explicit Auth 0001
+upgrade to reach the declared source; that migration retains its frozen target
+catalog and does not dispatch across runtime versions.

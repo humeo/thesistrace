@@ -4,7 +4,7 @@ import { OperatorEmailCode } from "./operator-email-code.js";
 import { EmailCodeDelivery } from "./email-code.js";
 import { serve } from "@hono/node-server";
 
-import { ResearcherAccessService } from "./access.js";
+import { isResearcherActive, ResearcherAccessService } from "./access.js";
 import { createMcpConnectionsApp } from "./mcp-connections.js";
 import { createAuthApp } from "./app.js";
 import { createThesisTraceAuth } from "./auth.js";
@@ -20,14 +20,10 @@ import {
 import { createAuthCoordinationPool, createAuthPool } from "./database.js";
 import { diagnoseAuthFailure } from "./failure.js";
 import { createAuthHttpObserver } from "./http-observability.js";
-import { ResearcherInvitationService } from "./invitation.js";
-import { InvitationAdmission } from "./invitation-admission.js";
 import { createMcpAccessTokenIssuer } from "./mcp-access-token.js";
 import { OperatorDirectoryService } from "./operator-directory.js";
-import { OperatorInvitationService } from "./operator-invitation.js";
 import { OperatorProofService } from "./operator-proof.js";
 import { OperatorSessionRevocationService } from "./operator-session-revocation.js";
-import { PasswordResetLifecycle } from "./password-reset.js";
 import { checkAuthReadiness } from "./readiness.js";
 import { sendResendEmail } from "./resend.js";
 import { verifyAuthSchema } from "./schema-contract.js";
@@ -66,7 +62,6 @@ async function main(): Promise<void> {
       coordination,
       pool,
     });
-    const invitationAdmission = new InvitationAdmission();
     const sendEmail = (email: Parameters<typeof sendResendEmail>[1]) =>
       sendResendEmail(
         {
@@ -76,22 +71,10 @@ async function main(): Promise<void> {
         },
         email,
       );
-    const passwordReset = new PasswordResetLifecycle({
-      authSecret: settings.secret,
-      backgroundTask: backgroundTasks.handler,
-      credentialCoordinator,
-      pool,
-      publicOrigin: settings.publicOrigin,
-      sendEmail,
-    });
     const auth = createThesisTraceAuth(settings, pool, {
       backgroundTask: backgroundTasks.handler,
-      invitationAdmission,
-      isResearcherActive: passwordReset.isResearcherActive,
-      recordPasswordResetCredential:
-        credentialCoordinator.recordPasswordResetCredential,
+      isResearcherActive: (id) => isResearcherActive(pool, id),
       recordSession: credentialCoordinator.recordSession,
-      sendResetPassword: passwordReset.sendResetPassword,
     });
     await auth.$context;
     const emailCodes = new EmailCodeDelivery({auth, coordinator: credentialCoordinator, sendEmail});
@@ -105,20 +88,6 @@ async function main(): Promise<void> {
     });
     const issueMcpAccessToken = createMcpAccessTokenIssuer(settings, {
       sign: (payload) => auth.api.signJWT({ body: { payload } }),
-    });
-    const invitations = new ResearcherInvitationService({
-      auth,
-      authSecret: settings.secret,
-      credentialCoordinator,
-      invitationAdmission,
-      pool,
-      publicOrigin: settings.publicOrigin,
-      sendEmail,
-    });
-    const invitationRateLimiter = new AuthEndpointRateLimiter({
-      authSecret: settings.secret,
-      pool,
-      scope: "researcher-invitation",
     });
     const operatorProofRateLimiter = new AuthEndpointRateLimiter({
       authSecret: settings.secret,
@@ -146,17 +115,11 @@ async function main(): Promise<void> {
       credentialCoordinator,
       pool,
     });
-    const operatorInvitations = new OperatorInvitationService({
-      invitations,
-      proofs: operatorProofs,
-    });
     const operatorSessionRevocations = new OperatorSessionRevocationService({
       access: researcherAccess,
       proofs: operatorProofs,
     });
     const app = createAuthApp({
-      acceptInvitation: (token, password, headers) =>
-        invitations.accept(token, password, headers),
       authHandler: (request) =>
         credentialCoordinator.handleAuthRequest(
           request,
@@ -168,8 +131,6 @@ async function main(): Promise<void> {
             ),
           getSession,
         ),
-      consumeInvitationRateLimit: (token, headers) =>
-        invitationRateLimiter.consume(token, headers),
       consumeOperatorProofRateLimit: (sessionId, headers) =>
         operatorProofRateLimiter.consume(sessionId, headers),
       getSession: (input) => auth.api.getSession(input),
@@ -177,7 +138,6 @@ async function main(): Promise<void> {
       hasOperatorCapability: (principal) =>
         operatorDirectory.hasCapability(principal),
       httpObserver: createAuthHttpObserver(),
-      inspectInvitation: (token) => invitations.inspect(token),
       turnstileSiteKey: settings.turnstileSiteKey,
       admitSignInCode: (email, token, headers) => signInAdmission.admit(email, token, headers),
       sendSignInCode: email => emailCodes.send(email, "sign-in"),
@@ -188,17 +148,11 @@ async function main(): Promise<void> {
       consumeOperatorProof: async (principal, input) => {
         await operatorProofs.consumeExternal(principal, input);
       },
-      issueOperatorInvitation: (principal, input) =>
-        operatorInvitations.issue(principal, input),
-      listOperatorInvitations: (principal, input) =>
-        operatorDirectory.listInvitations(principal, input),
       listOperatorResearchers: (principal, input) =>
         operatorDirectory.listResearchers(principal, input),
       issueMcpAccessToken,
       publicOrigin: settings.publicOrigin,
       readiness: () => checkAuthReadiness(pool),
-      reissueOperatorInvitation: (principal, input) =>
-        operatorInvitations.reissue(principal, input),
       revokeOperatorResearcherSessions: (principal, input) =>
         operatorSessionRevocations.revoke(principal, input),
     }, createMcpConnectionsApp(auth, pool, settings, coordination));

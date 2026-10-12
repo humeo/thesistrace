@@ -24,12 +24,10 @@ import {
   type PublicSession,
 } from "./session";
 
-import { authRetryAfter, type AuthErrorCode, type AuthFailure, type AuthResult, type InvitationInspection } from "./errors";
+import { authRetryAfter, type AuthErrorCode, type AuthFailure, type AuthResult, } from "./errors";
 
 type AuthContextValue = Readonly<{
   state: AuthState;
-  acceptInvitation: (token: string, password: string) => Promise<AuthResult>;
-  inspectInvitation: (token: string) => Promise<InvitationInspection>;
   retry: () => Promise<void>;
   sendCode: (email: string, captchaToken: string) => Promise<AuthResult>;
   signIn: (email: string, otp: string) => Promise<AuthResult>;
@@ -48,7 +46,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const refreshInFlight = useRef<Promise<void> | null>(null);
   const generation = useRef(0);
   const sessionRetryAt = useRef(0);
-  const cooldowns = useRef<Partial<Record<"signIn" | "signOut" | "sendCode" | "invitation", number>>>({});
+  const cooldowns = useRef<Partial<Record<"signIn" | "signOut" | "sendCode", number>>>({});
   const remaining = useCallback((operation: keyof typeof cooldowns.current): AuthFailure | null => {
     const seconds = Math.ceil(((cooldowns.current[operation] ?? 0) - Date.now()) / 1_000);
     return seconds > 0 ? { ok: false, code: "tooManyRequests", retryAfterSeconds: seconds } : null;
@@ -218,56 +216,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [clearSession, invalidate, remaining, limited]);
 
-  const inspectInvitation = useCallback(async (token: string): Promise<InvitationInspection> => {
-    const cooling = remaining("invitation");
-    if (cooling) return cooling;
-    try {
-      const response = await authJson("/api/auth/researcher-invitation/inspect", { token });
-      if (response.status === 429) return limited("invitation", response.retryAfterSeconds);
-      if (!response.ok) return invitationFailure(response);
-      if (!isRecord(response.data) || typeof response.data.email !== "string") return failure("operationFailed");
-      return { ok: true, email: response.data.email };
-    } catch {
-      return failure("unavailable");
-    }
-  }, [remaining, limited]);
-
-  const acceptInvitation = useCallback(async (
-    token: string,
-    password: string,
-  ): Promise<AuthResult> => {
-    const cooling = remaining("invitation");
-    if (cooling) return cooling;
-    invalidate();
-    const epoch = generation.current;
-    try {
-      const response = await authJson("/api/auth/researcher-invitation/accept", {
-        password,
-        token,
-      });
-      if (epoch !== generation.current) return failure("operationFailed");
-      if (response.status === 429) return limited("invitation", response.retryAfterSeconds);
-      if (!response.ok) return invitationFailure(response);
-      readyResearcherId.current = null;
-      await refreshSession(true);
-      return { ok: true };
-    } catch {
-      return failure("unavailable");
-    }
-  }, [refreshSession, invalidate, remaining, limited]);
-
   const value = useMemo<AuthContextValue>(() => ({
     state,
-    acceptInvitation,
-    inspectInvitation,
     retry: () => refreshSession(stateRef.current.session !== null
       && readyResearcherId.current !== stateRef.current.session.researcherId),
     sendCode,
     signIn,
     signOut,
   }), [
-    acceptInvitation,
-    inspectInvitation,
     refreshSession,
     sendCode,
     signIn,
@@ -307,12 +263,6 @@ async function authJson(path: string, body: Record<string, string>): Promise<Rea
 
 function failure(code: AuthErrorCode): Readonly<{ ok: false; code: AuthErrorCode }> {
   return { ok: false, code };
-}
-
-function invitationFailure(response: Readonly<{ status: number; data: unknown }>) {
-  if (response.status >= 500) return failure("unavailable");
-  if (isRecord(response.data) && response.data.code === "INVITATION_INVALID") return failure("invitationExpired");
-  return failure("operationFailed");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

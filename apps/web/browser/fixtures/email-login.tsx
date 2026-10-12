@@ -7,7 +7,7 @@ function Content() {
   if (state.status === "loading") return <p>Checking access</p>;
   if (state.status === "authenticated") return <p role="status">Signed in as {state.session.email}</p>;
   const pathname = window.location.pathname;
-  return <AuthRoute clearSecret={()=>{}} secret={pathname === "/accept-invitation" ? {kind:"invitation",token:"fixture-token"} : null}
-    location={{pathname,search:window.location.search,hash:""}} navigate={()=>{}} />;
+  return <AuthRoute
+    location={{pathname,search:window.location.search,hash:""}} />;
 }
 createRoot(document.getElementById("root")!).render(<AuthProvider><Content /></AuthProvider>);

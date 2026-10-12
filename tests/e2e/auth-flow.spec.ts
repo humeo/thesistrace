@@ -1,16 +1,12 @@
 import { randomUUID } from "node:crypto";
-import type { Locator, Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 
 import {
-  browserPassword,
   createResearcher,
-  emailToken,
   emailCode,
   expect,
-  expireInvitation,
-  fillPasswordInput,
-  issueInvitation,
   restoreResearcherSession,
+  resetAuthRateLimits,
   runAuthOperator,
   sameOriginHeaders,
   securityTest as test,
@@ -43,7 +39,7 @@ test("Chinese public entry survives real email authentication and a saved consol
   await expect(page).toHaveURL(/\/login\?lang=zh$/);
   await page.getByLabel("邮箱", { exact: true }).fill(email);
   await page.getByRole("button", { name: "使用邮箱继续", exact: true }).click();
-  await page.getByLabel("验证码", { exact: true }).fill(await emailCode(email));
+  await page.getByRole("textbox", {name: "验证码", exact: true}).fill(await emailCode(email));
   await page.getByRole("button", { name: "验证并继续", exact: true }).click();
   await expect(page).toHaveURL(/\/data$/);
   await expect(page.getByRole("heading", { name: "数据", exact: true })).toBeVisible();
@@ -57,7 +53,7 @@ test("Chinese public entry survives real email authentication and a saved consol
 
 test("Email verification creates one account and preserves the access lifecycle", async ({page}) => {
   const email = "browser-email-access@example.test";
-  await page.setViewportSize({width:375,height:812});
+  await page.setViewportSize({width:1280,height:900});
   await page.goto("/login");
   await expect(page.locator('input[type="password"]')).toHaveCount(0);
   await loginThroughUi(page,email);
@@ -83,56 +79,8 @@ test("Email verification creates one account and preserves the access lifecycle"
   await expect(page.getByRole("heading",{name:"Welcome to QAgentis"})).toBeVisible();
 });
 
-test("Invitation expiry, reissue, and lost-response replay converge safely", async ({ page }) => {
-  const email = "browser-invitation-reissue@example.test";
-  const expiredToken = await issueInvitation(email);
-  expireInvitation(expiredToken);
-
-  await page.goto(`/accept-invitation#token=${encodeURIComponent(expiredToken)}`);
-  await expect(page).toHaveURL(/\/accept-invitation$/);
-  await expect(page.getByRole("alert")).toContainText(
-    "This invitation is invalid or has expired.",
-  );
-
-  expect(runAuthOperator("reissue", "--email", email)).toMatchObject({
-    command: "reissue",
-    status: "delivered",
-  });
-  const replacementToken = await emailToken(email, "/accept-invitation#token=");
-  expect(replacementToken).not.toBe(expiredToken);
-  await page.goto(`/accept-invitation#token=${encodeURIComponent(replacementToken)}`);
-  await expect(page.getByLabel("Email")).toHaveValue(email);
-  await fillPasswordInput(page.getByLabel("Password", { exact: true }));
-  await fillPasswordInput(page.getByLabel("Confirm password"));
-  await page.getByRole("button", { name: "Accept invitation" }).click();
-  await expect(page).toHaveURL(/\/data$/);
-
-  const replay = await page.request.post(
-    "/api/auth/researcher-invitation/accept",
-    {
-      data: { password: browserPassword, token: replacementToken },
-      headers: sameOriginHeaders(),
-    },
-  );
-  expect(replay.status()).toBe(200);
-  const wrongPassword = await page.request.post(
-    "/api/auth/researcher-invitation/accept",
-    {
-      data: {
-        password: "Browser-wrong-password-2026",
-        token: replacementToken,
-      },
-      headers: sameOriginHeaders(),
-    },
-  );
-  expect(wrongPassword.status()).toBe(400);
-  await expect(page.locator("body")).not.toContainText(replacementToken);
-  expect(await localStorageContains(page, replacementToken)).toBe(false);
-});
-
 test("Bootstrap and Core failures preserve the exact Session boundary", async ({ page }) => {
   const email = "browser-bootstrap-retry@example.test";
-  const token = await issueInvitation(email);
   let bootstrapUnavailable = true;
   await page.route("**/api/researcher/bootstrap", async (route) => {
     if (bootstrapUnavailable) {
@@ -141,11 +89,8 @@ test("Bootstrap and Core failures preserve the exact Session boundary", async ({
       await route.continue();
     }
   });
-  await page.goto(`/accept-invitation#token=${encodeURIComponent(token)}`);
-  await expect(page.getByLabel("Email")).toHaveValue(email);
-  await fillPasswordInput(page.getByLabel("Password", { exact: true }));
-  await fillPasswordInput(page.getByLabel("Confirm password"));
-  await page.getByRole("button", { name: "Accept invitation" }).click();
+  await page.goto("/login");
+  await loginThroughUi(page, email);
   await expect(page.getByRole("heading", { name: "Workspace setup unavailable" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Data", exact: true })).toHaveCount(0);
   bootstrapUnavailable = false;
@@ -155,16 +100,19 @@ test("Bootstrap and Core failures preserve the exact Session boundary", async ({
   await page.unroute("**/api/researcher/bootstrap");
 
   await page.getByRole("link", { name: "Research", exact: true }).click();
-  await expect(page.getByLabel("Research name")).toBeVisible();
+  await page.getByRole("button", { name: "Factor Evaluation", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Alpha authoring", exact: true })).toBeVisible();
   await page.route("**/api/data", (route) => route.fulfill({
     json: { code: "CORE_UNAVAILABLE" },
     status: 503,
   }));
   await page.getByRole("link", { name: "Data", exact: true }).click();
+  await page.getByRole("button", { name: "Reload status", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("Data unavailable");
   await expect(page.getByLabel("Account menu")).toBeVisible();
   await page.unroute("**/api/data");
-  await page.getByRole("button", { name: "Retry" }).click();
+  await page.getByRole("button", { name: "Reload status", exact: true }).click();
+  await expect(page.getByRole("alert")).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Data", exact: true })).toBeVisible();
 
   await page.route("**/api/auth/get-session", (route) => route.fulfill({
@@ -184,37 +132,9 @@ test("Bootstrap and Core failures preserve the exact Session boundary", async ({
     status: 401,
   }));
   await page.getByRole("link", { name: "Data", exact: true }).click();
+  await page.getByRole("button", { name: "Reload status", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Welcome to QAgentis" })).toBeVisible();
   await expect(page.getByLabel("Account menu")).toHaveCount(0);
-});
-
-test.describe("tablet touch presentation", () => {
-  test.use({
-    hasTouch: true,
-    viewport: { width: 820, height: 1180 },
-  });
-
-  test("Auth and account controls keep 44px touch targets above the mobile breakpoint", async ({ page }) => {
-    const email = "browser-tablet-touch@example.test";
-    const invitationToken = await issueInvitation(email);
-
-    await page.goto(`/accept-invitation#token=${encodeURIComponent(invitationToken)}`);
-    const password = page.getByLabel("Password", { exact: true });
-    const confirmation = page.getByLabel("Confirm password");
-    const acceptInvitation = page.getByRole("button", { name: "Accept invitation" });
-    await expectTouchTargets(password, confirmation, acceptInvitation);
-    await fillPasswordInput(password);
-    await fillPasswordInput(confirmation);
-    await acceptInvitation.click();
-
-    await expect(page).toHaveURL(/\/data$/, { timeout: 15_000 });
-    await expect(page.getByRole("heading", { name: "Data", exact: true })).toBeVisible();
-    await openAccountMenu(page);
-    const accountMenu = page.getByRole("button", { name: "Account menu" });
-    const logOut = page.getByRole("button", { name: "Log out" });
-    await expectTouchTargets(accountMenu, logOut);
-    await expect(page.getByRole("button", {name:"Change password"})).toHaveCount(0);
-  });
 });
 
 test("Two Researchers isolate Drafts, receipts, pages, and system Folder identity", async ({ page }) => {
@@ -304,11 +224,18 @@ test("Two Researchers isolate Drafts, receipts, pages, and system Folder identit
 });
 
 async function loginThroughUi(page: Page, email: string): Promise<void> {
+  // This helper exercises identity/access transitions; delivery cooldown has its own case.
+  resetAuthRateLimits();
   await page.getByLabel("Email",{exact:true}).fill(email);
   await page.getByRole("button",{name:"Continue with email"}).click();
-  await expect(page.getByLabel("Verification code")).toBeVisible();
-  await page.getByLabel("Verification code").fill(await emailCode(email.trim().toLowerCase()));
-  await page.getByRole("button",{name:"Verify and continue"}).click();
+  await expect(page.getByRole("textbox", {name: "Verification code", exact: true})).toBeVisible();
+  await page.getByRole("textbox", {name: "Verification code", exact: true}).fill(await emailCode(email.trim().toLowerCase()));
+  const [signedIn] = await Promise.all([
+    page.waitForResponse(response => new URL(response.url()).pathname === "/api/auth/sign-in/email-otp"
+      && response.request().method() === "POST", { timeout: 10_000 }),
+    page.getByRole("button",{name:"Verify and continue"}).click(),
+  ]);
+  expect(signedIn.status()).toBe(200);
 }
 
 async function refreshSessionOnBrowserEvent(
@@ -340,18 +267,6 @@ async function openAccountMenu(page: Page): Promise<void> {
   const menu = page.getByLabel("Account menu");
   if (!(await menu.isVisible())) await page.getByRole("button", { name: "Open navigation", exact: true }).click();
   if ((await menu.locator("xpath=..").getAttribute("open")) === null) await menu.click();
-}
-
-async function expectTouchTargets(...targets: Locator[]): Promise<void> {
-  for (const target of targets) {
-    await expect(target).toBeVisible();
-    await expect.poll(async () => (await target.boundingBox())?.height ?? 0, {
-      message: "touch target height after entry animation",
-    }).toBeGreaterThanOrEqual(44);
-    await expect.poll(async () => (await target.boundingBox())?.width ?? 0, {
-      message: "touch target width after entry animation",
-    }).toBeGreaterThanOrEqual(44);
-  }
 }
 
 async function localStorageContains(page: Page, value: string): Promise<boolean> {

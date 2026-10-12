@@ -61,7 +61,6 @@ export type AuthInitializerSettings = Readonly<{ databaseUrl: string }>;
 export type DevelopmentAccountSettings = Readonly<{
   email: string;
   name: string;
-  password: string;
 }>;
 
 type Environment = Readonly<Record<string, string | undefined>>;
@@ -348,11 +347,9 @@ export function readDevelopmentAccountSettings(
   const parsed = z.object({
     email: z.email().max(254),
     name: z.string().trim().min(1).max(128),
-    password: z.string().min(12).max(128),
   }).safeParse({
     email: required(environment, "THESISTRACE_DEV_RESEARCHER_EMAIL"),
     name: required(environment, "THESISTRACE_DEV_RESEARCHER_NAME"),
-    password: required(environment, "THESISTRACE_DEV_RESEARCHER_PASSWORD"),
   });
   if (!parsed.success) throw new AuthConfigurationError("Development account configuration is invalid");
   return { ...parsed.data, email: canonicalizeEmail(parsed.data.email) };

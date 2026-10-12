@@ -1,12 +1,10 @@
 /** Public authentication outcomes. Keep language out of auth state and callbacks. */
 export type AuthErrorCode = "accountInactive" | "tooManyAttempts" | "unavailable" | "invalidCode"
-  | "challengeFailed" | "tooManyRequests" | "codeDeliveryFailed" | "signOutFailed" | "invitationExpired"
-  | "invalidInvitation" | "passwordMismatch" | "operationFailed";
+  | "challengeFailed" | "tooManyRequests" | "codeDeliveryFailed" | "signOutFailed"
+  | "operationFailed";
 
 export type AuthFailure = Readonly<{ ok: false; code: AuthErrorCode; retryAfterSeconds?: number }>;
 export type AuthResult = Readonly<{ ok: true }> | AuthFailure;
-export type InvitationInspection = Readonly<{ ok: true; email: string }>
-  | AuthFailure;
 
 /** The current authentication contract uses integer seconds, with send budgets up to one day. */
 export function authRetryAfter(response: Response): number | null {

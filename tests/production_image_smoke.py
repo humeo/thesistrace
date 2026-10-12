@@ -244,62 +244,21 @@ def _qualify_operator_while_worker_unavailable(
         revocation_target["researcher_id"],
     } <= researcher_ids
 
-    invitation_email = "image-smoke-console-invitation@example.test"
-    issue_proof = _operator_proof(
-        gateway_origin,
-        operator["cookie"],
-        {
-            "email": invitation_email,
-            "operation": "invitation.issue",
-        },
-    )
-    issue_body = {"email": invitation_email, "proof": issue_proof}
-    issue_status, issued, issue_request_id = _gateway_json(
-        gateway_origin,
-        "POST",
-        "/api/auth/operator/invitations/issue",
-        cookie=operator["cookie"],
-        body=issue_body,
-    )
-    assert issue_status == 200
-    assert isinstance(issued, dict)
-    assert issued.get("email") == invitation_email
-    assert issued.get("status") == "delivered"
-    invitation_id = issued.get("invitation_id")
-    assert isinstance(invitation_id, str) and invitation_id
-
-    replay_status, replayed, _ = _gateway_json(
-        gateway_origin,
-        "POST",
-        "/api/auth/operator/invitations/issue",
-        cookie=operator["cookie"],
-        body=issue_body,
-    )
-    assert replay_status == 400
-    assert replayed == {"code": "OPERATOR_PROOF_INVALID"}
-
-    reissue_proof = _operator_proof(
-        gateway_origin,
-        operator["cookie"],
-        {
-            "email": invitation_email,
-            "operation": "invitation.reissue",
-        },
-    )
-    reissue_status, reissued, reissue_request_id = _gateway_json(
-        gateway_origin,
-        "POST",
-        "/api/auth/operator/invitations/reissue",
-        cookie=operator["cookie"],
-        body={"email": invitation_email, "proof": reissue_proof},
-    )
-    assert reissue_status == 200
-    assert isinstance(reissued, dict)
-    assert reissued.get("email") == invitation_email
-    assert reissued.get("status") == "delivered"
-    reissued_invitation_id = reissued.get("invitation_id")
-    assert isinstance(reissued_invitation_id, str)
-    assert reissued_invitation_id != invitation_id
+    for method, path in [
+        ("GET", "/api/auth/operator/invitations"),
+        ("POST", "/api/auth/operator/invitations/issue"),
+        ("POST", "/api/auth/operator/invitations/reissue"),
+        ("POST", "/api/auth/researcher-invitation/inspect"),
+        ("POST", "/api/auth/researcher-invitation/accept"),
+    ]:
+        retired_status, _, _ = _gateway_bytes(
+            gateway_origin,
+            method,
+            path,
+            cookie=operator["cookie"],
+            body={} if method == "POST" else None,
+        )
+        assert retired_status == 404
 
     revoke_proof = _operator_proof(
         gateway_origin,
@@ -323,6 +282,17 @@ def _qualify_operator_while_worker_unavailable(
     assert isinstance(revoked, dict)
     assert revoked.get("researcher_id") == revocation_target["researcher_id"]
     assert revoked.get("revoked_session_count") == 1
+    replay_status, _, _ = _gateway_json(
+        gateway_origin,
+        "POST",
+        "/api/auth/operator/researchers/sessions/revoke",
+        cookie=operator["cookie"],
+        body={
+            "proof": revoke_proof,
+            "researcher_id": revocation_target["researcher_id"],
+        },
+    )
+    assert replay_status == 400
     revoked_session_status, revoked_session, _ = _gateway_json(
         gateway_origin,
         "GET",
@@ -388,15 +358,13 @@ def _qualify_operator_while_worker_unavailable(
     return {
         "accepted_operation": OPERATOR_IMAGE_SMOKE_DATASET_KEY,
         "assignment_researcher_id": operator["researcher_id"],
-        "invitation_ids": [invitation_id, reissued_invitation_id],
+        "retired_endpoints_404_verified": True,
         "ordinary_404_verified": True,
         "operator_access_preserved": True,
         "proof_consumed_once": True,
         "request_ids": _request_ids(
             capability_request_id,
             directory_request_id,
-            issue_request_id,
-            reissue_request_id,
             revoke_request_id,
             submit_request_id,
             status_request_id,

@@ -4,7 +4,6 @@ import type { Pool, PoolClient } from "pg";
 import { z } from "zod";
 
 import { lockAuthMutationShared } from "./auth-mutation-lock.js";
-import { canonicalizeEmail } from "./identity.js";
 import type { OperatorPrincipal } from "./operator-directory.js";
 import { lockOperatorAssignment } from "./operator-lock.js";
 import {
@@ -48,12 +47,7 @@ function containsLoneSurrogate(value: string): boolean {
   return false;
 }
 
-export type OperatorInvitationProofOperation =
-  | "invitation.issue"
-  | "invitation.reissue";
-
 type OperatorProofOperation =
-  | OperatorInvitationProofOperation
   | "researcher.sessions.revoke"
   | "data.refresh.dataset.submit"
   | "data.refresh.financial.submit"
@@ -64,11 +58,6 @@ type OperatorProofOperation =
 export type DataRefreshKind = "market" | "financial" | "industry" | "dataset";
 
 export type OperatorProofRequest =
-  | Readonly<{
-      email: string;
-      operation: OperatorInvitationProofOperation;
-      researcherId?: never;
-    }>
   | Readonly<{
       email?: never;
       operation: "researcher.sessions.revoke";
@@ -590,11 +579,7 @@ function operatorRequestHash(request: OperatorProofRequest): Buffer {
       version: 1,
     }));
   }
-  return sha256(JSON.stringify({
-        email: request.email,
-        operation: request.operation,
-        version: 1,
-      }));
+  throw new OperatorProofInvalidError();
 }
 
 function normalizeProofRequest(request: OperatorProofRequest): OperatorProofRequest {
@@ -663,10 +648,7 @@ function normalizeProofRequest(request: OperatorProofRequest): OperatorProofRequ
       target: request.target,
     };
   }
-  return {
-    email: canonicalizeEmail(request.email),
-    operation: request.operation,
-  };
+  throw new OperatorProofInvalidError();
 }
 
 export function isIsoResearchSession(value: string): boolean {

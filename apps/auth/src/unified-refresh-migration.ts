@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import type { Pool } from "pg";
 import {
   assertExactCatalog, catalogFingerprint, collectAuthSchemaCatalog,
-  loadExpectedCatalog, type AuthSchemaCatalog,
+  type AuthSchemaCatalog,
 } from "./schema-contract.js";
 
 export const AUTH_REFRESH_SOURCE = "479089ee38d20700e10a0f955ee153eb2644e6925d4cb671009a728a161b1d5e";
@@ -12,7 +12,7 @@ const migration = "0001_dataset_refresh_proofs";
 /** Explicit maintenance command; never called by application initialization. */
 export async function migrateUnifiedRefreshProofs(pool: Pool, apply = false) {
   const source = JSON.parse(await readFile(new URL("../schema/migrations/0001-source-catalog.json", import.meta.url), "utf8")) as AuthSchemaCatalog;
-  const target = await loadExpectedCatalog();
+  const target = JSON.parse(await readFile(new URL("../schema/migrations/0002-source-catalog.json", import.meta.url), "utf8")) as AuthSchemaCatalog;
   if (catalogFingerprint(source) !== AUTH_REFRESH_SOURCE || catalogFingerprint(target) !== AUTH_REFRESH_TARGET) {
     throw new Error("Migration assets do not match the declared release");
   }

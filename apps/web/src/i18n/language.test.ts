@@ -8,7 +8,6 @@ describe("interface language at a public or product entry", () => {
     ["/research", "", "en", "en"],
     ["/", "?lang=zh", "en", "zh-CN"],
     ["/login", "?lang=zh&returnTo=%2Fresearch", "en", "zh-CN"],
-    ["/accept-invitation", "?lang=zh", null, "zh-CN"],
     ["/", "?lang=en", "zh-CN", "en"],
     ["/", "?lang=unknown", "zh-CN", "zh-CN"],
     ["/", "", "unsupported", "en"],

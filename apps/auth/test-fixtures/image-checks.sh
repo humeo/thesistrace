@@ -28,7 +28,7 @@ compose() {
       -H 'Cookie: token-canary=do-not-log' \
       --data '{"email":"body-canary@example.test","password":"credential-canary-do-not-log"}' \
       "http://127.0.0.1:$auth_port/api/auth/sign-up/email")
-    test "$signup_status" = 403
+    test "$signup_status" = 404
     compose logs --no-color auth auth-initialize >"$evidence_root/auth-services.log"
 
     if compose run --rm --no-deps -T --interactive=false \

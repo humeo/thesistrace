@@ -16,14 +16,8 @@ import {
 import { isJsonContentType } from "./http-media-type.js";
 import type { AuthHttpObserver } from "./http-observability.js";
 import {
-  InvitationConflictError,
-  InvitationDeliveryError,
-  InvitationRejectedError,
-} from "./invitation.js";
-import {
   OperatorAccessNotFoundError,
   OperatorCursorInvalidError,
-  type OperatorInvitationSummary,
   type OperatorPage,
   type OperatorPrincipal,
   OperatorQueryInvalidError,
@@ -41,24 +35,7 @@ import {
   type OperatorProofRequest,
 } from "./operator-proof.js";
 import { OperatorSessionTargetProtectedError } from "./operator-session-revocation.js";
-
-const invitationInspectSchema = z
-  .object({ token: z.string().length(80) })
-  .strict();
-const invitationAcceptSchema = z
-  .object({
-    password: z.string().min(12).max(128),
-    token: z.string().length(80),
-  })
-  .strict();
 const operatorProofSchema = z.union([
-  z
-    .object({
-      email: z.string().min(1).max(512),
-      operation: z.enum(["invitation.issue", "invitation.reissue"]),
-      otp: z.string().regex(/^\d{6}$/),
-    })
-    .strict(),
   z
     .object({
       operation: z.literal("researcher.sessions.revoke"),
@@ -160,12 +137,6 @@ const internalOperatorProofConsumptionSchema = z.union([
       && isRefreshActionTarget(value.kind, value.target)
     )),
 ]);
-const operatorInvitationMutationSchema = z
-  .object({
-    email: z.string().min(1).max(512),
-    proof: z.string().length(80),
-  })
-  .strict();
 const operatorSessionRevocationSchema = z
   .object({
     proof: z.string().length(80),
@@ -207,16 +178,7 @@ const publicBetterAuthPaths = new Set([
 ]);
 
 export type AuthAppDependencies = Readonly<{
-  acceptInvitation: (
-    token: string,
-    password: string,
-    headers: Headers,
-  ) => Promise<Readonly<{ setCookies: string[] }>>;
   authHandler: (request: Request) => Promise<Response> | Response;
-  consumeInvitationRateLimit: (
-    token: string,
-    headers: Headers,
-  ) => Promise<Readonly<{ allowed: boolean; retryAfterSeconds: number }>>;
   consumeOperatorProofRateLimit: (
     sessionId: string,
     headers: Headers,
@@ -225,7 +187,6 @@ export type AuthAppDependencies = Readonly<{
   hasOperatorCapability: (principal: OperatorPrincipal) => Promise<boolean>;
   isOperator: (researcherId: string) => Promise<boolean>;
   httpObserver?: AuthHttpObserver;
-  inspectInvitation: (token: string) => Promise<Readonly<{ email: string }>>;
   turnstileSiteKey?: string;
   admitSignInCode?: (email: string, token: string, headers: Headers) => Promise<SignInCodeDecision>;
   sendSignInCode?: (email: string) => Promise<void>;
@@ -239,18 +200,6 @@ export type AuthAppDependencies = Readonly<{
     principal: OperatorPrincipal,
     input: OperatorProofRequest & Readonly<{ proof: string }>,
   ) => Promise<void>;
-  issueOperatorInvitation: (
-    principal: OperatorPrincipal,
-    input: Readonly<{ email: string; proof: string }>,
-  ) => Promise<Readonly<{
-    email: string;
-    invitationId: string;
-    status: "delivered";
-  }>>;
-  listOperatorInvitations: (
-    principal: OperatorPrincipal,
-    input: Readonly<{ cursor: string | null }>,
-  ) => Promise<OperatorPage<OperatorInvitationSummary>>;
   listOperatorResearchers: (
     principal: OperatorPrincipal,
     input: Readonly<{ cursor: string | null; search: string | null }>,
@@ -258,14 +207,6 @@ export type AuthAppDependencies = Readonly<{
   issueMcpAccessToken: (researcherId: string) => Promise<McpAccessToken>;
   publicOrigin: string;
   readiness: () => Promise<boolean>;
-  reissueOperatorInvitation: (
-    principal: OperatorPrincipal,
-    input: Readonly<{ email: string; proof: string }>,
-  ) => Promise<Readonly<{
-    email: string;
-    invitationId: string;
-    status: "delivered";
-  }>>;
   revokeOperatorResearcherSessions: (
     principal: OperatorPrincipal,
     input: Readonly<{ proof: string; researcherId: string }>,
@@ -439,29 +380,6 @@ export function createAuthApp(dependencies: AuthAppDependencies, mcpRoutes?: Ret
     }
   });
 
-  app.get("/api/auth/operator/invitations", async (context) => {
-    const principal = await requireOperator(
-      dependencies,
-      context.req.raw.headers,
-    );
-    if (principal instanceof Response) return principal;
-    const query = exactQuery(context.req.url, new Set(["cursor"]));
-    if (query === null) {
-      return context.json({ code: "OPERATOR_REQUEST_INVALID" }, 400);
-    }
-    try {
-      const page = await dependencies.listOperatorInvitations(principal, {
-        cursor: query.get("cursor"),
-      });
-      return context.json({
-        items: page.items.map(invitationResponse),
-        next_cursor: page.nextCursor,
-      });
-    } catch (error) {
-      return operatorReadError(error);
-    }
-  });
-
   app.get("/api/auth/email-otp/challenge", context => {
     if (!dependencies.turnstileSiteKey) return context.json({code: "AUTH_SERVICE_UNAVAILABLE"}, 503);
     return context.json({siteKey: dependencies.turnstileSiteKey, action: SIGN_IN_CHALLENGE_ACTION});
@@ -548,19 +466,13 @@ export function createAuthApp(dependencies: AuthAppDependencies, mcpRoutes?: Ret
                     sourceIdempotencyKey: body.source_idempotency_key,
                     target: body.target,
                   }
-                : body.operation === "data.refresh.retry"
-                  ? {
+                : {
                       kind: body.kind,
                       newIdempotencyKey: body.new_idempotency_key,
                       operation: body.operation,
                       sourceIdempotencyKey: body.source_idempotency_key,
                       target: body.target,
-                    }
-              : {
-                  email: canonicalizeEmail(body.email),
-                  operation: body.operation,
-                  otp: body.otp,
-                },
+                    },
       );
       return context.json({
         expires_at: result.expiresAt,
@@ -582,13 +494,6 @@ export function createAuthApp(dependencies: AuthAppDependencies, mcpRoutes?: Ret
       throw error;
     }
   });
-
-  app.post("/api/auth/operator/invitations/issue", async (context) =>
-    operatorInvitationMutation(context, dependencies, "issue")
-  );
-  app.post("/api/auth/operator/invitations/reissue", async (context) =>
-    operatorInvitationMutation(context, dependencies, "reissue")
-  );
   app.post(
     "/api/auth/operator/researchers/sessions/revoke",
     async (context) => operatorSessionRevocation(context, dependencies),
@@ -607,68 +512,6 @@ export function createAuthApp(dependencies: AuthAppDependencies, mcpRoutes?: Ret
       return context.json(await dependencies.issueMcpAccessToken(result.user.id));
     } catch {
       return context.json({ code: "AUTH_SERVICE_UNAVAILABLE" }, 503);
-    }
-  });
-
-  app.post("/api/auth/sign-up/email", (context) =>
-    context.json({ code: "RESEARCHER_INVITATION_REQUIRED" }, 403),
-  );
-  app.post("/api/auth/researcher-invitation/inspect", async (context) => {
-    if (context.req.header("origin") !== dependencies.publicOrigin) {
-      return context.json({ code: "ORIGIN_NOT_ALLOWED" }, 403);
-    }
-    const body = await exactJson(context.req.raw, invitationInspectSchema);
-    if (body === null) {
-      return context.json({ code: "INVITATION_INVALID" }, 400);
-    }
-    const rateLimit = await dependencies.consumeInvitationRateLimit(
-      body.token,
-      context.req.raw.headers,
-    );
-    if (!rateLimit.allowed) {
-      context.header("retry-after", String(rateLimit.retryAfterSeconds));
-      return context.json({ code: "AUTH_RATE_LIMITED" }, 429);
-    }
-    try {
-      return context.json(await dependencies.inspectInvitation(body.token));
-    } catch (error) {
-      if (error instanceof InvitationRejectedError) {
-        return context.json({ code: "INVITATION_INVALID" }, 400);
-      }
-      throw error;
-    }
-  });
-  app.post("/api/auth/researcher-invitation/accept", async (context) => {
-    if (context.req.header("origin") !== dependencies.publicOrigin) {
-      return context.json({ code: "ORIGIN_NOT_ALLOWED" }, 403);
-    }
-    const body = await exactJson(context.req.raw, invitationAcceptSchema);
-    if (body === null) {
-      return context.json({ code: "INVITATION_INVALID" }, 400);
-    }
-    const rateLimit = await dependencies.consumeInvitationRateLimit(
-      body.token,
-      context.req.raw.headers,
-    );
-    if (!rateLimit.allowed) {
-      context.header("retry-after", String(rateLimit.retryAfterSeconds));
-      return context.json({ code: "AUTH_RATE_LIMITED" }, 429);
-    }
-    try {
-      const accepted = await dependencies.acceptInvitation(
-        body.token,
-        body.password,
-        context.req.raw.headers,
-      );
-      for (const cookie of accepted.setCookies) {
-        context.header("set-cookie", cookie, { append: true });
-      }
-      return context.json({ status: true as const });
-    } catch (error) {
-      if (error instanceof InvitationRejectedError) {
-        return context.json({ code: "INVITATION_INVALID" }, 400);
-      }
-      throw error;
     }
   });
   if (mcpRoutes) app.route("/", mcpRoutes);
@@ -747,59 +590,6 @@ async function operatorSessionRevocation(
     }
     if (error instanceof ResearcherNotFoundError) {
       return context.json({ code: "OPERATOR_SESSION_TARGET_INVALID" }, 409);
-    }
-    throw error;
-  }
-}
-
-async function operatorInvitationMutation(
-  context: Context,
-  dependencies: AuthAppDependencies,
-  operation: "issue" | "reissue",
-): Promise<Response> {
-  const principal = await requireOperator(
-    dependencies,
-    context.req.raw.headers,
-  );
-  if (principal instanceof Response) return principal;
-  if (context.req.header("origin") !== dependencies.publicOrigin) {
-    return context.json({ code: "ORIGIN_NOT_ALLOWED" }, 403);
-  }
-  const body = await exactJson(
-    context.req.raw,
-    operatorInvitationMutationSchema,
-  );
-  if (body === null) {
-    return context.json({ code: "OPERATOR_REQUEST_INVALID" }, 400);
-  }
-  try {
-    const input = { email: canonicalizeEmail(body.email), proof: body.proof };
-    const result = operation === "issue"
-      ? await dependencies.issueOperatorInvitation(principal, input)
-      : await dependencies.reissueOperatorInvitation(principal, input);
-    return context.json({
-      email: result.email,
-      invitation_id: result.invitationId,
-      status: result.status,
-    });
-  } catch (error) {
-    if (error instanceof OperatorProofNotFoundError) {
-      return context.body(null, 404);
-    }
-    if (error instanceof OperatorProofInvalidError) {
-      return context.json({ code: "OPERATOR_PROOF_INVALID" }, 400);
-    }
-    if (error instanceof InvalidEmailError) {
-      return context.json({ code: "OPERATOR_REQUEST_INVALID" }, 400);
-    }
-    if (error instanceof InvitationConflictError) {
-      return context.json({ code: "OPERATOR_INVITATION_CONFLICT" }, 409);
-    }
-    if (error instanceof InvitationDeliveryError) {
-      return context.json(
-        { code: "OPERATOR_INVITATION_DELIVERY_FAILED" },
-        502,
-      );
     }
     throw error;
   }
@@ -949,26 +739,8 @@ function researcherResponse(item: OperatorResearcherSummary) {
     created_at: item.createdAt,
     current_session_count: item.currentSessionCount,
     display_label: item.displayLabel,
-    effective_invitation:
-      item.effectiveInvitation === null
-        ? null
-        : invitationResponse(item.effectiveInvitation),
     email: item.email,
     latest_successful_login_at: item.latestSuccessfulLoginAt,
     researcher_id: item.id,
-  };
-}
-
-function invitationResponse(item: OperatorInvitationSummary) {
-  return {
-    created_at: item.createdAt,
-    delivered_at: item.deliveredAt,
-    effective: item.effective,
-    email: item.email,
-    expires_at: item.expiresAt,
-    invitation_id: item.id,
-    researcher_id: item.researcherId,
-    status: item.status,
-    terminal_at: item.terminalAt,
   };
 }

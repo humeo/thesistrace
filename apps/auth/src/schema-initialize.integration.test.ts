@@ -1,5 +1,4 @@
 import { Pool } from "pg";
-import { verifyPassword } from "better-auth/crypto";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
 import { initializeAuthSchema } from "./schema-initialize.js";
@@ -56,27 +55,21 @@ describe.sequential("Auth physical schema", () => {
       await Promise.all([
         initializeDevelopmentAccount(owner, {
           email: "operator@fixture.test", name: "Configured Operator",
-          password: "configured-private-password-123",
         }),
         initializeDevelopmentAccount(owner, {
           email: "operator@fixture.test", name: "Configured Operator",
-          password: "configured-private-password-123",
         }),
       ]);
       const result = await owner.query(
-        `SELECT u.email, u.active, u."emailVerified", a.password,
-                a."providerId", a.issuer, o.researcher_id = u.id AS operator
-         FROM auth."user" u JOIN auth."account" a ON a."userId" = u.id
-         JOIN auth.operator_assignment o ON o.researcher_id = u.id`,
+        `SELECT u.email, u.active, u."emailVerified", o.researcher_id = u.id AS operator
+         FROM auth."user" u JOIN auth.operator_assignment o ON o.researcher_id = u.id`,
       );
       expect(result.rows).toHaveLength(1);
       expect(result.rows[0]).toMatchObject({
         email: "operator@fixture.test", active: true, emailVerified: true,
-        providerId: "credential", issuer: "local:credential", operator: true,
+        operator: true,
       });
-      expect(await verifyPassword({
-        hash: result.rows[0].password, password: "configured-private-password-123",
-      })).toBe(true);
+      expect((await owner.query('SELECT * FROM auth."account"')).rows).toEqual([]);
       await owner.query("DROP SCHEMA auth CASCADE");
     }
   });
@@ -85,14 +78,12 @@ describe.sequential("Auth physical schema", () => {
     await initializeAuthSchema(owner);
     await initializeDevelopmentAccount(owner, {
       email: "operator@fixture.test", name: "Configured Operator",
-      password: "configured-private-password-123",
     });
-    await owner.query(`UPDATE auth."account" SET password = 'changed-password-hash'`);
+    await owner.query(`INSERT INTO auth."account" (issuer,"accountId","providerId","userId",password,"updatedAt") SELECT 'local:credential',id::text,'credential',id,'changed-password-hash',now() FROM auth."user"`);
     await owner.query(`UPDATE auth."user" SET active = FALSE`);
     await owner.query("DELETE FROM auth.operator_assignment");
     await initializeDevelopmentAccount(owner, {
       email: "operator@fixture.test", name: "Configured Operator",
-      password: "configured-private-password-123",
     });
     expect((await owner.query(`SELECT password FROM auth."account"`)).rows)
       .toEqual([{ password: "changed-password-hash" }]);
@@ -328,10 +319,8 @@ describe.sequential("Auth physical schema", () => {
       "oauthResource",
       "operator_assignment",
       "operator_proof",
-      "password_reset",
-      "rateLimit",
-      "researcher_invitation",
-      "schema_contract",
+            "rateLimit",
+            "schema_contract",
       "security_audit",
       "session",
       "user",

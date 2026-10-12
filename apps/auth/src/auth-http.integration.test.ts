@@ -1,3 +1,4 @@
+import { emailSession } from "../test-fixtures/email-session.js";
 import { createPublicKey, verify } from "node:crypto";
 
 import { Pool } from "pg";
@@ -17,7 +18,6 @@ import {
   CredentialOperationCoordinator,
 } from "./coordination.js";
 import { createAuthCoordinationPool, createAuthPool } from "./database.js";
-import { InvitationRejectedError } from "./invitation.js";
 import { OperatorAssignmentService } from "./operator-assignment.js";
 import { OperatorDirectoryService } from "./operator-directory.js";
 import { OperatorProofService } from "./operator-proof.js";
@@ -25,7 +25,6 @@ import { OperatorSessionRevocationService } from "./operator-session-revocation.
 import { checkAuthReadiness } from "./readiness.js";
 import { initializeAuthSchema } from "./schema-initialize.js";
 import { verifyAuthSchema } from "./schema-contract.js";
-import { InvitationAdmission } from "./invitation-admission.js";
 import { createMcpAccessTokenIssuer } from "./mcp-access-token.js";
 import { unknownEmailHmac } from "./security.js";
 
@@ -43,7 +42,6 @@ const owner = new Pool({ connectionString: ownerDatabaseUrl, max: 2 });
 const runtimePool = createAuthPool(authRuntimeDatabaseUrl);
 const coordinationPool = createAuthCoordinationPool(authRuntimeDatabaseUrl);
 const settings = authTestSettings({ databaseUrl: authRuntimeDatabaseUrl });
-const invitationAdmission = new InvitationAdmission();
 const credentialCoordinator = new CredentialOperationCoordinator({
   authSecret: settings.secret,
   coordination: new AuthOperationCoordinator(coordinationPool),
@@ -54,7 +52,6 @@ const authLifecycle: AuthLifecycleDependencies = {
   backgroundTask(promise) {
     void promise.catch(() => undefined);
   },
-  invitationAdmission,
   async isResearcherActive(userId) {
     const result = await runtimePool.query<{ active: boolean }>(
       'SELECT active FROM auth."user" WHERE id = $1',
@@ -62,10 +59,7 @@ const authLifecycle: AuthLifecycleDependencies = {
     );
     return result.rows[0]?.active === true;
   },
-  recordPasswordResetCredential:
-    credentialCoordinator.recordPasswordResetCredential,
   recordSession: credentialCoordinator.recordSession,
-  async sendResetPassword() {},
 };
 const ambientOverrideNames = [
   "BETTER_AUTH_SECRETS",
@@ -95,8 +89,8 @@ describe.sequential("Auth database-backed HTTP contract", () => {
       TRUNCATE
         auth.operator_assignment,
         auth.security_audit,
-        auth.password_reset,
-        auth.researcher_invitation,
+
+
         auth."verification",
         auth."rateLimit",
         auth."user"
@@ -210,7 +204,6 @@ describe.sequential("Auth database-backed HTTP contract", () => {
         active: true,
         current_session_count: 1,
         display_label: "operator-http",
-        effective_invitation: null,
         email: "operator-http@example.com",
         researcher_id: operator.researcherId,
       }],
@@ -639,19 +632,6 @@ describe.sequential("Auth database-backed HTTP contract", () => {
     expect(response.status).toBe(403);
   });
 
-  it.each([11, 129])("rejects a %i-character password", async (length) => {
-    const { auth } = runtime();
-    const response = await directSignUp(auth, {
-      email: `password-${length}@example.com`,
-      password: "x".repeat(length),
-    });
-
-    expect(response.status).toBe(400);
-    expect(
-      await owner.query<{ count: string }>('SELECT count(*) FROM auth."user"'),
-    ).toMatchObject({ rows: [{ count: "0" }] });
-  });
-
   it("uses fixed windows for continuous low-frequency sign-in attempts", async () => {
     const { app } = runtime();
     const start = Date.now();
@@ -863,7 +843,6 @@ describe.sequential("Auth database-backed HTTP contract", () => {
         await blocker.query("BEGIN");
         await blocker.query("LOCK TABLE auth.security_audit IN ACCESS EXCLUSIVE MODE");
         response = await operation();
-        // Password hashing may take longer on a busy host. The contract is that
         // HTTP completes while the real audit write is still blocked by the lock.
         let auditCompleted = false;
         const audit = tasks.drain().then(() => { auditCompleted = true; });
@@ -917,10 +896,9 @@ describe.sequential("Auth database-backed HTTP contract", () => {
       runtimePool,
       authLifecycle,
     );
-    const response = await directSignUp(auth, {
+    const response = await directEmailLogin(auth, {
       email: "cookie@example.com",
       origin: "https://thesistrace.test",
-      password: "correct-horse-battery-staple",
       publicOrigin: "https://thesistrace.test",
     });
     const cookie = response.headers.get("set-cookie") ?? "";
@@ -1169,9 +1147,6 @@ function runtime() {
     proofs: operatorProofs,
   });
   const app = createAuthApp({
-    async acceptInvitation() {
-      throw new InvitationRejectedError();
-    },
     authHandler: (request) =>
       credentialCoordinator.handleAuthRequest(
         request,
@@ -1196,9 +1171,6 @@ function runtime() {
     consumeOperatorProof: async (principal, input) => {
       await operatorProofs.consumeExternal(principal, input);
     },
-    async consumeInvitationRateLimit() {
-      return { allowed: true, retryAfterSeconds: 0 };
-    },
 
     async consumeOperatorProofRateLimit() {
       return { allowed: true, retryAfterSeconds: 0 };
@@ -1207,22 +1179,11 @@ function runtime() {
     isOperator: (researcherId) => operatorDirectory.isOperator(researcherId),
     hasOperatorCapability: (principal) =>
       operatorDirectory.hasCapability(principal),
-    async inspectInvitation() {
-      throw new InvitationRejectedError();
-    },
-    async issueOperatorInvitation() {
-      throw new Error("OPERATOR_MUTATION_UNAVAILABLE_IN_HTTP_CONTRACT_HARNESS");
-    },
-    listOperatorInvitations: (principal, input) =>
-      operatorDirectory.listInvitations(principal, input),
     listOperatorResearchers: (principal, input) =>
       operatorDirectory.listResearchers(principal, input),
     issueMcpAccessToken,
     publicOrigin: settings.publicOrigin,
     readiness: () => checkAuthReadiness(runtimePool),
-    async reissueOperatorInvitation() {
-      throw new Error("OPERATOR_MUTATION_UNAVAILABLE_IN_HTTP_CONTRACT_HARNESS");
-    },
     revokeOperatorResearcherSessions: (principal, input) =>
       operatorSessionRevocations.revoke(principal, input),
 
@@ -1242,10 +1203,9 @@ async function createSessionCookie(
   email: string,
   clientIp?: string,
 ): Promise<string> {
-  const response = await directSignUp(auth, {
+  const response = await directEmailLogin(auth, {
     clientIp,
     email,
-    password: "correct-horse-battery-staple",
   });
   expect(response.status).toBe(200);
   const setCookie = response.headers.get("set-cookie");
@@ -1277,38 +1237,6 @@ async function persistedPrincipal(email: string): Promise<Readonly<{
   const row = result.rows[0];
   if (row === undefined) throw new Error("expected persisted Auth principal");
   return { researcherId: row.researcher_id, sessionId: row.session_id };
-}
-
-async function directSignUp(
-  auth: ReturnType<typeof createThesisTraceAuth>,
-  input: Readonly<{
-    clientIp?: string;
-    email: string;
-    origin?: string;
-    password: string;
-    publicOrigin?: string;
-  }>,
-): Promise<Response> {
-  const publicOrigin = input.publicOrigin ?? settings.publicOrigin;
-  return invitationAdmission.run(
-    input.email.trim().toLowerCase(),
-    () =>
-      auth.handler(
-        new Request(`${publicOrigin}/api/auth/sign-up/email`, {
-          body: JSON.stringify({
-            email: input.email,
-            name: "client-supplied-label",
-            password: input.password,
-          }),
-          headers: {
-            "content-type": "application/json",
-            origin: input.origin ?? settings.publicOrigin,
-            "x-thesistrace-client-ip": input.clientIp ?? `192.0.2.${input.password.length}`,
-          },
-          method: "POST",
-        }),
-      ),
-  );
 }
 
 async function persistedSessionTimes(): Promise<{
@@ -1356,4 +1284,8 @@ function roleDatabaseUrl(base: string, username: string, password: string): stri
   url.username = username;
   url.password = password;
   return url.toString();
+}
+
+async function directEmailLogin(auth: ReturnType<typeof createThesisTraceAuth>, input: Readonly<{clientIp?: string; email: string; origin?: string; publicOrigin?: string}>): Promise<Response> {
+  return emailSession(auth, input.email, new Headers({origin: input.origin ?? settings.publicOrigin, "x-thesistrace-client-ip": input.clientIp ?? "192.0.2.27"}));
 }

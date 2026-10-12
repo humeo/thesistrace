@@ -12,15 +12,14 @@ import {
 } from "./config.js";
 import { createBetterAuthRateLimitStorage } from "./auth-rate-limit.js";
 import { canonicalizeEmail } from "./identity.js";
-import { InvitationAdmission } from "./invitation-admission.js";
-import {
-  passwordResetIdentifier,
-  rawPasswordResetToken,
-} from "./password-reset-token.js";
-import { sha256 } from "./security.js";
 
 const DAY_SECONDS = 60 * 60 * 24;
 const disabledBetterAuthPaths = [
+  "/sign-up/email",
+  "/sign-in/email",
+  "/request-password-reset",
+  "/change-password",
+  "/set-password",
   "/token",
   "/account-info",
   "/change-email",
@@ -46,33 +45,13 @@ const disabledBetterAuthPaths = [
   "/verify-password",
 ] as const;
 
-type PasswordResetUser = Readonly<{
-  email: string;
-  id: string;
-  name: string;
-}>;
-
 export type AuthLifecycleDependencies = Readonly<{
   backgroundTask: (promise: Promise<unknown>) => void;
-  invitationAdmission: InvitationAdmission;
   isResearcherActive: (userId: string) => Promise<boolean>;
-  recordPasswordResetCredential: (input: Readonly<{
-    identifier: string;
-    researcherId: string;
-    tokenHash: Buffer;
-  }>) => void;
   recordSession: (input: Readonly<{
     researcherId: string;
     token: string;
   }>) => void;
-  sendResetPassword: (
-    data: Readonly<{
-      token: string;
-      url: string;
-      user: PasswordResetUser;
-    }>,
-    request?: Request,
-  ) => Promise<void>;
 }>;
 
 export function createClosedAuthLifecycle(): AuthLifecycleDependencies {
@@ -80,15 +59,10 @@ export function createClosedAuthLifecycle(): AuthLifecycleDependencies {
     backgroundTask(promise) {
       void promise.catch(() => undefined);
     },
-    invitationAdmission: new InvitationAdmission(),
     async isResearcherActive() {
       return false;
     },
-    recordPasswordResetCredential() {},
     recordSession() {},
-    async sendResetPassword() {
-      throw new Error("PASSWORD_RESET_DELIVERY_UNAVAILABLE");
-    },
   };
 }
 
@@ -120,31 +94,11 @@ export function createThesisTraceAuth(
     baseURL: settings.publicOrigin,
     database: pool,
     databaseHooks: {
-      verification: {
-        create: {
-          async before(verification) {
-            const token = rawPasswordResetToken(verification.identifier);
-            if (token === null) return true;
-            const identifier = passwordResetIdentifier(token);
-            lifecycle.recordPasswordResetCredential({
-              identifier,
-              researcherId: verification.value,
-              tokenHash: sha256(token),
-            });
-            return {
-              data: {
-                ...verification,
-                identifier,
-              },
-            };
-          },
-        },
-      },
       user: {
         create: {
           async before(user, context) {
             const email = canonicalizeEmail(user.email);
-            if (context?.path !== "/sign-in/email-otp" && !lifecycle.invitationAdmission.allows(email)) {
+            if (context?.path !== "/sign-in/email-otp") {
               return false;
             }
             return {
@@ -163,8 +117,7 @@ export function createThesisTraceAuth(
         create: {
           async before(session) {
             if (
-              !lifecycle.invitationAdmission.isActive()
-              && !(await lifecycle.isResearcherActive(session.userId))
+              !(await lifecycle.isResearcherActive(session.userId))
             ) {
               throw new APIError("FORBIDDEN", {
                 code: "ACCOUNT_INACTIVE",
@@ -181,14 +134,7 @@ export function createThesisTraceAuth(
       },
     },
     disabledPaths: [...disabledBetterAuthPaths],
-    emailAndPassword: {
-      enabled: true,
-      maxPasswordLength: 128,
-      minPasswordLength: 12,
-      requireEmailVerification: false,
-      resetPasswordTokenExpiresIn: 30 * 60,
-      sendResetPassword: lifecycle.sendResetPassword,
-    },
+    emailAndPassword: { enabled: false },
     logger: { disabled: true },
     plugins: [
       emailOTP({
@@ -239,8 +185,6 @@ export function createThesisTraceAuth(
         // Session verification remains mandatory; this is only an HTTP quota exemption.
         "/get-session": false,
         "/sign-in/email-otp": { max: 5, window: 60 },
-        "/sign-in/email": { max: 5, window: 60 },
-        "/sign-up/email": { max: 1, window: 60 },
       },
       enabled: true,
       max: 60,

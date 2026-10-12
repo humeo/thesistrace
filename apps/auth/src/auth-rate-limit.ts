@@ -38,7 +38,7 @@ export type AuthEndpointRateLimiterDependencies = Readonly<{
   authSecret: string;
   clock?: () => Date;
   pool: Pool;
-  scope: "email-code" | "operator-proof" | "password-reset" | "researcher-invitation";
+  scope: "email-code" | "operator-proof";
 }>;
 
 export class AuthEndpointRateLimiter {

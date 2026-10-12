@@ -33,8 +33,8 @@ describe.sequential("Auth secret fingerprint contract", () => {
       TRUNCATE
         auth.auth_secret_contract,
         auth.security_audit,
-        auth.password_reset,
-        auth.researcher_invitation,
+
+
         auth."rateLimit",
         auth."verification",
         auth."user"
@@ -50,10 +50,10 @@ describe.sequential("Auth secret fingerprint contract", () => {
 
   it("initializes once and treats the same secret as no change", async () => {
     await expect(
-      enforceAuthSecretContract(runtimePool, firstSecret, () => fixedNow),
+      enforceAuthSecretContract(runtimePool, firstSecret),
     ).resolves.toEqual({ status: "initialized" });
     await expect(
-      enforceAuthSecretContract(runtimePool, firstSecret, () => fixedNow),
+      enforceAuthSecretContract(runtimePool, firstSecret),
     ).resolves.toEqual({ status: "unchanged" });
 
     expect(
@@ -65,155 +65,27 @@ describe.sequential("Auth secret fingerprint contract", () => {
     });
   });
 
-  it("serializes a hard rotation and revokes every effective credential", async () => {
-    await enforceAuthSecretContract(runtimePool, firstSecret, () => fixedNow);
+  it("serializes hard rotation and revokes Sessions and email codes while retaining identity", async () => {
+    await enforceAuthSecretContract(runtimePool, firstSecret);
     await insertEffectiveCredentials();
-
-    const results = await Promise.all([
-      enforceAuthSecretContract(runtimePool, rotatedSecret, () => fixedNow),
-      enforceAuthSecretContract(runtimePool, rotatedSecret, () => fixedNow),
-    ]);
-    const persisted = await owner.query<{
-      reset_status: string;
-      reset_terminal_at: Date;
-      secret_fingerprint: string;
-      sessions: string;
-      verifications: string;
-    }>(`
-      SELECT
-        c.secret_fingerprint,
-        r.status AS reset_status,
-        r.terminal_at AS reset_terminal_at,
-        (SELECT count(*) FROM auth."session") AS sessions,
-        (
-          SELECT count(*)
-          FROM auth."verification"
-          WHERE identifier LIKE 'reset-password:%'
-        ) AS verifications
-      FROM auth.auth_secret_contract c
-      CROSS JOIN auth.password_reset r
-    `);
-    const invitations = await owner.query<{
-      status: string;
-      terminal_at: Date;
-    }>(
-      `
-        SELECT status, terminal_at
-        FROM auth.researcher_invitation
-        ORDER BY id
-      `,
-    );
-
-    expect(results).toEqual(
-      expect.arrayContaining([{ status: "rotated" }, { status: "unchanged" }]),
-    );
-    expect(persisted.rows).toEqual([
-      {
-        reset_status: "revoked",
-        reset_terminal_at: fixedNow,
-        secret_fingerprint: secretFingerprint(rotatedSecret),
-        sessions: "0",
-        verifications: "0",
-      },
-    ]);
-    expect(invitations.rows).toEqual([
-      { status: "revoked", terminal_at: fixedNow },
-      { status: "revoked", terminal_at: fixedNow },
-    ]);
+    const results=await Promise.all([enforceAuthSecretContract(runtimePool,rotatedSecret),enforceAuthSecretContract(runtimePool,rotatedSecret)]);
+    expect(results).toEqual(expect.arrayContaining([{status:"rotated"},{status:"unchanged"}]));
+    expect((await owner.query("SELECT secret_fingerprint FROM auth.auth_secret_contract")).rows).toEqual([{secret_fingerprint:secretFingerprint(rotatedSecret)}]);
+    expect((await owner.query('SELECT count(*)::int AS count FROM auth."session"')).rows).toEqual([{count:0}]);
+    expect((await owner.query('SELECT count(*)::int AS count FROM auth."verification"')).rows).toEqual([{count:0}]);
+    expect((await owner.query('SELECT id,active FROM auth."user"')).rows).toEqual([{id:userId,active:true}]);
   });
 });
-
-async function insertEffectiveCredentials(): Promise<void> {
-  await owner.query(
-    `
-      INSERT INTO auth."user" (
-        id, name, email, "emailVerified", "createdAt", "updatedAt", active
-      )
-      VALUES ($1, 'researcher', 'researcher@example.com', TRUE, $2, $2, TRUE)
-    `,
-    [userId, fixedNow],
-  );
-  await owner.query(
-    `
-      INSERT INTO auth."session" (
-        id, "expiresAt", token, "createdAt", "updatedAt", "userId"
-      )
-      VALUES (
-        '00000000-0000-4000-8000-000000000002',
-        $2,
-        'session-token',
-        $3,
-        $3,
-        $1
-      )
-    `,
-    [userId, new Date("2026-09-01T07:00:00.000Z"), fixedNow],
-  );
-  await owner.query(
-    `
-      INSERT INTO auth.researcher_invitation (
-        id, email, token_hash, status, expires_at, created_at, delivered_at
-      )
-      VALUES
-        (
-          '00000000-0000-4000-8000-000000000003',
-          'other@example.com',
-          decode(repeat('11', 32), 'hex'),
-          'delivered',
-          $1,
-          $2,
-          $2
-        ),
-        (
-          '00000000-0000-4000-8000-000000000006',
-          'replacement@example.com',
-          decode(repeat('33', 32), 'hex'),
-          'replacement_pending',
-          $1,
-          $2,
-          NULL
-        )
-    `,
-    [new Date("2026-08-30T07:00:00.000Z"), fixedNow],
-  );
-  await owner.query(
-    `
-      INSERT INTO auth.password_reset (
-        id, user_id, token_hash, status, expires_at, created_at, delivered_at
-      )
-      VALUES (
-        '00000000-0000-4000-8000-000000000004',
-        $1,
-        decode(repeat('22', 32), 'hex'),
-        'delivered',
-        $2,
-        $3,
-        $3
-      )
-    `,
-    [userId, new Date("2026-08-28T07:30:00.000Z"), fixedNow],
-  );
-  await owner.query(
-    `
-      INSERT INTO auth."verification" (
-        id, identifier, value, "expiresAt", "createdAt", "updatedAt"
-      )
-      VALUES (
-        '00000000-0000-4000-8000-000000000005',
-        'reset-password:' || repeat('22', 32),
-        $1,
-        $2,
-        $3,
-        $3
-      )
-    `,
-    [userId, new Date("2026-08-28T07:30:00.000Z"), fixedNow],
-  );
-}
 
 function roleDatabaseUrl(base: string, username: string, password: string): string {
   const url = new URL(base);
   url.username = username;
   url.password = password;
   return url.toString();
+}
+
+async function insertEffectiveCredentials(): Promise<void> {
+  await owner.query(`INSERT INTO auth."user" (id,name,email,"emailVerified",active) VALUES ($1,'researcher','researcher@example.com',TRUE,TRUE)`,[userId]);
+  await owner.query(`INSERT INTO auth."session" ("userId",token,"updatedAt","expiresAt") VALUES ($1,'test-session',now(),now()+interval '1 day')`,[userId]);
+  await owner.query(`INSERT INTO auth."verification" (identifier,value,"expiresAt") VALUES ('sign-in-otp-researcher@example.com','hashed-login-code',now()+interval '5 minutes'),('email-verification-otp-researcher@example.com','hashed-operator-code',now()+interval '5 minutes')`);
 }

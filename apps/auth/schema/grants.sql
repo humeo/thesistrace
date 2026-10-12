@@ -13,8 +13,6 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
     auth."rateLimit",
     auth.operator_assignment,
     auth.operator_proof,
-    auth.researcher_invitation,
-    auth.password_reset,
     auth.security_audit,
     auth.auth_secret_contract
 TO auth_runtime;

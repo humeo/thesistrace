@@ -24,27 +24,6 @@ async function withAuth(assertion: (auth: ReturnType<typeof useAuth>) => Promise
 }
 
 test.each([
-  ["INVITATION_INVALID", 400, "invitationExpired"],
-  ["AUTH_RATE_LIMITED", 429, "tooManyRequests"],
-  ["AUTH_SERVICE_UNAVAILABLE", 503, "unavailable"],
-  ["ORIGIN_NOT_ALLOWED", 403, "operationFailed"],
-  ["UNKNOWN_REASON", 400, "operationFailed"],
-] as const)("invitation failures preserve the %s reason", async (code, status, expected) => {
-  vi.stubGlobal("fetch", async () => Response.json({ code }, { status, headers: status === 429 ? {"Retry-After": "37"} : {} }));
-  await withAuth(async (auth) => {
-    expect(await auth.inspectInvitation("invitation-token")).toEqual({ ok: false, code: expected, ...(status === 429 ? {retryAfterSeconds: 37} : {}) });
-    expect(await auth.acceptInvitation("invitation-token", "unused-password")).toEqual({ ok: false, code: expected, ...(status === 429 ? {retryAfterSeconds: 37} : {}) });
-  });
-});
-
-test("malformed invitation inspection is an operation failure, not an expired invitation", async () => {
-  vi.stubGlobal("fetch", async () => Response.json({}));
-  await withAuth(async (auth) => {
-    expect(await auth.inspectInvitation("invitation-token")).toEqual({ ok: false, code: "operationFailed" });
-  });
-});
-
-test.each([
   ["INVALID_OTP", 400, "invalidCode"],
   ["OTP_EXPIRED", 400, "invalidCode"],
   ["TOO_MANY_ATTEMPTS", 403, "tooManyAttempts"],

@@ -3,8 +3,6 @@ import { decodeFinancialRefreshProgress, type FinancialRefreshProgress } from ".
 
 const pythonBoundaryWhitespace = /^[\u0009-\u000D\u001C-\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]$/u;
 
-export type InvitationMutationOperation = "issue" | "reissue";
-
 export type DatasetRefreshRequest = Readonly<{
   asOf: string;
   idempotencyKey: string;
@@ -94,7 +92,6 @@ export type DataRefreshActionReceipt = Readonly<{
 
 export type OperatorMutationErrorCode =
   | "conflict"
-  | "delivery-failed"
   | "data-not-ready"
   | "invalid-target"
   | "invalid-otp"
@@ -132,57 +129,6 @@ export function isIsoResearchSession(value: unknown): value is string {
   ) return false;
   const parsed = new Date(`${value}T00:00:00Z`);
   return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
-}
-
-export async function confirmOperatorProof(
-  operation: InvitationMutationOperation,
-  email: string,
-  otp: string,
-  signal: AbortSignal,
-): Promise<Readonly<{ expiresAt: string; proof: string }>> {
-  const value = await operatorPost(
-    "/api/auth/operator/proofs",
-    {
-      email,
-      operation: `invitation.${operation}`,
-      otp,
-    },
-    signal,
-  );
-  if (
-    !hasExactKeys(value, ["expires_at", "proof"])
-    || !isIsoTimestamp(value.expires_at)
-    || typeof value.proof !== "string"
-    || !isOpaqueProof(value.proof)
-  ) {
-    throw new OperatorMutationError("unavailable");
-  }
-  return { expiresAt: value.expires_at, proof: value.proof };
-}
-
-export async function submitInvitationMutation(
-  operation: InvitationMutationOperation,
-  email: string,
-  proof: string,
-  signal: AbortSignal,
-): Promise<Readonly<{ email: string; invitationId: string }>> {
-  const value = await operatorPost(
-    `/api/auth/operator/invitations/${operation}`,
-    { email, proof },
-    signal,
-  );
-  if (
-    !hasExactKeys(value, ["email", "invitation_id", "status"])
-    || typeof value.email !== "string"
-    || value.email !== value.email.trim().toLowerCase()
-    || !isEmail(value.email)
-    || typeof value.invitation_id !== "string"
-    || !isUuid(value.invitation_id)
-    || value.status !== "delivered"
-  ) {
-    throw new OperatorMutationError("unavailable");
-  }
-  return { email: value.email, invitationId: value.invitation_id };
 }
 
 export async function confirmSessionRevocationProof(
@@ -539,8 +485,6 @@ async function responseErrorCode(
   }
   if (code === "OPERATOR_CODE_INVALID") return "invalid-otp";
   if (code === "OPERATOR_PROOF_INVALID") return "invalid-proof";
-  if (code === "OPERATOR_INVITATION_CONFLICT") return "conflict";
-  if (code === "OPERATOR_INVITATION_DELIVERY_FAILED") return "delivery-failed";
   if (code === "OPERATOR_SESSION_TARGET_PROTECTED") return "protected-target";
   if (code === "OPERATOR_SESSION_TARGET_INVALID") return "invalid-target";
   if (code === "OPERATOR_REQUEST_INVALID") return "request-invalid";
@@ -884,8 +828,4 @@ function containsLoneSurrogate(value: string): boolean {
 function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
     .test(value);
-}
-
-function isEmail(value: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }

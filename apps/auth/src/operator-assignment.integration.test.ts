@@ -38,8 +38,8 @@ describe.sequential("Auth Operator Assignment", () => {
       TRUNCATE
         auth.operator_assignment,
         auth.security_audit,
-        auth.password_reset,
-        auth.researcher_invitation,
+
+
         auth."rateLimit",
         auth."verification",
         auth."user"

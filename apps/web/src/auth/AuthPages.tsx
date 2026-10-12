@@ -4,18 +4,17 @@ import { lazy, Suspense, useEffect, useRef, useState, type FormEvent, type React
 import { useAuthRetry } from "./useAuthRetry";
 import { useAuth } from "./AuthProvider";
 import { Brand, BrandMark } from "../brand/Brand";
-import { safeReturnTo, type BrowserLocation, type InitialAuthSecret } from "./routing";
+import { safeReturnTo, type BrowserLocation } from "./routing";
 import { interfaceLocale, publicLanguageCode, useTranslation } from "../i18n";
 import type { AuthErrorCode } from "./errors";
 import { Alert, AlertDescription } from "../components/ui/alert";
 import { Button } from "../components/ui/button";
 import { Field, FieldDescription, FieldGroup, FieldLabel, FieldTitle } from "../components/ui/field";
 import { Input } from "../components/ui/input";
+import { InputOTP, InputOTPSlot } from "../components/ui/input-otp";
 import { Spinner } from "../components/ui/spinner";
 
 const SignInChallenge = lazy(() => import("./SignInChallenge").then(module => ({default: module.SignInChallenge})));
-
-type Navigate = (path: string, options?: Readonly<{ replace?: boolean }>) => void;
 
 function LoginPage() {
   const { t } = useTranslation("auth");
@@ -140,23 +139,26 @@ function LoginPage() {
               <Field data-invalid={error !== null} data-disabled={submitting}>
                 <FieldLabel htmlFor="login-code">{t("verificationCode")}</FieldLabel>
                 <div className="flex min-w-0 items-center gap-2">
-                  <Input
-                    autoComplete="one-time-code"
+                  <InputOTP
                     aria-describedby="login-code-hint"
-                    aria-invalid={error !== null}
                     className="min-w-0 flex-1"
                     disabled={submitting}
                     id="login-code"
-                    inputMode="numeric"
-                    maxLength={6}
-                    minLength={6}
-                    onChange={(event) => { setOtp(event.target.value.replace(/\D/g, "")); setError(null); }}
-                    pattern="[0-9]{6}"
-                    placeholder={t("codePlaceholder")}
-                    ref={otpRef}
+                    length={6}
+                    onValueChange={(value) => { setOtp(value); setError(null); }}
                     required
                     value={otp}
-                  />
+                  >
+                    {Array.from({ length: 6 }, (_, index) => (
+                      <InputOTPSlot
+                        key={index}
+                        aria-describedby="login-code-hint"
+                        aria-invalid={error !== null}
+                        aria-label={index === 0 ? undefined : t("codeDigit", { position: index + 1 })}
+                        ref={index === 0 ? otpRef : undefined}
+                      />
+                    ))}
+                  </InputOTP>
                   <Button
                     variant="outline"
                     className="shrink-0"
@@ -207,161 +209,6 @@ function LoginPage() {
   );
 }
 
-function AcceptInvitationPage({ secret, clearSecret }: {
-  secret: InitialAuthSecret | null;
-  clearSecret: () => void;
-}) {
-  const { t } = useTranslation("auth");
-  const { acceptInvitation, inspectInvitation } = useAuth();
-  const token = secret?.kind === "invitation" ? secret.token : null;
-  const [email, setEmail] = useState<string | null>(null);
-  const [password, setPassword] = useState("");
-  const [confirmation, setConfirmation] = useState("");
-  const [loading, setLoading] = useState(token !== null);
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<AuthErrorCode | null>(token === null
-    ? "invalidInvitation"
-    : null);
-  const inspected = useRef(false);
-  const [retryAt, setRetryAt] = useState(0);
-  const cooldown = useAuthRetry(retryAt);
-
-  useEffect(() => {
-    if (token === null || inspected.current) return;
-    inspected.current = true;
-    let active = true;
-    void inspectInvitation(token)
-      .then((result) => {
-        if (!active) return;
-        if (!result.ok) {
-          setError(result.code);
-          if (result.retryAfterSeconds !== undefined) setRetryAt(Date.now() + result.retryAfterSeconds * 1_000);
-        }
-        else setEmail(result.email);
-      })
-      .catch(() => {
-        if (active) setError("unavailable");
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-    return () => { active = false; };
-  }, [inspectInvitation, token]);
-
-  async function retryInspection(): Promise<void> {
-    if (token === null || loading || cooldown > 0) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await inspectInvitation(token);
-      if (result.ok) setEmail(result.email);
-      else {
-        setError(result.code);
-        if (result.retryAfterSeconds !== undefined) setRetryAt(Date.now() + result.retryAfterSeconds * 1_000);
-      }
-    } finally { setLoading(false); }
-  }
-
-  async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
-    if (token === null || email === null || submitting || cooldown > 0) return;
-    if (password !== confirmation) {
-      setError("passwordMismatch");
-      return;
-    }
-    setSubmitting(true);
-    setError(null);
-    const result = await acceptInvitation(token, password);
-    setSubmitting(false);
-    if (!result.ok) {
-      setError(result.code);
-      if (result.retryAfterSeconds !== undefined) setRetryAt(Date.now() + result.retryAfterSeconds * 1_000);
-      return;
-    }
-    clearSecret();
-  }
-
-  return (
-    <AuthSurface eyebrow={t("invitation")} title={t("createAccess")}>
-      {loading ? <p className="flex items-center gap-2 text-sm text-muted-foreground" role="status"><Spinner aria-hidden="true" />{t("checkingInvitation")}</p> : null}
-      {!loading && email !== null ? (
-        <form onSubmit={(event) => void submit(event)}>
-          <FieldGroup className="gap-4">
-            <Field>
-              <FieldLabel htmlFor="invitation-email">{t("email")}</FieldLabel>
-              <Input autoComplete="email" id="invitation-email" readOnly type="email" value={email} />
-            </Field>
-            <Field data-disabled={submitting}>
-              <FieldLabel htmlFor="invitation-password">{t("password")}</FieldLabel>
-              <Input
-                autoComplete="new-password"
-                disabled={submitting}
-                id="invitation-password"
-                maxLength={128}
-                minLength={12}
-                onChange={(event) => setPassword(event.target.value)}
-                required
-                type="password"
-                value={password}
-              />
-              <FieldDescription>{t("passwordHint")}</FieldDescription>
-            </Field>
-            <Field data-disabled={submitting} data-invalid={error === "passwordMismatch"}>
-              <FieldLabel htmlFor="invitation-password-confirmation">{t("confirmPassword")}</FieldLabel>
-              <Input
-                aria-invalid={error === "passwordMismatch"}
-                autoComplete="new-password"
-                disabled={submitting}
-                id="invitation-password-confirmation"
-                maxLength={128}
-                minLength={12}
-                onChange={(event) => setConfirmation(event.target.value)}
-                required
-                type="password"
-                value={confirmation}
-              />
-            </Field>
-            {error !== null ? <Alert variant="destructive"><AlertDescription>{error === "tooManyRequests" && cooldown > 0 ? t("rateLimited", {seconds: cooldown}) : t(`errors.${error}`)}</AlertDescription></Alert> : null}
-            <Button className="w-full" disabled={submitting || cooldown > 0} size="lg" type="submit">
-              {submitting ? <Spinner data-icon="inline-start" aria-hidden="true" /> : null}
-              {t(submitting ? "creatingAccess" : "acceptInvitation")}
-            </Button>
-          </FieldGroup>
-        </form>
-      ) : null}
-      {!loading && email === null && error !== null ? <Alert variant="destructive"><AlertDescription>{error === "tooManyRequests" && cooldown > 0 ? t("rateLimited", {seconds: cooldown}) : t(`errors.${error}`)}</AlertDescription></Alert> : null}
-      {!loading && email === null && error === "tooManyRequests" ? <Button className="mt-4 w-full" disabled={cooldown > 0} onClick={() => void retryInspection()} type="button">{t("retry")}</Button> : null}
-    </AuthSurface>
-  );
-}
-
-export function AuthRoute({
-  clearSecret,
-  location,
-  navigate,
-  secret,
-}: {
-  clearSecret: () => void;
-  location: BrowserLocation;
-  navigate: Navigate;
-  secret: InitialAuthSecret | null;
-}) {
-  switch (location.pathname) {
-    case "/login":
-      return <LoginPage />;
-    case "/accept-invitation":
-      return (
-        <AcceptInvitationPage
-          clearSecret={clearSecret}
-          key={secret?.kind === "invitation" ? secret.token : "missing-invitation"}
-          secret={secret}
-        />
-      );
-    default:
-      return null;
-  }
-}
-
 export function returnToFromLocation(location: BrowserLocation): string | null {
   return safeReturnTo(
     new URLSearchParams(location.search).get("returnTo"),
@@ -394,4 +241,8 @@ export function AuthSurface({ eyebrow, title, children, as: Root = "main" }: {
       </section>
     </Root>
   );
+}
+
+export function AuthRoute({ location }: { location: BrowserLocation }) {
+  return location.pathname === "/login" ? <LoginPage /> : null;
 }

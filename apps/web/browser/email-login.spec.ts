@@ -44,10 +44,23 @@ for(const width of [1200]) {
     await expect(page.getByRole("alert")).toContainText("temporarily unavailable");
     await expect(page.getByLabel("Email",{exact:true})).toBeVisible();
     await page.getByRole("button",{name:"Continue with email"}).click();
-    await expect(page.getByLabel("Verification code")).toBeFocused();
+    await expect(page.getByRole("textbox", {name: "Verification code", exact: true})).toBeFocused();
+    const codeInputs = page.getByRole("textbox");
+    await expect(codeInputs).toHaveCount(6);
+    await expect(codeInputs.first()).toHaveAttribute("autocomplete", "one-time-code");
     await page.screenshot({path:test.info().outputPath(`email-code-${width}.png`)});
     await expect(page.getByRole("button",{name:/Resend code in/})).toBeDisabled();
     await expect(page.getByRole("button",{name:"Verify and continue"})).toBeDisabled();
+    await codeInputs.first().press("1");
+    await expect(codeInputs.nth(1)).toBeFocused();
+    await codeInputs.nth(1).press("a");
+    await expect(codeInputs.nth(1)).toHaveValue("");
+    await codeInputs.nth(1).press("2");
+    await expect(codeInputs.nth(2)).toBeFocused();
+    await codeInputs.nth(2).press("Backspace");
+    await expect(codeInputs.nth(1)).toBeFocused();
+    await expect(codeInputs.nth(1)).toHaveValue("");
+    await expect(codeInputs.first()).toHaveValue("1");
     await page.getByRole("button",{name:"Edit",exact:true}).click();
     await expect(page.getByLabel("Email",{exact:true})).toBeFocused();
     await expect(page.getByLabel("Email",{exact:true})).toHaveValue("researcher@example.com");
@@ -55,11 +68,20 @@ for(const width of [1200]) {
     await page.clock.install();
     await page.clock.fastForward(61_000);
     await page.getByRole("button",{name:"Continue with email"}).click();
-    await expect(page.getByLabel("Verification code")).toBeFocused();
-    await page.getByLabel("Verification code").fill("000000");
+    await expect(page.getByRole("textbox", {name: "Verification code", exact: true})).toBeFocused();
+    for (const input of await codeInputs.all()) await expect(input).toHaveValue("");
+    await page.getByRole("textbox", {name: "Verification code", exact: true}).fill("000000");
     await page.getByRole("button",{name:"Verify and continue"}).click();
     await expect(page.getByRole("alert")).toContainText("incorrect or has expired");
-    await page.getByLabel("Verification code").fill("123456");
+    for (const input of await codeInputs.all()) await expect(input).toHaveAttribute("aria-invalid", "true");
+    await codeInputs.first().evaluate(input => {
+      const clipboardData = new DataTransfer();
+      clipboardData.setData("text/plain", "123 456");
+      input.dispatchEvent(new ClipboardEvent("paste", {bubbles: true, clipboardData}));
+    });
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    for (const [index, digit] of [..."123456"].entries()) await expect(codeInputs.nth(index)).toHaveValue(digit);
+    await expect(codeInputs.nth(5)).toBeFocused();
     await page.getByRole("button",{name:"Verify and continue"}).click();
     await expect(page.getByRole("status")).toHaveText("Signed in as researcher@example.com");
     expect(submitted).toContainEqual(expect.objectContaining({email:"researcher@example.com",type:"sign-in",captcha_token:expect.stringContaining("test-turnstile:")}));
@@ -67,68 +89,6 @@ for(const width of [1200]) {
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   });
 }
-
-test("invitation mismatch, failed acceptance and retry preserve entered values", async ({page}) => {
-  let authenticated = false;
-  let failAccept = true;
-  const user = {id:"00000000-0000-4000-8000-000000000003",email:"invited@example.com",name:"invited",active:true};
-  await page.route("http://auth.fixture/**", async route => {
-    const path = new URL(route.request().url()).pathname;
-    if (path === "/accept-invitation") {
-      await route.fulfill({contentType:"text/html",body:`${fontStylesheet}<style>${styles}</style><div id="root"></div>`});
-      return;
-    }
-    if (path === "/api/auth/get-session") {
-      await route.fulfill({contentType:"application/json",body:JSON.stringify(authenticated ? {session:{id:"00000000-0000-4000-8000-000000000004"},user} : null)});
-      return;
-    }
-    if (path === "/api/auth/researcher-invitation/inspect") {
-      await route.fulfill({contentType:"application/json",body:JSON.stringify({email:user.email})});
-      return;
-    }
-    if (path === "/api/auth/researcher-invitation/accept") {
-      const payload = route.request().postDataJSON();
-      expect(payload).toEqual({password:"Secure-password-123",token:"fixture-token"});
-      if (failAccept) {
-        failAccept = false;
-        await route.fulfill({status:503,contentType:"application/json",body:JSON.stringify({code:"AUTH_SERVICE_UNAVAILABLE"})});
-        return;
-      }
-      authenticated = true;
-      await route.fulfill({contentType:"application/json",body:"{}"});
-      return;
-    }
-    if (path === "/api/researcher/bootstrap") {
-      await route.fulfill({contentType:"application/json",body:JSON.stringify({researcher_id:user.id,system_folders:{default:"folder_default",batch_research:"folder_batch_research"}})});
-      return;
-    }
-    if (path === "/api/auth/operator/capability") {
-      await route.fulfill({status:404,body:""});
-      return;
-    }
-    throw new Error(`unexpected request ${path}`);
-  });
-  await serveBrandAssets(page);
-  await page.setViewportSize({width:1200,height:850});
-  await page.goto("http://auth.fixture/accept-invitation");
-  await page.addScriptTag({content:script});
-  await expect(page.getByRole("heading",{name:"Create your QAgentis access"})).toBeVisible();
-  await expect(page.getByLabel("Email",{exact:true})).toHaveValue(user.email);
-  const password = page.getByLabel("Password",{exact:true});
-  const confirmation = page.getByLabel("Confirm password",{exact:true});
-  await password.fill("Secure-password-123");
-  await confirmation.fill("Different-password-123");
-  await page.getByRole("button",{name:"Accept invitation"}).click();
-  await expect(page.getByRole("alert")).toBeVisible();
-  await confirmation.fill("Secure-password-123");
-  await page.getByRole("button",{name:"Accept invitation"}).click();
-  await expect(page.getByRole("alert")).toBeVisible();
-  await expect(password).toHaveValue("Secure-password-123");
-  await expect(confirmation).toHaveValue("Secure-password-123");
-  await page.getByRole("button",{name:"Accept invitation"}).click();
-  await expect(page.getByRole("status")).toHaveText("Signed in as invited@example.com");
-  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
-});
 
 test("authentication recovery deadline preserves the code and enables manual retry on desktop", async ({page}) => {
   let authenticated = false;
@@ -158,13 +118,13 @@ test("authentication recovery deadline preserves the code and enables manual ret
   await page.clock.install();
   await page.getByLabel("Email", {exact: true}).fill(user.email);
   await page.getByRole("button", {name: "Continue with email"}).click();
-  await page.getByLabel("Verification code").fill("123456");
+  await page.getByRole("textbox", {name: "Verification code", exact: true}).fill("123456");
   await page.getByRole("button", {name: "Verify and continue"}).click();
   await expect(page.getByRole("alert")).toContainText("23s");
   await expect(page.getByRole("button", {name: "Verify and continue"})).toBeDisabled();
   await page.clock.fastForward(24_000);
   await expect(page.getByRole("button", {name: "Verify and continue"})).toBeEnabled();
-  await expect(page.getByLabel("Verification code")).toHaveValue("123456");
+  for (const [index, digit] of [..."123456"].entries()) await expect(page.getByRole("textbox").nth(index)).toHaveValue(digit);
   await expect(page.getByRole("status")).toHaveCount(0);
   await page.getByRole("button", {name: "Verify and continue"}).click();
   await expect(page.getByRole("status")).toHaveText("Signed in as researcher@example.com");

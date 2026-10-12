@@ -2,9 +2,7 @@ import type { Locator, Page, Route } from "@playwright/test";
 
 import {
   assertDataOperatorWorkerLeaseReleased,
-  browserPassword,
   createResearcher,
-  emailToken,
   emailCode,
   ensureOperatorDataBaseline,
   exhaustDataRefresh,
@@ -12,7 +10,6 @@ import {
   expect,
   fillOperatorCode,
   requestOperatorCode,
-  issueInvitation,
   markDataRefreshRunning,
   resetAuthRateLimits,
   restoreResearcherSession,
@@ -52,8 +49,8 @@ test("Operator confirms session revocation with an emailed code", {tag:"@isolate
 test("Operator access control and desktop navigation", { tag: "@isolated" }, async ({ page }) => {
   test.setTimeout(240_000);
   const { operatorMutationRequests, operator, ordinary } = await prepareOperator(page);
-  const { invitationEmail, researcherTable, operatorRow } = await prepareOperatorDirectory(page, operator, ordinary);
-  const oldConsoleToken = await emailToken(invitationEmail, "/accept-invitation#token=");
+  const { researcherTable, operatorRow } = await prepareOperatorDirectory(page, operator, ordinary);
+  const oldConsoleToken = "00000000-0000-4000-8000-000000000001." + "a".repeat(43);
   const applicationShell = page.locator(".app-shell");
   const collapseSidebar = page.getByRole("button", { name: "Collapse sidebar" });
   await expect(collapseSidebar).toBeVisible();
@@ -224,154 +221,10 @@ test("Operator access control and desktop navigation", { tag: "@isolated" }, asy
   await expect(page.locator("#root")).toHaveCount(0);
 });
 
-test("Operator researchers and invitations", { tag: "@isolated" }, async ({ page }) => {
+test("Operator researchers and Session revocation", { tag: "@isolated" }, async ({ page }) => {
   test.setTimeout(240_000);
   const { operatorMutationRequests, operator, ordinary } = await prepareOperator(page);
-  const { invitationEmail, researcherTable, operatorRow } = await prepareOperatorDirectory(page, operator, ordinary);
-  const invitationTable = page.getByRole("table", { name: "Invitations" });
-  const invitationRows = invitationTable.getByRole("row").filter({ hasText: invitationEmail });
-  await expect(invitationRows).toHaveCount(2);
-  const effectiveInvitation = invitationRows.filter({ hasText: "Effective · Delivered" });
-  const terminalInvitation = invitationRows.filter({ hasText: "Terminal · Revoked" });
-  await expect(effectiveInvitation).toHaveCount(1);
-  await effectiveInvitation.getByRole("button", { name: "Details", exact: true }).click();
-  await expect(effectiveInvitation.locator("dt").filter({ hasText: /^ID$/ }).locator("xpath=following-sibling::dd/code")).toHaveText(
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-  );
-  await expect(effectiveInvitation.locator("time")).toHaveCount(2);
-  await expect(effectiveInvitation.locator("dt").filter({ hasText: /^Terminal$/ }).locator("xpath=following-sibling::dd")).toHaveText("—");
-  await expect(terminalInvitation).toHaveCount(1);
-  await terminalInvitation.getByRole("button", { name: "Details", exact: true }).click();
-  await expect(terminalInvitation.locator("time")).toHaveCount(3);
-
-  const consoleInvitationEmail = "browser-console-invited@example.test";
-  const inviteResearcher = page.getByRole("button", { name: "Invite Researcher" });
-  await inviteResearcher.focus();
-  await inviteResearcher.press("Enter");
-  let confirmation = page.getByRole("dialog", { name: "Issue Invitation?" });
-  await expect(confirmation).toBeVisible();
-  await expect(confirmation).toContainText("Target email");
-  await expect(confirmation).toContainText("48-hour invitation link");
-  const issueEmail = confirmation.getByLabel("Target email");
-  const issuePassword = confirmation.getByLabel("Verification code");
-  await expect(issueEmail).toBeFocused();
-  await issueEmail.press("Shift+Tab");
-  await expect(confirmation.getByRole("button", { name: "Send Invitation" })).toBeFocused();
-  await page.keyboard.press("Tab");
-  await expect(issueEmail).toBeFocused();
-  await issueEmail.fill(consoleInvitationEmail);
-  await issuePassword.fill("123456");
-  await page.keyboard.press("Escape");
-  await expect(confirmation).toHaveCount(0);
-  await expect(inviteResearcher).toBeFocused();
-
-  await inviteResearcher.press("Enter");
-  confirmation = page.getByRole("dialog", { name: "Issue Invitation?" });
-  await expect(confirmation.getByLabel("Verification code")).toHaveValue("");
-  await confirmation.getByRole("button", { name: "Cancel" }).click();
-  await expect(confirmation).toHaveCount(0);
-  await expect(inviteResearcher).toBeFocused();
-  const cancelFocusPagination = page.getByRole("navigation", {
-    name: "Invitations pagination",
-  });
-  await cancelFocusPagination.getByRole("button", { name: "Next" }).click();
-  await expect(cancelFocusPagination).toContainText("Page 2");
-  await expect(inviteResearcher).not.toBeFocused();
-  await cancelFocusPagination.getByRole("button", { name: "Previous" }).click();
-  await expect(cancelFocusPagination).toContainText("Page 1");
-  await expect(inviteResearcher).toBeEnabled();
-
-  await inviteResearcher.press("Enter");
-  confirmation = page.getByRole("dialog", { name: "Issue Invitation?" });
-  await confirmation.getByLabel("Target email").fill(consoleInvitationEmail);
-  await confirmation.getByLabel("Target email").press("Tab");
-  await expect(confirmation.getByLabel("Verification code")).toBeFocused();
-  await fillOperatorCode(confirmation.getByLabel("Verification code"));
-  await confirmation.getByLabel("Verification code").press("Enter");
-  await expect(confirmation).toHaveCount(0);
-  await expect(page.getByRole("status").filter({
-    hasText: `Invitation sent to ${consoleInvitationEmail}.`,
-  })).toBeVisible();
-  const consoleInvitationTable = page.getByRole("table", { name: "Invitations" });
-  await expect(
-    consoleInvitationTable.getByText(consoleInvitationEmail, { exact: true }),
-  ).toBeVisible();
-  await expect(inviteResearcher).toBeFocused();
-  const oldConsoleToken = await emailToken(
-    consoleInvitationEmail,
-    "/accept-invitation#token=",
-  );
-
-  const reissueAction = page.getByRole("button", {
-    name: `Reissue invitation for ${consoleInvitationEmail}`,
-  });
-  await reissueAction.click();
-  const reissueConfirmation = page.getByRole("dialog", {
-    name: "Reissue Invitation?",
-  });
-  await expect(reissueConfirmation).toContainText(consoleInvitationEmail);
-  await expect(reissueConfirmation).toContainText(
-    "The old link becomes invalid only after delivery succeeds.",
-  );
-  await fillOperatorCode(reissueConfirmation.getByLabel("Verification code"));
-  await reissueConfirmation.getByLabel("Verification code").press("Enter");
-  await expect(reissueConfirmation).toHaveCount(0);
-  await expect(page.getByRole("status").filter({
-    hasText: `Invitation reissued for ${consoleInvitationEmail}.`,
-  })).toBeVisible();
-  const reissuedRows = consoleInvitationTable.getByRole("row").filter({
-    hasText: consoleInvitationEmail,
-  });
-  await expect(reissuedRows).toHaveCount(2);
-  await expect(
-    reissuedRows.filter({ hasText: "Terminal · Revoked" }).getByRole(
-      "button",
-      { name: `Reissue invitation for ${consoleInvitationEmail}` },
-    ),
-  ).toBeFocused();
-  const newConsoleToken = await emailToken(
-    consoleInvitationEmail,
-    "/accept-invitation#token=",
-  );
-  expect(newConsoleToken).not.toBe(oldConsoleToken);
-  const oldInspection = await page.request.post(
-    "/api/auth/researcher-invitation/inspect",
-    {
-      data: { token: oldConsoleToken },
-      headers: sameOriginHeaders(),
-    },
-  );
-  expect(oldInspection.status()).toBe(400);
-  const newInspection = await page.request.post(
-    "/api/auth/researcher-invitation/inspect",
-    {
-      data: { token: newConsoleToken },
-      headers: sameOriginHeaders(),
-    },
-  );
-  expect(newInspection.status()).toBe(200);
-
-  const proofRequests = operatorMutationRequests.filter((request) => {
-    if (request.path !== "/api/auth/operator/proofs") return false;
-    const body = JSON.parse(request.body) as { operation?: unknown };
-    return body.operation === "invitation.issue" || body.operation === "invitation.reissue";
-  });
-  const invitationMutations = operatorMutationRequests.filter(
-    (request) => request.path.startsWith("/api/auth/operator/invitations/"),
-  );
-  expect(proofRequests).toHaveLength(2);
-  expect(proofRequests.every((request) => /^[0-9]{6}$/.test(JSON.parse(request.body).otp)))
-    .toBe(true);
-  expect(invitationMutations).toHaveLength(2);
-  expect(invitationMutations.every((request) => !request.body.includes(browserPassword)))
-    .toBe(true);
-  expect(invitationMutations.map((request) => Object.keys(JSON.parse(request.body)).sort()))
-    .toEqual([["email", "proof"], ["email", "proof"]]);
-
-  await page.getByRole("navigation", { name: "Operator Console sections" })
-    .getByRole("link", { name: "Researchers", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Researcher access" })).toBeVisible();
-
+  const { researcherTable, operatorRow } = await prepareOperatorDirectory(page, operator, ordinary);
   const currentOperatorRow = researcherTable.getByRole("row").filter({
     hasText: operator.email,
   });
@@ -456,7 +309,7 @@ test("Operator researchers and invitations", { tag: "@isolated" }, async ({ page
     proof: expect.any(String),
     researcher_id: ordinary.id,
   });
-  expect(sessionMutations[0]?.body).not.toContain(browserPassword);
+  expect(JSON.parse(sessionMutations[0]?.body ?? "{}")).not.toHaveProperty("password");
 
   await restoreResearcherSession(page, ordinary);
   await refreshRevokedSessionOnBrowserEvent(page);
@@ -466,71 +319,6 @@ test("Operator researchers and invitations", { tag: "@isolated" }, async ({ page
   await refreshOperatorSessionOnBrowserEvent(page);
   await expect(page.getByRole("heading", { name: "Researcher access" })).toBeVisible();
   expect((await page.request.get("/api/auth/operator/capability")).status()).toBe(200);
-
-  const invitationPagination = page.getByRole("navigation", {
-    name: "Invitations pagination",
-  });
-  await invitationPagination.getByRole("button", { name: "Next" }).click();
-  await expect(invitationPagination).toContainText("Page 2");
-  const pagedInvitationEmail = "browser-invitation-01@example.test";
-  const secondPageReissue = await findInvitationReissue(
-    page,
-    invitationPagination,
-    pagedInvitationEmail,
-  );
-  await expect(secondPageReissue).toBeVisible();
-  await secondPageReissue.click();
-  const secondPageConfirmation = page.getByRole("dialog", {
-    name: "Reissue Invitation?",
-  });
-  await fillOperatorCode(secondPageConfirmation.getByLabel("Verification code"));
-  await secondPageConfirmation.getByLabel("Verification code").press("Enter");
-  await expect(secondPageConfirmation).toHaveCount(0);
-  await expect(invitationPagination).toContainText("Page 1");
-  await expect(inviteResearcher).toBeFocused();
-
-  const effectivePagedInvitation = page
-    .getByRole("table", { name: "Invitations" })
-    .getByRole("row")
-    .filter({ hasText: pagedInvitationEmail })
-    .filter({ hasText: "Effective · Delivered" });
-  const failedReloadReissue = effectivePagedInvitation.getByRole("button", {
-    name: `Reissue invitation for ${pagedInvitationEmail}`,
-  });
-  await expect(failedReloadReissue).toBeVisible();
-  await failedReloadReissue.click();
-  const failedReloadConfirmation = page.getByRole("dialog", {
-    name: "Reissue Invitation?",
-  });
-  await fillOperatorCode(failedReloadConfirmation.getByLabel("Verification code"));
-  let failInvitationReload = true;
-  await page.route("**/api/auth/operator/invitations*", async (route) => {
-    if (route.request().method() !== "GET" || !failInvitationReload) {
-      await route.continue();
-      return;
-    }
-    failInvitationReload = false;
-    await route.fulfill({
-      body: JSON.stringify({ code: "OPERATOR_UNAVAILABLE" }),
-      contentType: "application/json",
-      status: 503,
-    });
-  });
-  try {
-    await failedReloadConfirmation.getByLabel("Verification code").press("Enter");
-    await expect(failedReloadConfirmation).toHaveCount(0);
-    await expect(page.getByRole("alert").filter({
-      hasText: "Operator Console unavailable.",
-    })).toBeVisible();
-    const retry = page.getByRole("region", { name: "Operator Researchers" })
-      .getByRole("button", { name: "Retry", exact: true });
-    await expect(retry).toBeFocused();
-  } finally {
-    await page.unroute("**/api/auth/operator/invitations*");
-  }
-  await page.getByRole("region", { name: "Operator Researchers" })
-    .getByRole("button", { name: "Retry", exact: true }).click();
-  await expect(page.getByRole("table", { name: "Invitations" })).toBeVisible();
 
   const search = page.getByRole("searchbox", { name: "Search researchers" });
   await search.fill("browser-page-");
@@ -788,8 +576,7 @@ test("Operator Dataset submission and response recovery", { tag: "@isolated" }, 
     idempotency_key: datasetKey,
     proof: expect.any(String),
   });
-  expect(datasetMutations.every((request) => !request.body.includes(browserPassword)))
-    .toBe(true);
+  for (const request of datasetMutations) expect(JSON.parse(request.body)).not.toHaveProperty("password");
   resetAuthRateLimits();
 
   let droppedAfterAcceptanceKey = "";
@@ -1510,8 +1297,7 @@ test("Operator Dataset operations and Worker recovery", { tag: "@isolated" }, as
   }
   expect(actionMutations).toHaveLength(3);
   for (const request of actionMutations) expect(JSON.parse(request.body)).not.toHaveProperty("otp");
-  expect(actionMutations.every((request) => !request.body.includes(browserPassword)))
-    .toBe(true);
+  for (const request of actionMutations) expect(JSON.parse(request.body)).not.toHaveProperty("password");
   expect(actionMutations.map((request) => request.path)).toEqual([
     "/api/operator/data/refreshes/cancel",
     "/api/operator/data/refreshes/retry",
@@ -1571,33 +1357,6 @@ async function settleReactUpdates(page: Page): Promise<void> {
   await nextAnimationFrame(page);
 }
 
-
-async function findInvitationReissue(
-  page: Page,
-  pagination: Locator,
-  email: string,
-): Promise<Locator> {
-  const previous = pagination.getByRole("button", { name: "Previous" });
-  await expect(previous).toBeEnabled();
-  for (let visitedPageCount = 0; visitedPageCount < 20; visitedPageCount += 1) {
-    const action = page.getByRole("button", {
-      name: `Reissue invitation for ${email}`,
-    });
-    if (await action.count() === 1) return action;
-
-    const next = pagination.getByRole("button", { name: "Next" });
-    if (!await next.isEnabled()) break;
-    const currentPage = Number.parseInt(
-      (await pagination.textContent())?.match(/Page (\d+)/)?.[1] ?? "",
-      10,
-    );
-    await next.click();
-    await expect(pagination).toContainText(`Page ${currentPage + 1}`);
-    await expect(previous).toBeEnabled();
-  }
-  throw new Error(`Seeded invitation ${email} was not found in the paged directory.`);
-}
-
 async function reviewGeneratedRefresh(page: Page, button: Locator): Promise<string> {
   await button.click();
   const dialog = page.getByRole("dialog", { name: "Refresh all data?", exact: true });
@@ -1626,7 +1385,6 @@ async function prepareOperator(page: Page) {
       request.method() === "POST"
       && (
         path === "/api/auth/operator/proofs"
-        || path.startsWith("/api/auth/operator/invitations/")
         || path === "/api/auth/operator/researchers/sessions/revoke"
         || path === "/api/operator/data/refreshes/dataset"
         || path === "/api/operator/data/refreshes/cancel"
@@ -1663,21 +1421,13 @@ async function prepareOperatorDirectory(
   ordinary: Awaited<ReturnType<typeof createResearcher>>,
 ) {
   seedOperatorDirectory();
-  const invitationEmail = "browser-reissued-invitation@example.test";
-  await issueInvitation(invitationEmail);
-  expect(runAuthOperator("reissue", "--email", invitationEmail)).toMatchObject({
-    command: "reissue",
-    email: invitationEmail,
-    status: "delivered",
-  });
-
   await restoreResearcherSession(page, operator);
   const operatorDocument = await page.goto("/operator/researchers");
   expect(operatorDocument?.status()).toBe(200);
   await expect(page.getByRole("link", { name: "Operator", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Researcher access" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Researchers" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Invitations" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Invitations" })).toHaveCount(0);
   const researcherTable = page.getByRole("table", { name: "Researchers" });
   const operatorRow = researcherTable.getByRole("row").filter({ hasText: operator.email });
   await expect(operatorRow.getByText("browser-operator", { exact: true })).toBeVisible();
@@ -1689,10 +1439,9 @@ async function prepareOperatorDirectory(
   await expect(operatorDetails.locator("dt").filter({ hasText: /^Created$/ }).locator("xpath=following-sibling::dd/time")).toHaveCount(1);
   await expect(operatorRow.locator('[data-label="Latest login"]')).toHaveText(/.+/);
   await expect(operatorRow.locator('[data-label="Current sessions"]')).toHaveText("1");
-  await expect(operatorDetails.locator("dt").filter({ hasText: /^Effective invitation$/ }).locator("xpath=following-sibling::dd")).toHaveText("None");
   await expect(researcherTable.getByText(ordinary.email, { exact: true })).toBeVisible();
 
-  return { invitationEmail, researcherTable, operatorRow };
+  return { researcherTable, operatorRow };
 }
 
 async function prepareDatasetOperation(page: Page): Promise<string> {

@@ -145,36 +145,7 @@ export class ResearcherAccessService {
         [researcherId],
       );
       await revokeResearcherMcpAccess(client, researcherId);
-      const resets = await client.query(
-        `
-          UPDATE auth.password_reset
-          SET status = 'revoked', terminal_at = $2
-          WHERE user_id = $1 AND status IN ('delivery_pending', 'delivered')
-        `,
-        [researcherId, now],
-      );
-      const verifications = await client.query(
-        `
-          DELETE FROM auth."verification"
-          WHERE value = $1 AND identifier LIKE 'reset-password:%'
-        `,
-        [researcherId],
-      );
-      const invitations = await client.query(
-        `
-          UPDATE auth.researcher_invitation
-          SET status = 'revoked', terminal_at = $2
-          WHERE email = $1 AND status IN ('delivery_pending', 'delivered')
-        `,
-        [user.email, now],
-      );
-      return anyRowsChanged([
-        active,
-        sessions,
-        resets,
-        verifications,
-        invitations,
-      ]);
+      return anyRowsChanged([active, sessions]);
     });
   }
 
@@ -400,4 +371,11 @@ function anyRowsChanged(
   results: ReadonlyArray<Readonly<{ rowCount: number | null }>>,
 ): boolean {
   return results.some((result) => (result.rowCount ?? 0) !== 0);
+}
+
+export async function isResearcherActive(pool: Pool, userId: string): Promise<boolean> {
+  const result = await pool.query<{ active: boolean }>(
+    'SELECT active FROM auth."user" WHERE id = $1', [userId],
+  );
+  return result.rows[0]?.active === true;
 }

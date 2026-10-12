@@ -11,7 +11,6 @@ export type AuthSecretContractResult = Readonly<{
 export async function enforceAuthSecretContract(
   pool: Pool,
   secret: string,
-  clock: () => Date = () => new Date(),
 ): Promise<AuthSecretContractResult> {
   const fingerprint = secretFingerprint(secret);
   const client = await pool.connect();
@@ -46,37 +45,10 @@ export async function enforceAuthSecretContract(
       return { status: "unchanged" };
     }
 
-    const now = clock();
-    await client.query(
-      `
-        UPDATE auth.researcher_invitation
-        SET status = 'revoked', terminal_at = $1
-        WHERE status IN (
-          'delivery_pending', 'replacement_pending', 'delivered'
-        )
-      `,
-      [now],
-    );
-    await client.query(
-      `
-        UPDATE auth.password_reset
-        SET status = 'revoked', terminal_at = $1
-        WHERE status IN ('delivery_pending', 'delivered')
-      `,
-      [now],
-    );
-    await client.query(
-      `
-        DELETE FROM auth."verification"
-        WHERE identifier LIKE 'reset-password:%'
-      `,
-    );
     await client.query('DELETE FROM auth."oauthAccessToken"');
     await client.query('DELETE FROM auth."oauthRefreshToken"');
     await client.query('DELETE FROM auth."oauthConsent"');
-    await client.query(`DELETE FROM auth."verification" WHERE
-      CASE WHEN value IS JSON OBJECT THEN value::jsonb ELSE '{}'::jsonb END
-        @> '{"type":"authorization_code"}'::jsonb`);
+    await client.query('DELETE FROM auth."verification"');
     await client.query('DELETE FROM auth."session"');
     await client.query(
       `

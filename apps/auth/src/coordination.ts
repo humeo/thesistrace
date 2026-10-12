@@ -149,16 +149,12 @@ export type CredentialOperationCoordinatorDependencies = Readonly<{
 
 export type CredentialOperationOptions = Readonly<{
   additionalLockKeys?: readonly string[];
-  compensateUncertainty?: "reset-credentials" | "sessions";
+  compensateUncertainty?: "sessions";
   existingSession?: Readonly<{ researcherId: string; token: string }>;
 }>;
 
 type CredentialMutationArtifacts = {
   cancelled: boolean;
-  readonly passwordResets: Map<
-    string,
-    Readonly<{ researcherId: string; tokenHash: Buffer }>
-  >;
   readonly researcherIds: Set<string>;
   readonly sessions: Map<string, string>;
 };
@@ -175,20 +171,6 @@ export class CredentialOperationCoordinator {
     this.#coordination = dependencies.coordination;
     this.#pool = dependencies.pool;
   }
-
-  readonly recordPasswordResetCredential = (input: Readonly<{
-    identifier: string;
-    researcherId: string;
-    tokenHash: Buffer;
-  }>): void => {
-    const artifacts = this.#artifacts.getStore();
-    if (artifacts === undefined) return;
-    artifacts.passwordResets.set(input.identifier, {
-      researcherId: input.researcherId,
-      tokenHash: Buffer.from(input.tokenHash),
-    });
-    artifacts.researcherIds.add(input.researcherId);
-  };
 
   readonly recordSession = (input: Readonly<{
     researcherId: string;
@@ -224,7 +206,7 @@ export class CredentialOperationCoordinator {
         ) {
           artifacts.cancelled = true;
           try {
-            await this.#compensateCredentialUncertainty(artifacts, compensation);
+            await this.#compensateCredentialUncertainty(artifacts);
           } catch (cause) {
             throw new AuthCoordinationUnavailableError(
               {
@@ -272,7 +254,6 @@ export class CredentialOperationCoordinator {
 
   async #compensateCredentialUncertainty(
     artifacts: CredentialMutationArtifacts,
-    compensation: "reset-credentials" | "sessions",
   ): Promise<void> {
     const client = await this.#pool.connect();
     try {
@@ -294,27 +275,6 @@ export class CredentialOperationCoordinator {
         [[...artifacts.sessions.keys()]],
       );
       const occurredAt = new Date();
-      if (compensation === "reset-credentials") {
-        for (const [identifier, reset] of artifacts.passwordResets) {
-          await client.query(
-            `
-              UPDATE auth.password_reset
-              SET status = 'revoked', terminal_at = $3
-              WHERE user_id = $1
-                AND token_hash = $2
-                AND status IN ('delivery_pending', 'delivered')
-            `,
-            [reset.researcherId, reset.tokenHash, occurredAt],
-          );
-          await client.query(
-            `
-              DELETE FROM auth."verification"
-              WHERE value = $1 AND identifier = $2
-            `,
-            [reset.researcherId, identifier],
-          );
-        }
-      }
       const revokedResearcherIds = new Set(
         revoked.rows.map((row) => row.researcher_id),
       );
@@ -367,34 +327,26 @@ export function credentialLockKey(emailInput: string): string {
   return `researcher-credential:${sha256(`thesistrace:credential:${email}`).toString("hex")}`;
 }
 
-export function invitationTokenLockKey(tokenHash: Buffer): string {
-  return `researcher-invitation-token:${tokenHash.toString("hex")}`;
-}
-
 async function credentialRequestContext(
   request: Request,
   getSession: SessionReader,
 ): Promise<Readonly<{
-  compensation: "reset-credentials" | "sessions";
+  compensation: "sessions";
   email: string;
   existingSession?: Readonly<{ researcherId: string; token: string }>;
 }> | undefined> {
   const path = new URL(request.url).pathname;
   if (
-    (path === "/api/auth/sign-in/email" || path === "/api/auth/sign-in/email-otp" || path === "/api/auth/email-otp/send-verification-otp")
-    || path === "/api/auth/request-password-reset"
+    path === "/api/auth/sign-in/email-otp" || path === "/api/auth/email-otp/send-verification-otp"
   ) {
     const body = await jsonBody(request);
     if (typeof body?.email !== "string") return undefined;
     return {
-      compensation:
-        path === "/api/auth/request-password-reset"
-          ? "reset-credentials"
-          : "sessions",
+      compensation: "sessions",
       email: body.email,
     };
   }
-  if (path !== "/api/auth/change-password" && path !== "/api/auth/sign-out") {
+  if (path !== "/api/auth/sign-out") {
     return undefined;
   }
   const session = sessionCredential(await getSession(request.headers));
@@ -458,7 +410,6 @@ function createCredentialMutationArtifacts(
 ): CredentialMutationArtifacts {
   const artifacts: CredentialMutationArtifacts = {
     cancelled: false,
-    passwordResets: new Map(),
     researcherIds: new Set(),
     sessions: new Map(),
   };

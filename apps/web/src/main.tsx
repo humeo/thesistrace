@@ -5,12 +5,10 @@ import { useAuthRetry } from "./auth/useAuthRetry";
 import { AuthProvider, useAuth } from "./auth/AuthProvider";
 import { AuthRoute, AuthSurface, returnToFromLocation } from "./auth/AuthPages";
 import {
-  extractInitialAuthSecret,
   isAuthPath,
   isProductPath,
   locationHref,
   type BrowserLocation,
-  type InitialAuthSecret,
 } from "./auth/routing";
 import { CoreApp } from "./shell/CoreApp";
 import { synchronizeEntryLanguage, useTranslation } from "./i18n";
@@ -31,23 +29,6 @@ function browserLocation(): BrowserLocation {
   };
 }
 
-type ConsumedBrowserLocation = ReturnType<typeof extractInitialAuthSecret> & Readonly<{
-  hadFragment: boolean;
-}>;
-
-function consumeBrowserLocation(): ConsumedBrowserLocation {
-  const observed = browserLocation();
-  const extracted = extractInitialAuthSecret(observed);
-  if (
-    locationHref(extracted.location) !== `${window.location.pathname}${window.location.search}${window.location.hash}`
-  ) {
-    window.history.replaceState(null, "", locationHref(extracted.location));
-  }
-  return { ...extracted, hadFragment: observed.hash !== "" };
-}
-
-const initialLocation = consumeBrowserLocation();
-
 function BrowserRoutedApp() {
   const { t } = useTranslation("auth");
   const { state, retry } = useAuth();
@@ -55,18 +36,11 @@ function BrowserRoutedApp() {
     || (state.status === "unavailable" && state.workspaceReady) ? state.session : null;
   const researcherId = workspaceSession?.researcherId ?? null;
   const [location, setLocation] = useState(browserLocation);
-  const [secret, setSecret] = useState<InitialAuthSecret | null>(initialLocation.secret);
 
   const synchronizeLocation = useCallback(() => {
-    const next = consumeBrowserLocation();
-    if (isAuthPath(next.location.pathname)) synchronizeEntryLanguage();
-    React.startTransition(() => setLocation(next.location));
-    setSecret((current) => {
-      if (next.secret !== null) return next.secret;
-      if (next.hadFragment || current === null) return null;
-      const currentPath = "/accept-invitation";
-      return next.location.pathname === currentPath ? current : null;
-    });
+    const next = browserLocation();
+    if (isAuthPath(next.pathname)) synchronizeEntryLanguage();
+    React.startTransition(() => setLocation(next));
   }, []);
 
   const navigate = useCallback((path: string, options?: Readonly<{ replace?: boolean }>) => {
@@ -139,10 +113,7 @@ function BrowserRoutedApp() {
   if (state.status === "anonymous") {
     return (
       <AuthRoute
-        clearSecret={() => setSecret(null)}
         location={location}
-        navigate={navigate}
-        secret={secret}
       />
     );
   }

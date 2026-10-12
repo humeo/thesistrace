@@ -52,27 +52,6 @@ export class AuthEventRecorder {
       return;
     }
     if (
-      snapshot.path === "/api/auth/request-password-reset" &&
-      snapshot.email !== undefined
-    ) {
-      await this.#recordUnknownResetRequest(snapshot.email);
-      return;
-    }
-    if (
-      snapshot.path === "/api/auth/change-password" &&
-      snapshot.researcherId !== undefined
-    ) {
-      await this.#recordKnownEvents(snapshot.researcherId, [
-        ["password_changed", succeeded ? "succeeded" : "failed"],
-        ...(succeeded
-          ? ([
-              ["sessions_revoked", "succeeded"],
-            ] as const)
-          : []),
-      ]);
-      return;
-    }
-    if (
       snapshot.path === "/api/auth/sign-out" &&
       snapshot.researcherId !== undefined &&
       succeeded
@@ -102,25 +81,6 @@ export class AuthEventRecorder {
           researcherId === undefined ? { email } : { researcherId },
         occurredAt: this.#clock(),
         outcome,
-      });
-    });
-  }
-
-  async #recordUnknownResetRequest(email: string): Promise<void> {
-    await this.#transaction(async (client) => {
-      const user = await client.query<{ id: string }>(
-        'SELECT id FROM auth."user" WHERE email = $1',
-        [email],
-      );
-      if (user.rowCount !== 0) {
-        return;
-      }
-      await recordSecurityAudit(client, {
-        authSecret: this.#authSecret,
-        event: "password_reset_requested",
-        identity: { email },
-        occurredAt: this.#clock(),
-        outcome: "no_change",
       });
     });
   }
@@ -165,17 +125,14 @@ async function requestSnapshot(
   getSession: SessionReader,
 ): Promise<RequestSnapshot> {
   const path = new URL(request.url).pathname;
-  if (
-    path === "/api/auth/sign-in/email-otp" ||
-    path === "/api/auth/request-password-reset"
-  ) {
+  if (path === "/api/auth/sign-in/email-otp") {
     const body = await jsonBody(request);
     return {
       email: typeof body?.email === "string" ? body.email : undefined,
       path,
     };
   }
-  if (path === "/api/auth/change-password" || path === "/api/auth/sign-out") {
+  if (path === "/api/auth/sign-out") {
     let session: unknown;
     try {
       session = await getSession(request.headers);

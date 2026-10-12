@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act } from "react";
+import { act, useEffect, useImperativeHandle, type RefObject } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, test, vi } from "vitest";
 import { changeInterfaceLanguage } from "../i18n";
@@ -7,6 +7,16 @@ import { AuthRoute } from "./AuthPages";
 
 const { sendCode } = vi.hoisted(() => ({ sendCode: vi.fn() }));
 vi.mock("./AuthProvider", () => ({ useAuth: () => ({ sendCode }) }));
+vi.mock("./SignInChallenge", () => ({
+  SignInChallenge: ({onToken, widgetRef}: {
+    onToken: (token: string) => void;
+    widgetRef: RefObject<{reset: () => void} | null>;
+  }) => {
+    useEffect(() => onToken("test-browser-verification"), [onToken]);
+    useImperativeHandle(widgetRef, () => ({reset: () => onToken("test-browser-verification")}), [onToken]);
+    return null;
+  },
+}));
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 test("an existing authentication error follows the interface language without resubmitting", async () => {
@@ -16,8 +26,9 @@ test("an existing authentication error follows the interface language without re
   document.body.append(container);
   const root = createRoot(container);
   try {
-    await act(async () => root.render(<AuthRoute clearSecret={() => {}} secret={null}
-      location={{ pathname: "/login", search: "", hash: "" }} navigate={() => {}} />));
+    await act(async () => root.render(<AuthRoute
+      location={{ pathname: "/login", search: "", hash: "" }} />));
+    await act(async () => vi.dynamicImportSettled());
     const emailInput = container.querySelector("input");
     await act(async () => container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
     expect(container.querySelector('[role="alert"]')?.textContent).toBe("The verification code could not be sent. Please try again.");
@@ -42,7 +53,8 @@ test("shows server cooldown in both languages and enables manual retry at expiry
   const container = document.createElement("div"); document.body.append(container);
   const root = createRoot(container);
   try {
-    await act(async () => root.render(<AuthRoute clearSecret={() => {}} secret={null} location={{pathname: "/login", search: "", hash: ""}} navigate={() => {}} />));
+    await act(async () => root.render(<AuthRoute  location={{pathname: "/login", search: "", hash: ""}} />));
+    await act(async () => vi.dynamicImportSettled());
     await act(async () => container.querySelector("form")!.dispatchEvent(new Event("submit", {bubbles: true, cancelable: true})));
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("37s");
     expect(container.querySelector('button[type="submit"]')?.hasAttribute("disabled")).toBe(true);

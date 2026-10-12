@@ -4,14 +4,8 @@ export type BrowserLocation = Readonly<{
   hash: string;
 }>;
 
-export type InitialAuthSecret = Readonly<{
-  kind: "invitation";
-  token: string;
-}>;
-
 const AUTH_PATHS = new Set([
   "/login",
-  "/accept-invitation",
 ]);
 
 const PRODUCT_ROOTS = new Set([
@@ -40,33 +34,6 @@ export function isProductPath(pathname: string): boolean {
     || /^\/research-runs\/run_[a-f0-9]+$/.test(pathname)
     || /^\/research-runs\/batches\/batch_[a-f0-9]+$/.test(pathname)
     || /^\/daily-tracks\/track_[a-f0-9]+$/.test(pathname);
-}
-
-export function extractInitialAuthSecret(location: BrowserLocation): Readonly<{
-  location: BrowserLocation;
-  secret: InitialAuthSecret | null;
-}> {
-  if (
-    location.pathname !== "/accept-invitation"
-  ) {
-    return { location, secret: null };
-  }
-
-  const cleared = { ...location, hash: "" };
-  const fragment = new URLSearchParams(location.hash.startsWith("#")
-    ? location.hash.slice(1)
-    : location.hash);
-  const token = fragment.get("token");
-  if (fragment.size !== 1 || token === null || token.length === 0) {
-    return { location: cleared, secret: null };
-  }
-  return {
-    location: cleared,
-    secret: {
-      kind: "invitation",
-      token,
-    },
-  };
 }
 
 export function safeReturnTo(

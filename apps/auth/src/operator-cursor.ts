@@ -16,7 +16,7 @@ const CURSOR_AAD = Buffer.from(
 );
 const directoryIdSchema = z.uuid();
 
-type CursorCollection = "invitations" | "researchers";
+type CursorCollection = "researchers";
 
 export type OperatorCursorPosition = Readonly<{
   createdAt: Date;

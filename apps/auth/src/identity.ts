@@ -12,10 +12,6 @@ const canonicalEmailSchema = z
 const emailRequestPaths = new Set([
   "/api/auth/sign-in/email-otp",
   "/api/auth/email-otp/send-verification-otp",
-  "/api/auth/change-email",
-  "/api/auth/request-password-reset",
-  "/api/auth/send-verification-email",
-  "/api/auth/sign-in/email",
 ]);
 
 export class InvalidEmailError extends Error {

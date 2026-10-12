@@ -62,8 +62,8 @@ describe.sequential("Operator Researcher Session revocation", () => {
         auth.operator_proof,
         auth.operator_assignment,
         auth.security_audit,
-        auth.password_reset,
-        auth.researcher_invitation,
+
+
         auth."rateLimit",
         auth."verification",
         auth."user"

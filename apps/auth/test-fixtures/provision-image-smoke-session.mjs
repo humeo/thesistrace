@@ -1,21 +1,18 @@
-import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 
 const { Client } = createRequire("/app/auth/package.json")("pg");
 
 const authOrigin = process.env.THESISTRACE_AUTH_FIXTURE_AUTH_ORIGIN;
 const resendOrigin = "http://resend-fake:8300";
-const password = process.argv[3] ?? "correct-horse-battery-staple";
-const clientIp = process.argv[4] ?? "127.0.0.1";
+const clientIp = process.argv[3] ?? "127.0.0.1";
 const email = process.argv[2];
 
 try {
   if (typeof email !== "string" || email.length === 0) {
     throw new Error("EMAIL_REQUIRED");
   }
-  if (password.length < 12 || password.length > 128) {
-    throw new Error("PASSWORD_INVALID");
-  }
+  if (process.env.THESISTRACE_ENVIRONMENT !== "test") throw new Error("SESSION_PROVISION_REQUIRES_TEST_ENVIRONMENT");
   if (typeof authOrigin !== "string" || authOrigin.length === 0) {
     throw new Error("AUTH_FIXTURE_AUTH_ORIGIN_REQUIRED");
   }
@@ -32,22 +29,13 @@ try {
     200,
     "RESEND_CLEAR_FAILED",
   );
-  const invitation = spawnSync(
-    process.execPath,
-    ["dist/operator.js", "invite", "--email", email],
-    {
-      cwd: "/app/auth",
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
-  if (invitation.status !== 0) {
-    throw new Error("INVITATION_FAILED");
-  }
-
-  const token = await awaitInvitationToken();
+  await expectStatus(fetch(`${authOrigin}/api/auth/email-otp/send-verification-otp`, {
+    method: "POST", headers: {"content-type": "application/json", origin: publicOrigin, "x-thesistrace-client-ip": clientIp},
+    body: JSON.stringify({email, type: "sign-in", captcha_token: `test-turnstile:${new URL(publicOrigin).hostname}:${Date.now()}:${randomUUID()}`}),
+  }), 200, "EMAIL_CODE_SEND_FAILED");
+  const otp = await awaitEmailCode();
   const accepted = await fetch(
-    `${authOrigin}/api/auth/researcher-invitation/accept`,
+    `${authOrigin}/api/auth/sign-in/email-otp`,
     {
       method: "POST",
       headers: {
@@ -55,11 +43,11 @@ try {
         origin: publicOrigin,
         "x-thesistrace-client-ip": clientIp,
       },
-      body: JSON.stringify({ token, password }),
+      body: JSON.stringify({ email, otp }),
     },
   );
   if (accepted.status !== 200) {
-    throw new Error("INVITATION_ACCEPT_FAILED");
+    throw new Error("EMAIL_CODE_SIGN_IN_FAILED");
   }
   const cookie = accepted.headers
     .getSetCookie()
@@ -115,7 +103,7 @@ async function expectStatus(responsePromise, expected, code) {
   }
 }
 
-async function awaitInvitationToken() {
+async function awaitEmailCode() {
   const deadline = Date.now() + 10_000;
   let sawEmail = false;
   while (Date.now() < deadline) {
@@ -125,15 +113,15 @@ async function awaitInvitationToken() {
       const emails = payload?.emails;
       if (Array.isArray(emails) && emails.length > 0) {
         sawEmail = true;
-        const html = emails.at(-1)?.html;
+        const text = emails.at(-1)?.text;
         const match =
-          typeof html === "string" ? /#token=([^"'<\s]+)/.exec(html) : null;
+          typeof text === "string" ? /\b[0-9]{6}\b/.exec(text) : null;
         if (match !== null) {
-          return decodeURIComponent(match[1]);
+          return match[0];
         }
       }
     }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  throw new Error(sawEmail ? "INVITATION_TOKEN_INVALID" : "INVITATION_EMAIL_MISSING");
+  throw new Error(sawEmail ? "EMAIL_CODE_INVALID" : "EMAIL_CODE_EMAIL_MISSING");
 }

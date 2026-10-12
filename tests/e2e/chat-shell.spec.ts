@@ -65,8 +65,8 @@ securityTest("Chat preserves returnTo and opens after login without a document r
   });
   await page.getByLabel("Email").fill(email);
   await page.getByRole("button", {name: "Continue with email"}).click();
-  await expect(page.getByLabel("Verification code")).toBeVisible();
-  await page.getByLabel("Verification code").fill(await emailCode(email));
+  await expect(page.getByRole("textbox", {name: "Verification code", exact: true})).toBeVisible();
+  await page.getByRole("textbox", {name: "Verification code", exact: true}).fill(await emailCode(email));
   documentRequests.length = 0;
   await page.getByRole("button", { name: "Verify and continue" }).click();
 

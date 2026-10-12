@@ -1,3 +1,4 @@
+import { emailSession } from "../test-fixtures/email-session.js";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -15,7 +16,6 @@ import {
   OperatorDeactivationRejectedError,
   ResearcherAccessService,
 } from "./access.js";
-import { InvitationAdmission } from "./invitation-admission.js";
 import { OperatorAssignmentService } from "./operator-assignment.js";
 import { initializeAuthSchema } from "./schema-initialize.js";
 import { enforceAuthSecretContract } from "./secret-contract.js";
@@ -40,12 +40,10 @@ const credentialCoordinator = new CredentialOperationCoordinator({
   coordination: new AuthOperationCoordinator(coordinationPool),
   pool: runtimePool,
 });
-const invitationAdmission = new InvitationAdmission();
 const lifecycle: AuthLifecycleDependencies = {
   backgroundTask(promise) {
     void promise.catch(() => undefined);
   },
-  invitationAdmission,
   async isResearcherActive(userId) {
     const result = await runtimePool.query<{ active: boolean }>(
       'SELECT active FROM auth."user" WHERE id = $1',
@@ -53,9 +51,7 @@ const lifecycle: AuthLifecycleDependencies = {
     );
     return result.rows[0]?.active === true;
   },
-  recordPasswordResetCredential() {},
   recordSession() {},
-  async sendResetPassword() {},
 };
 
 describe.sequential("Auth operator access lifecycle", () => {
@@ -70,8 +66,8 @@ describe.sequential("Auth operator access lifecycle", () => {
         auth.auth_secret_contract,
         auth.operator_assignment,
         auth.security_audit,
-        auth.password_reset,
-        auth.researcher_invitation,
+
+
         auth."rateLimit",
         auth."verification",
         auth."user"
@@ -87,7 +83,6 @@ describe.sequential("Auth operator access lifecycle", () => {
 
   it("deactivates atomically, revokes every access grant, and is idempotent", async () => {
     const researcherId = await createUser("deactivate@example.com");
-    await insertEffectiveAccessState(researcherId, "deactivate@example.com");
     const access = service();
 
     await expect(access.deactivate(researcherId)).resolves.toEqual({
@@ -96,9 +91,6 @@ describe.sequential("Auth operator access lifecycle", () => {
     });
     expect(await persistedAccessState(researcherId)).toEqual({
       active: false,
-      effectiveInvitations: 0,
-      effectiveResets: 0,
-      resetVerifications: 0,
       sessions: 0,
     });
     await expect(access.deactivate(researcherId)).resolves.toEqual({
@@ -120,12 +112,8 @@ describe.sequential("Auth operator access lifecycle", () => {
   });
 
   it("serializes deactivation before hard secret rotation", async () => {
-    await enforceAuthSecretContract(runtimePool, settings.secret, () => fixedNow);
+    await enforceAuthSecretContract(runtimePool, settings.secret);
     const researcherId = await createUser("rotation-deactivate@example.com");
-    await insertEffectiveAccessState(
-      researcherId,
-      "rotation-deactivate@example.com",
-    );
     const blocker = await owner.connect();
     let deactivating: Promise<unknown> | undefined;
     let rotating: Promise<unknown> | undefined;
@@ -139,11 +127,7 @@ describe.sequential("Auth operator access lifecycle", () => {
       void deactivating.catch(() => undefined);
       await waitForCondition(() => hasBlockedRuntimeQuery('FROM auth."user"'));
 
-      rotating = enforceAuthSecretContract(
-        runtimePool,
-        "abcdef0123456789abcdef0123456789",
-        () => fixedNow,
-      );
+      rotating = enforceAuthSecretContract(runtimePool, "abcdef0123456789abcdef0123456789");
       void rotating.catch(() => undefined);
       await waitForCondition(() =>
         hasBlockedRuntimeQuery("pg_advisory_xact_lock(")
@@ -167,9 +151,6 @@ describe.sequential("Auth operator access lifecycle", () => {
 
     expect(await persistedAccessState(researcherId)).toEqual({
       active: false,
-      effectiveInvitations: 0,
-      effectiveResets: 0,
-      resetVerifications: 0,
       sessions: 0,
     });
   });
@@ -239,10 +220,10 @@ describe.sequential("Auth operator access lifecycle", () => {
     });
 
     const signingIn = auth.handler(
-      new Request(`${settings.publicOrigin}/api/auth/sign-in/email`, {
+      new Request(`${settings.publicOrigin}/api/auth/sign-in/email-otp`, {
         body: JSON.stringify({
           email: "race@example.com",
-          password: "correct-horse-battery-staple",
+          otp: await auth.api.createVerificationOTP({ body: { email: "race@example.com", type: "sign-in" } }),
         }),
         headers: {
           "content-type": "application/json",
@@ -311,149 +292,6 @@ function service(): ResearcherAccessService {
   });
 }
 
-async function createUser(email: string): Promise<string> {
-  const auth = createThesisTraceAuth(settings, runtimePool, lifecycle);
-  const response = await invitationAdmission.run(email, () =>
-    auth.api.signUpEmail({
-      asResponse: true,
-      body: {
-        email,
-        name: "untrusted",
-        password: "correct-horse-battery-staple",
-      },
-      headers: requestHeaders(),
-    }),
-  );
-  expect(response.status).toBe(200);
-  const result = await owner.query<{ id: string }>(
-    'SELECT id FROM auth."user" WHERE email = $1',
-    [email],
-  );
-  const id = result.rows[0]?.id;
-  if (id === undefined) {
-    throw new Error("expected a Researcher ID");
-  }
-  return id;
-}
-
-async function signIn(email: string): Promise<void> {
-  const auth = createThesisTraceAuth(settings, runtimePool, lifecycle);
-  const response = await auth.api.signInEmail({
-    asResponse: true,
-    body: { email, password: "correct-horse-battery-staple" },
-    headers: requestHeaders(),
-  });
-  expect(response.status).toBe(200);
-}
-
-async function insertEffectiveAccessState(
-  researcherId: string,
-  email: string,
-): Promise<void> {
-  await owner.query(
-    `
-      INSERT INTO auth.researcher_invitation (
-        id, email, token_hash, status, expires_at, created_at, delivered_at
-      )
-      VALUES (
-        '00000000-0000-4000-8000-000000000101',
-        $1,
-        decode(repeat('11', 32), 'hex'),
-        'delivered',
-        $2,
-        $3,
-        $3
-      )
-    `,
-    [email, new Date("2026-08-30T06:00:00.000Z"), fixedNow],
-  );
-  await owner.query(
-    `
-      INSERT INTO auth.password_reset (
-        id, user_id, token_hash, status, expires_at, created_at, delivered_at
-      )
-      VALUES (
-        '00000000-0000-4000-8000-000000000102',
-        $1,
-        decode(repeat('22', 32), 'hex'),
-        'delivered',
-        $2,
-        $3,
-        $3
-      )
-    `,
-    [researcherId, new Date("2026-08-28T06:30:00.000Z"), fixedNow],
-  );
-  await owner.query(
-    `
-      INSERT INTO auth."verification" (
-        id, identifier, value, "expiresAt", "createdAt", "updatedAt"
-      )
-      VALUES (
-        '00000000-0000-4000-8000-000000000103',
-        'reset-password:' || repeat('22', 32),
-        $1,
-        $2,
-        $3,
-        $3
-      )
-    `,
-    [researcherId, new Date("2026-08-28T06:30:00.000Z"), fixedNow],
-  );
-}
-
-async function persistedAccessState(researcherId: string): Promise<{
-  active: boolean;
-  effectiveInvitations: number;
-  effectiveResets: number;
-  resetVerifications: number;
-  sessions: number;
-}> {
-  const result = await owner.query<{
-    active: boolean;
-    effective_invitations: string;
-    effective_resets: string;
-    reset_verifications: string;
-    sessions: string;
-  }>(`
-    SELECT
-      u.active,
-      (
-        SELECT count(*)
-        FROM auth.researcher_invitation i
-        WHERE i.email = u.email
-          AND i.status IN ('delivery_pending', 'delivered')
-      ) AS effective_invitations,
-      (
-        SELECT count(*)
-        FROM auth.password_reset r
-        WHERE r.user_id = u.id
-          AND r.status IN ('delivery_pending', 'delivered')
-      ) AS effective_resets,
-      (
-        SELECT count(*)
-        FROM auth."verification" v
-        WHERE v.value = u.id::text AND v.identifier LIKE 'reset-password:%'
-      ) AS reset_verifications,
-      (
-        SELECT count(*) FROM auth."session" s WHERE s."userId" = u.id
-      ) AS sessions
-    FROM auth."user" u
-    WHERE u.id = $1
-  `, [researcherId]);
-  const row = result.rows[0];
-  if (row === undefined) {
-    throw new Error("expected access state");
-  }
-  return {
-    active: row.active,
-    effectiveInvitations: Number(row.effective_invitations),
-    effectiveResets: Number(row.effective_resets),
-    resetVerifications: Number(row.reset_verifications),
-    sessions: Number(row.sessions),
-  };
-}
-
 async function hasBlockedRuntimeQuery(fragment: string): Promise<boolean> {
   const result = await owner.query<{ waiting: boolean }>(
     `
@@ -492,4 +330,19 @@ function roleDatabaseUrl(base: string, username: string, password: string): stri
   url.username = username;
   url.password = password;
   return url.toString();
+}
+
+async function createUser(email: string): Promise<string> {
+  const auth = createThesisTraceAuth(settings, runtimePool, lifecycle);
+  expect((await emailSession(auth, email, requestHeaders())).status).toBe(200);
+  return (await owner.query<{id: string}>('SELECT id FROM auth."user" WHERE email=$1', [email])).rows[0]!.id;
+}
+async function signIn(email: string): Promise<void> {
+  const auth = createThesisTraceAuth(settings, runtimePool, lifecycle);
+  expect((await emailSession(auth, email, requestHeaders())).status).toBe(200);
+}
+
+async function persistedAccessState(researcherId: string): Promise<{active: boolean; sessions: number}> {
+  const result = await owner.query<{active: boolean; sessions: string}>(`SELECT u.active, (SELECT count(*) FROM auth."session" s WHERE s."userId"=u.id) AS sessions FROM auth."user" u WHERE u.id=$1`, [researcherId]);
+  const row=result.rows[0]!; return {active: row.active, sessions: Number(row.sessions)};
 }

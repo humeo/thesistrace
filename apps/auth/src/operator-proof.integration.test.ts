@@ -45,8 +45,8 @@ describe.sequential("Auth Operator Proof", () => {
         auth.operator_proof,
         auth.operator_assignment,
         auth.security_audit,
-        auth.password_reset,
-        auth.researcher_invitation,
+
+
         auth."rateLimit",
         auth."verification",
         auth."user"
@@ -93,7 +93,7 @@ describe.sequential("Auth Operator Proof", () => {
       })).resolves.toBe("consumed");
     }
     await expect(proofService.confirm(principal(), {
-      operation: "invitation.issue", email: "new@example.com", otp: "000000",
+      operation: "researcher.sessions.revoke", researcherId: targetResearcherId, otp: "000000",
     })).rejects.toBeInstanceOf(OperatorCodeInvalidError);
     await owner.query("DELETE FROM auth.operator_assignment");
     for (const request of requests) {
@@ -101,11 +101,11 @@ describe.sequential("Auth Operator Proof", () => {
     }
   });
 
-  it("binds a 60-second opaque proof to canonical request, operation, and Login Session", async () => {
+  it("binds a 60-second opaque proof to exact request, operation, and Login Session", async () => {
     const proofService = service();
     const confirmed = await proofService.confirm(principal(), {
-      email: " Researcher@Example.COM ",
-      operation: "invitation.issue",
+      researcherId: targetResearcherId,
+      operation: "researcher.sessions.revoke",
       otp: "123456",
     });
 
@@ -119,15 +119,15 @@ describe.sequential("Auth Operator Proof", () => {
       token_hash: Buffer;
     }>("SELECT operation, state, token_hash FROM auth.operator_proof");
     expect(persisted.rows).toEqual([{
-      operation: "invitation.issue",
+      operation: "researcher.sessions.revoke",
       state: "available",
       token_hash: expect.any(Buffer),
     }]);
     expect(JSON.stringify(persisted.rows)).not.toContain(confirmed.proof);
 
     const claim = await proofService.claim(principal(), {
-      email: "researcher@example.com",
-      operation: "invitation.issue",
+      researcherId: targetResearcherId,
+      operation: "researcher.sessions.revoke",
       proof: confirmed.proof,
     });
     await transaction(async (client) => {
@@ -135,8 +135,8 @@ describe.sequential("Auth Operator Proof", () => {
     });
     await expect(
       proofService.claim(principal(), {
-        email: "researcher@example.com",
-        operation: "invitation.issue",
+        researcherId: targetResearcherId,
+        operation: "researcher.sessions.revoke",
         proof: confirmed.proof,
       }),
     ).rejects.toEqual(new OperatorProofInvalidError());
@@ -406,8 +406,8 @@ describe.sequential("Auth Operator Proof", () => {
         [operatorId],
       );
       confirming = proofService.confirm(principal(), {
-        email: "delayed@example.com",
-        operation: "invitation.issue",
+        researcherId: targetResearcherId,
+        operation: "researcher.sessions.revoke",
         otp: "123456",
       });
       await waitForBlockedQuery("FROM auth.operator_assignment AS assignment");
@@ -434,8 +434,8 @@ describe.sequential("Auth Operator Proof", () => {
         [proofId],
       );
       claiming = proofService.claim(principal(), {
-        email: "delayed@example.com",
-        operation: "invitation.issue",
+        researcherId: targetResearcherId,
+        operation: "researcher.sessions.revoke",
         proof: confirmed.proof,
       });
       await waitForBlockedQuery("FROM auth.operator_proof AS proof");
@@ -460,8 +460,8 @@ describe.sequential("Auth Operator Proof", () => {
   it("rejects an invalid code without creating a proof", async () => {
     await expect(
       service().confirm(principal(), {
-        email: "researcher@example.com",
-        operation: "invitation.issue",
+        researcherId: targetResearcherId,
+        operation: "researcher.sessions.revoke",
         otp: "wrong-password-is-long-enough",
       }),
     ).rejects.toEqual(new OperatorCodeInvalidError());
@@ -473,24 +473,24 @@ describe.sequential("Auth Operator Proof", () => {
   it("fails closed for operation, request, Session, token, and expiry mismatch", async () => {
     const proofService = service();
     const confirmed = await proofService.confirm(principal(), {
-      email: "bound@example.com",
-      operation: "invitation.reissue",
+      researcherId: targetResearcherId,
+      operation: "researcher.sessions.revoke",
       otp: "123456",
     });
     const candidates = [
       {
         ...principal(),
         input: {
-          email: "different@example.com",
-          operation: "invitation.reissue" as const,
+          researcherId: "00000000-0000-4000-8000-000000000099",
+          operation: "researcher.sessions.revoke" as const,
           proof: confirmed.proof,
         },
       },
       {
         ...principal(),
         input: {
-          email: "bound@example.com",
-          operation: "invitation.issue" as const,
+          asOf: "2026-08-11T10:00:00Z", idempotencyKey: "wrong-operation",
+          operation: "data.refresh.dataset.submit" as const,
           proof: confirmed.proof,
         },
       },
@@ -498,16 +498,16 @@ describe.sequential("Auth Operator Proof", () => {
         researcherId: operatorId,
         sessionId: secondSessionId,
         input: {
-          email: "bound@example.com",
-          operation: "invitation.reissue" as const,
+          researcherId: targetResearcherId,
+          operation: "researcher.sessions.revoke" as const,
           proof: confirmed.proof,
         },
       },
       {
         ...principal(),
         input: {
-          email: "bound@example.com",
-          operation: "invitation.reissue" as const,
+          researcherId: targetResearcherId,
+          operation: "researcher.sessions.revoke" as const,
           proof: `${confirmed.proof.slice(0, -1)}${confirmed.proof.endsWith("a") ? "b" : "a"}`,
         },
       },
@@ -527,8 +527,8 @@ describe.sequential("Auth Operator Proof", () => {
     now = new Date("2026-08-29T06:01:00.000Z");
     await expect(
       proofService.claim(principal(), {
-        email: "bound@example.com",
-        operation: "invitation.reissue",
+        researcherId: targetResearcherId,
+        operation: "researcher.sessions.revoke",
         proof: confirmed.proof,
       }),
     ).rejects.toEqual(new OperatorProofInvalidError());
@@ -537,13 +537,13 @@ describe.sequential("Auth Operator Proof", () => {
   it("admits only one concurrent claim and permits a released unexpired claim once", async () => {
     const proofService = service();
     const confirmed = await proofService.confirm(principal(), {
-      email: "concurrent@example.com",
-      operation: "invitation.issue",
+      researcherId: targetResearcherId,
+      operation: "researcher.sessions.revoke",
       otp: "123456",
     });
     const input = {
-      email: "concurrent@example.com",
-      operation: "invitation.issue" as const,
+      researcherId: targetResearcherId,
+      operation: "researcher.sessions.revoke" as const,
       proof: confirmed.proof,
     };
 

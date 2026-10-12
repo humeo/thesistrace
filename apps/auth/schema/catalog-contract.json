@@ -1037,70 +1037,6 @@
       "name": "id",
       "notNull": true,
       "position": 1,
-      "relation": "password_reset",
-      "type": "uuid"
-    },
-    {
-      "default": null,
-      "name": "user_id",
-      "notNull": true,
-      "position": 2,
-      "relation": "password_reset",
-      "type": "uuid"
-    },
-    {
-      "default": null,
-      "name": "token_hash",
-      "notNull": true,
-      "position": 3,
-      "relation": "password_reset",
-      "type": "bytea"
-    },
-    {
-      "default": null,
-      "name": "status",
-      "notNull": true,
-      "position": 4,
-      "relation": "password_reset",
-      "type": "text"
-    },
-    {
-      "default": null,
-      "name": "expires_at",
-      "notNull": true,
-      "position": 5,
-      "relation": "password_reset",
-      "type": "timestamp with time zone"
-    },
-    {
-      "default": "CURRENT_TIMESTAMP",
-      "name": "created_at",
-      "notNull": true,
-      "position": 6,
-      "relation": "password_reset",
-      "type": "timestamp with time zone"
-    },
-    {
-      "default": null,
-      "name": "delivered_at",
-      "notNull": false,
-      "position": 7,
-      "relation": "password_reset",
-      "type": "timestamp with time zone"
-    },
-    {
-      "default": null,
-      "name": "terminal_at",
-      "notNull": false,
-      "position": 8,
-      "relation": "password_reset",
-      "type": "timestamp with time zone"
-    },
-    {
-      "default": "gen_random_uuid()",
-      "name": "id",
-      "notNull": true,
-      "position": 1,
       "relation": "rateLimit",
       "type": "uuid"
     },
@@ -1127,78 +1063,6 @@
       "position": 4,
       "relation": "rateLimit",
       "type": "bigint"
-    },
-    {
-      "default": "gen_random_uuid()",
-      "name": "id",
-      "notNull": true,
-      "position": 1,
-      "relation": "researcher_invitation",
-      "type": "uuid"
-    },
-    {
-      "default": null,
-      "name": "email",
-      "notNull": true,
-      "position": 2,
-      "relation": "researcher_invitation",
-      "type": "text"
-    },
-    {
-      "default": null,
-      "name": "token_hash",
-      "notNull": true,
-      "position": 3,
-      "relation": "researcher_invitation",
-      "type": "bytea"
-    },
-    {
-      "default": null,
-      "name": "status",
-      "notNull": true,
-      "position": 4,
-      "relation": "researcher_invitation",
-      "type": "text"
-    },
-    {
-      "default": null,
-      "name": "expires_at",
-      "notNull": true,
-      "position": 5,
-      "relation": "researcher_invitation",
-      "type": "timestamp with time zone"
-    },
-    {
-      "default": "CURRENT_TIMESTAMP",
-      "name": "created_at",
-      "notNull": true,
-      "position": 6,
-      "relation": "researcher_invitation",
-      "type": "timestamp with time zone"
-    },
-    {
-      "default": null,
-      "name": "delivered_at",
-      "notNull": false,
-      "position": 7,
-      "relation": "researcher_invitation",
-      "type": "timestamp with time zone"
-    },
-    {
-      "default": null,
-      "name": "terminal_at",
-      "notNull": false,
-      "position": 8,
-      "relation": "researcher_invitation",
-      "type": "timestamp with time zone"
-    },
-    {
-      "default": null,
-      "name": "user_id",
-      "notNull": false,
-      "position": 9,
-      "relation": "researcher_invitation",
-      "type": "uuid"
     },
     {
       "default": null,
@@ -1647,7 +1511,7 @@
       "type": "c"
     },
     {
-      "definition": "CHECK ((operation = ANY (ARRAY['invitation.issue'::text, 'invitation.reissue'::text, 'researcher.sessions.revoke'::text, 'data.refresh.market.submit'::text, 'data.refresh.dataset.submit'::text, 'data.refresh.financial.submit'::text, 'data.refresh.industry.submit'::text, 'data.refresh.cancel'::text, 'data.refresh.retry'::text])))",
+      "definition": "CHECK ((operation = ANY (ARRAY['researcher.sessions.revoke'::text, 'data.refresh.market.submit'::text, 'data.refresh.dataset.submit'::text, 'data.refresh.financial.submit'::text, 'data.refresh.industry.submit'::text, 'data.refresh.cancel'::text, 'data.refresh.retry'::text])))",
       "name": "operator_proof_operation_check",
       "relation": "operator_proof",
       "type": "c"
@@ -1689,42 +1553,6 @@
       "type": "u"
     },
     {
-      "definition": "CHECK ((((status = 'delivery_pending'::text) AND (delivered_at IS NULL) AND (terminal_at IS NULL)) OR ((status = 'delivered'::text) AND (delivered_at IS NOT NULL) AND (terminal_at IS NULL)) OR ((status = ANY (ARRAY['delivery_failed'::text, 'revoked'::text])) AND (terminal_at IS NOT NULL)) OR ((status = 'consumed'::text) AND (delivered_at IS NOT NULL) AND (terminal_at IS NOT NULL))))",
-      "name": "password_reset_lifecycle_check",
-      "relation": "password_reset",
-      "type": "c"
-    },
-    {
-      "definition": "PRIMARY KEY (id)",
-      "name": "password_reset_pkey",
-      "relation": "password_reset",
-      "type": "p"
-    },
-    {
-      "definition": "CHECK ((status = ANY (ARRAY['delivery_pending'::text, 'delivered'::text, 'delivery_failed'::text, 'consumed'::text, 'revoked'::text])))",
-      "name": "password_reset_status_check",
-      "relation": "password_reset",
-      "type": "c"
-    },
-    {
-      "definition": "CHECK ((octet_length(token_hash) = 32))",
-      "name": "password_reset_token_hash_check",
-      "relation": "password_reset",
-      "type": "c"
-    },
-    {
-      "definition": "UNIQUE (token_hash)",
-      "name": "password_reset_token_hash_key",
-      "relation": "password_reset",
-      "type": "u"
-    },
-    {
-      "definition": "FOREIGN KEY (user_id) REFERENCES auth.\"user\"(id) ON DELETE CASCADE",
-      "name": "password_reset_user_id_fkey",
-      "relation": "password_reset",
-      "type": "f"
-    },
-    {
       "definition": "UNIQUE (key)",
       "name": "ratelimit_key_key",
       "relation": "rateLimit",
@@ -1735,48 +1563,6 @@
       "name": "ratelimit_pkey",
       "relation": "rateLimit",
       "type": "p"
-    },
-    {
-      "definition": "CHECK (((email = lower(btrim(email))) AND (char_length(email) <= 254)))",
-      "name": "researcher_invitation_email_canonical_check",
-      "relation": "researcher_invitation",
-      "type": "c"
-    },
-    {
-      "definition": "CHECK ((((status = 'delivery_pending'::text) AND (delivered_at IS NULL) AND (terminal_at IS NULL) AND (user_id IS NULL)) OR ((status = 'replacement_pending'::text) AND (delivered_at IS NULL) AND (terminal_at IS NULL) AND (user_id IS NULL)) OR ((status = 'delivered'::text) AND (delivered_at IS NOT NULL) AND (terminal_at IS NULL) AND (user_id IS NULL)) OR ((status = ANY (ARRAY['delivery_failed'::text, 'revoked'::text])) AND (terminal_at IS NOT NULL) AND (user_id IS NULL)) OR ((status = 'consumed'::text) AND (delivered_at IS NOT NULL) AND (terminal_at IS NOT NULL) AND (user_id IS NOT NULL))))",
-      "name": "researcher_invitation_lifecycle_check",
-      "relation": "researcher_invitation",
-      "type": "c"
-    },
-    {
-      "definition": "PRIMARY KEY (id)",
-      "name": "researcher_invitation_pkey",
-      "relation": "researcher_invitation",
-      "type": "p"
-    },
-    {
-      "definition": "CHECK ((status = ANY (ARRAY['delivery_pending'::text, 'replacement_pending'::text, 'delivered'::text, 'delivery_failed'::text, 'consumed'::text, 'revoked'::text])))",
-      "name": "researcher_invitation_status_check",
-      "relation": "researcher_invitation",
-      "type": "c"
-    },
-    {
-      "definition": "CHECK ((octet_length(token_hash) = 32))",
-      "name": "researcher_invitation_token_hash_check",
-      "relation": "researcher_invitation",
-      "type": "c"
-    },
-    {
-      "definition": "UNIQUE (token_hash)",
-      "name": "researcher_invitation_token_hash_key",
-      "relation": "researcher_invitation",
-      "type": "u"
-    },
-    {
-      "definition": "FOREIGN KEY (user_id) REFERENCES auth.\"user\"(id) ON DELETE CASCADE",
-      "name": "researcher_invitation_user_id_fkey",
-      "relation": "researcher_invitation",
-      "type": "f"
     },
     {
       "definition": "PRIMARY KEY (singleton)",
@@ -1797,7 +1583,7 @@
       "type": "c"
     },
     {
-      "definition": "CHECK ((event = ANY (ARRAY['invitation_issued'::text, 'invitation_revoked'::text, 'invitation_accepted'::text, 'sign_in_succeeded'::text, 'sign_in_failed'::text, 'password_reset_requested'::text, 'password_reset_succeeded'::text, 'password_reset_failed'::text, 'password_changed'::text, 'sessions_revoked'::text, 'researcher_deactivated'::text, 'researcher_reactivated'::text, 'display_label_corrected'::text])))",
+      "definition": "CHECK ((event = ANY (ARRAY['sign_in_succeeded'::text, 'sign_in_failed'::text, 'sessions_revoked'::text, 'researcher_deactivated'::text, 'researcher_reactivated'::text, 'display_label_corrected'::text])))",
       "name": "security_audit_event_check",
       "relation": "security_audit",
       "type": "c"
@@ -2052,21 +1838,6 @@
       "relation": "operator_proof"
     },
     {
-      "definition": "CREATE UNIQUE INDEX password_reset_effective_user_id_uidx ON auth.password_reset USING btree (user_id) WHERE (status = ANY (ARRAY['delivery_pending'::text, 'delivered'::text]))",
-      "name": "password_reset_effective_user_id_uidx",
-      "relation": "password_reset"
-    },
-    {
-      "definition": "CREATE UNIQUE INDEX password_reset_pkey ON auth.password_reset USING btree (id)",
-      "name": "password_reset_pkey",
-      "relation": "password_reset"
-    },
-    {
-      "definition": "CREATE UNIQUE INDEX password_reset_token_hash_key ON auth.password_reset USING btree (token_hash)",
-      "name": "password_reset_token_hash_key",
-      "relation": "password_reset"
-    },
-    {
       "definition": "CREATE UNIQUE INDEX ratelimit_key_key ON auth.\"rateLimit\" USING btree (key)",
       "name": "ratelimit_key_key",
       "relation": "rateLimit"
@@ -2075,26 +1846,6 @@
       "definition": "CREATE UNIQUE INDEX ratelimit_pkey ON auth.\"rateLimit\" USING btree (id)",
       "name": "ratelimit_pkey",
       "relation": "rateLimit"
-    },
-    {
-      "definition": "CREATE UNIQUE INDEX researcher_invitation_effective_email_uidx ON auth.researcher_invitation USING btree (email) WHERE (status = ANY (ARRAY['delivery_pending'::text, 'delivered'::text]))",
-      "name": "researcher_invitation_effective_email_uidx",
-      "relation": "researcher_invitation"
-    },
-    {
-      "definition": "CREATE UNIQUE INDEX researcher_invitation_pkey ON auth.researcher_invitation USING btree (id)",
-      "name": "researcher_invitation_pkey",
-      "relation": "researcher_invitation"
-    },
-    {
-      "definition": "CREATE UNIQUE INDEX researcher_invitation_token_hash_key ON auth.researcher_invitation USING btree (token_hash)",
-      "name": "researcher_invitation_token_hash_key",
-      "relation": "researcher_invitation"
-    },
-    {
-      "definition": "CREATE INDEX researcher_invitation_user_id_idx ON auth.researcher_invitation USING btree (user_id)",
-      "name": "researcher_invitation_user_id_idx",
-      "relation": "researcher_invitation"
     },
     {
       "definition": "CREATE UNIQUE INDEX schema_contract_pkey ON auth.schema_contract USING btree (singleton)",
@@ -2250,23 +2001,7 @@
     {
       "forceRowSecurity": false,
       "kind": "r",
-      "name": "password_reset",
-      "owner": "thesistrace_owner",
-      "persistence": "p",
-      "rowSecurity": false
-    },
-    {
-      "forceRowSecurity": false,
-      "kind": "r",
       "name": "rateLimit",
-      "owner": "thesistrace_owner",
-      "persistence": "p",
-      "rowSecurity": false
-    },
-    {
-      "forceRowSecurity": false,
-      "kind": "r",
-      "name": "researcher_invitation",
       "owner": "thesistrace_owner",
       "persistence": "p",
       "rowSecurity": false

@@ -30,8 +30,8 @@ describe.sequential("daily Auth cleanup", () => {
       TRUNCATE
         auth.auth_secret_contract,
         auth.security_audit,
-        auth.password_reset,
-        auth.researcher_invitation,
+
+
         auth."rateLimit",
         auth."verification",
         auth."user"
@@ -45,46 +45,30 @@ describe.sequential("daily Auth cleanup", () => {
     await owner.end();
   });
 
-  it("retains current state, terminalizes expired grants, and deletes expired retention state", async () => {
+  it("retains current state and deletes expired retention state", async () => {
     await insertCleanupFixture();
 
     await expect(runAuthCleanup(runtimePool, () => fixedNow)).resolves.toEqual({
       deleted: {
         audits: 1,
-        invitations: 1,
         proofs: 1,
         oauthAccessTokens: 0,
         oauthRefreshTokens: 0,
         oauthAssertions: 0,
         rateLimits: 1,
-        resets: 1,
         sessions: 1,
         verifications: 1,
       },
-      revoked: { invitations: 1, resets: 1 },
       status: "completed",
     });
 
     expect(await retainedState()).toEqual({
       audits: 1,
-      invitationStatuses: ["delivered", "revoked"],
       proofs: 1,
       rateLimits: 1,
-      resetStatuses: ["delivered", "revoked"],
       sessions: 1,
       verifications: 1,
     });
-    expect(
-      await owner.query<{ terminal_at: Date }>(`
-        SELECT terminal_at
-        FROM auth.researcher_invitation
-        WHERE status = 'revoked'
-        UNION ALL
-        SELECT terminal_at
-        FROM auth.password_reset
-        WHERE status = 'revoked'
-      `),
-    ).toMatchObject({ rows: [{ terminal_at: fixedNow }, { terminal_at: fixedNow }] });
   });
 
   it("skips immediately while another Auth process owns the cleanup lock", async () => {
@@ -108,7 +92,6 @@ describe.sequential("daily Auth cleanup", () => {
 async function insertCleanupFixture(): Promise<void> {
   const oldAudit = new Date(fixedNow.getTime() - 181 * DAY_MS);
   const currentAudit = new Date(fixedNow.getTime() - 179 * DAY_MS);
-  const oldTerminal = new Date(fixedNow.getTime() - 31 * DAY_MS);
   const expired = new Date(fixedNow.getTime() - 1);
   const current = new Date(fixedNow.getTime() + DAY_MS);
   await owner.query(
@@ -135,30 +118,6 @@ async function insertCleanupFixture(): Promise<void> {
   );
   await owner.query(
     `
-      INSERT INTO auth.researcher_invitation (
-        id, email, token_hash, status, expires_at, created_at, delivered_at, terminal_at
-      )
-      VALUES
-        ('00000000-0000-4000-8000-000000000021', 'old@example.com', decode(repeat('11', 32), 'hex'), 'revoked', $1, $2, NULL, $2),
-        ('00000000-0000-4000-8000-000000000022', 'expired@example.com', decode(repeat('22', 32), 'hex'), 'delivered', $3, $2, $2, NULL),
-        ('00000000-0000-4000-8000-000000000023', 'current@example.com', decode(repeat('33', 32), 'hex'), 'delivered', $4, $2, $2, NULL)
-    `,
-    [expired, oldTerminal, expired, current],
-  );
-  await owner.query(
-    `
-      INSERT INTO auth.password_reset (
-        id, user_id, token_hash, status, expires_at, created_at, delivered_at, terminal_at
-      )
-      VALUES
-        ('00000000-0000-4000-8000-000000000031', '00000000-0000-4000-8000-000000000001', decode(repeat('44', 32), 'hex'), 'revoked', $1, $2, NULL, $2),
-        ('00000000-0000-4000-8000-000000000032', '00000000-0000-4000-8000-000000000001', decode(repeat('55', 32), 'hex'), 'delivered', $3, $2, $2, NULL),
-        ('00000000-0000-4000-8000-000000000033', '00000000-0000-4000-8000-000000000002', decode(repeat('66', 32), 'hex'), 'delivered', $4, $2, $2, NULL)
-    `,
-    [expired, oldTerminal, expired, current],
-  );
-  await owner.query(
-    `
       INSERT INTO auth."session" (
         id, "expiresAt", token, "createdAt", "updatedAt", "userId"
       )
@@ -175,8 +134,8 @@ async function insertCleanupFixture(): Promise<void> {
         expires_at, created_at
       )
       VALUES
-        ('00000000-0000-4000-8000-000000000071', decode(repeat('77', 32), 'hex'), '00000000-0000-4000-8000-000000000042', 'invitation.issue', decode(repeat('78', 32), 'hex'), 'available', $1, $2),
-        ('00000000-0000-4000-8000-000000000072', decode(repeat('88', 32), 'hex'), '00000000-0000-4000-8000-000000000042', 'invitation.reissue', decode(repeat('89', 32), 'hex'), 'available', $3, $2)
+        ('00000000-0000-4000-8000-000000000071', decode(repeat('77', 32), 'hex'), '00000000-0000-4000-8000-000000000042', 'researcher.sessions.revoke', decode(repeat('78', 32), 'hex'), 'available', $1, $2),
+        ('00000000-0000-4000-8000-000000000072', decode(repeat('88', 32), 'hex'), '00000000-0000-4000-8000-000000000042', 'researcher.sessions.revoke', decode(repeat('89', 32), 'hex'), 'available', $3, $2)
     `,
     [expired, new Date(fixedNow.getTime() - DAY_MS), current],
   );
@@ -204,28 +163,24 @@ async function insertCleanupFixture(): Promise<void> {
 
 async function retainedState(): Promise<{
   audits: number;
-  invitationStatuses: string[];
   proofs: number;
   rateLimits: number;
-  resetStatuses: string[];
   sessions: number;
   verifications: number;
 }> {
   const result = await owner.query<{
     audits: string;
-    invitation_statuses: string[];
     proofs: string;
     rate_limits: string;
-    reset_statuses: string[];
     sessions: string;
     verifications: string;
   }>(`
     SELECT
       (SELECT count(*) FROM auth.security_audit) AS audits,
-      (SELECT array_agg(status ORDER BY status) FROM auth.researcher_invitation) AS invitation_statuses,
+
       (SELECT count(*) FROM auth.operator_proof) AS proofs,
       (SELECT count(*) FROM auth."rateLimit") AS rate_limits,
-      (SELECT array_agg(status ORDER BY status) FROM auth.password_reset) AS reset_statuses,
+
       (SELECT count(*) FROM auth."session") AS sessions,
       (SELECT count(*) FROM auth."verification") AS verifications
   `);
@@ -235,10 +190,8 @@ async function retainedState(): Promise<{
   }
   return {
     audits: Number(row.audits),
-    invitationStatuses: row.invitation_statuses,
     proofs: Number(row.proofs),
     rateLimits: Number(row.rate_limits),
-    resetStatuses: row.reset_statuses,
     sessions: Number(row.sessions),
     verifications: Number(row.verifications),
   };

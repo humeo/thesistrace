@@ -8,7 +8,6 @@ import {
 export { OperatorCursorInvalidError } from "./operator-cursor.js";
 
 const PAGE_SIZE = 50;
-const TERMINAL_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 const researcherIdSchema = z.uuid();
 
 export type OperatorPrincipal = Readonly<{
@@ -16,32 +15,11 @@ export type OperatorPrincipal = Readonly<{
   sessionId: string;
 }>;
 
-type InvitationStatus =
-  | "consumed"
-  | "delivered"
-  | "delivery_failed"
-  | "delivery_pending"
-  | "expired"
-  | "revoked";
-
-export type OperatorInvitationSummary = Readonly<{
-  createdAt: string;
-  deliveredAt: string | null;
-  effective: boolean;
-  email: string;
-  expiresAt: string;
-  id: string;
-  researcherId: string | null;
-  status: InvitationStatus;
-  terminalAt: string | null;
-}>;
-
 export type OperatorResearcherSummary = Readonly<{
   active: boolean;
   createdAt: string;
   currentSessionCount: number;
   displayLabel: string;
-  effectiveInvitation: OperatorInvitationSummary | null;
   email: string;
   id: string;
   latestSuccessfulLoginAt: string | null;
@@ -81,27 +59,10 @@ type ResearcherRow = Readonly<{
   active: boolean;
   created_at: Date;
   current_session_count: string;
-  effective_created_at: Date | null;
-  effective_delivered_at: Date | null;
-  effective_email: string | null;
-  effective_expires_at: Date | null;
-  effective_id: string | null;
-  effective_status: InvitationStatus | null;
   email: string;
   id: string;
   latest_successful_login_at: Date | null;
   name: string;
-}>;
-
-type InvitationRow = Readonly<{
-  created_at: Date;
-  delivered_at: Date | null;
-  email: string;
-  expires_at: Date;
-  id: string;
-  researcher_id: string | null;
-  status: InvitationStatus;
-  terminal_at: Date | null;
 }>;
 
 export class OperatorDirectoryService {
@@ -152,13 +113,7 @@ export class OperatorDirectoryService {
             researcher.id,
             researcher.name,
             latest_login.latest_successful_login_at,
-            current_sessions.current_session_count,
-            effective_invitation.created_at AS effective_created_at,
-            effective_invitation.delivered_at AS effective_delivered_at,
-            effective_invitation.email AS effective_email,
-            effective_invitation.expires_at AS effective_expires_at,
-            effective_invitation.id AS effective_id,
-            effective_invitation.status AS effective_status
+            current_sessions.current_session_count
           FROM auth."user" AS researcher
           LEFT JOIN LATERAL (
             SELECT pg_catalog.max(audit.occurred_at) AS latest_successful_login_at
@@ -173,21 +128,6 @@ export class OperatorDirectoryService {
             WHERE login_session."userId" = researcher.id
               AND login_session."expiresAt" > $5
           ) AS current_sessions ON TRUE
-          LEFT JOIN LATERAL (
-            SELECT
-              invitation.created_at,
-              invitation.delivered_at,
-              invitation.email,
-              invitation.expires_at,
-              invitation.id,
-              invitation.status
-            FROM auth.researcher_invitation AS invitation
-            WHERE invitation.email = researcher.email
-              AND invitation.status IN ('delivery_pending', 'delivered')
-              AND invitation.expires_at > $5
-            ORDER BY invitation.created_at DESC, invitation.id DESC
-            LIMIT 1
-          ) AS effective_invitation ON TRUE
           WHERE (
             $1::text IS NULL
             OR pg_catalog.lower(researcher.email) LIKE $2 ESCAPE '\\'
@@ -205,84 +145,13 @@ export class OperatorDirectoryService {
       );
       const pageRows = result.rows.slice(0, PAGE_SIZE);
       return {
-        items: pageRows.map((row) => researcherSummary(row, now)),
+        items: pageRows.map((row) => researcherSummary(row)),
         nextCursor:
           result.rows.length > PAGE_SIZE && pageRows[PAGE_SIZE - 1] !== undefined
             ? this.#cursor.encode(
                 "researchers",
                 pageRows[PAGE_SIZE - 1],
                 search,
-              )
-            : null,
-      };
-    });
-  }
-
-  async listInvitations(
-    principal: OperatorPrincipal,
-    input: Readonly<{ cursor: string | null }>,
-  ): Promise<OperatorPage<OperatorInvitationSummary>> {
-    const after = this.#cursor.decode(input.cursor, "invitations", null);
-    return await this.#authorizedRead(principal, async (client, now) => {
-      const result = await client.query<InvitationRow>(
-        `
-          SELECT
-            invitation.created_at,
-            invitation.delivered_at,
-            invitation.email,
-            invitation.expires_at,
-            invitation.id,
-            COALESCE(invitation.user_id, researcher.id)
-              AS researcher_id,
-            CASE
-              WHEN invitation.status IN ('delivery_pending', 'delivered')
-                AND invitation.expires_at <= $4
-                THEN 'expired'
-              ELSE invitation.status
-            END AS status,
-            CASE
-              WHEN invitation.status IN ('delivery_pending', 'delivered')
-                AND invitation.expires_at <= $4
-                THEN invitation.expires_at
-              ELSE invitation.terminal_at
-            END AS terminal_at
-          FROM auth.researcher_invitation AS invitation
-          LEFT JOIN auth."user" AS researcher
-            ON researcher.email = invitation.email
-          WHERE (
-            (
-              invitation.status IN ('delivery_pending', 'delivered')
-              AND invitation.expires_at >= $3
-            )
-            OR (
-              invitation.status IN ('delivery_failed', 'consumed', 'revoked')
-              AND invitation.terminal_at >= $3
-            )
-          )
-            AND (
-              $1::timestamptz IS NULL
-              OR invitation.created_at < $1
-              OR (invitation.created_at = $1 AND invitation.id < $2)
-            )
-          ORDER BY invitation.created_at DESC, invitation.id DESC
-          LIMIT 51
-        `,
-        [
-          after?.createdAt ?? null,
-          after?.id ?? null,
-          new Date(now.getTime() - TERMINAL_RETENTION_MS),
-          now,
-        ],
-      );
-      const pageRows = result.rows.slice(0, PAGE_SIZE);
-      return {
-        items: pageRows.map((row) => invitationSummary(row, now)),
-        nextCursor:
-          result.rows.length > PAGE_SIZE && pageRows[PAGE_SIZE - 1] !== undefined
-            ? this.#cursor.encode(
-                "invitations",
-                pageRows[PAGE_SIZE - 1],
-                null,
               )
             : null,
       };
@@ -358,25 +227,12 @@ function escapeLike(value: string): string {
     .replaceAll("_", "\\_");
 }
 
-function researcherSummary(row: ResearcherRow, now: Date): OperatorResearcherSummary {
-  const effectiveInvitation = row.effective_id === null
-    ? null
-    : invitationSummary({
-        created_at: requiredDate(row.effective_created_at),
-        delivered_at: row.effective_delivered_at,
-        email: requiredString(row.effective_email),
-        expires_at: requiredDate(row.effective_expires_at),
-        id: row.effective_id,
-        researcher_id: row.id,
-        status: requiredInvitationStatus(row.effective_status),
-        terminal_at: null,
-      }, now);
+function researcherSummary(row: ResearcherRow): OperatorResearcherSummary {
   return {
     active: row.active,
     createdAt: isoDate(row.created_at),
     currentSessionCount: Number(row.current_session_count),
     displayLabel: row.name,
-    effectiveInvitation,
     email: row.email,
     id: row.id,
     latestSuccessfulLoginAt:
@@ -386,40 +242,9 @@ function researcherSummary(row: ResearcherRow, now: Date): OperatorResearcherSum
   };
 }
 
-function invitationSummary(row: InvitationRow, now: Date): OperatorInvitationSummary {
-  return {
-    createdAt: isoDate(row.created_at),
-    deliveredAt: row.delivered_at === null ? null : isoDate(row.delivered_at),
-    effective:
-      (row.status === "delivery_pending" || row.status === "delivered")
-      && row.expires_at.getTime() > now.getTime(),
-    email: row.email,
-    expiresAt: isoDate(row.expires_at),
-    id: row.id,
-    researcherId: row.researcher_id,
-    status: row.status,
-    terminalAt: row.terminal_at === null ? null : isoDate(row.terminal_at),
-  };
-}
-
 function isoDate(value: Date): string {
   if (!(value instanceof Date) || !Number.isFinite(value.getTime())) {
     throw new Error("OPERATOR_DIRECTORY_ROW_INVALID");
   }
   return value.toISOString();
-}
-
-function requiredDate(value: Date | null): Date {
-  if (value === null) throw new Error("OPERATOR_DIRECTORY_ROW_INVALID");
-  return value;
-}
-
-function requiredString(value: string | null): string {
-  if (value === null) throw new Error("OPERATOR_DIRECTORY_ROW_INVALID");
-  return value;
-}
-
-function requiredInvitationStatus(value: InvitationStatus | null): InvitationStatus {
-  if (value === null) throw new Error("OPERATOR_DIRECTORY_ROW_INVALID");
-  return value;
 }

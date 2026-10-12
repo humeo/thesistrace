@@ -6,7 +6,7 @@ export function initialInterfaceLocale(
   storage: Pick<Storage, "getItem"> | null,
 ): InterfaceLocale {
   const query = new URLSearchParams(location.search);
-  if (["/", "/login", "/accept-invitation"].includes(location.pathname) && !query.has("sig")) {
+  if (["/", "/login"].includes(location.pathname) && !query.has("sig")) {
     const explicit = query.get("lang");
     if (explicit === "zh") return "zh-CN";
     if (explicit === "en") return "en";

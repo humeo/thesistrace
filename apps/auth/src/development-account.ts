@@ -1,12 +1,10 @@
-import { hashPassword } from "better-auth/crypto";
 import type { Pool } from "pg";
 import type { DevelopmentAccountSettings } from "./config.js";
 
-/** Seed only a new Development identity; restarts preserve password and authority changes. */
+/** Seed only a new Development identity; restarts preserve identity and authority changes. */
 export async function initializeDevelopmentAccount(
   pool: Pool, settings: DevelopmentAccountSettings,
 ): Promise<void> {
-  const password = await hashPassword(settings.password);
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -18,12 +16,6 @@ export async function initializeDevelopmentAccount(
     );
     const user = created.rows[0];
     if (user !== undefined) {
-      await client.query(
-        `INSERT INTO auth."account"
-           (issuer, "accountId", "providerId", "userId", password, "updatedAt")
-         VALUES ('local:credential', $1::text, 'credential', $1::uuid, $2, CURRENT_TIMESTAMP)`,
-        [user.id, password],
-      );
       await client.query(
         `INSERT INTO auth.operator_assignment (singleton, researcher_id)
          VALUES (TRUE, $1) ON CONFLICT (singleton) DO NOTHING`,

@@ -90,7 +90,7 @@ headers.
 PostgreSQL Core schemas store Research Ownership, product lifecycle state,
 action receipts, attempts, data operation state, pins, and publication
 manifests. The independent `auth` schema stores identity, credentials, Login
-Sessions, invitations, verification records, rate limits, and security audit
+Sessions, verification records, rate limits, and security audit
 records. RustFS stores immutable ResearchRun and DailyTrack publication bytes.
 The mounted Canonical Data Store contains the current Dataset Head and
 immutable-while-referenced Data Generation files. No runtime downloads data
@@ -123,35 +123,16 @@ recovery, and every 12 hours while active so Better Auth can refresh both its
 database Session and browser Cookie. FastAPI's private verification disables
 refresh and never forwards `Set-Cookie`.
 
-### Email verification, optional invitations and provisioning
+### Email verification and provisioning
 
 Public access uses email OTP: the first successful verification creates a
 Researcher, and later verification authenticates the same canonical email.
-There is no invitation prerequisite and no separate public signup form.
+This is the sole registration and login path. The initial display label is
+derived from the complete canonical email local-part; it is not a verified
+human name. There is no separate signup form, invitation acceptance, or
+password credential provisioning.
 
-Operator-issued Researcher Invitations remain an optional provisioning path.
-The Operator issues at most one effective
-48-hour Researcher Invitation for one lowercase trimmed email through a private
-Auth command. Invitation delivery uses the existing Resend API directly and is
-usable only after Resend accepts the message; reissue revokes the preceding
-Invitation, and an existing Researcher email cannot be invited again.
-
-The email carries 32 cryptographically random bytes only in the URL fragment.
-The browser removes the fragment from visible history before submitting the
-token over HTTPS, while PostgreSQL stores only its SHA-256 hash. The acceptance
-form displays the bound email read-only and requests only a 12-through-128
-character password plus confirmation. Better Auth's required `name` is derived
-from the complete canonical email local-part as an initial display label, not a
-verified human name, and invitation proof marks the email verified.
-
-The invitation acceptance operation validates the Invitation and bound email
-before creating a unique User and scrypt credential through private Auth calls.
-It creates a Login Session on success and conditionally consumes the Invitation. Duplicate
-tabs, retries, and a response lost after User creation converge on the existing
-User and consumed Invitation; they never replace a password or create a second
-User.
-
-After successful email verification or invitation acceptance, the browser
+After successful email verification, the browser
 invokes idempotent
 `POST /api/researcher/bootstrap`. Core creates the Researcher and that
 Researcher's Default and Batch Research system Folders in one transaction. A
@@ -170,13 +151,11 @@ offers no Remember Me switch.
 
 Ordinary logout revokes only the current Session. Public sign-in uses email
 OTP; password sign-in, password change and recovery are not public product
-flows. Optional invitation acceptance still provisions a credential privately,
-without opening general email/password signup or changing the normal OTP login
-path. Operator confirmations use the exact-action proof policy in ADR-0241;
-sign-in codes do not authorize separate invitation or session-revocation actions.
+flows. Better Auth email/password authentication is disabled. Operator confirmations use the exact-action proof policy in ADR-0241;
+sign-in codes do not authorize separate session-revocation actions.
 
 Researcher Deactivation is reversible access revocation, not deletion or work
-cancellation. It revokes active Sessions and outstanding reset tokens, but
+cancellation. It revokes active Sessions and MCP access, but
 already admitted ResearchRuns and Research Batches may finish and active
 DailyTracks continue future Tracking Advances. Workers never call Auth or test
 Researcher active state. A request that passed Session verification before the
@@ -185,8 +164,7 @@ commit fails. Reactivation restores no Session.
 
 Routine access administration is available through the Operator Console.
 Operator Assignment and transfer remain deployment-private.
-Separate private commands also invite,
-reissue, deactivate, reactivate, revoke Sessions, and correct the initial
+Separate private commands deactivate, reactivate, revoke Sessions, and correct the initial
 display label; each emits one structured stdout result and safe operational
 events on stderr without printing a token or full link. The deactivation
 workflow reports the Researcher's active DailyTrack count by composing a
@@ -225,7 +203,7 @@ DELETE requests and JSON content type on body-bearing writes. The browser uses
 one origin, so Core and Auth expose no browser CORS policy.
 
 Better Auth rate limiting is explicit in every environment and persists in
-PostgreSQL, with stricter invitation, sign-in, and reset rules and no Redis.
+PostgreSQL, with stricter email-code and sign-in rules and no Redis.
 Caddy is the only source of the client-IP header trusted by Auth. Missing or
 placeholder Auth secret, public origin, Resend key, database role, or schema
 contract terminates Auth startup rather than weakening a check or partially
@@ -234,7 +212,7 @@ serving authentication.
 Production stores `BETTER_AUTH_SECRET`, database passwords, and the Resend key
 in one repository-external root-owned mode-0600 environment file. The single
 Auth secret has no compatibility key ring: a hard rotation invalidates every
-Session, Invitation, and reset token. No secret or generated token is written
+Session, email verification code, and MCP authorization token. No secret or generated token is written
 to Compose configuration, source control, stdout, or an operator result.
 
 Caddy applies a strict self-only script policy without unsafe inline script or
@@ -289,13 +267,15 @@ Auth never trusts a browser-supplied forwarding chain. Cookies, authorization
 headers, request and response bodies, passwords, tokens, email links, raw
 unknown emails, object keys, and Formulae are never logged.
 
-Auth owns one durable security-audit table for Invitation issue, revoke, and
-accept; sign-in success and failure; password reset and change; Session revoke;
-and Researcher deactivate and reactivate. Known Researchers are referenced by
-ID, while unknown-email events use a keyed HMAC rather than storing the email.
-Audit records retain 180 days. Terminal Invitation and reset records retain 30
-days; expired Sessions and rate-limit rows are cleaned daily by the Auth process
-under a PostgreSQL advisory lock, without Redis, Cron, or a generic scheduler.
+Auth owns one durable security-audit table for sign-in success and failure,
+Session revocation, Researcher deactivation and reactivation, and display-label
+correction. Known Researchers are referenced by ID; unknown-email events use
+a keyed HMAC. Audit records retain 180 days. Expired Sessions, one-time codes,
+proofs and stale rate-limit rows are cleaned daily under a PostgreSQL advisory
+lock. Retired invitation and password-reset records are preserved in an
+owner-only archive by the explicit Auth migration described in
+[database migrations](../database-migrations.md#auth-0002-email-only-identity).
+
 
 `GET /health/live` is a dependency-free process check and remains the API
 restart probe. `GET /health/ready` independently probes PostgreSQL, RustFS, and
@@ -739,7 +719,6 @@ The browser route boundary is:
 ```text
 /
 /login
-/accept-invitation
 
 /chat
 /data
@@ -756,12 +735,11 @@ The browser route boundary is:
 /operator/data
 ```
 
-Root serves the public landing page. `/login` and `/accept-invitation` are
-the two public Auth routes; there is no separate `/signup`, password-recovery
+Root serves the public landing page. `/login` is the public Auth route; there is no separate `/signup`, password-recovery
 or reset page. A protected direct path is retained only as a validated
 same-origin relative `returnTo`, and authenticated entry through an Auth route
 continues there or to `/data`. The lightweight router includes pathname, search
-and hash so Invitation fragments can be removed before routing continues.
+and hash for product navigation.
 
 One Auth provider and Session gate protect all Research pages. A shared Core
 request client treats `401` as Session loss and stops polling before redirecting
