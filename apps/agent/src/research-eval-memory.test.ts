@@ -48,15 +48,48 @@ function implicitFirstStep(...groups: MastraDBMessage[][]): MastraDBMessage {
 }
 
 describe("content-free native Memory outcome oracle", () => {
+  it("checks the actual global ranking and threshold units independently of prose", () => {
+    const ids = Array.from({ length: 10 }, (_, index) => `run_${index.toString(16).padStart(20, "0")}`);
+    const expectation: ResearchEvalMemoryExpectation = { kind: "query-ranking", run_ids: ids };
+    const args = { limit: 10, research_kind: "strategy_backtest", status: "succeeded", sort_by: "sharpe",
+      sort_direction: "descending", metric_filters: [
+        { metric: "sharpe", operator: "gte", value: 1 },
+        { metric: "maximum_drawdown", operator: "lte", value: 0.2 },
+      ] };
+    const output = { items: ids.map(id => ({ id })) };
+    const queried = (input = args, result = output) => message(1, "list_research_runs", input, result);
+    const presented = message(2, "render_a2ui", { view: "research_runs", runIds: ids }, { ok: true });
+    expect(facts([queried(), presented], expectation)).toMatchObject({
+      ranked_results_inspected: true, ranked_results_presented: true,
+    });
+    const paged = [
+      message(1, "list_research_runs", { ...args, limit: 5 }, { items: output.items.slice(0, 5), next_cursor: "second" }),
+      message(2, "list_research_runs", { ...args, limit: 5, cursor: "second" }, { items: output.items.slice(5), next_cursor: "remaining" }),
+    ];
+    expect(facts(paged, expectation).ranked_results_inspected).toBe(true);
+    expect(facts([...paged, message(3, "list_research_runs", { ...args, cursor: "remaining" },
+      { items: [{ id: "run_ffffffffffffffffffff" }], next_cursor: null })], expectation)
+      .ranked_results_inspected).toBe(false);
+    expect(facts([queried({ ...args, limit: 50 })], expectation).ranked_results_inspected).toBe(true);
+    expect(facts([queried({ ...args, limit: 50 }, { items: [...output.items, { id: "run_ffffffffffffffffffff" }] })],
+      expectation).ranked_results_inspected).toBe(false);
+    expect(facts([queried(args, { items: [...output.items].reverse() })], expectation)
+      .ranked_results_inspected).toBe(false);
+    expect(facts([queried({ ...args, metric_filters: [args.metric_filters[0]!,
+      { metric: "maximum_drawdown", operator: "lte", value: 20 }] })], expectation)
+      .ranked_results_inspected).toBe(false);
+    expect(facts([queried({ ...args, status: "running" })], expectation)
+      .ranked_results_inspected).toBe(false);
+  });
   it("distinguishes invalid-to-valid Formula correction from two already-valid diagnoses", () => {
-    expect(facts([bad(), good(), accepted()], formula)).toEqual({ formula_corrected: true, admission_corrected: false, unresolved_admission_rejection: false, batch_results_inspected: false });
+    expect(facts([bad(), good(), accepted()], formula)).toEqual({ formula_corrected: true, admission_corrected: false, unresolved_admission_rejection: false, batch_results_inspected: false, ranked_results_inspected: false, ranked_results_presented: false });
     for (const history of [[good(), good(), accepted()], [good(), bad(), accepted()], [accepted(), bad(), good()], [bad(), good()]]) {
       expect(facts(history, formula).formula_corrected).toBe(false);
     }
     expect(facts([bad(), good(), accepted({ formula: "-rank(close)" })], formula).formula_corrected).toBe(false);
   });
   it("requires real warmup rejection followed by a revised idempotency key and unchanged research", () => {
-    expect(facts([rejected(), accepted()], admission)).toEqual({ formula_corrected: false, admission_corrected: true, unresolved_admission_rejection: false, batch_results_inspected: false });
+    expect(facts([rejected(), accepted()], admission)).toEqual({ formula_corrected: false, admission_corrected: true, unresolved_admission_rejection: false, batch_results_inspected: false, ranked_results_inspected: false, ranked_results_presented: false });
     for (const history of [
       [accepted()], [accepted(), rejected()], [bad(), good(), accepted()],
       [rejected({}, "FOLDER_NOT_FOUND"), accepted()],
@@ -126,7 +159,7 @@ describe("content-free native Memory outcome oracle", () => {
       [first(), resultRead(2, childIds[1]!, { isError: true })],
       [first(), pending(second())],
       [first(), message(2, "get_research_run_result", { run_id: childIds[1], section: "factor" }, { outcome: "completed" })],
-    ]) expect(facts(history, expectation)).toMatchObject({ batch_results_inspected: false });
+    ]) expect(facts(history, expectation)).toMatchObject({ batch_results_inspected: false, ranked_results_inspected: false, ranked_results_presented: false });
     for (const history of [[first(), second()], [second(), first()], [steps([first(), second()])]]) {
       expect(facts(history, expectation)).toMatchObject({ batch_results_inspected: true });
       expect(JSON.stringify(facts(history, expectation))).not.toContain("private-eval-canary");

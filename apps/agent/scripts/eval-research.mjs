@@ -48,7 +48,7 @@ const [
 ] = runtimeModules;
 const {
   ResearchEvalError, evalBatchWorkerFailure, evalFailureSource, evalRunSchema, evalStartupRegistry, evalToolCapabilities,
-  maximumEvalTurnCostUsd, maximumTitleCostUsd, parseResearchEvalCandidates,
+  maximumTitleCostUsd, parseResearchEvalCandidates,
   parseResearchEvalCorpus, readResearchEvalControls, researchEvalPasses, researchEvalRepetitions, summarizeResearchEval,
   usageCostUsd, validateEvalObservation,
 } = evalRuntime;
@@ -61,6 +61,7 @@ const {
   RESEARCH_EVAL_TURN_OBSERVATION_MS,
   requestResearchEvalTurn,
   researchEvalConversationMeetsOutcome,
+  researchEvalRankingTableMatches,
   researchEvalToolRetryCount,
   unresolvedResearchEvalToolFailure,
 } = evalStreamRuntime;
@@ -82,7 +83,8 @@ try {
   const registryValue = evalStartupRegistry(candidate, effort);
   const registry = readModelRegistry(JSON.stringify(registryValue), process.env);
   const selected = new RegisteredModelRuntime(registry).resolve(candidate.key, effort);
-  const controls = readResearchEvalControls(candidate, process.env.THESISTRACE_AGENT_EVAL_PHASE, process.env.THESISTRACE_AGENT_EVAL_SPEND_LIMIT_USD);
+  const controls = readResearchEvalControls(candidate, process.env.THESISTRACE_AGENT_EVAL_PHASE, process.env.THESISTRACE_AGENT_EVAL_SPEND_LIMIT_USD,
+    process.env.THESISTRACE_AGENT_EVAL_CASE_IDS === "global-strategy-top-ten" ? 1 : undefined);
   if (process.argv.length !== 3 || !["configure", "run"].includes(process.argv[2])) throw new ResearchEvalError("CONFIG_INVALID");
   if (process.argv[2] === "configure") {
     process.stdout.write(`${JSON.stringify(registryValue)}\n`);
@@ -120,9 +122,17 @@ function readOpenAIBaseUrl() {
   return value;
 }
 
-async function evaluate({ candidate, candidateBytes, repetitions, effort, registryValue, providerBaseUrl, providerOptions, phase, budget }) {
+async function evaluate({ candidate, candidateBytes, repetitions, effort, registryValue, providerBaseUrl, providerOptions, phase, budget, turnCostReserveUsd }) {
   const corpusBytes = await readFile(new URL("../evals/research-corpus.json", import.meta.url));
-  const corpus = parseResearchEvalCorpus(JSON.parse(corpusBytes));
+  let corpus = parseResearchEvalCorpus(JSON.parse(corpusBytes));
+  const selectedIds = process.env.THESISTRACE_AGENT_EVAL_CASE_IDS?.split(",");
+  if (selectedIds !== undefined) {
+    if (!selectedIds.length || new Set(selectedIds).size !== selectedIds.length
+      || selectedIds.some(id => !corpus.cases.some(item => item.id === id))) {
+      throw new ResearchEvalError("CONFIG_INVALID");
+    }
+    corpus = { ...corpus, cases: corpus.cases.filter(item => selectedIds.includes(item.id)) };
+  }
   project = required("THESISTRACE_TEST_PROJECT_NAME");
   if (!/^thesistrace-test-[0-9]{8}t[0-9]{6}z-[0-9]+-[0-9a-f]{8}$/.test(project)) throw new ResearchEvalError("CONFIG_INVALID");
   const origin = required("THESISTRACE_TEST_WEB_ORIGIN");
@@ -148,7 +158,7 @@ async function evaluate({ candidate, candidateBytes, repetitions, effort, regist
   const fixtureBytes = await readFile(new URL("tests/fixtures/tushare-financial-product-replay.json", repo));
   const setupDigest = digest(Buffer.concat(await Promise.all([
     "tests/e2e/support/prepare_current_data.py", "tests/fixtures/tushare-financial-capability.json",
-    "tests/e2e/support/research_eval_formula.py", "apps/agent/scripts/eval-research.mjs", "pnpm-lock.yaml",
+    "tests/e2e/support/research_eval_formula.py", "tests/e2e/support/research_query_fixture.py", "apps/agent/scripts/eval-research.mjs", "pnpm-lock.yaml",
   ].map((path) => readFile(new URL(path, repo))))));
   const peer = await provision(origin, "peer");
   const data = await json(peer, "/api/data");
@@ -166,7 +176,7 @@ async function evaluate({ candidate, candidateBytes, repetitions, effort, regist
       // Reserve every possible step at the Provider input ceiling before a
       // paid turn. Unknown accounting halts the entire evaluation, never a
       // fake zero followed by additional paid work.
-      if (spending + maximumEvalTurnCostUsd(candidate) * testCase.messages.length > budget) {
+      if (spending + turnCostReserveUsd * testCase.messages.length > budget) {
         halted = "budget";
         break outer;
       }
@@ -181,6 +191,15 @@ async function evaluate({ candidate, candidateBytes, repetitions, effort, regist
       try {
         const researcher = await provision(origin, `${testCase.id}-${repetition}`);
         fixture = await prepareFixture(researcher, testCase, corpus);
+        if (Number.isFinite(turnCostReserveUsd)) {
+          const policy = JSON.parse(docker(["exec", `${project}-auth-1`, "node", "--input-type=module", "--eval",
+            `const r=await fetch('http://127.0.0.1:8200/internal/researchers/${researcher.id}/quota-policy'); if(!r.ok)process.exit(2);console.log(JSON.stringify(await r.json()));`]));
+          const day = new Intl.DateTimeFormat("en-CA", { timeZone: policy.timezone, year: "numeric", month: "2-digit", day: "2-digit" });
+          if (policy.daily_model_budget_nanodollars !== turnCostReserveUsd * 1e9
+            || day.format(Date.now()) !== day.format(Date.now() + (Number(process.env.THESISTRACE_AGENT_RUN_MAX_WALL_SECONDS) + 180) * 1000)) {
+            throw new ResearchEvalError("CONFIG_INVALID");
+          }
+        }
         caseStarted = performance.now();
         let pendingInterrupt = null;
         let currentRunId = null;
@@ -224,7 +243,7 @@ async function evaluate({ candidate, candidateBytes, repetitions, effort, regist
           if (stream.failure !== null) break;
           if (pendingInterrupt !== null && turn + 1 >= testCase.messages.length) break;
         }
-        artifact = await checkArtifact(researcher, testCase, fixture, corpus, threadId);
+        artifact = await checkArtifact(researcher, testCase, fixture, corpus, threadId, streams.at(-1)?.text ?? "");
         fixtureFailed = artifact.workerFailure === true;
         ownership = await artifactsArePrivate(peer, artifact.ids);
         const foreignChat = await request(peer, `/api/agent/sessions/${threadId}`);
@@ -289,7 +308,7 @@ async function evaluate({ candidate, candidateBytes, repetitions, effort, regist
     const qualified = phase === "qualification" && halted === null && reasoningProven && researchEvalPasses(summary, candidate);
     const report = {
       kind: "research-agent-eval", phase, qualified, halted, started_at: started,
-      corpus_version: corpus.version, corpus_sha256: digest(corpusBytes), candidates_sha256: digest(candidateBytes),
+      case_ids: corpus.cases.map(item => item.id), corpus_version: corpus.version, corpus_sha256: digest(corpusBytes), candidates_sha256: digest(candidateBytes),
       dataset: corpus.dataset, dataset_fixture_sha256: digest(fixtureBytes), evaluation_setup_sha256: setupDigest, clock_window: corpus.clock_window,
       git_revision: revision, tracked_source_diff_sha256: sourceDigest, images,
       model_key: candidate.key, provider_adapter: candidate.provider_adapter, provider_model_id: candidate.provider_model_id,
@@ -307,7 +326,7 @@ async function evaluate({ candidate, candidateBytes, repetitions, effort, regist
     report.observations = observations.map(validateEvalObservation);
     await writeFile(resolve(evidence, "research-agent-eval.json"), `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
     const rows = summary.case_rates.map((item) => `| ${item.case_id} | ${item.attempts}/${repetitions} | ${(item.success_rate * 100).toFixed(1)}% |`).join("\n");
-    await writeFile(resolve(evidence, "research-agent-eval.md"), `# Research Agent real-model evaluation\n\n${phase}; ${candidate.key} / ${effort}; qualified: ${qualified}.\n\nCorpus ${corpus.version}, ${summary.observed_cases}/${summary.expected_cases} cases.\n\nSuccess ${(summary.task_success_rate * 100).toFixed(1)}%; P95 ${summary.duration_p95_ms} ms; primary cost upper bound ${summary.estimated_primary_cost_usd === null ? "unreported" : `$${summary.estimated_primary_cost_usd.toFixed(6)}`}; separate title cost upper bound $${summary.title_cost_upper_bound_usd.toFixed(6)}.\n\nCosts use published Standard reference upper bounds, not verified local proxy charges.\n\n| Case | Attempts | Success |\n| --- | --- | --- |\n${rows}\n\nThe fixed small replay dataset measures workflow correctness, not investment efficacy. Missing accounting and infrastructure failures are not removed from the denominator. No generated text, formulas or tool payloads are retained in this report.\n`, { mode: 0o600 });
+    await writeFile(resolve(evidence, "research-agent-eval.md"), `# Research Agent real-model evaluation\n\n${phase}; ${candidate.key} / ${effort}; qualified: ${qualified}.\n\nCorpus ${corpus.version}; selected cases: ${corpus.cases.map(item => item.id).join(", ")}; ${summary.observed_cases}/${summary.expected_cases} cases.\n\nSuccess ${(summary.task_success_rate * 100).toFixed(1)}%; P95 ${summary.duration_p95_ms} ms; primary cost upper bound ${summary.estimated_primary_cost_usd === null ? "unreported" : `$${summary.estimated_primary_cost_usd.toFixed(6)}`}; separate title cost upper bound $${summary.title_cost_upper_bound_usd.toFixed(6)}.\n\nCosts use published Standard reference upper bounds, not verified local proxy charges.\n\n| Case | Attempts | Success |\n| --- | --- | --- |\n${rows}\n\nThe fixed small replay dataset measures workflow correctness, not investment efficacy. Missing accounting and infrastructure failures are not removed from the denominator. No generated text, formulas or tool payloads are retained in this report.\n`, { mode: 0o600 });
     if (phase === "qualification") process.exitCode = qualified ? 0 : 1;
     else process.exitCode = summary.complete && halted === null ? 0 : 1;
   }
@@ -363,6 +382,13 @@ async function prepareFixture(researcher, testCase, corpus) {
   }) });
   fixture.runId = run.id;
   await poll(() => json(researcher, `/api/research-runs/${run.id}`), (value) => value.status === "succeeded");
+  if (testCase.fixture === "query-strategies") {
+    const seeded = JSON.parse(command("uv", ["run", "python", "tests/e2e/support/research_query_fixture.py"],
+      JSON.stringify({ run_id: run.id, researcher_id: researcher.id })));
+    fixture.expectedIds = seeded.expected_ids;
+    fixture.expectedRows = seeded.expected_rows;
+    return fixture;
+  }
   if (testCase.fixture === "strategy" || testCase.fixture === "factor") return fixture;
   if (testCase.fixture === "blocked-track") controlWorker("pause", "tracking-worker");
   const track = await json(researcher, `/api/research-runs/${run.id}/daily-tracks`, { method: "POST", body: JSON.stringify({ request_id: `eval-start-${randomUUID()}` }) });
@@ -398,7 +424,14 @@ async function terminalObservation(runId, candidate, effort) {
   if (!parsed.success) throw new ResearchEvalError("REPORT_INVALID");
   return parsed.data;
 }
-async function checkArtifact(researcher, testCase, fixture, corpus, threadId) {
+async function checkArtifact(researcher, testCase, fixture, corpus, threadId, text) {
+  if (testCase.outcome === "ranked-strategies") {
+    const facts = memoryFacts(researcher, threadId, { kind: "query-ranking", run_ids: fixture.expectedIds });
+    const table = researchEvalRankingTableMatches(text, fixture.expectedRows);
+    return { passed: facts.ranked_results_inspected && (table === true
+      || (table === null && facts.ranked_results_presented)), ids: fixture.expectedIds,
+      workerFailure: false, unresolvedAdmissionRejection: facts.unresolved_admission_rejection };
+  }
   const [runList, batchList, trackList] = await Promise.all(["research-runs", "research-batches", "daily-tracks"].map((resource) => json(researcher, `/api/${resource}`)));
   if (![runList, batchList, trackList].every((value) => Array.isArray(value.items) && value.next_cursor === null)) throw new ResearchEvalError("REPORT_INVALID");
   const ids = [...runList.items, ...batchList.items, ...trackList.items].map((item) => item.id);

@@ -151,7 +151,11 @@ ResearchRunMetric = Literal[
 class ResearchRunMetricFilter(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    metric: ResearchRunMetric
+    metric: ResearchRunMetric = Field(description=(
+        "Strategy: annualized_excess_return (fraction, 0.15=15%), sharpe (ratio), "
+        "maximum_drawdown (positive fraction, 0.20=20%). Factor: signed mean "
+        "one_session_rank_ic, five_session_rank_ic, twenty_session_rank_ic."
+    ))
     operator: Literal["gt", "gte", "lt", "lte"]
     value: Annotated[float, Field(strict=True, allow_inf_nan=False)]
 
@@ -637,6 +641,53 @@ class ImmutableRunInput(BaseModel):
         return value
 
 
+class ResearchRunPeriod(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    start_date: NaturalDate
+    end_date: NaturalDate
+
+    @model_validator(mode="after")
+    def ordered(self):
+        if self.start_date > self.end_date:
+            raise ValueError("Research Period start must not be after end")
+        return self
+
+
+class ResearchRunQuery(BaseModel):
+    """Shared collection predicates; transports own their pagination contract."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    folder_id: FolderId | None = Field(default=None, description="Owned Folder ID; omit for all.")
+    research_kind: ResearchKind | None = Field(default=None, description=(
+        "Factor Evaluation or Strategy Backtest; set explicitly for metric queries."
+    ))
+    status: ResearchRunStatus | None = Field(default=None, description="Omit for all statuses.")
+    search: Annotated[str, Field(max_length=1024)] | None = Field(default=None, description=(
+        "Case-insensitive literal substring in name, hypothesis/notes or Formula source. "
+        "Not semantic search; does not search Python code. Empty means no text filter."
+    ))
+    research_period: ResearchRunPeriod | None = Field(default=None, description=(
+        "Exact requested start/end dates, not creation time or a recalculated return window."
+    ))
+    universe: ResearchUniverse | None = Field(default=None, description="Exact frozen Universe.")
+    metric_filters: ResearchRunMetricFilters = Field(default_factory=list, description=(
+        "All conditions are AND. Missing metrics never match. Percentages use fractions."
+    ))
+    sort_by: ResearchRunSortKey = Field(default="created_at", description=(
+        "Global ordering before paging. Missing values sort last; ties use creation time and ID."
+    ))
+    sort_direction: ResearchRunSortDirection = Field(default="descending", description=(
+        "Use ascending for smallest drawdown; descending for highest Sharpe/return/Rank IC."
+    ))
+
+    @field_validator("search")
+    @classmethod
+    def normalize_search(cls, value):
+        return (value.strip() or None) if value is not None else None
+
+
 class FactorEvaluationResearchRunKeyMetrics(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
@@ -673,6 +724,7 @@ class ResearchRunSummary(BaseModel):
     end_date: date
     formula_summary: Annotated[str, Field(max_length=120)]
     research_kind: ResearchKind
+    universe: ResearchUniverse
     rerun_origin: CurrentDataRerunOrigin | None = Field(
         default=None,
         exclude_if=lambda value: value is None,
@@ -801,6 +853,8 @@ class ResearchRunList(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     items: list[ResearchRunSummary]
+    total_count: int = Field(ge=0, description="All matching records before cursor and limit.")
+    applied_query: ResearchRunQuery
     next_cursor: str | None
 
 

@@ -147,6 +147,7 @@ from thesistrace.research_run.models import (
     ResearchRunPage,
     ResearchRunPollingDetail,
     ResearchRunProgress,
+    ResearchRunQuery,
     ResearchRunResult,
     ResearchRunResultSectionInput,
     ResearchRunResultSectionResponse,
@@ -181,6 +182,13 @@ from thesistrace.research_run.planning import (
     DEFAULT_RESEARCH_EXECUTION_MEMORY_BYTES,
     ResearchChunkCapacityError,
     plan_research_chunks,
+)
+from thesistrace.research_run.queries import (
+    cursor_predicate,
+    encode_cursor,
+    query_order,
+    query_predicates,
+    sort_expression,
 )
 from thesistrace.research_run.quota import daily_run_count
 from thesistrace.research_run.result import (
@@ -1641,200 +1649,84 @@ class ResearchRunService:
         return True
 
     def list_page(
-        self,
-        researcher_id: UUID,
-        *,
-        folder_id: str | None = None,
-        research_kind: ResearchKind | None = None,
-        page: int = 1,
-        page_size: int = 20,
+        self, researcher_id: UUID, *, folder_id: str | None = None,
+        research_kind: ResearchKind | None = None, page: int = 1, page_size: int = 20,
         sort_by: ResearchRunSortKey = "created_at",
         sort_direction: ResearchRunSortDirection = "descending",
-        metric_filters: Sequence[ResearchRunMetricFilter] = (),
-        search: str | None = None,
+        metric_filters: Sequence[ResearchRunMetricFilter] = (), search: str | None = None,
     ) -> ResearchRunPage:
-        """Fixed-size Web pages; Agent lists retain their bounded cursor contract."""
+        """Web pages use the same predicates/ordering as Agent cursor queries."""
         if isinstance(page, bool) or page < 1:
             raise ValueError("Page must be positive")
         if isinstance(page_size, bool) or not 1 <= page_size <= 50:
             raise ValueError("Page size must be between 1 and 50")
-        metric_keys = {
-            "annualized_excess_return", "sharpe", "maximum_drawdown",
-            "one_session_rank_ic", "five_session_rank_ic", "twenty_session_rank_ic",
-        }
-        if sort_by != "created_at" and sort_by not in metric_keys:
-            raise ValueError("ResearchRun sort key is invalid")
-        if sort_direction not in {"ascending", "descending"}:
-            raise ValueError("ResearchRun sort direction is invalid")
-        # Both fragments are selected from closed allowlists, never raw request SQL.
-        expression = (
-            "created_at" if sort_by == "created_at"
-            else f"(key_metrics->>'{sort_by}')::double precision"
-        )
-        direction = "ASC" if sort_direction == "ascending" else "DESC"
-        if len(metric_filters) > 12:
-            raise ValueError("At most 12 metric filters are allowed")
-        operators = {"gt": ">", "gte": ">=", "lt": "<", "lte": "<="}
-        predicates = []
-        thresholds = []
-        for item in metric_filters:
-            item = ResearchRunMetricFilter.model_validate(item)
-            predicates.append(
-                f"AND (key_metrics->>'{item.metric}')::double precision "
-                f"{operators[item.operator]} %s"
-            )
-            thresholds.append(item.value)
-        metric_predicates = " ".join(predicates)
-        search = (search or "").strip()
-        if len(search) > 1024:
-            raise ValueError("ResearchRun search must be at most 1024 characters")
-        # LIKE can use pg_trgm; escape its metacharacters to retain literal
-        # substring semantics. Generated notes/formula columns avoid reading the
-        # complete immutable input for every candidate, including short terms.
-        pattern = "%" + search.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%"
-        search_predicate = (
-            "AND (lower(name) LIKE lower(%s) ESCAPE '!' "
-            "OR search_notes LIKE lower(%s) ESCAPE '!' "
-            "OR search_formula LIKE lower(%s) ESCAPE '!')"
-            if search else ""
-        )
-        # Search once for the exact count and page. Materialize only IDs and
-        # sorting values; retrieve large immutable inputs for the page alone.
-        # Ordinary browsing keeps the existing index-ordered LIMIT plan.
-        materialization = "MATERIALIZED" if search else "NOT MATERIALIZED"
+        query = ResearchRunQuery(folder_id=folder_id, research_kind=research_kind,
+                                 sort_by=sort_by, sort_direction=sort_direction,
+                                 metric_filters=list(metric_filters), search=search)
+        rows, _ = self._query_rows(researcher_id, query, page_size,
+                                   offset=(page - 1) * page_size)
+        return ResearchRunPage(items=[_summary(row) for row in rows if row["id"] is not None],
+                               total_count=rows[0]["total_count"])
+
+    def list(
+        self, researcher_id: UUID, *, folder_id: str | None = None,
+        research_kind: ResearchKind | None = None, cursor: str | None = None,
+        limit: int = 20, **query_fields: object,
+    ) -> ResearchRunList:
+        if isinstance(limit, bool) or not 1 <= limit <= 50:
+            raise ValueError("List limit must be between 1 and 50")
+        query = ResearchRunQuery(folder_id=folder_id, research_kind=research_kind, **query_fields)
+        rows, cipher = self._query_rows(researcher_id, query, limit + 1, cursor=cursor)
+        total_count = rows[0]["total_count"]
+        records = [row for row in rows if row["id"] is not None]
+        summaries = [_summary(row) for row in records[:limit]]
+        return fit_page(summaries, lambda kept: ResearchRunList(
+            items=kept, total_count=total_count, applied_query=query,
+            next_cursor=(encode_cursor(records[len(kept) - 1], cipher, researcher_id, query)
+                         if kept and len(records) > len(kept) else None),
+        ))
+
+    def _query_rows(self, researcher_id, query, limit, *, cursor=None, offset=None):
+        predicates, parameters = query_predicates(researcher_id, query)
+        # Text selectivity requires the existing per-query plan rather than a
+        # cached generic plan. Only the small page loads immutable inputs.
+        materialization = "MATERIALIZED" if query.search else "NOT MATERIALIZED"
         try:
             with self._database.transaction() as transaction:
+                cipher = _cursor_fernet(_cursor_secret(transaction)) if offset is None else None
+                try:
+                    continuation, continuation_values = (
+                        cursor_predicate(cursor, cipher, researcher_id, query)
+                        if offset is None else ("true", [])
+                    )
+                except ValueError as error:
+                    raise ResearchRunInvalidCursor("ResearchRun cursor is invalid") from error
                 rows = transaction.execute(
                     f"""
                     WITH filtered AS {materialization} (
-                        SELECT id, created_at, {expression} AS sort_value
-                        FROM research_runs.runs
-                        WHERE researcher_id = %s
-                          AND (%s::text IS NULL OR folder_id = %s::text)
-                          AND (%s::text IS NULL OR immutable_input->>'research_kind' = %s::text)
-                          {search_predicate}
-                          {metric_predicates}
+                        SELECT id, created_at, {sort_expression(query)} AS sort_value
+                        FROM research_runs.runs WHERE {predicates}
                     )
                     SELECT totals.total_count, runs.id, runs.name, runs.folder_id,
                            runs.status, runs.requested_start_date, runs.requested_end_date,
                            runs.created_at, runs.immutable_input, runs.key_metrics,
-                           runs.failure_reason
+                           runs.failure_reason, page_rows.sort_value
                     FROM (SELECT count(*) AS total_count FROM filtered) AS totals
                     LEFT JOIN LATERAL (
-                        SELECT * FROM filtered
-                        ORDER BY sort_value {direction} NULLS LAST, created_at DESC, id
-                        LIMIT %s OFFSET %s
+                        SELECT * FROM filtered WHERE {continuation}
+                        ORDER BY {query_order(query)} LIMIT %s OFFSET %s
                     ) AS page_rows ON true
                     LEFT JOIN research_runs.runs AS runs ON runs.id = page_rows.id
-                    ORDER BY page_rows.sort_value {direction} NULLS LAST,
-                             page_rows.created_at DESC, page_rows.id
+                    ORDER BY {query_order(query, 'page_rows.')}
                     """,
-                    (researcher_id, folder_id, folder_id, research_kind, research_kind,
-                     *((pattern, pattern, pattern) if search else ()),
-                     *thresholds, page_size, (page - 1) * page_size),
-                    # Keyword selectivity varies sharply. A cached generic plan
-                    # can full-scan the GIN index for short terms across all users.
-                    prepare=False if search else None,
+                    (*parameters, *continuation_values, limit, offset or 0),
+                    prepare=False if query.search else None,
                 ).fetchall()
-            return ResearchRunPage(
-                items=[_summary(row) for row in rows if row["id"] is not None],
-                total_count=rows[0]["total_count"],
-            )
+            return rows, cipher
         except (OperationalError, PoolTimeout) as error:
             raise ResearchRunTemporarilyUnavailable(
                 "ResearchRun history is temporarily unavailable"
             ) from error
-
-    def list(
-        self,
-        researcher_id: UUID,
-        *,
-        folder_id: str | None = None,
-        research_kind: ResearchKind | None = None,
-        cursor: str | None = None,
-        limit: int = 20,
-    ) -> ResearchRunList:
-        if isinstance(limit, bool) or not 1 <= limit <= 50:
-            raise ValueError("List limit must be between 1 and 50")
-        try:
-            return self._list(
-                researcher_id,
-                folder_id=folder_id,
-                research_kind=research_kind,
-                cursor=cursor,
-                limit=limit,
-            )
-        except (OperationalError, PoolTimeout) as error:
-            raise ResearchRunTemporarilyUnavailable(
-                "ResearchRun history is temporarily unavailable"
-            ) from error
-
-    def _list(
-        self,
-        researcher_id: UUID,
-        *,
-        folder_id: str | None = None,
-        research_kind: ResearchKind | None = None,
-        cursor: str | None = None,
-        limit: int = 20,
-    ) -> ResearchRunList:
-        with self._database.transaction() as transaction:
-            cursor_secret = _cursor_secret(transaction)
-            cursor_created_at, cursor_id = _decode_list_cursor(
-                cursor,
-                secret=cursor_secret,
-                researcher_id=researcher_id,
-                folder_id=folder_id,
-                research_kind=research_kind,
-            )
-            rows = transaction.execute(
-                """
-                SELECT id, name, folder_id, status, requested_start_date,
-                       requested_end_date, created_at, immutable_input,
-                       key_metrics, failure_reason
-                FROM research_runs.runs
-                WHERE researcher_id = %s
-                  AND (%s::text IS NULL OR folder_id = %s::text)
-                  AND (%s::text IS NULL OR immutable_input->>'research_kind' = %s::text)
-                  AND (
-                    %s::timestamptz IS NULL
-                    OR created_at < %s::timestamptz
-                    OR (created_at = %s::timestamptz AND id > %s::text)
-                  )
-                ORDER BY created_at DESC, id
-                LIMIT %s::integer
-                """,
-                (
-                    researcher_id,
-                    folder_id,
-                    folder_id,
-                    research_kind,
-                    research_kind,
-                    cursor_created_at,
-                    cursor_created_at,
-                    cursor_created_at,
-                    cursor_id,
-                    limit + 1,
-                ),
-            ).fetchall()
-        summaries = [_summary(row) for row in rows[:limit]]
-        return fit_page(
-            summaries,
-            lambda kept: ResearchRunList(
-                items=kept,
-                next_cursor=(
-                    _encode_list_cursor(
-                        rows[len(kept) - 1],
-                        secret=cursor_secret,
-                        researcher_id=researcher_id,
-                        folder_id=folder_id,
-                        research_kind=research_kind,
-                    )
-                    if kept and len(rows) > len(kept)
-                    else None
-                ),
-            ),
-        )
 
     def get(self, researcher_id: UUID, run_id: str) -> ResearchRunSummary | None:
         with self._database.transaction() as transaction:
@@ -4178,71 +4070,6 @@ def _cursor_fernet(secret: bytes) -> Fernet:
     return Fernet(urlsafe_b64encode(secret))
 
 
-def _encode_list_cursor(
-    row: Mapping[str, object],
-    *,
-    secret: bytes,
-    researcher_id: UUID,
-    folder_id: str | None,
-    research_kind: ResearchKind | None,
-) -> str:
-    created_at = row["created_at"]
-    if not isinstance(created_at, datetime):
-        raise TypeError("ResearchRun created_at must be a datetime")
-    payload = json.dumps(
-        {
-            "created_at": created_at.isoformat(),
-            "folder_id": folder_id,
-            "id": row["id"],
-            "research_kind": research_kind,
-            "researcher_id": str(researcher_id),
-        },
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-    return _cursor_fernet(secret).encrypt(payload).decode("ascii")
-
-
-def _decode_list_cursor(
-    cursor: str | None,
-    *,
-    secret: bytes,
-    researcher_id: UUID,
-    folder_id: str | None,
-    research_kind: ResearchKind | None,
-) -> tuple[datetime | None, str | None]:
-    if cursor is None:
-        return None, None
-    try:
-        plaintext = _cursor_fernet(secret).decrypt(cursor.encode("ascii"))
-        decoded: object = json.loads(plaintext.decode("utf-8"))
-        if not isinstance(decoded, dict) or set(decoded) != {
-            "created_at",
-            "folder_id",
-            "id",
-            "research_kind",
-            "researcher_id",
-        }:
-            raise ValueError
-        created_at_value = decoded["created_at"]
-        run_id = decoded["id"]
-        if not isinstance(created_at_value, str):
-            raise ValueError
-        created_at = datetime.fromisoformat(created_at_value)
-        if (
-            created_at.tzinfo is None
-            or not isinstance(run_id, str)
-            or not run_id
-            or decoded["researcher_id"] != str(researcher_id)
-            or decoded["folder_id"] != folder_id
-            or decoded["research_kind"] != research_kind
-        ):
-            raise ValueError
-    except (InvalidToken, ValueError, UnicodeDecodeError, UnicodeEncodeError) as error:
-        raise ResearchRunInvalidCursor("ResearchRun cursor is invalid") from error
-    return created_at, run_id
-
-
 def _spec_programs(command: ResearchSpec):
     if isinstance(command, DirectStrategyBacktestSpec):
         return {"program": command.program}
@@ -4752,6 +4579,7 @@ def _summary(row: object) -> ResearchRunSummary:
             "end_date": row["requested_end_date"],
             "formula_summary": formula_summary,
             "research_kind": immutable_input.research_kind,
+            "universe": immutable_input.universe,
             "rerun_origin": immutable_input.rerun_origin,
             "key_metrics": key_metrics,
             "failure_reason": row.get("failure_reason"),

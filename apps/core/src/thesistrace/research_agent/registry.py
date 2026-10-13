@@ -194,6 +194,7 @@ class ResearchRunReader(Protocol):
         research_kind: ResearchKind | None = None,
         cursor: str | None = None,
         limit: int = 20,
+        **query_fields: object,
     ) -> ResearchRunList: ...
 
     def get_polling_detail(
@@ -531,7 +532,20 @@ class ResearchAgentCapabilityRegistry:
             ResearchAgentCapability(
                 name="list_research_runs",
                 description=(
-                    "List durable ResearchRuns with stable pagination; requires research:read."
+                    "Find, filter or rank owned ResearchRuns. Filtering and numeric ordering "
+                    "apply to "
+                    "all matches before pagination; use this for keyword lookup and top-N queries. "
+                    "For strategy rankings set research_kind=strategy_backtest, status=succeeded "
+                    "and an explicit sort metric. All metric conditions are AND; 0.20 means 20%. "
+                    "Missing metrics sort last and are not valid ranked values. Results include "
+                    "compact metrics, comparison dates and Universe; "
+                    "read details only for selected IDs. "
+                    "Pages may contain fewer than limit rows due to byte budget; "
+                    "follow next_cursor "
+                    "with unchanged query fields until enough valid rows are collected "
+                    "or the list ends. "
+                    "Pages are a live view, not a frozen snapshot. Requires research:read; "
+                    "reading never creates or reruns research."
                 ),
                 required_scope=ResearchAgentScope.RESEARCH_READ,
                 input_model=ListResearchRunsInput,
@@ -1057,24 +1071,18 @@ class ResearchAgentCapabilityRegistry:
         except ResearchRunTemporarilyUnavailable as error:
             raise _temporarily_unavailable() from error
 
-    def list_research_runs(
-        self,
-        folder_id: str | None = None,
-        research_kind: ResearchKind | None = None,
-        cursor: str | None = None,
-        limit: int = 20,
-    ) -> ResearchRunList:
+    def list_research_runs(self, **query_fields: object) -> ResearchRunList:
         self._require(ResearchAgentScope.RESEARCH_READ)
+        request = ListResearchRunsInput.model_validate(query_fields)
         try:
             return self._modules.research_runs.list(
-                self._authority.researcher_id,
-                folder_id=folder_id,
-                research_kind=research_kind,
-                cursor=cursor,
-                limit=limit,
+                self._authority.researcher_id, **request.model_dump(),
             )
         except ResearchRunInvalidCursor as error:
-            raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.INVALID_INPUT) from error
+            raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.INVALID_INPUT, issues=[
+                ResearchAgentInputIssue(path=["cursor"], code="invalid_cursor",
+                    message="Cursor does not match this caller or query; restart without cursor.")
+            ]) from error
         except ResearchRunTemporarilyUnavailable as error:
             raise _temporarily_unavailable() from error
 

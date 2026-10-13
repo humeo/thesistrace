@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EventType } from "@ag-ui/core";
 
-import { observeResearchEvalStream, observeResearchEvalTurn, requestResearchEvalTurn, researchEvalConversationMeetsOutcome, researchEvalPolledRun, researchEvalToolRetryCount, unresolvedResearchEvalToolFailure } from "./research-eval-stream.js";
+import { observeResearchEvalStream, observeResearchEvalTurn, requestResearchEvalTurn, researchEvalConversationMeetsOutcome, researchEvalPolledRun, researchEvalRankingTableMatches, researchEvalToolRetryCount, unresolvedResearchEvalToolFailure } from "./research-eval-stream.js";
 import { projectSafeToolResult } from "./safe-tool-result.js";
 import { ResearchA2UIEventProjector } from "./research-a2ui-events.js";
 import { RESEARCH_A2UI_ACTIVITY_TYPE, RESEARCH_A2UI_CATALOG_ID, RESEARCH_A2UI_PROTOCOL_VERSION } from "@thesistrace/contracts/research-a2ui";
@@ -54,6 +54,23 @@ function oversizedResponse() {
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
 describe("real-model evaluator AG-UI transport", () => {
+  it("checks ranked table values, units, order and dates without fixing explanatory prose", () => {
+    const expected = [
+      { name: "固定策略 01", sharpe: 30, annualized_excess_return: 0.3, maximum_drawdown: 0.1,
+        start_date: "2026-07-20", end_date: "2026-08-04" },
+      { name: "固定策略 02", sharpe: 29, annualized_excess_return: 0.29, maximum_drawdown: 0.1,
+        start_date: "2026-07-20", end_date: "2026-08-04" },
+    ];
+    const text = `按夏普初筛。\n| 名称 | 夏普 | 年化超额收益 | 最大回撤 | 回测区间 |
+| --- | --- | --- | --- | --- |
+| 固定策略 01 | 30.00 | 30.0% | 10.00% | 2026-07-20 至 2026-08-04 |
+| 固定策略 02 | 29 | 0.29 | 0.1 | 2026-07-20 至 2026-08-04 |`;
+    expect(researchEvalRankingTableMatches(text, expected)).toBe(true);
+    expect(researchEvalRankingTableMatches(text.replace("30.0%", "20%"), expected)).toBe(false);
+    expect(researchEvalRankingTableMatches(text.replaceAll("2026-08-04", "2025-08-04"), expected)).toBe(false);
+    expect(researchEvalRankingTableMatches("| 名称 |\n| 固定策略 01 |\n| 固定策略 02 |", expected)).toBe(false);
+    expect(researchEvalRankingTableMatches("按夏普初筛，结果显示在研究列表中。", expected)).toBeNull();
+  });
   it("evaluates the same visible explanation in a validated A2UI-only answer", async () => {
     const explanation = "run_0123456789abcdef0123: Rank IC is unavailable with one stock; coverage is not an estimated IC.";
     const content = surface([{ id: "root", component: "Text", text: explanation }]).content;

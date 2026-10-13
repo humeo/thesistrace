@@ -11,6 +11,8 @@ _SAFE_ERROR_TYPES = frozenset({
     "literal_error", "string_pattern_mismatch", "finite_number",
 })
 _SAFE_VALUE_ERRORS = frozenset({
+    "Metric queries require the matching explicit research_kind",
+    "Research Period start must not be after end",
     "Python Portfolio cannot contain builtin Portfolio settings",
     "Python Signal cannot contain builtin Alpha settings",
     "Research end date must not precede start date",

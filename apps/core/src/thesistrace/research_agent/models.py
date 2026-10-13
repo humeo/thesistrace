@@ -23,8 +23,8 @@ from thesistrace.research_batch.models import (
 from thesistrace.research_folder.models import ResearchFolderSummary
 from thesistrace.research_run.models import (
     RequestId,
-    ResearchKind,
     ResearchRunAdmissionIssue,
+    ResearchRunQuery,
     ResearchRunStatus,
     ResearchSpec,
 )
@@ -202,13 +202,26 @@ DailyTrackId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
 DailyTrackCursor = Annotated[str, Field(strict=True, min_length=1, max_length=1024)]
 
 
-class ListResearchRunsInput(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+class ListResearchRunsInput(ResearchRunQuery):
+    cursor: ResearchRunCursor | None = Field(default=None, description=(
+        "Return next_cursor unchanged with the same query; live pages are not a frozen snapshot."
+    ))
+    limit: Annotated[int, Field(strict=True, ge=1, le=50)] = Field(default=20, description=(
+        "Maximum rows, possibly fewer due to byte budget. Continue next_cursor if needed."
+    ))
 
-    folder_id: Annotated[str, Field(strict=True, min_length=1, max_length=200)] | None = None
-    research_kind: ResearchKind | None = None
-    cursor: ResearchRunCursor | None = None
-    limit: Annotated[int, Field(strict=True, ge=1, le=50)] = 20
+    @model_validator(mode="after")
+    def metric_kind(self):
+        metrics = {item.metric for item in self.metric_filters}
+        if self.sort_by != "created_at":
+            metrics.add(self.sort_by)
+        if metrics:
+            allowed = ({"annualized_excess_return", "sharpe", "maximum_drawdown"}
+                       if self.research_kind == "strategy_backtest" else
+                       {"one_session_rank_ic", "five_session_rank_ic", "twenty_session_rank_ic"})
+            if self.research_kind is None or not metrics <= allowed:
+                raise ValueError("Metric queries require the matching explicit research_kind")
+        return self
 
 
 class GetResearchRunInput(BaseModel):

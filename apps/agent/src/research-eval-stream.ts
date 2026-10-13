@@ -135,16 +135,50 @@ export function researchEvalPolledRun(events: readonly ResearchEvalToolEvent[]):
 export function researchEvalConversationMeetsOutcome(
   testCase: Pick<ResearchEvalCase, "outcome">,
   streams: readonly ResearchEvalTurn[],
-  fixture: Readonly<{ runId?: string }>,
+  fixture: Readonly<{ runId?: string; expectedIds?: string[] }>,
 ): boolean {
   const text = streams.at(-1)?.text ?? "";
   if (text.trim().length < 20) return false;
+  if (testCase.outcome === "ranked-strategies") return /sharpe|夏普/i.test(text);
   if (testCase.outcome === "clarified-factor") return streams.length === 2
     && /\?|？/.test(streams[0]!.text) && !streams[0]!.calls.some((call) => /^(submit_|start_|retry_)/.test(call.name));
   if (testCase.outcome === "explained-result") return fixture.runId !== undefined && text.includes(fixture.runId) && /rank.?ic/i.test(text) && /coverage/i.test(text)
     && /unavailable|insufficient|undefined|null|not .*estim|cannot|can't|too (?:few|small)|single.*stock|one.*stock/i.test(text);
   if (testCase.outcome === "polled-factor") return researchEvalPolledRun(streams.flatMap((item) => item.toolEvents));
   return true;
+}
+
+type RankingRow = Readonly<{ name: string; sharpe: number; annualized_excess_return: number;
+  maximum_drawdown: number; start_date: string; end_date: string }>;
+
+/** Check table values against the independent fixture, allowing labels and numeric formatting. */
+export function researchEvalRankingTableMatches(text: string, expected: readonly RankingRow[]): boolean | null {
+  const rows = text.split("\n").filter(line => line.includes("|"))
+    .map(line => line.trim().replace(/^\||\|$/g, "").split("|").map(cell => cell.trim()));
+  const data = rows.filter(row => expected.some(item => row.some(cell => cell.includes(item.name))));
+  if (data.length === 0) return null; // An authoritative platform view can supply the display.
+  const header = rows.find(row => row.some(cell => /sharpe|夏普/i.test(cell)));
+  if (!header || data.length !== expected.length) return false;
+  const index = (pattern: RegExp) => header.findIndex(cell => pattern.test(cell));
+  const sharpe = index(/sharpe|夏普/i), excess = index(/年化.*超额|annualized.*excess/i);
+  const drawdown = index(/最大.*回撤|maximum.*drawdown|max.*drawdown/i);
+  const dateColumns = header.flatMap((cell, column) =>
+    /区间|日期|开始|起始|结束|period|date|start|end/i.test(cell) ? [column] : []);
+  const numeric = (cell: string | undefined): number | null => {
+    const cleaned = cell?.replace(/[*`\s,]/g, "") ?? "";
+    if (!/^[+-]?\d+(?:\.\d+)?%?$/.test(cleaned)) return null;
+    return Number.parseFloat(cleaned) / (cleaned.endsWith("%") ? 100 : 1);
+  };
+  if ([sharpe, excess, drawdown].some(value => value < 0)) return false;
+  return expected.every((item, rowIndex) => {
+    const row = data[rowIndex]!;
+    const dates = dateColumns.length ? dateColumns.map(column => row[column]).join(" ") : text;
+    return row.some(cell => cell.includes(item.name))
+      && numeric(row[sharpe]) === item.sharpe
+      && numeric(row[excess]) === item.annualized_excess_return
+      && numeric(row[drawdown]) === item.maximum_drawdown
+      && dates.includes(item.start_date) && dates.includes(item.end_date);
+  });
 }
 
 export function unresolvedResearchEvalToolFailure(events: readonly ResearchEvalToolEvent[]): ToolFailureCode | null {

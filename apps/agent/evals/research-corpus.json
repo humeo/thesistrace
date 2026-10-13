@@ -1,5 +1,5 @@
 {
-  "version": "research-chat-2026-09-01-explicit-track-refresh",
+  "version": "research-chat-2026-10-14-query-ranking",
   "dataset": "tushare-financial-product-replay",
   "clock_window": { "start": "2026-07-20", "end": "2026-08-04", "head": "2026-08-05" },
   "admission_window": { "requested_start": "2010-01-04", "corrected_start": "2026-07-09" },
@@ -80,6 +80,26 @@
       "required_tools": ["get_research_run_result"],
       "forbidden_tools": ["submit_research_run", "submit_research_batch", "start_daily_track", "refresh_daily_track", "retry_daily_track"],
       "max_cost_usd": 1, "max_duration_ms": 180000
+    },
+    {
+      "id": "global-strategy-top-ten",
+      "fixture": "query-strategies",
+      "outcome": "ranked-strategies",
+      "messages": [
+        "请查出我全部成功的策略回测里，夏普至少 1、最大回撤不超过 20% 的前十，按夏普从高到低排列。请只使用记录中的指标摘要，用表格或现有研究列表视图展示策略名称、夏普、年化超额收益、最大回撤和回测区间，并明确排名口径。不要提交或重新运行研究。"
+      ],
+      "required_tools": [
+        "list_research_runs"
+      ],
+      "forbidden_tools": [
+        "submit_research_run",
+        "submit_research_batch",
+        "start_daily_track",
+        "refresh_daily_track",
+        "retry_daily_track"
+      ],
+      "max_cost_usd": 1,
+      "max_duration_ms": 250000
     }
   ]
 }

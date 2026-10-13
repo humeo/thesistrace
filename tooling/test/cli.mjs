@@ -52,7 +52,7 @@ try {
       run.agent_openai_base_url = process.env.THESISTRACE_AGENT_OPENAI_BASE_URL ?? '';
       run.agent_anthropic_api_key = process.env.THESISTRACE_AGENT_ANTHROPIC_API_KEY ?? '';
       run.agent_google_api_key = process.env.THESISTRACE_AGENT_GOOGLE_API_KEY ?? '';
-      run.eval_controls = Object.fromEntries(['MODEL_KEY', 'REASONING_EFFORT', 'PHASE', 'SPEND_LIMIT_USD']
+      run.eval_controls = Object.fromEntries(['MODEL_KEY', 'REASONING_EFFORT', 'PHASE', 'SPEND_LIMIT_USD', 'CASE_IDS']
         .map(key => `THESISTRACE_AGENT_EVAL_${key}`).filter(key => process.env[key] !== undefined)
         .map(key => [key, process.env[key]]));
       run.agent_model_registry = (await run.exec('node', [`${run.repo_root}/apps/agent/scripts/eval-research.mjs`, 'configure'], { capture: true })).trim();

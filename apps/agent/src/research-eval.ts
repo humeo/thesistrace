@@ -10,7 +10,7 @@ const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const count = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const rate = z.number().min(0).max(1);
 const dollars = z.number().finite().nonnegative();
-const outcomes = z.enum(["factor", "clarified-factor", "repaired-factor", "admission-repaired-factor", "strategy", "batch", "track-started", "track-refreshed", "track-recovered", "polled-factor", "explained-result"]);
+const outcomes = z.enum(["factor", "clarified-factor", "repaired-factor", "admission-repaired-factor", "strategy", "batch", "track-started", "track-refreshed", "track-recovered", "polled-factor", "explained-result", "ranked-strategies"]);
 const corpusSchema = z.object({
   version: identifier,
   dataset: identifier,
@@ -18,7 +18,7 @@ const corpusSchema = z.object({
   admission_window: z.object({ requested_start: date, corrected_start: date }).strict(),
   cases: z.array(z.object({
     id: identifier,
-    fixture: z.enum(["empty", "strategy", "factor", "active-track", "blocked-track", "paused-research"]),
+    fixture: z.enum(["empty", "strategy", "factor", "active-track", "blocked-track", "paused-research", "query-strategies"]),
     outcome: outcomes,
     messages: z.array(z.string().min(1).max(16 * 1024)).min(1).max(2),
     required_tools: z.array(toolName).min(1).max(32),
@@ -140,9 +140,9 @@ export function usageCostUsd(usage: EvalUsage, pricing: ResearchEvalPricing): nu
     + usage.outputTokens.total * pricing.output_usd_per_million) / 1_000_000;
 }
 
-/** Without a call-count bound, no finite full-Turn spend reserve is known. */
-export function maximumEvalTurnCostUsd(_candidate: ResearchEvalCandidate): number {
-  return Number.POSITIVE_INFINITY;
+/** A verified daily quota bounds a scenario; otherwise the full-Turn reserve is unknown. */
+export function maximumEvalTurnCostUsd(_candidate: ResearchEvalCandidate, dailyBudgetUsd?: number): number {
+  return dailyBudgetUsd ?? Number.POSITIVE_INFINITY;
 }
 export function maximumTitleCostUsd(candidate: ResearchEvalCandidate): number {
   // One separate first-message title invocation; use the provider's full
@@ -151,14 +151,17 @@ export function maximumTitleCostUsd(candidate: ResearchEvalCandidate): number {
     + 32 * candidate.pricing.output_usd_per_million) / 1_000_000;
 }
 
-export function readResearchEvalControls(candidate: ResearchEvalCandidate, phase: string | undefined, encodedBudget: string | undefined) {
+export function readResearchEvalControls(candidate: ResearchEvalCandidate, phase: string | undefined, encodedBudget: string | undefined, dailyBudgetUsd?: number) {
   const budget = Number(encodedBudget);
   if ((phase !== "baseline" && phase !== "qualification") || encodedBudget === undefined
     || !/^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/.test(encodedBudget)
-    || !Number.isFinite(budget) || budget < 2 * maximumEvalTurnCostUsd(candidate) || budget > 100) {
+    || !Number.isFinite(budget) || budget < 2 * maximumEvalTurnCostUsd(candidate, dailyBudgetUsd) || budget > 100) {
     throw new ResearchEvalError("CONFIG_INVALID");
   }
-  return { phase, budget };
+  if (dailyBudgetUsd !== undefined && (!Number.isFinite(dailyBudgetUsd) || dailyBudgetUsd <= 0)) {
+    throw new ResearchEvalError("CONFIG_INVALID");
+  }
+  return { phase, budget, turnCostReserveUsd: maximumEvalTurnCostUsd(candidate, dailyBudgetUsd) };
 }
 
 export function evalFailureSource(code: AgentFailureCode | null, evidence?: {
@@ -299,7 +302,9 @@ export function researchEvalPasses(summary: ReturnType<typeof summarizeResearchE
     && summary.duration_p95_ms <= t.max_p95_duration_ms
     && summary.maximum_case_cost_usd !== null && summary.maximum_case_cost_usd <= t.max_case_cost_usd
     && summary.repetition_success_variance <= t.max_repetition_success_variance
-    && summary.admission_correction_success_rate !== null && summary.admission_correction_success_rate >= t.min_admission_correction_rate;
+    // A selected corpus without repair cases has no repair measurement.
+    // summarizeResearchEval still rejects missing measurements for repair cases.
+    && (summary.admission_correction_success_rate === null || summary.admission_correction_success_rate >= t.min_admission_correction_rate);
 }
 
 const sum = (values: readonly number[]) => values.reduce((total, value) => total + value, 0);

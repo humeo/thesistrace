@@ -5,6 +5,7 @@ import json
 from base64 import urlsafe_b64encode
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from hashlib import sha256
 from typing import cast
 from uuid import UUID
 
@@ -15,6 +16,7 @@ from thesistrace._postgres import PostgresDatabase
 from thesistrace.research_run.models import (
     OrganizeResearchRunCommand,
     ResearchRunCancelCommand,
+    ResearchRunQuery,
     StartTrackingCommand,
 )
 from thesistrace.research_run.service import (
@@ -35,7 +37,7 @@ class _Rows:
         return self._row
 
     def fetchall(self) -> list[dict[str, object]]:
-        return []
+        return [] if self._row is None else [self._row]
 
 
 class _Transaction:
@@ -43,11 +45,13 @@ class _Transaction:
         self.parameters: tuple[object, ...] | None = None
         self.statements: list[str] = []
 
-    def execute(self, statement: str, parameters: tuple[object, ...]) -> _Rows:
+    def execute(self, statement: str, parameters: tuple[object, ...], *, prepare=None) -> _Rows:
         self.statements.append(statement)
         self.parameters = parameters
         if "research_runs.cursor_secrets" in statement:
             return _Rows({"secret": CURSOR_SECRET.hex()})
+        if "WITH filtered" in statement:
+            return _Rows({"total_count": 0, "id": None})
         return _Rows()
 
 
@@ -68,17 +72,14 @@ def _cursor(
     folder_id: str | None = "folder_default",
     research_kind: str | None = "factor_evaluation",
 ) -> str:
-    payload = json.dumps(
-        {
-            "created_at": datetime(2026, 8, 28, tzinfo=UTC).isoformat(),
-            "folder_id": folder_id,
-            "id": "run_123",
-            "research_kind": research_kind,
-            "researcher_id": str(researcher_id),
-        },
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode()
+    query = ResearchRunQuery(folder_id=folder_id, research_kind=research_kind)
+    payload = json.dumps({
+        "version": 1, "researcher": str(researcher_id),
+        "query": sha256(
+            json.dumps(query.model_dump(mode="json"), sort_keys=True).encode()).hexdigest(),
+        "created_at": datetime(2026, 8, 28, tzinfo=UTC).isoformat(),
+        "value": datetime(2026, 8, 28, tzinfo=UTC).isoformat(), "id": "run_123",
+    }, separators=(",", ":")).encode()
     return Fernet(urlsafe_b64encode(CURSOR_SECRET)).encrypt(payload).decode("ascii")
 
 
@@ -91,7 +92,8 @@ def _tampered_cursor() -> str:
 def test_research_run_browser_service_surface_requires_explicit_researcher() -> None:
     expected = {
         "admit": ("self", "researcher_id", "command"),
-        "list": ("self", "researcher_id", "folder_id", "research_kind", "cursor", "limit"),
+        "list": ("self", "researcher_id", "folder_id", "research_kind", "cursor",
+                 "limit", "query_fields"),
         "get": ("self", "researcher_id", "run_id"),
         "get_detail": ("self", "researcher_id", "run_id"),
         "organize": ("self", "researcher_id", "run_id", "command"),

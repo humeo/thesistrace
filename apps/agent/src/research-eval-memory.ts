@@ -14,6 +14,7 @@ const runSchema = z.object({
   research_kind: z.literal("factor_evaluation"),
 }).strict();
 const expectationSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("query-ranking"), run_ids: z.array(runId).length(10) }).strict(),
   z.object({ kind: z.literal("formula"), original_formula: z.string().min(1).max(4096), run: runSchema }).strict(),
   z.object({ kind: z.literal("admission"), requested_start: date, run: runSchema }).strict(),
   z.object({ kind: z.literal("batch-results"), run_ids: z.tuple([runId, runId])
@@ -25,7 +26,8 @@ const requestSchema = z.object({
 export type ResearchEvalMemoryExpectation = z.infer<typeof expectationSchema>;
 export const researchEvalMemoryFactsSchema = z.object({
   formula_corrected: z.boolean(), admission_corrected: z.boolean(), unresolved_admission_rejection: z.boolean(),
-  batch_results_inspected: z.boolean(),
+  batch_results_inspected: z.boolean(), ranked_results_inspected: z.boolean(),
+  ranked_results_presented: z.boolean(),
 }).strict();
 export type ResearchEvalMemoryFacts = z.infer<typeof researchEvalMemoryFactsSchema>;
 type ModelStep = Readonly<{ message: number; step: number }>;
@@ -42,7 +44,9 @@ export function researchEvalMemoryFacts(
     const starts = new Map<string, ModelStep>();
     const rejectedTools = new Map<string, ModelStep>();
     const inspectedResults = new Set<string>();
-    const facts = { formula_corrected: false, admission_corrected: false, unresolved_admission_rejection: false, batch_results_inspected: false };
+    let rankingIds: string[] = [], rankingCursor: string | null = null;
+    let rankingOverread = false;
+    const facts = { formula_corrected: false, admission_corrected: false, unresolved_admission_rejection: false, batch_results_inspected: false, ranked_results_inspected: false, ranked_results_presented: false };
     // Keep native pending calls: the display format drops them and can make an
     // already-started parallel call look like a decision made after an error.
     for (const [messageIndex, message] of convertMessages([...messages]).to("Mastra.V2").entries()) {
@@ -67,6 +71,32 @@ export function researchEvalMemoryFacts(
         if (("isError" in call && call.isError === true) || call.result.isError === true) continue;
         const name = call.toolName.replace(/^thesistrace_/, "");
         const input = call.args, output = call.result;
+        if (expected?.kind === "query-ranking") {
+          const equalIds = (values: unknown) => Array.isArray(values)
+            && values.length === expected.run_ids.length
+            && values.every((value, index) => value === expected.run_ids[index]);
+          if (name === "list_research_runs" && input.research_kind === "strategy_backtest"
+            && input.status === "succeeded" && input.sort_by === "sharpe"
+            && (input.sort_direction ?? "descending") === "descending"
+            && input.folder_id == null && input.research_period == null && input.universe == null
+            && (input.search == null || input.search === "") && Array.isArray(output.items)
+            && Array.isArray(input.metric_filters) && input.metric_filters.length === 2
+            && input.metric_filters.some(item => isRecord(item) && item.metric === "sharpe"
+              && item.operator === "gte" && item.value === 1)
+            && input.metric_filters.some(item => isRecord(item) && item.metric === "maximum_drawdown"
+              && item.operator === "lte" && item.value === 0.2)) {
+            rankingOverread ||= rankingIds.length >= expected.run_ids.length
+              || rankingIds.length + output.items.length > expected.run_ids.length;
+            if ((input.cursor ?? null) === rankingCursor && !rankingOverread) {
+              rankingIds.push(...output.items.map(item => isRecord(item) ? String(item.id) : ""));
+              rankingCursor = typeof output.next_cursor === "string" ? output.next_cursor : null;
+              facts.ranked_results_inspected = equalIds(rankingIds);
+            } else facts.ranked_results_inspected = false;
+          }
+          if (name === "render_a2ui" && input.view === "research_runs"
+            && equalIds(input.runIds)) facts.ranked_results_presented = true;
+          continue;
+        }
         if (name === "submit_research_run" || name === "submit_research_batch") {
           if (output.outcome === "rejected") rejectedTools.set(name, observed);
           if (output.outcome === "accepted" && startsAfter(started, rejectedTools.get(name))) rejectedTools.delete(name);

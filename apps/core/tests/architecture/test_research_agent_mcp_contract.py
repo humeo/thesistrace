@@ -121,6 +121,7 @@ from thesistrace.research_run.models import (
     ResearchRunList,
     ResearchRunPollingDetail,
     ResearchRunProgress,
+    ResearchRunQuery,
     ResearchRunResultSectionInput,
     ResearchRunResultSectionResponse,
     ResearchRunStartTrackingOutcome,
@@ -473,7 +474,8 @@ class _ResearchRunReader:
         if self.failure is not None:
             raise self.failure
         self.list_filters = filters
-        return ResearchRunList(items=[_run_summary()], next_cursor="cursor_next")
+        return ResearchRunList(items=[_run_summary()], next_cursor="cursor_next",
+                               total_count=2, applied_query=ResearchRunQuery())
 
     def get_polling_detail(
         self,
@@ -785,7 +787,7 @@ def _run_summary() -> ResearchRunSummary:
         start_date=date(2024, 1, 2),
         end_date=date(2024, 1, 31),
         formula_summary="close",
-        research_kind="factor_evaluation",
+        research_kind="factor_evaluation", universe="top300",
     )
 
 
@@ -1353,7 +1355,9 @@ def test_registry_projects_research_run_outcomes_and_expected_errors() -> None:
         "folder_id": "folder_default",
         "research_kind": "factor_evaluation",
         "cursor": None,
-        "limit": 20,
+        "limit": 20, "status": None, "search": None, "universe": None,
+        "research_period": None, "metric_filters": [],
+        "sort_by": "created_at", "sort_direction": "descending",
     }
 
     accepted = registry.invoke(
@@ -2205,9 +2209,9 @@ def test_v1_inventory_scopes_descriptions_annotations_and_schemas_are_exact() ->
     canonical = _canonical_v1_contract()
 
     assert sha256(canonical).hexdigest() == (
-        "3948a27f42c998748184b28afb024c1a20f9c58e756947b7a8bfa7faddf00870"
+        "89c1d47795c37a0d1dcf8a04bb90a5c7e0cfcf6ecf0375eda7ba4cc8920d8a3c"
     )
-    assert len(canonical) == 351622
+    assert len(canonical) == 358890
 
 
 def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None:

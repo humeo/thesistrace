@@ -201,7 +201,7 @@ def run_polling_payload(
         created_at=datetime(2024, 2, 1, tzinfo=UTC),
         start_date=date(2024, 1, 2),
         end_date=date(2024, 1, 31),
-        formula_summary="close",
+        formula_summary="close", universe="top300",
         research_kind=research_kind,
     )
     input_payload: dict[str, object] = {

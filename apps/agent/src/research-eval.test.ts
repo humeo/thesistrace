@@ -30,8 +30,8 @@ function completeObservations(repetitions: number = candidates.qualification_rep
 }
 
 describe("fixed real-model evaluation contract", () => {
-  it("requires all eleven distinct outcomes, unique identities and a single clarification", () => {
-    expect(corpus.cases).toHaveLength(11);
+  it("requires all twelve distinct outcomes, unique identities and a single clarification", () => {
+    expect(corpus.cases).toHaveLength(12);
     expect(() => parseResearchEvalCorpus({ ...corpus, cases: corpus.cases.slice(1) })).toThrow("CORPUS_INVALID");
     expect(() => parseResearchEvalCorpus({ ...corpus, cases: [...corpus.cases, corpus.cases[0]] })).toThrow("CORPUS_INVALID");
     expect(() => parseResearchEvalCorpus({ ...corpus, prompt: "private-canary" })).toThrow("CORPUS_INVALID");
@@ -87,10 +87,18 @@ describe("fixed real-model evaluation contract", () => {
     const durations = Object.fromEntries(corpus.cases.map((item) => [item.id, item.max_duration_ms]));
     expect(durations["strategy-backtest"]).toBe(250_000);
     expect(durations["alpha-comparison-batch"]).toBe(250_000);
-    expect(corpus.cases.filter((item) => !["strategy-backtest", "alpha-comparison-batch"].includes(item.id)))
+    expect(corpus.cases.filter((item) => !["strategy-backtest", "alpha-comparison-batch", "global-strategy-top-ten"].includes(item.id)))
       .toHaveLength(9);
-    expect(corpus.cases.filter((item) => !["strategy-backtest", "alpha-comparison-batch"].includes(item.id))
+    expect(corpus.cases.filter((item) => !["strategy-backtest", "alpha-comparison-batch", "global-strategy-top-ten"].includes(item.id))
       .every((item) => item.max_duration_ms === 180_000)).toBe(true);
+  });
+  it("can reserve a scenario bounded by a verified daily model quota", () => {
+    expect(readResearchEvalControls(candidate, "qualification", "5", 1)).toEqual({
+      phase: "qualification", budget: 5, turnCostReserveUsd: 1,
+    });
+    for (const bound of [0, -1, Infinity, NaN]) {
+      expect(() => readResearchEvalControls(candidate, "baseline", "5", bound)).toThrow("CONFIG_INVALID");
+    }
   });
   it("requires an explicit operator phase and a bounded complete-case spending reserve", () => {
     // A finite approval cannot reserve an unbounded number of provider calls.
@@ -110,7 +118,7 @@ describe("fixed real-model evaluation contract", () => {
   it("summarizes the fixed denominator without treating missing or duplicate attempts as passes", () => {
     const observations = completeObservations();
     const summary = summarizeResearchEval(corpus, 3, observations);
-    expect(summary).toMatchObject({ complete: true, task_success_rate: 1, usage_complete: true, total_agent_steps: 144, admission_correction_success_rate: 1 });
+    expect(summary).toMatchObject({ complete: true, task_success_rate: 1, usage_complete: true, total_agent_steps: 156, admission_correction_success_rate: 1 });
     expect(summary.duration_p50_ms).toBe(1100);
     expect(summary.duration_p95_ms).toBe(1200);
     expect(researchEvalPasses(summary, candidate)).toBe(true);
@@ -124,12 +132,19 @@ describe("fixed real-model evaluation contract", () => {
     const summary = summarizeResearchEval(corpus, repetitions, completeObservations(repetitions));
     expect(summary).toMatchObject({
       complete: true,
-      expected_cases: 11,
-      observed_cases: 11,
+      expected_cases: 12,
+      observed_cases: 12,
       task_success_rate: 1,
       minimum_case_success_rate: 1,
       repetition_success_rates: [1],
     });
+  });
+  it("qualifies a selected query case without an inapplicable admission repair measurement", () => {
+    const selected = { ...corpus, cases: corpus.cases.filter(item => item.id === "global-strategy-top-ten") };
+    const observations = completeObservations().filter(item => item.case_id === "global-strategy-top-ten");
+    const summary = summarizeResearchEval(selected, 3, observations);
+    expect(summary.admission_correction_success_rate).toBeNull();
+    expect(researchEvalPasses(summary, candidate)).toBe(true);
   });
   it("rejects leaked fields and inconsistent success claims before report persistence", () => {
     const observation = completeObservations()[0]!;
@@ -147,7 +162,7 @@ describe("fixed real-model evaluation contract", () => {
     expect(summary).toMatchObject({ complete: true, usage_complete: true, duration_p95_ms: 240_000 });
     expect(summary.failures["model-quality"]).toBe(3);
     expect(summary.failures["eval-infrastructure"]).toBe(0);
-    expect(summary.estimated_primary_cost_usd).toBeCloseTo(0.33);
+    expect(summary.estimated_primary_cost_usd).toBeCloseTo(0.36);
     expect(researchEvalPasses(summary, candidate)).toBe(false);
   });
   it("does not omit a repair measurement or one half of a clarification from a complete report", () => {

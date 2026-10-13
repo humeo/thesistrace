@@ -28,6 +28,7 @@ from thesistrace.data import DatasetAdmissionSnapshot
 from thesistrace.data.models import DatasetCoverage
 from thesistrace.migrations.research_search_0010 import SOURCE, migrate
 from thesistrace.research_run import ResearchRunAdmissionCommand, ResearchRunService
+from thesistrace.research_run.models import ResearchRunMetricFilter
 from thesistrace.researcher import ResearcherIdentity, ResearcherService
 from thesistrace.researcher.quota import QuotaPolicy
 
@@ -221,6 +222,33 @@ def main():
                 "SELECT pg_relation_size('research_runs.research_runs_search_idx') AS bytes"
             ).fetchone()["bytes"]
         report["results_equal"] = True
+        # Exercise the same metric ordering/count path now exposed through MCP,
+        # with the highest values in the oldest records across every owner.
+        with database.transaction() as tx:
+            tx.execute("""UPDATE research_runs.runs SET key_metrics=jsonb_build_object(
+                'research_kind','factor_evaluation',
+                'five_session_rank_ic',NULL,'twenty_session_rank_ic',NULL,
+                'one_session_rank_ic',CASE WHEN split_part(id,'-',3)::int=%s THEN NULL
+                    ELSE (%s-split_part(id,'-',3)::int)::double precision/1000 END)""",
+                       (args.runs_per_user, args.runs_per_user))
+            tx.execute("ANALYZE research_runs.runs")
+        metric_queries = {}
+        for direction in ("ascending", "descending"):
+            service.list_page(UUID(int=1), research_kind="factor_evaluation",
+                              sort_by="one_session_rank_ic", sort_direction=direction)
+            metric_queries[direction] = recording.query
+        service.list_page(UUID(int=1), research_kind="factor_evaluation",
+                          sort_by="one_session_rank_ic", metric_filters=[ResearchRunMetricFilter(
+                              metric="one_session_rank_ic", operator="gte", value=0.05)])
+        metric_queries["threshold"] = recording.query
+        report["metric_queries"] = measure(database, metric_queries)
+        assert report["metric_queries"]["descending"]["ids"] == [
+            f"load-1-{i}" for i in range(1, 21)]
+        assert report["metric_queries"]["ascending"]["ids"] == [
+            f"load-1-{i}" for i in range(args.runs_per_user - 1, args.runs_per_user - 21, -1)]
+        assert report["metric_queries"]["threshold"]["total"] == args.runs_per_user - 50
+        assert report["metric_queries"]["threshold"]["ids"] == [
+            f"load-1-{i}" for i in range(1, 21)]
         args.output.write_text(json.dumps(report, indent=2, ensure_ascii=False))
         print(json.dumps({key: report[key] for key in ("data", "baseline_concurrent",
                          "optimized_concurrent", "results_equal")}, ensure_ascii=False), flush=True)

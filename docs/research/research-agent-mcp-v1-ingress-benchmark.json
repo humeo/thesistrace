@@ -21,8 +21,8 @@
     "cursor_characters": 1024
   },
   "deterministic_payloads": {
-    "v1_contract_sha256": "3948a27f42c998748184b28afb024c1a20f9c58e756947b7a8bfa7faddf00870",
-    "v1_contract_bytes": 351622,
+    "v1_contract_sha256": "89c1d47795c37a0d1dcf8a04bb90a5c7e0cfcf6ecf0375eda7ba4cc8920d8a3c",
+    "v1_contract_bytes": 358890,
     "maximum_factor_batch_call_bytes": 84536,
     "maximum_framework_batch_call_bytes": 31444214
   },
@@ -43,5 +43,9 @@
     "network_access": false,
     "real_model": false,
     "note": "Deterministic contract sizes refreshed for shared authoring references, startup guide, catalog filters, conditional Framework inputs, safe validation issues, business rejection semantics, bounded Result pages and current seed names on DailyTrack list items. Observed performance remains the 2026-09-07 measurement; this is not a new performance qualification. Request and complete event-page wire envelopes have independent deterministic regressions in test_research_agent_mcp_contract.py. Python batch compute/decide contract and function-source payload sizes refreshed on 2026-10-08; observed timings were not remeasured. Independent Strategy Batch schemas and descriptions refreshed on 2026-10-09; historical performance observations remain unchanged."
-  }
+  },
+  "static_contract_updated_on": "2026-10-14",
+  "previous_static_contract_sha256": "3948a27f42c998748184b28afb024c1a20f9c58e756947b7a8bfa7faddf00870",
+  "previous_static_contract_bytes": 351622,
+  "static_contract_note": "Current schema payload metadata updated for research query. Previous static metadata is not evidence of the 2026-09-07 measured schema. Observed timings remain historical; that measurement's schema hash was not retained here."
 }
