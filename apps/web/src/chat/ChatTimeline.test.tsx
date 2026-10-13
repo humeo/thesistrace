@@ -180,6 +180,23 @@ test("shows elapsed work immediately after a running prompt before any model out
   await act(async () => root?.render(<ChatTestProvider controller={next}><ChatTimeline controller={next} /></ChatTestProvider>));
   expect(document.body.textContent).toContain("工作耗时 12 秒");
 });
+test("accepted Steer stops the earlier work clock and starts only the following section", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-09-02T00:00:07Z"));
+  await mount(controller({ phase: "active", currentTurnId: TURN_ID, turns: [timelineTurn([
+    entry("user_input", "prompt", { content: "List my research", inputId: INPUT_ID, source: "prompt" }),
+    entry("tool_activity", "before", { name: "list_research_runs", status: "complete" }),
+    { ...entry("user_input", "steer", { content: "Compare these", inputId: "steer", source: "steer" }), created_at: "2026-09-02T00:00:05Z" },
+    entry("tool_activity", "after", { name: "get_research_run", status: "running" }),
+  ], { status: "running", started_at: "2026-09-02T00:00:00Z", completed_at: null })] }));
+  const work = document.querySelectorAll<HTMLElement>('[data-entry-id^="work:"]');
+  expect(work).toHaveLength(2);
+  expect(work[0].textContent).toContain("Worked for 5s");
+  expect(work[1].textContent).toContain("Working for 2s");
+  await act(async () => vi.advanceTimersByTime(2_000));
+  expect(work[0].textContent).toContain("Worked for 5s");
+  expect(work[1].textContent).toContain("Working for 4s");
+});
 test("native work disclosure retains process text and successful tool results", async () => {
   await mount(controller({ turns: [timelineTurn([
     entry("assistant_message", "process", { content: "Checking quality", status: "complete" }),

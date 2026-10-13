@@ -15,7 +15,7 @@ import { parseResearchRunHref } from "./toolResult";
 import { ResearchA2UIActivity, researchResourceIds } from "./researchA2UI";
 import { ResearchResourceProvider } from "./ResearchResourceProvider";
 import { chatViewMessages, projectChatEntries, WORK_ACTIVITY, ENTRY_ACTIVITY, type ChatViewMessage, type WorkContent, type EntryContent } from "./chatViewMessages";
-import type { TimelineEntry, TimelineTurn, ChatQuestion } from "./chatProtocol";
+import type { TimelineEntry, ChatQuestion } from "./chatProtocol";
 import type { ChatConversationController } from "./useChatConversation";
 
 const MESSAGE_TIME_FORMAT = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
@@ -51,11 +51,13 @@ export function ChatTimeline({ controller }: { controller: ChatConversationContr
   const [readingOlder, setReadingOlder] = useState((restoringPosition.current?.top ?? 0) < -80);
   const messages = chatViewMessages(controller.turns);
   const prompts = messages.filter(message => message.role === "user");
-  const promptId = prompts.at(-1)?.id;
-  const firstPrompt = prompts.length === 1;
+  const latestInput = prompts.at(-1);
+  const promptId = latestInput?.id;
+  const steerId = latestInput?.entry?.kind === "user_input" && latestInput.entry.payload.source === "steer" ? promptId : undefined;
+  const firstPrompt = prompts.length === 1 && steerId === undefined;
   const running = controller.turns.at(-1)?.status === "running";
   const previousPrompt = useRef(promptId);
-  const [anchoredPrompt, setAnchoredPrompt] = useState(running && restoringPosition.current === null ? promptId : undefined);
+  const [anchoredPrompt, setAnchoredPrompt] = useState(running && restoringPosition.current === null && steerId === undefined ? promptId : undefined);
   const [replyMinHeight, setReplyMinHeight] = useState(0);
   // Short first conversations also need reply space when reopened from history.
   const layoutPrompt = anchoredPrompt ?? (firstPrompt ? promptId : undefined);
@@ -63,14 +65,18 @@ export function ChatTimeline({ controller }: { controller: ChatConversationContr
   useLayoutEffect(() => {
     if (promptId !== previousPrompt.current) {
       // Hydrating completed history should retain the native latest position.
-      if (previousPrompt.current !== undefined || running) setAnchoredPrompt(promptId);
+      if (steerId !== undefined) setAnchoredPrompt(undefined);
+      else if (previousPrompt.current !== undefined || running) setAnchoredPrompt(promptId);
       previousPrompt.current = promptId;
     }
-  }, [promptId, running]);
+  }, [promptId, running, steerId]);
 
   useLayoutEffect(() => {
     if (!layoutPrompt) {
       setReplyMinHeight(0);
+      if (steerId !== undefined && viewport && restoringPosition.current === null) {
+        list.current?.scrollTo({ top: "bottom", behavior: "instant" });
+      }
       return;
     }
     if (!viewport) return;
@@ -100,7 +106,7 @@ export function ChatTimeline({ controller }: { controller: ChatConversationContr
       cancelAnimationFrame(scrollFrame);
       observer.disconnect();
     };
-  }, [anchoredPrompt, firstPrompt, layoutPrompt, viewport]);
+  }, [anchoredPrompt, firstPrompt, layoutPrompt, steerId, viewport]);
 
   useLayoutEffect(() => {
     const position = restoringPosition.current;
@@ -186,16 +192,17 @@ function RecoveryNotice({ entry }: { entry?: TimelineEntry }) {
 }
 
 function WorkActivity({ content, controller }: { content: WorkContent; controller?: ChatConversationController }) {
-  const label = useWorkedFor({ turn: content.turn });
-  const active = !["completed", "failed", "stopped"].includes(content.turn.status);
+  const label = useWorkedFor(content);
+  const active = content.endedAt === null && !["completed", "failed", "stopped"].includes(content.turn.status);
+  const running = active && content.turn.status === "running";
   const [expanded, setExpanded] = useState(active);
   useEffect(() => setExpanded(active), [active]);
   return <Flex vertical gap={8}>
-    {content.entries.length > 0 ? <Think title={label} loading={content.turn.status === "running"}
+    {content.entries.length > 0 ? <Think title={label} loading={running}
       expanded={expanded} onExpand={setExpanded}>
       <WorkHistory entries={content.entries} controller={controller} />
     </Think> : <ThoughtChain.Item variant="text" icon={<Atom size={16} />}
-      status={content.turn.status === "running" ? "loading" : undefined}
+      status={running ? "loading" : undefined}
       description={label} style={{ padding: 0 }} />}
     <Divider style={{ margin: 0 }} />
   </Flex>;
@@ -273,18 +280,17 @@ function EntryActivity({ content, controller }: { content: EntryContent; control
   return entry.kind === "turn_outcome" ? <TurnOutcome entry={entry} /> : null;
 }
 
-function useWorkedFor({ turn }: { turn: TimelineTurn }) {
+function useWorkedFor({ turn, startedAt, endedAt }: WorkContent) {
   const { t } = useTranslation("chat");
-  const ticking = turn.completed_at === null && (turn.status === "running" || turn.status === "stopping");
+  const ticking = endedAt === null && (turn.status === "running" || turn.status === "stopping");
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!ticking) return;
     const interval = window.setInterval(() => setNow(Date.now()), 1_000);
     return () => window.clearInterval(interval);
   }, [ticking]);
-  const startedAt = Date.parse(turn.started_at);
-  const completedAt = turn.completed_at === null ? now : Date.parse(turn.completed_at);
-  return t(ticking ? "workingFor" : "workedFor", { duration: formatDuration(Math.max(0, completedAt - startedAt)) });
+  const completedAt = endedAt === null ? now : Date.parse(endedAt);
+  return t(ticking ? "workingFor" : "workedFor", { duration: formatDuration(Math.max(0, completedAt - Date.parse(startedAt))) });
 }
 
 

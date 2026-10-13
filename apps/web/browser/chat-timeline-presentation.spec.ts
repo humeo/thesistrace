@@ -268,6 +268,26 @@ test("new prompts sit near the top with reply space and stay there through short
   await expect.poll(relativePosition).toBeLessThanOrEqual(0.25);
   await page.screenshot({ path: new URL("../../../.local/ant-design-x-chat/turn-position/new-prompt.png", import.meta.url).pathname });
 });
+test("accepted Steer stays below earlier work near the composer instead of anchoring at the top", async ({ page }, testInfo) => {
+  await page.clock.setFixedTime(new Date("2026-09-06T00:00:10Z"));
+  await page.goto("https://chat.fixture/?initial=steer");
+  await expect(page.locator('[data-entry-id^="work:"]').first()).toContainText("Working for 10s");
+  await page.getByRole("button", { name: "Accept Steer", exact: true }).click();
+  const steer = page.locator('[data-entry-id="sent-1-steer"]');
+  const scroll = page.locator(".ant-bubble-list-scroll-box").first();
+  await expect(steer).toContainText("Sort by Sharpe instead");
+  const relativePosition = async () => ((await steer.boundingBox())!.y - (await scroll.boundingBox())!.y) / (await scroll.boundingBox())!.height;
+  await expect.poll(relativePosition).toBeGreaterThan(0.5);
+  const work = page.locator('[data-entry-id^="work:"]');
+  await expect(work).toHaveCount(2);
+  await expect(work.first()).toContainText("Worked for 10s");
+  expect((await work.first().boundingBox())!.y).toBeLessThan((await steer.boundingBox())!.y);
+  expect((await work.last().boundingBox())!.y).toBeGreaterThan((await steer.boundingBox())!.y);
+  await page.getByRole("button", { name: "Short reply", exact: true }).click();
+  await expect(page.locator('[data-entry-id="sent-1-response"]')).toContainText("Hello. How can I help?");
+  await expect.poll(relativePosition).toBeGreaterThan(0.5);
+  await page.screenshot({ path: testInfo.outputPath("steer-below-work.png") });
+});
 test("the first accepted prompt stays at the top before output and through a short reply", async ({ page }) => {
   await page.clock.setFixedTime(new Date("2026-09-06T00:00:05Z"));
   await page.goto("https://chat.fixture/?initial=prompt");

@@ -5,7 +5,7 @@ import { progressHistory } from "./progressHistory";
 export const WORK_ACTIVITY = "quantgrove-work-history";
 export const ENTRY_ACTIVITY = "quantgrove-timeline-entry";
 export type ChatViewMessage = Message & { entry?: TimelineEntry; timestamp?: string };
-export type WorkContent = { turn: TimelineTurn; entries: readonly TimelineEntry[] };
+export type WorkContent = { turn: TimelineTurn; entries: readonly TimelineEntry[]; startedAt: string; endedAt: string | null };
 export type EntryContent = { entry: TimelineEntry; answer?: { content: string } };
 
 /** Adapt the persisted product timeline to the chat library's current message contract. */
@@ -13,26 +13,37 @@ export function chatViewMessages(turns: readonly TimelineTurn[]): ChatViewMessag
   return turns.flatMap(turn => {
     const hidden = progressHistory(turn);
     const entries = turn.entries.filter(entry => !hidden.has(entry.entry_id));
-    const lastTool = entries.reduce((last, entry, index) => entry.kind === "tool_activity" || entry.kind === "question" && entry.payload.status !== "pending" ? index : last, -1);
-    const ended = ["completed", "failed", "stopped"].includes(turn.status);
-    const process = entries.filter((entry, index) => entry.kind === "tool_activity"
-      || entry.kind === "question" && entry.payload.status !== "pending"
-      || entry.kind === "user_input" && entry.payload.source === "answer"
-      // Text after the latest tool is already the visible reply. Keep it in
-      // the same message while streaming and when the turn completes.
-      || entry.kind === "assistant_message" && !entry.payload.recovery && index < lastTool);
-    const processIds = new Set(process.map(entry => entry.entry_id));
-    const result = entries.filter(entry => !processIds.has(entry.entry_id));
-    const firstResponse = result.findIndex(entry => entry.kind !== "user_input");
-    const split = firstResponse === -1 ? result.length : firstResponse;
-    const finalAssistant = [...result].reverse().find(entry => entry.kind === "assistant_message");
-    const work: ActivityMessage = { id: `work:${turn.id}`, role: "activity", activityType: WORK_ACTIVITY, content: { turn, entries: process } };
-    return [
-      ...projectChatEntries(result.slice(0, split)),
-      ...(!ended || process.length > 0 || firstResponse !== -1 ? [work] : []),
-      ...projectChatEntries(result.slice(split)).map(message => message.id === finalAssistant?.entry_id
-        ? { ...message, timestamp: turn.completed_at ?? undefined } : message),
-    ];
+    // Steer continues this Turn, but starts a new chronological work section.
+    // Do not fold earlier work or visible replies around the accepted input.
+    const boundaries = [0, ...entries.flatMap((entry, index) => index > 0
+      && entry.kind === "user_input" && entry.payload.source === "steer" ? [index] : [])];
+    return boundaries.flatMap((start, section) => {
+      const end = boundaries[section + 1] ?? entries.length;
+      const segment = entries.slice(start, end);
+      const endedAt = end < entries.length ? entries[end].created_at : turn.completed_at;
+      const ended = end < entries.length || ["completed", "failed", "stopped"].includes(turn.status);
+      const lastTool = segment.reduce((last, entry, index) => entry.kind === "tool_activity" || entry.kind === "question" && entry.payload.status !== "pending" ? index : last, -1);
+      const process = segment.filter((entry, index) => entry.kind === "tool_activity"
+        || entry.kind === "question" && entry.payload.status !== "pending"
+        || entry.kind === "user_input" && entry.payload.source === "answer"
+        // Text after the latest tool stays visible while streaming and after
+        // completion. Later Steer work cannot fold that reply retroactively.
+        || entry.kind === "assistant_message" && !entry.payload.recovery && index < lastTool);
+      const processIds = new Set(process.map(entry => entry.entry_id));
+      const result = segment.filter(entry => !processIds.has(entry.entry_id));
+      const firstResponse = result.findIndex(entry => entry.kind !== "user_input");
+      const split = firstResponse === -1 ? result.length : firstResponse;
+      const finalAssistant = [...result].reverse().find(entry => entry.kind === "assistant_message");
+      const work: ActivityMessage = { id: start === 0 ? `work:${turn.id}` : `work:${turn.id}:${entries[start].entry_id}`,
+        role: "activity", activityType: WORK_ACTIVITY, content: { turn, entries: process,
+          startedAt: start === 0 ? turn.started_at : entries[start].created_at, endedAt } };
+      return [
+        ...projectChatEntries(result.slice(0, split)),
+        ...(!ended || process.length > 0 || firstResponse !== -1 ? [work] : []),
+        ...projectChatEntries(result.slice(split)).map(message => end === entries.length && message.id === finalAssistant?.entry_id
+          ? { ...message, timestamp: turn.completed_at ?? undefined } : message),
+      ];
+    });
   });
 }
 

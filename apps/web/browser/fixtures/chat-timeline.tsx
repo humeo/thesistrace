@@ -38,10 +38,19 @@ function TimelineFixture() {
     id, started_at: time, completed_at: history ? time : null,
     status: history ? "completed" : "running", entries: [
       { entry_id: `${id}-prompt`, turn_id: id, created_at: time, kind: "user_input", payload: { source: "prompt", content: "Hi", inputId: id } },
+      ...(initial === "steer" ? [{ ...tool(`${id}-before-steer`), turn_id: id }] : []),
       ...(history ? [{ ...text(`${id}-response`, "Hello. How can I help?"), turn_id: id }] : []),
     ],
   })));
   const streamedParagraphs = useRef(60);
+  function acceptSteer() {
+    setSentTurns(turns => turns.map((item, index) => index === turns.length - 1 ? {
+      ...item, entries: [...item.entries, {
+        entry_id: `${item.id}-steer`, turn_id: item.id, created_at: new Date().toISOString(),
+        kind: "user_input", payload: { source: "steer", content: "Sort by Sharpe instead", inputId: "steer" },
+      }, { ...tool(`${item.id}-after-steer`), turn_id: item.id, created_at: new Date().toISOString() }],
+    } : item));
+  }
   const entries = [{ entry_id: "initial-prompt", turn_id: turnId, created_at: time, kind: "user_input" as const,
     payload: { source: "prompt" as const, content: "Check the research results.", inputId: turnId } },
     text("before", "Checking the research context."), tool("first-tool"),
@@ -90,7 +99,8 @@ function TimelineFixture() {
   function respond(content: string, complete = false) {
     setSentTurns((turns) => turns.map((item, index) => index === turns.length - 1 ? {
       ...item, status: complete ? "completed" : "running", completed_at: complete ? time : null,
-      entries: [item.entries[0]!, { ...text(`${item.id}-response`, content), turn_id: item.id }],
+      entries: [...item.entries.filter(entry => entry.entry_id !== `${item.id}-response`),
+        { ...text(`${item.id}-response`, content), turn_id: item.id }],
     } : item));
   }
   return <main style={{ height: "100vh", display: "grid", gridTemplateRows: "auto minmax(0, 1fr)" }}>
@@ -107,7 +117,8 @@ function TimelineFixture() {
       <button onClick={() => respond("Hello. How can I help?", true)}>Finish reply</button>
       <button onClick={() => respond("First **paragraph** with `研究区间`.\n\nSecond paragraph.\n\n### Section\n\nSection content.\n\n- First item\n- Second item\n\n## Summary\n\nSummary content.\n\n| 阅读位置 | 核心问题 | 变化 |\n| --- | --- | ---: |\n| 方法与结果 | 证据是否支持假设？ | +12.5% |\n| 局限与结论 | 结论适用边界在哪？`research_reference_0123456789abcdefghijklmnopqrstuvwxyz` | -3.2% |", true)}>Typography reply</button>
       <button onClick={() => respond("[X](/research-runs/run_0123456789abcdef0123)", true)}>Run link reply</button>
-      <button onClick={() => respond("A longer streamed paragraph.\n\n".repeat(++streamedParagraphs.current))}>Long reply</button></nav>
+      <button onClick={() => respond("A longer streamed paragraph.\n\n".repeat(++streamedParagraphs.current))}>Long reply</button>
+      <button onClick={acceptSteer}>Accept Steer</button></nav>
     <ChatTestProvider controller={controller}><ChatConversationView controller={{ ...controller, action: { enabled: false, kind: "send", label: "Send" }, queue: [], error: null, errorCode: null, draft: "", draftBytes: 0, textareaRef: { current: null }, setDraft: () => {} }} existingSession agentId="default" threadId="fixture" modelControls={null} /></ChatTestProvider><Toaster />
   </main>;
 }
