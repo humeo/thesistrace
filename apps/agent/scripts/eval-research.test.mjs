@@ -34,6 +34,17 @@ test("offline preflight rejects a finite reserve without a model-call bound", ()
   assert.equal(result.stderr.trim(), "RESEARCH_EVAL_CONFIG_INVALID");
 });
 
+test("offline query preflight exports the configured model with an explicit bounded scenario", () => {
+  const result = invoke("configure", {
+    THESISTRACE_AGENT_EVAL_CASE_IDS: "global-strategy-top-ten",
+    THESISTRACE_AGENT_EVAL_SPEND_LIMIT_USD: "5",
+    THESISTRACE_AGENT_EVAL_PHASE: "qualification",
+  });
+  assert.equal(result.status, 0);
+  assert.equal(result.stderr, "");
+  assert.equal(JSON.parse(result.stdout).models[0].key, "gpt-5.6-luna");
+});
+
 for (const [label, command, overrides] of [
   ["unsupported effort", "configure", { THESISTRACE_AGENT_EVAL_REASONING_EFFORT: "minimal" }],
   ["superseded model", "configure", { THESISTRACE_AGENT_EVAL_MODEL_KEY: "gpt-5.4-mini" }],

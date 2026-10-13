@@ -340,7 +340,7 @@ function command(program, args, input) {
 function required(name) { const value = process.env[name]; if (!value) throw new ResearchEvalError("CONFIG_INVALID"); return value; }
 async function provision(origin, suffix) {
   const output = JSON.parse(docker(["exec", `${project}-auth-1`, "node", "/test-fixtures/provision-image-smoke-session.mjs",
-    `agent-eval-${suffix}@example.test`, "Agent-eval-isolated-password-2026", `198.51.100.${Number.parseInt(digest(suffix).slice(0, 2), 16) || 1}`]));
+    `agent-eval-${suffix}@example.test`, `198.51.100.${Number.parseInt(digest(suffix).slice(0, 2), 16) || 1}`]));
   if (typeof output.cookie !== "string" || !/^[a-f0-9-]{36}$/.test(output.researcher_id)) throw new ResearchEvalError("DEPENDENCY_UNAVAILABLE");
   const researcher = { origin, cookie: output.cookie, id: output.researcher_id };
   await json(researcher, "/api/researcher/bootstrap", { method: "POST", body: "{}" });
