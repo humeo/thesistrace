@@ -32,7 +32,7 @@ test("shows one newest-first history list with a new Chat action in its header",
       .toEqual(["Most recent", "Last week", "Older chat"]);
     expect(host.querySelectorAll(".chat-session-list")).toHaveLength(1);
     expect(Array.from(host.querySelectorAll("h3"), (node) => node.textContent)).toEqual(["Recent"]);
-    const shortcut = host.querySelector<HTMLAnchorElement>('a[aria-label="Start a new Chat from history"]');
+    const shortcut = host.querySelector<HTMLAnchorElement>('a[aria-label="New Chat"]');
     expect(shortcut?.getAttribute("href")).toBe("/chat");
     await act(async () => shortcut?.click());
     expect(navigate).toHaveBeenCalledWith("/chat");
@@ -92,7 +92,7 @@ test("uses the first message while a title is pending and retains an open histor
     expect(document.querySelector('[role="menu"]')).not.toBeNull();
     await act(async () => changeInterfaceLanguage("zh-CN"));
     expect(host.querySelector(".chat-session-heading h3")?.textContent).toBe("最近");
-    expect(host.querySelector(".chat-session-new-chat")?.getAttribute("aria-label")).toBe("从历史记录新建对话");
+    expect(host.querySelector(".chat-session-new-chat")?.getAttribute("aria-label")).toBe("新对话");
     expect(host.querySelector<HTMLAnchorElement>(`a[href="${chatSessionHref(sessions[0].id)}"]`)?.textContent).toBe("查看最近的研究");
     expect(host.querySelector<HTMLAnchorElement>(`a[href="${chatSessionHref(sessions[1].id)}"]`)?.textContent).toBe("未命名");
     expect(document.querySelector('[role="menu"]')?.getAttribute("aria-label")).toBe("查看最近的研究 的操作");

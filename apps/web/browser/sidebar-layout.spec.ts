@@ -112,7 +112,7 @@ test('mobile Sheet closes on Escape from the focused New Chat link', async ({ pa
  const trigger = page.getByRole('button', { name: 'Open navigation' });
  await trigger.click();
  const sheet = page.getByRole('dialog', { name: 'Navigation' });
- const newChat = sheet.getByRole('link', { name: 'New Chat', exact: true });
+ const newChat = sheet.getByRole('link', { name: 'New Chat', exact: true }).filter({ hasText: 'New Chat' });
  await newChat.focus();
  await expect(newChat).toBeFocused();
  await page.keyboard.press('Escape');
@@ -308,7 +308,7 @@ test('sidebar panel trigger and collapsed navigation share their visual center',
 
 test('history reveals its new Chat action on hover and focus', async ({ page }) => {
  const heading = page.locator('.chat-session-heading h3');
- const shortcut = page.getByRole('link', { name: 'Start a new Chat from history' });
+ const shortcut = page.locator('.chat-session-heading').getByRole('link', { name: 'New Chat', exact: true });
  await expect(heading).toHaveText('Recent');
  await expect(page.locator('.chat-session-row')).toHaveCount(1);
  await expect(page.locator('.chat-session-list')).toHaveCount(1);
@@ -321,12 +321,12 @@ test('history reveals its new Chat action on hover and focus', async ({ page }) 
  await heading.hover();
  await expect(shortcut).toHaveCSS('opacity', '1');
  await shortcut.hover();
- await expect(page.locator('[data-slot="tooltip-content"]')).toHaveText('Start a new Chat from history');
+ await expect(page.locator('[data-slot="tooltip-content"]')).toHaveText('New Chat');
  await page.getByTestId('workspace-content').hover();
  await expect(page.locator('[data-slot="tooltip-content"]')).toHaveCount(0);
  await shortcut.focus();
  await expect(shortcut).toHaveCSS('opacity', '1');
- await expect(page.locator('[data-slot="tooltip-content"]')).toHaveText('Start a new Chat from history');
+ await expect(page.locator('[data-slot="tooltip-content"]')).toHaveText('New Chat');
  await shortcut.click();
  await expect(page.getByTestId('workspace-content')).toContainText('/chat');
 });
@@ -337,7 +337,7 @@ test('sidebar avoids redundant expanded hints and retains one collapsed hint', a
  await research.hover();
  await expect(page.locator('[data-slot=tooltip-content]')).toHaveCount(0);
  await expect(research).not.toHaveCSS('background-color', 'rgb(255, 255, 255)');
- const newChat = page.getByRole('link', { name: 'New Chat', exact: true });
+ const newChat = page.getByRole('link', { name: 'New Chat', exact: true }).filter({ hasText: 'New Chat' });
  await expect(newChat).not.toHaveAttribute('title');
  await expect(newChat).toHaveCSS('box-shadow', 'none');
  await page.getByRole('button', { name: 'Collapse sidebar', exact: true }).click();
