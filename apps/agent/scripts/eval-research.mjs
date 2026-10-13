@@ -148,7 +148,8 @@ async function evaluate({ candidate, candidateBytes, repetitions, effort, regist
     if (deployedEndpointHash !== digest(providerBaseUrl)) throw new ResearchEvalError("CONFIG_INVALID");
   }
   const inspect = JSON.parse(docker(["inspect", "--format", '{"memory":{{.HostConfig.Memory}},"nano_cpus":{{.HostConfig.NanoCpus}}}', `${project}-agent-1`]));
-  if (inspect.memory !== 1073741824 || inspect.nano_cpus !== 1000000000) throw new ResearchEvalError("CONFIG_INVALID");
+  process.stderr.write(`${JSON.stringify({ event: "research_eval_host_resources", memoryBytes: inspect.memory, cpuCount: inspect.nano_cpus / 1e9 })}\n`);
+  if (inspect.memory !== 4294967296 || inspect.nano_cpus !== 2000000000) throw new ResearchEvalError("CONFIG_INVALID");
   const images = Object.fromEntries(["agent", "auth", "api", "research-worker", "batch-research-worker", "tracking-worker", "web"].map((service) => [service,
     docker(["inspect", "--format", "{{.Image}}", `${project}-${service}-1`]).trim(),
   ]));
@@ -317,7 +318,7 @@ async function evaluate({ candidate, candidateBytes, repetitions, effort, regist
       startup_registry_sha256: digest(JSON.stringify(registryValue)), capability_inventory_sha256: digest(JSON.stringify(allowedTools)),
       pricing: candidate.pricing, repetitions, thresholds: candidate.thresholds, spend_limit_usd: budget,
       envelope: { ...AGENT_LIMITS, messageBytes: MAX_CHAT_MESSAGE_BYTES, activeRuns: MAX_ACTIVE_AGENT_RUNS,
-        cpuCount: 1, memoryBytes: 1073741824, runWallSeconds: 600, mcpTokenLifetimeSeconds: 660, mcpClockSkewSeconds: 30,
+        cpuCount: inspect.nano_cpus / 1e9, memoryBytes: inspect.memory, runWallSeconds: 600, mcpTokenLifetimeSeconds: 660, mcpClockSkewSeconds: 30,
         evalTurnObservationMs: RESEARCH_EVAL_TURN_OBSERVATION_MS },
       summary, observations,
     };
