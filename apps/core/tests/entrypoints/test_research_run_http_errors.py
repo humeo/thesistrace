@@ -50,7 +50,7 @@ def test_http_validates_pages_and_maps_owned_research_run_failures_to_503() -> N
         raise_server_exceptions=False,
     )
 
-    for params in ({"page": 0}, {"page_size": 0}, {"page_size": 51},
+    for params in ({"page": 0}, {"page_size": 0}, {"page_size": 51}, {"search": "x" * 1025},
                    {"sort_by": "unknown"}, {"sort_direction": "sideways"},
                    {"metric_filters": "not-json"},
                    {"metric_filters": '[{"metric":"created_at","operator":"gt","value":1}]'},
@@ -136,3 +136,22 @@ def test_http_passes_valid_metric_conditions_to_owned_listing() -> None:
         ResearchRunMetricFilter(metric="annualized_excess_return", operator="gt", value=0.1),
         ResearchRunMetricFilter(metric="maximum_drawdown", operator="lte", value=0.2),
     ])]
+
+
+def test_http_passes_search_to_owned_listing() -> None:
+    from thesistrace.research_run import ResearchRunPage
+
+    received = []
+
+    def list_page(researcher_id, **options):
+        received.append((researcher_id, options["search"]))
+        return ResearchRunPage(items=[], total_count=0)
+
+    app = _app()
+    app.state.core_runtime = SimpleNamespace(research_runs=SimpleNamespace(list_page=list_page))
+    response = TestClient(app, headers={"Origin": PUBLIC_ORIGIN}).get(
+        "/api/research-runs", params={"search": "动量 100%_"},
+    )
+    assert response.status_code == 200
+    assert response.json() == {"items": [], "total_count": 0}
+    assert received == [(UUID("018f6f7e-8342-7c9a-a4df-9a86147d2e11"), "动量 100%_")]

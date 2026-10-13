@@ -595,6 +595,18 @@ describe("ResearchRunHistory", () => {
 });
 
 describe("Research Runs pagination", () => {
+  it("encodes a trimmed search with existing filters and omits a blank search", () => {
+    const options = {
+      page: 1, folderId: "folder signals", researchKind: "factor_evaluation" as const,
+      sort: { key: "created_at" as const, direction: "descending" as const },
+    };
+    const parameters = new URL(researchRunListPath({ ...options, search: "  动量 100%_  " }), "http://core.test").searchParams;
+    expect(parameters.get("search")).toBe("动量 100%_");
+    expect(parameters.get("folder_id")).toBe("folder signals");
+    expect(parameters.get("research_kind")).toBe("factor_evaluation");
+    expect(researchRunListPath({ ...options, search: "   " })).toBe(researchRunListPath(options));
+  });
+
   it("builds a bounded, filtered page request", () => {
     expect(researchRunListPath({
       page: 2,

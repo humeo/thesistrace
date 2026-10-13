@@ -1651,6 +1651,7 @@ class ResearchRunService:
         sort_by: ResearchRunSortKey = "created_at",
         sort_direction: ResearchRunSortDirection = "descending",
         metric_filters: Sequence[ResearchRunMetricFilter] = (),
+        search: str | None = None,
     ) -> ResearchRunPage:
         """Fixed-size Web pages; Agent lists retain their bounded cursor contract."""
         if isinstance(page, bool) or page < 1:
@@ -1684,32 +1685,56 @@ class ResearchRunService:
             )
             thresholds.append(item.value)
         metric_predicates = " ".join(predicates)
+        search = (search or "").strip()
+        if len(search) > 1024:
+            raise ValueError("ResearchRun search must be at most 1024 characters")
+        # LIKE can use pg_trgm; escape its metacharacters to retain literal
+        # substring semantics. Generated notes/formula columns avoid reading the
+        # complete immutable input for every candidate, including short terms.
+        pattern = "%" + search.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%"
+        search_predicate = (
+            "AND (lower(name) LIKE lower(%s) ESCAPE '!' "
+            "OR search_notes LIKE lower(%s) ESCAPE '!' "
+            "OR search_formula LIKE lower(%s) ESCAPE '!')"
+            if search else ""
+        )
+        # Search once for the exact count and page. Materialize only IDs and
+        # sorting values; retrieve large immutable inputs for the page alone.
+        # Ordinary browsing keeps the existing index-ordered LIMIT plan.
+        materialization = "MATERIALIZED" if search else "NOT MATERIALIZED"
         try:
             with self._database.transaction() as transaction:
                 rows = transaction.execute(
                     f"""
-                    WITH filtered AS NOT MATERIALIZED (
-                        SELECT id, name, folder_id, status, requested_start_date,
-                               requested_end_date, created_at, immutable_input,
-                               key_metrics, failure_reason
+                    WITH filtered AS {materialization} (
+                        SELECT id, created_at, {expression} AS sort_value
                         FROM research_runs.runs
                         WHERE researcher_id = %s
                           AND (%s::text IS NULL OR folder_id = %s::text)
                           AND (%s::text IS NULL OR immutable_input->>'research_kind' = %s::text)
+                          {search_predicate}
                           {metric_predicates}
                     )
-                    SELECT totals.total_count, page_rows.*
+                    SELECT totals.total_count, runs.id, runs.name, runs.folder_id,
+                           runs.status, runs.requested_start_date, runs.requested_end_date,
+                           runs.created_at, runs.immutable_input, runs.key_metrics,
+                           runs.failure_reason
                     FROM (SELECT count(*) AS total_count FROM filtered) AS totals
                     LEFT JOIN LATERAL (
-                        SELECT *, {expression} AS sort_value FROM filtered
+                        SELECT * FROM filtered
                         ORDER BY sort_value {direction} NULLS LAST, created_at DESC, id
                         LIMIT %s OFFSET %s
                     ) AS page_rows ON true
+                    LEFT JOIN research_runs.runs AS runs ON runs.id = page_rows.id
                     ORDER BY page_rows.sort_value {direction} NULLS LAST,
                              page_rows.created_at DESC, page_rows.id
                     """,
                     (researcher_id, folder_id, folder_id, research_kind, research_kind,
+                     *((pattern, pattern, pattern) if search else ()),
                      *thresholds, page_size, (page - 1) * page_size),
+                    # Keyword selectivity varies sharply. A cached generic plan
+                    # can full-scan the GIN index for short terms across all users.
+                    prepare=False if search else None,
                 ).fetchall()
             return ResearchRunPage(
                 items=[_summary(row) for row in rows if row["id"] is not None],

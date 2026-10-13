@@ -39,8 +39,9 @@ export function useResearchRunListController(runId: string | undefined) {
   const [pageIndex, setPageIndex] = useState(0);
   const [sort, setSort] = useState<ResearchRunSort>(DEFAULT_RESEARCH_RUN_SORT);
   const [metricFilters, setMetricFilters] = useState<ResearchMetricFilter[]>([]);
+  const [search, setSearch] = useState("");
   const folderQuery = useQuery(researchFoldersQuery);
-  const path = researchRunListPath({ page: pageIndex + 1, sort, metricFilters, folderId: folderFilter, researchKind: researchKindFilter });
+  const path = researchRunListPath({ page: pageIndex + 1, sort, metricFilters, folderId: folderFilter, researchKind: researchKindFilter, search });
   const listQuery = useQuery({
     queryKey: ["workspace", "research-runs", path],
     queryFn: async ({ signal }): Promise<ResearchRunList> => {
@@ -79,7 +80,8 @@ export function useResearchRunListController(runId: string | undefined) {
     if (totalCount !== null && (pageIndex + 1) * RESEARCH_RUN_PAGE_SIZE < totalCount) setPageIndex(current => current + 1);
   }
   function applyMetricFilters(filters: ResearchMetricFilter[]) { setMetricFilters(filters); setPageIndex(0); }
-  return { items, folders, folderFilter, researchKindFilter, pageIndex, sort, metricFilters, totalCount, folderError, error, loadState, refresh, refreshFolders, changeSort, changeFolderFilter, changeResearchKindFilter, showPreviousPage, showNextPage, applyMetricFilters };
+  function applySearch(value: string) { setSearch(value.trim()); setPageIndex(0); }
+  return { items, folders, folderFilter, researchKindFilter, pageIndex, sort, metricFilters, search, totalCount, folderError, error, loadState, refresh, refreshFolders, changeSort, changeFolderFilter, changeResearchKindFilter, showPreviousPage, showNextPage, applyMetricFilters, applySearch };
 }
 
 export function researchRunListPath({
@@ -88,17 +90,20 @@ export function researchRunListPath({
   sort,
   folderId,
   researchKind,
+  search = "",
 }: {
   page: number;
   metricFilters?: ResearchMetricFilter[];
   sort: ResearchRunSort;
   folderId: string;
   researchKind: ResearchKindFilter;
+  search?: string;
 }): string {
   const parameters = new URLSearchParams({ page: String(page), page_size: String(RESEARCH_RUN_PAGE_SIZE), sort_by: sort.key, sort_direction: sort.direction });
   if (metricFilters.length) parameters.set("metric_filters", JSON.stringify(metricFilters));
   if (folderId !== "") parameters.set("folder_id", folderId);
   if (researchKind !== "") parameters.set("research_kind", researchKind);
+  if (search.trim() !== "") parameters.set("search", search.trim());
   return `/api/research-runs?${parameters.toString()}`;
 }
 

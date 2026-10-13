@@ -12,7 +12,7 @@ import { Empty, EmptyHeader, EmptyTitle } from "../components/ui/empty";
 import { PageNavigation } from "../components/layout/PageNavigation";
 import type { ParseKeys } from "i18next";
 import { useRef, useState } from "react";
-import { CaretDown, CaretUp, CaretUpDown } from "@phosphor-icons/react";
+import { CaretDown, CaretUp, CaretUpDown, MagnifyingGlass } from "@phosphor-icons/react";
 import { i18n, useTranslation } from "../i18n";
 import { formatDecimal, formatNumber, formatPercent, formatUtcTimestamp } from "../i18n/format";
 import { folderDisplayName } from "../research/folders";
@@ -25,14 +25,34 @@ import { RESEARCH_RUN_PAGE_SIZE, type ResearchKindFilter, type ResearchMetricFil
 
 export function ResearchRunList({ list }: { list: ReturnType<typeof useResearchRunListController> }) {
   const { t } = useTranslation("runs");
-  const { items, folders, folderFilter, researchKindFilter, pageIndex, sort, metricFilters, totalCount, folderError, error, loadState, refresh, refreshFolders, changeSort, changeFolderFilter, changeResearchKindFilter, showPreviousPage, showNextPage, applyMetricFilters } = list;
+  const { items, folders, folderFilter, researchKindFilter, pageIndex, sort, metricFilters, search, totalCount, folderError, error, loadState, refresh, refreshFolders, changeSort, changeFolderFilter, changeResearchKindFilter, showPreviousPage, showNextPage, applyMetricFilters, applySearch } = list;
   const selectedFolder = folders.find(folder => folder.id === folderFilter);
   const [metricOpen, setMetricOpen] = useState(false);
+  const [searchDraft, setSearchDraft] = useState(search);
   return <Page className="console-workspace" aria-label={t("title")}>
     <PageContent className="flex flex-col gap-6">
       <PageHeader variant="console" title={t("title")} className="mb-0" />
       <ResearchRunsNavigation active="runs" />
       {folderError ? <ResearchFolderLoadFailure error={folderError} onRetry={refreshFolders} /> : null}
+      <form role="search" aria-label={t("searchLabel")} onSubmit={event => {
+        event.preventDefault();
+        setSearchDraft(searchDraft.trim());
+        applySearch(searchDraft);
+      }}>
+        <FieldGroup className="flex-row items-end gap-3">
+          <Field className="min-w-0 flex-1">
+            <FieldLabel htmlFor="runs-search">{t("search")}</FieldLabel>
+            <Input id="runs-search" type="search" aria-label={t("searchLabel")}
+              placeholder={t("searchPlaceholder")} maxLength={1024}
+              value={searchDraft} onChange={event => setSearchDraft(event.target.value)} />
+          </Field>
+          <Button type="submit" variant="outline"><MagnifyingGlass aria-hidden="true" data-icon="inline-start" />{t("search")}</Button>
+          {searchDraft !== "" || search !== "" ? <Button type="button" variant="ghost" onClick={() => {
+            setSearchDraft("");
+            applySearch("");
+          }}>{t("clearSearch")}</Button> : null}
+        </FieldGroup>
+      </form>
       <FieldGroup className="flex-row flex-wrap items-end gap-6">
         <Field className="w-72 max-w-full">
           <FieldLabel htmlFor="runs-folder-filter">{t("folder")}</FieldLabel>

@@ -1072,6 +1072,7 @@ def create_app(
         sort_by: ResearchRunSortKey = "created_at",
         sort_direction: ResearchRunSortDirection = "descending",
         metric_filters: str | None = Query(default=None, max_length=4096),
+        search: str | None = Query(default=None, max_length=1024),
     ) -> ResearchRunPage:
         try:
             filters = (
@@ -1093,6 +1094,7 @@ def create_app(
                 sort_by=sort_by,
                 sort_direction=sort_direction,
                 metric_filters=filters,
+                search=search,
             )
         except ResearchRunTemporarilyUnavailable as error:
             raise HTTPException(

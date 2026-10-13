@@ -101,7 +101,11 @@ def test_research_run_service_scopes_resources_receipts_and_cursors(
 
     run_a_second = service.admit(
         RESEARCHER_A.researcher_id,
-        _command("second-alpha-request"),
+        ADMISSION.validate_python({
+            **_command("second-alpha-request").model_dump(mode="json"),
+            "name": "中文动量 100%_收益",
+            "hypothesis": "检查成交量；Keep Turnover Low! path\\sample",
+        }),
     )
     assert service.get(RESEARCHER_A.researcher_id, run_a.id) == run_a
     assert service.get(RESEARCHER_A.researcher_id, run_b.id) is None
@@ -144,6 +148,41 @@ def test_research_run_service_scopes_resources_receipts_and_cursors(
     assert service.list_page(RESEARCHER_A.researcher_id, folder_id="missing").total_count == 0
     assert service.list_page(RESEARCHER_A.researcher_id, page=3, page_size=1).items == []
 
+    # Search happens before paging/counting, includes frozen notes and formulas,
+    # treats SQL wildcard characters literally, and retains researcher ownership.
+    for search, expected in (
+        ("中文动量", {run_a_second.id}),
+        ("动量", {run_a_second.id}),
+        ("量", {run_a_second.id}),
+        ("  TURNOVER  ", {run_a_second.id}),
+        ("成交量", {run_a_second.id}),
+        ("100%_", {run_a_second.id}),
+        ("%", {run_a_second.id}),
+        ("_", {run_a_second.id}),
+        ("!", {run_a_second.id}),
+        ("\\sample", {run_a_second.id}),
+        ("%sample", set()),
+        ("Low! path", {run_a_second.id}),
+        ("收益检查", set()),
+        ("Owned", {run_a.id}),
+        ("CLOSE", {run_a.id, run_a_second.id}),
+        ("   ", {run_a.id, run_a_second.id}),
+        ("no matching research", set()),
+        ("' OR true --", set()),
+    ):
+        matches = service.list_page(RESEARCHER_A.researcher_id, search=search)
+        assert {item.id for item in matches.items} == expected
+        assert matches.total_count == len(expected)
+    pages = [service.list_page(RESEARCHER_A.researcher_id, search="close",
+                              page=page, page_size=1) for page in (1, 2)]
+    assert {page.items[0].id for page in pages} == {run_a.id, run_a_second.id}
+    assert all(page.total_count == 2 for page in pages)
+    beyond = service.list_page(RESEARCHER_A.researcher_id, search="close", page=3, page_size=1)
+    assert beyond.items == [] and beyond.total_count == 2
+    assert service.list_page(RESEARCHER_B.researcher_id, search="成交量").total_count == 0
+    for filters in ({"folder_id": "missing"}, {"research_kind": "strategy_backtest"}):
+        assert service.list_page(RESEARCHER_A.researcher_id, search="动量", **filters).items == []
+
     # The older record must move across the page boundary, not merely sort in-page.
     with ownership_database.transaction() as transaction:
         for run, score in ((run_a, 0.8), (run_a_second, 0.2), (run_b, 0.99)):
@@ -168,6 +207,10 @@ def test_research_run_service_scopes_resources_receipts_and_cursors(
         )
         assert filtered.total_count == 1
         assert filtered.items[0].id == run_a.id
+        assert service.list_page(
+            RESEARCHER_A.researcher_id, search="动量",
+            metric_filters=[ResearchRunMetricFilter(metric=key, operator="gt", value=0.2)],
+        ).total_count == 0
     with ownership_database.transaction() as transaction:
         transaction.execute("UPDATE research_runs.runs SET key_metrics = NULL WHERE id = %s",
                             (run_a.id,))
@@ -175,6 +218,13 @@ def test_research_run_service_scopes_resources_receipts_and_cursors(
         page = service.list_page(RESEARCHER_A.researcher_id, sort_by="five_session_rank_ic",
                                  sort_direction=direction)
         assert [item.id for item in page.items] == [run_a_second.id, run_a.id]
+
+    service.organize(RESEARCHER_A.researcher_id, run_a_second.id,
+                     OrganizeResearchRunCommand(name="Renamed Search Target"))
+    assert service.list_page(RESEARCHER_A.researcher_id, search="动量").total_count == 0
+    renamed = service.list_page(RESEARCHER_A.researcher_id, search="renamed")
+    assert [item.id for item in renamed.items] == [run_a_second.id]
+    assert service.list_page(RESEARCHER_A.researcher_id, search="成交量").total_count == 1
 
     cancelled_a = service.cancel(
         RESEARCHER_A.researcher_id,

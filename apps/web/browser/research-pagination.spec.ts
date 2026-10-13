@@ -158,6 +158,59 @@ const sampleRun = {
   formula_summary: "close", research_kind: "strategy_backtest",
 };
 
+test("searches globally on submit, preserves filters and language state, and clears the search", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const requests: URLSearchParams[] = [];
+  await page.route("http://research.test/**", route => {
+    const url = new URL(route.request().url());
+    if (url.pathname === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    if (url.pathname === "/api/research-folders") return route.fulfill({ json: folderList });
+    if (url.pathname === "/api/research-runs/run_context") return route.fulfill({ json: sampleRun });
+    requests.push(url.searchParams);
+    const search = url.searchParams.get("search");
+    return route.fulfill({ json: { items: search === "no match" ? [] : [sampleRun], total_count: search ? (search === "no match" ? 0 : 1) : 21 } });
+  });
+  await page.goto("http://research.test/");
+  await page.addStyleTag({ content: styles });
+  await page.addScriptTag({ content: timelineScript });
+  await choose(page, "Filter by Folder", "Default");
+  await choose(page, "Filter by Type", "strategy_backtest");
+  await page.getByRole("button", { name: "Metric filters", exact: true }).click();
+  await page.getByRole("button", { name: "Add condition", exact: true }).click();
+  await page.getByLabel("Threshold 1", { exact: true }).fill("10");
+  await page.getByRole("button", { name: "Apply filters", exact: true }).click();
+  const nav = page.getByRole("navigation", { name: "Research Runs pages" });
+  await nav.getByRole("button", { name: "Next", exact: true }).click();
+  await expect(nav).toContainText("Page 2 / 2");
+  const search = page.getByRole("searchbox", { name: "Search research", exact: true });
+  await expect(search).toHaveAttribute("placeholder", "Research name, formula keywords or notes");
+  await search.fill("  动量 100%_  ");
+  expect(requests.at(-1)?.has("search")).toBe(false);
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await expect(nav).toContainText("Page 1 / 1");
+  expect(requests.at(-1)?.get("search")).toBe("动量 100%_");
+  expect(requests.at(-1)?.get("page")).toBe("1");
+  expect(requests.at(-1)?.get("folder_id")).toBe("folder_default");
+  expect(requests.at(-1)?.get("research_kind")).toBe("strategy_backtest");
+  expect(requests.at(-1)?.get("metric_filters")).toBe(JSON.stringify([{ metric: "annualized_excess_return", operator: "gt", value: 0.1 }]));
+  await page.getByRole("link", { name: sampleRun.name, exact: true }).click();
+  await page.getByRole("link", { name: "Back to Research Runs", exact: true }).click();
+  await expect(search).toHaveValue("动量 100%_");
+  const query = requests.at(-1)?.toString();
+  await page.getByRole("button", { name: "简体中文", exact: true }).click();
+  await expect(page.getByRole("searchbox", { name: "搜索研究", exact: true })).toHaveValue("动量 100%_");
+  expect(requests.at(-1)?.toString()).toBe(query);
+  await page.getByRole("searchbox", { name: "搜索研究", exact: true }).fill("no match");
+  await page.getByRole("searchbox", { name: "搜索研究", exact: true }).press("Enter");
+  await expect(page.getByText("没有符合搜索或筛选条件的研究运行。", { exact: true })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "研究运行分页" })).toContainText("第 0 / 0 页");
+  await page.getByRole("button", { name: "清空搜索", exact: true }).click();
+  await expect(page.getByRole("searchbox", { name: "搜索研究", exact: true })).toHaveValue("");
+  await expect(page.getByRole("navigation", { name: "研究运行分页" })).toContainText("第 1 / 2 页");
+  expect(requests.at(-1)?.has("search")).toBe(false);
+  expect(requests.at(-1)?.get("folder_id")).toBe("folder_default");
+});
+
 test("returning from a Run keeps applied filters and page across language and width changes", async ({ page }) => {
   const requests: URLSearchParams[] = [];
   await page.route("http://research.test/**", route => {

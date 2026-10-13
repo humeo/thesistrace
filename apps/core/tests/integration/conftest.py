@@ -125,3 +125,10 @@ def execution_timing_target_schemas():
     from thesistrace.migrations.execution_timing_0009 import TARGET
 
     return _migration_release_schemas("execution-timing-target.zip", TARGET)
+
+
+@pytest.fixture
+def independent_strategies_target_schemas():
+    from thesistrace.migrations.independent_strategies_0007 import TARGET
+
+    return _migration_release_schemas("independent-strategies-target.zip", TARGET)

@@ -40,8 +40,11 @@ try {
       }
     }
   } else {
-    if (!Object.hasOwn(phases, command) || args.length > 1 || (args.length && args[0] !== '--keep-environment')) throw new CommandError('invalid Test command or options', 2);
-    run = new TestRun(command, { keepEnvironment: args.length === 1 });
+    const searchPerformance = command === 'performance' && args.includes('--research-search');
+    const options = [...args];
+    if (searchPerformance) options.splice(options.indexOf('--research-search'), 1);
+    if (!Object.hasOwn(phases, command) || options.length > 1 || (options.length && options[0] !== '--keep-environment')) throw new CommandError('invalid Test command or options', 2);
+    run = new TestRun(searchPerformance ? 'performance-search' : command, { keepEnvironment: options.length === 1 });
     if (command === 'agent-eval') {
       if (run.keep_environment) throw new CommandError('agent-eval cannot retain a credential-bearing environment', 2);
       await run.exec('pnpm', ['--dir', `${run.repo_root}/apps/agent`, 'build']);
@@ -68,8 +71,9 @@ try {
       await run.allocate();
       await run.compose(['config', '--quiet']);
       run.compose_cleanup_required = true;
-      const module = await import(`./phases/${phases[command]}.mjs`);
-      await module[phases[command].replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())](run);
+      const phase = searchPerformance ? 'research-search' : phases[command];
+      const module = await import(`./phases/${phase}.mjs`);
+      await module[phase.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())](run);
     } catch (error) {
       result = run.interrupted_status || error.status || 1;
       console.error(error.message);

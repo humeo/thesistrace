@@ -795,6 +795,7 @@ def test_core_has_one_operational_output_schema_and_no_log_files() -> None:
         "migrations/unified_refresh_0006.py",
         "migrations/independent_strategies_0007.py",  # Explicit migration CLI JSON receipt.
         "migrations/execution_timing_0009.py",  # Explicit migration CLI JSON receipt.
+        "migrations/research_search_0010.py",  # Explicit migration CLI JSON receipt.
         "migrations/financial_disclosures_0005.py",  # Explicit data-preserving migration receipt.
         "migrations/rank_ic_0001.py",  # Explicit migration CLI JSON receipt.
         "migrations/research_contract_cutover.py",  # Explicit scoped retirement CLI receipt.
@@ -1838,6 +1839,21 @@ def test_product_state_reset_recreates_the_auth_fixture_network_namespace(
     commands = command_log.read_text()
     assert "stop auth auth-fixture-control" in commands
     assert "rm --force auth auth-fixture-control" in commands
+
+
+def test_search_performance_runs_only_against_its_isolated_postgres(tmp_path: Path) -> None:
+    command_log, environment = _fake_test_runtime_commands(tmp_path)
+    completed = subprocess.run(
+        [ROOT / "tooling/test/cli.mjs", "performance", "--research-search"],
+        cwd=ROOT, env=environment, capture_output=True, text=True, check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    commands = command_log.read_text()
+    assert "check_research_search.py --output" in commands
+    assert "research-search.json" in commands
+    assert "long_research_qualification.py" not in commands
+    assert "thesistrace-dev" not in commands
+    assert "down --volumes" in commands
 
 
 def test_performance_reprovisions_an_authenticated_researcher_after_each_reset(

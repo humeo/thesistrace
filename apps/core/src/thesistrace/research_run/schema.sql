@@ -4,6 +4,7 @@
 
 CREATE SCHEMA research_runs;
 
+CREATE EXTENSION pg_trgm WITH SCHEMA research_runs;
 
 SET default_tablespace = '';
 
@@ -76,6 +77,8 @@ CREATE TABLE research_runs.runs (
     status text NOT NULL,
     execution_owner text DEFAULT 'ordinary' NOT NULL,
     immutable_input jsonb NOT NULL,
+    search_notes text GENERATED ALWAYS AS (lower(immutable_input->>'hypothesis')) STORED,
+    search_formula text GENERATED ALWAYS AS (lower(immutable_input->>'formula_source')) STORED,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     execution_fence integer DEFAULT 0 NOT NULL,
@@ -399,6 +402,12 @@ CREATE INDEX research_runs_runs_folder_created_idx ON research_runs.runs USING b
 CREATE INDEX research_runs_runs_kind_created_idx ON research_runs.runs USING btree (researcher_id, (immutable_input->>'research_kind'), created_at DESC, id);
 
 CREATE INDEX research_runs_runs_folder_kind_created_idx ON research_runs.runs USING btree (researcher_id, folder_id, (immutable_input->>'research_kind'), created_at DESC, id);
+
+CREATE INDEX research_runs_search_idx ON research_runs.runs USING gin (
+    lower(name) research_runs.gin_trgm_ops,
+    search_notes research_runs.gin_trgm_ops,
+    search_formula research_runs.gin_trgm_ops
+);
 
 
 --

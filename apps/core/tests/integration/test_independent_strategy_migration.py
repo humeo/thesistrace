@@ -39,8 +39,7 @@ def source_database(core_settings, unified_refresh_target_schemas):
 
 
 def test_upgrade_preserves_history_and_repeat_verifies_new_contract(
-    source_database,
-    execution_timing_source_schemas,
+    source_database, independent_strategies_target_schemas,
 ):
     with source_database.transaction() as tx:
         before = tx.execute("SELECT * FROM research_batches.batches").fetchall()
@@ -53,7 +52,7 @@ def test_upgrade_preserves_history_and_repeat_verifies_new_contract(
             == SOURCE
         )
     assert migrate(source_database, apply=True)["preserved_batches"] == 1
-    verify_schemas(source_database, execution_timing_source_schemas)
+    verify_schemas(source_database, independent_strategies_target_schemas)
     assert migrate(source_database, apply=True)["status"] == "already_current"
     with source_database.transaction() as tx:
         assert tx.execute("SELECT * FROM research_batches.batches").fetchall() == before

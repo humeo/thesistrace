@@ -341,3 +341,35 @@ backup and the matching previous application. Initialization never applies this
 upgrade automatically. Older Auth releases first use the explicit Auth 0001
 upgrade to reach the declared source; that migration retains its frozen target
 catalog and does not dispatch across runtime versions.
+
+## 0010: Indexed Research Run search
+
+This search upgrade follows the fixed 0009 execution-timing contract.
+
+- Source: `d6ee5f41c2c3c9fa8a49d5adf530eb4e98c9f9c8cb3fd5fff1408a1a157115a9`
+- Target: `a40cd7fedf6025c2c2f1ac096a26cbe60ab4c85a868d49f0cf9f087f697408e0`
+- Preflight: `python -m thesistrace.migrations.research_search_0010`.
+- Apply: add `--apply --database-backup /restricted/path/database.dump` as database owner.
+
+Stop Core writers, take a restricted PostgreSQL backup and verify restoration before
+applying. The migration adds `pg_trgm` in the `research_runs` schema, two stored
+generated columns for normalized notes and formula text, and one multicolumn GIN
+index covering name, notes and formula. PostgreSQL maintains these values and the
+index atomically on writes. Existing names, immutable inputs, IDs, ownership,
+Results and timestamps are preserved; object storage is unchanged.
+
+Backfill, index creation, structural verification, the migration receipt and the
+schema contract commit together. Both columns are added in one table rewrite.
+The operation takes an exclusive table lock, with a five-second lock timeout and
+a 120-second statement timeout. Schedule a maintenance window; this is not an
+online upgrade for arbitrarily large histories. Unknown versions and structure
+drift fail closed. A failure rolls back columns, extension, index and receipt;
+repeated application verifies the target without rewriting history. Post-commit
+restoration uses the verified backup and matching application release.
+
+Initialize and restart all Core services with the target image after the migration.
+Search remains a case-insensitive literal substring match scoped to the researcher.
+Trigram indexes accelerate selective terms; short terms such as two-character
+Chinese words can instead use the existing researcher index and scan that user's
+compact search columns. Matching IDs and sort values are materialized once for
+the exact total and page, and only the page retrieves complete immutable inputs.
