@@ -5,8 +5,7 @@ import pytest
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
-from thesistrace._postgres import PostgresDatabase, initialize_schemas
-from thesistrace.entrypoints.schema import verify_core_schema
+from thesistrace._postgres import PostgresDatabase, initialize_schemas, verify_schemas
 from thesistrace.migrations.independent_strategies_0007 import SOURCE, TARGET, migrate
 
 
@@ -39,7 +38,10 @@ def source_database(core_settings, unified_refresh_target_schemas):
         admin.close()
 
 
-def test_upgrade_preserves_history_and_repeat_verifies_new_contract(source_database):
+def test_upgrade_preserves_history_and_repeat_verifies_new_contract(
+    source_database,
+    execution_timing_source_schemas,
+):
     with source_database.transaction() as tx:
         before = tx.execute("SELECT * FROM research_batches.batches").fetchall()
     assert migrate(source_database)["status"] == "validated"
@@ -51,7 +53,7 @@ def test_upgrade_preserves_history_and_repeat_verifies_new_contract(source_datab
             == SOURCE
         )
     assert migrate(source_database, apply=True)["preserved_batches"] == 1
-    verify_core_schema(source_database)
+    verify_schemas(source_database, execution_timing_source_schemas)
     assert migrate(source_database, apply=True)["status"] == "already_current"
     with source_database.transaction() as tx:
         assert tx.execute("SELECT * FROM research_batches.batches").fetchall() == before

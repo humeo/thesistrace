@@ -107,6 +107,7 @@ class _FactorItemState:
     final_values: dict[str, object] | None = None
     error: Exception | None = None
     calculation_seconds: float = 0.0
+    processing_seconds: float = 0.0
     phase_seconds: dict[str, float] = field(default_factory=lambda: _empty_phase_seconds())
 
 
@@ -115,6 +116,7 @@ class _IndependentStrategyState:
     continuation: dict[str, object] = field(default_factory=empty_strategy_continuation)
     failed: bool = False
     calculation_seconds: float = 0.0
+    processing_seconds: float = 0.0
     phase_seconds: dict[str, float] = field(default_factory=lambda: _empty_phase_seconds())
 
 
@@ -369,6 +371,7 @@ class SupervisedResearchBatchExecution:
             "max_effective_lookback",
             "child_data_read_seconds",
             "child_chunk_seconds",
+            "child_processing_seconds",
             "child_calculation_phase_seconds",
             "category",
             "error_type",
@@ -836,7 +839,9 @@ def _execute_factor_batch_messages(
                 )
                 state.continuation = calculation.continuation
                 state.final_values = calculation.final_values
-                state.calculation_seconds += monotonic() - calculation_started
+                item_seconds = monotonic() - calculation_started
+                state.calculation_seconds += item_seconds
+                state.processing_seconds += item_seconds
                 for name, seconds in calculation.phase_seconds.items():
                     state.phase_seconds[name] += seconds
                     chunk_phase_seconds[name] += seconds
@@ -855,6 +860,9 @@ def _execute_factor_batch_messages(
                     "chunk_ordinal": window.ordinal,
                     "child_peak_rss_bytes": _current_process_peak_rss_bytes(),
                     "factor_daily_observations": list(calculation.factor_daily_observations),
+                    "child_processing_seconds": state.processing_seconds,
+                    "task_role": "factor",
+                    "phase": "research",
                 }
                 del calculation, run_input
             except (MemoryError, ResearchExecutionResourceExhausted):
@@ -876,6 +884,7 @@ def _execute_factor_batch_messages(
                 "boundary_session": window.research_sessions[-1],
                 "child_peak_rss_bytes": _current_process_peak_rss_bytes(),
                 "child_chunk_seconds": monotonic() - chunk_started,
+                "child_processing_seconds": first_state.processing_seconds,
                 "child_data_read_seconds": data_read_seconds,
                 "child_calculation_phase_seconds": chunk_phase_seconds,
                 "alpha_factor_task_started": False,
@@ -920,6 +929,7 @@ def _execute_factor_batch_messages(
             "boundary_session": plan.chunks[-1].last_session.isoformat(),
             "child_peak_rss_bytes": _current_process_peak_rss_bytes(),
             "child_chunk_seconds": state.calculation_seconds,
+            "child_processing_seconds": state.processing_seconds,
             "child_data_read_seconds": (
                 total_data_read_seconds if item.ordinal == first_item.ordinal else 0.0
             ),
@@ -1091,6 +1101,7 @@ def _execute_independent_window_messages(
         for item in members:
             state = states[item.ordinal]
             started = monotonic()
+            owned_seconds = 0.0
             frozen = item.immutable_input
             try:
                 run_input = _strategy_run_input(
@@ -1110,12 +1121,16 @@ def _execute_independent_window_messages(
                     state.calculation_seconds += alpha_seconds
                     for name, seconds in alpha_outcome.phase_seconds.items():
                         state.phase_seconds[name] += seconds
+                if len(members) == 1:
+                    state.processing_seconds += alpha_seconds
                 if common_input_references(*frozen.expression_trees):
                     common_rows = common_input_observation_rows(
                         {"sessions": list(outcome.common_input_sessions)},
                         sessions=window.research_sessions,
                     )
+                    owned_seconds += monotonic() - started
                     yield _common_input_chunk_message(item, window, common_rows)
+                    started = monotonic()
                     del common_rows
                 observations = outcome.daily_observations_snapshot()
                 events = outcome.strategy_events_snapshot()
@@ -1133,7 +1148,9 @@ def _execute_independent_window_messages(
                     "row_count": len(observations), "first_session": observations[0]["session"],
                     "last_session": observations[-1]["session"],
                 }
-                state.calculation_seconds += monotonic() - started
+                owned_seconds += monotonic() - started
+                state.calculation_seconds += owned_seconds
+                state.processing_seconds += owned_seconds
                 del outcome, run_input, observations
                 completed = int(alpha_states[identity]["completed_research_session_count"])
                 yield {
@@ -1141,6 +1158,7 @@ def _execute_independent_window_messages(
                     "item_key": item.item_key, "run_id": item.run_id,
                     "child_peak_rss_bytes": _current_process_peak_rss_bytes(),
                     "task_role": "strategy", "phase": "strategy",
+                    "child_processing_seconds": state.processing_seconds,
                     "completed_research_sessions": completed,
                     "total_research_sessions": frozen.execution_plan.research_session_count,
                     "strategy_partition": descriptor, "strategy_events": events,
@@ -1156,6 +1174,7 @@ def _execute_independent_window_messages(
                         "item_key": item.item_key, "run_id": item.run_id,
                         "child_peak_rss_bytes": _current_process_peak_rss_bytes(),
                         "child_chunk_seconds": state.calculation_seconds,
+                        "child_processing_seconds": state.processing_seconds,
                         "child_data_read_seconds": (
                             total_data_read_seconds if item is items[0] else 0.0
                         ),
@@ -1465,6 +1484,7 @@ def _execute_strategy_item_messages(
     data_read_seconds = 0.0
     strategy_seconds = 0.0
     finalize_seconds = 0.0
+    processing_seconds = 0.0
     try:
         with PrivateAlphaFactorArtifactReader(
             private_artifact_path,
@@ -1475,6 +1495,7 @@ def _execute_strategy_item_messages(
             ),
         ) as reader:
             for window, stored in zip(research_windows, reader, strict=True):
+                processing_started = monotonic()
                 _require_artifact_window(stored, window)
                 data_read_started = monotonic()
                 # Shared scores are frozen; each account owns its Exposure and Weighting data.
@@ -1530,7 +1551,9 @@ def _execute_strategy_item_messages(
                         {"sessions": list(outcome.common_input_sessions)},
                         sessions=window.research_sessions,
                     )
+                    processing_seconds += monotonic() - processing_started
                     yield _common_input_chunk_message(item, window, common_rows)
+                    processing_started = monotonic()
                 strategy_continuation = outcome.continuation_snapshot()
                 observations = outcome.daily_observations_snapshot()
                 strategy_events = outcome.strategy_events_snapshot()
@@ -1563,6 +1586,7 @@ def _execute_strategy_item_messages(
                     stored,
                 )
                 _release_chunk_memory()
+                processing_seconds += monotonic() - processing_started
                 yield {
                     "status": "item_strategy_chunk_succeeded",
                     "item_ordinal": item.ordinal,
@@ -1571,6 +1595,7 @@ def _execute_strategy_item_messages(
                     "child_peak_rss_bytes": _current_process_peak_rss_bytes(),
                     "task_role": "strategy",
                     "phase": "strategy",
+                    "child_processing_seconds": processing_seconds,
                     "completed_research_sessions": completed_research_sessions,
                     "total_research_sessions": (
                         item.immutable_input.execution_plan.research_session_count
@@ -1592,6 +1617,7 @@ def _execute_strategy_item_messages(
             "run_id": item.run_id,
             "child_peak_rss_bytes": _current_process_peak_rss_bytes(),
             "child_chunk_seconds": monotonic() - started,
+            "child_processing_seconds": processing_seconds,
             "child_data_read_seconds": data_read_seconds,
             "child_calculation_phase_seconds": {
                 "input": 0.0,

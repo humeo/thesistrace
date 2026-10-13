@@ -1316,11 +1316,15 @@ class ResearchRunProgress(BaseModel):
 
 
 class ResearchRunExecutionTiming(BaseModel):
+    """Owned processing time; timestamps describe lifecycle boundaries separately."""
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     started_at: datetime | None
     finished_at: datetime | None
-    elapsed_seconds: float | None
+    elapsed_seconds: float | None = Field(
+        ge=0,
+        description="Cumulative measured processing seconds, excluding queue and batch waits.",
+    )
     is_final: bool
 
 

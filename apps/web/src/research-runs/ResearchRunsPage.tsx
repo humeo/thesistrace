@@ -454,7 +454,7 @@ export function ResearchRunProgressView({
     <dl className="m-0 grid w-full min-w-0 gap-4 sm:grid-cols-3 [&_dt]:text-muted-foreground [&_dd]:m-0 [&_dd]:font-mono [&_dd]:break-words">
       <div>
         <dt>{t("executionTime")}</dt>
-        <dd>{formatDuration(timing?.elapsed_seconds ?? null)}</dd>
+        <dd title={t("executionTimeHelp")}>{formatDuration(timing?.elapsed_seconds ?? null)}</dd>
       </div>
       <div>
         <dt>{t("started")}</dt>
@@ -478,7 +478,7 @@ export function ResearchRunProgressView({
         <CardContent>
           <dl className="m-0 grid min-w-0 gap-4 lg:grid-cols-4">
             <FrozenFact label={t("researchSessions")}>{formatNumber(progress.completed_research_sessions)} / {formatNumber(progress.total_research_sessions)}</FrozenFact>
-            <FrozenFact label={t("executionTime")}>{formatDuration(timing?.elapsed_seconds ?? null)}</FrozenFact>
+            <FrozenFact label={t("executionTime")}><span title={t("executionTimeHelp")}>{formatDuration(timing?.elapsed_seconds ?? null)}</span></FrozenFact>
             <FrozenFact label={t("started")}><span className="font-mono"><ExecutionTimestamp value={timing?.started_at ?? null} /></span></FrozenFact>
             <FrozenFact label={t("finished")}><span className="font-mono"><ExecutionTimestamp value={timing?.finished_at ?? null} /></span></FrozenFact>
           </dl>

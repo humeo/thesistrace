@@ -35,6 +35,12 @@ CREATE TABLE research_runs.attempts (
     lease_expires_at timestamp with time zone NOT NULL,
     finished_at timestamp with time zone,
     failure_reason text,
+    processing_seconds double precision,
+    processing_chunk_ordinal integer DEFAULT 0 NOT NULL,
+    CONSTRAINT attempts_processing_check CHECK (
+        (processing_seconds IS NULL OR (processing_seconds >= 0 AND processing_seconds < 'Infinity'::float8))
+        AND processing_chunk_ordinal >= 0
+    ),
     CONSTRAINT attempts_fence_check CHECK ((fence > 0)),
     CONSTRAINT attempts_ordinal_check CHECK ((ordinal > 0)),
     CONSTRAINT attempts_status_check CHECK ((status = ANY (ARRAY['running'::text, 'cancelling'::text, 'succeeded'::text, 'failed'::text, 'cancelled'::text])))

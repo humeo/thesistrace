@@ -111,3 +111,17 @@ def unified_refresh_target_schemas():
     from thesistrace.migrations.unified_refresh_0006 import TARGET
 
     return _migration_release_schemas("unified-refresh-target.zip", TARGET)
+
+
+@pytest.fixture
+def execution_timing_source_schemas():
+    from thesistrace.migrations.execution_timing_0009 import SOURCE
+
+    return _migration_release_schemas("execution-timing-source.zip", SOURCE)
+
+
+@pytest.fixture
+def execution_timing_target_schemas():
+    from thesistrace.migrations.execution_timing_0009 import TARGET
+
+    return _migration_release_schemas("execution-timing-target.zip", TARGET)

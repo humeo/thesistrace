@@ -285,6 +285,32 @@ the command verifies the target without rewriting rows. Unknown versions, struct
 drift and active Batches reject the upgrade. Post-commit rollback requires the
 verified backup and matching old application; initialization never migrates itself.
 
+## 0009: Measured ResearchRun execution time
+
+- Source: `423422281705fa7018c712268141c15fc58de13de7d1b46523a449e84a66c00d`
+- Target: `d6ee5f41c2c3c9fa8a49d5adf530eb4e98c9f9c8cb3fd5fff1408a1a157115a9`
+- Preflight: `uv run --project apps/core python -m thesistrace.migrations.execution_timing_0009`.
+- Apply: add `--apply --database-backup /restricted/path/database.dump` as database owner.
+- Optional historical evidence: `--measurements /restricted/path/execution-measurements.json`.
+
+Drain active research and stop Core writers before upgrading. Save and verify a
+restorable PostgreSQL backup. This migration adds nullable processing counters to
+ordinary Attempts and Batch task Attempts, preserving all existing research,
+Results, lifecycle timestamps, and ownership. Historical counters remain unknown
+unless exact measurements are supplied; lifecycle duration is never substituted.
+
+The optional file has schema version `research-execution-measurements-v1`, the
+source schema fingerprint, and a `measurements` array. Each entry contains
+`owner` (`ordinary_attempt` or `batch_task`), `attempt_id`, finite nonnegative
+`processing_seconds`, and `chunk_ordinal` (zero for a Batch task). Only known
+terminal Attempts are accepted. Duplicate entries, conflicting measurements,
+active writers, unsupported versions, and structural drift reject the upgrade.
+
+Table changes, evidence backfill, migration receipt, and schema fingerprint are
+transactional. Failure rolls everything back; repeat execution verifies the
+contract and existing values. After commit, restoration requires the verified
+backup and matching release. Initialization does not perform migrations.
+
 ## Auth 0002: Email-only identity
 
 - Source: `d64b69665b7454cd602a81295df4deb99b5f336a6df58a6cb66dc3b35aa3a4eb`.

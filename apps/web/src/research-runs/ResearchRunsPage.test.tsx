@@ -265,8 +265,8 @@ describe("ResearchRunProgressView", () => {
         status="succeeded"
         timing={{
           started_at: "2026-08-13T01:00:00Z",
-          finished_at: "2026-08-13T01:02:46Z",
-          elapsed_seconds: 166,
+          finished_at: "2026-08-13T02:00:00Z",
+          elapsed_seconds: 487,
           is_final: true,
         }}
       />,
@@ -278,11 +278,13 @@ describe("ResearchRunProgressView", () => {
     expect(markup).toContain("Execution details");
     expect(markup).not.toContain("<progress");
     expect(markup).not.toContain("100%");
-    expect(markup).toContain("2m 46s");
+    expect(markup).toContain("8m 7s");
+    expect(markup).not.toContain("1h 0m 0s");
+    expect(markup).toContain("excluding queueing and waiting for other research");
     expect(markup).not.toContain("aria-expanded");
     expect(markup).not.toContain("<button");
     expect(markup).toContain("2026-08-13 01:00:00 UTC");
-    expect(markup).toContain("2026-08-13 01:02:46 UTC");
+    expect(markup).toContain("2026-08-13 02:00:00 UTC");
   });
 });
 

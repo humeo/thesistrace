@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime
 from uuid import UUID
 
 from thesistrace._postgres import PostgresTransaction
@@ -20,7 +19,7 @@ def project_batch_run_execution(
         """
         SELECT item.batch_id, item.item_key, item.dependency_role, item.outcome,
                batch.status AS batch_status, batch.batch_kind,
-               timing.started_at, timing.finished_at,
+               timing.started_at, timing.finished_at, timing.processing_seconds,
                CURRENT_TIMESTAMP AS observed_at
         FROM research_batches.items AS item
         JOIN research_batches.batches AS batch ON batch.id = item.batch_id
@@ -35,7 +34,15 @@ def project_batch_run_execution(
                        WHERE task.item_ordinal = item.ordinal
                           OR (item.dependency_role = 'strategy'
                               AND task.task_role = 'shared_alpha_factor')
-                   ) AS finished_at
+                   ) AS finished_at,
+                   CASE WHEN count(*) FILTER (WHERE task.item_ordinal = item.ordinal)
+                             = count(task.processing_seconds) FILTER (
+                                 WHERE task.item_ordinal = item.ordinal
+                               )
+                        THEN sum(task.processing_seconds) FILTER (
+                            WHERE task.item_ordinal = item.ordinal
+                        )
+                   END AS processing_seconds
             FROM research_batches.task_attempts AS task
             WHERE task.batch_id = item.batch_id
         ) AS timing ON true
@@ -50,15 +57,10 @@ def project_batch_run_execution(
     terminal = run_status in {"succeeded", "failed", "cancelled"}
     started_at = item["started_at"]
     finished_at = item["finished_at"] if terminal else None
-    endpoint = finished_at if terminal else item["observed_at"]
     timing = ResearchRunExecutionTiming(
         started_at=started_at,
         finished_at=finished_at,
-        elapsed_seconds=(
-            max(0.0, (endpoint - started_at).total_seconds())
-            if isinstance(started_at, datetime) and isinstance(endpoint, datetime)
-            else None
-        ),
+        elapsed_seconds=item["processing_seconds"],
         is_final=terminal,
     )
     if item["outcome"] == "succeeded":

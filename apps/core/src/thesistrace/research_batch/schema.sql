@@ -236,6 +236,10 @@ CREATE TABLE research_batches.task_attempts (
     failure_diagnostic jsonb,
     live_completed_sessions integer,
     live_total_sessions integer,
+    processing_seconds double precision,
+    CONSTRAINT task_attempts_processing_check CHECK (
+        processing_seconds IS NULL OR (processing_seconds >= 0 AND processing_seconds < 'Infinity'::float8)
+    ),
     CONSTRAINT task_attempts_live_sessions_check CHECK (
         (live_completed_sessions IS NULL AND live_total_sessions IS NULL)
         OR (live_completed_sessions IS NOT NULL AND live_total_sessions IS NOT NULL

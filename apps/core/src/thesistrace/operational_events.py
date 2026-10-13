@@ -121,6 +121,7 @@ _NONNEGATIVE_NUMBER_FIELDS = frozenset(
     {
         "queue_wait_seconds",
         "child_chunk_seconds",
+        "child_processing_seconds",
         "child_data_read_seconds",
         "child_calculation_seconds",
         "supervisor_commit_seconds",

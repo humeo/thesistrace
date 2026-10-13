@@ -1453,6 +1453,11 @@ class ResearchRunService:
         claim = claim_result.claim
         if claim is None:
             return False
+
+        def emit_measured_execution(event: dict[str, object]) -> None:
+            if event.get("event") == "research_execution_chunk_received":
+                self._record_processing_measurement(claim, event)
+            emit(event)
         if on_claim is not None:
             try:
                 on_claim(claim.run_id, claim.attempt_id)
@@ -1489,7 +1494,7 @@ class ResearchRunService:
             try:
                 execution = self._execute(
                     claim,
-                    emit=emit,
+                    emit=emit_measured_execution,
                 )
                 while True:
                     chunk = execution.chunk
@@ -2489,13 +2494,16 @@ class ResearchRunService:
                        progress.last_completed_research_session,
                        progress.remaining_duration_estimate_seconds,
                        timing.execution_started_at,
-                       timing.execution_finished_at,
+                       timing.execution_finished_at, timing.execution_elapsed_seconds,
                        CURRENT_TIMESTAMP AS execution_observed_at
                 FROM research_runs.runs AS run
                 JOIN research_runs.progress AS progress ON progress.run_id = run.id
                 LEFT JOIN LATERAL (
                     SELECT min(attempt.started_at) AS execution_started_at,
-                           max(attempt.finished_at) AS execution_finished_at
+                           max(attempt.finished_at) AS execution_finished_at,
+                           CASE WHEN count(*) = count(attempt.processing_seconds)
+                                THEN sum(attempt.processing_seconds)
+                           END AS execution_elapsed_seconds
                     FROM research_runs.attempts AS attempt
                     WHERE attempt.run_id = run.id
                 ) AS timing ON true
@@ -2515,6 +2523,7 @@ class ResearchRunService:
                 row["progress_phase"] = progress.phase
                 row["execution_started_at"] = timing.started_at
                 row["execution_finished_at"] = timing.finished_at
+                row["execution_elapsed_seconds"] = timing.elapsed_seconds
         return row
 
     def get_polling_detail(
@@ -3035,10 +3044,10 @@ class ResearchRunService:
                 INSERT INTO research_runs.attempts (
                     id, run_id, ordinal, fence, generation_pin_id,
                     data_generation_id, data_through_session,
-                    status, lease_expires_at
+                    status, lease_expires_at, processing_seconds
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s, %s, 'running',
-                    %s
+                    %s, 0
                 )
                 """,
                 (
@@ -3204,6 +3213,36 @@ class ResearchRunService:
                 return
             if renewed.rowcount != 1:
                 return
+
+    def _record_processing_measurement(
+        self, claim: ResearchRunExecutionClaim, event: Mapping[str, object],
+    ) -> None:
+        seconds, ordinal = event["child_chunk_seconds"], event["chunk_ordinal"]
+        if (type(seconds) not in {int, float} or not math.isfinite(seconds) or seconds < 0
+                or type(ordinal) is not int or ordinal < 1):
+            raise RuntimeError("Research execution processing measurement is invalid")
+        with self._database.transaction() as transaction:
+            current = transaction.execute(
+                """
+                SELECT processing_chunk_ordinal FROM research_runs.attempts
+                WHERE id = %s AND run_id = %s AND fence = %s AND status = 'running'
+                  AND lease_expires_at > clock_timestamp()
+                FOR UPDATE
+                """,
+                (claim.attempt_id, claim.run_id, claim.fence),
+            ).fetchone()
+            if current is None:
+                raise RuntimeError("Research execution processing measurement was fenced")
+            if ordinal <= current["processing_chunk_ordinal"]:
+                return
+            transaction.execute(
+                """
+                UPDATE research_runs.attempts
+                SET processing_seconds = processing_seconds + %s, processing_chunk_ordinal = %s
+                WHERE id = %s AND run_id = %s AND fence = %s
+                """,
+                (float(seconds), ordinal, claim.attempt_id, claim.run_id, claim.fence),
+            )
 
     def _execute(
         self,
@@ -4829,13 +4868,8 @@ def _research_execution_timing(
 ) -> ResearchRunExecutionTiming:
     started_at = row.get("execution_started_at")
     finished_at = row.get("execution_finished_at")
-    observed_at = row.get("execution_observed_at")
     is_final = status in {"succeeded", "failed", "cancelled"}
-    elapsed_seconds: float | None = None
-    if isinstance(started_at, datetime):
-        endpoint = finished_at if is_final else observed_at
-        if isinstance(endpoint, datetime):
-            elapsed_seconds = max(0.0, (endpoint - started_at).total_seconds())
+    elapsed_seconds = row.get("execution_elapsed_seconds")
     return ResearchRunExecutionTiming(
         started_at=started_at if isinstance(started_at, datetime) else None,
         finished_at=(finished_at if is_final and isinstance(finished_at, datetime) else None),

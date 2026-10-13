@@ -31,7 +31,7 @@ test("configuration groups accepted research settings, strategy stages and reada
         completed_research_sessions: 2, total_research_sessions: 2, committed_chunk_count: 1,
         last_completed_warmup_session: null, last_completed_research_session: run.end_date,
         remaining_duration_estimate_seconds: null, duration_is_estimate: false },
-      execution_timing: { started_at: "2026-09-15T01:00:00Z", finished_at: "2026-09-15T01:01:06Z", elapsed_seconds: 66, is_final: true },
+      execution_timing: { started_at: "2026-09-15T01:00:00Z", finished_at: "2026-09-15T02:00:00Z", elapsed_seconds: 487, is_final: true },
     } });
   });
   await page.goto("https://research-evidence.test/");
@@ -55,9 +55,12 @@ test("configuration groups accepted research settings, strategy stages and reada
   const execution = page.getByRole("region", { name: "ResearchRun progress", exact: true });
   await expect(execution.getByRole("heading", { name: "Execution details", exact: true })).toBeVisible();
   await expect(execution.getByText("Execution complete", { exact: true })).toBeVisible();
-  await expect(execution.getByText("1m 6s", { exact: true })).toBeVisible();
+  await expect(execution.getByText("8m 7s", { exact: true })).toBeVisible();
+  await expect(execution).not.toContainText("1h 0m 0s");
+  await expect(execution.getByText("8m 7s", { exact: true })).toHaveAttribute("title", /excluding queueing/);
   await expect(execution.getByText("2026-09-15 01:00:00 UTC", { exact: true })).toBeVisible();
-  await expect(execution.getByText("2026-09-15 01:01:06 UTC", { exact: true })).toBeVisible();
+  await expect(execution.getByText("2026-09-15 02:00:00 UTC", { exact: true })).toBeVisible();
+  await execution.screenshot({ path: test.info().outputPath("execution-time.png") });
   await expect(execution.getByRole("button")).toHaveCount(0);
   const positions = await page.getByRole("group", { name: "Research execution conditions", exact: true }).evaluate(element => {
     const panels = [...element.querySelectorAll('[role="region"]')];

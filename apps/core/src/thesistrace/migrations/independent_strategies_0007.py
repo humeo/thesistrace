@@ -13,8 +13,6 @@ from uuid import uuid4
 from psycopg import sql
 
 from thesistrace._postgres import PostgresDatabase
-from thesistrace._postgres.schema import _fingerprint
-from thesistrace.entrypoints.schema import CORE_SCHEMA_DEFINITIONS
 from thesistrace.migrations.financial_indicator import _shape
 
 SOURCE = "84827a4b8a6c9bb9d0171e4a7aa42cfefb061216a98295a1e7d784632c237070"
@@ -75,10 +73,8 @@ def _verify_structure(tx, statement: str) -> None:
 
 
 def migrate(database: PostgresDatabase, *, apply: bool = False) -> dict:
-    if _fingerprint(CORE_SCHEMA_DEFINITIONS) != TARGET:
-        raise ValueError("Migration target does not match this checkout")
     source = files(__package__).joinpath("0007_source_research_batch.sql").read_text()
-    target = next(d.statement for d in CORE_SCHEMA_DEFINITIONS if d.name == "research_batches")
+    target = files(__package__).joinpath("0007_target_research_batch.sql").read_text()
     with database.transaction() as tx:
         tx.execute("SET LOCAL lock_timeout = '5s'")
         tx.execute("SET LOCAL statement_timeout = '60s'")

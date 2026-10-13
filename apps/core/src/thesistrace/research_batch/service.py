@@ -2203,6 +2203,27 @@ class ResearchBatchService:
             ).fetchone()
             if current is None:
                 raise RuntimeError("Research Batch live progress was fenced")
+            if "child_processing_seconds" in event:
+                seconds = event["child_processing_seconds"]
+                if (type(seconds) not in {int, float}
+                        or not math.isfinite(seconds) or seconds < 0):
+                    raise RuntimeError("Research Batch processing measurement is invalid")
+                item_ordinal = event.get("item_ordinal")
+                if isinstance(item_ordinal, int):
+                    updated = transaction.execute(
+                        """
+                        UPDATE research_batches.task_attempts
+                        SET processing_seconds = greatest(processing_seconds, %s)
+                        WHERE batch_id = %s AND batch_attempt_id = %s AND fence = %s
+                          AND item_ordinal = %s AND status = 'running'
+                        """,
+                        (
+                            float(seconds), claim.batch_id, claim.attempt_id,
+                            claim.fence, item_ordinal,
+                        ),
+                    )
+                    if updated.rowcount != 1:
+                        raise RuntimeError("Research Batch processing measurement was fenced")
             if task_role is None:
                 task_role = str(current["current_task_role"])
             if item_key is None and task_role not in {"preparation", "shared_alpha_factor"}:
@@ -2381,8 +2402,8 @@ class ResearchBatchService:
             """
             INSERT INTO research_batches.task_attempts (
                 id, batch_id, item_ordinal, task_key, task_role, ordinal,
-                batch_attempt_id, fence, status
-            ) SELECT %s, %s, %s, item.item_key, 'factor', %s, %s, %s, 'running'
+                batch_attempt_id, fence, status, processing_seconds
+            ) SELECT %s, %s, %s, item.item_key, 'factor', %s, %s, %s, 'running', 0
             FROM research_batches.items AS item
             WHERE item.batch_id = %s AND item.ordinal = %s
             """,
@@ -2455,8 +2476,8 @@ class ResearchBatchService:
             """
             INSERT INTO research_batches.task_attempts (
                 id, batch_id, item_ordinal, task_key, task_role, ordinal,
-                batch_attempt_id, fence, status
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'running')
+                batch_attempt_id, fence, status, processing_seconds
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'running', 0)
             """,
             (
                 f"strategy_task_attempt_{uuid4().hex[:20]}",

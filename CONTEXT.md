@@ -185,6 +185,14 @@ _避免混用_: Published Result, guaranteed completion time
 The completed Research Sessions within a ResearchRun, excluding work whose outcome is still unfinished.
 _避免混用_: Partial Result, guaranteed completion time
 
+**Research Execution Time**:
+The cumulative measured wall time processing one ResearchRun's own data and
+calculation slices. Queueing, work on other Batch Items, shared Batch preparation,
+and pauses between slices do not contribute. Lifecycle timestamps are separate
+facts; their difference is not Research Execution Time. Missing historical
+measurements remain unknown.
+_避免混用_: Run elapsed time, Batch elapsed time, CPU time
+
 **Research Execution Opportunity**:
 One allocation of execution capacity to a Researcher for an ordinary ResearchRun
 or a complete Research Batch, granted independently within each research pool.
