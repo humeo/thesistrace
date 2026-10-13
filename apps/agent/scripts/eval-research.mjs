@@ -379,7 +379,8 @@ async function prepareFixture(researcher, testCase, corpus) {
     request_id: `eval-fixture-${randomUUID()}`, folder_id: "folder_default", name: "Isolated evaluation fixture",
     formula: "rank(close)", hypothesis: null, start_date: corpus.clock_window.start, end_date: corpus.clock_window.end,
     universe: "top300", neutralization: "none", research_kind: testCase.fixture === "factor" ? "factor_evaluation" : "strategy_backtest",
-    ...(testCase.fixture === "factor" ? {} : { holdings_count: 10, selection_every_sessions: 1 }),
+    ...(testCase.fixture === "factor" ? {} : { holdings_count: 10, selection_every_sessions: 1,
+      initial_cash_cny: "100000", weighting: "equal_weight", volatility_window: 20, exposure_expression: "1" }),
   }) });
   fixture.runId = run.id;
   await poll(() => json(researcher, `/api/research-runs/${run.id}`), (value) => value.status === "succeeded");
