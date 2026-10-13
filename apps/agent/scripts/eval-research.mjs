@@ -189,9 +189,11 @@ async function evaluate({ candidate, candidateBytes, repetitions, effort, regist
       let fixtureFailed = false;
       let artifact = { passed: false, ids: [] };
       let ownership = false;
+      let pendingInterrupt = null;
       try {
         const researcher = await provision(origin, `${testCase.id}-${repetition}`);
         fixture = await prepareFixture(researcher, testCase, corpus);
+        if (testCase.fixture === "query-strategies") prepareQuerySession(researcher, threadId, candidate, effort);
         if (Number.isFinite(turnCostReserveUsd)) {
           const policy = JSON.parse(docker(["exec", `${project}-auth-1`, "node", "--input-type=module", "--eval",
             `const r=await fetch('http://127.0.0.1:8200/internal/researchers/${researcher.id}/quota-policy'); if(!r.ok)process.exit(2);console.log(JSON.stringify(await r.json()));`]));
@@ -202,7 +204,6 @@ async function evaluate({ candidate, candidateBytes, repetitions, effort, regist
           }
         }
         caseStarted = performance.now();
-        let pendingInterrupt = null;
         let currentRunId = null;
         for (let turn = 0; turn < testCase.messages.length; turn++) {
           const text = testCase.messages[turn].replaceAll("{{run_id}}", fixture.runId ?? "").replaceAll("{{track_id}}", fixture.trackId ?? "");
@@ -217,7 +218,7 @@ async function evaluate({ candidate, candidateBytes, repetitions, effort, regist
           } : {
             threadId, runId, state: {}, context: [], tools: [],
             messages: [{ id: inputId, role: "user", content: text }],
-            forwardedProps: { thesistrace: { command: "prompt", selectionMode: "manual", modelKey: candidate.key, reasoningEffort: effort, sessionMode: turn === 0 ? "new" : "existing" } },
+            forwardedProps: { thesistrace: { command: "prompt", selectionMode: "manual", modelKey: candidate.key, reasoningEffort: effort, sessionMode: turn === 0 && testCase.fixture !== "query-strategies" ? "new" : "existing" } },
           };
           if (!answering) {
             currentRunId = runId;
@@ -267,7 +268,7 @@ async function evaluate({ candidate, candidateBytes, repetitions, effort, regist
       const costs = runs.map((run) => usageCostUsd(run.token_usage, candidate.pricing));
       const usageComplete = runs.length === runIds.length && runs.length > 0 && costs.every((cost) => cost !== null);
       const cost = usageComplete ? costs.reduce((total, value) => total + value, 0) : null;
-      const titleReserve = maximumTitleCostUsd(candidate) * runIds.length;
+      const titleReserve = testCase.fixture === "query-strategies" ? 0 : maximumTitleCostUsd(candidate) * runIds.length;
       const conversation = researchEvalConversationMeetsOutcome(testCase, streams, fixture);
       const { invalid, forbidden } = evalToolCapabilities(names, allowedTools, testCase.forbidden_tools);
       const checks = {
@@ -310,6 +311,7 @@ async function evaluate({ candidate, candidateBytes, repetitions, effort, regist
     const report = {
       kind: "research-agent-eval", phase, qualified, halted, started_at: started,
       case_ids: corpus.cases.map(item => item.id), corpus_version: corpus.version, corpus_sha256: digest(corpusBytes), candidates_sha256: digest(candidateBytes),
+      case_sessions: Object.fromEntries(corpus.cases.map(item => [item.id, item.fixture === "query-strategies" ? "named-existing" : "new"])),
       dataset: corpus.dataset, dataset_fixture_sha256: digest(fixtureBytes), evaluation_setup_sha256: setupDigest, clock_window: corpus.clock_window,
       git_revision: revision, tracked_source_diff_sha256: sourceDigest, images,
       model_key: candidate.key, provider_adapter: candidate.provider_adapter, provider_model_id: candidate.provider_model_id,
@@ -339,6 +341,26 @@ function command(program, args, input) {
   catch { throw new ResearchEvalError("DEPENDENCY_UNAVAILABLE"); }
 }
 function required(name) { const value = process.env[name]; if (!value) throw new ResearchEvalError("CONFIG_INVALID"); return value; }
+function prepareQuerySession(researcher, threadId, candidate, effort) {
+  // A legal owned, named session isolates retrieval from first-message title generation.
+  docker(["exec", "--interactive", `${project}-agent-1`, "node", "--input-type=module", "--eval", `
+    import { readFileSync } from 'node:fs';
+    import { Pool } from 'pg';
+    if (process.env.THESISTRACE_ENVIRONMENT !== 'test') process.exit(2);
+    const input=JSON.parse(readFileSync(0,'utf8'));
+    const pool=new Pool({connectionString:process.env.THESISTRACE_AGENT_DATABASE_URL,max:1});
+    const client=await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('INSERT INTO agent.chat_session(id,researcher_id,selected_model_key,selected_reasoning_effort) VALUES ($1::uuid,$2::uuid,$3,$4)',
+        [input.threadId,input.researcherId,input.modelKey,input.effort]);
+      await client.query('INSERT INTO agent.mastra_threads(id,"resourceId",title,metadata,"createdAt","updatedAt") VALUES ($1,$2,$3,NULL,now(),now())',
+        [input.threadId,input.researcherId,'策略查询验收']);
+      await client.query('COMMIT');
+    } catch(error) { await client.query('ROLLBACK'); throw error; }
+    finally { client.release(); await pool.end(); }
+  `], JSON.stringify({ threadId, researcherId: researcher.id, modelKey: candidate.key, effort }));
+}
 async function provision(origin, suffix) {
   const output = JSON.parse(docker(["exec", `${project}-auth-1`, "node", "/test-fixtures/provision-image-smoke-session.mjs",
     `agent-eval-${suffix}@example.test`, `198.51.100.${Number.parseInt(digest(suffix).slice(0, 2), 16) || 1}`]));

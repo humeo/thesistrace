@@ -213,7 +213,7 @@ const observationSchema = z.object({
   title_cost_upper_bound_usd: dollars, runs: z.array(evalRunSchema).max(2),
   tool_calls: count, invalid_tool_calls: count, forbidden_tool_calls: count, tool_errors: count, tool_retries: count,
   admission_correction: z.boolean().nullable(),
-  artifact_ids: z.array(z.string().regex(/^(?:run|batch|track)_[a-f0-9]{20}$/)).max(8),
+  artifact_ids: z.array(z.string().regex(/^(?:run|batch|track)_[a-f0-9]{20}$/)).max(10),
 }).strict();
 export type ResearchEvalObservation = z.infer<typeof observationSchema>;
 

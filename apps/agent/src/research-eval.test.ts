@@ -154,6 +154,13 @@ describe("fixed real-model evaluation contract", () => {
     expect(() => validateEvalObservation({ ...observation, runs: [{ ...observation.runs[0], token_usage: { reported: false } }] })).toThrow("REPORT_INVALID");
     expect(() => validateEvalObservation({ ...observation, runs: [], estimated_cost_usd: 0 })).toThrow("REPORT_INVALID");
   });
+  it("records all ten ranking artifacts while keeping the report bounded", () => {
+    const observation = completeObservations().find(item => item.case_id === "global-strategy-top-ten")!;
+    const ids = Array.from({ length: 10 }, (_, index) => `run_${index.toString(16).padStart(20, "0")}`);
+    expect(validateEvalObservation({ ...observation, artifact_ids: ids }).artifact_ids).toEqual(ids);
+    expect(() => validateEvalObservation({ ...observation, artifact_ids: [...ids, "run_ffffffffffffffffffff"] }))
+      .toThrow("REPORT_INVALID");
+  });
   it("keeps late completed cases in accounting but does not qualify their latency", () => {
     const observations = completeObservations().map((item) => item.case_id === "alpha-comparison-batch"
       ? validateEvalObservation({ ...item, succeeded: false, duration_ms: 240_000,
