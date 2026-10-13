@@ -11,6 +11,82 @@ test.beforeAll(async () => {
   ({ script, styles } = await buildProductFixture(new URL("./fixtures/research-evidence.tsx", import.meta.url), "ResearchEvidenceFixture"));
 });
 
+for (const { mode, locale, label } of [
+  { mode: "direct", locale: "en", label: "Frozen Python source" },
+  { mode: "framework", locale: "zh-CN", label: "组合构建 · 冻结的 Python 源码" },
+] as const) test(`frozen Python is readable, selectable and copied exactly without editing (${mode}, ${locale})`, async ({ page, context }) => {
+  await page.setViewportSize({ width: 1079, height: 938 });
+  await page.addInitScript(language => localStorage.setItem("quantgrove.interface-language", language), locale);
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  const source = [
+    "import numpy as np",
+    "from quantgrove import Targets",
+    "",
+    '# 动量策略：保留原始缩进与换行',
+    'FAMILY = "momentum"',
+    "CALIBRATION = 120",
+    "",
+    "def decide(data, account, state):",
+    "    close = data.history(\"close\", CALIBRATION)",
+    "    score = close[-1] / close[0] - 1",
+    "    selected = np.argsort(score)[-30:]",
+    '    state["first_decision"] = {"selected": selected.tolist(), "reason": "Declared disjoint estimation and formation windows; preserve this full long line while reading and copying the accepted strategy source."}',
+    "    return Targets.equal_weight(selected)",
+    "",
+  ].join("\r\n");
+  await page.route("https://research-evidence.test/**", route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    if (path === "/api/research-folders") return route.fulfill({ json: { items: [], next_cursor: null } });
+    return route.fulfill({ json: { ...run, input: {
+      research_kind: "strategy_backtest", strategy_mode: mode, hypothesis: null,
+      start_date: run.start_date, end_date: run.end_date, universe: "top300",
+      initial_cash_cny: "1000000", costs: defaultSimulationCosts(),
+      ...(mode === "direct" ? { program: { source } } : { modules: {
+        ...builtinFrameworkModules, portfolio_construction: { kind: "python", program: { source } },
+      }, formula: "rank(close)", neutralization: "none" }),
+    } } });
+  });
+  await page.goto("https://research-evidence.test/");
+  await page.addStyleTag({ content: styles });
+  await page.addScriptTag({ content: script });
+  await page.getByRole("tab", { name: locale === "en" ? "Configuration" : "配置", exact: true }).click();
+  const disclosure = page.getByRole("button", { name: label, exact: true });
+  await disclosure.click();
+  const code = page.getByRole("textbox", { name: label, exact: true });
+  await expect(code).toBeVisible();
+  await expect(code).toHaveAttribute("aria-readonly", "true");
+  await expect(code).toHaveAttribute("contenteditable", "false");
+  await expect(code).toContainText('FAMILY = "momentum"');
+  await expect(page.locator(".cm-lineNumbers")).toContainText("13");
+  expect(await code.locator(".cm-line").first().evaluate(line => {
+    const span = line.querySelector("span")!;
+    return getComputedStyle(span).color !== getComputedStyle(line).color;
+  })).toBe(true);
+  await code.focus();
+  await page.keyboard.type("DO_NOT_CHANGE");
+  await expect(code).not.toContainText("DO_NOT_CHANGE");
+  await code.press("Tab");
+  await expect(code).not.toBeFocused();
+  const scroller = code.locator("..");
+  const horizontalScroll = await scroller.evaluate(element => {
+    element.scrollLeft = element.scrollWidth;
+    return element.scrollLeft;
+  });
+  expect(horizontalScroll).toBeGreaterThan(0);
+  await disclosure.click();
+  await expect(code).toBeHidden();
+  await disclosure.click();
+  await expect(code).toBeVisible();
+  expect(await scroller.evaluate(element => element.scrollLeft)).toBe(horizontalScroll);
+  await scroller.evaluate(element => { element.scrollLeft = 0; });
+  await page.getByRole("button", { name: locale === "en" ? "Copy source" : "复制源码", exact: true }).click();
+  await expect(page.getByRole("button", { name: locale === "en" ? "Copied" : "已复制", exact: true })).toBeVisible();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(source);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await disclosure.locator("..").screenshot({ path: test.info().outputPath("frozen-python-reader.png") });
+});
+
 // Shared deterministic result facts; request behavior remains local to each test.
 
 test("configuration groups accepted research settings, strategy stages and readable fees", async ({ page }) => {

@@ -14,9 +14,9 @@ export function CopyButton({ text, label, iconOnly = false }: { text: string; la
       try { await navigator.clipboard.writeText(text); setState("copied"); toast.add({ title: <CopyFeedback message="copied" />, type: "success" }); }
       catch { setState("failed"); toast.add({ title: <CopyFeedback message="copyFailed" />, type: "error" }); }
       timer.current = setTimeout(() => setState("idle"), 2500);
-    }}>{state === "copied" ? <Check data-icon="inline-start" /> : <Copy data-icon="inline-start" />}{iconOnly ? null : state === "copied" ? t("copied") : t("copyPrompt")}</Button>;
+    }}>{state === "copied" ? <Check data-icon="inline-start" /> : <Copy data-icon="inline-start" />}{iconOnly ? null : state === "copied" ? t("copied") : label}</Button>;
   return <span className="inline-flex min-w-0">
-    {iconOnly ? <TooltipProvider><Tooltip><TooltipTrigger render={button} /><TooltipContent>{state === "copied" ? t("copied") : t("copyPrompt")}</TooltipContent></Tooltip></TooltipProvider> : button}
+    {iconOnly ? <TooltipProvider><Tooltip><TooltipTrigger render={button} /><TooltipContent>{state === "copied" ? t("copied") : label}</TooltipContent></Tooltip></TooltipProvider> : button}
     <span role="status" className="sr-only">{state === "failed" ? t("copyFailed") : ""}</span>
   </span>;
 }

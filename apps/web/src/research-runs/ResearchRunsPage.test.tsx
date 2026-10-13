@@ -91,8 +91,9 @@ describe("ResearchRunFacts", () => {
     } }} />);
     expect(markup).toContain("Alpha / Signals");
     expect(markup).toContain("Portfolio Construction");
-    expect(markup).toContain("improvement");
-    expect(markup).toContain("from quantgrove import Strategy");
+    expect(markup).toContain("Alpha / Signals · Frozen Python source");
+    expect(markup).toContain("Portfolio Construction · Frozen Python source");
+    expect(markup).toContain("Copy source");
     expect(markup).not.toContain("Holdings count");
     expect(markup).not.toContain("Neutralization");
     expect(markup).not.toContain("Exposure expression");
@@ -107,8 +108,9 @@ describe("ResearchRunFacts", () => {
       },
     }} />);
     expect(markup).toContain("Direct · Python");
-    expect(markup).toContain("from quantgrove import Strategy");
-    expect(markup).toContain("improvement");
+    expect(markup).toContain("Frozen Python source");
+    expect(markup).toContain("Copy source");
+    expect(markup).toContain("Read-only");
     expect(markup).not.toContain("Framework");
     expect(configurationFacts(markup)).not.toHaveProperty("Formula");
     expect(markup).not.toContain("Neutralization");

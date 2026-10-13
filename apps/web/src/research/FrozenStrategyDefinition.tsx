@@ -1,6 +1,6 @@
 import { Disclosure } from "../components/layout/Disclosure";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "../components/ui/card";
-import type { ReactNode } from "react";
+import { lazy, Suspense, useId, useState, type ReactNode } from "react";
 import { cn } from "cn";
 import Decimal from "decimal.js";
 import { takeProfitDraft } from "./takeProfit";
@@ -10,6 +10,9 @@ import type { PythonProgram } from "./pythonStrategy";
 import { costFields, type SimulationCosts } from "./simulationCosts";
 import { i18n, useTranslation } from "../i18n";
 import { formatDecimalString, formatNumber } from "../i18n/format";
+import { CopyButton } from "../mcp/CopyButton";
+
+const PythonSourceEditor = lazy(() => import("./PythonSourceEditor").then(module => ({ default: module.PythonSourceEditor })));
 
 export function FrozenFact({ label, children }: { label: string; children: ReactNode }) {
   return <div className="grid min-w-0 gap-1">
@@ -41,8 +44,17 @@ export function FrozenPythonProgram({ program, title }: {
   program: PythonProgram; title?: string;
 }) {
   const { t } = useTranslation("strategy");
-  return <Disclosure title={<>{title ?? t("frozen.python")}</>}>
-    <pre className="max-h-96 min-w-0 overflow-auto rounded-md bg-muted p-4 font-mono text-sm" tabIndex={0}><code>{program.source}</code></pre>
+  const id = useId();
+  const [hasOpened, setHasOpened] = useState(false);
+  const label = title ?? t("frozen.python");
+  return <Disclosure title={label} onOpenChange={open => { if (open) setHasOpened(true); }}>
+    <div className="mb-2 flex items-center justify-between gap-3">
+      <span className="text-xs text-muted-foreground">Python · {t("frozen.readOnly")}</span>
+      <CopyButton text={program.source} label={t("frozen.copySource")} />
+    </div>
+    {hasOpened && <Suspense fallback={<p role="status" className="m-0 py-3 text-muted-foreground">{t("frozen.loadingSource")}</p>}>
+      <PythonSourceEditor id={id} label={label} source={program.source} readOnly />
+    </Suspense>}
   </Disclosure>;
 }
 

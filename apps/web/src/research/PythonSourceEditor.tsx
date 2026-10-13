@@ -7,6 +7,7 @@ import { Compartment, EditorState, Transaction } from "@codemirror/state";
 import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 import { useEffect, useImperativeHandle, useRef, type Ref } from "react";
+import { cn } from "cn";
 
 import { i18n, interfaceLocale } from "../i18n";
 import { researchEditorTheme } from "./editorTheme";
@@ -23,16 +24,15 @@ const pythonHighlighting = syntaxHighlighting(HighlightStyle.define([
 /** The owning module keeps this mounted while hidden, preserving selection and history. */
 export type PythonSourceEditorHandle = { insertAtSelection: (text: string) => void; focus: () => void };
 
-export function PythonSourceEditor({ id, label, describedBy, source, error, errorLine, onChange, editorRef }: {
+export function PythonSourceEditor({ id, label, describedBy, source, error, errorLine, onChange, editorRef, readOnly = false }: {
   editorRef?: Ref<PythonSourceEditorHandle>;
   id: string;
   label: string;
-  describedBy: string;
+  describedBy?: string;
   source: string;
   error?: string;
   errorLine?: number | null;
-  onChange: (source: string) => void;
-}) {
+} & ({ readOnly?: false; onChange: (source: string) => void } | { readOnly: true; onChange?: never })) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const presentation = useRef(new Compartment());
@@ -43,7 +43,7 @@ export function PythonSourceEditor({ id, label, describedBy, source, error, erro
   useImperativeHandle(editorRef, () => ({
     insertAtSelection(text) {
       const editor = view.current;
-      if (editor) editor.dispatch(editor.state.replaceSelection(text), { userEvent: "input" });
+      if (editor && !editor.state.readOnly) editor.dispatch(editor.state.replaceSelection(text), { userEvent: "input" });
     },
     focus() { view.current?.focus(); },
   }), []);
@@ -73,7 +73,7 @@ export function PythonSourceEditor({ id, label, describedBy, source, error, erro
         keymap.of([...closeBracketsKeymap, ...completionKeymap, indentWithTab, ...defaultKeymap, ...historyKeymap]),
         presentation.current.of([]),
         EditorView.updateListener.of(update => {
-          if (update.docChanged && !applyingExternal.current) onChangeRef.current(update.state.doc.toString());
+          if (update.docChanged && !applyingExternal.current) onChangeRef.current?.(update.state.doc.toString());
         }),
       ] }),
     });
@@ -95,14 +95,17 @@ export function PythonSourceEditor({ id, label, describedBy, source, error, erro
     const editor = view.current;
     if (!editor) return;
     editor.dispatch({ effects: presentation.current.reconfigure([
+      EditorState.readOnly.of(readOnly),
+      EditorView.editable.of(!readOnly),
       EditorState.phrases.of(i18n.getFixedT(locale, "editor")("phrases", { returnObjects: true })),
-      EditorView.contentAttributes.of({ id, "aria-label": label, "aria-describedby": describedBy,
+      EditorView.contentAttributes.of({ id, "aria-label": label, ...(describedBy ? { "aria-describedby": describedBy } : {}),
+        role: "textbox", tabindex: "0", "aria-readonly": String(readOnly),
         "aria-invalid": String(Boolean(error)), spellcheck: "false", autocapitalize: "off", autocorrect: "off" }),
     ]) });
     const line = errorLine && errorLine <= editor.state.doc.lines ? editor.state.doc.line(errorLine) : null;
     editor.dispatch(setDiagnostics(editor.state, error ? [{ from: line?.from ?? 0,
       to: line?.to ?? 0, severity: "error", message: error }] : []));
-  }, [id, label, describedBy, error, errorLine, locale, source]);
+  }, [id, label, describedBy, error, errorLine, locale, source, readOnly]);
 
-  return <div ref={host} className="python-source-editor h-[280px] min-h-[180px] resize-y min-w-0 overflow-hidden rounded-md border border-input bg-card focus-within:ring-2 focus-within:ring-ring/30" />;
+  return <div ref={host} className={cn("python-source-editor min-h-[180px] resize-y min-w-0 overflow-hidden rounded-md border border-input bg-card focus-within:ring-2 focus-within:ring-ring/30", readOnly ? "h-96" : "h-[280px]")} />;
 }
