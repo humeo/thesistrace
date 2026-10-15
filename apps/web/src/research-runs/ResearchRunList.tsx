@@ -14,7 +14,7 @@ import type { ParseKeys } from "i18next";
 import { useRef, useState } from "react";
 import { CaretDown, CaretUp, CaretUpDown, MagnifyingGlass } from "@phosphor-icons/react";
 import { i18n, useTranslation } from "../i18n";
-import { formatDecimal, formatNumber, formatPercent, formatUtcTimestamp } from "../i18n/format";
+import { formatDecimal, formatNumber, formatPercent, formatTimestamp } from "../i18n/format";
 import { folderDisplayName } from "../research/folders";
 import { followCoreLink } from "../shell/navigation";
 import { formatRunError } from "./errors";
@@ -214,6 +214,8 @@ export function ResearchRunHistory({
 }) {
   const { t } = useTranslation("runs");
   const metricColumns = researchRunMetricColumns(researchKind);
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const createdLabel = t("createdInTimeZone", { timeZone });
 
   function changeSort(key: ResearchRunSortKey) {
     onSortChange({ key, direction: sort.key === key
@@ -252,7 +254,7 @@ export function ResearchRunHistory({
             <SortableResearchRunHeading
               direction={sort.direction}
               isActive={sort.key === "created_at"}
-              label={t("createdUtc")}
+              label={createdLabel}
               onSort={() => changeSort("created_at")}
             />
             <TableHead scope="col">{t("status")}</TableHead>
@@ -278,8 +280,11 @@ export function ResearchRunHistory({
                 <span className="block text-sm font-normal text-muted-foreground">{item.start_date} — {item.end_date}</span>
               </TableCell>
               {researchKind === "" ? <TableCell data-label={t("type")}>{researchKindLabel(item.research_kind)}</TableCell> : null}
-              <TableCell data-label={t("createdUtc")}>
-                <time dateTime={item.created_at}>{formatResearchRunCreatedAt(item.created_at)}</time>
+              <TableCell data-label={createdLabel}>
+                <time dateTime={item.created_at}>{formatTimestamp(item.created_at, {
+                  timeZone, year: "numeric", month: "2-digit", day: "2-digit",
+                  hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+                })}</time>
               </TableCell>
               <TableCell data-label={t("status")}><Badge variant={item.status === "failed" ? "destructive" : item.status === "succeeded" ? "secondary" : "outline"}>{t(`statuses.${item.status}`)}</Badge></TableCell>
               {metricColumns.length === 0 ? (
@@ -355,10 +360,6 @@ function SortableResearchRunHeading({
       </Button>
     </TableHead>
   );
-}
-
-export function formatResearchRunCreatedAt(value: string): string {
-  return formatUtcTimestamp(value);
 }
 
 function researchRunSortValue(item: ResearchRun, key: ResearchRunSortKey): number | null {

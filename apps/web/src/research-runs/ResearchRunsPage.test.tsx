@@ -1,5 +1,5 @@
 import { ResearchFolderLoadFailure } from "./ResearchFolderLoadFailure";
-import { ResearchRunHistory, ResearchRunPagination, formatResearchRunCreatedAt } from "./ResearchRunList";
+import { ResearchRunHistory, ResearchRunPagination } from "./ResearchRunList";
 import { researchRunListPath } from "./useResearchRunListController";
 import { defaultSimulationCosts } from "../research/simulationCosts";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -543,8 +543,8 @@ describe("ResearchRunHistory", () => {
     expect(markup).toContain(">Type</th>");
     expect(markup).toContain("Factor Evaluation");
     expect(markup).toContain("Strategy Backtest");
-    expect(markup).toContain("Created (UTC)");
-    expect(markup).toContain(">2026-08-13 01:02:03</time>");
+    expect(markup).toContain("Created (");
+    expect(markup).toContain('dateTime="2026-08-13T01:02:03.987654Z"');
     expect(markup).toContain("Result summary");
     expect(markup).toContain("1S Rank IC");
     expect(markup).toContain("Excess");
@@ -584,13 +584,6 @@ describe("ResearchRunHistory", () => {
   it("preserves the globally sorted server page order", () => {
     const markup = renderToStaticMarkup(<ResearchRunHistory items={[items[2], items[0]]} sort={{ key: "sharpe", direction: "descending" }} onSortChange={() => undefined} />);
     expect(markup.indexOf(items[2].name)).toBeLessThan(markup.indexOf(items[0].name));
-  });
-
-  it("formats creation timestamps in UTC through whole seconds", () => {
-    expect(formatResearchRunCreatedAt("2026-08-13T09:02:03.987654+08:00")).toBe(
-      "2026-08-13 01:02:03",
-    );
-    expect(formatResearchRunCreatedAt("invalid")).toBe("Not available");
   });
 });
 
