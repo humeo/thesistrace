@@ -1487,10 +1487,12 @@ FINANCIAL_INDICATOR_FIELDS = (
         source_column="valuechange_income",
     ),
     _indicator_field(
-        "interest_expense", "利息费用",
+        "interest_expense", "供应商利息指标",
         "利润与现金流基础值", "CNY", "CNY",
         "latest_visible_report_cumulative",
-        "supplier report cumulative: interest expense, despite source spelling interst_income ",
+        "supplier report cumulative fina_indicator.interst_income; vendor-defined interest amount "
+        "that may be net of interest income; not guaranteed gross statement interest expense "
+        "or cash interest paid; source value is preserved",
         source_column="interst_income",
     ),
     _indicator_field(
