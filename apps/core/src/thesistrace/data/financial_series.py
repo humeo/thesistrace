@@ -11,6 +11,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 
 from thesistrace.data.fields import FINANCIAL_FIELDS
+from thesistrace.data.history_projection import HistoryProjectionCache
 from thesistrace.research_series import Coordinate, NumericValue, ttm_window_column
 
 
@@ -82,8 +83,15 @@ _COMPANY_TYPES = frozenset({"1", "2", "3", "4"})
 class FinancialSeriesResolver:
     """Resolve sparse PIT facts into requested storage-independent Numeric Series."""
 
-    def __init__(self, reader: FinancialSeriesReader) -> None:
+    def __init__(
+        self, reader: FinancialSeriesReader, *,
+        projection_cache: HistoryProjectionCache | None = None,
+        history_sessions: tuple[str, ...] = (),
+    ) -> None:
         self._reader = reader
+        if projection_cache is not None and not history_sessions:
+            raise ValueError("Cached financial history requires its frozen calendar")
+        self._projection_cache, self._history_sessions = projection_cache, history_sessions
 
     def resolve(
         self,
@@ -166,6 +174,29 @@ class FinancialSeriesResolver:
         instrument_set = frozenset(requested_instruments)
         coordinates = _coordinate_table(requested_sessions, tuple(sorted(instrument_set)))
         result = coordinates.select(("session", "instrument_id"))
+        if self._projection_cache is not None and instrument_set and requested_sessions:
+            if not set(requested_sessions) <= set(self._history_sessions):
+                raise FinancialSeriesError("FINANCIAL_SERIES_SESSION_INVALID")
+            for projection in projections:
+                columns = ("session_date", "instrument_id", *_projection_columns((projection,)))
+                transitions = self._projection_cache.read_instruments(
+                    ("financial-states", manifest_sha256, projection.field_id,
+                     self._history_sessions[0], self._history_sessions[-1]),
+                    columns, instrument_set,
+                    lambda instruments, projection=projection: _projection_transitions(
+                        self._reader.read_financial_table(
+                            manifest_sha256, projection.endpoint,
+                            (*_METADATA_COLUMNS, projection.source_column),
+                            self._history_sessions, instruments,
+                        ), (projection,), instruments,
+                    ),
+                )
+                aligned = _align_projection_group(
+                    transitions, (projection,), requested_sessions, instrument_set,
+                )
+                for column in _projection_columns((projection,)):
+                    result = result.append_column(column, aligned[column])
+            return result.select(("session", "instrument_id", *_projection_columns(projections)))
         for endpoint in _ENDPOINTS:
             endpoint_projections = tuple(
                 projection for projection in projections if projection.endpoint == endpoint
@@ -242,13 +273,18 @@ def _resolve_projection_group_table(
     sessions: tuple[str, ...],
     instrument_ids: frozenset[str],
 ) -> pa.Table:
-    annual = projections[0].period_selection == "annual"
-    transitions = (
+    transitions = _projection_transitions(table, projections, instrument_ids)
+    return _align_projection_group(transitions, projections, sessions, instrument_ids)
+
+
+def _projection_transitions(table, projections, instrument_ids):
+    return (
         _ttm_state_transitions_table(table, projections, instrument_ids)
         if projections[0].period_selection == "ttm" else
-        _state_transitions_table(table, projections, instrument_ids, annual=annual)
+        _state_transitions_table(
+            table, projections, instrument_ids, annual=projections[0].period_selection == "annual",
+        )
     )
-    return _align_projection_group(transitions, projections, sessions, instrument_ids)
 
 
 def _align_projection_group(

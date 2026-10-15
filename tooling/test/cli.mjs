@@ -2,6 +2,7 @@
 import { CommandError } from '../process.mjs';
 import { TestRun, runId } from './resources.mjs';
 import { cleanupProject, finish } from './cleanup.mjs';
+import { mkdirSync } from 'node:fs';
 
 const phases = { integration: 'integration', e2e: 'e2e', 'agent-eval': 'e2e', 'image-smoke': 'image-smoke', 'image-qualification': 'image-qualification', performance: 'performance', 'codex-mcp': 'codex', 'integration-batch-cancel': 'batch-cancel' };
 let run;
@@ -10,6 +11,19 @@ try {
   if (command === 'identity') {
     if (args.length) throw new CommandError('Test identity accepts no arguments', 2);
     console.log(`thesistrace-test-${runId()}`);
+  } else if (command === 'performance' && args[0] === '--financial-history') {
+    if (args.length !== 3 || args[1] !== '--baseline-ref' || !args[2]) {
+      throw new CommandError('financial history requires --baseline-ref <revision>', 2);
+    }
+    const local = new TestRun('performance-financial-history');
+    mkdirSync(local.evidence_dir, { recursive: true });
+    const output = `${local.evidence_dir}/financial-history.json`;
+    await local.phase('financial-history', () => local.host([
+      'uv', 'run', '--project', `${local.repo_root}/apps/core`, '--no-sync', 'python',
+      `${local.repo_root}/apps/core/benchmarks/financial_history.py`, '--output', output,
+      '--baseline-ref', args[2],
+    ]));
+    console.log(`Financial history evidence: ${output}`);
   } else if (['cleanup', 'stop-postgres', 'restart-postgres', 'stop-rustfs', 'restart-rustfs'].includes(command)) {
     if (args.length) throw new CommandError('Test resource commands accept no arguments', 2);
     run = new TestRun(command, { project: process.env.THESISTRACE_TEST_PROJECT_NAME ?? '' });

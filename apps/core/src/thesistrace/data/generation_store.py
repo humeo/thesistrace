@@ -1458,14 +1458,21 @@ class MountedGenerationStore:
         )
 
     def _series_family_reader(self, generation: MountedFamilyGenerationDescriptor, family_id: str):
+        from thesistrace.data.dependencies import generation_family_coverage
         from thesistrace.data.financial_candidate import FinancialCandidateStore
         from thesistrace.data.financial_series import FinancialSeriesResolver
 
+        coverage = generation_family_coverage(generation)
         readers = {
             "equity.daily_basic": lambda: self._daily_basic_series_reader(generation),
             "equity.financial_indicator": lambda: self._indicator_series_reader(generation),
             "equity.financial_pit": lambda: FinancialSeriesResolver(
-                FinancialCandidateStore(self._root)
+                FinancialCandidateStore(self._root), projection_cache=self._history_projections,
+                history_sessions=tuple(
+                    day for day in generation.research_sessions
+                    if coverage[family_id].start.isoformat() <= day
+                    <= coverage[family_id].end.isoformat()
+                ),
             ),
         }
         reference = next(
@@ -1486,9 +1493,7 @@ class MountedGenerationStore:
         family = next(
             f for f in generation.families if f.family_id == "equity.financial_indicator"
         )
-        store = FinancialIndicatorCandidateStore(
-            self._root, projection_cache=self._history_projections,
-        )
+        store = FinancialIndicatorCandidateStore(self._root)
         return FinancialIndicatorSeriesResolver(
             family.manifest_sha256,
             lambda columns, instruments, through: store.read_table(
@@ -1497,6 +1502,8 @@ class MountedGenerationStore:
                 instrument_ids=instruments,
                 through=through,
             ),
+            projection_cache=self._history_projections,
+            history_end=str(family.dataset_coverage["end"]),
         )
 
     def _daily_basic_series_reader(self, generation: MountedFamilyGenerationDescriptor):

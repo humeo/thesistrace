@@ -12,6 +12,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 
 from thesistrace.data.fields import FINANCIAL_INDICATOR_FIELDS
+from thesistrace.data.history_projection import HistoryProjectionCache
 
 _FIELDS = {field.field_id: field for field in FINANCIAL_INDICATOR_FIELDS}
 _METADATA = {
@@ -43,9 +44,15 @@ def normalize_indicator_value(source: object, *, source_unit: str) -> float | No
 
 
 class FinancialIndicatorSeriesResolver:
-    def __init__(self, manifest_sha256: str, read_table: IndicatorTableReader) -> None:
+    def __init__(
+        self, manifest_sha256: str, read_table: IndicatorTableReader, *,
+        projection_cache: HistoryProjectionCache | None = None, history_end: str | None = None,
+    ) -> None:
         self._manifest_sha256 = manifest_sha256
         self._read_table = read_table
+        if projection_cache is not None and history_end is None:
+            raise ValueError("Cached indicator history requires its frozen end")
+        self._projection_cache, self._history_end = projection_cache, history_end
 
     def resolve_table(
         self,
@@ -73,65 +80,48 @@ class FinancialIndicatorSeriesResolver:
         if not sessions or not instrument_ids:
             return pa.Table.from_pylist([], schema=schema)
         fields = [_FIELDS[field] for field in field_ids]
-        table = self._read_table(
-            _METADATA | {field.source_column for field in fields},
-            frozenset(instrument_ids),
-            sessions[-1],
-        ).combine_chunks()
+        def load(instruments):
+            return _indicator_transitions(self._read_table(
+                _METADATA | {field.source_column for field in fields}, instruments,
+                self._history_end if self._projection_cache is not None else sessions[-1],
+            ), fields)
+
+        if self._projection_cache is None:
+            transitions = load(frozenset(instrument_ids))
+        else:
+            if sessions[-1] > self._history_end:
+                raise ValueError("Indicator history exceeds its frozen coverage")
+            transitions = self._projection_cache.read_instruments(
+                ("indicator-states", manifest_sha256, self._history_end),
+                ("instrument_id", "state_effective_session", *field_ids),
+                frozenset(instrument_ids), load,
+            )
         ordered_instruments = tuple(sorted(instrument_ids))
         width = len(ordered_instruments)
         values = {
             field.field_id: np.full(len(sessions) * width, np.nan, dtype=np.float64)
             for field in fields
         }
-        # Group row indices once instead of rescanning the full table per stock.
-        # Decode only one security at a time, retaining the Arrow projection.
-        order = pc.sort_indices(table, sort_keys=[("instrument_id", "ascending")])
-        groups = pc.run_end_encode(pc.take(table["instrument_id"], order).combine_chunks())
+        transitions = transitions.sort_by([
+            ("instrument_id", "ascending"), ("state_effective_session", "ascending"),
+        ])
+        groups = pc.run_end_encode(transitions["instrument_id"].combine_chunks())
         instrument_indices = {instrument: index for index, instrument in
                               enumerate(ordered_instruments)}
         start = 0
         for instrument, end in zip(groups.values.to_pylist(), groups.run_ends.to_pylist(),
                                    strict=True):
-            indices = order.slice(start, end - start)
+            history = transitions.slice(start, end - start)
             start = end
-            if instrument not in instrument_indices:
-                continue
-            instrument_index = instrument_indices[instrument]
-            facts = table.take(indices).to_pylist()
-            facts = [row for row in facts if row["state_effective_session"] is not None]
-            facts = _agreeing_observation_states(
-                facts, tuple(field.source_column for field in fields),
-            )
-            facts.sort(
-                key=lambda row: (row["state_effective_session"], row["observation_event_at"])
-            )
-            states = {}
-            position = 0
-            for session_index, session in enumerate(sessions):
-                while (
-                    position < len(facts) and facts[position]["state_effective_session"] <= session
-                ):
-                    row = facts[position]
-                    key = (row["source_report_period"], row["source_published_date"])
-                    previous = states.get(key)
-                    if (
-                        previous is not None
-                        and previous["observation_event_at"] == row["observation_event_at"]
-                        and previous != row
-                    ):
-                        row = {**row, "availability_status": "conflicting_observation"}
-                    states[key] = row
-                    position += 1
-                selected = states[max(states)] if states else None
-                for field in fields:
-                    value = None
-                    if selected is not None and selected["availability_status"] == "available":
-                        value = normalize_indicator_value(
-                            selected[field.source_column], source_unit=field.source_unit,
-                        )
-                    if value is not None:
-                        values[field.field_id][session_index * width + instrument_index] = value
+            selected = np.searchsorted(
+                history["state_effective_session"].to_numpy(), sessions, side="right",
+            ) - 1
+            available = selected >= 0
+            positions = np.flatnonzero(available) * width + instrument_indices[instrument]
+            for field in fields:
+                values[field.field_id][positions] = pc.take(
+                    history[field.field_id], pa.array(selected[available]),
+                ).to_numpy()
         return pa.Table.from_arrays(
             [
                 pc.take(pa.array(sessions, type=pa.string()),
@@ -149,6 +139,50 @@ class FinancialIndicatorSeriesResolver:
             field: {(row["session"], row["instrument_id"]): row[field] for row in table.to_pylist()}
             for field in request["field_ids"]
         }
+
+
+def _indicator_transitions(table, fields):
+    """Latest-report state at each source event, before selecting caller dates."""
+    schema = pa.schema([
+        ("instrument_id", pa.string()), ("state_effective_session", pa.string()),
+        *((field.field_id, pa.float64()) for field in fields),
+    ])
+    ordered = table.sort_by([("instrument_id", "ascending")])
+    groups = pc.run_end_encode(ordered["instrument_id"].combine_chunks())
+    transitions, start = [], 0
+    for instrument, end in zip(
+        groups.values.to_pylist(), groups.run_ends.to_pylist(), strict=True,
+    ):
+        facts = ordered.slice(start, end - start).to_pylist()
+        start = end
+        facts = _agreeing_observation_states(
+            [row for row in facts if row["state_effective_session"] is not None],
+            tuple(field.source_column for field in fields),
+        )
+        facts.sort(key=lambda row: (row["state_effective_session"], row["observation_event_at"]))
+        states, position, rows = {}, 0, []
+        for session in sorted({row["state_effective_session"] for row in facts}):
+            while position < len(facts) and facts[position]["state_effective_session"] <= session:
+                row = facts[position]
+                key = (row["source_report_period"], row["source_published_date"])
+                previous = states.get(key)
+                if (previous is not None
+                        and previous["observation_event_at"] == row["observation_event_at"]
+                        and previous != row):
+                    row = {**row, "availability_status": "conflicting_observation"}
+                states[key] = row
+                position += 1
+            selected = states[max(states)]
+            rows.append({
+                "instrument_id": instrument, "state_effective_session": session,
+                **{field.field_id: normalize_indicator_value(
+                    selected[field.source_column], source_unit=field.source_unit,
+                ) if selected["availability_status"] == "available" else None for field in fields},
+            })
+        transitions.append(pa.Table.from_pylist(rows, schema=schema))
+    if transitions:
+        return pa.concat_tables(transitions)
+    return pa.Table.from_batches([], schema=schema)
 
 
 def _agreeing_observation_states(

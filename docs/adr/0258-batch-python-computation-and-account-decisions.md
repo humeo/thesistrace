@@ -97,6 +97,11 @@ read response and 16 MiB output, while preserving 128 MiB guest memory and
 current execution deadlines. No unbounded history cache or automatic package
 installation is introduced.
 
+Mounted readers reuse sparse financial state timelines in the existing bounded
+32 MiB history-projection allowance, keyed by frozen family, field and security.
+They select requested dates and securities before exposing SDK history; source
+versions, conflicts, missing values and units retain their existing meaning.
+
 Python candidate metadata always includes the pinned industry's assignment (or
 an unassigned null), independently of neutralization and batch composition.
 Admission, research recovery and Daily Tracking require that same dependency.
