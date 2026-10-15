@@ -3,6 +3,8 @@ import os
 import subprocess
 import sys
 import time
+from itertools import count
+from types import SimpleNamespace
 
 import pytest
 
@@ -90,12 +92,14 @@ def test_controlled_host_reads_do_not_consume_the_python_execution_budget():
 def test_repeated_host_reads_cannot_replenish_compute_time(monkeypatch):
     from thesistrace.research_kernel import python_execution as execution
 
-    # Isolate the cumulative wall budget from the separately tested request cap.
+    # Account for a fixed guest interval between clock reads so the cumulative
+    # budget assertion does not depend on how fast this machine serves requests.
+    ticks = count(step=0.05)
+    monkeypatch.setattr(execution, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
     monkeypatch.setattr(execution, "WALL_SECONDS", 0.25)
-    monkeypatch.setattr(execution, "REQUESTS", 5001)
     with PreparedPythonEnvironment(
         "from _thesistrace_execution import ready, read_request, payload\nready()\n"
-        "if payload:\n    for _ in range(5000): read_request(b'hello')\n"
+        "if payload:\n    for _ in range(10): read_request(b'hello')\n"
         "print('healthy')",
     ) as environment:
         with pytest.raises(PythonExecutionTimeout) as error:
