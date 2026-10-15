@@ -4098,7 +4098,7 @@ def _spec_data_requirements(command, compiled, exposure) -> ExpressionRequiremen
     return ExpressionRequirements(
         field_bindings=bindings, effective_lookback=lookback, node_count=base.node_count,
         depth=base.depth, estimated_work=base.estimated_work,
-        require_industry=base.require_industry,
+        require_industry=base.require_industry or bool(_spec_programs(command)),
     )
 
 
@@ -4233,7 +4233,10 @@ def _admitted_input(
             else:
                 code = "FIELD_CALCULATION_OUTSIDE_COVERAGE"
             issue_range = None
-            if family_id == "equity.industry_membership" and requirements.require_industry:
+            if (family_id == "equity.industry_membership"
+                    and requires_common_industry(*tuple(
+                        value.expression for value in (compiled, exposure) if value is not None
+                    ))):
                 industry_expression = (
                     compiled if compiled is not None and requires_common_industry(
                         compiled.expression,
@@ -4248,6 +4251,9 @@ def _admitted_input(
                         "column": len(industry_expression.source.rsplit("\n", 1)[-1]) + 1,
                     },
                 }
+            if (family_id == "equity.industry_membership"
+                    and issue_range is None and programs):
+                owners = [f"{path}.source" for path in programs]
             issues.extend(ResearchRunAdmissionIssue(
                 code=code, field=owner, range=issue_range,
                 details=ResearchAdmissionDetails(

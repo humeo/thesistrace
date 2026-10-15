@@ -22,7 +22,10 @@ from thesistrace.daily_holding_queries import (
 )
 from thesistrace.daily_track.observation_state import TrackingObservationState
 from thesistrace.research_definition import SimulationCosts
-from thesistrace.research_kernel.common_inputs import common_input_references
+from thesistrace.research_kernel.common_inputs import (
+    common_input_references,
+    requires_common_industry,
+)
 from thesistrace.research_kernel.common_observations import CommonInputObservation
 from thesistrace.research_kernel.framework_strategy import FrameworkModules
 from thesistrace.research_kernel.portfolio_weighting import PortfolioWeighting, VolatilityWindow
@@ -241,6 +244,13 @@ class TrackingOrigin(BaseModel):
     strategy_initial_cash_cny: str
     initial_strategy_state: InitialStrategyState
     calculation_contracts: dict[str, object]
+
+    @property
+    def requires_industry(self) -> bool:
+        strategy = self.immutable_input["strategy"]
+        return (strategy["kind"] == "direct"
+                or bool(FrameworkModules.model_validate(strategy["modules"]).programs())
+                or requires_common_industry(*self.expression_trees))
 
     @property
     def expression_trees(self) -> tuple[dict[str, object], ...]:

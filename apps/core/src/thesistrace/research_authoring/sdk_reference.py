@@ -257,7 +257,9 @@ def _sdk_entries() -> dict[str, AuthoringReferenceEntry]:
         _entry(
             "Data.candidate_details",
             "Tuple of read-only mappings: instrument_id (string), "
-            "board (string), industry (industry code or None). Same order as candidates.",
+            "board (string), industry (industry code or None when unassigned). "
+            "Industry metadata comes from the pinned data regardless of neutralization, "
+            "standalone or batch execution. Same order as candidates.",
         ),
         _entry(
             "Data.framework",

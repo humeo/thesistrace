@@ -10,7 +10,6 @@ from pathlib import Path
 from time import monotonic
 
 from thesistrace.data import GenerationStoreError, MountedGenerationStore
-from thesistrace.research_kernel.common_inputs import requires_common_industry
 from thesistrace.research_kernel.common_observations import common_input_observation_rows
 from thesistrace.research_kernel.factor import prepare_columnar_forward_labels
 from thesistrace.research_kernel.holding_observations import holding_rows
@@ -572,7 +571,7 @@ def _calculate_chunks(
                 sessions=context_sessions,
                 universe_name=immutable_input.universe,
                 neutralization=immutable_input.neutralization,
-                require_industry=requires_common_industry(*immutable_input.expression_trees),
+                require_industry=immutable_input.requires_industry,
                 field_bindings=immutable_input.field_bindings,
                 fact_instrument_ids=fact_instrument_ids,
             )

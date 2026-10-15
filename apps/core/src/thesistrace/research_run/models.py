@@ -93,6 +93,7 @@ from thesistrace.research_definition import (
 from thesistrace.research_definition import (
     StrategyBacktestSpec as StrategyBacktestSpec,
 )
+from thesistrace.research_kernel.common_inputs import requires_common_industry
 from thesistrace.research_kernel.common_observations import CommonInputObservation
 from thesistrace.research_kernel.direct_strategy import PythonProgram
 from thesistrace.research_kernel.exposure import validate_exposure
@@ -618,6 +619,10 @@ class ImmutableRunInput(BaseModel):
             .programs()
             .items()
         }
+
+    @property
+    def requires_industry(self) -> bool:
+        return bool(self.programs) or requires_common_industry(*self.expression_trees)
 
     @property
     def expression_trees(self) -> tuple[dict[str, object], ...]:

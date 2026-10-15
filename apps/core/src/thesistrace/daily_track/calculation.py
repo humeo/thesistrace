@@ -18,7 +18,6 @@ from thesistrace.research_kernel import (
     continuation_snapshot,
     empty_continuation,
 )
-from thesistrace.research_kernel.common_inputs import requires_common_industry
 from thesistrace.research_kernel.holding_observations import holding_rows
 from thesistrace.research_kernel.numeric import require_current_numeric_contract
 from thesistrace.research_kernel.strategy_events import strategy_event_rows
@@ -140,7 +139,7 @@ def execute_tracking_target(value: Mapping[str, object]) -> dict[str, object]:
         sessions=dependency_sessions,
         universe_name=origin_universe(origin),
         neutralization=origin_neutralization(origin),
-        require_industry=requires_common_industry(*origin.expression_trees),
+        require_industry=origin.requires_industry,
         field_bindings={
             str(key): str(binding)
             for key, binding in origin.immutable_input["field_bindings"].items()
@@ -238,7 +237,7 @@ def _rebuild_continuation(
             sessions=calendar[context_start : chunk_end + 1],
             universe_name=origin_universe(origin),
             neutralization=origin_neutralization(origin),
-            require_industry=requires_common_industry(*origin.expression_trees),
+            require_industry=origin.requires_industry,
             field_bindings={
                 str(key): str(binding)
                 for key, binding in origin.immutable_input["field_bindings"].items()

@@ -23,7 +23,6 @@ from thesistrace.research_batch.private_artifact import (
 )
 from thesistrace.research_kernel.common_inputs import (
     common_input_references,
-    requires_common_industry,
 )
 from thesistrace.research_kernel.common_observations import common_input_observation_rows
 from thesistrace.research_kernel.exposure import validate_exposure
@@ -782,7 +781,7 @@ def _execute_factor_batch_messages(
                 neutralization=common.neutralization,
                 field_bindings=union_bindings,
                 require_industry=any(
-                    requires_common_industry(*item.immutable_input.expression_trees)
+                    item.immutable_input.requires_industry
                     for item in items
                 ),
                 effective_lookback=max_lookback,
@@ -994,9 +993,7 @@ def _execute_independent_strategy_messages(
         ) -> None:
             for item in active:
                 frozen = item.immutable_input
-                industry = frozen.neutralization == "industry" or requires_common_industry(
-                    *frozen.expression_trees
-                )
+                industry = frozen.neutralization == "industry" or frozen.requires_industry
                 if failure.field_ids.intersection(frozen.field_bindings) or (
                     failure.industry and industry
                 ):
@@ -1020,7 +1017,7 @@ def _execute_independent_strategy_messages(
                     item.immutable_input.expression_admission.effective_lookback for item in active
                 ),
                 require_industry=any(
-                    requires_common_industry(*item.immutable_input.expression_trees)
+                    item.immutable_input.requires_industry
                     for item in active
                 ),
                 fact_instrument_ids=frozenset().union(*(
@@ -1296,7 +1293,7 @@ def _execute_strategy_sweep_messages(
                         universe=shared_input.universe,
                         neutralization=shared_input.neutralization,
                         field_bindings=union_bindings if shared_input.has_alpha else {},
-                        require_industry=requires_common_industry(*shared_input.expression_trees),
+                        require_industry=shared_input.requires_industry,
                         effective_lookback=(shared_input.expression_admission.effective_lookback),
                         fact_instrument_ids=frozenset(),
                     )
@@ -1523,7 +1520,7 @@ def _execute_strategy_item_messages(
                     neutralization="none",
                     field_bindings=strategy_fields,
                     effective_lookback=strategy_lookback,
-                    require_industry=requires_common_industry(*item.immutable_input.expression_trees),
+                    require_industry=item.immutable_input.requires_industry,
                     fact_instrument_ids=_continuation_instrument_ids(strategy_continuation),
                 )
                 data_read_seconds += monotonic() - data_read_started

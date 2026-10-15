@@ -67,6 +67,7 @@ def test_completed_chunk_releases_large_calculation_inputs_before_yield(monkeypa
         expression_admission=SimpleNamespace(effective_lookback=0),
         alpha_expression={"kind": "field", "field_id": "close_adj"},
         expression_trees=({"kind": "field", "field_id": "close_adj"},),
+        requires_industry=False,
         numeric_execution_contract="thesistrace-numeric-v1",
         research_kind="strategy_backtest",
         semantic_versions={"kernel": "test-kernel"},

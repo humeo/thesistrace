@@ -125,7 +125,6 @@ from thesistrace.research_kernel import (
 from thesistrace.research_kernel.capacity import DecisionMode
 from thesistrace.research_kernel.common_inputs import (
     common_input_references,
-    requires_common_industry,
 )
 from thesistrace.research_kernel.framework_strategy import FrameworkModules
 from thesistrace.research_kernel.strategy_program_runtime import STATE_BYTES, StrategyProgramFailure
@@ -2588,7 +2587,7 @@ class DailyTrackService:
             sessions=calculation_calendar,
             universe_name=origin_universe(origin),
             neutralization=origin_neutralization(origin),
-            require_industry=requires_common_industry(*origin.expression_trees),
+            require_industry=origin.requires_industry,
             field_bindings={
                 str(key): str(value)
                 for key, value in origin.immutable_input["field_bindings"].items()
@@ -3892,7 +3891,7 @@ def _origin_dependencies(origin: TrackingOrigin) -> DataDependencies:
     return resolve_data_dependencies(
         field_ids=set(field_bindings),
         neutralization=origin_neutralization(origin),
-        require_industry=requires_common_industry(*origin.expression_trees),
+        require_industry=origin.requires_industry,
     )
 
 

@@ -97,6 +97,10 @@ read response and 16 MiB output, while preserving 128 MiB guest memory and
 current execution deadlines. No unbounded history cache or automatic package
 installation is introduced.
 
+Python candidate metadata always includes the pinned industry's assignment (or
+an unassigned null), independently of neutralization and batch composition.
+Admission, research recovery and Daily Tracking require that same dependency.
+
 Freeze the new bootstrap, SDK, numerical codec, limits and execution policies
 in environment identity. Historical inputs/results stay unchanged. Old frozen
 environments and class programs fail explicitly; there is no runtime ABI
