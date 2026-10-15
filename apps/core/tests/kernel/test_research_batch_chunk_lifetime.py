@@ -45,6 +45,7 @@ def test_factor_batch_prepares_one_shared_chunk_and_releases_it_before_yield(
         semantic_versions={"kernel": "test"},
         universe="top300",
         neutralization="none",
+        requires_industry=False,
     )
     items = tuple(
         ResearchBatchExecutionItem(

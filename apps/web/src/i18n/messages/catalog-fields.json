@@ -705,8 +705,8 @@
       "description": "supplier report cumulative: value-change net income; distinct from investment income alone"
     },
     "financial.indicator.interest_expense": {
-      "name": "Interest expense",
-      "description": "supplier report cumulative: interest expense, despite source spelling interst_income"
+      "name": "Supplier interest indicator",
+      "description": "supplier report cumulative fina_indicator.interst_income; vendor-defined interest amount that may be net of interest income; not guaranteed gross statement interest expense or cash interest paid; source value is preserved"
     },
     "financial.indicator.daa": {
       "name": "Depreciation and amortization",
@@ -1611,8 +1611,8 @@
       "description": "供应商报告期累计口径：价值变动净收益；不只包含投资收益。"
     },
     "financial.indicator.interest_expense": {
-      "name": "利息费用",
-      "description": "供应商报告期累计口径：利息费用；来源列虽然拼写为 interst_income，含义仍为利息费用。"
+      "name": "供应商利息指标",
+      "description": "供应商 fina_indicator.interst_income 报告期累计值，可能已扣除利息收入；不保证等同于报表利息费用总额或现金支付利息；保留供应商原值。"
     },
     "financial.indicator.daa": {
       "name": "折旧与摊销",
