@@ -1,10 +1,6 @@
 /* Research editor surface. Shared sidebar styling lives in styles.css. */
-.app-shell-research {
-  background: var(--background);
-}
 .app-shell-research .main-content {
   padding-top: 32px;
-  background: var(--background);
 }
 .app-shell-research .main-content > section {
   width: min(1280px, 100%);

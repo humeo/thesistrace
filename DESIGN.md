@@ -149,6 +149,10 @@ Use these semantic roles on the landing, authentication and console. Explicit ca
 | Warning | `#E0B95E` | Caution, also labeled in words |
 | Error | `#F07D86` | Validation errors, also labeled in words |
 
+The document root owns one continuous canvas across the landing, authentication and every console route, including Chat. Body, app shells, route wrappers and main-content containers remain transparent. Cards, controls, the sidebar and overlays retain their own semantic surface colors. Do not repaint the page canvas inside individual routes.
+
+The shared stylesheet paints the canvas with a repeating, solid-color 2px SVG image using the approved `#010102`. This avoids the horizontal color discontinuity reproduced with plain background colors in Chrome on macOS on the affected display. Keep the image fill and the shared background token together when changing the canvas color. Do not add route-specific images, browser detection, filters or forced compositor layers. Verify this symptom in a visible native browser window: attaching browser inspection can hide it, so automated screenshots alone do not establish a fix.
+
 Multi-strategy comparison charts use the [IBM Carbon dark categorical palette](https://carbondesignsystem.com/data-visualization/color-palettes/) in its official 14-color sequence, defined as `--chart-categorical-*` in the shared stylesheet. This palette identifies strategies independently of the existing single-strategy and benchmark colors. Legends use the shared outline ToggleGroup with neutral selected surfaces and line swatches matching each curve; preserve the accessible pressed state and keyboard toggling.
 
 - Use a 4px rhythm with 4/8/12/16px for controls and 24/32/48px to separate substantial console sections. Keep 40px desktop buttons and inputs, 48px ordinary rows and 44px dense catalog rows; coarse-pointer targets remain at least 44px.

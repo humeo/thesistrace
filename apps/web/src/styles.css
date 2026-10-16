@@ -27,7 +27,6 @@
    intentionally omitted so the established public landing keeps its own reset. */
 :root {
   color: #f7f8f8;
-  background: #010102;
   color-scheme: dark;
   --font-body: Inter, "Noto Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   --font-display: var(--font-body);
@@ -118,7 +117,6 @@
 body:has(.app-shell) {
   --font-body: Inter, "Noto Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", sans-serif;
   --font-display: var(--font-body);
-  --background: #010102;
   --foreground: #f7f8f8;
   --card: #111216;
   --card-foreground: #f7f8f8;
@@ -147,7 +145,6 @@ body:has(.app-shell) {
   --sidebar-accent-foreground: #f7f8f8;
   --sidebar-border: #23252a;
   --sidebar-ring: #5e69d1;
-  --canvas: #010102;
   --surface-1: #111216;
   --surface-2: #191b21;
   --surface-3: #22242c;
@@ -169,14 +166,12 @@ body:has(.app-shell) {
   --shadow-card: none;
   --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
   color: var(--foreground);
-  background: var(--background);
   font-family: var(--font-body);
 }
 
 /* Public and authentication surfaces use the same Linear-inspired dark ladder. */
 .landing-page, .login-page, .auth-page {
   color-scheme: dark;
-  --canvas: #010102;
   --surface-1: #111216;
   --surface-2: #191b21;
   --surface-3: #22242c;
@@ -198,23 +193,29 @@ body:has(.app-shell) {
   --danger-action: #f07d86;
   --danger-action-hover: #dc6671;
   color: var(--ink);
-  background: var(--canvas);
-}
-html:has(.landing-page, .login-page, .auth-page) {
-  color-scheme: dark;
-  background: #010102;
 }
 .quantgrove-wordmark { font-family: var(--font-brand); font-weight: 550; letter-spacing: -.02em; }
 
 * { box-sizing: border-box; }
-html { min-width: 0; overflow-x: clip; scrollbar-gutter: stable; background: var(--canvas); }
+/* The document owns the continuous page canvas. Route and layout containers
+   remain transparent; cards, controls and overlays own their surface colors. */
+html {
+  min-width: 0;
+  overflow-x: clip;
+  scrollbar-gutter: stable;
+  background-color: var(--canvas);
+  /* A solid image keeps empty and content-bearing canvas tiles on the same
+     image paint path. Plain background-color splits into visibly different
+     bands in Chrome on macOS with the affected display profile. Keep this
+     image's fill in sync with --background; SVG images cannot inherit tokens. */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='2' height='2'%3E%3Cpath fill='%23010102' d='M0 0h2v2H0z'/%3E%3C/svg%3E");
+}
 body {
   margin: 0;
   min-width: 0;
   min-height: 100vh;
   min-height: 100dvh;
   overflow-x: clip;
-  background: var(--canvas);
   font-size: var(--text-sm);
   line-height: var(--text-sm--line-height);
 }
@@ -261,7 +262,6 @@ code:not(.quantgrove-chat code) { font-family: var(--mono); }
 .app-shell {
   min-height: 100vh;
   min-height: 100dvh;
-  background: var(--canvas);
 }
 .application-sidebar {
   min-width: 0;
@@ -717,7 +717,6 @@ code:not(.quantgrove-chat code) { font-family: var(--mono); }
 .main-content:has(.research-run-page),
 .main-content:has(.console-workspace) {
   padding-block: 32px;
-  background: var(--background);
 }
 
 .result-surface ::selection { background: var(--secondary); color: var(--foreground); }
@@ -760,7 +759,6 @@ a:focus-visible {
   min-height: 100dvh;
   place-items: center;
   padding: 32px 16px;
-  background: var(--canvas);
 }
 .auth-panel {
   width: min(440px, 100%);
@@ -1062,7 +1060,7 @@ a:focus-visible {
   [data-slot="alert-dialog-content"] { animation: none !important; }
 }
 
-.login-page { min-height: 100dvh; display: flex; flex-direction: column; background: var(--canvas); }
+.login-page { min-height: 100dvh; display: flex; flex-direction: column; }
 .login-brand { display: inline-flex; align-items: center; gap: 10px; align-self: flex-start; margin: 28px 36px 0; color: var(--ink); font-size: 18px; font-weight: 600; text-decoration: none; min-height: 44px; }
 .login-main { flex: 1; display: grid; place-items: center; padding: 64px 24px; }
 .login-content { width: min(380px, 100%); }
@@ -1170,7 +1168,7 @@ body:has(.app-shell) [data-slot="button"]:is([data-size="default"], [data-size="
 }
 body:has(.app-shell) [data-slot="button"]:is([data-size="default"], [data-size="lg"], [data-size="xl"])[data-variant="default"]:hover:not(:disabled) {
   background: #828fff;
-  color: #010102;
+  color: var(--canvas);
   box-shadow: none;
 }
 body:has(.app-shell) [data-slot="button"]:is([data-size="default"], [data-size="lg"], [data-size="xl"])[data-variant="default"]:active:not(:disabled) {

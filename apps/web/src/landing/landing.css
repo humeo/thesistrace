@@ -1,5 +1,5 @@
 /* The approved QAgentis homepage uses the same dark palette as the research workspace. */
-.landing-page { color: var(--foreground); background: var(--background); min-height: 100vh; }
+.landing-page { color: var(--foreground); min-height: 100vh; }
 .landing-page *, .landing-page *::before, .landing-page *::after { box-sizing: border-box; }
 .landing-page p, .landing-page h1, .landing-page h2, .landing-page h3, .landing-page ul, .landing-page dl { margin: 0; }
 .landing-page a { text-decoration: none; }
