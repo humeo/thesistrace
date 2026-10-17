@@ -68,7 +68,7 @@ def test_production_runtime_prevents_ambient_security_overrides(
         (ROOT / "apps/agent" / "config" / "model-registry.json").read_text()
     )
     assert lines[:3] + lines[4:] == [
-        "public_origin=https://research.thesistrace.com",
+        "public_origin=https://qagentis.com",
         "auth_secret=9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
         "tushare_token=production-tushare-token-7Kp4mN9vQ2sL6xT8",
         "agent_provider=sk-production-agent-7Kp4mN9vQ2sL6xT8",
@@ -112,7 +112,7 @@ def test_production_runtime_rejects_non_root_or_non_0600_environment(
             "PRODUCTION_PUBLIC_ORIGIN_INVALID",
         ),
         (
-            "THESISTRACE_PUBLIC_ORIGIN=https://research.thesistrace.com:8443",
+            "THESISTRACE_PUBLIC_ORIGIN=https://qagentis.com:8443",
             "PRODUCTION_PUBLIC_ORIGIN_INVALID",
         ),
         (
@@ -172,7 +172,7 @@ def test_production_runtime_rejects_non_root_or_non_0600_environment(
             "PRODUCTION_AGENT_PROVIDER_SECRET_INVALID",
         ),
         (
-            "THESISTRACE_MCP_RESOURCE_URL=https://research.thesistrace.com/mcp/v1",
+            "THESISTRACE_MCP_RESOURCE_URL=https://qagentis.com/mcp/v1",
             "CONFIG_VARIABLE_UNKNOWN",
         ),
         (

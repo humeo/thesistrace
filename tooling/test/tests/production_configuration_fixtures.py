@@ -10,7 +10,7 @@ SCRIPT = ["node", ROOT / "tooling/dev/runtime.mjs", "production"]
 
 VALID_ENVIRONMENT = """\
 THESISTRACE_ENVIRONMENT=production
-THESISTRACE_PUBLIC_ORIGIN=https://research.thesistrace.com
+THESISTRACE_PUBLIC_ORIGIN=https://qagentis.com
 THESISTRACE_TURNSTILE_SITE_KEY=0xFixtureSiteKeyForValidation1234
 THESISTRACE_TURNSTILE_SECRET_KEY=0xFixtureSecretKeyForValidation1234
 THESISTRACE_RESEND_API_URL=https://api.resend.com
@@ -23,7 +23,7 @@ THESISTRACE_AUTH_DATABASE_PASSWORD=AuthRuntime_9Fd4vB7Ky2Hg6Px8
 THESISTRACE_AGENT_DATABASE_PASSWORD=AgentRuntime_5Jt8mQ3Wx7Lc9Vr4
 BETTER_AUTH_SECRET=9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
 RESEND_API_KEY=re_production_7Kp4mN9vQ2sL6xT8
-RESEND_FROM_EMAIL=ThesisTrace <noreply@thesistrace.com>
+RESEND_FROM_EMAIL=QAgentis <noreply@qagentis.com>
 THESISTRACE_TUSHARE_TOKEN=production-tushare-token-7Kp4mN9vQ2sL6xT8
 THESISTRACE_AUTH_IMAGE=ghcr.io/thesistrace/auth:2026-08-29
 THESISTRACE_AGENT_IMAGE=ghcr.io/thesistrace/agent:2026-08-29

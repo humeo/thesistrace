@@ -3,6 +3,19 @@
 Run repository commands with the versions in `.mise.toml`. Verification selection and
 entrypoints are documented in [AGENTS.md](../AGENTS.md#testing).
 
+The canonical production origin is `https://qagentis.com`, with MCP at
+`https://qagentis.com/mcp` and the model gateway at `https://api.qagentis.com/v1`.
+Production mail is sent as `QAgentis <noreply@qagentis.com>` after Resend verifies
+its DNS records. `www.qagentis.com` and the former `thesistrace.com` website redirect
+to the canonical origin; clients must use the canonical MCP URL and authorize again.
+
+`THESISTRACE_PUBLIC_ORIGIN` is the single source for the public origin, Auth base URL,
+trusted origins, MCP issuer/resource and host/origin allowlists. Change the private
+production configuration, not derived variables. The Turnstile widget must authorize
+`qagentis.com`; the Auth service also verifies that exact hostname. Keep the primary
+site, `www` and `api` DNS records proxied, mail validation records DNS-only, and use
+Cloudflare Full (strict) once Caddy has obtained valid origin certificates.
+
 Production reads one authoritative, root-owned, mode-600 configuration file outside
 this checkout. It does not merge the development `.env` with a production file.
 Initialize a new deployment on the server as root:
@@ -46,7 +59,7 @@ replace their source address with that header. Update the range list from
 
 Additional operator-owned Caddy sites can be placed in `/etc/thesistrace/caddy/*.caddy`.
 This directory is mounted read-only; keep it root-owned. For this Contabo deployment,
-`api.thesistrace.com` routes only model API paths to an independently deployed
+`api.qagentis.com` routes only model API paths to an independently deployed
 CLIProxyAPI container on the `thesistrace_default` network. The gateway has no
 published ports; its API key and model account files live outside the checkout.
 Stop the gateway before `pnpm prod down`, because it also uses that network. Restart
