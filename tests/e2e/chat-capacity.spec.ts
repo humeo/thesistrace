@@ -72,7 +72,7 @@ test("Chat saturation rejects an unaccepted Session and preserves an explicit br
     const acceptedTurn = await submitChatPrompt(page, prompt);
     await waitForChatTurn(page, acceptedTurn);
     await expect(page.locator("[data-chat-status]")).toHaveText("Run complete", { timeout: 30_000 });
-    await expect(page.locator(".chat-message-user .chat-message-content")).toHaveText(prompt);
+    await expect(page.locator(".chat-message-user .ant-bubble-content")).toHaveText(prompt);
     await expect((await revealToolActivity(page, "get_research_context", "complete")).last()).toBeVisible();
     await expect(page).toHaveURL(/\/chat\?session=[a-f0-9-]{36}$/);
     expect(databaseCounts(researcher.id)).toEqual({ sessions: activeRunLimit + 1, runs: activeRunLimit + 1, running: 0 });

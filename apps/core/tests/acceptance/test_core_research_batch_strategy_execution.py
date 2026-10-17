@@ -1717,7 +1717,8 @@ def test_long_history_multi_chunk_strategy_sweep_stays_inside_memory_budget(
     _assert_strategy_capacity_is_bounded_by_chunk(
         tmp_path,
         case="wide",
-        memory_bytes=300 * 1024**2,
+        # The current Framework state and continuation must fit with 25% headroom.
+        memory_bytes=384 * 1024**2,
         sessions=_business_sessions(324, ending=date(2026, 8, 4)),
         instrument_count=512,
         formula="close",
@@ -1735,7 +1736,8 @@ def test_high_work_strategy_sweep_selects_a_bounded_chunk(
     _assert_strategy_capacity_is_bounded_by_chunk(
         tmp_path,
         case="high-work",
-        memory_bytes=512 * 1024**2,
+        # Include the complete 251-session lookback and the Batch safety headroom.
+        memory_bytes=576 * 1024**2,
         sessions=_business_sessions(400, ending=date(2026, 8, 4)),
         instrument_count=512,
         formula=formula,

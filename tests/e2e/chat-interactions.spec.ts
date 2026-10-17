@@ -1,7 +1,7 @@
 import type { BrowserContext, Page } from "@playwright/test";
 
 import { expect, sameOriginHeaders, test } from "./auth-fixture";
-import { revealToolActivity, submitChatPrompt, waitForChatTurn } from "../fixtures/chat-ui";
+import { revealWorkHistory, submitChatPrompt, waitForChatTurn } from "../fixtures/chat-ui";
 import { proxyState, setProxyMode } from "./fault-proxy";
 
 const toolPrompt = "[scripted-tool-turn] Inspect the available research context.";
@@ -24,7 +24,7 @@ test("Staged FIFO survives reload, Steer stays in the active Turn, and two tabs 
 
     await stage(page, "Keep quality as the primary objective.");
     await stage(page, "Explain the next concrete research step.");
-    await expect(page.locator(".chat-staged-queue li")).toHaveCount(2);
+    await expect(page.locator(".chat-staged-queue [data-staged-input]")).toHaveCount(2);
     const sessionUrl = page.url();
     expect(new URL(sessionUrl).searchParams.get("session")).toMatch(/^[a-f0-9-]{36}$/u);
 
@@ -34,7 +34,7 @@ test("Staged FIFO survives reload, Steer stays in the active Turn, and two tabs 
     await page.getByRole("button", { name: "简体中文", exact: true }).click();
     await expect(status(page)).toHaveText("Research Agent 正在工作");
     await expect(page.getByRole("textbox", { name: "消息", exact: true })).toHaveValue(draft);
-    await expect(page.locator(".chat-staged-queue li")).toHaveCount(2);
+    await expect(page.locator(".chat-staged-queue [data-staged-input]")).toHaveCount(2);
     expect(page.url()).toBe(sessionUrl);
     expect(runs).toHaveLength(1);
     await page.getByRole("button", { name: "English", exact: true }).click();
@@ -42,15 +42,15 @@ test("Staged FIFO survives reload, Steer stays in the active Turn, and two tabs 
     await page.getByRole("textbox", { name: "Message", exact: true }).fill("");
 
     await page.reload();
-    await expect(page.locator(".chat-staged-queue li")).toHaveCount(2);
+    await expect(page.locator(".chat-staged-queue [data-staged-input]")).toHaveCount(2);
     await expect(status(page)).toHaveText("Research Agent is working");
     secondPage = await page.context().newPage();
     await secondPage.goto(sessionUrl);
-    await expect(secondPage.locator(".chat-staged-queue li")).toHaveCount(2);
+    await expect(secondPage.locator(".chat-staged-queue [data-staged-input]")).toHaveCount(2);
 
     await page.getByRole("button", { name: "Steer", exact: true }).click();
-    await expect(page.locator(".chat-staged-queue li")).toHaveCount(1);
-    await expect(secondPage.locator(".chat-staged-queue li")).toHaveCount(1);
+    await expect(page.locator(".chat-staged-queue [data-staged-input]")).toHaveCount(1);
+    await expect(secondPage.locator(".chat-staged-queue [data-staged-input]")).toHaveCount(1);
     expect(runs).toHaveLength(1);
 
     setProxyMode("mcp-fault-proxy", 8150, "tool-call", "pass");
@@ -103,9 +103,11 @@ test("waiting_for_user survives reload and Answer resumes the same Turn", async 
   expect(runs).toHaveLength(2);
   expect(runs[1]).toMatchObject({ command: "answer", messages: [], runId: firstRunId });
   expect(runs[1]?.resume).toMatchObject([{ payload: { selections: ["Quality"], text: "Keep turnover low." }, status: "resolved" }]);
-  const questionTool = await revealToolActivity(page, "ask_user", "complete");
-  await questionTool.getByText("Question and answer", { exact: true }).click();
-  await expect(questionTool).toContainText("Quality\n\nKeep turnover low.");
+  await revealWorkHistory(page);
+  const questionHistory = page.locator(".ant-think-content");
+  await expect(questionHistory).toContainText("Which objective should lead?");
+  await expect(questionHistory).toContainText("Quality");
+  await expect(questionHistory).toContainText("Keep turnover low.");
   await expect(page.locator(".chat-message-user")).toHaveCount(1);
   await expect(page.locator(".chat-question-composer")).toHaveCount(0);
   const sessionId = new URL(sessionUrl).searchParams.get("session")!;
@@ -161,10 +163,10 @@ test("Staged storage enforces its limit, preserves order, supports edit/delete, 
     for (let index = 1; index <= 20; index += 1) {
       await stage(page, `Queued input ${index.toString().padStart(2, "0")}`);
     }
-    const rows = page.locator(".chat-staged-queue li");
+    const rows = page.locator(".chat-staged-queue [data-staged-input]");
     await expect(rows).toHaveCount(20);
-    await expect(rows.first().locator(".chat-staged-preview")).toHaveText("Queued input 01");
-    await expect(rows.last().locator(".chat-staged-preview")).toHaveText("Queued input 20");
+    await expect(rows.first()).toContainText("Queued input 01");
+    await expect(rows.last()).toContainText("Queued input 20");
 
     const textarea = page.getByRole("textbox", { name: "Message", exact: true });
     await textarea.fill("This input must remain in the draft");
@@ -173,11 +175,11 @@ test("Staged storage enforces its limit, preserves order, supports edit/delete, 
     await expect(textarea).toHaveValue("This input must remain in the draft");
 
     await textarea.fill("");
-    await rows.nth(1).getByRole("button", { name: "Edit staged input" }).click();
+    await rows.nth(1).getByRole("button", { name: "Edit staged input", exact: true }).click();
     await expect(textarea).toHaveValue("Queued input 02");
     await expect(rows).toHaveCount(19);
     await textarea.fill("");
-    await rows.last().getByRole("button", { name: "Delete staged input" }).click();
+    await rows.last().getByRole("button", { name: "Delete staged input", exact: true }).click();
     await expect(rows).toHaveCount(18);
 
     await corruptFirstStagedInput(page);
@@ -201,7 +203,7 @@ async function send(page: Page, content: string): Promise<void> {
 }
 
 async function stage(page: Page, content: string): Promise<void> {
-  const rows = page.locator(".chat-staged-queue li");
+  const rows = page.locator(".chat-staged-queue [data-staged-input]");
   const previousCount = await rows.count();
   await page.getByRole("textbox", { name: "Message", exact: true }).fill(content);
   await page.getByRole("button", { name: "Stage", exact: true }).click();

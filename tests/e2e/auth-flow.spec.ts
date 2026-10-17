@@ -143,6 +143,7 @@ test("Two Researchers isolate Drafts, receipts, pages, and system Folder identit
   const bootstrapA = await bootstrap(page);
   await page.goto("/research");
   await page.getByRole("button", { name: "Factor Evaluation", exact: true }).click();
+  await page.getByTitle("Edit research name", { exact: true }).click();
   await page.getByLabel("Research name").fill("Researcher A draft");
   await replaceFormula(page, "close");
   const keyA = `thesistrace.research-draft.${researcherA.id}.folder_default`;
@@ -157,6 +158,7 @@ test("Two Researchers isolate Drafts, receipts, pages, and system Folder identit
   });
   await page.goto("/research");
   await page.getByRole("button", { name: "Factor Evaluation", exact: true }).click();
+  await page.getByTitle("Edit research name", { exact: true }).click();
   await expect(page.getByLabel("Research name")).toHaveValue("");
   await page.getByLabel("Research name").fill("Researcher B draft");
   await replaceFormula(page, "volume");
@@ -186,6 +188,7 @@ test("Two Researchers isolate Drafts, receipts, pages, and system Folder identit
   await restoreResearcherSession(page, researcherA);
   await bootstrap(page);
   await page.goto("/research");
+  await page.getByTitle("Edit research name", { exact: true }).click();
   await expect(page.getByLabel("Research name")).toHaveValue("Researcher A draft");
   const runA = await admitRun(page, sharedRequestId, "Researcher A shared receipt");
   const secondRunA = await admitRun(page, "browser-owner-page-second", "Researcher A page second");
@@ -216,6 +219,7 @@ test("Two Researchers isolate Drafts, receipts, pages, and system Folder identit
   expect(ownedIds).not.toContain(runA);
   expect(ownedIds).not.toContain(secondRunA);
   await page.goto("/research");
+  await page.getByTitle("Edit research name", { exact: true }).click();
   await expect(page.getByLabel("Research name")).toHaveValue("Researcher B draft");
   expect(await page.evaluate(() => Object.keys(localStorage).sort())).toEqual([keyA, keyB].sort());
   expect(await page.evaluate(() => localStorage.getItem(

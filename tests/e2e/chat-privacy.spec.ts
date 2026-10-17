@@ -88,7 +88,12 @@ test("Chat content-free telemetry survives success faults restart and deletion i
     expect(env.THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET === canaries.provider_key, "configured Provider Key canary is missing").toBe(true);
     expect(Object.keys(env).some((key) => /^(?:THESISTRACE_(?:DATABASE_URL|AUTH_DATABASE_URL|OWNER_DATABASE_URL|S3_|DATA_MOUNT|BENCHMARK_MOUNT|MCP_SIGNING)|BETTER_AUTH_SECRET)|QUEUE|WORKER/.test(key))).toBe(false);
     expect(new URL(env.THESISTRACE_AGENT_DATABASE_URL).username).toBe("agent_runtime");
-    expect(inspect.Mounts.length).toBe(0);
+    expect(inspect.Mounts).toHaveLength(1);
+    expect(inspect.Mounts[0]).toMatchObject({
+      Type: "volume", Name: `${testProjectName()}_model-settlements`,
+      Destination: "/app/agent/state", RW: true,
+    });
+    expect(env.THESISTRACE_AGENT_MODEL_SETTLEMENT_PATH).toBe("/app/agent/state/model-settlements.sqlite");
     for (const endpoint of ["live", "ready"]) {
       const health = docker(["exec", container, "node", "--input-type=module", "--eval", `const r=await fetch('http://127.0.0.1:8400/health/${endpoint}');process.stdout.write(await r.text());`]);
       expect(Object.values(canaries).some((value) => health.includes(value))).toBe(false);
@@ -147,7 +152,7 @@ test("Chat content-free telemetry survives success faults restart and deletion i
     await testInfo.attach("content-free-privacy-metadata", { contentType: "application/json", body: Buffer.from(JSON.stringify({
       status: "passed", seed: 0, scenarios: ["success", "provider_failure", "auth_failure", "mcp_error", "invalid_a2ui", "agent_limit", "restart", "delete"],
       canary_categories: Object.keys(canaries), runs: cases.map(({ runId, threadId, status, code }) => ({ run_id: runId, thread_id: threadId, status, error_category: code })),
-      core_resource_retained: true, content_remaining: 0, runtime_mounts: 0, image_digest: inspect.Image,
+      core_resource_retained: true, content_remaining: 0, runtime_mounts: inspect.Mounts.length, image_digest: inspect.Image,
     })) });
   } finally { setProxyMode("mcp-fault-proxy", 8150, "tool-call", "pass"); }
 });

@@ -13,11 +13,7 @@ export function toolActivity(page: Page, name: string, status: ToolStatus): Loca
   });
 }
 
-export async function revealToolActivity(
-  page: Page,
-  name: string,
-  status: ToolStatus,
-): Promise<Locator> {
+export async function revealWorkHistory(page: Page): Promise<void> {
   // Native Think and ThoughtChain unmount collapsed content. Expand the visible
   // history controls before locating their accessible Tool items.
   for (const history of await page.locator(".ant-think").all()) {
@@ -32,6 +28,14 @@ export async function revealToolActivity(
       await expect(details).toBeVisible();
     }
   }
+}
+
+export async function revealToolActivity(
+  page: Page,
+  name: string,
+  status: ToolStatus,
+): Promise<Locator> {
+  await revealWorkHistory(page);
   const activity = toolActivity(page, name, status);
   await expect(activity.first()).toBeVisible();
   return activity;
@@ -47,9 +51,9 @@ async function openModelPicker(page: Page): Promise<Locator> {
 
 export async function selectModel(page: Page, displayName: string): Promise<void> {
   const picker = await openModelPicker(page);
-  await picker.getByRole("group", { name: "Model", exact: true })
-    .getByRole("button", { name: displayName, exact: true })
-    .click();
+  const model = picker.getByRole("radio", { name: displayName, exact: true });
+  await model.check();
+  await expect(model).toBeChecked();
 }
 
 export async function selectReasoning(page: Page, label: string): Promise<void> {

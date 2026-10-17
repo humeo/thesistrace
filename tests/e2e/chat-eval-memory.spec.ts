@@ -50,7 +50,7 @@ for (const kind of ["formula", "admission"] as const) {
         : { kind, requested_start: "2010-01-04", run: expectedRun },
     };
     const facts = oracle(input);
-    expect(facts).toEqual({ formula_corrected: kind === "formula", admission_corrected: kind === "admission", unresolved_admission_rejection: false, batch_results_inspected: false });
+    expect(facts).toEqual({ formula_corrected: kind === "formula", admission_corrected: kind === "admission", unresolved_admission_rejection: false, batch_results_inspected: false, ranked_results_inspected: false, ranked_results_presented: false });
     expect(() => oracle({ ...input, researcher_id: randomUUID() })).toThrow("EVAL_MEMORY_ORACLE_UNAVAILABLE");
     await testInfo.attach("correction-engineering-evidence", { body: JSON.stringify({
       kind: "deterministic-engineering-evidence", model_quality_evidence: false, ...facts,
@@ -86,7 +86,7 @@ test("Eval Memory oracle does not confuse completed Batch artifacts with inspect
   await waitForChatTurn(page, resumedTurn, "completed", 60_000);
   await expect(page.locator("[data-chat-status]")).toHaveText("Run complete", { timeout: 60_000 });
   const facts = oracle(input);
-  expect(facts).toEqual({ formula_corrected: false, admission_corrected: false, unresolved_admission_rejection: false, batch_results_inspected: true });
+  expect(facts).toEqual({ formula_corrected: false, admission_corrected: false, unresolved_admission_rejection: false, batch_results_inspected: true, ranked_results_inspected: false, ranked_results_presented: false });
   expect(oracle({ ...input, expectation: { kind: "batch-results", run_ids: [runIds[0], "run_00000000000000000001"] } }))
     .toMatchObject({ batch_results_inspected: false });
   expect(() => oracle({ ...input, researcher_id: randomUUID() })).toThrow("EVAL_MEMORY_ORACLE_UNAVAILABLE");

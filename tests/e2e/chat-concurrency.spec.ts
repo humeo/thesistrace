@@ -40,7 +40,7 @@ test("Chat shared Session binds two contexts to one Run while another Session ru
     const runId = identities[1]!.runId;
     for (const client of [page, other]) {
       await expect(status(client)).toHaveText("Research Agent is working", { timeout: 10_000 });
-      await expect(client.locator(".chat-main")).toHaveAttribute("data-agent-run-id", runId);
+      await expect(client.locator("main[data-agent-run-id]")).toHaveAttribute("data-agent-run-id", runId);
       await expect(client.getByRole("textbox", { name: "Message", exact: true })).toBeEnabled();
       await expect(client.getByRole("button", { name: "Stop", exact: true })).toBeEnabled();
       await expect(client.locator(".chat-message-user")).toHaveCount(2);
@@ -64,14 +64,14 @@ test("Chat shared Session binds two contexts to one Run while another Session ru
     ).toBe(2);
     await expect(parallel).toHaveURL((url) => uuid.test(url.searchParams.get("session") ?? ""));
     expect(sessionId(parallel)).not.toBe(threadId);
-    await expect(parallel.locator(".chat-main")).toHaveAttribute("data-agent-run-id", uuid);
-    const parallelRunId = await parallel.locator(".chat-main").getAttribute("data-agent-run-id");
+    await expect(parallel.locator("main[data-agent-run-id]")).toHaveAttribute("data-agent-run-id", uuid);
+    const parallelRunId = await parallel.locator("main[data-agent-run-id]").getAttribute("data-agent-run-id");
     if (!parallelRunId || !uuid.test(parallelRunId)) throw new Error("Parallel Run identity missing");
     expect(databaseFacts(researcher.id)).toMatchObject({ active_runs: 2, agent_runs: 3, user_messages: 3 });
 
     // Reload tears down the HTTP stream, not the accepted model invocation.
     await page.reload();
-    await expect(page.locator(".chat-main")).toHaveAttribute("data-agent-run-id", runId);
+    await expect(page.locator("main[data-agent-run-id]")).toHaveAttribute("data-agent-run-id", runId);
     await expect(status(page)).toHaveText("Research Agent is working");
     await expect(page.locator(".chat-message-user")).toHaveCount(2);
     expect(identities).toHaveLength(2);
@@ -87,7 +87,7 @@ test("Chat shared Session binds two contexts to one Run while another Session ru
       await expect((await revealToolActivity(client, "get_research_context", "complete")).last()).toBeVisible();
     }
     for (const client of [page, other]) {
-      await expect(client.locator(".chat-main")).toHaveAttribute("data-agent-run-id", runId);
+      await expect(client.locator("main[data-agent-run-id]")).toHaveAttribute("data-agent-run-id", runId);
       await expect(client.locator(".chat-message-user")).toHaveCount(2);
     }
     const facts = databaseFacts(researcher.id);
@@ -134,7 +134,7 @@ test("Chat Host restart retains completed Tools and Core work without replaying 
     agentStopped = false;
     await expect.poll(async () => (await page.request.get("/api/agent/models", { headers: sameOriginHeaders() })).status(), { timeout: 30_000 }).toBe(200);
     await page.reload();
-    await expect(page.locator(".chat-main")).toHaveAttribute("data-agent-run-id", runId);
+    await expect(page.locator("main[data-agent-run-id]")).toHaveAttribute("data-agent-run-id", runId);
     await expect(status(page)).toHaveText("Run failed", { timeout: 15_000 });
     await expect(page.getByRole("textbox", { name: "Message", exact: true })).toBeEnabled();
     await expect((await revealToolActivity(page, "submit_research_run", "complete")).last()).toBeVisible();

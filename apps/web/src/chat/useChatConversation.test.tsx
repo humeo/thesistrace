@@ -450,7 +450,7 @@ test("commits the final Turn projection before exposing a terminal Session", asy
 });
 
 test("keeps an input and surfaces a known failure rejected before acceptance", async () => {
-  vi.mocked(loadTimelinePage).mockResolvedValue({ next_cursor: null, turns: [] });
+  vi.mocked(loadTimelinePage).mockRejectedValue(new ChatApiError("CHAT_SESSION_NOT_FOUND", 404));
   vi.spyOn(StagedInputStore.prototype, "list").mockResolvedValue([]);
   const runAgent = vi.fn(async (_input, subscriber?: AgentSubscriber) => {
     await subscriber?.onRunErrorEvent?.({
@@ -477,6 +477,7 @@ test("keeps an input and surfaces a known failure rejected before acceptance", a
   expect(latestController?.draft).toBe("Retain this input");
   expect(latestController?.errorCode).toBe("AGENT_CAPACITY");
   expect(latestController?.error).toContain("Agent at capacity");
+  expect(latestController?.timelineError).toBe(false);
   expect(loadCommandReceipt).not.toHaveBeenCalled();
 });
 

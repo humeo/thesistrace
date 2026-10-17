@@ -254,6 +254,7 @@ export function useChatConversation(options: Readonly<{
   }, [options.researcherId, options.threadId]);
 
   const loadLatestTimeline = useCallback(async (signal?: AbortSignal) => {
+    if (!sessionEstablishedRef.current) return;
     const generation = generationRef.current;
     const existing = timelineLoadRef.current;
     if (existing !== null && existing.generation === generation) {
