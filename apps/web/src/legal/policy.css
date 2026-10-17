@@ -1,0 +1,11 @@
+.policy-page { max-width: 76ch; margin: 0 auto; padding: 32px 28px 64px; color: var(--foreground); }
+.policy-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 40px; }
+.policy-page a { color: inherit; text-decoration: underline; text-underline-offset: 4px; }
+.policy-page a[aria-current="page"] { color: var(--primary); }
+.policy-page h1 { font-size: 32px; line-height: 1.25; margin: 44px 0 20px; }
+.policy-page h2 { font-size: var(--text-xl); line-height: 1.4; margin: 36px 0 12px; }
+.policy-page p { font-size: var(--text-base); line-height: 1.8; margin: 12px 0; }
+.policy-page .policy-notice { color: var(--muted-foreground); font-size: var(--text-sm); padding-bottom: 24px; border-bottom: 1px solid var(--border); margin-bottom: 28px; }
+.policy-page footer { margin-top: 48px; padding-top: 24px; border-top: 1px solid var(--border); }
+.policy-skip { position: absolute; left: -10000px; }
+.policy-skip:focus { position: static; display: block; margin-bottom: 16px; }

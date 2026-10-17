@@ -56,6 +56,10 @@ Financial mutation 超时可能已经成功，不能用另一个 request_id 自�
 
 qagentis 商户 Test Mode 已实测银行卡拒付、Pro 首付、付款支持的 Max 补差升级、预约降级、取消续费、客户门户、发票、逐笔部分 / 全额退款和延迟付款事件重放。测试金额已全部退款，最终回到 Free。自然次月续费 / 到期未等待，真实争议恢复未实测；这些边界仍需区分确定性测试与商户证据。
 
+2026-10-18 已在 qagentis 的 Live 商品目录创建 Pro `prod_sqIE1DFFpFJ7bUhB0KTtl` 和 Max `prod_3SY38JAtVTkBtSKmOPJ6rV`，分别为 USD 20 / 100 月付、SaaS、税费另计、无试用，返回地址为上述 qagentis.com 地址。Live 取消方式已保存为期末取消，目录没有 Product Bundle。创建商品不代表审核通过或网站已启用收款；Live 密钥、Webhook 和实际生产验收仍待完成。
+
+`/terms`、`/privacy`、`/refunds`、`/pricing` 为无需登录的中英文上线前预览页，支持及隐私联系邮箱为 `koltenluca433@gmail.com`。正式运营主体、完整生产隐私事实与生效日期确认前，不得把预览声明移除或视为完成上线审核。
+
 上线前还需商户审核、对外商户名称、支持邮箱、公开服务条款 / 隐私及退款说明、数据供应商授权、Live 商品 / 密钥 / HTTPS Webhook 和部署验证。未配置或未验证的外部事项不能据本地或 Test Mode 测试宣称已完成。
 
 Pro 每月 $20，但按 $1 AI 日预算满额使用 30–32 个额度日对应 $30–32 配置成本；当前价格是用户已确认的补贴策略，不随支付实现调整。

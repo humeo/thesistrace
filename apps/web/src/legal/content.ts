@@ -1,0 +1,59 @@
+import type { PublicPolicyPath } from "./routes";
+
+type Policy = { title: string; sections: readonly { title: string; paragraphs: readonly string[] }[] };
+export const policyContent: Record<"en" | "zh-CN", Record<PublicPolicyPath, Policy>> = {
+  en: {
+    "/terms": { title: "Terms of service", sections: [
+      { title: "Research tools, with human judgment", paragraphs: ["QAgentis provides quantitative research, historical backtests, AI-assisted analysis and simulated daily tracking. It does not execute trades, hold investment funds or guarantee returns. Historical and simulated results do not predict actual trading performance. Verify AI outputs and data before relying on them."] },
+      { title: "Your account and content", paragraphs: ["Keep your login credentials secure and authorize only clients you trust. You must have the rights needed to submit content and use data. Do not bypass usage limits, compromise security, disrupt the service or infringe others’ rights.", "You retain the rights you hold in your submitted content. We process it to provide, maintain and protect the service. A subscription does not grant unrestricted redistribution rights to third-party datasets, software or model outputs."] },
+      { title: "Monthly subscriptions", paragraphs: ["Pro and Max renew monthly in USD until canceled. Applicable taxes are added at checkout, where the final total is shown. Creem hosts checkout and processes payments under the terms shown there. See Pricing for plan limits.", "Daily research and AI limits reset at midnight Asia/Shanghai. Unused daily allowance does not roll over. Upgrades and renewal do not reset usage already incurred that day. AI budget is a metered service allowance, not a cash balance or withdrawable credit."] },
+      { title: "How usage is counted", paragraphs: ["A research task reserves a run when accepted. A failed task, or a task canceled before execution starts, releases that reservation. Canceling after execution starts counts as a run. Each child task in a batch counts separately.", "AI usage is metered separately. A failed research task does not reverse AI usage already incurred. Tracking limits count the objects you can continue tracking, rather than a daily allowance."] },
+      { title: "Plan changes and cancellation", paragraphs: ["An upgrade takes effect after the prorated payment is verified. A downgrade changes the next monthly plan while preserving the higher entitlement supported by the current payment until its expiry. Cancel renewal through Billing or the Creem customer portal; current paid access continues to the end of the paid period, then returns to Free.", "After returning to Free, you may continue one tracking object. Existing history remains. If selection is required, choose the object when continuing tracking. Selected slots cannot be rotated freely: stop a selected track and wait for completion, or upgrade. Stopping a track is irreversible.", "A failed renewal or expired paid period can end paid access. Cancellation does not itself issue a refund; see Refunds and cancellation."] },
+      { title: "Service availability and changes", paragraphs: ["Data and AI results may contain errors, and service interruptions can occur. Material issues affecting purchased service are handled through support and the refund process. Nothing here excludes rights or liabilities that applicable law does not permit us to exclude.", "Material changes to prices, limits or terms will be communicated before taking effect, allowing cancellation before an affected renewal. Changes will not retroactively reduce paid-period entitlements."] },
+    ] },
+    "/privacy": { title: "Privacy notice", sections: [
+      { title: "Information used to provide QAgentis", paragraphs: ["Account and session information supports login, account administration and abuse prevention. Research conditions, code, prompts, conversation context, results and tracking history support task execution and saved work.", "Plan details, usage records and Creem customer, subscription and transaction references support billing and entitlement checks. Necessary request, security and fault records support troubleshooting. Avoid submitting sensitive information unrelated to your task."] },
+      { title: "Payment, email and security services", paragraphs: ["Creem hosts payment entry. QAgentis does not collect full card details through its own checkout form, but receives payment references and events needed to manage billing. Creem’s own privacy notice applies to its processing.", "Resend delivers account verification emails. Cloudflare Turnstile provides login abuse protection. These providers process information needed for those functions."] },
+      { title: "AI services and connected clients", paragraphs: ["AI requests can send prompts, relevant conversation context and tool results to the configured model provider. External MCP clients can receive information you authorize them to access. Review access before connecting a client.", "The production provider list, processing locations, international transfer arrangements and provider retention practices are being finalized before paid launch. This preview does not promise that every provider excludes all training uses."] },
+      { title: "Storage and retention", paragraphs: ["Necessary session cookies and browser storage support login and interface preferences. Saved research and conversations support service features. Payment, security and dispute records may need to remain after a visible record is deleted.", "Contact koltenluca433@gmail.com to request access, correction, export or deletion of personal information. Account ownership may need to be verified. The final notice will identify the operator, production providers, retention periods, backup expiry and the detailed request process. These details are not yet finalized. Do not interpret this preview as a promise of immediate deletion from every backup or third-party system."] },
+    ] },
+    "/refunds": { title: "Refunds and cancellation", sections: [
+      { title: "Stop the next renewal", paragraphs: ["Cancel through QAgentis Billing or the Creem customer portal. Once cancellation is confirmed, current paid access continues until the paid period ends and the subscription does not renew. Cancellation and a refund are separate actions."] },
+      { title: "Request a review", paragraphs: ["Refund requests are reviewed manually. For duplicate charges, inability to access purchased service, persistent technical issues or other billing problems, provide the account email, invoice or order reference, payment date and a description. Never send a full card number or security code.", "Contact koltenluca433@gmail.com for support and refund requests. Decisions depend on the facts, applicable law and Creem’s processing rules. This policy does not guarantee approval of every request or remove mandatory consumer rights."] },
+      { title: "What changes after a refund", paragraphs: ["A confirmed full refund removes the entitlement supported by that payment without deleting research history or entitlements supported by other valid payments. A partial refund ordinarily preserves the corresponding entitlement. Merely requesting a refund does not revoke access.", "A downgrade does not automatically refund the current period’s difference; the current entitlement continues until expiry. Unused daily research or AI allowance does not automatically become cash or a refund."] },
+      { title: "Processing and future charges", paragraphs: ["Approved refunds are processed through Creem and its payment channels. Arrival time depends on the payment channel and bank. A refund alone does not confirm cancellation: separately cancel renewal and check the displayed end date if you do not want future charges."] },
+    ] },
+    "/pricing": { title: "Plans and usage", sections: [
+      { title: "Monthly, in USD", paragraphs: ["Pro and Max automatically renew monthly until canceled. Applicable taxes are added at checkout. No annual plan is offered. Paid checkout is not open during launch preparation."] },
+      { title: "Daily limits, clearly counted", paragraphs: ["Research and AI allowances reset at midnight Asia/Shanghai and do not roll over. AI allowance is metered usage, not money held in your account. Tracking slots are concurrent capacity. Failed research releases its run reservation; AI usage is counted separately."] },
+      { title: "Change or cancel", paragraphs: ["Upgrade after a confirmed prorated payment. Downgrade for the next monthly period. Cancel renewal while keeping the current paid period. Read the terms and refund policy for details."] },
+    ] },
+  },
+  "zh-CN": {
+    "/terms": { title: "服务条款", sections: [
+      { title: "研究工具与人工判断", paragraphs: ["QAgentis 提供量化研究、历史回测、AI 辅助分析和模拟日常跟踪工具，不执行真实交易、不保管投资资金，也不保证收益。历史和模拟结果不代表实际交易表现；使用前请核实 AI 输出和数据。"] },
+      { title: "账户与内容", paragraphs: ["请妥善保管登录凭据，只授权可信客户端访问账户。您应拥有提交内容和使用数据所需的权利，不得绕过额度、安全限制、干扰服务或侵犯他人权利。", "您保留对提交内容依法享有的权利。我们在提供、维护和保护服务所需范围内处理内容。购买套餐不授予无限制再分发第三方数据、软件或模型输出的权利。"] },
+      { title: "月付订阅", paragraphs: ["Pro 和 Max 按 USD 每月自动续费，直至取消。适用税费另计，结账时显示最终应付总额。Creem 托管结账并处理付款，适用结账时展示的相关条款。套餐额度见价格说明。", "每日研究和 AI 额度按北京时间（Asia/Shanghai）零点重置，未用额度不结转。升级或续费不会重置当天已用量。AI 预算是计量使用上限，不是现金余额，不能提现。"] },
+      { title: "额度如何计算", paragraphs: ["研究任务接受时预占次数，最终失败或执行开始前取消会释放预占。执行开始后主动取消会计次；批量中的每个子任务分别计次。", "AI 使用单独计量，研究失败不意味着已经发生的 AI 用量全部撤销。跟踪名额是可以持续推进的对象数量，不是每日次数。"] },
+      { title: "升级、降级和取消", paragraphs: ["升级在补差付款核实后提高权益。降级改变下期套餐，本期付款支持的较高权益保留至到期。可在账单页或 Creem 客户门户取消续费；本期付费权益继续有效，到期后回到 Free。", "回到 Free 后只允许继续推进一个跟踪对象，历史仍保留。需要选择时，系统会在继续推进时提示。选定名额不能自由轮换，释放名额需停止已选跟踪并等待完成，或升级增加名额。停止跟踪不可撤销。", "续费失败或付费账期到期可能结束付费权益。取消续费不会自动退款，详见退款与取消说明。"] },
+      { title: "服务及条款变更", paragraphs: ["数据及 AI 输出可能存在错误，服务可能中断。影响已购买服务的重要问题通过支持和退款流程处理。本说明不排除适用法律禁止排除的责任或消费者权利。", "价格、额度或重要条款变更会提前通知，让用户能在受影响的续费前取消。变更不会追溯削减已付款周期的权益。"] },
+    ] },
+    "/privacy": { title: "隐私说明", sections: [
+      { title: "提供服务所需的信息", paragraphs: ["账户和会话信息用于登录、账户管理与防滥用。研究条件、代码、提示词、会话上下文、结果和跟踪历史用于执行任务及保存工作。", "套餐、用量及 Creem 客户、订阅和交易关联用于账单和权益核验。必要的请求、安全和故障记录用于排查问题。请勿提交与任务无关的敏感信息。"] },
+      { title: "支付、邮件与安全服务", paragraphs: ["付款资料在 Creem 托管页面输入。QAgentis 不通过自己的结账表单收集完整银行卡信息，但会接收管理账单所需的支付关联及事件。Creem 的数据处理适用其自身隐私政策。", "Resend 发送账户验证码邮件；Cloudflare Turnstile 提供登录防滥用验证。相关服务商处理完成这些功能所需的信息。"] },
+      { title: "AI 服务与连接的客户端", paragraphs: ["AI 请求可能将提示词、相关会话上下文和工具结果发送至配置的模型服务商。外部 MCP 客户端可能接收您授权访问的信息，请在连接前核对权限。", "生产服务商清单、处理地区、跨境安排及服务商保留规则将在付费上线前确定。本预览不承诺所有服务商都排除所有模型训练用途。"] },
+      { title: "存储与保留", paragraphs: ["必要的会话 Cookie 和浏览器存储支持登录及界面偏好。保存的研究和会话支持产品功能；删除界面记录后，账务、安全或争议记录仍可能需要保留。", "可联系 koltenluca433@gmail.com 请求访问、更正、导出或删除个人信息，处理时可能需要核实账户归属。正式说明将列明运营主体、生产服务商、数据保留期限、备份淘汰时间以及详细请求流程。这些信息尚在确认中；本预览不承诺立即删除全部备份或第三方系统中的数据。"] },
+    ] },
+    "/refunds": { title: "退款与取消", sections: [
+      { title: "停止下期续费", paragraphs: ["在 QAgentis 账单页或 Creem 客户门户取消续费。确认取消后，本期付费权益保留至到期，下期不再续费。取消续费与退款是两项独立操作。"] },
+      { title: "申请人工审核", paragraphs: ["退款申请由人工审核。遇到重复扣款、无法获得已购服务、持续技术故障或其他账单问题，请提供账户邮箱、订单或发票编号、付款日期及问题说明，不要发送完整银行卡号或安全码。", "支持及退款申请请联系 koltenluca433@gmail.com。退款决定取决于具体事实、适用法律及 Creem 的处理规则，不保证所有申请获批，也不排除法定消费者权利。"] },
+      { title: "退款后的权益", paragraphs: ["确认全额退款会撤销对应付款支持的权益，不删除研究历史，也不影响其他有效付款支持的权益。部分退款通常保留对应权益；仅提出退款申请不会撤权。", "降级不会自动退还本期差价，本期权益保留至到期。未使用的每日研究次数和 AI 预算不会自动折现或退款。"] },
+      { title: "到账与后续扣款", paragraphs: ["获批退款通过 Creem 及支付渠道处理，到账时间取决于支付渠道和银行。退款不代表已取消续费；若不希望后续扣款，请另行取消并确认页面显示的到期安排。"] },
+    ] },
+    "/pricing": { title: "套餐与额度", sections: [
+      { title: "USD 月付", paragraphs: ["Pro 和 Max 每月自动续费，直至取消。适用税费另计，结账前展示。暂不提供年付方案，上线准备期间尚未开放付费结账。"] },
+      { title: "每日额度与跟踪名额", paragraphs: ["研究和 AI 额度按北京时间（Asia/Shanghai）零点重置，不结转。AI 额度是计量使用上限，不是账户资金；跟踪名额是同时使用的容量。失败研究释放次数预占，AI 使用单独计量。"] },
+      { title: "变更与取消", paragraphs: ["升级在补差付款确认后生效，降级用于下期月付套餐。取消续费后保留本期权益，详见服务条款和退款说明。"] },
+    ] },
+  },
+};

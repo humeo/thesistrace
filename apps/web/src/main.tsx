@@ -19,6 +19,9 @@ import { Toaster } from "./components/ui/toast";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "./components/ui/dialog";
 import "./styles.css";
 
+import { isPublicPolicyPath } from "./legal/routes";
+const PolicyPage = lazy(() => import("./legal/PolicyPage"));
+
 const LandingPage = lazy(() => import('./landing/LandingPage'));
 
 function browserLocation(): BrowserLocation {
@@ -184,7 +187,9 @@ function AuthStatus({ title, message, action, actionLabel, retryAt = 0 }: {
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    {window.location.pathname === "/" ? (
+    {isPublicPolicyPath(window.location.pathname) ? (
+      <Suspense fallback={null}><PolicyPage path={window.location.pathname} /></Suspense>
+    ) : window.location.pathname === "/" ? (
       <Suspense fallback={null}><LandingPage /></Suspense>
     ) : (
       <AuthProvider><BrowserRoutedApp /><Toaster /></AuthProvider>

@@ -90,3 +90,55 @@ Publication 孤儿维护每分钟最多检查一页 1,000 个对象，一轮完�
 邮箱登录的发码入口必须通过 Cloudflare Turnstile。创建 Managed widget 并添加实际访问域名，把站点密钥和服务端密钥分别写入私有部署配置的 `THESISTRACE_TURNSTILE_SITE_KEY`、`THESISTRACE_TURNSTILE_SECRET_KEY`；服务端密钥不能进入 Git 或前端构建。服务端严格校验当前 `THESISTRACE_PUBLIC_ORIGIN` 的 hostname 和 `sign-in-code` action。生产环境只允许官方 Siteverify 地址，不接受测试密钥或本地验证服务。
 
 每个邮箱使用独立的固定窗口：60 秒内 1 封、每小时 5 封、每天 10 封；IP 每分钟 5 次请求，IPv6 按 `/64` 合并。全站发码默认为每小时 25 封、每天 100 封，分别由 `THESISTRACE_EMAIL_CODE_GLOBAL_HOURLY_LIMIT` 和 `THESISTRACE_EMAIL_CODE_GLOBAL_DAILY_LIMIT` 配置。达到全站上限记录 `auth_email_code_budget_reached` 日志，可接入运维告警。额度在数据库中原子预留，重启仍有效；发送失败也保留预留，限制失败重试产生的消耗。拒绝请求不会刷新验证码或延长邮箱冷却，验证失败只消耗 IP 请求额度。Operator 证明码仍走独立的已认证流程。相关验证入口见仓库根 [AGENTS.md](../AGENTS.md#testing)。
+
+## Payment launch preparation
+
+The pre-launch `/terms`, `/privacy`, `/refunds` and `/pricing` pages are public and
+must remain accessible without a login or a working Auth API. They currently state
+that they are previews. Before collecting payments, finalize the operator identity,
+support/privacy contact, production processor inventory, retention/deletion rules and
+effective date; remove preview copy only when the final facts are in place. Internal
+editorial gaps are tracked in [the policy draft](../docs/public-policies-draft.md).
+
+While merchant verification is pending, retain the payment-disabled values in
+[payment-disabled.env.example](payment-disabled.env.example). This is a reference
+fragment, not a replacement for the existing private production file. Disabled mode
+requires all Creem credentials, product IDs and API override fields to be empty.
+Do not copy Test Mode credentials into a live deployment.
+
+Prepare a candidate from `main`, validate the applicable boundaries using
+[AGENTS.md](../AGENTS.md#testing), then merge `main` into `codex/contabo-deployment`.
+Record the deployed revision and immutable image references. Before any required
+schema change, identify the actual source version, take and verify backups, stop
+writers and follow the exact [versioned migration](../docs/database-migrations.md).
+Preserve the Agent model-settlements volume with database backups. A rollback must
+restore a matching schema and images; payment disabling is not a schema rollback.
+
+Once the merchant is eligible for live payments, configure its separate Live Pro
+and Max products using the [billing contract](../docs/creem-billing.md#商户配置).
+Set the restricted configuration to `THESISTRACE_CREEM_MODE=live` with the Live API
+key, Live webhook signing secret and the two distinct Live product IDs. Keep
+`THESISTRACE_CREEM_API_ORIGIN` empty to select the official API. The receiver is
+`https://qagentis.com/api/auth/billing/webhook`; the return URL is
+`https://qagentis.com/billing?payment_return=1`. Merchant cancellation must end at
+the period boundary, and Product Bundle self-service upgrades/downgrades must be off.
+
+Use `THESISTRACE_ENV_FILE=/etc/thesistrace/production.env pnpm prod validate`
+before applying the deployment. Auth also checks payment settings at startup and
+validates products when used; configuration validation alone is not live-payment
+qualification. Keep the webhook reachable without login or a browser challenge,
+while retaining signature verification. Do not exempt unrelated site routes from
+security checks or rely on source-IP allowlists for webhook authentication.
+
+Before opening paid checkout, retain evidence of the candidate revision, migration
+receipts, verified policy/contact links, webhook delivery and a user-operated real
+payment that becomes the expected entitlement. Observe failed callback processing,
+reconciliation errors, unresolved financial commands and the model-settlement backlog;
+record who receives alerts and handles support. Replay failed inbox events only via
+the existing [billing maintenance commands](../docs/creem-billing.md#维护与恢复).
+Never retry an unknown-outcome financial mutation with a new request ID.
+
+For a payment incident, close new financial requests without discarding events or
+credentials needed to reconcile existing subscribers; investigate the documented
+billing state before choosing containment. `disabled` is the pre-launch state, not
+a blanket operational rollback for a store with active subscriptions.

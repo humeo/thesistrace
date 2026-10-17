@@ -1,3 +1,4 @@
+import { isPublicPolicyPath } from "../legal/routes";
 export type InterfaceLocale = "en" | "zh-CN";
 export const LANGUAGE_PREFERENCE_KEY = "quantgrove.interface-language";
 
@@ -6,7 +7,7 @@ export function initialInterfaceLocale(
   storage: Pick<Storage, "getItem"> | null,
 ): InterfaceLocale {
   const query = new URLSearchParams(location.search);
-  if (["/", "/login"].includes(location.pathname) && !query.has("sig")) {
+  if ((["/", "/login"].includes(location.pathname) || isPublicPolicyPath(location.pathname)) && !query.has("sig")) {
     const explicit = query.get("lang");
     if (explicit === "zh") return "zh-CN";
     if (explicit === "en") return "en";

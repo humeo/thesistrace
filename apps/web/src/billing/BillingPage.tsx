@@ -1,3 +1,4 @@
+import { PolicyLinks } from "../legal/PolicyLinks";
 import { useRef, useState } from "react";
 import "../i18n/billing";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -382,6 +383,7 @@ export function BillingPage() {
           ) : null}
         </section>
         <p className="text-sm text-muted-foreground">{t("refund")}</p>
+        <PolicyLinks />
         <AlertDialog
           open={command !== null}
           onOpenChange={(open) => {
