@@ -12,9 +12,9 @@ test("the landing heading and language control work while the conversation previ
   });
   try {
     await page.goto("/?lang=en", { waitUntil: "commit" });
-    await expect(page.getByRole("heading", { name: "Quant research for you and your AI Agent" })).toBeVisible({ timeout: 3_000 });
+    await expect(page.getByRole("heading", { name: "From an idea. To evidence." })).toBeVisible({ timeout: 3_000 });
     await page.getByRole("button", { name: "Switch to Chinese", exact: true }).click();
-    await expect(page.getByRole("heading", { name: /量化研究，\s*与你的 AI Agent 一起。/ })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /从一个想法，\s*到可验证的研究。/ })).toBeVisible();
   } finally { release(); }
   await expect(page.locator(".qh-example-conversation .ant-bubble-list")).toBeVisible();
 });

@@ -1,0 +1,16 @@
+[
+  {
+    "file": "source-serif-4-editorial.woff2",
+    "source": "https://qagentis-research-design.clarencereed.chatgpt.site/assets/fonts/source-serif-4-latin.woff2",
+    "retrieved": "2026-10-17",
+    "bytes": 122168,
+    "sha256": "2a24bad466f09b88b8e9cbc488bf774117c912e66374c57bf4716855849143f8"
+  },
+  {
+    "file": "noto-serif-sc-headings.woff2",
+    "source": "https://qagentis-research-design.clarencereed.chatgpt.site/assets/fonts/noto-serif-sc-headings.woff2",
+    "retrieved": "2026-10-17",
+    "bytes": 174356,
+    "sha256": "dbc6b59d58aef9dde1e8205a628f587697ba0864603a658b4e16659294ac390e"
+  }
+]

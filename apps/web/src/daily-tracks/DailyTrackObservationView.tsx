@@ -116,8 +116,8 @@ export function SelectionSchedule({ observation, isStopped, isStopping, isBehind
   );
 }
 
-export function TrackingReturnChart({ observation, originSession, height = 216 }: {
-  observation: Pick<DailyTrackObservation, "returns">; originSession: string; height?: number;
+export function TrackingReturnChart({ observation, originSession, height = 216, appearance = "dark" }: {
+  observation: Pick<DailyTrackObservation, "returns">; originSession: string; height?: number; appearance?: "light" | "dark";
 }) {
   const { t, i18n } = useTranslation("daily");
   const chartRef = useRef<IChartApi | null>(null);
@@ -152,7 +152,7 @@ export function TrackingReturnChart({ observation, originSession, height = 216 }
     });
     resize.observe(element);
     return () => { visibleRange.current = chart.timeScale().getVisibleLogicalRange(); chartRef.current = null; resize.disconnect(); chart.remove(); };
-  }, [observation.returns, height]);
+  }, [observation.returns, height, appearance]);
   useEffect(() => {
     chartRef.current?.applyOptions({ localization: { locale: interfaceLocale(), priceFormatter: formatReturn } });
   }, [i18n.language, observation.returns]);

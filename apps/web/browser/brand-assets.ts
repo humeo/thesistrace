@@ -4,11 +4,11 @@ import type { Page } from "@playwright/test";
 // Component fixtures use the same local fonts and logo assets as the real entrypoint.
 export const fontStylesheet = '<link rel="stylesheet" href="http://assets.fixture/fonts/quantgrove.css">';
 const contentTypes: Record<string, string> = {
-  css: "text/css", woff2: "font/woff2", svg: "image/svg+xml", png: "image/png", jpg: "image/jpeg",
+  css: "text/css", woff2: "font/woff2", svg: "image/svg+xml", png: "image/png", jpg: "image/jpeg", webp: "image/webp",
 };
 
 export async function serveBrandAssets(page: Page): Promise<void> {
-  await page.route(/\/(?:brand|fonts)\/[a-z0-9-]+\.(?:css|woff2|svg|png|jpg)$/, route => {
+  await page.route(/\/(?:brand|fonts)\/[a-z0-9-]+\.(?:css|woff2|svg|png|jpg|webp)$/, route => {
     const pathname = new URL(route.request().url()).pathname;
     const extension = pathname.split(".").at(-1)!;
     return route.fulfill({
