@@ -33,7 +33,9 @@ test('account popup aligns with its trigger and keeps Discord in keyboard order'
  expect(panel.y + panel.height).toBeLessThan(trigger.y);
  await page.screenshot({path:testInfo.outputPath('account-card.png'),clip:{x:0,y:panel.y-8,width:240,height:850-panel.y+8}});
  await page.screenshot({path:testInfo.outputPath('account-menu-desktop.png')});
- await account.press('Tab'); await expect(page.getByRole('link',{name:'Plan and billing'})).toBeFocused();
+ const billing = page.getByRole('button',{name:'Plan and billing'});
+ await expect(billing).toHaveAttribute('href','/billing');
+ await account.press('Tab'); await expect(billing).toBeFocused();
  await page.keyboard.press('Tab'); await expect(page.getByRole('link',{name:'Join Discord'})).toBeFocused();
  await page.keyboard.press('Tab'); await expect(page.getByRole('button',{name:'Log out'})).toBeFocused();
  await page.keyboard.press('Escape'); await expect(account).toBeFocused();
