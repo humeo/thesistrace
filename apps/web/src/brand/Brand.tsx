@@ -1,16 +1,19 @@
+import { BrandWordmark } from "./BrandWordmark";
+
 export const PRODUCT_NAME = "QAgentis";
 
 type BrandMarkProps = Readonly<{
   size?: number;
   className?: string;
   inverse?: boolean;
+  tone?: "jade";
 }>;
 
 /** Decorative mark; the enclosing link or wordmark supplies the accessible name. */
-export function BrandMark({ size = 30, className, inverse = false }: BrandMarkProps) {
+export function BrandMark({ size = 30, className, inverse = false, tone }: BrandMarkProps) {
   return <img
     className={className}
-    src={`/brand/qhypo-mark${inverse ? "-inverse" : ""}.svg`}
+    src={`/brand/qhypo-mark${tone === "jade" ? "-jade" : ""}${inverse ? "-inverse" : ""}.svg`}
     alt=""
     width={size * 4 / 3}
     height={size}
@@ -21,6 +24,6 @@ export function BrandMark({ size = 30, className, inverse = false }: BrandMarkPr
 export function Brand({ wordmarkClassName = "", ...mark }: BrandMarkProps & Readonly<{ wordmarkClassName?: string }>) {
   return <>
     <BrandMark {...mark} />
-    <span className={`quantgrove-wordmark ${wordmarkClassName}`.trim()}>{PRODUCT_NAME}</span>
+    <span className={`quantgrove-wordmark ${wordmarkClassName}`.trim()}><BrandWordmark /><span className="sr-only">{PRODUCT_NAME}</span></span>
   </>;
 }

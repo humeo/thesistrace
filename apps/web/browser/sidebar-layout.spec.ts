@@ -242,7 +242,7 @@ test('shared sidebar keeps its presentation across workspace routes and collapse
  await page.getByRole('link', { name: 'Research', exact: true }).click();
  const reference = await presentation();
  for (const name of ['Data', 'MCP', 'New Chat', 'Research']) {
-  await page.getByRole('link', { name, exact: true }).click();
+  await page.getByRole('link', { name, exact: true }).and(page.locator('.sidebar-new-chat, .resource-nav a')).click();
   await page.getByTestId('workspace-content').hover();
   expect(await presentation()).toEqual(reference);
   await expect(page.getByRole('link', { name: 'Quality Alpha', exact: true })).toBeVisible();

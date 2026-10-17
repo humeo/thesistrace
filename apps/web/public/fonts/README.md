@@ -19,14 +19,15 @@ Upstream sources and licenses: https://github.com/google/fonts/tree/main/ofl
 The 215 files total approximately 10.4 MiB on disk; browsers download only the
 Unicode subsets needed by the displayed text, not the entire collection.
 
-## QAgentis wordmark
+## QAgentis editorial typography
 
-The wordmark reuses locally served **Inter at weight 550**, the same family and
-weight as the former QuantTrace homepage wordmark. Its tracking is -.02em.
-The existing variable Inter WOFF2 files support the requested weight without
-synthesis; `quantgrove.css` loads them with `font-display: swap`, and the main
-document preloads the Latin subset `inter-a28b7e319024.woff2`.
+The homepage uses the approved 2026-10-17 Modern Research Journal design at
+https://qagentis-research-design.clarencereed.chatgpt.site/.
+`source-serif-4-editorial.woff2` (Source Serif 4, variable 200–900) and
+`noto-serif-sc-headings.woff2` (Noto Serif SC, variable 200–900, headline subset)
+were exported from that design. Their SIL OFL licenses are included here.
+The existing Noto Serif SC Unicode subsets cover other Chinese headings.
 
-[inter-OFL.txt](inter-OFL.txt) contains its SIL Open Font License. `sources.json`
-records the source, byte size and SHA-256. No additional font family or remote
-font request is needed.
+The shared wordmark preserves the original Source Serif 4 650, optical size 32
+letter outlines and kerning in `src/brand/BrandWordmark.tsx`. The double-ring
+mark geometry is unchanged. No remote font requests are needed at runtime.
