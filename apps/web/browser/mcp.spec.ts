@@ -90,7 +90,7 @@ for (const width of [1280, 1440]) {
       expect(Math.abs((copyBox!.y + copyBox!.height / 2) - (commandBox!.y + commandBox!.height / 2))).toBeLessThan(1);
     }
     await page.getByRole("button", { name: "Copy command", exact: true }).hover();
-    await expect(page.locator('[data-slot="tooltip-content"]')).toHaveText("Copy");
+    await expect(page.locator('[data-slot="tooltip-content"]')).toHaveText("Copy command");
     const setupBox = await page.getByRole("region", { name: "Connect an assistant", exact: true }).boundingBox();
     const appsBox = await page.getByRole("region", { name: "Authorized apps", exact: true }).boundingBox();
     const toolsBox = await page.getByRole("region", { name: "Tool set", exact: true }).boundingBox();

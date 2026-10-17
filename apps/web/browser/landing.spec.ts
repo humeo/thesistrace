@@ -1,23 +1,8 @@
-import { expect, test } from '@playwright/test';
-import { createServer, type ViteDevServer } from 'vite';
-import { fileURLToPath } from 'node:url';
-import { createServer as createPortServer, type AddressInfo } from 'node:net';
-let server: ViteDevServer;
-let origin: string;
-test.beforeAll(async () => {
-  // Vite treats port 0 as its default port. Reserve an OS-selected port first.
-  const reservation = createPortServer();
-  await new Promise<void>(resolve => reservation.listen(0, '127.0.0.1', resolve));
-  const port = (reservation.address() as AddressInfo).port;
-  await new Promise<void>((resolve, reject) => reservation.close(error => error ? reject(error) : resolve()));
-  server = await createServer({ root: fileURLToPath(new URL('..', import.meta.url)), server: { host: '127.0.0.1', port, strictPort: true }, logLevel: 'error' });
-  await server.listen();
-  origin = server.resolvedUrls!.local[0];
-});
-test.afterAll(async () => { await server?.close(); });
+import { expect, test } from "./workbench-fixture";
+
 for (const width of [1220, 1440]) {
   test(`public landing language, evidence preview and login at ${width}px`, async ({ page }) => {
-    // Includes cold Vite transforms, both language captures and the lazy auth route.
+    // Exercise the actual production bundle, both languages and the lazy Auth route.
     test.setTimeout(60_000);
     const apiRequests: string[] = [];
     await page.route('**/api/**', async route => {
@@ -26,7 +11,7 @@ for (const width of [1220, 1440]) {
     });
     await page.setViewportSize({ width, height: 964 });
     await page.emulateMedia({ reducedMotion: 'reduce' });
-    await page.goto(`${origin}?lang=en`);
+    await page.goto("/?lang=en");
     await expect(page.getByRole('heading', { name: 'From an idea. To evidence.' })).toBeVisible();
     await expect(page.locator('.qh-brand img').first()).toHaveAttribute('src', '/brand/qhypo-mark-jade.svg');
     await expect(page.locator('.qh-header .quantgrove-wordmark')).toHaveText('QAgentis');
@@ -93,7 +78,7 @@ for (const width of [1220, 1440]) {
     await page.screenshot({ path: test.info().outputPath(`landing-zh-${width}.png`), fullPage: true });
     await page.reload();
     await expect(page.getByRole('button', { name: '切换为 English', exact: true })).toBeVisible();
-    await page.goto(origin);
+    await page.goto("/");
     await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
     await page.getByRole('button', { name: '切换为 English', exact: true }).click();
     await expect(page.locator('html')).toHaveAttribute('lang', 'en');

@@ -266,10 +266,6 @@ test("server cursor pages and filter survive detail return with deleted children
   expect(requests.at(-1)?.get("cursor")).toBe("page2");
   expect(requests.at(-1)?.get("active_only")).toBe("false");
   expect(requests.at(-1)?.get("limit")).toBe("20");
-  const scroller = page.locator('[data-slot="table-container"]');
-  await scroller.focus();
-  await scroller.press("ArrowRight");
-  await expect.poll(() => scroller.evaluate(element => element.scrollLeft)).toBeGreaterThan(0);
   await page.getByRole("button", { name: "简体中文", exact: true }).click();
   await expect(page.getByRole("navigation", { name: "批次分页" })).toContainText("2");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

@@ -29,11 +29,12 @@ test('account popup aligns with its trigger and keeps Discord in keyboard order'
  await expect(page.locator('.account-menu-panel')).toContainText('researcher@example.test');
  const trigger=(await account.boundingBox())!; const panel=(await page.locator('.account-menu-panel').boundingBox())!;
  expect(Math.abs(panel.x - trigger.x)).toBeLessThanOrEqual(1); expect(panel.width).toBeGreaterThanOrEqual(trigger.width);
- expect(panel.height).toBeLessThanOrEqual(260);
+ expect(panel.y).toBeGreaterThanOrEqual(0);
  expect(panel.y + panel.height).toBeLessThan(trigger.y);
  await page.screenshot({path:testInfo.outputPath('account-card.png'),clip:{x:0,y:panel.y-8,width:240,height:850-panel.y+8}});
  await page.screenshot({path:testInfo.outputPath('account-menu-desktop.png')});
- await account.press('Tab'); await expect(page.getByRole('link',{name:'Join Discord'})).toBeFocused();
+ await account.press('Tab'); await expect(page.getByRole('link',{name:'Plan and billing'})).toBeFocused();
+ await page.keyboard.press('Tab'); await expect(page.getByRole('link',{name:'Join Discord'})).toBeFocused();
  await page.keyboard.press('Tab'); await expect(page.getByRole('button',{name:'Log out'})).toBeFocused();
  await page.keyboard.press('Escape'); await expect(account).toBeFocused();
 });

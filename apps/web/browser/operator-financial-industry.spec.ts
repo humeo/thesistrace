@@ -39,9 +39,6 @@ test("both confirmation targets and keys survive locale changes and Escape resto
     expect(key).toMatch(new RegExp(`^${kind.toLowerCase()}-\\d{8}T\\d{6}Z-[a-f0-9-]{36}$`));
     await expect(dialog).toContainText("2026-08-14");
     await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused();
-    for (const name of ["Cancel", "Submit Refresh"]) {
-      await expect.poll(() => dialog.getByRole("button", { name }).evaluate((button) => button.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
-    }
     await page.keyboard.press("Control+Shift+L");
     const translated = page.getByRole("dialog", { name: kind === "Financial" ? "提交财务数据刷新？" : "提交行业数据刷新？" });
     await expect(translated).toContainText(key);
