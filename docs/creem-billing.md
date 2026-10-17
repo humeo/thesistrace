@@ -30,6 +30,8 @@ Agent 按模型配置 Token 单价记录实际费用。当前调用预留最坏�
 - 商品必须为 USD、every-month、recurring，基础价分别 2000 / 10000 cents，tax_mode=exclusive，无 trial、无 business net pricing。SDK 读取后验证，不接受客户端传金额或 Product ID。
 - `THESISTRACE_CREEM_API_ORIGIN` 通常留空，自动选择官方 Test / Live API；只有隔离 test runtime 可使用明确允许的 HTTP Fake 主机。
 
+生产支付统一使用 `https://qagentis.com`：部署配置设置 `THESISTRACE_PUBLIC_ORIGIN=https://qagentis.com`，Checkout 的成功地址由此生成 `https://qagentis.com/billing?payment_return=1`。Creem 商户 Website 使用 `https://qagentis.com`，Pro / Max 商品的 Return URL 使用上述成功地址，公开 Webhook 使用 `https://qagentis.com/api/auth/billing/webhook`。Test / Live 的商品和 Webhook 分开配置；本地 CLI 转发端点不属于公网域名配置。Creem 官方 API 和托管 Checkout / Portal 的 `creem.io` 域名保持不变。
+
 本机连接真实 Test Mode 时，Public Origin 使用 `http://localhost:端口`，Auth、Core、Agent 及 MCP 的 Origin / Issuer / Resource 配置保持一致。2026-10-17 联调中 Creem 明确拒绝 `http://127.0.0.1:端口` 的 success_url。可使用[官方 CLI 本地 Webhook 转发](https://docs.creem.io/code/cli)，签名密钥仅保存于受限本机配置；确定性工程测试仍使用隔离 Fake。支付 SDK 单次请求上限为 15 秒，不自动重试金融写入。
 
 公开 HTTPS Webhook 为 `/api/auth/billing/webhook`，事件至少包括 Checkout 完成、订阅付款及状态变更、退款和争议。处理失败返回失败状态并保留可重放收件箱。托管账单入口复用 Creem 的发票、付款方式及取消功能；套餐变更由本站控制。Product Bundle 的 Self-Service Upgrades/Downgrades 必须关闭，不能让 Portal 绕过本站的降级和补差规则。依据：[Creem Product Bundles](https://docs.creem.io/features/product-bundles)、[Customer Portal](https://docs.creem.io/features/customer-portal)。
