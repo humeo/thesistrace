@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import "../i18n/billing";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowClockwise } from "@phosphor-icons/react";
 import { Page, PageContent, PageHeader } from "../components/layout/Page";

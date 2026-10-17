@@ -1,4 +1,3 @@
-import {billingEn,billingZh} from "./messages/billing";
 import { dailyEn, dailyZh } from "./messages/daily";
 import { mcpEn, mcpZh } from "./messages/mcp";
 import { operatorResearchersEn, operatorResearchersZh } from "./messages/operator-researchers";
@@ -21,6 +20,6 @@ import strategy from "./messages/strategy.json";
 import { diagnosticsEn, diagnosticsZh } from "./messages/diagnostics";
 
 export const resources = {
-  en: { billing:billingEn,operator: { researchers: operatorResearchersEn, data: operatorDataEn }, mcp: mcpEn, chat: chatEn, daily: dailyEn, runs: runsEn, batches: batchesEn, analysis: { ...analysisEn, metrics: metricHelpEn }, strategy: strategy.en, common: commonEn, navigation: navigationEn, auth: authEn, landing: { page: copy.en }, data: dataEn, editor: editorEn, diagnostics: diagnosticsEn, research: researchEn, catalog: { fields: fields.en, ...catalog.en } },
-  "zh-CN": { billing:billingZh,operator: { researchers: operatorResearchersZh, data: operatorDataZh }, mcp: mcpZh, chat: chatZh, daily: dailyZh, runs: runsZh, batches: batchesZh, analysis: { ...analysisZh, metrics: metricHelpZh }, strategy: strategy["zh-CN"], common: commonZh, navigation: navigationZh, auth: authZh, landing: { page: copy.zh }, data: dataZh, editor: editorZh, diagnostics: diagnosticsZh, research: researchZh, catalog: { fields: fields["zh-CN"], ...catalog["zh-CN"] } },
+  en: { operator: { researchers: operatorResearchersEn, data: operatorDataEn }, mcp: mcpEn, chat: chatEn, daily: dailyEn, runs: runsEn, batches: batchesEn, analysis: { ...analysisEn, metrics: metricHelpEn }, strategy: strategy.en, common: commonEn, navigation: navigationEn, auth: authEn, landing: { page: copy.en }, data: dataEn, editor: editorEn, diagnostics: diagnosticsEn, research: researchEn, catalog: { fields: fields.en, ...catalog.en } },
+  "zh-CN": { operator: { researchers: operatorResearchersZh, data: operatorDataZh }, mcp: mcpZh, chat: chatZh, daily: dailyZh, runs: runsZh, batches: batchesZh, analysis: { ...analysisZh, metrics: metricHelpZh }, strategy: strategy["zh-CN"], common: commonZh, navigation: navigationZh, auth: authZh, landing: { page: copy.zh }, data: dataZh, editor: editorZh, diagnostics: diagnosticsZh, research: researchZh, catalog: { fields: fields["zh-CN"], ...catalog["zh-CN"] } },
 } as const;

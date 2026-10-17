@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import { resources } from "./resources";
 import { i18n } from "./index";
+import { billingEn, billingZh } from "./messages/billing";
 
 function messages(value: unknown, path = ""): Map<string, string> {
   if (typeof value === "string") return new Map([[path, value]]);
@@ -13,8 +14,8 @@ function parameters(message: string): string[] {
 }
 
 test("both bundled languages cover the same messages and interpolation parameters", () => {
-  const english = messages(resources.en);
-  const chinese = messages(resources["zh-CN"]);
+  const english = messages({ ...resources.en, billing: billingEn });
+  const chinese = messages({ ...resources["zh-CN"], billing: billingZh });
   expect([...chinese.keys()].sort()).toEqual([...english.keys()].sort());
   for (const [key, text] of english) {
     expect(text.trim(), key).not.toBe("");
