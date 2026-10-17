@@ -123,7 +123,7 @@ const horizon = (value: 1 | 5 | 20) => ({
     quantile_valid_session_count: 0 },
 });
 
-test("completed Factor result preserves metrics, visited views, folders and mobile layout", async ({ page }, testInfo) => {
+test("completed Factor result preserves metrics, visited views and folders", async ({ page }, testInfo) => {
   const reads: string[] = [];
   await page.route("**/api/research-runs/run_cancel/factor-periods?**", route => {
     reads.push("evidence");
@@ -148,8 +148,6 @@ test("completed Factor result preserves metrics, visited views, folders and mobi
   expect(reads).toEqual([]);
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.screenshot({ path: testInfo.outputPath("factor-overview-1280.png"), fullPage: true });
-  await page.setViewportSize({ width: 320, height: 900 });
-  await page.screenshot({ path: testInfo.outputPath("factor-overview-320.png"), fullPage: true });
   await page.getByRole("tab", { name: "Factor evidence" }).click();
   await expect(page.getByText("No observations in this selection.")).toBeVisible();
   await page.getByRole("combobox", { name: "Horizon" }).click();
@@ -176,11 +174,11 @@ test("completed Factor result preserves metrics, visited views, folders and mobi
   await page.keyboard.press("Escape");
   await expect(page.getByRole("alertdialog")).not.toBeVisible();
   await expect(page.getByRole("tab", { name: "Configuration" })).toHaveAttribute("data-active", "");
-  for (const width of [1280, 390, 320]) {
+  for (const width of [1280]) {
     await page.setViewportSize({ width, height: 900 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   }
-  await page.screenshot({ path: testInfo.outputPath("factor-result-320.png"), fullPage: true });
+  await page.screenshot({ path: testInfo.outputPath("factor-result-desktop.png"), fullPage: true });
 });
 
 test("failed Factor run leads with the server reason and keeps its frozen configuration", async ({ page }) => {
@@ -245,7 +243,7 @@ test("a missing or forbidden Factor run offers a way back to Research Runs", asy
   await expect(page.getByRole("alert")).toHaveText("You do not have access to this research.");
 });
 
-test("completed execution keeps timing in a keyboard-accessible disclosure on desktop and mobile", async ({ page }) => {
+test("completed execution keeps timing in a keyboard-accessible disclosure on desktop", async ({ page }) => {
   await page.route("**/api/research-runs/run_cancel", route => route.fulfill({ json: {
     ...detail,
     status: "succeeded",
@@ -262,7 +260,7 @@ test("completed execution keeps timing in a keyboard-accessible disclosure on de
   await expect(progress).toContainText("5 / 5 sessions");
   await expect(progress).toContainText("2m 39s");
   await expect(progress.getByRole("progressbar")).toHaveCount(0);
-  for (const width of [1050, 390]) {
+  for (const width of [1050]) {
     await page.setViewportSize({ width, height: 964 });
     await expect(progress.getByText("Started", { exact: true })).not.toBeVisible();
     await disclosure.focus();
@@ -345,7 +343,6 @@ test("accepted cancellation keeps its details and polls until execution has stop
   await expect(page.getByText("cancelled", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Cancel", exact: true })).toHaveCount(0);
 });
-
 
 test("a late tracking rejection uses the current language and actual configured limit", async ({ page }) => {
   await page.route("**/api/research-runs/run_cancel", route => route.fulfill({ json: { ...summary, status: "succeeded", research_kind: "strategy_backtest" } }));

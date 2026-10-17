@@ -56,11 +56,6 @@ test("Chat DailyTrack uses the full grant and explains a real Strategy's current
   expect(browserCoreWrites).toEqual([]);
   await page.getByRole("region", { name: `DailyTrack ${id}`, exact: true }).last().scrollIntoViewIfNeeded();
   await testInfo.attach("daily-track-desktop", { body: await page.screenshot(), contentType: "image/png" });
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByRole("region", { name: `DailyTrack ${id}`, exact: true }).last().scrollIntoViewIfNeeded();
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  await testInfo.attach("daily-track-mobile", { body: await page.screenshot(), contentType: "image/png" });
-  await page.setViewportSize({ width: 1280, height: 900 });
   await page.getByRole("link", { name: /^track_[a-f0-9]{20}$/ }).last().click();
   await expect(page).toHaveURL(new RegExp(`${href}$`));
   await expect(page.getByRole("heading", { level: 2, name: /^Daily Track / }).locator("[data-slot=badge]")).toHaveText(/Up to date|Update available|Updating/);

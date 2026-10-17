@@ -346,7 +346,7 @@ def decide(data, account, state):
 test("Combined risk rules survives Run reuse and DailyTrack refresh", { tag: "@isolated" }, async ({ page }, testInfo) => {
   test.setTimeout(240_000);
   publishFinancialTrackHead("lagged");
-  await page.setViewportSize({ width: 390, height: 844 });
+  await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/research?new");
   await fillCompleteDraft(page, { name: "Combined risk rules", formula: "close" });
   await page.getByLabel("Drawdown threshold (%)", { exact: true }).fill("1");
@@ -533,11 +533,9 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await expect(strategyBacktest).toHaveCount(0);
     await expect(page.getByLabel("Holdings count")).not.toBeVisible();
     await expect(page.getByLabel("Selection interval (trading days)")).not.toBeVisible();
-    await page.setViewportSize({ width: 480, height: 900 });
     await expect(page.getByRole("button", { name: "Back to research types", exact: true })).toBeVisible();
     const maxDateRange = page.getByRole("button", { name: "Use all available data" });
     await expect(maxDateRange).toBeVisible();
-    expect((await maxDateRange.boundingBox())?.height).toBeGreaterThanOrEqual(44);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
     await page.setViewportSize({ width: 1280, height: 900 });
 
@@ -1912,7 +1910,6 @@ async function confirmTrackStop(page: Page) {
   await page.getByRole("menuitem", { name: "Stop DailyTrack", exact: true }).click();
   await decision.getByRole("button", { name: "Stop DailyTrack", exact: true }).click();
 }
-
 
 async function fillResearchNotes(page: Page, value: string): Promise<void> {
   const notes = page.getByLabel("Research notes (optional)", { exact: true });

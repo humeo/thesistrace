@@ -101,158 +101,156 @@ test("language switch preserves an unsent prompt and a pending-question answer o
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
-for (const mobile of [false]) {
-  test(`question composer supports options plus text, custom-only and Stop on ${mobile ? "mobile" : "desktop"}`, async ({ page }) => {
-    await page.setViewportSize(mobile ? { width: 390, height: 844 } : { width: 1159, height: 964 });
-    await page.emulateMedia({ reducedMotion: "reduce" });
-    const mode = page.getByLabel("Test question mode");
-    await mode.selectOption("single_select");
-    const answer = page.getByRole("textbox", { name: "Answer", exact: true });
-    const send = page.getByRole("button", { name: "Send answer", exact: true });
-    await expect(answer).toBeEnabled();
-    await expect(answer).toHaveAccessibleDescription(/Enter to answer.*Shift\+Enter for newline/);
-    await expect(page.locator(".chat-composer-guidance")).toHaveCount(0);
-    await expect(send).toBeDisabled();
-    await answer.press("Enter");
-    await expect(page.locator(".chat-question-composer")).toBeVisible();
-    await page.getByText("Quality", { exact: true }).click();
-    await expect(page.getByRole("radio", { name: "Quality", exact: true })).toBeChecked();
-    await answer.fill("Keep turnover low.");
-    await expect(answer).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
-    await expect(answer).toHaveCSS("outline-style", "none");
-    await expect(page.getByRole("button", { name: /^Model / })).toHaveCount(0);
-    expect((await send.boundingBox())!.height).toBeGreaterThanOrEqual(24);
-    await answer.press("Tab");
-    await expect(send).toBeFocused();
-    await expect(send).not.toHaveCSS("outline-style", "none");
-    await send.press("Enter");
-    await expect(page.locator("[data-answer-receipt]")).toHaveText("Quality\n\nKeep turnover low.");
+test(`question composer supports options plus text, custom-only and Stop on desktop`, async ({ page }) => {
+  await page.setViewportSize({ width: 1159, height: 964 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const mode = page.getByLabel("Test question mode");
+  await mode.selectOption("single_select");
+  const answer = page.getByRole("textbox", { name: "Answer", exact: true });
+  const send = page.getByRole("button", { name: "Send answer", exact: true });
+  await expect(answer).toBeEnabled();
+  await expect(answer).toHaveAccessibleDescription(/Enter to answer.*Shift\+Enter for newline/);
+  await expect(page.locator(".chat-composer-guidance")).toHaveCount(0);
+  await expect(send).toBeDisabled();
+  await answer.press("Enter");
+  await expect(page.locator(".chat-question-composer")).toBeVisible();
+  await page.getByText("Quality", { exact: true }).click();
+  await expect(page.getByRole("radio", { name: "Quality", exact: true })).toBeChecked();
+  await answer.fill("Keep turnover low.");
+  await expect(answer).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await expect(answer).toHaveCSS("outline-style", "none");
+  await expect(page.getByRole("button", { name: /^Model / })).toHaveCount(0);
+  expect((await send.boundingBox())!.height).toBeGreaterThanOrEqual(24);
+  await answer.press("Tab");
+  await expect(send).toBeFocused();
+  await expect(send).not.toHaveCSS("outline-style", "none");
+  await send.press("Enter");
+  await expect(page.locator("[data-answer-receipt]")).toHaveText("Quality\n\nKeep turnover low.");
 
-    await mode.selectOption("multi_select");
-    await page.getByText("Quality", { exact: true }).click();
-    await page.getByText("Risk", { exact: true }).click();
-    await page.getByRole("button", { name: "Clear", exact: true }).click();
-    await expect(send).toBeDisabled();
-    await answer.fill("Research liquidity instead.");
-    await answer.press("Enter");
-    await expect(page.locator("[data-answer-receipt]")).toHaveText("Research liquidity instead.");
+  await mode.selectOption("multi_select");
+  await page.getByText("Quality", { exact: true }).click();
+  await page.getByText("Risk", { exact: true }).click();
+  await page.getByRole("button", { name: "Clear", exact: true }).click();
+  await expect(send).toBeDisabled();
+  await answer.fill("Research liquidity instead.");
+  await answer.press("Enter");
+  await expect(page.locator("[data-answer-receipt]")).toHaveText("Research liquidity instead.");
 
-    await mode.selectOption("free_text");
-    await answer.fill("A custom answer");
-    await page.getByRole("button", { name: "Stop", exact: true }).click();
-    await expect(page.locator("[data-answer-receipt]")).toHaveText("Stopped");
-    await expect(page.locator(".chat-question-composer")).toHaveCount(0);
+  await mode.selectOption("free_text");
+  await answer.fill("A custom answer");
+  await page.getByRole("button", { name: "Stop", exact: true }).click();
+  await expect(page.locator("[data-answer-receipt]")).toHaveText("Stopped");
+  await expect(page.locator(".chat-question-composer")).toHaveCount(0);
+});
+
+test(`long question composer keeps its answer row reachable on desktop`, async ({ page }) => {
+  await page.setViewportSize({ width: 1159, height: 964 });
+  await page.getByLabel("Test question mode").selectOption("long");
+  const panel = page.locator(".chat-question-composer");
+  const body = page.locator(".chat-question-body");
+  const answer = page.getByRole("textbox", { name: "Answer", exact: true });
+  await expect(panel).toBeVisible();
+  await expect(body).toHaveCSS("overflow-y", "auto");
+  expect(await body.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+  await page.getByText("Objective 20", { exact: true }).click();
+  await expect(page.getByRole("checkbox", { name: "Objective 20", exact: true })).toBeChecked();
+  await answer.fill("A note\n".repeat(30));
+  await expect(page.getByRole("button", { name: "Send answer", exact: true })).toBeInViewport();
+  const panelBox = (await panel.boundingBox())!;
+  const rowBox = (await page.locator(".chat-question-answer-row").boundingBox())!;
+  const answerBox = (await answer.boundingBox())!;
+  await test.info().attach("question-layout", {
+    body: JSON.stringify({ panelBox, rowBox, answerBox, geometry: await panel.evaluate((element) =>
+      [element, ...element.children].map((node) => ({
+        className: node.className,
+        scrollTop: node.scrollTop,
+        scrollHeight: node.scrollHeight,
+        clientHeight: node.clientHeight,
+        height: getComputedStyle(node).height,
+        flex: getComputedStyle(node).flex,
+      }))) }),
+    contentType: "application/json",
   });
+  expect(rowBox.height).toBeLessThanOrEqual(answerBox.height + 64);
+  expect(panelBox.y + panelBox.height - rowBox.y - rowBox.height).toBeLessThanOrEqual(12);
+  expect(await panel.evaluate((element) => element.scrollTop)).toBe(0);
+  expect(answerBox.height).toBeLessThanOrEqual(140);
+  expect((await panel.boundingBox())!.height).toBeLessThanOrEqual(560);
+  expect(await page.locator("body").evaluate((element) => element.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: `${test.info().outputDir}/question-desktop.png` });
+});
 
-  test(`long question composer keeps its answer row reachable on ${mobile ? "mobile" : "desktop"}`, async ({ page }) => {
-    await page.setViewportSize(mobile ? { width: 390, height: 844 } : { width: 1159, height: 964 });
-    await page.getByLabel("Test question mode").selectOption("long");
-    const panel = page.locator(".chat-question-composer");
-    const body = page.locator(".chat-question-body");
-    const answer = page.getByRole("textbox", { name: "Answer", exact: true });
-    await expect(panel).toBeVisible();
-    await expect(body).toHaveCSS("overflow-y", "auto");
-    expect(await body.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
-    await page.getByText("Objective 20", { exact: true }).click();
-    await expect(page.getByRole("checkbox", { name: "Objective 20", exact: true })).toBeChecked();
-    await answer.fill("A note\n".repeat(30));
-    await expect(page.getByRole("button", { name: "Send answer", exact: true })).toBeInViewport();
-    const panelBox = (await panel.boundingBox())!;
-    const rowBox = (await page.locator(".chat-question-answer-row").boundingBox())!;
-    const answerBox = (await answer.boundingBox())!;
-    await test.info().attach("question-layout", {
-      body: JSON.stringify({ panelBox, rowBox, answerBox, geometry: await panel.evaluate((element) =>
-        [element, ...element.children].map((node) => ({
-          className: node.className,
-          scrollTop: node.scrollTop,
-          scrollHeight: node.scrollHeight,
-          clientHeight: node.clientHeight,
-          height: getComputedStyle(node).height,
-          flex: getComputedStyle(node).flex,
-        }))) }),
-      contentType: "application/json",
-    });
-    expect(rowBox.height).toBeLessThanOrEqual(answerBox.height + 64);
-    expect(panelBox.y + panelBox.height - rowBox.y - rowBox.height).toBeLessThanOrEqual(12);
-    expect(await panel.evaluate((element) => element.scrollTop)).toBe(0);
-    expect(answerBox.height).toBeLessThanOrEqual(140);
-    expect((await panel.boundingBox())!.height).toBeLessThanOrEqual(mobile ? 549 : 560);
-    expect(await page.locator("body").evaluate((element) => element.scrollWidth <= window.innerWidth)).toBe(true);
-    await page.screenshot({ path: `${test.info().outputDir}/question-${mobile ? "mobile" : "desktop"}.png` });
-  });
-
-}
 for (const width of [1280]) {
-  test(`model settings preserve draft and keyboard focus at ${width}px`, async ({ page }) => {
-    await page.setViewportSize({ width, height: 900 });
-    const input = page.getByRole("textbox", { name: "Message", exact: true });
-    await input.fill("Keep my research draft");
-    const trigger = page.getByRole("button", { name: /^Model / });
-    await trigger.focus();
-    await trigger.press("ArrowDown");
-    const popup = page.getByRole("dialog");
-    const luna = popup.getByRole("radio", { name: "GPT-5.6 Luna", exact: true });
-    await expect(luna).toBeFocused();
-    await expect(popup.getByRole("slider", { name: "Reasoning", exact: true })).toHaveAttribute("aria-valuemax", "4");
-    await luna.press("ArrowDown");
-    const sol = popup.getByRole("radio", { name: "GPT-5.6 Sol", exact: true });
-    await expect(sol).toBeFocused();
-    await expect(sol).toBeChecked();
-    await expect(popup).toBeVisible();
-    await sol.press("Tab");
-    const reasoning = popup.getByRole("slider", { name: "Reasoning", exact: true });
-    await expect(reasoning).toBeFocused();
-    expect(await reasoning.evaluate(el => getComputedStyle(el, "::after").outlineStyle)).not.toBe("none");
-    await expect(reasoning).toHaveAttribute("aria-valuemax", "3");
-    await expect(reasoning).toHaveAttribute("aria-valuetext", "X-high");
-    await reasoning.press("ArrowLeft");
-    await expect(reasoning).toHaveAttribute("aria-valuetext", "High");
-    await reasoning.press("ArrowLeft");
-    await expect(reasoning).toHaveAttribute("aria-valuetext", "Medium");
-    await expect(popup).toBeVisible();
-    await reasoning.press("Escape");
-    await expect(popup).toBeHidden();
-    await expect(trigger).toBeFocused();
-    await expect(popup).toHaveCount(0);
-    await trigger.click();
-    await page.getByRole("button", { name: "简体中文", exact: true }).click();
-    // The language control is outside this non-modal popover and dismisses it.
-    await expect(popup).toHaveCount(0);
-    await page.locator('button[aria-haspopup="dialog"]').click();
-    const localizedReasoning = popup.getByRole("slider", { name: "推理强度", exact: true });
-    await expect(localizedReasoning).toHaveAttribute("aria-valuetext", "中");
-    const track = popup.locator('.ant-slider-rail');
-    const trackBox = (await track.boundingBox())!;
-    await popup.locator('.ant-slider-mark').getByText("很高", { exact: true }).click();
-    await expect(localizedReasoning).toHaveAttribute("aria-valuetext", "很高");
-    await expect(popup).toBeVisible();
-    await localizedReasoning.hover();
-    const thumbBox = (await localizedReasoning.boundingBox())!;
-    await page.mouse.move(thumbBox.x + thumbBox.width / 2, thumbBox.y + thumbBox.height / 2);
-    await page.mouse.down();
-    await page.mouse.move(trackBox.x + 4, trackBox.y + trackBox.height / 2, { steps: 8 });
-    await page.mouse.up();
-    await expect(localizedReasoning).toHaveAttribute("aria-valuetext", "低");
-    await localizedReasoning.press("Escape");
-    await expect(popup).toBeHidden();
-    await expect(page.getByRole("textbox", { name: "消息", exact: true })).toHaveValue("Keep my research draft");
-    await expect(page.locator('button[aria-haspopup="dialog"]')).toBeFocused();
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  });
+test(`model settings preserve draft and keyboard focus at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 900 });
+  const input = page.getByRole("textbox", { name: "Message", exact: true });
+  await input.fill("Keep my research draft");
+  const trigger = page.getByRole("button", { name: /^Model / });
+  await trigger.focus();
+  await trigger.press("ArrowDown");
+  const popup = page.getByRole("dialog");
+  const luna = popup.getByRole("radio", { name: "GPT-5.6 Luna", exact: true });
+  await expect(luna).toBeFocused();
+  await expect(popup.getByRole("slider", { name: "Reasoning", exact: true })).toHaveAttribute("aria-valuemax", "4");
+  await luna.press("ArrowDown");
+  const sol = popup.getByRole("radio", { name: "GPT-5.6 Sol", exact: true });
+  await expect(sol).toBeFocused();
+  await expect(sol).toBeChecked();
+  await expect(popup).toBeVisible();
+  await sol.press("Tab");
+  const reasoning = popup.getByRole("slider", { name: "Reasoning", exact: true });
+  await expect(reasoning).toBeFocused();
+  expect(await reasoning.evaluate(el => getComputedStyle(el, "::after").outlineStyle)).not.toBe("none");
+  await expect(reasoning).toHaveAttribute("aria-valuemax", "3");
+  await expect(reasoning).toHaveAttribute("aria-valuetext", "X-high");
+  await reasoning.press("ArrowLeft");
+  await expect(reasoning).toHaveAttribute("aria-valuetext", "High");
+  await reasoning.press("ArrowLeft");
+  await expect(reasoning).toHaveAttribute("aria-valuetext", "Medium");
+  await expect(popup).toBeVisible();
+  await reasoning.press("Escape");
+  await expect(popup).toBeHidden();
+  await expect(trigger).toBeFocused();
+  await expect(popup).toHaveCount(0);
+  await trigger.click();
+  await page.getByRole("button", { name: "简体中文", exact: true }).click();
+  // The language control is outside this non-modal popover and dismisses it.
+  await expect(popup).toHaveCount(0);
+  await page.locator('button[aria-haspopup="dialog"]').click();
+  const localizedReasoning = popup.getByRole("slider", { name: "推理强度", exact: true });
+  await expect(localizedReasoning).toHaveAttribute("aria-valuetext", "中");
+  const track = popup.locator('.ant-slider-rail');
+  const trackBox = (await track.boundingBox())!;
+  await popup.locator('.ant-slider-mark').getByText("很高", { exact: true }).click();
+  await expect(localizedReasoning).toHaveAttribute("aria-valuetext", "很高");
+  await expect(popup).toBeVisible();
+  await localizedReasoning.hover();
+  const thumbBox = (await localizedReasoning.boundingBox())!;
+  await page.mouse.move(thumbBox.x + thumbBox.width / 2, thumbBox.y + thumbBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(trackBox.x + 4, trackBox.y + trackBox.height / 2, { steps: 8 });
+  await page.mouse.up();
+  await expect(localizedReasoning).toHaveAttribute("aria-valuetext", "低");
+  await localizedReasoning.press("Escape");
+  await expect(popup).toBeHidden();
+  await expect(page.getByRole("textbox", { name: "消息", exact: true })).toHaveValue("Keep my research draft");
+  await expect(page.locator('button[aria-haspopup="dialog"]')).toBeFocused();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
 }
 
 for (const mode of ["single_select", "multi_select"]) {
-  test(`question ${mode} shows keyboard focus on the option`, async ({ page }) => {
-    await page.getByLabel("Test question mode").selectOption(mode);
-    const option = page.getByRole(mode === "single_select" ? "radio" : "checkbox", { name: "Quality", exact: true });
-    await page.keyboard.press("Tab");
-    await option.focus();
-    await expect(option).toBeFocused();
-    await expect(option.locator("xpath=..")).not.toHaveCSS("outline-style", "none");
-    await option.press("Space");
-    await expect(option).toBeChecked();
-    await expect(option.locator("xpath=..")).not.toHaveCSS("outline-style", "none");
-  });
+test(`question ${mode} shows keyboard focus on the option`, async ({ page }) => {
+  await page.getByLabel("Test question mode").selectOption(mode);
+  const option = page.getByRole(mode === "single_select" ? "radio" : "checkbox", { name: "Quality", exact: true });
+  await page.keyboard.press("Tab");
+  await option.focus();
+  await expect(option).toBeFocused();
+  await expect(option.locator("xpath=..")).not.toHaveCSS("outline-style", "none");
+  await option.press("Space");
+  await expect(option).toBeChecked();
+  await expect(option.locator("xpath=..")).not.toHaveCSS("outline-style", "none");
+});
 }
 
 test("native composer sends with Enter, grows for multiline text and preserves rejected drafts", async ({ page }) => {

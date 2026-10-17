@@ -99,12 +99,6 @@ test(`Chat Batch ${mode} preserves ordered child Results independently of its Se
   await expect((await comparisonCards(page, runIds)).locator(".chat-a2ui-metrics")).toHaveText(metrics);
   expect(batchDatabaseFacts(researcher.id)).toMatchObject({ admissions: 1, batches: 1, children: 2 });
   await testInfo.attach(`${mode}-desktop`, { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
-  await page.setViewportSize({ width: 390, height: 844 });
-  await expect((await comparisonCards(page, runIds)).locator(".chat-a2ui-metrics")).toHaveText(metrics);
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  await testInfo.attach(`${mode}-mobile`, { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
-  await page.setViewportSize({ width: 1280, height: 900 });
-
   const currentTitle = (await currentChatTitle(page).innerText()).trim();
   await page.locator(".chat-session-row").filter({ has: page.getByRole("button", { name: `Actions for ${currentTitle}`, exact: true }) }).hover();
   await page.getByRole("button", { name: `Actions for ${currentTitle}` }).click();

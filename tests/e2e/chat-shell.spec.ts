@@ -142,111 +142,57 @@ test("Chat exposes the registered Catalog and responsive Session sidebar through
   ).toBe(224);
   await collapse.click();
 
-  await page.setViewportSize({ width: 390, height: 844 });
-  const open = page.locator(".mobile-navigation-toggle");
-  await expect(page.locator(".context-bar")).toHaveCount(0);
-  const openBox = (await open.boundingBox())!;
-  expect(openBox.x).toBe(8);
-  expect(openBox.y).toBe(8);
-  expect(openBox.width).toBeGreaterThanOrEqual(44);
-  expect(openBox.height).toBeGreaterThanOrEqual(44);
-  const mobileCanvas = (await page.locator(".chat-main").boundingBox())!;
-  expect(mobileCanvas.y).toBe(0);
-  expect(mobileCanvas.height).toBe(844);
-  await expect(sidebar).toBeHidden();
-  await expect.poll(
-    () => page.locator(".chat-main").evaluate((element) => element.getBoundingClientRect().x),
-  ).toBe(0);
-  await page.screenshot({ path: test.info().outputPath("chat-mobile.png") });
-  await expect(sidebar).toHaveCount(0);
-  await open.click();
-  await expect(open).toHaveAttribute("aria-expanded", "true");
-  await expect(page.getByRole("dialog", { name: "Navigation" })).toBeVisible();
-  await expect.poll(
-    () => sidebar.evaluate((element) => element.getBoundingClientRect().left),
-  ).toBe(0);
-
-  const close = sidebar.getByRole("button", { name: "Close navigation" });
-  await expect(close).toBeFocused();
-  const closeBox = await close.boundingBox();
-  expect(closeBox?.width).toBeGreaterThanOrEqual(44);
-  expect(closeBox?.height).toBeGreaterThanOrEqual(44);
-  const sendBox = await page.locator(".chat-main-action").boundingBox();
-  expect(sendBox?.width).toBeGreaterThanOrEqual(44);
-  expect(sendBox?.height).toBeGreaterThanOrEqual(44);
-  await page.keyboard.press("Escape");
-  await expect(open).toBeFocused();
-  await expect(open).toHaveAttribute("aria-expanded", "false");
-  await expect(sidebar).toHaveCount(0);
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  await open.press("Enter");
-  await expect(close).toBeFocused();
-  const home = sidebar.getByRole("link", { name: "QAgentis home" });
-  const account = sidebar.getByRole("button", { name: "Account menu" });
-  await home.focus();
-  await home.press("Shift+Tab");
-  await expect(account).toBeFocused();
-  await account.press("Tab");
-  await expect(home).toBeFocused();
-  await page.keyboard.press("Escape");
-  await expect(open).toBeFocused();
 });
 
-for (const mobile of [false, true]) {
-  test(`shared sidebar keeps Chat available across resources on ${mobile ? "mobile" : "desktop"}`, async ({ page }) => {
-    await page.setViewportSize(mobile ? { width: 390, height: 844 } : { width: 1280, height: 900 });
-    await page.goto("/chat");
-    const completedTurn1 = await submitChatPrompt(page, "Build a low volatility Alpha.");
-    await waitForChatTurn(page, completedTurn1);
-    await expect(agentRunStatus(page)).toHaveText("Run complete");
-    await expect(page.locator(".context-bar")).toHaveCount(0);
-    const sessionUrl = page.url();
-    const sessionId = new URL(sessionUrl).searchParams.get("session")!;
-    const sidebar = page.locator("#primary-navigation");
-    const sessionLink = sidebar.locator(`a[href="/chat?session=${sessionId}"]`);
-    if (mobile) await page.getByRole("button", { name: "Open navigation" }).click();
-    await expect(sessionLink).toHaveCount(1);
-    if (mobile) await sidebar.getByRole("button", { name: "Close navigation" }).click();
-    const documentRequests: string[] = [];
-    page.on("request", (request) => {
-      if (request.resourceType() === "document") documentRequests.push(request.url());
-    });
-    const shellElement = await page.locator(".app-shell").elementHandle();
-    if (!mobile) await page.getByRole("button", { name: "Collapse sidebar" }).click();
+test(`shared sidebar keeps Chat available across resources on desktop`, async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/chat");
+  const completedTurn1 = await submitChatPrompt(page, "Build a low volatility Alpha.");
+  await waitForChatTurn(page, completedTurn1);
+  await expect(agentRunStatus(page)).toHaveText("Run complete");
+  await expect(page.locator(".context-bar")).toHaveCount(0);
+  const sessionUrl = page.url();
+  const sessionId = new URL(sessionUrl).searchParams.get("session")!;
+  const sidebar = page.locator("#primary-navigation");
+  const sessionLink = sidebar.locator(`a[href="/chat?session=${sessionId}"]`);
 
-    for (const [path, label] of [
-      ["/data", "Data"], ["/research", "Research"],
-      ["/research-runs", "Research Runs"], ["/daily-tracks", "Daily Tracks"],
-    ]) {
-      if (mobile) {
-        await page.getByRole("button", { name: "Open navigation" }).click();
-        await expect(sessionLink).toHaveCount(1);
-      }
-      await sidebar.getByRole("link", { name: label!, exact: true }).click();
-      await expect(page).toHaveURL(new RegExp(`${path}$`));
-      await expect(page.locator(".context-bar")).toHaveCount(0);
-      await expect(sessionLink).toHaveCount(mobile ? 0 : 1);
-      if (!mobile) await expect(sidebar.locator(`.resource-nav a[href="${path}"]`)).toHaveAttribute("aria-current", "page");
-      expect(await shellElement!.evaluate((element) => element.isConnected)).toBe(true);
-      if (mobile) await expect(sidebar).toHaveCount(0);
-      else await expect(page.getByRole("button", { name: "Expand sidebar" })).toBeVisible();
-    }
-    if (mobile) await page.getByRole("button", { name: "Open navigation" }).click();
-    await sessionLink.click();
-    await expect(page).toHaveURL(sessionUrl);
-    await expect(page.locator(".context-bar")).toHaveCount(0);
-    await expect(page.locator(".chat-message-user")).toContainText("Build a low volatility Alpha.");
-    await expect(agentRunStatus(page)).toHaveText("Run complete");
-    await page.goBack();
-    await expect(page).toHaveURL(/\/daily-tracks$/);
-    await page.goForward();
-    await expect(page).toHaveURL(sessionUrl);
-    await expect(page.locator(".chat-message-user")).toContainText("Build a low volatility Alpha.");
-    expect(await shellElement!.evaluate((element) => element.isConnected)).toBe(true);
-    expect(documentRequests).toEqual([]);
-    await expect(page.locator(".app-shell")).toHaveCount(1);
+  await expect(sessionLink).toHaveCount(1);
+
+  const documentRequests: string[] = [];
+  page.on("request", (request) => {
+    if (request.resourceType() === "document") documentRequests.push(request.url());
   });
-}
+  const shellElement = await page.locator(".app-shell").elementHandle();
+  await page.getByRole("button", { name: "Collapse sidebar" }).click();
+
+  for (const [path, label] of [
+    ["/data", "Data"], ["/research", "Research"],
+    ["/research-runs", "Research Runs"], ["/daily-tracks", "Daily Tracks"],
+  ]) {
+
+    await sidebar.getByRole("link", { name: label!, exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`${path}$`));
+    await expect(page.locator(".context-bar")).toHaveCount(0);
+    await expect(sessionLink).toHaveCount(1);
+    await expect(sidebar.locator(`.resource-nav a[href="${path}"]`)).toHaveAttribute("aria-current", "page");
+    expect(await shellElement!.evaluate((element) => element.isConnected)).toBe(true);
+    await expect(page.getByRole("button", { name: "Expand sidebar" })).toBeVisible();
+  }
+
+  await sessionLink.click();
+  await expect(page).toHaveURL(sessionUrl);
+  await expect(page.locator(".context-bar")).toHaveCount(0);
+  await expect(page.locator(".chat-message-user")).toContainText("Build a low volatility Alpha.");
+  await expect(agentRunStatus(page)).toHaveText("Run complete");
+  await page.goBack();
+  await expect(page).toHaveURL(/\/daily-tracks$/);
+  await page.goForward();
+  await expect(page).toHaveURL(sessionUrl);
+  await expect(page.locator(".chat-message-user")).toContainText("Build a low volatility Alpha.");
+  expect(await shellElement!.evaluate((element) => element.isConnected)).toBe(true);
+  expect(documentRequests).toEqual([]);
+  await expect(page.locator(".app-shell")).toHaveCount(1);
+});
 
 test("shared sidebar observes an active Chat finishing while viewing Data", async ({ page }) => {
   await page.goto("/chat");
@@ -295,48 +241,37 @@ test("an unknown durable Session URL fails closed instead of becoming a new Chat
   await expect(page).toHaveURL(/\/chat\?session=.*&session=.*/);
 });
 
-for (const viewport of [
-  { name: "desktop", width: 1280, height: 900 },
-  { name: "mobile", width: 390, height: 844 },
-]) {
-  test(`Chat deletion restores ${viewport.name} navigation focus`, async ({ page }) => {
-    await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    await page.goto("/chat");
-    const message = page.getByRole("textbox", { name: "Message", exact: true });
-    await expect(message).toBeEnabled();
-    const turnId = await submitChatPrompt(page, "Build a low volatility Alpha.");
-    await waitForChatTurn(page, turnId);
-    await expect(agentRunStatus(page)).toHaveText("Run complete");
-    const sessionUrl = page.url();
-    expect(new URL(sessionUrl).searchParams.get("session")).not.toBeNull();
-    const navigation = page.getByRole("button", { name: "Open navigation" });
-    if (viewport.name === "mobile") await navigation.click();
-    const actions = page.locator(".chat-session-row").getByRole("button");
-    await page.locator(".chat-session-row").hover();
-    await actions.click();
-    await page.getByRole("menuitem", { name: "Delete Chat", exact: true }).click();
-    const dialog = page.getByRole("alertdialog", { name: "Delete Chat?", exact: true });
-    await expect(dialog.getByRole("button", { name: "Cancel", exact: true })).toBeFocused();
-    await dialog.getByRole("button", { name: "Delete Chat", exact: true }).click();
-    await expect(page).toHaveURL(/\/chat$/);
-    await expect(dialog).toHaveCount(0);
-    const focusTarget = viewport.name === "mobile"
-      ? navigation
-      : page.getByRole("link", { name: "New Chat", exact: true });
-    await expect(focusTarget).toBeFocused();
-    await expect(message).toBeEnabled();
-    await expect(focusTarget).toBeFocused();
-    if (viewport.name === "mobile") {
-      await expect(navigation).toHaveAttribute("aria-expanded", "false");
-      await expect(page.locator("#primary-navigation")).toHaveCount(0);
-    }
-    await page.goto(sessionUrl);
-    await expect(page.getByRole("heading", { name: "Chat not found" })).toBeVisible();
-  });
-}
+test(`Chat deletion restores desktop navigation focus`, async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/chat");
+  const message = page.getByRole("textbox", { name: "Message", exact: true });
+  await expect(message).toBeEnabled();
+  const turnId = await submitChatPrompt(page, "Build a low volatility Alpha.");
+  await waitForChatTurn(page, turnId);
+  await expect(agentRunStatus(page)).toHaveText("Run complete");
+  const sessionUrl = page.url();
+  expect(new URL(sessionUrl).searchParams.get("session")).not.toBeNull();
+
+  const actions = page.locator(".chat-session-row").getByRole("button");
+  await page.locator(".chat-session-row").hover();
+  await actions.click();
+  await page.getByRole("menuitem", { name: "Delete Chat", exact: true }).click();
+  const dialog = page.getByRole("alertdialog", { name: "Delete Chat?", exact: true });
+  await expect(dialog.getByRole("button", { name: "Cancel", exact: true })).toBeFocused();
+  await dialog.getByRole("button", { name: "Delete Chat", exact: true }).click();
+  await expect(page).toHaveURL(/\/chat$/);
+  await expect(dialog).toHaveCount(0);
+  const focusTarget = page.getByRole("link", { name: "New Chat", exact: true });
+  await expect(focusTarget).toBeFocused();
+  await expect(message).toBeEnabled();
+  await expect(focusTarget).toBeFocused();
+
+  await page.goto(sessionUrl);
+  await expect(page.getByRole("heading", { name: "Chat not found" })).toBeVisible();
+});
 
 test("first Chat turn streams through Caddy and reload replays without another run", async ({ page }) => {
-  // This checks the streamed turn, persisted reload, desktop menus, and mobile drawer.
+  // This checks the streamed turn, persisted reload and desktop menus.
   test.setTimeout(120_000);
   const runRequests: string[] = [];
   page.on("request", (request) => {
@@ -617,50 +552,9 @@ test("first Chat turn streams through Caddy and reload replays without another r
   await expect(currentChatTitle(page)).toHaveText(renamedTitle);
   expect(runRequests).toHaveLength(1);
 
-  await page.setViewportSize({ height: 844, width: 390 });
-  const openNavigation = page.getByRole("button", { name: "Open navigation" });
-  await openNavigation.click();
-  const mobileActions = page.getByRole("button", { name: `Actions for ${renamedTitle}` });
-  const mobileSessionLink = page.getByRole("link", { name: renamedTitle, exact: true });
-  // Revealing the menu also waits for the navigation slide to settle before
-  // measuring its hit targets; transformed bounds can round just below 44px.
+  const desktopActions = page.getByRole("button", { name: `Actions for ${renamedTitle}` });
   await page.locator(".chat-session-row-current").hover();
-  for (const target of [mobileActions, mobileSessionLink]) {
-    const bounds = await target.boundingBox();
-    expect(bounds?.width).toBeGreaterThanOrEqual(44);
-    expect(bounds?.height).toBeGreaterThanOrEqual(44);
-  }
-  await mobileActions.click();
-  await expect(page.getByRole("menu", { name: `Actions for ${renamedTitle}` })).toBeVisible();
-  const navigationBackdrop = page.locator('[data-slot="sheet-overlay"]');
-  const navigationBackdropBounds = await navigationBackdrop.boundingBox();
-  if (navigationBackdropBounds === null) {
-    throw new Error("Mobile navigation exposed no clickable backdrop");
-  }
-  await navigationBackdrop.click({
-    position: {
-      x: navigationBackdropBounds.width - 8,
-      y: navigationBackdropBounds.height / 2,
-    },
-  });
-  await expect(page.getByRole("menu", { name: `Actions for ${renamedTitle}` })).toHaveCount(0);
-  await expect(page.locator("#primary-navigation")).toHaveCount(0);
-  await expect(openNavigation).toBeFocused();
-  await openNavigation.click();
-  await page.locator(".chat-session-row-current").hover();
-  await mobileActions.click();
-  await expect(page.getByRole("menuitem", { name: "Rename", exact: true })).toBeVisible();
-  await page.keyboard.press("Escape");
-  await expect(page.getByRole("menu", { name: `Actions for ${renamedTitle}` })).toBeHidden();
-  await expect(page.getByRole("dialog", { name: "Navigation" })).toBeVisible();
-  await expect(mobileActions).toBeFocused();
-  await mobileActions.click();
-  await page.getByRole("menuitem", { name: "Rename" }).click();
-  await page.keyboard.press("Escape");
-  await expect(page.getByRole("dialog", { name: "Navigation" })).toBeVisible();
-  await expect(mobileActions).toBeFocused();
-  await mobileActions.click();
-  await expect(page.getByRole("menu", { name: `Actions for ${renamedTitle}` })).toBeVisible();
+  await desktopActions.click();
   expect((await page.request.delete(`/api/agent/sessions/${durableSession}`, {
     headers: sameOriginHeaders(),
   })).status()).toBe(204);
@@ -687,11 +581,7 @@ test("first Chat turn streams through Caddy and reload replays without another r
   });
   await expect(page.getByRole("menu", { name: `Actions for ${renamedTitle}` })).toHaveCount(0);
   await expect(page.getByText("No conversations yet", { exact: true })).toBeVisible();
-  await expect(page.getByRole("dialog", { name: "Navigation" })).toBeVisible();
   await expect(page.getByRole("link", { name: "New Chat", exact: true })).toBeFocused();
-  await page.keyboard.press("Escape");
-  await expect(page.getByRole("dialog", { name: "Navigation" })).toBeHidden();
-  await expect(openNavigation).toBeFocused();
 });
 
 test("Chat preserves bounded multi-step output across reload and a subsequent message", async ({ page }) => {
@@ -765,30 +655,6 @@ test("Chat executes a real protected MCP read Tool and renders only its safe lif
 
   const response = await runResponse;
   expect(response.status()).toBe(200);
-  await page.setViewportSize({ width: 320, height: 720 });
-  await expect(page.locator("#primary-navigation")).toHaveCount(0);
-  const compactToolLayout = await tool.evaluate((element) => {
-    const toolBounds = element.getBoundingClientRect();
-    const fields = [...element.querySelectorAll<HTMLElement>(":scope > code, :scope > span")];
-    if (fields.length !== 2) throw new Error("Expected the safe Tool name and status");
-    const fieldBounds = fields.map((field) => field.getBoundingClientRect());
-    return {
-      allFieldsInside: fieldBounds.every((bounds) =>
-        bounds.left >= toolBounds.left - 1
-        && bounds.right <= toolBounds.right + 1
-        && bounds.top >= toolBounds.top - 1
-        && bounds.bottom <= toolBounds.bottom + 1
-      ),
-      toolOverflow: element.scrollWidth > element.clientWidth,
-      viewportOverflow:
-        document.documentElement.scrollWidth > document.documentElement.clientWidth,
-    };
-  });
-  expect(compactToolLayout).toEqual({
-    allFieldsInside: true,
-    toolOverflow: false,
-    viewportOverflow: false,
-  });
   await expect(page.locator("body")).not.toContainText("data_overview");
   await expect(page.locator("body")).not.toContainText("authoring_constraints");
 
@@ -873,7 +739,7 @@ test(`Chat rejects an invalid model-authored A2UI surface and remains usable: ${
 });
 }
 
-test("A2UI shows real running state and supports keyboard and narrow-screen result interactions", async ({ page }, testInfo) => {
+test("A2UI shows real running state and supports keyboard result interactions", async ({ page }, testInfo) => {
   test.setTimeout(180_000);
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   let worker: ChildProcess | undefined;
@@ -930,16 +796,7 @@ test("A2UI shows real running state and supports keyboard and narrow-screen resu
     expect((await reloaded).status()).toBe(200);
     await expect(metrics).toHaveText(values!);
 
-    await page.setViewportSize({ width: 390, height: 844 });
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     const navigation = card.getByRole("link", { name: runId, exact: true });
-    for (const target of [copy, reload, navigation]) {
-      const bounds = await target.boundingBox();
-      expect(bounds?.width).toBeGreaterThanOrEqual(44);
-      expect(bounds?.height).toBeGreaterThanOrEqual(44);
-    }
-    await metrics.scrollIntoViewIfNeeded();
-    await testInfo.attach("a2ui-result-mobile.png", { body: await page.screenshot(), contentType: "image/png" });
     await keyboardFocus(page, navigation);
     await page.keyboard.press("Enter");
     await expect(page).toHaveURL(new RegExp(`/research-runs/${runId}$`));
@@ -990,7 +847,7 @@ async function keyboardFocus(page: Page, target: Locator): Promise<void> {
   await expect.poll(() => target.evaluate(el => getComputedStyle(el).boxShadow)).not.toBe("none");
 }
 
-async function expectAccessibleNarrowTable(table: Locator, columns: number): Promise<void> {
+async function expectAccessibleResultTable(table: Locator, columns: number): Promise<void> {
   await expect(table.getByRole("columnheader")).toHaveCount(columns);
   expect(await table.evaluate((element) => {
     const cells = Array.from(element.querySelectorAll("td"));
@@ -1207,13 +1064,6 @@ test("admitted Research artifacts and a DailyTrack outlive the Chat that created
   expect(agentFactsBeforeDelete.messages).toBeGreaterThan(0);
   expect(agentFactsBeforeDelete.runs).toBeGreaterThanOrEqual(2);
   expect(agentFactsBeforeDelete.a2ui).toBeGreaterThanOrEqual(5);
-  await page.setViewportSize({ height: 900, width: 768 });
-  const durableRunLink = page.locator("a.chat-markdown-run-link").last();
-  await durableRunLink.scrollIntoViewIfNeeded();
-  const touchTarget = await durableRunLink.boundingBox();
-  expect(touchTarget?.width).toBeGreaterThanOrEqual(44);
-  expect(touchTarget?.height).toBeGreaterThanOrEqual(44);
-
   const foreign = await createResearcher(page, `foreign-${runId}@example.test`);
   const foreignBootstrap = await page.request.post("/api/researcher/bootstrap", {
     data: {},

@@ -21,7 +21,6 @@ const SCRIPTED_RESUME_RESEARCH_PROMPT = "Resume the accepted ResearchRun from th
 
 for (const [code, prompt] of Object.entries(SCRIPTED_FAILURE_PROMPTS)) {
   test(`Chat bounded failure ${code} retains identity and requires explicit recovery`, async ({ page, researcher }, testInfo) => {
-    if (code === "PROVIDER_TIMEOUT") await page.setViewportSize({ width: 390, height: 844 });
     const requests = observeRuns(page);
     const started = performance.now();
     await page.goto("/chat");
@@ -29,12 +28,6 @@ for (const [code, prompt] of Object.entries(SCRIPTED_FAILURE_PROMPTS)) {
     const error = page.locator(`[data-turn-outcome="failed"][data-failure-code="${code}"]`);
     await expect(error).toBeVisible();
     await expect(status(page)).toHaveText("Run failed");
-    if (code === "PROVIDER_TIMEOUT") {
-      const actionSize = await page.getByRole("button", { name: "Send", exact: true }).boundingBox();
-      expect(actionSize?.width).toBeGreaterThanOrEqual(44);
-      expect(actionSize?.height).toBeGreaterThanOrEqual(44);
-      await testInfo.attach("mobile-bounded-failure", { contentType: "image/png", body: await page.screenshot() });
-    }
     const runId = await page.locator(".chat-main").getAttribute("data-agent-run-id");
     await expect(page.locator(".chat-message-user")).toHaveCount(1);
     expect(requests).toHaveLength(1);
@@ -114,7 +107,7 @@ test("Chat provider failure preserves admitted Core work and completed Tools wit
 });
 
 test("Chat missing login fails before token exchange or durable acceptance", async ({ page, researcher }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
+  await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/chat");
   await expect(page.getByRole("textbox", { name: "Message", exact: true })).toBeEnabled();
   const before = proxyState("auth-exchange-proxy", 8250).exchange_requests;

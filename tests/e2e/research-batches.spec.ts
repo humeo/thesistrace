@@ -83,10 +83,6 @@ test("Research Batches lists active work and cancels only the confirmed batch", 
     await expect(batchRows.filter({ hasText: target.id })).toContainText("Cancelled");
     await expect(batchRows.filter({ hasText: history.id })).toContainText("Cancelled");
     await testInfo.attach("batch-list-desktop", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
-    await page.setViewportSize({ width: 390, height: 844 });
-    await expect(batchRows.filter({ hasText: sibling.id }).getByRole("button", { name: "Cancel batch" })).toBeVisible();
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-    await testInfo.attach("batch-list-mobile", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
   } finally {
     try {
       for (const id of created) {

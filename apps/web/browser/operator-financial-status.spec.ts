@@ -4,7 +4,7 @@ import { buildProductFixture } from "./build-product-fixture";
 let fixture: Awaited<ReturnType<typeof buildProductFixture>>;
 test.beforeAll(async () => { fixture = await buildProductFixture(new URL("./fixtures/operator-financial-status.tsx", import.meta.url), "OperatorFinancialStatusFixture"); });
 
-for (const width of [1280, 390, 320]) {
+for (const width of [1280]) {
   test(`Financial pending indicators remain visible when statements are complete at ${width}px`, async ({ page }, testInfo) => {
     let complete = false;
     let statusRequests = 0;

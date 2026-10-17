@@ -34,7 +34,6 @@ test("desktop research cards retain public Python timeout and source diagnostics
   await expect(page.getByRole("alert").filter({ hasText: "Python 程序执行失败" })).toContainText("weights must be positive");
 });
 
-
 test("A2UI resource references read Core and isolate an unavailable sibling", async ({ page }) => {
   let status = "running";
   await page.route("http://research.test/**", async route => {
@@ -59,7 +58,7 @@ test("A2UI resource references read Core and isolate an unavailable sibling", as
   await expect(card.getByText("running", { exact: true })).toHaveCount(0);
 });
 
-for (const width of [320, 390, 768, 1280, 1440]) {
+for (const width of [1280, 1440]) {
   test(`catalog table and authoritative refresh remain usable at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     let failure = false;

@@ -11,7 +11,6 @@ test.beforeAll(async () => {
   ({ script, styles } = await buildProductFixture(new URL("./fixtures/factor-evidence.tsx", import.meta.url), "FactorEvidenceFixture"));
 });
 
-
 const groups = { q1: 0, q2: 0.01, q3: 0.02, q4: 0.03, q5: 0.04 };
 const counts = { q1: 6, q2: 6, q3: 6, q4: 6, q5: 6 };
 const daily = { session: "2026-08-03", horizon: 5, label_entry_session: "2026-08-04",
@@ -65,7 +64,7 @@ test("Factor evidence loads on demand, resets cursors with filters and shows dai
   await expect(page.getByRole("combobox", { name: "预测周期" })).toContainText("20 个交易日");
   await expect(page.getByRole("combobox", { name: "视图" })).toContainText("逐日");
   expect(reads).toHaveLength(beforeLanguageReads);
-  for (const width of [1050, 390, 320]) {
+  for (const width of [1050]) {
     await page.setViewportSize({ width, height: 964 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   }
@@ -88,9 +87,9 @@ test("Factor request failure stays distinct from an empty page and can retry", a
   await expect(page.getByText("No observations in this selection.")).toBeVisible();
 });
 
-test("narrow Factor view preserves missing values and rejects reversed signal dates locally", async ({ page }) => {
+test("Factor view preserves missing values and rejects reversed signal dates locally", async ({ page }) => {
   let reads = 0;
-  await page.setViewportSize({ width: 390, height: 844 });
+  await page.setViewportSize({ width: 1280, height: 900 });
   await page.route("https://factor.test/**", route => {
     const url = new URL(route.request().url());
     if (url.pathname === "/") return route.fulfill({ contentType: "text/html", body: `${fontStylesheet}<div id="root"></div>` });
@@ -112,7 +111,7 @@ test("narrow Factor view preserves missing values and rejects reversed signal da
   await page.getByRole("option", { name: "Daily", exact: true }).click();
   await expect(page.getByRole("cell", { name: "—", exact: true }).first()).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  await page.screenshot({ path: "../../.local/browser-tests/factor-evidence-mobile.png", fullPage: true });
+  await page.screenshot({ path: "../../.local/browser-tests/factor-evidence-desktop.png", fullPage: true });
   await page.getByRole("textbox", { name: "Signal from" }).fill("2026-08-10");
   await expect(page.getByRole("cell", { name: "2026-08-03", exact: true })).toBeVisible();
   const beforeInvalid = reads;

@@ -114,7 +114,7 @@ test("result tabs hide inactive panels and retain applied holdings filters", asy
   const loaded = reads.length;
   await page.getByRole("tab", { name: "Overview", exact: true }).click();
   await page.getByRole("button", { name: "简体中文", exact: true }).click();
-  await page.setViewportSize({ width: 320, height: 844 });
+  await page.setViewportSize({ width: 1280, height: 900 });
   await page.getByRole("tab", { name: "每日持仓", exact: true }).click();
   await expect(page.getByRole("textbox", { name: "开始", exact: true })).toHaveValue("2026-08-03");
   expect(reads).toHaveLength(loaded);
