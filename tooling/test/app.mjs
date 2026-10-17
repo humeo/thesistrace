@@ -12,7 +12,7 @@ import { runPhase } from './phase.mjs';
 
 const [app, command, ...args] = process.argv.slice(2);
 let result = 0;
-if (!['auth', 'agent'].includes(app) || !['integration', 'image-smoke', ...(app === 'agent' ? ['schema-generate'] : ['runner-contract-self-check'])].includes(command)) {
+if (!['auth', 'agent'].includes(app) || !['integration', 'image-smoke', 'schema-generate', ...(app === 'auth' ? ['runner-contract-self-check'] : [])].includes(command)) {
   console.error('usage: app.mjs {auth|agent} {integration|image-smoke|schema-generate}');
   process.exitCode = 2;
 } else {
@@ -91,7 +91,7 @@ if (!['auth', 'agent'].includes(app) || !['integration', 'image-smoke', ...(app 
         const env = { ...environment, [`THESISTRACE_${app.toUpperCase()}_TEST_OWNER_DATABASE_URL`]: `postgresql://thesistrace_owner:owner-test-password@127.0.0.1:${mapped}/thesistrace`, COPILOTKIT_TELEMETRY_DISABLED: 'true', TZ: 'Asia/Seoul' };
         if (command === 'schema-generate') {
           await phase('build', () => exec('pnpm', ['build']));
-          await phase('schema-generate', () => exec('node', [`${appRoot}/scripts/generate-schema-contract.mjs`], { env: { ...env, THESISTRACE_AGENT_SCHEMA_GENERATION: 'isolated' } }));
+          await phase('schema-generate', () => exec('node', [`${appRoot}/scripts/generate-schema-contract.mjs`], { env: { ...env, [`THESISTRACE_${app.toUpperCase()}_SCHEMA_GENERATION`]: 'isolated' } }));
         } else {
           if (app === 'auth') await phase('build', () => exec(`${appRoot}/node_modules/.bin/tsc`, ['--project', `${appRoot}/tsconfig.build.json`, '--pretty', 'false']));
           await phase('integration', () => exec(`${appRoot}/node_modules/.bin/vitest`, ['run', '--root', appRoot, '--config', `${appRoot}/vitest.integration.config.ts`, ...args], { env }));

@@ -1,3 +1,4 @@
+import { isAbsolute } from "node:path";
 import { isIP } from "node:net";
 
 import { z } from "zod";
@@ -16,6 +17,7 @@ export type AgentSettings = Readonly<{
   mcpClockSkewSeconds: number;
   mcpInternalUrl: string;
   modelRegistry: ModelRegistry;
+  modelSettlementPath:string;
   port: number;
   publicOrigin: string;
   providerCallTimeoutSeconds: number;
@@ -71,8 +73,11 @@ export function readAgentSettings(
     throw new AgentConfigurationError();
   }
 
+  const modelSettlementPath=required(environment,"THESISTRACE_AGENT_MODEL_SETTLEMENT_PATH");
+  if(!isAbsolute(modelSettlementPath) || modelSettlementPath.includes("\0"))throw new AgentConfigurationError();
   return {
     agentBuildRevision,
+    modelSettlementPath,
     authInternalOrigin,
     databaseUrl,
     environment: parsedEnvironment.data,

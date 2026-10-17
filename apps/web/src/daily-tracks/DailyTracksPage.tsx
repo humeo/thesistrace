@@ -1,3 +1,5 @@
+import {useTrackingSelection} from "./useTrackingSelection";
+import {submitTrackingAction,TrackingSelectionCancelled,TrackingQuotaError} from "./trackingQuota";
 import { useTranslation } from "react-i18next";
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -99,6 +101,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
   const [reloading, setReloading] = useState(false);
   const loadState: LoadState = (trackId ? detailQuery.isLoading : listQuery.isLoading)
     ? "loading" : reloading ? "reloading" : null;
+  const quota=useTrackingSelection();
   const [actionError, setActionError] = useState<ActionError | null>(null);
   const [confirmStop, setConfirmStop] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -162,19 +165,16 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
     setAdvanceState("submitting");
     setActionError(null);
     try {
-      const response = await coreFetch(`/api/daily-tracks/${trackId}/refresh`, {
-        method: "POST",
-        signal: controller.signal,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ request_id: `refresh_${crypto.randomUUID()}` }),
-      });
+      const response = await submitTrackingAction(trackId,"refresh",controller.signal,quota.choose);
       if (!response.ok) throw new Error("DailyTrack Refresh was not accepted");
       await response.json();
       setAdvanceState("accepted");
       void reloadFacts();
-    } catch {
+    } catch (error) {
       if (controller.signal.aborted) return;
       setAdvanceState(null);
+      if(error instanceof TrackingSelectionCancelled)return;
+      if(error instanceof TrackingQuotaError){quota.showRestriction(error.selected);return;}
       setActionError("refreshError");
     } finally {
       mutationPending.current = false;
@@ -190,10 +190,11 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
     setBulkResult(null);
     setBulkError(false);
     try {
-      const result = await refreshAllDailyTracks(controller.signal);
+      const result = await refreshAllDailyTracks(controller.signal,quota.choose);
       setBulkResult(result);
       void reloadFacts();
-    } catch {
+    } catch (error) {
+      if(error instanceof TrackingSelectionCancelled)return;
       if (!controller.signal.aborted) setBulkError(true);
     } finally {
       mutationPending.current = false;
@@ -209,19 +210,16 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
     setRetryState("submitting");
     setActionError(null);
     try {
-      const response = await coreFetch(`/api/daily-tracks/${trackId}/retry`, {
-        method: "POST",
-        signal: controller.signal,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ request_id: `retry_${crypto.randomUUID()}` }),
-      });
+      const response = await submitTrackingAction(trackId,"retry",controller.signal,quota.choose);
       if (!response.ok) throw new Error("DailyTrack Retry was not accepted");
       await response.json();
       setRetryState("accepted");
       void reloadFacts();
-    } catch {
+    } catch (error) {
       if (controller.signal.aborted) return;
       setRetryState(null);
+      if(error instanceof TrackingSelectionCancelled)return;
+      if(error instanceof TrackingQuotaError){quota.showRestriction(error.selected);return;}
       setActionError("retryError");
     } finally {
       mutationPending.current = false;
@@ -329,6 +327,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
         {track.status === "stopping" ? <p role="status">{t("stopWaiting")}</p> : null}
         {actionError || deleteError ? <Alert variant="destructive"><AlertDescription>{actionError ? t(actionError) : deleteError?.status == null ? t("deleteError") : t("deleteHttpError", { status: deleteError.status })}</AlertDescription></Alert> : null}
       </>} />
+      {quota.dialog}
       <TrackActionDialog open={confirmStop} submitting={stopState === "submitting"} title={t("stopTitle")} description={t("stopDescription")}
         cancelLabel={t("keep")} confirmLabel={t(stopState === "submitting" ? "stopping" : "stop")}
         error={actionError ? t(actionError) : null} onCancel={() => setConfirmStop(false)} onConfirm={() => void stopTrack()} finalFocus={() => stopState === "accepted" || manageTrigger.current?.disabled ? reloadTrigger.current : manageTrigger.current} />
@@ -347,6 +346,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
     {advanceState === "submitting" && <p role="status">{t("bulkSubmitting")}</p>}
     {bulkError && <Alert variant="destructive"><AlertDescription>{t("bulkError")}</AlertDescription></Alert>}
     {bulkResult && <BulkRefreshFeedback items={bulkResult} />}
+    {quota.dialog}
     {error ? <Alert variant="destructive"><AlertDescription>{t("listReloadFailed")}</AlertDescription></Alert> : null}
     {items?.length === 0 ? <Empty variant="page"><EmptyHeader><EmptyTitle role="heading" aria-level={2}>{t("emptyTitle")}</EmptyTitle><EmptyDescription>{t("emptyDescription")}</EmptyDescription></EmptyHeader>
       <Button nativeButton={false} role="link" render={<a href="/research-runs" onClick={followCoreLink} />}>{t("browseRuns")}</Button>

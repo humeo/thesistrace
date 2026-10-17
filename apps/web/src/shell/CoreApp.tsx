@@ -9,6 +9,7 @@ import { AppShell } from "./AppShell";
 import { WorkspaceQueryProvider } from "./WorkspaceQueryProvider";
 import { useTranslation } from "../i18n";
 
+const BillingPage=lazy(()=>import("../billing/BillingPage").then(({BillingPage})=>({default:BillingPage})));
 const McpPage = lazy(() => import("../mcp/McpPage").then(({ McpPage }) => ({ default: McpPage })));
 const McpAuthorizePage = lazy(() => import("../mcp/McpAuthorizePage").then(({ McpAuthorizePage }) => ({ default: McpAuthorizePage })));
 
@@ -57,7 +58,7 @@ export function CoreApp({ location, navigate, isOperator, researcherId }: {
   const { t: navigationText } = useTranslation("navigation");
   const currentPath = location.pathname;
   useEffect(() => {
-    const title = currentPath.startsWith("/research-runs/batches") ? "researchBatches"
+    const title = currentPath==="/billing"?"billing":currentPath.startsWith("/research-runs/batches") ? "researchBatches"
       : currentPath.startsWith("/research-runs") ? "researchRuns"
       : currentPath.startsWith("/daily-tracks") ? "dailyTracks"
       : currentPath.startsWith("/operator") ? "operator"
@@ -90,6 +91,7 @@ export function CoreApp({ location, navigate, isOperator, researcherId }: {
           : <section className="state-section"><p>{t("loadingWorkspace")}</p></section>}
       >
         {thread === null ? null : <ChatPage key={researcherId} researcherId={researcherId} thread={thread} />}
+        {currentPath === "/billing" ? <BillingPage /> : null}
         {currentPath === "/data" ? <DataPage /> : null}
         {currentPath === "/connections/mcp" ? <McpPage /> : null}
         {currentPath === "/connections/mcp/authorize" ? <McpAuthorizePage search={location.search} /> : null}
@@ -117,7 +119,7 @@ export function CoreApp({ location, navigate, isOperator, researcherId }: {
           </section>
         ) : null}
         {currentPath !== "/chat" && currentPath !== "/data" &&
-        currentPath !== "/research" &&
+        currentPath !== "/research" && currentPath!=="/billing" &&
         !currentPath.startsWith("/connections/mcp") &&
         currentPath !== "/operator/researchers" &&
         currentPath !== "/operator/data" &&

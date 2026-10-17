@@ -29,6 +29,7 @@ from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.publication.payload_retention import PayloadRetention
 from thesistrace.research_definition import default_simulation_costs
 from thesistrace.researcher import ResearcherIdentity, ResearcherService
+from thesistrace.researcher.quota import QuotaPolicy
 
 pytestmark = pytest.mark.skipif(
     not core_environment_is_configured(),
@@ -124,7 +125,10 @@ def combined_command(request_id, *, end=SESSIONS[2]):
 
 
 @pytest.mark.parametrize("mode", ["framework", "direct"])
-def test_combined_batch_sibling_failure_matches_run_and_segmented_track(tmp_path, mode):
+def test_combined_batch_sibling_failure_matches_run_and_segmented_track(
+    tmp_path, mode,
+    pro_quota_policy: QuotaPolicy,
+):
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
@@ -258,7 +262,10 @@ def test_combined_batch_sibling_failure_matches_run_and_segmented_track(tmp_path
 
 
 @pytest.mark.parametrize("fault", ["checkpoint_insert", "before_publish", "after_publish"])
-def test_combined_risk_publication_and_head_commit_once_after_interruption(tmp_path, fault):
+def test_combined_risk_publication_and_head_commit_once_after_interruption(
+    tmp_path, fault,
+    pro_quota_policy: QuotaPolicy,
+):
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
@@ -500,7 +507,10 @@ def decide(data, account, state):
         assert "alpha" in blocked["blocked_reason"]
 
 
-def test_expired_trading_events_preserve_combined_checkpoint_and_continuation(tmp_path):
+def test_expired_trading_events_preserve_combined_checkpoint_and_continuation(
+    tmp_path,
+    pro_quota_policy: QuotaPolicy,
+):
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
@@ -580,7 +590,10 @@ def test_expired_trading_events_preserve_combined_checkpoint_and_continuation(tm
         assert retention_metadata() == expired_metadata
 
 
-def test_combined_refresh_claim_keeps_frozen_dataset_when_head_moves(tmp_path):
+def test_combined_refresh_claim_keeps_frozen_dataset_when_head_moves(
+    tmp_path,
+    pro_quota_policy: QuotaPolicy,
+):
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
     initialize_core(settings.database_url)

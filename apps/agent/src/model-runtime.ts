@@ -45,7 +45,7 @@ export class RegisteredModelRuntime {
     modelKey: string,
     effort: ReasoningEffort,
     observation?: RunModelObservation,
-    metering?: Readonly<{ budget: ModelBudget; researcherId: string }>,
+    metering?: Readonly<{ budget: ModelBudget; researcherId: string;runId?:string }>,
   ): ResolvedModelSelection {
     const model = this.registry.models.find(
       (candidate) => candidate.enabled && candidate.key === modelKey,
@@ -59,7 +59,7 @@ export class RegisteredModelRuntime {
       throw new AgentConfigurationError();
     }
     if (metering !== undefined) languageModel = new MeteredLanguageModel(
-      fetch => createLanguageModel(model, fetch), model, metering.budget, metering.researcherId);
+      fetch => createLanguageModel(model, fetch), model, metering.budget, metering.researcherId,metering.runId);
     return {
       compactionEnabled: model.contextWindow >= this.registry.minCompactionContextWindow,
       effort,

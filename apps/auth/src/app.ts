@@ -2,7 +2,7 @@ import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
 import { SIGN_IN_CHALLENGE_ACTION, type SignInCodeDecision } from "./sign-in-code-admission.js";
-import { ResearcherQuotaPolicy } from "./quota-policy.js";
+import { ResearcherQuotaPolicy, type PlanKey } from "./quota-policy.js";
 
 import {
   ResearcherNotFoundError,
@@ -185,6 +185,7 @@ export type AuthAppDependencies = Readonly<{
   getSession: (input: GetSessionInput) => Promise<unknown>;
   hasOperatorCapability: (principal: OperatorPrincipal) => Promise<boolean>;
   isOperator: (researcherId: string) => Promise<boolean>;
+  researcherPlan: (researcherId: string) => Promise<PlanKey>;
   httpObserver?: AuthHttpObserver;
   turnstileSiteKey?: string;
   admitSignInCode?: (email: string, token: string, headers: Headers) => Promise<SignInCodeDecision>;
@@ -212,7 +213,7 @@ export type AuthAppDependencies = Readonly<{
   ) => Promise<ResearcherSessionRevocationResult>;
 }>;
 
-export function createAuthApp(dependencies: AuthAppDependencies, mcpRoutes?: ReturnType<typeof import("./mcp-connections.js").createMcpConnectionsApp>): Hono {
+export function createAuthApp(dependencies: AuthAppDependencies, mcpRoutes?: ReturnType<typeof import("./mcp-connections.js").createMcpConnectionsApp>, billingRoutes?: ReturnType<typeof import("./billing-http.js").createBillingApp>): Hono {
   const app = new Hono();
   app.use("*", async (context, next) => {
     const observer = dependencies.httpObserver;
@@ -267,7 +268,7 @@ export function createAuthApp(dependencies: AuthAppDependencies, mcpRoutes?: Ret
     });
   });
 
-  const quotaPolicy = new ResearcherQuotaPolicy(dependencies.isOperator);
+  const quotaPolicy = new ResearcherQuotaPolicy(dependencies.isOperator, dependencies.researcherPlan);
 
   // Internal service policy lookup; Caddy never routes /internal to Auth.
   app.get("/internal/researchers/:researcherId/quota-policy", async (context) => {
@@ -514,6 +515,7 @@ export function createAuthApp(dependencies: AuthAppDependencies, mcpRoutes?: Ret
     }
   });
   if (mcpRoutes) app.route("/", mcpRoutes);
+  if (billingRoutes) app.route("/api/auth/billing",billingRoutes);
 
   app.all("/api/auth/*", async (context) => {
     if (!publicBetterAuthPaths.has(context.req.path)) {
@@ -602,7 +604,7 @@ type ActiveSessionResult =
   | Readonly<{ kind: "invalid" }>
   | Readonly<{ kind: "unavailable" }>;
 
-async function loadActiveSession(
+export async function loadActiveSession(
   dependencies: Pick<AuthAppDependencies, "getSession">,
   headers: Headers,
 ): Promise<ActiveSessionResult> {

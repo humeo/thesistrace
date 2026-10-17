@@ -229,6 +229,7 @@ CREATE TABLE daily_tracks.stop_receipts (
 --
 
 CREATE TABLE daily_tracks.tracks (
+    quota_selected boolean DEFAULT true NOT NULL,
     researcher_id uuid NOT NULL,
     id text NOT NULL,
     status text NOT NULL,

@@ -53,6 +53,7 @@ from thesistrace.daily_track.models import (
     DailyTrackCommonInputObservationsResultSectionInput,
     DailyTrackResultSectionInput,
 )
+from thesistrace.daily_track.quota import TrackingSelectionError
 from thesistrace.daily_track.service import DailyTrackResultReadFailed, DailyTrackResultUnavailable
 from thesistrace.data import (
     DataOverview,
@@ -1385,6 +1386,12 @@ def create_app(
             raise HTTPException(status_code=404, detail="ResearchRun not found")
         return track
 
+    @app.get("/api/billing/usage")
+    def billing_usage(request: Request):
+        runtime, researcher_id = _runtime(request), _researcher_id(request)
+        return {**runtime.research_runs.quota_usage(researcher_id),
+                "tracking": runtime.daily_tracks.quota_usage(researcher_id)}
+
     @app.get("/api/daily-tracks", response_model=DailyTrackList)
     def list_daily_tracks(
         request: Request,
@@ -1543,6 +1550,11 @@ def create_app(
             track = _runtime(request).daily_tracks.refresh(
                 _researcher_id(request), track_id, command
             )
+        except TrackingSelectionError as error:
+            raise HTTPException(status_code=409, detail={
+                "code": error.code, "limit": error.limit,
+                "selected_track_ids": error.selected,
+            }) from error
         except DailyTrackRefreshConflict as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except DailyTrackRefreshUnavailable as error:
@@ -1567,6 +1579,11 @@ def create_app(
     ) -> DailyTrackSummary:
         try:
             track = _runtime(request).daily_tracks.retry(_researcher_id(request), track_id, command)
+        except TrackingSelectionError as error:
+            raise HTTPException(status_code=409, detail={
+                "code": error.code, "limit": error.limit,
+                "selected_track_ids": error.selected,
+            }) from error
         except DailyTrackRetryConflict as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except DailyTrackRetryUnavailable as error:

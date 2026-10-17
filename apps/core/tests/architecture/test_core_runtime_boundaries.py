@@ -461,6 +461,7 @@ def test_postgres_support_contains_mechanics_but_no_product_sql() -> None:
 
 def test_http_route_and_action_inventory_is_exactly_the_core_resources() -> None:
     assert _http_routes() == {
+        ("get", "/api/billing/usage"),
         ("get", "/api/alpha/catalog"),
         ("post", "/api/alpha/diagnostics"),
         ("get", "/api/data"),

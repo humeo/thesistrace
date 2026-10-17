@@ -186,6 +186,11 @@ async function verifyAuthRoleGrants(client: PoolClient): Promise<void> {
   const expected = new Set<string>();
   for (const table of [
     "account",
+    "billing_account",
+    "billing_payment",
+    "billing_adjustment",
+    "billing_event",
+    "billing_command",
     "auth_secret_contract",
     "oauthClient",
     "oauthResource",

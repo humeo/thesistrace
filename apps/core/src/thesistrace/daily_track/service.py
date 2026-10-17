@@ -92,6 +92,7 @@ from thesistrace.daily_track.planning import (
     DEFAULT_TRACKING_EXECUTION_MEMORY_BYTES,
     plan_tracking_advance,
 )
+from thesistrace.daily_track.quota import admit_tracking_action, tracking_usage
 from thesistrace.daily_track.session_persistence import SessionCoordinateRepository
 from thesistrace.data import (
     DatasetLifecycle,
@@ -473,17 +474,22 @@ class DailyTrackService:
             is not None
         )
 
+    def quota_usage(self, researcher_id: UUID) -> dict:
+        limit = self._quota_policy(researcher_id).active_daily_track_limit
+        with self._database.transaction() as transaction:
+            return tracking_usage(transaction, researcher_id, limit)
+
     def activate(
         self,
         transaction: PostgresTransaction,
         researcher_id: UUID,
         origin: TrackingOrigin,
     ) -> DailyTrackSummary:
-        lock_publication_mutation(transaction)
         transaction.execute(
             "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
             (f"daily_tracks.activation.capacity:{researcher_id}",),
         ).fetchone()
+        lock_publication_mutation(transaction)
         transaction.execute(
             "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
             (f"daily_tracks.activation.seed:{researcher_id}:{origin.seed_run_id}",),
@@ -502,7 +508,7 @@ class DailyTrackService:
             SELECT count(*) AS count
             FROM daily_tracks.tracks
             WHERE researcher_id = %s
-              AND status IN ('active', 'blocked', 'stopping')
+              AND status IN ('active', 'blocked', 'stopping') AND quota_selected
             """,
             (researcher_id,),
         ).fetchone()
@@ -962,6 +968,10 @@ class DailyTrackService:
                     retry_after_seconds=2,
                 )
 
+            admit_tracking_action(transaction, researcher_id, track_id,
+                                  self._quota_policy(researcher_id).active_daily_track_limit,
+                                  command.selected_track_ids)
+
             track = transaction.execute(
                 f"""
                 {_TRACK_SELECT}
@@ -1085,6 +1095,10 @@ class DailyTrackService:
                         phase="queued" if track.status == "active" else "blocked",
                     ),
                 )
+
+            admit_tracking_action(transaction, researcher_id, track_id,
+                                  self._quota_policy(researcher_id).active_daily_track_limit,
+                                  command.selected_track_ids)
 
             track = transaction.execute(
                 f"""

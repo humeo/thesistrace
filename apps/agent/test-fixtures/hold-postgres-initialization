@@ -14,3 +14,7 @@ while [ ! -e "$release_marker" ]; do
   fi
   sleep 0.05
 done
+
+# Hold before initdb so its disk synchronization belongs to the existing
+# PostgreSQL startup deadline rather than the fixture-handshake deadline.
+exec docker-entrypoint.sh "$@"

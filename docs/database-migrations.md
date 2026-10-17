@@ -373,3 +373,39 @@ Trigram indexes accelerate selective terms; short terms such as two-character
 Chinese words can instead use the existing researcher index and scan that user's
 compact search columns. Matching IDs and sort values are materialized once for
 the exact total and page, and only the page retrieves complete immutable inputs.
+
+## Billing: Auth 0003, Core 0011 and Agent 0001
+
+Stop Auth, Core and Agent writers and preserve a verified private PostgreSQL backup
+before applying all three upgrades. Startup only verifies the current contract; it
+never upgrades existing schemas automatically. All release source/target assets are
+frozen, including the previous search migration's target.
+
+| Owner | Source fingerprint | Target fingerprint | Preflight / apply entry |
+| --- | --- | --- | --- |
+| Auth | `1726410065771dea71f1f81b83deee4de87f219c08b86c649d8d0c479b7eec7e` | `1b50ec71fe68647a99ccdcf76c76fc1d5fa05cd59673bda0028f6fd7c22ce386` | `node apps/auth/dist/billing-migrate.js --backup-directory <private-backup>` |
+| Core | `a40cd7fedf6025c2c2f1ac096a26cbe60ab4c85a868d49f0cf9f087f697408e0` | `702d259e8393f789b1ac8a04e6192d443ccd56a46647e02a238b1ea0220e762e` | `python -m thesistrace.migrations.billing_0011` |
+| Agent | `0f28e823f7a7128e7e4eba004584ca58475d9df737006a1899965f97b358099e` | `639450f161abbaba6c0314465024effbb9b9ddf3eb1d0cf24a91569145149577` | `node apps/agent/dist/model-settlement-migrate.js --backup-directory <private-backup>` |
+
+Use `THESISTRACE_OWNER_DATABASE_URL` for the Node commands and an owner
+`THESISTRACE_DATABASE_URL` for Core. Apply with `--apply`; Node requires the verified
+backup at `<private-backup>/database.dump`, while Core also requires
+`--database-backup <verified-dump>`. Node receipts include the backup SHA-256; all
+three transactions record their version transition and preserved row counts.
+
+Auth adds payment associations, paid entitlements, adjustments, the verified event
+inbox and command receipts without changing identities. Core adds durable quota
+settlement to retained Run ownership and persistent tracking selection. Deleted
+historical Run ownership remains consumed; failed and unstarted canceled retained
+Runs release their original-day quota. Agent preserves existing settled charges,
+retains unknown reservations and adds explicit settlement state and Run association.
+No existing paid customers are manufactured or migrated.
+
+Preflight, target structure, repeated execution, owner access and late-receipt
+rollback are verified in isolated database tests. After applying all upgrades,
+run ordinary initialization/verification, compare preserved identities, ownership,
+tracks and costs, then restart the matching new services. Restore a committed
+upgrade only by stopping writers and restoring the verified backup with its matching
+release; never reset data or rewrite a fingerprint to bypass verification.
+
+Product and merchant configuration: [Creem billing](creem-billing.md).

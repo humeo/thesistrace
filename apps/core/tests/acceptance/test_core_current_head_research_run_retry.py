@@ -446,7 +446,7 @@ def test_publication_retry_reuses_the_validated_final_checkpoint(
         assert completed["execution_timing"] == {
             "started_at": "2026-08-13T10:00:00Z",
             "finished_at": "2026-08-13T10:08:00Z",
-            "elapsed_seconds": 480.0,
+            "elapsed_seconds": 180.0,
             "is_final": True,
         }
         assert _checkpoint_ordinals(settings, run_id) == []
@@ -1244,7 +1244,7 @@ def test_expired_execution_cannot_publish_without_a_replacement_worker(
         assert barrier_errors == []
         assert expired.is_set()
         waiting = client.get(f"/api/research-runs/{run_id}").json()
-        assert waiting["status"] == "running"
+        assert waiting["status"] == "running", _attempts(settings, run_id)
         assert _stored_run(settings, run_id)["result_manifest_sha256"] is None
         assert _research_result_manifest_count(settings) == 0
         assert any(event["event"] == "research_attempt_fenced" for event in events)
@@ -1448,6 +1448,10 @@ def _set_attempt_timing(settings: CoreSettings, run_id: str) -> None:
                     finished_at = CASE ordinal
                         WHEN 1 THEN '2026-08-13T10:01:00Z'::timestamptz
                         WHEN 2 THEN '2026-08-13T10:08:00Z'::timestamptz
+                    END,
+                    processing_seconds = CASE ordinal
+                        WHEN 1 THEN 60.0
+                        WHEN 2 THEN 120.0
                     END
                 WHERE run_id = %s
                 """,

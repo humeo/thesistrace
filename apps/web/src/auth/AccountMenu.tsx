@@ -70,6 +70,7 @@ export function AccountMenuContent({ session, signOut }: AccountMenuContentProps
           </span>
         </div>
         <Separator className="account-menu-divider" />
+        <Button variant="ghost" className="account-action" nativeButton={false} render={<a href="/billing" />}>{t("billing")}</Button>
         {message !== null ? <Alert variant="destructive"><AlertDescription>{message === "tooManyRequests" && cooldown > 0 ? t("auth:rateLimited", {seconds: cooldown}) : t(`auth:errors.${message}`)}</AlertDescription></Alert> : null}
         <Button variant="ghost" className="account-action" render={
           <a href="https://discord.gg/tdwxubVhMJ" target="_blank" rel="noopener noreferrer" />

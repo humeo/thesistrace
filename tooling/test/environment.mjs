@@ -82,7 +82,7 @@ const composeNames = {
 
 export function deterministicEnvironment(ambient = process.env) {
   return Object.fromEntries(Object.entries(ambient).filter(([name]) =>
-    !/^(THESISTRACE_|COMPOSE_|BETTER_AUTH_|RESEND_|OPENAI_|ANTHROPIC_|GOOGLE_GENERATIVE_AI_|CLI_API_KEY$|CLIPROXY_API_KEY$)/.test(name)));
+    !/^(THESISTRACE_|COMPOSE_|BETTER_AUTH_|RESEND_|CREEM_|OPENAI_|ANTHROPIC_|GOOGLE_GENERATIVE_AI_|CLI_API_KEY$|CLIPROXY_API_KEY$)/.test(name)));
 }
 
 export function composeEnvironment(context) {

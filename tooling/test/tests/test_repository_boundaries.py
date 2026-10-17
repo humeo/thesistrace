@@ -1,4 +1,5 @@
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -63,10 +64,25 @@ def test_canonical_compose_pins_external_infrastructure_images() -> None:
     assert "postgres:16.10-alpine" in compose
     assert "rustfs/rustfs:1.0.0-beta.12" in compose
     assert ":latest" not in compose
-    for forbidden in ("sqlite", "temporal", "object-store"):
+    for forbidden in ("sqlite://", "\n  sqlite:", "temporal", "object-store"):
         assert forbidden not in compose.lower()
     assert "  auth-initialize:\n" in compose
     assert "  auth:\n" in compose
+
+
+def test_agent_settlement_journal_is_private_and_persistent_alongside_postgres() -> None:
+    compose = (ROOT / "deploy" / "compose.yaml").read_text()
+    agent = re.search(r"^  agent:\n(.*?)(?=^  \S|\Z)", compose, re.M | re.S)
+    assert agent is not None
+    service = agent.group(1)
+    assert "THESISTRACE_AGENT_DATABASE_URL: postgresql://agent_runtime:" in service
+    assert (
+        "THESISTRACE_AGENT_MODEL_SETTLEMENT_PATH: "
+        "/app/agent/state/model-settlements.sqlite"
+    ) in service
+    assert "- model-settlements:/app/agent/state" in service
+    assert compose.count("model-settlements:/app/agent/state") == 1
+    assert "\n  model-settlements:\n" in compose
 
 
 def test_web_shell_declares_only_the_four_product_resources() -> None:

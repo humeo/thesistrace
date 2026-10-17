@@ -315,6 +315,7 @@ class RetryDailyTrackInput(BaseModel):
 
     track_id: DailyTrackId
     request_id: RequestId
+    selected_track_ids: Annotated[list[DailyTrackId], Field(max_length=50)] | None = None
 
 
 class RefreshDailyTrackInput(BaseModel):
@@ -322,6 +323,7 @@ class RefreshDailyTrackInput(BaseModel):
 
     track_id: DailyTrackId
     request_id: RequestId
+    selected_track_ids: Annotated[list[DailyTrackId], Field(max_length=50)] | None = None
 
 
 class RefreshDailyTrackOutcome(BaseModel):

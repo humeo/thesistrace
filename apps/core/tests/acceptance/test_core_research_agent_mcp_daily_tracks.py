@@ -43,6 +43,7 @@ pytestmark = pytest.mark.skipif(
 
 
 def test_stdio_daily_tracks_survive_disconnect_progress_and_enforce_capacity(
+    paid_pro_quota,
     tmp_path: Path,
 ) -> None:
     settings = isolated_core_settings(tmp_path / "data")

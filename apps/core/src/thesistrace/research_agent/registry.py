@@ -45,6 +45,7 @@ from thesistrace.daily_track import (
 from thesistrace.daily_track import (
     DailyTrackStopOutcome as DomainDailyTrackStopOutcome,
 )
+from thesistrace.daily_track.quota import TrackingSelectionError
 from thesistrace.data.models import DataOverview
 from thesistrace.data.overview import DatasetOverviewTemporarilyUnavailable
 from thesistrace.research_agent.models import (
@@ -668,7 +669,10 @@ class ResearchAgentCapabilityRegistry:
                     "to the latest available Dataset Head; requires tracking:execute, "
                     "is non-destructive and idempotent by request_id, and continues after "
                     "the MCP connection closes. A later Dataset Head requires another "
-                    "Refresh. Poll get_daily_track after retry_after_seconds."
+                    "Refresh. If TRACK_SELECTION_REQUIRED, send selected_track_ids "
+                    "once to retain the permitted tracks. "
+                    "Selections cannot rotate until Stop finishes. Poll "
+                    "get_daily_track after retry_after_seconds."
                 ),
                 required_scope=ResearchAgentScope.TRACKING_EXECUTE,
                 input_model=RefreshDailyTrackInput,
@@ -1229,14 +1233,26 @@ class ResearchAgentCapabilityRegistry:
         self,
         track_id: str,
         request_id: str,
+        selected_track_ids: list[str] | None = None,
     ) -> RetryDailyTrackOutcome:
         self._require(ResearchAgentScope.TRACKING_EXECUTE)
         try:
             outcome = self._modules.daily_tracks.retry_with_outcome(
                 self._authority.researcher_id,
                 track_id,
-                RetryDailyTrackCommand(request_id=request_id),
+                RetryDailyTrackCommand(
+                    request_id=request_id, selected_track_ids=selected_track_ids
+                ),
             )
+        except TrackingSelectionError as error:
+            raise ResearchAgentExpectedFailure(
+                ResearchAgentErrorCode.STATE_CONFLICT,
+                issues=[ResearchAgentInputIssue(
+                    path=["selected_track_ids"], code=error.code,
+                    message=(f"Select up to {error.limit} tracks. Existing selected slots require "
+                             "Stop to finish before replacement; use list_daily_tracks to choose."),
+                )],
+            ) from error
         except DailyTrackRetryConflict as error:
             raise ResearchAgentExpectedFailure(
                 ResearchAgentErrorCode.IDEMPOTENCY_CONFLICT
@@ -1258,14 +1274,26 @@ class ResearchAgentCapabilityRegistry:
         self,
         track_id: str,
         request_id: str,
+        selected_track_ids: list[str] | None = None,
     ) -> RefreshDailyTrackOutcome:
         self._require(ResearchAgentScope.TRACKING_EXECUTE)
         try:
             outcome = self._modules.daily_tracks.refresh_with_outcome(
                 self._authority.researcher_id,
                 track_id,
-                RefreshDailyTrackCommand(request_id=request_id),
+                RefreshDailyTrackCommand(
+                    request_id=request_id, selected_track_ids=selected_track_ids
+                ),
             )
+        except TrackingSelectionError as error:
+            raise ResearchAgentExpectedFailure(
+                ResearchAgentErrorCode.STATE_CONFLICT,
+                issues=[ResearchAgentInputIssue(
+                    path=["selected_track_ids"], code=error.code,
+                    message=(f"Select up to {error.limit} tracks. Existing selected slots require "
+                             "Stop to finish before replacement; use list_daily_tracks to choose."),
+                )],
+            ) from error
         except DailyTrackRefreshConflict as error:
             raise ResearchAgentExpectedFailure(
                 ResearchAgentErrorCode.IDEMPOTENCY_CONFLICT

@@ -1648,6 +1648,10 @@ class ResearchRunService:
                     )
         return True
 
+    def quota_usage(self, researcher_id: UUID) -> dict:
+        from thesistrace.research_run.usage import run_usage
+        return run_usage(self._database,researcher_id,self._quota_policy(researcher_id))
+
     def list_page(
         self, researcher_id: UUID, *, folder_id: str | None = None,
         research_kind: ResearchKind | None = None, page: int = 1, page_size: int = 20,
@@ -3149,7 +3153,7 @@ class ResearchRunService:
                 (claim.attempt_id, claim.run_id, claim.fence),
             ).fetchone()
             if current is None:
-                raise RuntimeError("Research execution processing measurement was fenced")
+                raise ResearchRunFenced("Research execution processing measurement was fenced")
             if ordinal <= current["processing_chunk_ordinal"]:
                 return
             transaction.execute(

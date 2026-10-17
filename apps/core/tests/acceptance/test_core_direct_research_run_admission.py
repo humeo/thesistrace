@@ -421,6 +421,7 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
             "start_date": "2026-08-03",
             "end_date": "2026-08-04",
             "formula_summary": "close",
+            "universe": "top300",
             "research_kind": "strategy_backtest",
         }
         queued_detail = client.get(f"/api/research-runs/{queued['id']}").json()

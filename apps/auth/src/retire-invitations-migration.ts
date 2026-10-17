@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import type { Pool } from "pg";
 import {
   assertExactCatalog, catalogFingerprint, collectAuthSchemaCatalog,
-  loadExpectedCatalog, type AuthSchemaCatalog,
+  type AuthSchemaCatalog,
 } from "./schema-contract.js";
 
 export const AUTH_EMAIL_ONLY_SOURCE = "d64b69665b7454cd602a81295df4deb99b5f336a6df58a6cb66dc3b35aa3a4eb";
@@ -12,7 +12,7 @@ const migration = "0002_retire_invitation_credentials";
 /** Explicit owner maintenance only. Application startup never upgrades a populated schema. */
 export async function migrateRetiredInvitations(pool: Pool, apply = false) {
   const source = JSON.parse(await readFile(new URL("../schema/migrations/0002-source-catalog.json", import.meta.url), "utf8")) as AuthSchemaCatalog;
-  const target = await loadExpectedCatalog();
+  const target = JSON.parse(await readFile(new URL("../schema/migrations/0003-source-catalog.json", import.meta.url), "utf8")) as AuthSchemaCatalog;
   if (catalogFingerprint(source) !== AUTH_EMAIL_ONLY_SOURCE || catalogFingerprint(target) !== AUTH_EMAIL_ONLY_TARGET) {
     throw new Error("Migration assets do not match the declared release");
   }

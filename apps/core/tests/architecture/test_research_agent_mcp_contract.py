@@ -2209,9 +2209,9 @@ def test_v1_inventory_scopes_descriptions_annotations_and_schemas_are_exact() ->
     canonical = _canonical_v1_contract()
 
     assert sha256(canonical).hexdigest() == (
-        "89c1d47795c37a0d1dcf8a04bb90a5c7e0cfcf6ecf0375eda7ba4cc8920d8a3c"
+        "7bb8c925dc435b8412589aedb339fe20f0f2f64e2252432d96def863ab2eb986"
     )
-    assert len(canonical) == 358890
+    assert len(canonical) == 359386
 
 
 def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None:
@@ -3926,3 +3926,25 @@ def test_source_rerun_mcp_requires_source_read_authority(source, read_scope):
             else:
                 assert result.structured_content["code"] == "FORBIDDEN"
     anyio.run(exercise)
+
+
+@pytest.mark.parametrize("tool", ["refresh_daily_track", "retry_daily_track"])
+def test_tracking_slot_selection_reaches_shared_admission_and_explains_rejection(tool):
+    from thesistrace.daily_track.quota import TrackingSelectionError
+
+    reader = _DailyTrackReader()
+    registry = _registry(daily_tracks=reader)
+    args = dict(track_id="track_test", request_id="selection", selected_track_ids=["track_test"])
+    result = registry.invoke(tool, args, trace_id="selection")
+    assert result.error is None
+    commands = reader.refresh_commands if tool == "refresh_daily_track" else reader.retry_commands
+    assert commands[-1][1].selected_track_ids == ["track_test"]
+    capability = next(item for item in registry.accessible_capabilities() if item.name == tool)
+    validator = Draft202012Validator(capability.input_schema())
+    assert validator.is_valid({**args, "selected_track_ids": [f"track_{i}" for i in range(50)]})
+    assert not validator.is_valid({**args, "selected_track_ids": [f"track_{i}" for i in range(51)]})
+    reader.failure = TrackingSelectionError("TRACK_SELECTION_REQUIRED", 1, {"track_test"})
+    rejected = registry.invoke(tool, args, trace_id="selection_rejected")
+    assert rejected.error.code == "STATE_CONFLICT"
+    assert rejected.error.issues[0].code == "TRACK_SELECTION_REQUIRED"
+    assert "Stop" in rejected.error.issues[0].message

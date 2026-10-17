@@ -30,6 +30,7 @@ from thesistrace.entrypoints.schema import initialize_core
     ],
 )
 def test_execution_constraints_publish_and_continue_through_tracking(
+    paid_pro_quota,
     tmp_path,
     cash,
     planned,

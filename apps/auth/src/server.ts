@@ -1,4 +1,5 @@
 import { SignInCodeAdmission } from "./sign-in-code-admission.js";
+import { researcherPlan } from "./billing-store.js";
 import { createTurnstileVerifier } from "./turnstile.js";
 import { OperatorEmailCode } from "./operator-email-code.js";
 import { EmailCodeDelivery } from "./email-code.js";
@@ -6,7 +7,10 @@ import { serve } from "@hono/node-server";
 
 import { isResearcherActive, ResearcherAccessService } from "./access.js";
 import { createMcpConnectionsApp } from "./mcp-connections.js";
-import { createAuthApp } from "./app.js";
+import { BillingService } from "./billing.js";
+import { readBillingSettings } from "./billing-config.js";
+import { createBillingApp } from "./billing-http.js";
+import { createAuthApp, loadActiveSession } from "./app.js";
 import { createThesisTraceAuth } from "./auth.js";
 import { AuthEventRecorder } from "./auth-events.js";
 import { AuthEndpointRateLimiter } from "./auth-rate-limit.js";
@@ -119,6 +123,12 @@ async function main(): Promise<void> {
       access: researcherAccess,
       proofs: operatorProofs,
     });
+    const billing=new BillingService({pool,settings:readBillingSettings(process.env,settings.environment),publicOrigin:settings.publicOrigin});
+    const billingRoutes=createBillingApp({billing,publicOrigin:settings.publicOrigin,requireResearcher:async(request)=>{
+      const result=await loadActiveSession({getSession:input=>auth.api.getSession(input)},request.headers);
+      if(result.kind!=="active")return Response.json({code:result.kind==="invalid"?"UNAUTHENTICATED":"AUTH_UNAVAILABLE"},{status:result.kind==="invalid"?401:503});
+      return {id:result.user.id,email:result.user.email};
+    }});
     const app = createAuthApp({
       authHandler: (request) =>
         credentialCoordinator.handleAuthRequest(
@@ -135,6 +145,7 @@ async function main(): Promise<void> {
         operatorProofRateLimiter.consume(sessionId, headers),
       getSession: (input) => auth.api.getSession(input),
       isOperator: (researcherId) => operatorDirectory.isOperator(researcherId),
+      researcherPlan: (id) => researcherPlan(pool, id),
       hasOperatorCapability: (principal) =>
         operatorDirectory.hasCapability(principal),
       httpObserver: createAuthHttpObserver(),
@@ -155,7 +166,7 @@ async function main(): Promise<void> {
       readiness: () => checkAuthReadiness(pool),
       revokeOperatorResearcherSessions: (principal, input) =>
         operatorSessionRevocations.revoke(principal, input),
-    }, createMcpConnectionsApp(auth, pool, settings, coordination));
+    }, createMcpConnectionsApp(auth, pool, settings, coordination),billingRoutes);
     const server = serve({
       fetch: app.fetch,
       hostname: settings.host,
@@ -167,6 +178,11 @@ async function main(): Promise<void> {
     }, 24 * 60 * 60 * 1_000);
     cleanupInterval.unref();
 
+    let reconciling=false;
+    const reconcileBilling=async()=>{if(reconciling)return;reconciling=true;try{await billing.reconcile();}finally{reconciling=false;}};
+    backgroundTasks.handler(reconcileBilling());
+    const billingInterval=setInterval(()=>backgroundTasks.handler(reconcileBilling()),30_000);
+    billingInterval.unref();
     let closing = false;
     const close = () => {
       if (closing) {
@@ -174,6 +190,7 @@ async function main(): Promise<void> {
       }
       closing = true;
       clearInterval(cleanupInterval);
+      clearInterval(billingInterval);
       server.close(() => {
         void backgroundTasks
           .drain()

@@ -9,6 +9,7 @@ const AUTH_PATHS = new Set([
 ]);
 
 const PRODUCT_ROOTS = new Set([
+  "/billing",
   "/chat",
   "/data",
   "/research",

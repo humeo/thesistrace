@@ -1,4 +1,5 @@
 export const navigationEn = {
+  billing:"Plan and billing",
   data: "Data",
   research: "Research",
   researchRuns: "Research Runs",
@@ -19,6 +20,7 @@ export const navigationEn = {
 } as const;
 
 export const navigationZh = {
+  billing:"套餐与账单",
   data: "数据",
   research: "研究",
   researchRuns: "研究记录",

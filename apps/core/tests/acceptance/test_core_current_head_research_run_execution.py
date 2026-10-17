@@ -1402,6 +1402,7 @@ def test_tracking_working_cache_failure_is_safe_and_non_authoritative(
 )
 def test_tracking_advance_blocks_one_session_before_creating_an_attempt(
     tmp_path: Path,
+    pro_quota_policy: QuotaPolicy,
 ) -> None:
     settings = replace(
         CoreSettings.from_environment(),
@@ -1505,6 +1506,7 @@ def test_tracking_advance_blocks_one_session_before_creating_an_attempt(
         unchanged_retry_events: list[dict[str, object]] = []
         unchanged_retrier = DailyTrackService(
             runtime.database,
+            quota_policy=lambda _rid: pro_quota_policy,
             publication=runtime.publication,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             generation_store=MountedGenerationStore(settings.data_mount),
@@ -1560,6 +1562,7 @@ def test_tracking_advance_blocks_one_session_before_creating_an_attempt(
 
         retrier = DailyTrackService(
             runtime.database,
+            quota_policy=lambda _rid: pro_quota_policy,
             publication=runtime.publication,
             dataset_lifecycle=DatasetLifecycle(runtime.database, fit_settings.data_mount),
             generation_store=MountedGenerationStore(fit_settings.data_mount),
@@ -1595,6 +1598,7 @@ def test_tracking_advance_blocks_one_session_before_creating_an_attempt(
 )
 def test_tracking_transient_cycle_persists_backoff_rotates_and_requires_retry(
     tmp_path: Path,
+    pro_quota_policy: QuotaPolicy,
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
@@ -1794,6 +1798,7 @@ def test_tracking_transient_cycle_persists_backoff_rotates_and_requires_retry(
 )
 def test_blocked_and_retry_wait_tracks_stop_without_future_attempts(
     tmp_path: Path,
+    pro_quota_policy: QuotaPolicy,
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
@@ -2280,6 +2285,7 @@ def test_industry_admission_requires_only_neutralized_period_coverage(
 )
 def test_fixed_role_worker_replicas_claim_distinct_runs_and_tracks(
     tmp_path: Path,
+    pro_quota_policy: QuotaPolicy,
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
@@ -2591,6 +2597,7 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
         public_run = detail.json()
         assert public_run["status"] == "succeeded"
         assert public_run["batch_id"] is None
+        assert public_run["universe"] == "top300"
         assert set(public_run) == {
             "id",
             "batch_id",
@@ -2602,6 +2609,7 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
             "end_date",
             "formula_summary",
             "research_kind",
+            "universe",
             "key_metrics",
             "input",
             "progress",
@@ -3347,7 +3355,15 @@ def test_delete_races_linearize_with_cancel_and_stop(tmp_path: Path) -> None:
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_current_data_track_limit_releases_capacity_after_stop(tmp_path: Path) -> None:
+def test_current_data_track_limit_releases_capacity_after_stop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Three slots cover active, blocked and stopping occupancy in one race.
+    # Catalog-specific Free/Pro/Max limits have their own billing tests.
+    policy = QuotaPolicy(timezone="Asia/Shanghai", daily_model_budget_nanodollars=1_000_000_000,
+                         daily_run_limit=100, active_daily_track_limit=3)
+    monkeypatch.setattr("thesistrace.entrypoints.runtime.quota_policy_lookup",
+                        lambda _origin: lambda _rid: policy)
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
@@ -3685,6 +3701,7 @@ def test_live_tracking_owner_renews_lease_and_blocks_duplicate_claim(
 )
 def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
     tmp_path: Path,
+    pro_quota_policy: QuotaPolicy,
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)

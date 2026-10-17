@@ -1,8 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { Pool } from "pg";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { initializeAuthSchema } from "./schema-initialize.js";
-import { assertExactCatalog, collectAuthSchemaCatalog, verifyAuthSchema, type AuthSchemaCatalog } from "./schema-contract.js";
+import { assertExactCatalog, collectAuthSchemaCatalog, type AuthSchemaCatalog } from "./schema-contract.js";
 import { AUTH_EMAIL_ONLY_SOURCE, AUTH_EMAIL_ONLY_TARGET, migrateRetiredInvitations } from "./retire-invitations-migration.js";
 
 const pool = new Pool({connectionString: process.env.THESISTRACE_AUTH_TEST_OWNER_DATABASE_URL});
@@ -16,7 +15,7 @@ describe.sequential("Explicit email-only identity upgrade", () => {
     await pool.query("DROP SCHEMA IF EXISTS thesistrace_auth_migrations CASCADE");
     await pool.query("CREATE SCHEMA auth AUTHORIZATION thesistrace_owner");
     await pool.query(await readFile(new URL("../schema/migrations/0002-source-schema.sql", import.meta.url), "utf8"));
-    await pool.query(await readFile(new URL("../schema/grants.sql", import.meta.url), "utf8"));
+    await pool.query(await readFile(new URL("../schema/migrations/0003-source-grants.sql", import.meta.url), "utf8"));
     await pool.query("GRANT SELECT, INSERT, UPDATE, DELETE ON auth.researcher_invitation, auth.password_reset TO auth_runtime");
     await pool.query("INSERT INTO auth.schema_contract(singleton,schema_fingerprint) VALUES (TRUE,$1)", [AUTH_EMAIL_ONLY_SOURCE]);
     await pool.query(`INSERT INTO auth."user" (id,name,email,"emailVerified",active) VALUES ($1,'Existing','existing@example.com',TRUE,TRUE)`, [userId]);
@@ -42,8 +41,8 @@ describe.sequential("Explicit email-only identity upgrade", () => {
     const retired = await Promise.all(["researcher_invitation", "password_reset"].map(table => pool.query(`SELECT * FROM auth.${table}`)));
     expect((await migrateRetiredInvitations(pool)).status).toBe("validated");
     expect((await migrateRetiredInvitations(pool, true)).status).toBe("applied");
-    await verifyAuthSchema(pool);
-    await initializeAuthSchema(pool);
+    const target = JSON.parse(await readFile(new URL("../schema/migrations/0003-source-catalog.json", import.meta.url), "utf8")) as AuthSchemaCatalog;
+    assertExactCatalog(target, await collectAuthSchemaCatalog(pool));
     expect((await migrateRetiredInvitations(pool, true)).status).toBe("already_current");
     for (const [index, table] of ["user", "session", "account"].entries()) {
       expect((await pool.query(`SELECT * FROM auth.${table}`)).rows).toEqual(preserved[index]!.rows);

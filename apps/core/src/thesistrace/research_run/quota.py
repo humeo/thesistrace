@@ -14,7 +14,7 @@ def daily_run_count(transaction: PostgresTransaction, researcher_id: UUID, timez
     row = transaction.execute(
         """
         SELECT count(*) AS count FROM research_runs.run_ownership
-        WHERE researcher_id = %s
+        WHERE researcher_id = %s AND quota_state <> 'released'
           AND created_at >= date_trunc('day', now() AT TIME ZONE %s)
                             AT TIME ZONE %s
           AND created_at < (date_trunc('day', now() AT TIME ZONE %s)

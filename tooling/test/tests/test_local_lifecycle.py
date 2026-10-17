@@ -26,6 +26,7 @@ def _fake_development_docker(tmp_path: Path) -> tuple[Path, Path, dict[str, str]
         "thesistrace-dev_batch-attempt-control",
         "thesistrace-dev_benchmark-data",
         "thesistrace-dev_canonical-data",
+        "thesistrace-dev_model-settlements",
         "thesistrace-dev_postgres-data",
         "thesistrace-dev_rustfs-data",
     ):
@@ -61,6 +62,7 @@ if "up" in arguments:
         "thesistrace-dev_batch-attempt-control",
         "thesistrace-dev_benchmark-data",
         "thesistrace-dev_canonical-data",
+        "thesistrace-dev_model-settlements",
         "thesistrace-dev_postgres-data",
         "thesistrace-dev_rustfs-data",
     ):
@@ -638,13 +640,14 @@ def test_development_reset_recreates_only_product_state_volumes(tmp_path: Path) 
     assert canonical_head.read_text() == "frozen-dataset-head"
     assert benchmark_snapshot.read_text() == "frozen-benchmark-snapshot"
     assert (volume_root / "thesistrace-dev_canonical-data" / "preserved-marker").exists()
-    for volume in ("batch-attempt-control", "postgres-data", "rustfs-data"):
+    for volume in ("batch-attempt-control", "model-settlements", "postgres-data", "rustfs-data"):
         recreated = volume_root / f"thesistrace-dev_{volume}"
         assert recreated.is_dir()
         assert not (recreated / "preserved-marker").exists()
     commands = command_log.read_text()
     assert "down --remove-orphans" in commands
     assert "down --volumes" not in commands
+    assert "volume rm thesistrace-dev_model-settlements" in commands
     assert "volume rm thesistrace-dev_postgres-data" in commands
     assert "volume rm thesistrace-dev_rustfs-data" in commands
     assert "volume rm thesistrace-dev_batch-attempt-control" in commands
@@ -670,6 +673,7 @@ def test_development_erase_removes_every_development_volume(tmp_path: Path) -> N
     commands = command_log.read_text()
     assert "down --remove-orphans" in commands
     assert "down --volumes" not in commands
+    assert "volume rm thesistrace-dev_model-settlements" in commands
     assert "volume rm thesistrace-dev_postgres-data" in commands
     assert "volume rm thesistrace-dev_rustfs-data" in commands
     assert "volume rm thesistrace-dev_batch-attempt-control" in commands
@@ -795,6 +799,7 @@ def test_core_has_one_operational_output_schema_and_no_log_files() -> None:
         "migrations/unified_refresh_0006.py",
         "migrations/independent_strategies_0007.py",  # Explicit migration CLI JSON receipt.
         "migrations/execution_timing_0009.py",  # Explicit migration CLI JSON receipt.
+        "migrations/billing_0011.py",  # Explicit quota migration receipt.
         "migrations/research_search_0010.py",  # Explicit migration CLI JSON receipt.
         "migrations/financial_disclosures_0005.py",  # Explicit data-preserving migration receipt.
         "migrations/rank_ic_0001.py",  # Explicit migration CLI JSON receipt.

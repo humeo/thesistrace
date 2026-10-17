@@ -28,6 +28,8 @@ COPY --from=build --chown=node:node /app/apps/agent/dist ./dist
 COPY --from=build --chown=node:node /app/apps/agent/schema ./schema
 COPY --from=build --chown=node:node /app/apps/agent/fixtures ./fixtures
 
+RUN mkdir -p /app/agent/state && chown node:node /app/agent/state && chmod 700 /app/agent/state
+
 USER node
 EXPOSE 8400
 CMD ["node", "dist/server.js"]

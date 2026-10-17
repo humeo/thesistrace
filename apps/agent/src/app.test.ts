@@ -29,6 +29,7 @@ function dependencies(
   overrides: Partial<AgentAppDependencies> = {},
 ): AgentAppDependencies {
   return {
+    billingUsage:vi.fn(async()=>({actual_nanodollars:0,reserved_nanodollars:0,remaining_nanodollars:1000000000,limit_nanodollars:1000000000,resets_at:"2026-10-18T00:00:00+08:00",timezone:"Asia/Shanghai"})),
     contextWindow: vi.fn(async (modelKey) => ({ model_key: modelKey, context_window: 258_000, input_tokens: null, measured_at: null })),
     mcpConnection: vi.fn(async () => ({ checked_at: new Date().toISOString(), tools: [] })),
     commandReceipt: vi.fn(async (_threadId, commandId) => ({

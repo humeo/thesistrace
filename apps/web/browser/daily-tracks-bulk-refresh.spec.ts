@@ -184,3 +184,34 @@ test("puts the return chart before strategy progress and opens holdings and upda
   await expect(page.getByRole("button", { name: "更新结果", exact: true })).toHaveAttribute("aria-expanded", "true");
   expect(commands).toBe(0);
 });
+
+test("keeps only the selected downgraded slot when updating all strategies",async({page})=>{
+ await page.setViewportSize({width:1440,height:960});
+ const tracks=['first','second'].map(name=>({...structuredClone(exampleDailyTrack),id:`track_${name}`,seed_name:name,lag_sessions:1}));
+ let selected:string[]|null=null;
+ const admitted:string[]=[];
+ await page.route('https://daily-quota.test/**',route=>{
+  const path=new URL(route.request().url()).pathname;
+  if(path==='/')return route.fulfill({contentType:'text/html',body:'<div id="root"></div>'});
+  if(path==='/api/daily-tracks')return route.fulfill({json:{items:tracks.map(track=>({id:track.id,seed_name:track.seed_name,status:track.status,origin_session:"2026-08-01",strategy_session:track.strategy_session})),next_cursor:null}});
+  if(path==='/api/daily-tracks/comparison')return route.fulfill({json:{items:tracks.map(track=>({id:track.id,values:comparisonValues(track)}))}});
+  const id=path.split('/')[3];const track=tracks.find(item=>item.id===id)!;
+  if(path.endsWith('/refresh')){
+   const body=route.request().postDataJSON();
+   if(body.selected_track_ids)selected=body.selected_track_ids;
+   if(!selected)return route.fulfill({status:409,json:{detail:{code:'TRACK_SELECTION_REQUIRED',limit:1,selected_track_ids:tracks.map(item=>item.id)}}});
+   if(!selected.includes(id))return route.fulfill({status:409,json:{detail:{code:'TRACK_NOT_SELECTED',limit:1,selected_track_ids:selected}}});
+   admitted.push(id);track.progress.phase='queued';
+   return route.fulfill({status:202,json:{id,status:'active'}});
+  }
+  return route.fulfill({json:track});
+ });
+ await page.goto('https://daily-quota.test/?list');await page.addStyleTag({content:styles});await page.addScriptTag({content:script});
+ await page.getByRole('button',{name:'Update all strategies',exact:true}).click();
+ const dialog=page.getByRole('dialog',{name:'Choose tracks to continue'});
+ await expect(dialog).toContainText('Stop is permanent');
+ await dialog.getByRole('checkbox',{name:'second',exact:true}).check();
+ await dialog.getByRole('button',{name:'Keep selection and continue',exact:true}).click();
+ await expect(page.getByRole('status')).toContainText('1 queued');
+ expect(admitted).toEqual(['track_second']);expect(selected).toEqual(['track_second']);
+});

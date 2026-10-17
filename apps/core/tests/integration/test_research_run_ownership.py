@@ -333,8 +333,21 @@ def test_daily_run_quota_is_atomic_retained_and_operator_exempt(ownership_databa
     service.cancel(
         RESEARCHER_A.researcher_id, replay.id, ResearchRunCancelCommand(request_id="quota-cancel")
     )
+    admitted = service.admit(RESEARCHER_A.researcher_id, _command("after-cancel"))
+    with ownership_database.transaction() as tx:
+        tx.execute("UPDATE research_runs.runs SET status='running' WHERE id=%s", (admitted.id,))
+        tx.execute("UPDATE research_runs.runs SET status='failed' WHERE id=%s", (admitted.id,))
+    replacement = service.admit(RESEARCHER_A.researcher_id, _command("after-failure"))
+    with ownership_database.transaction() as tx:
+        tx.execute("DELETE FROM research_runs.admission_requests WHERE run_id=%s", (admitted.id,))
+        tx.execute("DELETE FROM research_runs.runs WHERE id=%s", (admitted.id,))
+        tx.execute("UPDATE research_runs.runs SET status='running' WHERE id=%s", (replacement.id,))
+    service.cancel(RESEARCHER_A.researcher_id,replacement.id,ResearchRunCancelCommand(request_id="started-cancel"))
     with pytest.raises(ResearchRunAdmissionRejected):
-        service.admit(RESEARCHER_A.researcher_id, _command("after-cancel"))
+        service.admit(RESEARCHER_A.researcher_id,_command("after-started-cancel"))
+    assert service.quota_usage(RESEARCHER_A.researcher_id)['research'] == dict(
+        actual=1, reserved=2, remaining=0, limit=3,
+    )
     for index in range(12):
         service.admit(RESEARCHER_B.researcher_id, _command(f"operator-{index}"))
     with ownership_database.transaction() as transaction:
@@ -344,6 +357,13 @@ def test_daily_run_quota_is_atomic_retained_and_operator_exempt(ownership_databa
             (RESEARCHER_A.researcher_id,),
         )
     assert service.admit(RESEARCHER_A.researcher_id, _command("next-day")).id
+    for index in range(2):
+        service.admit(RESEARCHER_A.researcher_id, _command(f"today-{index}"))
+    old = service.admit(RESEARCHER_A.researcher_id, _command("quota-1"))
+    with ownership_database.transaction() as tx:
+        tx.execute("UPDATE research_runs.runs SET status='failed' WHERE id=%s", (old.id,))
+    with pytest.raises(ResearchRunAdmissionRejected):
+        service.admit(RESEARCHER_A.researcher_id, _command("no-new-day-compensation"))
 
 
 def _drop_core_schemas(database_url: str) -> None:
@@ -574,3 +594,43 @@ def test_metric_cursor_traverses_numeric_values_ties_and_nulls(ranked_records, d
         if cursor is None:
             break
     assert found == tied
+
+
+def test_tracking_selection_is_persistent_and_cannot_rotate_free_slots(ownership_database):
+    from thesistrace.daily_track.quota import TrackingSelectionError, admit_tracking_action
+
+    ResearcherService(ownership_database).bootstrap(RESEARCHER_A)
+    rid = RESEARCHER_A.researcher_id
+    with ownership_database.transaction() as tx:
+        for i in range(3):
+            tx.execute("INSERT INTO research_runs.run_ownership(researcher_id,run_id) "
+                       "VALUES (%s,%s)", (rid, f"seed-{i}"))
+            tx.execute("INSERT INTO "
+                       "daily_tracks.tracks(researcher_id,id,status,seed_run_id,origin) "
+                       "VALUES (%s,%s,'active',%s,'{}')", (rid, f"track-{i}", f"seed-{i}"))
+    with pytest.raises(TrackingSelectionError) as initial:
+        with ownership_database.transaction() as tx:
+            admit_tracking_action(tx, rid, "track-0", 1)
+    assert initial.value.code == "TRACK_SELECTION_REQUIRED"
+    with ownership_database.transaction() as tx:
+        admit_tracking_action(tx, rid, "track-0", 1, ["track-0"])
+    with pytest.raises(TrackingSelectionError):
+        with ownership_database.transaction() as tx:
+            admit_tracking_action(tx, rid, "track-1", 1, ["track-1"])
+    # Already selected work remains possible; stopping must finish before reuse.
+    with ownership_database.transaction() as tx:
+        admit_tracking_action(tx, rid, "track-0", 1)
+        tx.execute("UPDATE daily_tracks.tracks SET status='stopping' WHERE id='track-0'")
+    with pytest.raises(TrackingSelectionError):
+        with ownership_database.transaction() as tx:
+            admit_tracking_action(tx, rid, "track-1", 1)
+    with ownership_database.transaction() as tx:
+        tx.execute("UPDATE daily_tracks.tracks SET status='stopped' WHERE id='track-0'")
+        admit_tracking_action(tx, rid, "track-1", 1)
+    # Upgrade adds capacity; it doesn't allow deselecting a still active slot.
+    with ownership_database.transaction() as tx:
+        admit_tracking_action(tx, rid, "track-2", 3, ["track-1", "track-2"])
+        active = tx.execute(
+            "SELECT count(*) n FROM daily_tracks.tracks WHERE status='active'"
+        ).fetchone()
+        assert active["n"] == 2

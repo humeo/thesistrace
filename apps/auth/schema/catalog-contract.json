@@ -129,6 +129,334 @@
       "type": "text"
     },
     {
+      "default": null,
+      "name": "researcher_id",
+      "notNull": true,
+      "position": 1,
+      "relation": "billing_account",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "customer_id",
+      "notNull": false,
+      "position": 2,
+      "relation": "billing_account",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "subscription_id",
+      "notNull": false,
+      "position": 3,
+      "relation": "billing_account",
+      "type": "text"
+    },
+    {
+      "default": "gen_random_uuid()",
+      "name": "checkout_request_id",
+      "notNull": true,
+      "position": 4,
+      "relation": "billing_account",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "checkout_plan",
+      "notNull": false,
+      "position": 5,
+      "relation": "billing_account",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "checkout_id",
+      "notNull": false,
+      "position": 6,
+      "relation": "billing_account",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "checkout_url",
+      "notNull": false,
+      "position": 7,
+      "relation": "billing_account",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "provider_status",
+      "notNull": false,
+      "position": 8,
+      "relation": "billing_account",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "renewal_plan",
+      "notNull": false,
+      "position": 9,
+      "relation": "billing_account",
+      "type": "text"
+    },
+    {
+      "default": "now()",
+      "name": "updated_at",
+      "notNull": true,
+      "position": 10,
+      "relation": "billing_account",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "transaction_id",
+      "notNull": true,
+      "position": 1,
+      "relation": "billing_adjustment",
+      "type": "text"
+    },
+    {
+      "default": "0",
+      "name": "refunded_amount",
+      "notNull": true,
+      "position": 2,
+      "relation": "billing_adjustment",
+      "type": "integer"
+    },
+    {
+      "default": "false",
+      "name": "disputed",
+      "notNull": true,
+      "position": 3,
+      "relation": "billing_adjustment",
+      "type": "boolean"
+    },
+    {
+      "default": null,
+      "name": "dispute_resolved_at",
+      "notNull": false,
+      "position": 4,
+      "relation": "billing_adjustment",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "now()",
+      "name": "updated_at",
+      "notNull": true,
+      "position": 5,
+      "relation": "billing_adjustment",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "relation": "billing_command",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "researcher_id",
+      "notNull": true,
+      "position": 2,
+      "relation": "billing_command",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "kind",
+      "notNull": true,
+      "position": 3,
+      "relation": "billing_command",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "plan_key",
+      "notNull": false,
+      "position": 4,
+      "relation": "billing_command",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "status",
+      "notNull": true,
+      "position": 5,
+      "relation": "billing_command",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "result",
+      "notNull": false,
+      "position": 6,
+      "relation": "billing_command",
+      "type": "jsonb"
+    },
+    {
+      "default": "now()",
+      "name": "created_at",
+      "notNull": true,
+      "position": 7,
+      "relation": "billing_command",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "now()",
+      "name": "updated_at",
+      "notNull": true,
+      "position": 8,
+      "relation": "billing_command",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "relation": "billing_event",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "event_type",
+      "notNull": true,
+      "position": 2,
+      "relation": "billing_event",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "raw_body",
+      "notNull": true,
+      "position": 3,
+      "relation": "billing_event",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "body_sha256",
+      "notNull": true,
+      "position": 4,
+      "relation": "billing_event",
+      "type": "bytea"
+    },
+    {
+      "default": "now()",
+      "name": "received_at",
+      "notNull": true,
+      "position": 5,
+      "relation": "billing_event",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "processed_at",
+      "notNull": false,
+      "position": 6,
+      "relation": "billing_event",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "0",
+      "name": "attempts",
+      "notNull": true,
+      "position": 7,
+      "relation": "billing_event",
+      "type": "integer"
+    },
+    {
+      "default": null,
+      "name": "failure_code",
+      "notNull": false,
+      "position": 8,
+      "relation": "billing_event",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "transaction_id",
+      "notNull": true,
+      "position": 1,
+      "relation": "billing_payment",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "researcher_id",
+      "notNull": true,
+      "position": 2,
+      "relation": "billing_payment",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "subscription_id",
+      "notNull": true,
+      "position": 3,
+      "relation": "billing_payment",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "plan_key",
+      "notNull": true,
+      "position": 4,
+      "relation": "billing_payment",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "starts_at",
+      "notNull": true,
+      "position": 5,
+      "relation": "billing_payment",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "ends_at",
+      "notNull": true,
+      "position": 6,
+      "relation": "billing_payment",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "amount",
+      "notNull": true,
+      "position": 7,
+      "relation": "billing_payment",
+      "type": "integer"
+    },
+    {
+      "default": "0",
+      "name": "refunded_amount",
+      "notNull": true,
+      "position": 8,
+      "relation": "billing_payment",
+      "type": "integer"
+    },
+    {
+      "default": "false",
+      "name": "disputed",
+      "notNull": true,
+      "position": 9,
+      "relation": "billing_payment",
+      "type": "boolean"
+    },
+    {
+      "default": "now()",
+      "name": "created_at",
+      "notNull": true,
+      "position": 10,
+      "relation": "billing_payment",
+      "type": "timestamp with time zone"
+    },
+    {
       "default": "gen_random_uuid()",
       "name": "id",
       "notNull": true,
@@ -1337,6 +1665,156 @@
       "type": "c"
     },
     {
+      "definition": "UNIQUE (checkout_id)",
+      "name": "billing_account_checkout_id_key",
+      "relation": "billing_account",
+      "type": "u"
+    },
+    {
+      "definition": "CHECK ((checkout_plan = ANY (ARRAY['pro'::text, 'max'::text])))",
+      "name": "billing_account_checkout_plan_check",
+      "relation": "billing_account",
+      "type": "c"
+    },
+    {
+      "definition": "UNIQUE (checkout_request_id)",
+      "name": "billing_account_checkout_request_id_key",
+      "relation": "billing_account",
+      "type": "u"
+    },
+    {
+      "definition": "UNIQUE (customer_id)",
+      "name": "billing_account_customer_id_key",
+      "relation": "billing_account",
+      "type": "u"
+    },
+    {
+      "definition": "PRIMARY KEY (researcher_id)",
+      "name": "billing_account_pkey",
+      "relation": "billing_account",
+      "type": "p"
+    },
+    {
+      "definition": "CHECK ((renewal_plan = ANY (ARRAY['pro'::text, 'max'::text])))",
+      "name": "billing_account_renewal_plan_check",
+      "relation": "billing_account",
+      "type": "c"
+    },
+    {
+      "definition": "FOREIGN KEY (researcher_id) REFERENCES auth.\"user\"(id)",
+      "name": "billing_account_researcher_id_fkey",
+      "relation": "billing_account",
+      "type": "f"
+    },
+    {
+      "definition": "UNIQUE (subscription_id)",
+      "name": "billing_account_subscription_id_key",
+      "relation": "billing_account",
+      "type": "u"
+    },
+    {
+      "definition": "PRIMARY KEY (transaction_id)",
+      "name": "billing_adjustment_pkey",
+      "relation": "billing_adjustment",
+      "type": "p"
+    },
+    {
+      "definition": "CHECK ((refunded_amount >= 0))",
+      "name": "billing_adjustment_refunded_amount_check",
+      "relation": "billing_adjustment",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK (((kind = 'cancel'::text) = (plan_key IS NULL)))",
+      "name": "billing_command_check",
+      "relation": "billing_command",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK ((kind = ANY (ARRAY['checkout'::text, 'change'::text, 'cancel'::text])))",
+      "name": "billing_command_kind_check",
+      "relation": "billing_command",
+      "type": "c"
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "billing_command_pkey",
+      "relation": "billing_command",
+      "type": "p"
+    },
+    {
+      "definition": "CHECK ((plan_key = ANY (ARRAY['pro'::text, 'max'::text])))",
+      "name": "billing_command_plan_key_check",
+      "relation": "billing_command",
+      "type": "c"
+    },
+    {
+      "definition": "FOREIGN KEY (researcher_id) REFERENCES auth.\"user\"(id)",
+      "name": "billing_command_researcher_id_fkey",
+      "relation": "billing_command",
+      "type": "f"
+    },
+    {
+      "definition": "CHECK ((status = ANY (ARRAY['prepared'::text, 'dispatched'::text, 'completed'::text, 'uncertain'::text])))",
+      "name": "billing_command_status_check",
+      "relation": "billing_command",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK ((attempts >= 0))",
+      "name": "billing_event_attempts_check",
+      "relation": "billing_event",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK ((octet_length(body_sha256) = 32))",
+      "name": "billing_event_body_sha256_check",
+      "relation": "billing_event",
+      "type": "c"
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "billing_event_pkey",
+      "relation": "billing_event",
+      "type": "p"
+    },
+    {
+      "definition": "CHECK ((amount > 0))",
+      "name": "billing_payment_amount_check",
+      "relation": "billing_payment",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK (((refunded_amount >= 0) AND (refunded_amount <= amount)))",
+      "name": "billing_payment_check",
+      "relation": "billing_payment",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK ((ends_at > starts_at))",
+      "name": "billing_payment_check1",
+      "relation": "billing_payment",
+      "type": "c"
+    },
+    {
+      "definition": "PRIMARY KEY (transaction_id)",
+      "name": "billing_payment_pkey",
+      "relation": "billing_payment",
+      "type": "p"
+    },
+    {
+      "definition": "CHECK ((plan_key = ANY (ARRAY['pro'::text, 'max'::text])))",
+      "name": "billing_payment_plan_key_check",
+      "relation": "billing_payment",
+      "type": "c"
+    },
+    {
+      "definition": "FOREIGN KEY (researcher_id) REFERENCES auth.\"user\"(id)",
+      "name": "billing_payment_researcher_id_fkey",
+      "relation": "billing_payment",
+      "type": "f"
+    },
+    {
       "definition": "FOREIGN KEY (\"clientId\") REFERENCES auth.\"oauthClient\"(\"clientId\") ON DELETE CASCADE",
       "name": "oauthAccessToken_clientId_fkey",
       "relation": "oauthAccessToken",
@@ -1683,6 +2161,66 @@
       "relation": "auth_secret_contract"
     },
     {
+      "definition": "CREATE UNIQUE INDEX billing_account_checkout_id_key ON auth.billing_account USING btree (checkout_id)",
+      "name": "billing_account_checkout_id_key",
+      "relation": "billing_account"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX billing_account_checkout_request_id_key ON auth.billing_account USING btree (checkout_request_id)",
+      "name": "billing_account_checkout_request_id_key",
+      "relation": "billing_account"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX billing_account_customer_id_key ON auth.billing_account USING btree (customer_id)",
+      "name": "billing_account_customer_id_key",
+      "relation": "billing_account"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX billing_account_pkey ON auth.billing_account USING btree (researcher_id)",
+      "name": "billing_account_pkey",
+      "relation": "billing_account"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX billing_account_subscription_id_key ON auth.billing_account USING btree (subscription_id)",
+      "name": "billing_account_subscription_id_key",
+      "relation": "billing_account"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX billing_adjustment_pkey ON auth.billing_adjustment USING btree (transaction_id)",
+      "name": "billing_adjustment_pkey",
+      "relation": "billing_adjustment"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX billing_command_open_per_researcher ON auth.billing_command USING btree (researcher_id) WHERE (status = ANY (ARRAY['prepared'::text, 'dispatched'::text, 'uncertain'::text]))",
+      "name": "billing_command_open_per_researcher",
+      "relation": "billing_command"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX billing_command_pkey ON auth.billing_command USING btree (id)",
+      "name": "billing_command_pkey",
+      "relation": "billing_command"
+    },
+    {
+      "definition": "CREATE INDEX billing_event_pending ON auth.billing_event USING btree (received_at) WHERE (processed_at IS NULL)",
+      "name": "billing_event_pending",
+      "relation": "billing_event"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX billing_event_pkey ON auth.billing_event USING btree (id)",
+      "name": "billing_event_pkey",
+      "relation": "billing_event"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX billing_payment_pkey ON auth.billing_payment USING btree (transaction_id)",
+      "name": "billing_payment_pkey",
+      "relation": "billing_payment"
+    },
+    {
+      "definition": "CREATE INDEX billing_payment_researcher_period ON auth.billing_payment USING btree (researcher_id, ends_at)",
+      "name": "billing_payment_researcher_period",
+      "relation": "billing_payment"
+    },
+    {
       "definition": "CREATE INDEX \"oauthAccessToken_authorizationCodeId_idx\" ON auth.\"oauthAccessToken\" USING btree (\"authorizationCodeId\")",
       "name": "oauthAccessToken_authorizationCodeId_idx",
       "relation": "oauthAccessToken"
@@ -1922,6 +2460,46 @@
       "forceRowSecurity": false,
       "kind": "r",
       "name": "auth_secret_contract",
+      "owner": "thesistrace_owner",
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "billing_account",
+      "owner": "thesistrace_owner",
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "billing_adjustment",
+      "owner": "thesistrace_owner",
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "billing_command",
+      "owner": "thesistrace_owner",
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "billing_event",
+      "owner": "thesistrace_owner",
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "billing_payment",
       "owner": "thesistrace_owner",
       "persistence": "p",
       "rowSecurity": false

@@ -1,3 +1,4 @@
+import {handleCreemFake} from "./creem-fake.mjs";
 import {handleTurnstileFake} from "./turnstile-fake.mjs";
 import { createServer } from "node:http";
 
@@ -12,6 +13,7 @@ const emails = [];
 
 const server = createServer(async (request, response) => {
   if (await handleTurnstileFake(request, response)) return;
+  if (await handleCreemFake(request,response)) return;
   const url = new URL(request.url ?? "/", "http://resend-fake.test");
   if (request.method === "GET" && url.pathname === "/health/live") {
     return json(response, 200, { status: "ok" });

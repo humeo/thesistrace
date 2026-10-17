@@ -187,12 +187,14 @@ class RetryDailyTrackCommand(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     request_id: RequestId
+    selected_track_ids: Annotated[list[RequestId], Field(max_length=50)] | None = None
 
 
 class RefreshDailyTrackCommand(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     request_id: RequestId
+    selected_track_ids: Annotated[list[RequestId], Field(max_length=50)] | None = None
 
 
 class StopDailyTrackCommand(BaseModel):

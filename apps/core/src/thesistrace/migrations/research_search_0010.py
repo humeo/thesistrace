@@ -14,7 +14,7 @@ from psycopg import sql
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace._postgres.schema import _fingerprint
-from thesistrace.entrypoints.schema import CORE_SCHEMA_DEFINITIONS
+from thesistrace.migrations.billing_0011 import release_schemas
 from thesistrace.migrations.financial_indicator import _shape
 
 SOURCE = "d6ee5f41c2c3c9fa8a49d5adf530eb4e98c9f9c8cb3fd5fff1408a1a157115a9"
@@ -67,10 +67,11 @@ def _verify_structure(tx, statement, *, target):
 
 
 def migrate(database: PostgresDatabase, *, apply: bool = False) -> dict:
-    if _fingerprint(CORE_SCHEMA_DEFINITIONS) != TARGET:
+    definitions = release_schemas("0011-source.zip")
+    if _fingerprint(definitions) != TARGET:
         raise ValueError("Migration target does not match this checkout")
     source = files(__package__).joinpath("0010_source_research_run.sql").read_text()
-    target = next(d.statement for d in CORE_SCHEMA_DEFINITIONS if d.name == "research_runs")
+    target = next(d.statement for d in definitions if d.name == "research_runs")
     with database.transaction() as tx:
         tx.execute("SET LOCAL lock_timeout = '5s'")
         tx.execute("SET LOCAL statement_timeout = '120s'")

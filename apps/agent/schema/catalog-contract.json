@@ -1098,6 +1098,30 @@
     },
     {
       "default": null,
+      "name": "run_id",
+      "notNull": false,
+      "position": 7,
+      "relation": "model_charge",
+      "type": "text"
+    },
+    {
+      "default": "'reserved'::text",
+      "name": "settlement_state",
+      "notNull": true,
+      "position": 8,
+      "relation": "model_charge",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "finished_at",
+      "notNull": false,
+      "position": 9,
+      "relation": "model_charge",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
       "name": "thread_id",
       "notNull": true,
       "position": 1,
@@ -1645,6 +1669,12 @@
     {
       "definition": "CHECK ((reserved_nanodollars >= 0))",
       "name": "model_charge_reserved_nanodollars_check",
+      "relation": "model_charge",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK ((settlement_state = ANY (ARRAY['reserved'::text, 'settled'::text, 'absorbed'::text])))",
+      "name": "model_charge_settlement_state_check",
       "relation": "model_charge",
       "type": "c"
     },

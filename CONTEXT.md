@@ -955,3 +955,79 @@ _避免混用_: Industry Classification, Industry Neutralization, published indu
 The optional cross-sectional demeaning of Alpha Values within each instrument's
 point-in-time SW2021 L1 industry.
 _避免混用_: Separate Research Kind, automatic neutralization
+
+## Researcher Plans and Subscriptions
+
+**Researcher Plan**:
+The free or paid offering that defines a Researcher's permitted Research,
+Daily Tracking, and Research Agent usage, with shared product capabilities across plans.
+_避免混用_: ResearchSpec, Research Execution Opportunity, team plan
+
+**Researcher Quota**:
+The personal usage and capacity limits assigned to one Researcher by their
+Researcher Plan, shared by their direct actions and actions delegated to a Research Agent.
+_避免混用_: Usage already consumed, Research Execution Opportunity, model provider balance
+
+**Researcher Subscription**:
+A recurring monthly purchase of a Researcher Plan for exactly one
+Researcher, who may have only one effective paid subscription at a time and cannot
+share or transfer its Researcher Quota.
+_避免混用_: Login Session, Research Ownership, shared team subscription
+
+**Free Researcher Plan**:
+A Researcher Plan providing ongoing, limited Research, Daily Tracking, and
+Research Agent use without a subscription payment.
+_避免混用_: Time-limited trial, paid Researcher Subscription
+
+**Researcher Quota Day**:
+The Asia/Shanghai calendar day to which a Researcher's research submission and
+AI compute allowances apply, independently of monthly subscription billing.
+_避免混用_: Billing period, Research Session, rolling twenty-four-hour allowance
+
+**Research Run Allowance**:
+The daily allowance for quota-consuming ResearchRuns, counting each Research
+Batch Item separately and excluding failed ResearchRuns from consumption.
+_避免混用_: Raw submission count, Research Batch count, Research Execution Opportunity
+
+**Research Quota Reservation**:
+The portion of Research Run Allowance temporarily held by an admitted unfinished
+ResearchRun, released without consumption when that ResearchRun ultimately fails.
+_避免混用_: Confirmed consumption, extra compensation allowance, another attempt of the same ResearchRun
+
+**AI Compute Budget**:
+The US-dollar-denominated allowance for a Researcher's model usage within one
+Researcher Quota Day, including generation, memory processing, and title generation.
+Costs finally assigned to the platform are excluded from this allowance.
+_避免混用_: Message count, Token allowance, model provider balance
+
+**AI Budget Reservation**:
+The portion of AI Compute Budget held for a model call whose actual usage has not
+yet been settled, distinct from confirmed consumption.
+_避免混用_: Confirmed model cost, subscription payment, additional allowance
+
+**DailyTrack Capacity**:
+The number of DailyTracks entitled to further tracking under a Researcher Plan;
+retained DailyTracks can exceed this number after a plan reduction.
+_避免混用_: Retained DailyTrack count, DailyTrack Refresh count, daily creation allowance
+
+**DailyTrack Selection**:
+The Researcher's persistent choice of retained DailyTracks entitled to further
+tracking within their current DailyTrack Capacity after a plan reduction.
+Unselected tracks remain retained without permission for further advances.
+_避免混用_: DailyTrack Stop, DailyTrack Deletion, execution concurrency
+
+**Subscription Expiry**:
+The end of a Researcher's paid plan entitlement and return to the Free Researcher
+Plan, preserving Research Ownership and access to retained research results.
+_避免混用_: Researcher Deactivation, Research Deletion, DailyTrack Stop, cancellation request
+
+**Paid Plan Entitlement**:
+A Researcher's confirmed right to a Researcher Plan's allowances for a paid
+period, which can differ from the plan selected for the next billing period.
+Its availability depends on the supporting payment, independently of other paid periods.
+_避免混用_: Checkout completion page, next renewal plan, Research Ownership
+
+**Scheduled Plan Downgrade**:
+A lower Researcher Plan chosen for the next billing period while the current
+Paid Plan Entitlement remains available until its paid period ends.
+_避免混用_: Immediate entitlement reduction, subscription cancellation, quota reset

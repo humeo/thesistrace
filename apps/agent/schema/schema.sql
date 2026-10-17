@@ -4,7 +4,10 @@ CREATE TABLE agent.model_charge (
     budget_day date NOT NULL,
     reserved_nanodollars bigint NOT NULL CHECK (reserved_nanodollars >= 0),
     actual_nanodollars bigint CHECK (actual_nanodollars >= 0),
-    created_at timestamp with time zone DEFAULT now() NOT NULL
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    run_id text,
+    settlement_state text DEFAULT 'reserved' NOT NULL CHECK (settlement_state IN ('reserved','settled','absorbed')),
+    finished_at timestamp with time zone
 );
 CREATE INDEX model_charge_researcher_day ON agent.model_charge (researcher_id, budget_day);
 

@@ -150,6 +150,7 @@ class _DeterministicOAuthIssuer:
 
 
 def test_mounted_oauth_streamable_http_read_loop_and_fail_closed_boundaries(
+    paid_pro_quota,
     tmp_path: Path,
 ) -> None:
     settings = isolated_core_settings(tmp_path / "data")

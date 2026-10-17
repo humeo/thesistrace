@@ -59,6 +59,7 @@ The current Strategy contract in [ADR-0250](0250-admit-strategy-programs-with-ex
 - [ADR-0233 — Separate Better Auth identity from Core Research authorization](0233-separate-better-auth-identity-from-core-research-authorization.md)
 - [ADR-0239 — Grant one Operator capability without general RBAC](0239-expose-one-capability-gated-operator-console.md)
 - [ADR-0241 — Keep Operator authority split between Auth and Core](0241-keep-operator-authority-split-between-auth-and-core.md)
+- [ADR-0261 — Keep paid entitlements in Auth and usage with execution owners](0261-keep-paid-entitlements-in-auth-and-usage-with-execution-owners.md)
 
 ## Frontend presentation
 

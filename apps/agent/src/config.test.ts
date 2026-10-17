@@ -20,6 +20,7 @@ const environment = {
   THESISTRACE_AGENT_DATABASE_URL:
     "postgresql://agent_runtime:agent-password@postgres:5432/thesistrace",
   THESISTRACE_AGENT_MODEL_REGISTRY: registry,
+  THESISTRACE_AGENT_MODEL_SETTLEMENT_PATH:"/app/agent/state/model-settlements.sqlite",
   THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET: "scripted-test-secret",
   THESISTRACE_AUTH_INTERNAL_ORIGIN: "http://auth:8200",
   THESISTRACE_AGENT_RUN_MAX_WALL_SECONDS: "300",
@@ -58,6 +59,7 @@ describe("Agent Host configuration", () => {
     "THESISTRACE_AGENT_BUILD_REVISION",
     "THESISTRACE_AGENT_DATABASE_URL",
     "THESISTRACE_AGENT_MODEL_REGISTRY",
+    "THESISTRACE_AGENT_MODEL_SETTLEMENT_PATH",
     "THESISTRACE_AUTH_INTERNAL_ORIGIN",
     "THESISTRACE_AGENT_RUN_MAX_WALL_SECONDS",
     "THESISTRACE_ENVIRONMENT",
@@ -175,3 +177,5 @@ describe("Agent Host configuration", () => {
     })).toThrow("Agent configuration is invalid");
   });
 });
+
+it.each([":memory:","relative.sqlite","/invalid\0path"])("rejects a non-durable journal path %s",value=>{expect(()=>readAgentSettings({...environment,THESISTRACE_AGENT_MODEL_SETTLEMENT_PATH:value})).toThrow("Agent configuration is invalid");});

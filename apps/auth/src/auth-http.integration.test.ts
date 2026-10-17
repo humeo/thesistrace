@@ -180,7 +180,7 @@ describe.sequential("Auth database-backed HTTP contract", () => {
         timezone: "Asia/Shanghai",
         daily_model_budget_nanodollars: unlimited ? null : 1_000_000_000,
         daily_run_limit: unlimited ? null : 10,
-        active_daily_track_limit: unlimited ? null : 3,
+        active_daily_track_limit: unlimited ? null : 1,
       });
     }
 
@@ -1146,6 +1146,7 @@ function runtime() {
     proofs: operatorProofs,
   });
   const app = createAuthApp({
+    researcherPlan: async () => "free",
     authHandler: (request) =>
       credentialCoordinator.handleAuthRequest(
         request,

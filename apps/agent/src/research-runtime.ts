@@ -92,6 +92,7 @@ For DailyTrack, verify a succeeded Strategy Backtest Origin and reuse an existin
 Use render_a2ui for only three business views: research_runs with ordered distinct runIds, alpha_proposal with proposal fields for an unsubmitted idea, or daily_track with trackId. Obtain persisted resource IDs from authoritative Tool results. The authenticated client reads status, formulas and metrics; never supply or duplicate those facts in model-authored display fields. The application owns component structure, surface identity, layout and spacing. Write explanations, headings and ordinary tables in the normal Markdown response, alongside the view. Intermediate progress uses concise ordinary text and Tool activity, not progress-only surfaces. A proposal is Chat-owned and must never imply persistence. Follow the current tool schema; do not supply component arrays, surfaceId, layout, bindings, actions, HTML, CSS or JavaScript. Correct validation errors using their field paths and reasons.`;
 
 export type ResearchRuntime = Readonly<{
+  billingUsage:(researcher:VerifiedResearcher)=>Promise<import("./model-budget.js").ModelUsage>;
   contextWindow: (modelKey: string, threadId: string | undefined, researcher: VerifiedResearcher) => Promise<ContextWindowSnapshot>;
   close: () => Promise<void>;
   deleteSession: (threadId: string, researcher: VerifiedResearcher) => Promise<void>;
@@ -163,13 +164,19 @@ export async function createResearchRuntime(
     await pool.end();
     throw error;
   }
+  const modelBudget = new ModelBudget(pool,settings.authInternalOrigin,dependencies.quotaPolicyFetch,settings.modelSettlementPath);
+  try {await modelBudget.recoverInterrupted();}
+  catch(error) {await modelBudget.close();await pool.end();throw error;}
+  const settlementTimer=setInterval(()=>{void modelBudget.reconcile().catch(()=>{
+    process.stderr.write(JSON.stringify({event:"model_settlement_deferred",code:"DATABASE_WRITE_UNAVAILABLE"})+"\n");
+  });},5_000);
+  settlementTimer.unref();
   const titleGenerator = new SessionTitleGenerator(repository);
   const readinessPool = createAgentReadinessPool(settings.databaseUrl);
   const readiness = createAgentReadiness(settings, readinessPool, {
     fetch: dependencies.readinessFetch,
   });
   const modelRuntime = new RegisteredModelRuntime(settings.modelRegistry, settings.providerCallTimeoutSeconds * 1_000);
-  const modelBudget = new ModelBudget(pool, settings.authInternalOrigin, dependencies.quotaPolicyFetch);
   const mcpRunFactory = dependencies.mcpRunFactory ?? createMcpRunFactory(settings);
   const storage = new PostgresStore({
     disableInit: true,
@@ -282,7 +289,7 @@ export async function createResearchRuntime(
               ? resumedExecution?.selection.reasoningEffort ?? "medium"
               : validated.reasoningEffort,
             modelObservation,
-            { budget: modelBudget, researcherId },
+            { budget: modelBudget, researcherId,runId:validated.input.runId },
           );
       if (
         resumedExecution !== undefined
@@ -292,7 +299,7 @@ export async function createResearchRuntime(
       }
       const titleSelection = validated?.command !== "prompt"
         ? undefined
-        : modelRuntime.resolve(validated.modelKey, validated.reasoningEffort, undefined, { budget: modelBudget, researcherId });
+        : modelRuntime.resolve(validated.modelKey, validated.reasoningEffort, undefined, { budget: modelBudget, researcherId,runId:validated.input.runId });
       const requestContext = createRequestContext(selection);
       requestContext.set("modelObservation", modelObservation);
 
@@ -366,6 +373,8 @@ export async function createResearchRuntime(
       await titleGenerator.settled();
       await Promise.all([...memories.values()].map((memory) => memory.settled()));
       await repository.failInterruptedRunsAfterHostRestart();
+      clearInterval(settlementTimer);
+      await modelBudget.close();
       await storage.close();
       await readinessPool.end();
       await pool.end();
@@ -391,6 +400,7 @@ export async function createResearchRuntime(
       runtimeHandler,
       settings,
     }),
+    billingUsage:researcher=>modelBudget.usage(researcher.researcher_id),
     contextWindow: async (modelKey, threadId, researcher) => {
       const model = settings.modelRegistry.models.find(candidate => candidate.enabled && candidate.key === modelKey);
       if (!model) throw new ChatRequestError("INVALID_MODEL", 400);

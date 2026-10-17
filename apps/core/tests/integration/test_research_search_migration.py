@@ -5,8 +5,8 @@ import pytest
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
-from thesistrace._postgres import PostgresDatabase, initialize_schemas
-from thesistrace.entrypoints.schema import verify_core_schema
+from thesistrace._postgres import PostgresDatabase, initialize_schemas, verify_schemas
+from thesistrace.migrations.billing_0011 import release_schemas
 from thesistrace.migrations.research_search_0010 import SOURCE, TARGET, migrate
 
 
@@ -60,7 +60,7 @@ def test_upgrade_backfills_search_preserves_data_and_verifies_on_repeat(source_d
             "fingerprint"
         ] == SOURCE
     assert migrate(source_database, apply=True)["preserved_runs"] == 1
-    verify_core_schema(source_database)
+    verify_schemas(source_database,release_schemas("0011-source.zip"))
     assert migrate(source_database, apply=True)["status"] == "already_current"
     with source_database.transaction() as tx:
         after = tx.execute("SELECT * FROM research_runs.runs").fetchone()

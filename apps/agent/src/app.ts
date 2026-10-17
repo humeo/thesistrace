@@ -34,6 +34,7 @@ import {
 import type { VerifiedResearcher } from "./session-verifier.js";
 
 export type AgentAppDependencies = Readonly<{
+  billingUsage:(researcher:VerifiedResearcher)=>Promise<import("./model-budget.js").ModelUsage>;
   contextWindow: (modelKey: string, threadId: string | undefined, researcher: VerifiedResearcher) => Promise<import("@thesistrace/contracts/context-window").ContextWindowSnapshot>;
   mcpConnection: (headers: Headers) => Promise<import("./mcp-connection.js").McpConnection>;
   commandReceipt: (
@@ -144,6 +145,10 @@ export function createAgentApp(dependencies: AgentAppDependencies): Hono<AgentAp
     return context.json(dependencies.modelCatalog);
   });
 
+  app.get("/api/agent/billing/usage",async context=>{
+    try{return context.json(await dependencies.billingUsage(context.get("researcher")));}
+    catch{return context.json({code:"AGENT_SERVICE_UNAVAILABLE"},503);}
+  });
   app.get("/api/agent/context-window", async (context) => {
     const modelKey = context.req.query("model_key");
     const threadId = context.req.query("thread_id");

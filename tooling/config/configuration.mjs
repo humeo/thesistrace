@@ -105,7 +105,7 @@ export function loadConfiguration({ file = configurationFile(), mode = 'developm
   if (mode === 'production') validateProduction(values);
   const environment = { ...ambient };
   // Service-local and Compose controls must not replace selected deployment inputs.
-  for (const name of Object.keys(environment)) if (/^(THESISTRACE_|COMPOSE_|BETTER_AUTH_|RESEND_|OPENAI_BASE_URL$)/.test(name)) delete environment[name];
+  for (const name of Object.keys(environment)) if (/^(THESISTRACE_|COMPOSE_|BETTER_AUTH_|RESEND_|CREEM_|OPENAI_BASE_URL$)/.test(name)) delete environment[name];
   return { ...environment, ...values, ...identity, THESISTRACE_AGENT_MODEL_REGISTRY: registry };
 }
 export function template(generated = {}) {

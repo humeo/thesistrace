@@ -13,6 +13,8 @@ SET default_table_access_method = heap;
 CREATE TABLE research_runs.run_ownership (
     researcher_id uuid NOT NULL,
     run_id text PRIMARY KEY,
+    quota_started boolean DEFAULT false NOT NULL,
+    quota_state text DEFAULT 'reserved' NOT NULL CHECK (quota_state IN ('reserved','consumed','released')),
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     UNIQUE (researcher_id, run_id),
     FOREIGN KEY (researcher_id) REFERENCES researchers.researchers(id)
@@ -443,3 +445,27 @@ ALTER TABLE ONLY research_runs.execution_checkpoints
     ADD CONSTRAINT execution_checkpoints_run_attempt_fkey
     FOREIGN KEY (run_id, attempt_id)
     REFERENCES research_runs.attempts(run_id, id);
+
+
+-- The ownership ledger survives result/history deletion. Every execution owner
+-- settles the same ledger in the transaction that changes the Run status.
+CREATE FUNCTION research_runs.settle_run_quota() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog AS $$
+BEGIN
+    UPDATE research_runs.run_ownership SET
+        quota_started = quota_started OR NEW.status IN ('running','cancelling','succeeded'),
+        quota_state = CASE
+            WHEN NEW.status = 'failed' THEN 'released'
+            WHEN NEW.status = 'cancelled' THEN
+                CASE WHEN quota_started THEN 'consumed' ELSE 'released' END
+            WHEN NEW.status = 'succeeded' THEN 'consumed'
+            ELSE 'reserved'
+        END
+    WHERE run_id = NEW.id AND researcher_id = NEW.researcher_id;
+    RETURN NEW;
+END;
+$$;
+REVOKE ALL ON FUNCTION research_runs.settle_run_quota() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION research_runs.settle_run_quota() TO core_runtime;
+CREATE TRIGGER settle_run_quota AFTER INSERT OR UPDATE OF status ON research_runs.runs
+FOR EACH ROW EXECUTE FUNCTION research_runs.settle_run_quota();

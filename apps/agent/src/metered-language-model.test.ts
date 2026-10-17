@@ -30,7 +30,7 @@ function fixture(denied = false, unknown = false) {
   const budget = { reserve: vi.fn(async () => {
     if (denied) throw new AgentRunFailure("DAILY_MODEL_BUDGET_EXCEEDED");
     return { id: "charge", amount: 51720000 };
-  }), settle: vi.fn(async () => undefined) };
+  }), absorb: vi.fn(async () => undefined), settle: vi.fn(async () => undefined) };
   const metered = new MeteredLanguageModel(fetch => createOpenAI({ apiKey: "fixture", fetch })(model.providerModelId), model, budget, "researcher");
   return { metered, budget, requests };
 }
@@ -54,15 +54,16 @@ it("sends the configured output bound when the caller omits one", async () => {
   expect(f.requests[0]).toHaveProperty("max_output_tokens", 128000);
   expect(f.budget.reserve).toHaveBeenCalledWith("researcher", 205200000);
 });
-it("retains the reservation when the provider omits usage", async () => {
+it("absorbs an ended invocation when the provider omits usage", async () => {
   const f = fixture(false, true);
   await expect(f.metered.doGenerate(options)).rejects.toMatchObject({ code: "PROVIDER_MALFORMED_STREAM" });
   expect(f.budget.settle).not.toHaveBeenCalled();
+  expect(f.budget.absorb).toHaveBeenCalled();
 });
 
 it.each([false, true])("meters native SDK streaming with interrupted=%s", async interrupted => {
   const budget = { reserve: vi.fn(async (_researcher: string, amount: number) => ({ id: "stream-charge", amount })),
-    settle: vi.fn(async () => undefined) };
+    absorb: vi.fn(async () => undefined), settle: vi.fn(async () => undefined) };
   vi.stubGlobal("fetch", async (url: URL | string) => {
     if (!String(url).endsWith("/responses")) return new Response(null, { status: 404 });
     const events = [
@@ -111,11 +112,18 @@ it.each(["anthropic", "google"] as const)("meters the existing %s SDK adapter wi
       usageMetadata: { promptTokenCount: 1000, candidatesTokenCount: 10, totalTokenCount: 1010, cachedContentTokenCount: 400 },
     });
   });
-  const budget = { reserve: vi.fn(async () => ({ id: "charge", amount: 51720000 })), settle: vi.fn(async () => undefined) };
+  const budget = { reserve: vi.fn(async () => ({ id: "charge", amount: 51720000 })), absorb: vi.fn(async () => undefined), settle: vi.fn(async () => undefined) };
   const metered = new MeteredLanguageModel(fetch => adapter === "anthropic"
     ? createAnthropic({ apiKey: "fixture", fetch })(selected.providerModelId)
     : createGoogleGenerativeAI({ apiKey: "fixture", fetch })(selected.providerModelId), selected, budget, "researcher");
   await metered.doGenerate({ ...options, providerOptions: {} });
   expect(budget.settle).toHaveBeenCalledWith({ id: "charge", amount: 51720000 }, 140000);
   expect(countBodies).toHaveLength(0);
+});
+
+it("retains a known charge when database settlement fails",async()=>{
+  const f=fixture();
+  f.budget.settle.mockRejectedValue(new Error("Database offline"));
+  await expect(f.metered.doGenerate(options)).rejects.toThrow("Database offline");
+  expect(f.budget.absorb).not.toHaveBeenCalled();
 });

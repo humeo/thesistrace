@@ -1,4 +1,5 @@
 export const commonEn = {
+  billing:"Plan and billing",
   accountMenu: "Account menu",
   language: "Interface language",
   joinCommunity: "Join Discord",
@@ -27,6 +28,7 @@ export const commonEn = {
 } as const;
 
 export const commonZh = {
+  billing:"套餐与账单",
   accountMenu: "账户菜单",
   language: "界面语言",
   joinCommunity: "加入社区",

@@ -73,6 +73,7 @@ export const dailyEn = {
   "bulkAccepted": "Accepted updates continue in the background. Observations refresh after publication.",
   "bulkError": "Could not load all tracks. Reload the status and try again.",
   "bulkOutcomes": {
+    "quota_limited":"Outside selected tracking slots",
     "up_to_date": "Already up to date",
     "busy": "Already updating or stopping",
     "blocked": "Update blocked; open the strategy to inspect and retry",
@@ -326,6 +327,7 @@ export const dailyZh = {
   "bulkAccepted": "已接受的更新会在后台继续运行，观察结果发布后会自动刷新。",
   "bulkError": "无法读取完整跟踪列表，请重新加载状态后重试。",
   "bulkOutcomes": {
+    "quota_limited":"不在已选跟踪名额内",
     "up_to_date": "已是最新数据",
     "busy": "正在更新或停止",
     "blocked": "更新受阻，请查看策略原因后重试",

@@ -1,6 +1,8 @@
 {
   "timezone": "Asia/Shanghai",
-  "daily_model_budget_usd": 1,
-  "daily_run_limit": 10,
-  "active_daily_track_limit": 3
+  "plans": {
+    "free": { "monthly_price_usd": 0, "daily_model_budget_usd": 1, "daily_run_limit": 10, "active_daily_track_limit": 1 },
+    "pro": { "monthly_price_usd": 20, "daily_model_budget_usd": 1, "daily_run_limit": 100, "active_daily_track_limit": 10 },
+    "max": { "monthly_price_usd": 100, "daily_model_budget_usd": 2, "daily_run_limit": 500, "active_daily_track_limit": 50 }
+  }
 }

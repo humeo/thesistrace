@@ -123,6 +123,7 @@ const settings: AgentSettings = {
   mcpClockSkewSeconds: 30,
   mcpInternalUrl: "http://core.invalid/mcp",
   modelRegistry,
+  modelSettlementPath:":memory:",
   port: 8400,
   publicOrigin: "http://127.0.0.1:4317",
   runMaxWallSeconds: 300,
@@ -3184,6 +3185,7 @@ describe.sequential("durable Research Agent runtime", () => {
           expectation: { kind: "batch-results", run_ids: [...CHILD_IDS] } };
         expect(await readResearchEvalMemoryFacts(agentStore, request)).toEqual({
           formula_corrected: false, admission_corrected: false, unresolved_admission_rejection: false, batch_results_inspected: true,
+          ranked_results_inspected: false, ranked_results_presented: false,
         });
         expect(await readResearchEvalMemoryFacts(agentStore, { ...request,
           expectation: { kind: "batch-results", run_ids: [CHILD_IDS[0], "run_00000000000000000001"] },
@@ -3352,7 +3354,7 @@ describe.sequential("durable Research Agent runtime", () => {
       };
       expect(await readResearchEvalMemoryFacts(agentStore, input)).toEqual({
         formula_corrected: kind === "formula", admission_corrected: kind === "admission", unresolved_admission_rejection: false,
-        batch_results_inspected: false,
+        batch_results_inspected: false, ranked_results_inspected: false, ranked_results_presented: false,
       });
       await expect(readResearchEvalMemoryFacts(agentStore, { ...input, researcher_id: foreignResearcher.researcher_id }))
         .rejects.toThrow("RESEARCH_EVAL_REPORT_INVALID");

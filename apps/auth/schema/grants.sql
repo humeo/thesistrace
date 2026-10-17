@@ -28,3 +28,9 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
     auth."oauthConsent",
     auth."oauthClientAssertion"
 TO auth_runtime;
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
+    auth.billing_account, auth.billing_payment, auth.billing_adjustment, auth.billing_event
+TO auth_runtime;
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE auth.billing_command TO auth_runtime;

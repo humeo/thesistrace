@@ -41,6 +41,7 @@ const admission = new SignInCodeAdmission({pool, authSecret: settings.secret, cl
 const unavailable = async (): Promise<never> => { throw new Error("unrelated endpoint"); };
 const deps: AuthAppDependencies = {
   isOperator: async () => false,
+  researcherPlan: async () => "free",
   turnstileSiteKey: settings.turnstileSiteKey,
   admitSignInCode: (email,token,headers) => admission.admit(email,token,headers),
   sendSignInCode: email => delivery.send(email, "sign-in"),
