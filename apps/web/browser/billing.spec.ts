@@ -19,7 +19,7 @@ const plans = {
     monthly_price_usd: 20,
     daily_run_limit: 100,
     active_daily_track_limit: 10,
-    daily_model_budget_usd: 1,
+    daily_model_budget_usd: 1.5,
   },
   max: {
     monthly_price_usd: 100,

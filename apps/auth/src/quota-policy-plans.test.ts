@@ -16,7 +16,7 @@ it("applies the Researcher's current paid plan without resetting the shared quot
   plan = "pro";
   expect(await policy.forResearcher("researcher")).toEqual({
     timezone: "Asia/Shanghai",
-    daily_model_budget_nanodollars: 1_000_000_000,
+    daily_model_budget_nanodollars: 1_500_000_000,
     daily_run_limit: 100,
     active_daily_track_limit: 10,
   });

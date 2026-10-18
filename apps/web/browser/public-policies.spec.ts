@@ -24,6 +24,9 @@ for (const language of ["en", "zh"] as const) {
     }
     await expect(page.getByRole("table")).toContainText("$20");
     await expect(page.getByRole("table")).toContainText("$100");
+    const pro = page.getByRole("row").filter({ hasText: "Pro" });
+    await expect(pro).toContainText(language === "en" ? "More usage" : "更多用量");
+    await expect(pro).toContainText(language === "en" ? "About $1.5 / day" : "约 $1.5／天");
     await page.getByRole("button", { name: language === "en" ? "中文" : "English", exact: true }).click();
     await page.reload();
     await expect(page.getByRole("heading", { level: 1 })).toHaveText(language === "en" ? "套餐与额度" : "Plans and usage");

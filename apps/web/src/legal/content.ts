@@ -25,7 +25,7 @@ export const policyContent: Record<"en" | "zh-CN", Record<PublicPolicyPath, Poli
     ] },
     "/pricing": { title: "Plans and usage", sections: [
       { title: "Monthly, in USD", paragraphs: ["Pro and Max automatically renew monthly until canceled. Applicable taxes are added at checkout. No annual plan is offered. Paid checkout is not open during launch preparation."] },
-      { title: "Daily limits, clearly counted", paragraphs: ["Research and AI allowances reset at midnight Asia/Shanghai and do not roll over. AI allowance is metered usage, not money held in your account. Tracking slots are concurrent capacity. Failed research releases its run reservation; AI usage is counted separately."] },
+      { title: "Daily limits, clearly counted", paragraphs: ["Research and AI allowances reset at midnight Asia/Shanghai and do not roll over. AI allowance is metered usage, not money held in your account. Dollar amounts are approximate daily allowance references; the number of requests varies with the model and context length. Tracking slots are concurrent capacity. Failed research releases its run reservation; AI usage is counted separately."] },
       { title: "Change or cancel", paragraphs: ["Upgrade after a confirmed prorated payment. Downgrade for the next monthly period. Cancel renewal while keeping the current paid period. Read the terms and refund policy for details."] },
     ] },
   },
@@ -52,7 +52,7 @@ export const policyContent: Record<"en" | "zh-CN", Record<PublicPolicyPath, Poli
     ] },
     "/pricing": { title: "套餐与额度", sections: [
       { title: "USD 月付", paragraphs: ["Pro 和 Max 每月自动续费，直至取消。适用税费另计，结账前展示。暂不提供年付方案，上线准备期间尚未开放付费结账。"] },
-      { title: "每日额度与跟踪名额", paragraphs: ["研究和 AI 额度按北京时间（Asia/Shanghai）零点重置，不结转。AI 额度是计量使用上限，不是账户资金；跟踪名额是同时使用的容量。失败研究释放次数预占，AI 使用单独计量。"] },
+      { title: "每日额度与跟踪名额", paragraphs: ["研究和 AI 额度按北京时间（Asia/Shanghai）零点重置，不结转。AI 额度是计量使用上限，不是账户资金。金额为大致每日额度参考，可完成的请求数量随模型和上下文长度变化。跟踪名额是同时使用的容量。失败研究释放次数预占，AI 使用单独计量。"] },
       { title: "变更与取消", paragraphs: ["升级在补差付款确认后生效，降级用于下期月付套餐。取消续费后保留本期权益，详见服务条款和退款说明。"] },
     ] },
   },

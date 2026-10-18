@@ -36,8 +36,10 @@ export default function PolicyPage({ path }: { path: PublicPolicyPath }) {
         ? "上线前预览 · 正式运营主体及完整隐私信息将在开放付费订阅前公布。本页尚非最终生效版本。"
         : "Pre-launch preview · Operator details and the complete privacy notice will be published before paid subscriptions open. This is not the final effective version."}</p>
       {path === "/pricing" && <Table>
-        <TableHeader><TableRow>{(zh ? ["套餐", "USD / 月", "研究 / 日", "跟踪名额", "AI 预算 / 日"] : ["Plan", "USD / month", "Runs / day", "Tracking slots", "AI budget / day"]).map(label => <TableHead key={label}>{label}</TableHead>)}</TableRow></TableHeader>
-        <TableBody>{[["Free", "$0", "10", "1", "$1"], ["Pro", "$20", "100", "10", "$1"], ["Max", "$100", "500", "50", "$2"]].map(row => <TableRow key={row[0]}>{row.map((cell, index) => <TableCell key={index}>{cell}</TableCell>)}</TableRow>)}</TableBody>
+        <TableHeader><TableRow>{(zh ? ["套餐", "USD / 月", "研究 / 日", "跟踪名额", "AI 用量"] : ["Plan", "USD / month", "Runs / day", "Tracking slots", "AI usage"]).map(label => <TableHead key={label}>{label}</TableHead>)}</TableRow></TableHeader>
+        <TableBody>{[["Free", "$0", "10", "1", "$1"], ["Pro", "$20", "100", "10", "$1.5"], ["Max", "$100", "500", "50", "$2"]].map((row, planIndex) => <TableRow key={row[0]}>{row.map((cell, index) => <TableCell key={index}>{index === 4
+          ? <div className="flex flex-col gap-1"><span>{(zh ? ["基础用量", "更多用量", "充裕用量"] : ["Basic usage", "More usage", "Generous usage"])[planIndex]}</span><span className="text-xs text-muted-foreground">{zh ? `约 ${cell}／天` : `About ${cell} / day`}</span></div>
+          : cell}</TableCell>)}</TableRow>)}</TableBody>
       </Table>}
       {policy.sections.map(section => <section key={section.title}>
         <h2>{section.title}</h2>
