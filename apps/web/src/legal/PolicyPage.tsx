@@ -55,6 +55,6 @@ export default function PolicyPage({ path }: { path: PublicPolicyPath }) {
       </section>}
       {(path === "/terms" || path === "/refunds") && <p><a href="https://www.creem.io/buyer-terms">{zh ? "Creem 购买条款" : "Creem Buyer Terms"}</a></p>}
     </main>
-    <footer><PolicyLinks /><p>{zh ? "支持与隐私联系：" : "Support and privacy: "}<a href="mailto:koltenluca433@gmail.com">koltenluca433@gmail.com</a></p></footer>
+    <footer><PolicyLinks /><p>{zh ? "支持与隐私联系：" : "Support and privacy: "}<a href="mailto:support@qagentis.com">support@qagentis.com</a></p></footer>
   </div>;
 }

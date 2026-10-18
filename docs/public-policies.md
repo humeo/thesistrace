@@ -14,8 +14,8 @@
 ## 已确认资料
 
 - 个人运营者：朱城磊（英文展示 Zhu Chenglei），不虚构公司名称或注册信息。
-- 支持及隐私邮箱：`koltenluca433@gmail.com`。
-- 托管基础设施：Contabo EU（德国）；AI 上游：OpenAI，由运营者确认。Resend 和 Cloudflare Turnstile 分别用于验证码投递与登录防滥用，Google Gmail 用于公开支持及隐私邮箱。
+- 支持及隐私邮箱：`support@qagentis.com`。
+- 托管基础设施：Contabo EU（德国）；AI 上游：OpenAI，由运营者确认。Resend 和 Cloudflare Turnstile 分别用于验证码投递与登录防滥用，Cloudflare Email Routing 将域名支持邮件转发至 Google Gmail 收件箱。
 - 研究与 AI 额度、订阅和退款规则以[支付契约](creem-billing.md)及唯一额度配置为依据；当前 Pro AI 每日配置额度为 $1.5。
 - Auth 安全审计记录通常保留 180 天，到期会由现有清理任务删除。认证和验证记录按到期情况清理。其他数据依据服务需要、账户状态、会计义务和争议处理决定保留，不虚构统一删除时限或即时备份删除能力。
 - 不承诺 OpenAI 在所有服务和账户设置下均零保留或不用于训练；对应服务的实际条款与设置仍需核对。

@@ -58,7 +58,7 @@ qagentis 商户 Test Mode 已实测银行卡拒付、Pro 首付、付款支持�
 
 2026-10-18 已在 qagentis 的 Live 商品目录创建 Pro `prod_sqIE1DFFpFJ7bUhB0KTtl` 和 Max `prod_3SY38JAtVTkBtSKmOPJ6rV`，分别为 USD 20 / 100 月付、SaaS、税费另计、无试用，返回地址为上述 qagentis.com 地址。Live 取消方式已保存为期末取消，目录没有 Product Bundle。创建商品不代表审核通过或网站已启用收款；Live 密钥、Webhook 和实际生产验收仍待完成。
 
-`/terms`、`/privacy`、`/refunds`、`/pricing` 为无需登录的中英文公开政策页，当前文案生效日期为 2026-10-18，个人运营者为朱城磊，支持及隐私联系邮箱为 `koltenluca433@gmail.com`。已确认的服务商、保留依据和 Contabo EU（德国）实例地区见[公开政策资料](public-policies.md)。正式文案进入 `main` 不代表已部署或已完成商户审核。
+`/terms`、`/privacy`、`/refunds`、`/pricing` 为无需登录的中英文公开政策页，当前文案生效日期为 2026-10-18，个人运营者为朱城磊，支持及隐私联系邮箱为 `support@qagentis.com`。已确认的服务商、保留依据和 Contabo EU（德国）实例地区见[公开政策资料](public-policies.md)。正式文案进入 `main` 不代表已部署或已完成商户审核。
 
 上线前还需商户审核、对外商户名称、支持邮箱、公开服务条款 / 隐私及退款说明、数据供应商授权、Live 商品 / 密钥 / HTTPS Webhook 和部署验证。未配置或未验证的外部事项不能据本地或 Test Mode 测试宣称已完成。
 
@@ -67,3 +67,59 @@ Pro 每月 $20，但按 $1.5 AI 日预算满额使用 30–32 个额度日对应
 Agent 的 `model-settlements` 持久卷保存已结束模型调用的待入账决定（预留 ID、实际金额或最终未知吸收），不保存模型内容。PostgreSQL 暂不可写时保留该记录并重试，恢复后先入账再接纳新调用；服务重启先重放已知费用，再吸收旧主机中断且最终未知的预留。备份/恢复 PostgreSQL 时也必须保留对应持久卷，禁止把该卷当缓存清理。容器固定使用 `/app/agent/state/model-settlements.sqlite`，运行用户为 node。
 
 “正在确认付款”来自具体未完成命令或已请求的升级付款，不根据续费商品与当前权益的差额推断。全额退款或争议撤权后仍可查看账单、取消续费；重新应用已存在的同一商品不会产生付款，应用明确提示先处理该订阅的付款问题。对账每轮也更新失败或缺少第三方标识的旧命令的检查时间，避免阻塞其他用户的恢复。
+
+## 商户审核访问与支持
+
+公开支持与隐私邮箱统一为 `support@qagentis.com`，显示在首页、政策页和账单页。Cloudflare Email Routing 转发至运营者的已验证 Gmail 收件箱；Resend 的已验证域名支持以该地址发信。转发收件和 Resend 发信不等于 Gmail 已配置该地址的 Send as 身份。
+
+审核人员可在 `https://qagentis.com/login` 使用自己的邮箱接收验证码并注册；无需共享运营者账户或密码。Free 与付费档包含同样的研究工具，可体验研究、历史回测、AI 辅助分析和模拟跟踪；配额较低。外部 Agent 的 MCP 连接同样只提供研究能力。实际权限和用量以登录后的账单页为准。
+
+Creem 可能使用一次性 100% 折扣进行有限审核。零金额账期仍需官方验签及服务端交易、客户、商品、币种、模式和账期校验，不能通过跳转或 Checkout 完成直接发放权益。Auth 0004 显式迁移见[数据库迁移](database-migrations.md#auth-0004-verified-zero-value-subscription-periods)。生产支付在商户审批及 Live 配置完成前保持关闭；隔离 Fake、真实 Test Mode 与生产支付的验证结果必须分别记录。工程验证入口统一见 [AGENTS.md](../AGENTS.md#testing)。
+
+## 发给 Creem 的类别确认说明（待运营者发送）
+
+Subject: Product eligibility pre-check — QAgentis quantitative research SaaS
+
+Hello Creem team,
+
+I operate QAgentis as an individual and would like to confirm product eligibility before submitting the account review.
+
+Store: qagentis (`sto_2fDr2Uer3O1oFbsJB0acKa`)
+Website: https://qagentis.com
+Contact: support@qagentis.com
+
+QAgentis is a self-service quantitative research SaaS. Users inspect historical market data, evaluate factor expressions, run historical strategy backtests, and track simulated portfolios over subsequent trading days. Results include research statistics, simulated holdings and performance, with the relevant formulas and assumptions.
+
+OpenAI powers text-based research assistance, including drafting research code and explaining results. Users may also connect an external AI agent through MCP to run research and read results. QAgentis has no broker or exchange account connections, does not route or execute live orders, does not automate real-money trading, and does not hold investment funds or promise returns. It does not provide image/video generation. Subscriptions purchase software access; we do not sell trading courses or community memberships.
+
+Free provides limited daily access to the same research tools. Pro costs USD 20/month and Max USD 100/month, with applicable taxes added at checkout; paid tiers increase research, tracking and metered AI allowances. This is a new business without prior paid-customer processing history; I cannot provide an established chargeback/refund track record.
+
+Could you confirm whether this research-only product is eligible as SaaS, is restricted, or is unsupported under your trading/investment and generative-AI rules? If restricted, what additional evidence is required from a first-time merchant?
+
+Terms, privacy, refunds and pricing are publicly linked from the website. Reviewers can register with their own email and use Free. Live checkout remains disabled pending approval and final Live integration. Please also confirm the access you require before approval, and how your one-time 100% discount test should be arranged if live checkout cannot yet be enabled. In Test Mode, creating a one-use 100% Pro discount in the dashboard returned a generic save error and no discount was created; please advise whether this is supported for a pending-review store.
+
+Thank you,
+QAgentis
+
+### 中文版本
+
+主题：QAgentis 量化研究 SaaS 的产品准入类别确认
+
+Creem 团队您好：
+
+我是 QAgentis 的个人运营者，希望在提交账户审核前确认产品是否符合准入要求。商店名称为 qagentis，商店 ID 为 `sto_2fDr2Uer3O1oFbsJB0acKa`，网站为 https://qagentis.com，联系邮箱为 support@qagentis.com。
+
+QAgentis 是自助式量化研究软件。用户可以查看历史市场数据、评估因子表达式、运行历史策略回测，并在后续交易日跟踪模拟组合。研究结果包含统计指标、模拟持仓与表现，以及相关公式和假设。
+
+产品使用 OpenAI 提供文字研究辅助，包括协助编写研究代码和解释结果；用户也可以通过 MCP 连接外部 AI Agent，执行研究并读取结果。产品没有券商或交易所账户连接，不路由或执行实盘订单，不提供真实资金交易自动化，不托管投资资金，也不承诺收益。产品不提供图片或视频生成。订阅购买的是软件使用权限，我们不出售交易课程或社群会员。
+
+Free 提供相同研究工具的有限每日额度；Pro 为每月 20 美元，Max 为每月 100 美元，适用税费在结账时另计。付费套餐增加研究次数、模拟跟踪名额和按用量计量的 AI 额度。这是一项新业务，目前没有过往付费客户的收款、拒付或退款记录可供提交。
+
+请确认：此类仅用于研究的软件是否可按 SaaS 接入，属于受限类别，还是不受支持？如果属于受限类别，首次申请的个人商户需要提供哪些额外材料？我们希望明确了解其在交易／投资工具和生成式 AI 规则下的分类。
+
+网站已经公开服务条款、隐私说明、退款与取消说明及套餐页。审核人员可以用自己的邮箱注册并体验 Free。正式结账将在商户获批并完成 Live 配置后启用。请同时说明审核前需要怎样的访问权限，以及在尚未开放 Live 结账时，如何安排一次性 100% 折扣审核体验。我们曾在 Test Mode 尝试创建仅限 Pro、最多使用一次的 100% 折扣，但控制台返回通用保存错误，未创建成功；请告知待审核商店是否支持这一操作。
+
+谢谢！
+QAgentis
+
+以上中英文说明均为草稿，尚未发送，不代表 Creem 已认可产品类别。

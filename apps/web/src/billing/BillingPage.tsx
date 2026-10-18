@@ -383,6 +383,7 @@ export function BillingPage() {
           ) : null}
         </section>
         <p className="text-sm text-muted-foreground">{t("refund")}</p>
+        <a className="text-sm underline underline-offset-4" href="mailto:support@qagentis.com">support@qagentis.com</a>
         <PolicyLinks />
         <AlertDialog
           open={command !== null}
