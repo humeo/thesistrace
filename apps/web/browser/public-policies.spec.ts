@@ -17,10 +17,22 @@ for (const language of ["en", "zh"] as const) {
       await expect(page.getByRole("heading", { level: 1 })).toHaveText(titles[index]);
       await expect(page).toHaveTitle(`${titles[index]} · QAgentis`);
       await expect(page.locator("html")).toHaveAttribute("lang", language === "en" ? "en" : "zh-CN");
-      await expect(page.locator(".policy-notice")).toContainText(language === "en" ? "Pre-launch preview" : "上线前预览");
+      await expect(page.locator(".policy-notice")).toContainText(language === "en" ? "Effective date: October 18, 2026" : "生效日期：2026 年 10 月 18 日");
+      await expect(page.getByRole("main")).not.toContainText(language === "en" ? "Pre-launch preview" : "上线前预览");
       await expect(page.getByRole("main")).not.toContainText("[支持及隐私联系邮箱]");
       await expect(page.locator('a[aria-current="page"]')).toHaveCount(2);
       await expect(page.getByRole("link", { name: "koltenluca433@gmail.com", exact: true })).toHaveAttribute("href", "mailto:koltenluca433@gmail.com");
+      if (path === "/terms" || path === "/privacy") {
+        await expect(page.getByRole("main")).toContainText("朱城磊");
+      }
+      if (path === "/privacy") {
+        await expect(page.getByRole("main")).toContainText("Contabo");
+        await expect(page.getByRole("main")).toContainText("OpenAI");
+        await expect(page.getByRole("link", { name: language === "en" ? "OpenAI privacy policy" : "OpenAI 隐私政策", exact: true })).toHaveAttribute("href", "https://openai.com/policies/privacy-policy/");
+      }
+      if (path === "/terms" || path === "/refunds") {
+        await expect(page.getByRole("link", { name: language === "en" ? "Creem Buyer Terms" : "Creem 购买条款", exact: true })).toHaveAttribute("href", "https://www.creem.io/buyer-terms");
+      }
     }
     await expect(page.getByRole("table")).toContainText("$20");
     await expect(page.getByRole("table")).toContainText("$100");

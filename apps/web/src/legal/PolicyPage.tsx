@@ -32,9 +32,7 @@ export default function PolicyPage({ path }: { path: PublicPolicyPath }) {
     <PolicyLinks />
     <main id="policy-content">
       <h1>{policy.title}</h1>
-      <p className="policy-notice">{zh
-        ? "上线前预览 · 正式运营主体及完整隐私信息将在开放付费订阅前公布。本页尚非最终生效版本。"
-        : "Pre-launch preview · Operator details and the complete privacy notice will be published before paid subscriptions open. This is not the final effective version."}</p>
+      <p className="policy-notice">{zh ? "生效日期：2026 年 10 月 18 日" : "Effective date: October 18, 2026"}</p>
       {path === "/pricing" && <Table>
         <TableHeader><TableRow>{(zh ? ["套餐", "USD / 月", "研究 / 日", "跟踪名额", "AI 用量"] : ["Plan", "USD / month", "Runs / day", "Tracking slots", "AI usage"]).map(label => <TableHead key={label}>{label}</TableHead>)}</TableRow></TableHeader>
         <TableBody>{[["Free", "$0", "10", "1", "$1"], ["Pro", "$20", "100", "10", "$1.5"], ["Max", "$100", "500", "50", "$2"]].map((row, planIndex) => <TableRow key={row[0]}>{row.map((cell, index) => <TableCell key={index}>{index === 4
@@ -45,7 +43,17 @@ export default function PolicyPage({ path }: { path: PublicPolicyPath }) {
         <h2>{section.title}</h2>
         {section.paragraphs.map(paragraph => <p key={paragraph}>{paragraph}</p>)}
       </section>)}
-      {path === "/privacy" && <p><a href="https://www.creem.io/privacy">{zh ? "Creem 隐私政策" : "Creem privacy notice"}</a></p>}
+      {path === "/privacy" && <section>
+        <h2>{zh ? "相关服务商说明" : "Provider information"}</h2>
+        <ul>
+          <li><a href="https://www.creem.io/privacy">{zh ? "Creem 隐私政策" : "Creem privacy notice"}</a></li>
+          <li><a href="https://openai.com/policies/privacy-policy/">{zh ? "OpenAI 隐私政策" : "OpenAI privacy policy"}</a> · <a href="https://openai.com/business-data/">{zh ? "OpenAI 业务数据说明" : "OpenAI business data information"}</a></li>
+          <li><a href="https://resend.com/legal/privacy-policy">{zh ? "Resend 隐私政策" : "Resend privacy policy"}</a></li>
+          <li><a href="https://www.cloudflare.com/privacypolicy/">{zh ? "Cloudflare 隐私政策" : "Cloudflare privacy policy"}</a></li>
+          <li><a href="https://policies.google.com/privacy">{zh ? "Google 隐私政策" : "Google privacy policy"}</a></li>
+        </ul>
+      </section>}
+      {(path === "/terms" || path === "/refunds") && <p><a href="https://www.creem.io/buyer-terms">{zh ? "Creem 购买条款" : "Creem Buyer Terms"}</a></p>}
     </main>
     <footer><PolicyLinks /><p>{zh ? "支持与隐私联系：" : "Support and privacy: "}<a href="mailto:koltenluca433@gmail.com">koltenluca433@gmail.com</a></p></footer>
   </div>;

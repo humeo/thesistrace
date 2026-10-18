@@ -93,12 +93,14 @@ Publication 孤儿维护每分钟最多检查一页 1,000 个对象，一轮完�
 
 ## Payment launch preparation
 
-The pre-launch `/terms`, `/privacy`, `/refunds` and `/pricing` pages are public and
-must remain accessible without a login or a working Auth API. They currently state
-that they are previews. Before collecting payments, finalize the operator identity,
-support/privacy contact, production processor inventory, retention/deletion rules and
-effective date; remove preview copy only when the final facts are in place. Internal
-editorial gaps are tracked in [the policy draft](../docs/public-policies-draft.md).
+The `/terms`, `/privacy`, `/refunds` and `/pricing` pages contain the current bilingual
+service policies and must remain accessible without a login or a working Auth API.
+The operator is Zhu Chenglei (朱城磊); support and privacy requests go to
+`koltenluca433@gmail.com`. Before merchant review, deploy the policy version so these
+URLs are accessible at `https://qagentis.com`. Policy metadata is not proof of
+production deployment or payment eligibility. The current Contabo instance is in
+EU (Germany); confirm any required correspondence address. See [policy facts and remaining
+boundaries](../docs/public-policies.md).
 
 While merchant verification is pending, retain the payment-disabled values in
 [payment-disabled.env.example](payment-disabled.env.example). This is a reference
