@@ -7,6 +7,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import type { ValidatedChatRun } from "./chat-request.js";
 import type { McpRun } from "./mcp-run.js";
 import { ResearchMastraAgent } from "./research-mastra-agent.js";
+import { AgentRunFailure } from "./run-failure.js";
 import { createRunTelemetry, type AgentTelemetryEvent } from "./run-telemetry.js";
 import {
   SAFE_TOOL_COMPLETED,
@@ -391,6 +392,42 @@ test("a newly accepted Untitled session schedules title generation once", async 
   await lastValueFrom(agent.run(input).pipe(toArray()));
 
   expect(scheduleTitle).toHaveBeenCalledOnce();
+});
+
+test("a background title cannot consume the budget needed by the primary reply", async () => {
+  const titleFinished = deferred<void>();
+  let reserved = 0;
+  const { agent, input, scheduleTitle } = testAgent({
+    agentStream: async () => ({
+      processDataStream: async ({ onChunk }: { onChunk: (chunk: unknown) => Promise<void> }) => {
+        // The production Free allowance admits either call on its own, while
+        // the title reservation must not prevent the primary reply from starting.
+        if (reserved + 965_000_000 > 1_000_000_000)
+          throw new AgentRunFailure("DAILY_MODEL_BUDGET_EXCEEDED");
+        reserved += 965_000_000;
+        try {
+          await onChunk({ payload: { text: "Primary reply completed." }, type: "text-delta" });
+        } finally {
+          reserved -= 965_000_000;
+        }
+      },
+    }),
+    mcpRun: async () => ({ close: async () => undefined, hasFatalToolFailure: () => false, toolFailure: () => undefined, tools: {} }),
+    prepareRun: async () => ({ durableMessages: [], execution: "start", generateTitle: true, kind: "new", status: "running" }),
+    runMaxWallMs: 1_000,
+  });
+  scheduleTitle.mockImplementation(async () => {
+    reserved += 645_320_000;
+    try { await titleFinished.promise; }
+    finally { reserved -= 645_320_000; }
+  });
+  try {
+    const events = await lastValueFrom(agent.run(input).pipe(toArray()));
+    expect(events.at(-1)?.type).toBe("RUN_FINISHED");
+    expect(JSON.stringify(events)).toContain("Primary reply completed.");
+  } finally {
+    titleFinished.resolve();
+  }
 });
 
 test("a slow title never delays the terminal event or Runner release", async () => {

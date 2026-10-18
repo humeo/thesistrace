@@ -14,6 +14,7 @@ import {
   from,
   map,
   of,
+  tap,
   throwError,
 } from "rxjs";
 
@@ -146,11 +147,6 @@ export class ResearchMastraAgent extends MastraAgent {
         shouldScheduleTitle = prepared.kind === "new"
           && this.execution.run.command === "prompt"
           && prepared.generateTitle;
-        // The first accepted message owns title generation, but the title is
-        // not part of the Agent Run lifecycle. Start it once admission is
-        // durable and never hold RUN_FINISHED/RUN_ERROR or Runner cleanup open
-        // for this independent best-effort operation.
-        if (shouldScheduleTitle) void scheduleTitle();
         if (disposed && prepared.kind === "new") {
           ownsRun = true;
           this.terminalStarted = true;
@@ -290,6 +286,13 @@ export class ResearchMastraAgent extends MastraAgent {
       );
 
       return boundedRun.pipe(
+        tap((event) => {
+          // The first accepted message owns the title. Wait until its primary
+          // work is terminal so a background reservation cannot reject that
+          // work. Title completion must never hold the terminal event open.
+          if (event.type === EventType.RUN_FINISHED || event.type === EventType.RUN_ERROR)
+            void scheduleTitle();
+        }),
         finalize(() => {
           disposed = true;
           if (ownsRun && !this.terminalStarted) {
