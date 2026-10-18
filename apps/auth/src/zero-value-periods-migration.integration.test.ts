@@ -19,7 +19,14 @@ describe.sequential("Explicit zero-value paid-period upgrade", () => {
       ('txn_refunded',$1,'sub_refunded','max','2026-10-01Z','2026-11-01Z',10000,10000)`, [researcher]);
     await pool.query("INSERT INTO auth.billing_adjustment(transaction_id,refunded_amount) VALUES('txn_partial',500),('txn_refunded',10000)");
   });
-  afterAll(async () => { await pool.end(); });
+  afterAll(async () => {
+    try {
+      await pool.query("DROP SCHEMA IF EXISTS auth CASCADE; DROP SCHEMA IF EXISTS thesistrace_auth_migrations CASCADE;");
+      await initializeAuthSchema(pool);
+    } finally {
+      await pool.end();
+    }
+  });
 
   it("preserves billing rows, backfills full refunds and repeats without rewriting data", async () => {
     const before = (await pool.query("SELECT * FROM auth.billing_payment ORDER BY transaction_id")).rows;

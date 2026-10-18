@@ -3,6 +3,7 @@ import { Pool } from "pg";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { AUTH_BILLING_SOURCE, migrateBilling } from "./billing-migration.js";
 import { assertExactCatalog, collectAuthSchemaCatalog } from "./schema-contract.js";
+import { initializeAuthSchema } from "./schema-initialize.js";
 
 const pool = new Pool({
   connectionString: process.env.THESISTRACE_AUTH_TEST_OWNER_DATABASE_URL,
@@ -41,7 +42,12 @@ describe.sequential("Explicit paid-entitlement schema upgrade", () => {
     }
   });
   afterAll(async () => {
-    await pool.end();
+    try {
+      await pool.query("DROP SCHEMA IF EXISTS auth CASCADE; DROP SCHEMA IF EXISTS thesistrace_auth_migrations CASCADE;");
+      await initializeAuthSchema(pool);
+    } finally {
+      await pool.end();
+    }
   });
   it("preserves identities, records the upgrade and validates repeated execution", async () => {
     const before = (await pool.query('SELECT * FROM auth."user"')).rows;
