@@ -394,22 +394,14 @@ test("a newly accepted Untitled session schedules title generation once", async 
   expect(scheduleTitle).toHaveBeenCalledOnce();
 });
 
-test("a background title cannot consume the budget needed by the primary reply", async () => {
+test("a background title starts only after the primary reply is persisted", async () => {
   const titleFinished = deferred<void>();
-  let reserved = 0;
-  const { agent, input, scheduleTitle } = testAgent({
+  let primaryCompletedBeforeTitle = false;
+  const { agent, input, repository, scheduleTitle } = testAgent({
     agentStream: async () => ({
       processDataStream: async ({ onChunk }: { onChunk: (chunk: unknown) => Promise<void> }) => {
-        // The production Free allowance admits either call on its own, while
-        // the title reservation must not prevent the primary reply from starting.
-        if (reserved + 965_000_000 > 1_000_000_000)
-          throw new AgentRunFailure("DAILY_MODEL_BUDGET_EXCEEDED");
-        reserved += 965_000_000;
-        try {
-          await onChunk({ payload: { text: "Primary reply completed." }, type: "text-delta" });
-        } finally {
-          reserved -= 965_000_000;
-        }
+        expect(scheduleTitle).not.toHaveBeenCalled();
+        await onChunk({ payload: { text: "Primary reply completed." }, type: "text-delta" });
       },
     }),
     mcpRun: async () => ({ close: async () => undefined, hasFatalToolFailure: () => false, toolFailure: () => undefined, tools: {} }),
@@ -417,14 +409,15 @@ test("a background title cannot consume the budget needed by the primary reply",
     runMaxWallMs: 1_000,
   });
   scheduleTitle.mockImplementation(async () => {
-    reserved += 645_320_000;
-    try { await titleFinished.promise; }
-    finally { reserved -= 645_320_000; }
+    primaryCompletedBeforeTitle = repository.markCompleted.mock.calls.length === 1;
+    await titleFinished.promise;
   });
   try {
     const events = await lastValueFrom(agent.run(input).pipe(toArray()));
     expect(events.at(-1)?.type).toBe("RUN_FINISHED");
     expect(JSON.stringify(events)).toContain("Primary reply completed.");
+    expect(scheduleTitle).toHaveBeenCalledOnce();
+    expect(primaryCompletedBeforeTitle).toBe(true);
   } finally {
     titleFinished.resolve();
   }

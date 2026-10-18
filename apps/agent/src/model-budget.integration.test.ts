@@ -48,19 +48,19 @@ afterAll(async () => {
   await budget.close();
   await pool.end();
 });
-it("admits exactly one concurrent call when only one reservation fits", async () => {
+it("admits calls with positive remaining usage and records concurrent overshoot without reservations", async () => {
   const researcher = randomUUID();
-  await budget.reserve(researcher, 900_000_000);
-  const outcomes = await Promise.allSettled([
-    budget.reserve(researcher, 100_000_000),
-    budget.reserve(researcher, 100_000_000),
-  ]);
-  expect(
-    outcomes.filter((result) => result.status === "fulfilled"),
-  ).toHaveLength(1);
-  expect(
-    outcomes.filter((result) => result.status === "rejected"),
-  ).toHaveLength(1);
+  const first = await budget.begin(researcher);
+  await budget.settle(first, 999_000_000);
+  const calls = await Promise.all([budget.begin(researcher), budget.begin(researcher)]);
+  expect(await budget.usage(researcher)).toMatchObject({
+    actual_nanodollars: 999_000_000, reserved_nanodollars: 0, remaining_nanodollars: 1_000_000,
+  });
+  await Promise.all(calls.map(call => budget.settle(call, 10_000_000)));
+  expect(await budget.usage(researcher)).toMatchObject({
+    actual_nanodollars: 1_019_000_000, reserved_nanodollars: 0, remaining_nanodollars: 0,
+  });
+  await expect(budget.begin(researcher)).rejects.toMatchObject({ code: "DAILY_MODEL_BUDGET_EXCEEDED" });
 });
 it("keeps database connections available while waiting for the quota policy", async () => {
   const limitedPool = new Pool({
@@ -91,7 +91,7 @@ it("keeps database connections available while waiting for the quota policy", as
     },
     ":memory:",
   );
-  const pending = delayed.reserve(randomUUID(), 0);
+  const pending = delayed.begin(randomUUID());
   // Attach a handler before any asynchronous assertion can fail.
   const settled = Promise.allSettled([pending]);
   try {
@@ -104,53 +104,41 @@ it("keeps database connections available while waiting for the quota policy", as
     await delayed.close();
     await limitedPool.end();
   }
-  await expect(pending).resolves.toMatchObject({ amount: 0 });
+  await expect(pending).resolves.toMatchObject({ id: expect.any(String) });
 });
-it("settles once, releases the unused reservation, and retains unknown calls", async () => {
+it("settles once and refuses the next call at the exact allowance", async () => {
   const researcher = randomUUID();
-  const call = await budget.reserve(researcher, 1_000_000_000);
-  await expect(budget.reserve(researcher, 1)).rejects.toMatchObject({
-    code: "DAILY_MODEL_BUDGET_EXCEEDED",
-  });
+  const call = await budget.begin(researcher);
   await budget.settle(call, 200_000_000);
   await budget.settle(call, 200_000_000);
-  await expect(budget.settle(call, 0)).rejects.toThrow(
-    "MODEL_CHARGE_SETTLEMENT_CONFLICT",
-  );
-  await budget.reserve(researcher, 800_000_000);
-  await expect(budget.reserve(researcher, 1)).rejects.toMatchObject({
-    code: "DAILY_MODEL_BUDGET_EXCEEDED",
-  });
+  await expect(budget.settle(call, 0)).rejects.toThrow("MODEL_CHARGE_SETTLEMENT_CONFLICT");
+  const next = await budget.begin(researcher);
+  await budget.settle(next, 800_000_000);
+  await expect(budget.begin(researcher)).rejects.toMatchObject({ code: "DAILY_MODEL_BUDGET_EXCEEDED" });
 });
 it("exempts the current Operator and isolates researchers and Beijing dates", async () => {
-  await budget.reserve(operator, 2_000_000_000);
+  const operatorCall = await budget.begin(operator);
+  await budget.settle(operatorCall, 2_000_000_000);
+  await expect(budget.begin(operator)).resolves.toBeDefined();
   const researcher = randomUUID();
-  const prior = await budget.reserve(researcher, 1_000_000_000);
-  await pool.query(
-    "UPDATE agent.model_charge SET budget_day = budget_day - 1 WHERE id = $1",
-    [prior.id],
-  );
-  await expect(
-    budget.reserve(researcher, 1_000_000_000),
-  ).resolves.toBeDefined();
-  await expect(
-    budget.reserve(randomUUID(), 1_000_000_000),
-  ).resolves.toBeDefined();
-  const result = await pool.query(
-    "SELECT count(*)::int AS count FROM agent.model_charge WHERE budget_day = (now() AT TIME ZONE 'Asia/Shanghai')::date",
-  );
-  expect(result.rows[0].count).toBe(3);
+  const prior = await budget.begin(researcher);
+  await budget.settle(prior, 1_000_000_000);
+  await pool.query("UPDATE agent.model_charge SET budget_day = budget_day - 1 WHERE id = $1", [prior.id]);
+  await expect(budget.begin(researcher)).resolves.toBeDefined();
+  await expect(budget.begin(randomUUID())).resolves.toBeDefined();
+  const result = await pool.query("SELECT count(*)::int AS count FROM agent.model_charge WHERE budget_day = (now() AT TIME ZONE 'Asia/Shanghai')::date");
+  expect(result.rows[0].count).toBe(4);
 });
-
-it("uses changed policy values immediately instead of a local dollar constant", async () => {
+it("uses changed policy values immediately and rejects zero allowance", async () => {
   const researcher = randomUUID();
+  dailyBudget = 0;
+  await expect(budget.begin(researcher)).rejects.toMatchObject({ code: "DAILY_MODEL_BUDGET_EXCEEDED" });
   dailyBudget = 200_000_000;
-  await budget.reserve(researcher, 200_000_000);
-  await expect(budget.reserve(researcher, 1)).rejects.toMatchObject({
-    code: "DAILY_MODEL_BUDGET_EXCEEDED",
-  });
+  const call = await budget.begin(researcher);
+  await budget.settle(call, 200_000_000);
+  await expect(budget.begin(researcher)).rejects.toMatchObject({ code: "DAILY_MODEL_BUDGET_EXCEEDED" });
   dailyBudget = 300_000_000;
-  await expect(budget.reserve(researcher, 100_000_000)).resolves.toBeDefined();
+  await expect(budget.begin(researcher)).resolves.toBeDefined();
 });
 it("fails closed when the quota policy is unavailable or malformed", async () => {
   for (const payload of [
@@ -169,7 +157,7 @@ it("fails closed when the quota policy is unavailable or malformed", async () =>
       async () => Response.json(payload),
       ":memory:",
     );
-    await expect(invalid.reserve(randomUUID(), 0)).rejects.toMatchObject({
+    await expect(invalid.begin(randomUUID())).rejects.toMatchObject({
       code: "AGENT_UNAVAILABLE",
     });
     await invalid.close();
@@ -182,7 +170,7 @@ it("fails closed when the quota policy is unavailable or malformed", async () =>
     },
     ":memory:",
   );
-  await expect(unavailable.reserve(randomUUID(), 0)).rejects.toMatchObject({
+  await expect(unavailable.begin(randomUUID())).rejects.toMatchObject({
     code: "AGENT_UNAVAILABLE",
   });
   await unavailable.close();
@@ -194,11 +182,11 @@ it("fails closed when the quota policy is unavailable or malformed", async () =>
 
 it("releases conclusively unknown finished calls without backcharging late usage", async () => {
   const researcher = randomUUID();
-  const call = await budget.reserve(researcher, 1_000_000_000);
+  const call = await budget.begin(researcher);
   await budget.absorb(call);
   await budget.settle(call, 200_000_000);
   await expect(
-    budget.reserve(researcher, 1_000_000_000),
+    budget.begin(researcher),
   ).resolves.toBeDefined();
 });
 
@@ -221,8 +209,8 @@ it("durably recovers known usage before absorbing interrupted calls after a host
   let recovered: ModelBudget | undefined;
   const researcher = randomUUID();
   try {
-    const known = await interrupted.reserve(researcher, 900_000_000);
-    await interrupted.reserve(researcher, 100_000_000); // still executing when the host dies
+    const known = await interrupted.begin(researcher);
+    await interrupted.begin(researcher); // still executing when the host dies
     await pool.query("REVOKE UPDATE ON agent.model_charge FROM agent_runtime");
     await expect(
       interrupted.settle(known, 23_000_000),
@@ -235,6 +223,9 @@ it("durably recovers known usage before absorbing interrupted calls after a host
         )
       ).rows[0],
     ).toEqual({ actual_nanodollars: null });
+    // A known cost waiting for durable database settlement must block admission,
+    // even though no monetary reservation is held for the call.
+    await expect(interrupted.begin(researcher)).rejects.toThrow();
     await interrupted.close();
     await pool.query("GRANT UPDATE ON agent.model_charge TO agent_runtime");
     recovered = new ModelBudget(runtimePool, origin, undefined, journalPath);
@@ -247,7 +238,7 @@ it("durably recovers known usage before absorbing interrupted calls after a host
     expect(
       (
         await pool.query(
-          "SELECT settlement_state,actual_nanodollars FROM agent.model_charge ORDER BY reserved_nanodollars DESC",
+          "SELECT settlement_state,actual_nanodollars FROM agent.model_charge ORDER BY settlement_state DESC",
         )
       ).rows,
     ).toEqual([
@@ -256,7 +247,7 @@ it("durably recovers known usage before absorbing interrupted calls after a host
     ]);
     await recovered.recoverInterrupted();
     await expect(
-      recovered.reserve(researcher, 977_000_000),
+      recovered.begin(researcher),
     ).resolves.toBeDefined();
   } finally {
     await pool.query("GRANT UPDATE ON agent.model_charge TO agent_runtime");

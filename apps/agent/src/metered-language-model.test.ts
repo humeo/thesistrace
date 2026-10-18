@@ -27,22 +27,22 @@ function fixture(denied = false, unknown = false) {
         output_tokens: 10, output_tokens_details: { reasoning_tokens: 0 } } }),
     });
   });
-  const budget = { reserve: vi.fn(async () => {
+  const budget = { begin: vi.fn(async () => {
     if (denied) throw new AgentRunFailure("DAILY_MODEL_BUDGET_EXCEEDED");
-    return { id: "charge", amount: 51720000 };
+    return { id: "charge" };
   }), absorb: vi.fn(async () => undefined), settle: vi.fn(async () => undefined) };
   const metered = new MeteredLanguageModel(fetch => createOpenAI({ apiKey: "fixture", fetch })(model.providerModelId), model, budget, "researcher");
   return { metered, budget, requests };
 }
-it("reserves the configured input ceiling without a count endpoint and settles actual discounted usage", async () => {
+it("does not reserve an estimated ceiling and settles actual discounted usage", async () => {
   const f = fixture();
   await f.metered.doGenerate(options);
-  expect(f.budget.reserve).toHaveBeenCalledWith("researcher", 51720000);
-  expect(f.budget.settle).toHaveBeenCalledWith({ id: "charge", amount: 51720000 }, 140000);
+  expect(f.budget.begin).toHaveBeenCalledWith("researcher");
+  expect(f.budget.settle).toHaveBeenCalledWith({ id: "charge" }, 140000);
   expect(f.requests).toHaveLength(1);
   expect(f.requests[0]).toHaveProperty("max_output_tokens", 100);
 });
-it("never dispatches generation when the daily budget refuses the reservation", async () => {
+it("never dispatches generation when actual daily usage has exhausted the allowance", async () => {
   const f = fixture(true);
   await expect(f.metered.doGenerate(options)).rejects.toMatchObject({ code: "DAILY_MODEL_BUDGET_EXCEEDED" });
   expect(f.requests).toHaveLength(0);
@@ -52,7 +52,7 @@ it("sends the configured output bound when the caller omits one", async () => {
   const f = fixture();
   await f.metered.doGenerate({ ...options, maxOutputTokens: undefined });
   expect(f.requests[0]).toHaveProperty("max_output_tokens", 128000);
-  expect(f.budget.reserve).toHaveBeenCalledWith("researcher", 205200000);
+  expect(f.budget.begin).toHaveBeenCalledWith("researcher");
 });
 it("absorbs an ended invocation when the provider omits usage", async () => {
   const f = fixture(false, true);
@@ -62,7 +62,7 @@ it("absorbs an ended invocation when the provider omits usage", async () => {
 });
 
 it.each([false, true])("meters native SDK streaming with interrupted=%s", async interrupted => {
-  const budget = { reserve: vi.fn(async (_researcher: string, amount: number) => ({ id: "stream-charge", amount })),
+  const budget = { begin: vi.fn(async () => ({ id: "stream-charge" })),
     absorb: vi.fn(async () => undefined), settle: vi.fn(async () => undefined) };
   vi.stubGlobal("fetch", async (url: URL | string) => {
     if (!String(url).endsWith("/responses")) return new Response(null, { status: 404 });
@@ -89,9 +89,9 @@ it.each([false, true])("meters native SDK streaming with interrupted=%s", async 
     expect(budget.settle).not.toHaveBeenCalled();
   } else {
     await drain();
-    expect(budget.settle).toHaveBeenCalledWith({ id: "stream-charge", amount: 51720000 }, 140000);
+    expect(budget.settle).toHaveBeenCalledWith({ id: "stream-charge" }, 140000);
   }
-  expect(budget.reserve).toHaveBeenCalledWith("researcher", 51720000);
+  expect(budget.begin).toHaveBeenCalledWith("researcher");
 });
 
 it.each(["anthropic", "google"] as const)("meters the existing %s SDK adapter with configured prices", async adapter => {
@@ -112,12 +112,12 @@ it.each(["anthropic", "google"] as const)("meters the existing %s SDK adapter wi
       usageMetadata: { promptTokenCount: 1000, candidatesTokenCount: 10, totalTokenCount: 1010, cachedContentTokenCount: 400 },
     });
   });
-  const budget = { reserve: vi.fn(async () => ({ id: "charge", amount: 51720000 })), absorb: vi.fn(async () => undefined), settle: vi.fn(async () => undefined) };
+  const budget = { begin: vi.fn(async () => ({ id: "charge" })), absorb: vi.fn(async () => undefined), settle: vi.fn(async () => undefined) };
   const metered = new MeteredLanguageModel(fetch => adapter === "anthropic"
     ? createAnthropic({ apiKey: "fixture", fetch })(selected.providerModelId)
     : createGoogleGenerativeAI({ apiKey: "fixture", fetch })(selected.providerModelId), selected, budget, "researcher");
   await metered.doGenerate({ ...options, providerOptions: {} });
-  expect(budget.settle).toHaveBeenCalledWith({ id: "charge", amount: 51720000 }, 140000);
+  expect(budget.settle).toHaveBeenCalledWith({ id: "charge" }, 140000);
   expect(countBodies).toHaveLength(0);
 });
 

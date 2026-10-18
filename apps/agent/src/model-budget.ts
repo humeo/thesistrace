@@ -27,7 +27,7 @@ const policySchema = z
     active_daily_track_limit: limit,
   })
   .strict();
-export type ModelReservation = Readonly<{ id: string; amount: number }>;
+export type ModelCall = Readonly<{ id: string }>;
 
 export type ModelUsage = {
   actual_nanodollars: number;
@@ -50,12 +50,10 @@ export class ModelBudget {
     this.journal = new ModelSettlementJournal(journalPath);
   }
 
-  async reserve(
+  async begin(
     researcherId: string,
-    amount: number,
     runId?: string,
-  ): Promise<ModelReservation> {
-    exactAmount(amount);
+  ): Promise<ModelCall> {
     // Apply known pending costs before admitting another provider call.
     await this.reconcile();
     // Remote policy lookup must not hold a pooled connection or the budget lock.
@@ -74,26 +72,28 @@ export class ModelBudget {
       const date = day.rows[0]!.day;
       const result = await client.query<{ used: string }>(
         `
-        SELECT COALESCE(sum(COALESCE(actual_nanodollars, reserved_nanodollars)), 0)::text AS used
+        SELECT COALESCE(sum(actual_nanodollars), 0)::text AS used
         FROM agent.model_charge WHERE researcher_id = $1 AND budget_day = $2
       `,
         [researcherId, date],
       );
       if (
         policy.daily_model_budget_nanodollars !== null &&
-        BigInt(result.rows[0]!.used) + BigInt(amount) >
+        BigInt(result.rows[0]!.used) >=
           BigInt(policy.daily_model_budget_nanodollars)
       ) {
         throw new AgentRunFailure("DAILY_MODEL_BUDGET_EXCEEDED");
       }
       const id = randomUUID();
+      // Keep a durable in-flight call for settlement/recovery, without holding
+      // money. Concurrent calls may finish beyond the daily allowance.
       await client.query(
         `INSERT INTO agent.model_charge
-        (id, researcher_id, budget_day, reserved_nanodollars,run_id) VALUES ($1, $2, $3, $4,$5)`,
-        [id, researcherId, date, amount, runId ?? null],
+        (id, researcher_id, budget_day, reserved_nanodollars,run_id) VALUES ($1, $2, $3, 0,$4)`,
+        [id, researcherId, date, runId ?? null],
       );
       await client.query("COMMIT");
-      return { id, amount };
+      return { id };
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
@@ -102,13 +102,13 @@ export class ModelBudget {
     }
   }
 
-  async settle(reservation: ModelReservation, amount: number): Promise<void> {
+  async settle(call: ModelCall, amount: number): Promise<void> {
     exactAmount(amount);
-    this.journal.record({ id: reservation.id, kind: "settled", amount });
+    this.journal.record({ id: call.id, kind: "settled", amount });
     await this.flushOrDefer();
   }
-  async absorb(reservation: ModelReservation): Promise<void> {
-    this.journal.record({ id: reservation.id, kind: "absorbed", amount: 0 });
+  async absorb(call: ModelCall): Promise<void> {
+    this.journal.record({ id: call.id, kind: "absorbed", amount: 0 });
     await this.flushOrDefer();
   }
   /** On this single Agent host, all calls from the prior host have ended.

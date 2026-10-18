@@ -8,7 +8,7 @@ import type { RegisteredModel } from "./model-registry.js";
 import {
   ModelBudget,
   modelCost,
-  type ModelReservation,
+  type ModelCall,
 } from "./model-budget.js";
 import { AgentRunFailure } from "./run-failure.js";
 
@@ -30,43 +30,38 @@ export class MeteredLanguageModel implements LanguageModelV3 {
       fetch: typeof globalThis.fetch,
     ) => LanguageModelV3,
     private readonly model: RegisteredModel,
-    private readonly budget: Pick<ModelBudget, "reserve" | "settle" | "absorb">,
+    private readonly budget: Pick<ModelBudget, "begin" | "settle" | "absorb">,
     private readonly researcherId: string,
     private readonly runId?: string,
   ) {
     this.metadata = factory(globalThis.fetch);
   }
 
-  private call(options: LanguageModelV3CallOptions) {
-    let reservation: ModelReservation | undefined;
+  private call() {
+    let invocation: ModelCall | undefined;
     let known = false;
     const price = this.model.pricing;
-    const reserve = (amount: number) =>
+    const begin = () =>
       this.runId === undefined
-        ? this.budget.reserve(this.researcherId, amount)
-        : this.budget.reserve(this.researcherId, amount, this.runId);
+        ? this.budget.begin(this.researcherId)
+        : this.budget.begin(this.researcherId, this.runId);
     const meteredFetch: typeof globalThis.fetch = async (input, init) => {
-      if (reservation !== undefined)
+      if (invocation !== undefined)
         throw new AgentRunFailure("INTERNAL_FAILURE");
-      const output = options.maxOutputTokens ?? this.model.maxOutputTokens;
-      reservation = await reserve(
-        this.model.contextWindow *
-          Math.max(price.input, price.cacheRead, price.cacheWrite) +
-          output * price.output,
-      );
+      invocation = await begin();
       return fetch(input, init);
     };
     return {
       delegate: this.factory(meteredFetch),
       prepare: async () => {
         if (this.model.providerAdapter === "scripted")
-          reservation = await reserve(0);
+          invocation = await begin();
       },
       unknown: async () => {
-        if (reservation && !known) await this.budget.absorb(reservation);
+        if (invocation && !known) await this.budget.absorb(invocation);
       },
       settle: async (usage: LanguageModelV3Usage) => {
-        if (reservation === undefined)
+        if (invocation === undefined)
           throw new AgentRunFailure("INTERNAL_FAILURE");
         const actual = Object.values(price).every((value) => value === 0)
           ? 0
@@ -74,11 +69,9 @@ export class MeteredLanguageModel implements LanguageModelV3 {
         if (actual === null)
           throw new AgentRunFailure("PROVIDER_MALFORMED_STREAM");
         // Set this before awaiting the database: known usage awaiting settlement
-        // must retain its reservation on DB failure, never be absorbed as unknown.
+        // must retain its charge on DB failure, never be absorbed as unknown.
         known = true;
-        await this.budget.settle(reservation, actual);
-        if (actual > reservation.amount)
-          throw new AgentRunFailure("INTERNAL_FAILURE");
+        await this.budget.settle(invocation, actual);
       },
     };
   }
@@ -93,7 +86,7 @@ export class MeteredLanguageModel implements LanguageModelV3 {
   }
   async doGenerate(options: LanguageModelV3CallOptions) {
     options = this.bounded(options);
-    const call = this.call(options);
+    const call = this.call();
     try {
       await call.prepare();
       const result = await call.delegate.doGenerate(options);
@@ -106,7 +99,7 @@ export class MeteredLanguageModel implements LanguageModelV3 {
   }
   async doStream(options: LanguageModelV3CallOptions) {
     options = this.bounded(options);
-    const call = this.call(options);
+    const call = this.call();
     try {
       await call.prepare();
       const result = await call.delegate.doStream(options);
