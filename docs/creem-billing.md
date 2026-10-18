@@ -70,11 +70,13 @@ Agent 的 `model-settlements` 持久卷保存已结束模型调用的待入账�
 
 ## 商户审核访问与支持
 
-公开支持与隐私邮箱统一为 `support@qagentis.com`，显示在首页、政策页和账单页。Cloudflare Email Routing 转发至运营者的已验证 Gmail 收件箱；Resend 的已验证域名支持以该地址发信。转发收件和 Resend 发信不等于 Gmail 已配置该地址的 Send as 身份。
+公开支持与隐私邮箱统一为 `support@qagentis.com`，显示在首页、政策页和账单页。Cloudflare Email Routing 转发至运营者的已验证 Gmail 收件箱；Resend 的已验证域名支持以该地址发信。2026-10-18 已在 Gmail 完成该发件身份的地址验证，使用 `smtp.resend.com:587` / TLS 和仅限 qagentis.com 发信的独立凭据，回复设置为使用收件时的相同地址。Gmail 发件身份测试邮件已进入运营者自己的收件箱。[Google 已公告](https://support.google.com/mail/answer/22370) 2027 年 1 月起停止第三方地址的 Send as，需在此前改用支持 SMTP 的邮件客户端或其他邮箱服务。
 
 审核人员可在 `https://qagentis.com/login` 使用自己的邮箱接收验证码并注册；无需共享运营者账户或密码。Free 与付费档包含同样的研究工具，可体验研究、历史回测、AI 辅助分析和模拟跟踪；配额较低。外部 Agent 的 MCP 连接同样只提供研究能力。实际权限和用量以登录后的账单页为准。
 
 Creem 可能使用一次性 100% 折扣进行有限审核。零金额账期仍需官方验签及服务端交易、客户、商品、币种、模式和账期校验，不能通过跳转或 Checkout 完成直接发放权益。Auth 0004 显式迁移见[数据库迁移](database-migrations.md#auth-0004-verified-zero-value-subscription-periods)。生产支付在商户审批及 Live 配置完成前保持关闭；隔离 Fake、真实 Test Mode 与生产支付的验证结果必须分别记录。工程验证入口统一见 [AGENTS.md](../AGENTS.md#testing)。
+
+自动聊天标题在主轮次形成终态后才异步生成；标题请求仍计入 AI 预算，但其预留不得与该轮主回复争抢额度或延迟终态。主回复期间不会为了标题另行预留费用。
 
 ## 发给 Creem 的类别确认说明（待运营者发送）
 
