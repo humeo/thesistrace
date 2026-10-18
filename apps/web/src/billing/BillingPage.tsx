@@ -275,9 +275,7 @@ export function BillingPage() {
                           })}
                         </li>
                         <li>
-                          {t("aiAmount", {
-                            amount: usd(limits.daily_model_budget_usd),
-                          })}
+                          {t(`aiAmount.${plan}`)}
                         </li>
                       </ul>
                     </CardContent>
