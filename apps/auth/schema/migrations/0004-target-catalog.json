@@ -1,0 +1,2674 @@
+{
+  "columns": [
+    {
+      "default": "gen_random_uuid()",
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "relation": "account",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "issuer",
+      "notNull": true,
+      "position": 2,
+      "relation": "account",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "accountId",
+      "notNull": true,
+      "position": 3,
+      "relation": "account",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "providerId",
+      "notNull": true,
+      "position": 4,
+      "relation": "account",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "userId",
+      "notNull": true,
+      "position": 5,
+      "relation": "account",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "accessToken",
+      "notNull": false,
+      "position": 6,
+      "relation": "account",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "refreshToken",
+      "notNull": false,
+      "position": 7,
+      "relation": "account",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "idToken",
+      "notNull": false,
+      "position": 8,
+      "relation": "account",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "accessTokenExpiresAt",
+      "notNull": false,
+      "position": 9,
+      "relation": "account",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "refreshTokenExpiresAt",
+      "notNull": false,
+      "position": 10,
+      "relation": "account",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "scope",
+      "notNull": false,
+      "position": 11,
+      "relation": "account",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "password",
+      "notNull": false,
+      "position": 12,
+      "relation": "account",
+      "type": "text"
+    },
+    {
+      "default": "CURRENT_TIMESTAMP",
+      "name": "createdAt",
+      "notNull": true,
+      "position": 13,
+      "relation": "account",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "updatedAt",
+      "notNull": true,
+      "position": 14,
+      "relation": "account",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "singleton",
+      "notNull": true,
+      "position": 1,
+      "relation": "auth_secret_contract",
+      "type": "boolean"
+    },
+    {
+      "default": null,
+      "name": "secret_fingerprint",
+      "notNull": true,
+      "position": 2,
+      "relation": "auth_secret_contract",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "researcher_id",
+      "notNull": true,
+      "position": 1,
+      "relation": "billing_account",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "customer_id",
+      "notNull": false,
+      "position": 2,
+      "relation": "billing_account",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "subscription_id",
+      "notNull": false,
+      "position": 3,
+      "relation": "billing_account",
+      "type": "text"
+    },
+    {
+      "default": "gen_random_uuid()",
+      "name": "checkout_request_id",
+      "notNull": true,
+      "position": 4,
+      "relation": "billing_account",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "checkout_plan",
+      "notNull": false,
+      "position": 5,
+      "relation": "billing_account",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "checkout_id",
+      "notNull": false,
+      "position": 6,
+      "relation": "billing_account",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "checkout_url",
+      "notNull": false,
+      "position": 7,
+      "relation": "billing_account",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "provider_status",
+      "notNull": false,
+      "position": 8,
+      "relation": "billing_account",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "renewal_plan",
+      "notNull": false,
+      "position": 9,
+      "relation": "billing_account",
+      "type": "text"
+    },
+    {
+      "default": "now()",
+      "name": "updated_at",
+      "notNull": true,
+      "position": 10,
+      "relation": "billing_account",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "transaction_id",
+      "notNull": true,
+      "position": 1,
+      "relation": "billing_adjustment",
+      "type": "text"
+    },
+    {
+      "default": "0",
+      "name": "refunded_amount",
+      "notNull": true,
+      "position": 2,
+      "relation": "billing_adjustment",
+      "type": "integer"
+    },
+    {
+      "default": "false",
+      "name": "disputed",
+      "notNull": true,
+      "position": 3,
+      "relation": "billing_adjustment",
+      "type": "boolean"
+    },
+    {
+      "default": null,
+      "name": "dispute_resolved_at",
+      "notNull": false,
+      "position": 4,
+      "relation": "billing_adjustment",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "now()",
+      "name": "updated_at",
+      "notNull": true,
+      "position": 5,
+      "relation": "billing_adjustment",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "false",
+      "name": "fully_refunded",
+      "notNull": true,
+      "position": 6,
+      "relation": "billing_adjustment",
+      "type": "boolean"
+    },
+    {
+      "default": null,
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "relation": "billing_command",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "researcher_id",
+      "notNull": true,
+      "position": 2,
+      "relation": "billing_command",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "kind",
+      "notNull": true,
+      "position": 3,
+      "relation": "billing_command",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "plan_key",
+      "notNull": false,
+      "position": 4,
+      "relation": "billing_command",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "status",
+      "notNull": true,
+      "position": 5,
+      "relation": "billing_command",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "result",
+      "notNull": false,
+      "position": 6,
+      "relation": "billing_command",
+      "type": "jsonb"
+    },
+    {
+      "default": "now()",
+      "name": "created_at",
+      "notNull": true,
+      "position": 7,
+      "relation": "billing_command",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "now()",
+      "name": "updated_at",
+      "notNull": true,
+      "position": 8,
+      "relation": "billing_command",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "relation": "billing_event",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "event_type",
+      "notNull": true,
+      "position": 2,
+      "relation": "billing_event",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "raw_body",
+      "notNull": true,
+      "position": 3,
+      "relation": "billing_event",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "body_sha256",
+      "notNull": true,
+      "position": 4,
+      "relation": "billing_event",
+      "type": "bytea"
+    },
+    {
+      "default": "now()",
+      "name": "received_at",
+      "notNull": true,
+      "position": 5,
+      "relation": "billing_event",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "processed_at",
+      "notNull": false,
+      "position": 6,
+      "relation": "billing_event",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "0",
+      "name": "attempts",
+      "notNull": true,
+      "position": 7,
+      "relation": "billing_event",
+      "type": "integer"
+    },
+    {
+      "default": null,
+      "name": "failure_code",
+      "notNull": false,
+      "position": 8,
+      "relation": "billing_event",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "transaction_id",
+      "notNull": true,
+      "position": 1,
+      "relation": "billing_payment",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "researcher_id",
+      "notNull": true,
+      "position": 2,
+      "relation": "billing_payment",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "subscription_id",
+      "notNull": true,
+      "position": 3,
+      "relation": "billing_payment",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "plan_key",
+      "notNull": true,
+      "position": 4,
+      "relation": "billing_payment",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "starts_at",
+      "notNull": true,
+      "position": 5,
+      "relation": "billing_payment",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "ends_at",
+      "notNull": true,
+      "position": 6,
+      "relation": "billing_payment",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "amount",
+      "notNull": true,
+      "position": 7,
+      "relation": "billing_payment",
+      "type": "integer"
+    },
+    {
+      "default": "0",
+      "name": "refunded_amount",
+      "notNull": true,
+      "position": 8,
+      "relation": "billing_payment",
+      "type": "integer"
+    },
+    {
+      "default": "false",
+      "name": "disputed",
+      "notNull": true,
+      "position": 9,
+      "relation": "billing_payment",
+      "type": "boolean"
+    },
+    {
+      "default": "now()",
+      "name": "created_at",
+      "notNull": true,
+      "position": 10,
+      "relation": "billing_payment",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "false",
+      "name": "fully_refunded",
+      "notNull": true,
+      "position": 11,
+      "relation": "billing_payment",
+      "type": "boolean"
+    },
+    {
+      "default": "gen_random_uuid()",
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "relation": "oauthAccessToken",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "token",
+      "notNull": true,
+      "position": 2,
+      "relation": "oauthAccessToken",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "clientId",
+      "notNull": true,
+      "position": 3,
+      "relation": "oauthAccessToken",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "sessionId",
+      "notNull": false,
+      "position": 4,
+      "relation": "oauthAccessToken",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "userId",
+      "notNull": false,
+      "position": 5,
+      "relation": "oauthAccessToken",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "referenceId",
+      "notNull": false,
+      "position": 6,
+      "relation": "oauthAccessToken",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "authorizationCodeId",
+      "notNull": false,
+      "position": 7,
+      "relation": "oauthAccessToken",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "resources",
+      "notNull": false,
+      "position": 8,
+      "relation": "oauthAccessToken",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "requestedUserInfoClaims",
+      "notNull": false,
+      "position": 9,
+      "relation": "oauthAccessToken",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "refreshId",
+      "notNull": false,
+      "position": 10,
+      "relation": "oauthAccessToken",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "expiresAt",
+      "notNull": true,
+      "position": 11,
+      "relation": "oauthAccessToken",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "createdAt",
+      "notNull": true,
+      "position": 12,
+      "relation": "oauthAccessToken",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "revoked",
+      "notNull": false,
+      "position": 13,
+      "relation": "oauthAccessToken",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "confirmation",
+      "notNull": false,
+      "position": 14,
+      "relation": "oauthAccessToken",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "scopes",
+      "notNull": true,
+      "position": 15,
+      "relation": "oauthAccessToken",
+      "type": "jsonb"
+    },
+    {
+      "default": "gen_random_uuid()",
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "relation": "oauthClient",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "clientId",
+      "notNull": true,
+      "position": 2,
+      "relation": "oauthClient",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "clientSecret",
+      "notNull": false,
+      "position": 3,
+      "relation": "oauthClient",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "clientDiscoveryId",
+      "notNull": false,
+      "position": 4,
+      "relation": "oauthClient",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "disabled",
+      "notNull": false,
+      "position": 5,
+      "relation": "oauthClient",
+      "type": "boolean"
+    },
+    {
+      "default": null,
+      "name": "skipConsent",
+      "notNull": false,
+      "position": 6,
+      "relation": "oauthClient",
+      "type": "boolean"
+    },
+    {
+      "default": null,
+      "name": "enableEndSession",
+      "notNull": false,
+      "position": 7,
+      "relation": "oauthClient",
+      "type": "boolean"
+    },
+    {
+      "default": null,
+      "name": "subjectType",
+      "notNull": false,
+      "position": 8,
+      "relation": "oauthClient",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "scopes",
+      "notNull": false,
+      "position": 9,
+      "relation": "oauthClient",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "clientCredentialsScopes",
+      "notNull": false,
+      "position": 10,
+      "relation": "oauthClient",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "userId",
+      "notNull": false,
+      "position": 11,
+      "relation": "oauthClient",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "createdAt",
+      "notNull": false,
+      "position": 12,
+      "relation": "oauthClient",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "updatedAt",
+      "notNull": false,
+      "position": 13,
+      "relation": "oauthClient",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "name",
+      "notNull": false,
+      "position": 14,
+      "relation": "oauthClient",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "uri",
+      "notNull": false,
+      "position": 15,
+      "relation": "oauthClient",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "icon",
+      "notNull": false,
+      "position": 16,
+      "relation": "oauthClient",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "contacts",
+      "notNull": false,
+      "position": 17,
+      "relation": "oauthClient",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "tos",
+      "notNull": false,
+      "position": 18,
+      "relation": "oauthClient",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "policy",
+      "notNull": false,
+      "position": 19,
+      "relation": "oauthClient",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "softwareId",
+      "notNull": false,
+      "position": 20,
+      "relation": "oauthClient",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "softwareVersion",
+      "notNull": false,
+      "position": 21,
+      "relation": "oauthClient",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "softwareStatement",
+      "notNull": false,
+      "position": 22,
+      "relation": "oauthClient",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "redirectUris",
+      "notNull": true,
+      "position": 23,
+      "relation": "oauthClient",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "postLogoutRedirectUris",
+      "notNull": false,
+      "position": 24,
+      "relation": "oauthClient",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "backchannelLogoutUri",
+      "notNull": false,
+      "position": 25,
+      "relation": "oauthClient",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "backchannelLogoutSessionRequired",
+      "notNull": false,
+      "position": 26,
+      "relation": "oauthClient",
+      "type": "boolean"
+    },
+    {
+      "default": null,
+      "name": "tokenEndpointAuthMethod",
+      "notNull": false,
+      "position": 27,
+      "relation": "oauthClient",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "applicationType",
+      "notNull": false,
+      "position": 28,
+      "relation": "oauthClient",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "jwks",
+      "notNull": false,
+      "position": 29,
+      "relation": "oauthClient",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "jwksUri",
+      "notNull": false,
+      "position": 30,
+      "relation": "oauthClient",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "grantTypes",
+      "notNull": false,
+      "position": 31,
+      "relation": "oauthClient",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "responseTypes",
+      "notNull": false,
+      "position": 32,
+      "relation": "oauthClient",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "requirePKCE",
+      "notNull": false,
+      "position": 33,
+      "relation": "oauthClient",
+      "type": "boolean"
+    },
+    {
+      "default": null,
+      "name": "dpopBoundAccessTokens",
+      "notNull": false,
+      "position": 34,
+      "relation": "oauthClient",
+      "type": "boolean"
+    },
+    {
+      "default": null,
+      "name": "referenceId",
+      "notNull": false,
+      "position": 35,
+      "relation": "oauthClient",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "metadata",
+      "notNull": false,
+      "position": 36,
+      "relation": "oauthClient",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "relation": "oauthClientAssertion",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "expiresAt",
+      "notNull": true,
+      "position": 2,
+      "relation": "oauthClientAssertion",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "gen_random_uuid()",
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "relation": "oauthClientResource",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "clientId",
+      "notNull": true,
+      "position": 2,
+      "relation": "oauthClientResource",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "resourceId",
+      "notNull": true,
+      "position": 3,
+      "relation": "oauthClientResource",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "metadata",
+      "notNull": false,
+      "position": 4,
+      "relation": "oauthClientResource",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "createdAt",
+      "notNull": false,
+      "position": 5,
+      "relation": "oauthClientResource",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "gen_random_uuid()",
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "relation": "oauthConsent",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "clientId",
+      "notNull": true,
+      "position": 2,
+      "relation": "oauthConsent",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "userId",
+      "notNull": false,
+      "position": 3,
+      "relation": "oauthConsent",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "referenceId",
+      "notNull": false,
+      "position": 4,
+      "relation": "oauthConsent",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "resources",
+      "notNull": false,
+      "position": 5,
+      "relation": "oauthConsent",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "requestedUserInfoClaims",
+      "notNull": false,
+      "position": 6,
+      "relation": "oauthConsent",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "scopes",
+      "notNull": true,
+      "position": 7,
+      "relation": "oauthConsent",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "createdAt",
+      "notNull": true,
+      "position": 8,
+      "relation": "oauthConsent",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "updatedAt",
+      "notNull": true,
+      "position": 9,
+      "relation": "oauthConsent",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "gen_random_uuid()",
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "relation": "oauthRefreshToken",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "token",
+      "notNull": true,
+      "position": 2,
+      "relation": "oauthRefreshToken",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "clientId",
+      "notNull": true,
+      "position": 3,
+      "relation": "oauthRefreshToken",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "sessionId",
+      "notNull": false,
+      "position": 4,
+      "relation": "oauthRefreshToken",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "userId",
+      "notNull": true,
+      "position": 5,
+      "relation": "oauthRefreshToken",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "referenceId",
+      "notNull": false,
+      "position": 6,
+      "relation": "oauthRefreshToken",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "authorizationCodeId",
+      "notNull": false,
+      "position": 7,
+      "relation": "oauthRefreshToken",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "resources",
+      "notNull": false,
+      "position": 8,
+      "relation": "oauthRefreshToken",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "requestedUserInfoClaims",
+      "notNull": false,
+      "position": 9,
+      "relation": "oauthRefreshToken",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "expiresAt",
+      "notNull": true,
+      "position": 10,
+      "relation": "oauthRefreshToken",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "createdAt",
+      "notNull": true,
+      "position": 11,
+      "relation": "oauthRefreshToken",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "revoked",
+      "notNull": false,
+      "position": 12,
+      "relation": "oauthRefreshToken",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "rotatedAt",
+      "notNull": false,
+      "position": 13,
+      "relation": "oauthRefreshToken",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "rotationReplayResponse",
+      "notNull": false,
+      "position": 14,
+      "relation": "oauthRefreshToken",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "rotationReplayExpiresAt",
+      "notNull": false,
+      "position": 15,
+      "relation": "oauthRefreshToken",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "authTime",
+      "notNull": false,
+      "position": 16,
+      "relation": "oauthRefreshToken",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "confirmation",
+      "notNull": false,
+      "position": 17,
+      "relation": "oauthRefreshToken",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "scopes",
+      "notNull": true,
+      "position": 18,
+      "relation": "oauthRefreshToken",
+      "type": "jsonb"
+    },
+    {
+      "default": "gen_random_uuid()",
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "relation": "oauthResource",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "identifier",
+      "notNull": true,
+      "position": 2,
+      "relation": "oauthResource",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "name",
+      "notNull": true,
+      "position": 3,
+      "relation": "oauthResource",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "accessTokenTtl",
+      "notNull": false,
+      "position": 4,
+      "relation": "oauthResource",
+      "type": "integer"
+    },
+    {
+      "default": null,
+      "name": "refreshTokenTtl",
+      "notNull": false,
+      "position": 5,
+      "relation": "oauthResource",
+      "type": "integer"
+    },
+    {
+      "default": null,
+      "name": "signingAlgorithm",
+      "notNull": false,
+      "position": 6,
+      "relation": "oauthResource",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "signingKeyId",
+      "notNull": false,
+      "position": 7,
+      "relation": "oauthResource",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "allowedScopes",
+      "notNull": false,
+      "position": 8,
+      "relation": "oauthResource",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "customClaims",
+      "notNull": false,
+      "position": 9,
+      "relation": "oauthResource",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "dpopBoundAccessTokensRequired",
+      "notNull": false,
+      "position": 10,
+      "relation": "oauthResource",
+      "type": "boolean"
+    },
+    {
+      "default": null,
+      "name": "disabled",
+      "notNull": false,
+      "position": 11,
+      "relation": "oauthResource",
+      "type": "boolean"
+    },
+    {
+      "default": null,
+      "name": "createdAt",
+      "notNull": false,
+      "position": 12,
+      "relation": "oauthResource",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "updatedAt",
+      "notNull": false,
+      "position": 13,
+      "relation": "oauthResource",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "policyVersion",
+      "notNull": false,
+      "position": 14,
+      "relation": "oauthResource",
+      "type": "integer"
+    },
+    {
+      "default": null,
+      "name": "metadata",
+      "notNull": false,
+      "position": 15,
+      "relation": "oauthResource",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "singleton",
+      "notNull": true,
+      "position": 1,
+      "relation": "operator_assignment",
+      "type": "boolean"
+    },
+    {
+      "default": null,
+      "name": "researcher_id",
+      "notNull": true,
+      "position": 2,
+      "relation": "operator_assignment",
+      "type": "uuid"
+    },
+    {
+      "default": "CURRENT_TIMESTAMP",
+      "name": "assigned_at",
+      "notNull": true,
+      "position": 3,
+      "relation": "operator_assignment",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "gen_random_uuid()",
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "relation": "operator_proof",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "token_hash",
+      "notNull": true,
+      "position": 2,
+      "relation": "operator_proof",
+      "type": "bytea"
+    },
+    {
+      "default": null,
+      "name": "session_id",
+      "notNull": true,
+      "position": 3,
+      "relation": "operator_proof",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "operation",
+      "notNull": true,
+      "position": 4,
+      "relation": "operator_proof",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "request_hash",
+      "notNull": true,
+      "position": 5,
+      "relation": "operator_proof",
+      "type": "bytea"
+    },
+    {
+      "default": null,
+      "name": "state",
+      "notNull": true,
+      "position": 6,
+      "relation": "operator_proof",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "expires_at",
+      "notNull": true,
+      "position": 7,
+      "relation": "operator_proof",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "CURRENT_TIMESTAMP",
+      "name": "created_at",
+      "notNull": true,
+      "position": 8,
+      "relation": "operator_proof",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "claimed_at",
+      "notNull": false,
+      "position": 9,
+      "relation": "operator_proof",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "consumed_at",
+      "notNull": false,
+      "position": 10,
+      "relation": "operator_proof",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "gen_random_uuid()",
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "relation": "rateLimit",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "key",
+      "notNull": true,
+      "position": 2,
+      "relation": "rateLimit",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "count",
+      "notNull": true,
+      "position": 3,
+      "relation": "rateLimit",
+      "type": "integer"
+    },
+    {
+      "default": null,
+      "name": "lastRequest",
+      "notNull": true,
+      "position": 4,
+      "relation": "rateLimit",
+      "type": "bigint"
+    },
+    {
+      "default": null,
+      "name": "singleton",
+      "notNull": true,
+      "position": 1,
+      "relation": "schema_contract",
+      "type": "boolean"
+    },
+    {
+      "default": null,
+      "name": "schema_fingerprint",
+      "notNull": true,
+      "position": 2,
+      "relation": "schema_contract",
+      "type": "text"
+    },
+    {
+      "default": "gen_random_uuid()",
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "relation": "security_audit",
+      "type": "uuid"
+    },
+    {
+      "default": "CURRENT_TIMESTAMP",
+      "name": "occurred_at",
+      "notNull": true,
+      "position": 2,
+      "relation": "security_audit",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "event",
+      "notNull": true,
+      "position": 3,
+      "relation": "security_audit",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "outcome",
+      "notNull": true,
+      "position": 4,
+      "relation": "security_audit",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "researcher_id",
+      "notNull": false,
+      "position": 5,
+      "relation": "security_audit",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "unknown_email_hmac",
+      "notNull": false,
+      "position": 6,
+      "relation": "security_audit",
+      "type": "bytea"
+    },
+    {
+      "default": "gen_random_uuid()",
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "relation": "session",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "expiresAt",
+      "notNull": true,
+      "position": 2,
+      "relation": "session",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "token",
+      "notNull": true,
+      "position": 3,
+      "relation": "session",
+      "type": "text"
+    },
+    {
+      "default": "CURRENT_TIMESTAMP",
+      "name": "createdAt",
+      "notNull": true,
+      "position": 4,
+      "relation": "session",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "updatedAt",
+      "notNull": true,
+      "position": 5,
+      "relation": "session",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "ipAddress",
+      "notNull": false,
+      "position": 6,
+      "relation": "session",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "userAgent",
+      "notNull": false,
+      "position": 7,
+      "relation": "session",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "userId",
+      "notNull": true,
+      "position": 8,
+      "relation": "session",
+      "type": "uuid"
+    },
+    {
+      "default": "gen_random_uuid()",
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "relation": "user",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "name",
+      "notNull": true,
+      "position": 2,
+      "relation": "user",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "email",
+      "notNull": true,
+      "position": 3,
+      "relation": "user",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "emailVerified",
+      "notNull": true,
+      "position": 4,
+      "relation": "user",
+      "type": "boolean"
+    },
+    {
+      "default": null,
+      "name": "image",
+      "notNull": false,
+      "position": 5,
+      "relation": "user",
+      "type": "text"
+    },
+    {
+      "default": "CURRENT_TIMESTAMP",
+      "name": "createdAt",
+      "notNull": true,
+      "position": 6,
+      "relation": "user",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "CURRENT_TIMESTAMP",
+      "name": "updatedAt",
+      "notNull": true,
+      "position": 7,
+      "relation": "user",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "active",
+      "notNull": true,
+      "position": 8,
+      "relation": "user",
+      "type": "boolean"
+    },
+    {
+      "default": "gen_random_uuid()",
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "relation": "verification",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "identifier",
+      "notNull": true,
+      "position": 2,
+      "relation": "verification",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "value",
+      "notNull": true,
+      "position": 3,
+      "relation": "verification",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "expiresAt",
+      "notNull": true,
+      "position": 4,
+      "relation": "verification",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "CURRENT_TIMESTAMP",
+      "name": "createdAt",
+      "notNull": true,
+      "position": 5,
+      "relation": "verification",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "CURRENT_TIMESTAMP",
+      "name": "updatedAt",
+      "notNull": true,
+      "position": 6,
+      "relation": "verification",
+      "type": "timestamp with time zone"
+    }
+  ],
+  "constraints": [
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "account_pkey",
+      "relation": "account",
+      "type": "p"
+    },
+    {
+      "definition": "FOREIGN KEY (\"userId\") REFERENCES auth.\"user\"(id) ON DELETE CASCADE",
+      "name": "account_userid_fkey",
+      "relation": "account",
+      "type": "f"
+    },
+    {
+      "definition": "PRIMARY KEY (singleton)",
+      "name": "auth_secret_contract_pkey",
+      "relation": "auth_secret_contract",
+      "type": "p"
+    },
+    {
+      "definition": "CHECK ((secret_fingerprint ~ '^[0-9a-f]{64}$'::text))",
+      "name": "auth_secret_contract_secret_fingerprint_check",
+      "relation": "auth_secret_contract",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK (singleton)",
+      "name": "auth_secret_contract_singleton_check",
+      "relation": "auth_secret_contract",
+      "type": "c"
+    },
+    {
+      "definition": "UNIQUE (checkout_id)",
+      "name": "billing_account_checkout_id_key",
+      "relation": "billing_account",
+      "type": "u"
+    },
+    {
+      "definition": "CHECK ((checkout_plan = ANY (ARRAY['pro'::text, 'max'::text])))",
+      "name": "billing_account_checkout_plan_check",
+      "relation": "billing_account",
+      "type": "c"
+    },
+    {
+      "definition": "UNIQUE (checkout_request_id)",
+      "name": "billing_account_checkout_request_id_key",
+      "relation": "billing_account",
+      "type": "u"
+    },
+    {
+      "definition": "UNIQUE (customer_id)",
+      "name": "billing_account_customer_id_key",
+      "relation": "billing_account",
+      "type": "u"
+    },
+    {
+      "definition": "PRIMARY KEY (researcher_id)",
+      "name": "billing_account_pkey",
+      "relation": "billing_account",
+      "type": "p"
+    },
+    {
+      "definition": "CHECK ((renewal_plan = ANY (ARRAY['pro'::text, 'max'::text])))",
+      "name": "billing_account_renewal_plan_check",
+      "relation": "billing_account",
+      "type": "c"
+    },
+    {
+      "definition": "FOREIGN KEY (researcher_id) REFERENCES auth.\"user\"(id)",
+      "name": "billing_account_researcher_id_fkey",
+      "relation": "billing_account",
+      "type": "f"
+    },
+    {
+      "definition": "UNIQUE (subscription_id)",
+      "name": "billing_account_subscription_id_key",
+      "relation": "billing_account",
+      "type": "u"
+    },
+    {
+      "definition": "PRIMARY KEY (transaction_id)",
+      "name": "billing_adjustment_pkey",
+      "relation": "billing_adjustment",
+      "type": "p"
+    },
+    {
+      "definition": "CHECK ((refunded_amount >= 0))",
+      "name": "billing_adjustment_refunded_amount_check",
+      "relation": "billing_adjustment",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK (((kind = 'cancel'::text) = (plan_key IS NULL)))",
+      "name": "billing_command_check",
+      "relation": "billing_command",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK ((kind = ANY (ARRAY['checkout'::text, 'change'::text, 'cancel'::text])))",
+      "name": "billing_command_kind_check",
+      "relation": "billing_command",
+      "type": "c"
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "billing_command_pkey",
+      "relation": "billing_command",
+      "type": "p"
+    },
+    {
+      "definition": "CHECK ((plan_key = ANY (ARRAY['pro'::text, 'max'::text])))",
+      "name": "billing_command_plan_key_check",
+      "relation": "billing_command",
+      "type": "c"
+    },
+    {
+      "definition": "FOREIGN KEY (researcher_id) REFERENCES auth.\"user\"(id)",
+      "name": "billing_command_researcher_id_fkey",
+      "relation": "billing_command",
+      "type": "f"
+    },
+    {
+      "definition": "CHECK ((status = ANY (ARRAY['prepared'::text, 'dispatched'::text, 'completed'::text, 'uncertain'::text])))",
+      "name": "billing_command_status_check",
+      "relation": "billing_command",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK ((attempts >= 0))",
+      "name": "billing_event_attempts_check",
+      "relation": "billing_event",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK ((octet_length(body_sha256) = 32))",
+      "name": "billing_event_body_sha256_check",
+      "relation": "billing_event",
+      "type": "c"
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "billing_event_pkey",
+      "relation": "billing_event",
+      "type": "p"
+    },
+    {
+      "definition": "CHECK ((amount >= 0))",
+      "name": "billing_payment_amount_check",
+      "relation": "billing_payment",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK (((refunded_amount >= 0) AND (refunded_amount <= amount)))",
+      "name": "billing_payment_check",
+      "relation": "billing_payment",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK ((ends_at > starts_at))",
+      "name": "billing_payment_check1",
+      "relation": "billing_payment",
+      "type": "c"
+    },
+    {
+      "definition": "PRIMARY KEY (transaction_id)",
+      "name": "billing_payment_pkey",
+      "relation": "billing_payment",
+      "type": "p"
+    },
+    {
+      "definition": "CHECK ((plan_key = ANY (ARRAY['pro'::text, 'max'::text])))",
+      "name": "billing_payment_plan_key_check",
+      "relation": "billing_payment",
+      "type": "c"
+    },
+    {
+      "definition": "FOREIGN KEY (researcher_id) REFERENCES auth.\"user\"(id)",
+      "name": "billing_payment_researcher_id_fkey",
+      "relation": "billing_payment",
+      "type": "f"
+    },
+    {
+      "definition": "FOREIGN KEY (\"clientId\") REFERENCES auth.\"oauthClient\"(\"clientId\") ON DELETE CASCADE",
+      "name": "oauthAccessToken_clientId_fkey",
+      "relation": "oauthAccessToken",
+      "type": "f"
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "oauthAccessToken_pkey",
+      "relation": "oauthAccessToken",
+      "type": "p"
+    },
+    {
+      "definition": "FOREIGN KEY (\"refreshId\") REFERENCES auth.\"oauthRefreshToken\"(id) ON DELETE CASCADE",
+      "name": "oauthAccessToken_refreshId_fkey",
+      "relation": "oauthAccessToken",
+      "type": "f"
+    },
+    {
+      "definition": "FOREIGN KEY (\"sessionId\") REFERENCES auth.session(id) ON DELETE SET NULL",
+      "name": "oauthAccessToken_sessionId_fkey",
+      "relation": "oauthAccessToken",
+      "type": "f"
+    },
+    {
+      "definition": "UNIQUE (token)",
+      "name": "oauthAccessToken_token_key",
+      "relation": "oauthAccessToken",
+      "type": "u"
+    },
+    {
+      "definition": "FOREIGN KEY (\"userId\") REFERENCES auth.\"user\"(id) ON DELETE CASCADE",
+      "name": "oauthAccessToken_userId_fkey",
+      "relation": "oauthAccessToken",
+      "type": "f"
+    },
+    {
+      "definition": "UNIQUE (\"clientId\")",
+      "name": "oauthClient_clientId_key",
+      "relation": "oauthClient",
+      "type": "u"
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "oauthClient_pkey",
+      "relation": "oauthClient",
+      "type": "p"
+    },
+    {
+      "definition": "FOREIGN KEY (\"userId\") REFERENCES auth.\"user\"(id) ON DELETE CASCADE",
+      "name": "oauthClient_userId_fkey",
+      "relation": "oauthClient",
+      "type": "f"
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "oauthClientAssertion_pkey",
+      "relation": "oauthClientAssertion",
+      "type": "p"
+    },
+    {
+      "definition": "FOREIGN KEY (\"clientId\") REFERENCES auth.\"oauthClient\"(\"clientId\") ON DELETE CASCADE",
+      "name": "oauthClientResource_clientId_fkey",
+      "relation": "oauthClientResource",
+      "type": "f"
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "oauthClientResource_pkey",
+      "relation": "oauthClientResource",
+      "type": "p"
+    },
+    {
+      "definition": "FOREIGN KEY (\"resourceId\") REFERENCES auth.\"oauthResource\"(identifier) ON DELETE CASCADE",
+      "name": "oauthClientResource_resourceId_fkey",
+      "relation": "oauthClientResource",
+      "type": "f"
+    },
+    {
+      "definition": "FOREIGN KEY (\"clientId\") REFERENCES auth.\"oauthClient\"(\"clientId\") ON DELETE CASCADE",
+      "name": "oauthConsent_clientId_fkey",
+      "relation": "oauthConsent",
+      "type": "f"
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "oauthConsent_pkey",
+      "relation": "oauthConsent",
+      "type": "p"
+    },
+    {
+      "definition": "FOREIGN KEY (\"userId\") REFERENCES auth.\"user\"(id) ON DELETE CASCADE",
+      "name": "oauthConsent_userId_fkey",
+      "relation": "oauthConsent",
+      "type": "f"
+    },
+    {
+      "definition": "FOREIGN KEY (\"clientId\") REFERENCES auth.\"oauthClient\"(\"clientId\") ON DELETE CASCADE",
+      "name": "oauthRefreshToken_clientId_fkey",
+      "relation": "oauthRefreshToken",
+      "type": "f"
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "oauthRefreshToken_pkey",
+      "relation": "oauthRefreshToken",
+      "type": "p"
+    },
+    {
+      "definition": "FOREIGN KEY (\"sessionId\") REFERENCES auth.session(id) ON DELETE SET NULL",
+      "name": "oauthRefreshToken_sessionId_fkey",
+      "relation": "oauthRefreshToken",
+      "type": "f"
+    },
+    {
+      "definition": "UNIQUE (token)",
+      "name": "oauthRefreshToken_token_key",
+      "relation": "oauthRefreshToken",
+      "type": "u"
+    },
+    {
+      "definition": "FOREIGN KEY (\"userId\") REFERENCES auth.\"user\"(id) ON DELETE CASCADE",
+      "name": "oauthRefreshToken_userId_fkey",
+      "relation": "oauthRefreshToken",
+      "type": "f"
+    },
+    {
+      "definition": "UNIQUE (identifier)",
+      "name": "oauthResource_identifier_key",
+      "relation": "oauthResource",
+      "type": "u"
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "oauthResource_pkey",
+      "relation": "oauthResource",
+      "type": "p"
+    },
+    {
+      "definition": "PRIMARY KEY (singleton)",
+      "name": "operator_assignment_pkey",
+      "relation": "operator_assignment",
+      "type": "p"
+    },
+    {
+      "definition": "FOREIGN KEY (researcher_id) REFERENCES auth.\"user\"(id) ON DELETE RESTRICT",
+      "name": "operator_assignment_researcher_id_fkey",
+      "relation": "operator_assignment",
+      "type": "f"
+    },
+    {
+      "definition": "UNIQUE (researcher_id)",
+      "name": "operator_assignment_researcher_id_key",
+      "relation": "operator_assignment",
+      "type": "u"
+    },
+    {
+      "definition": "CHECK (singleton)",
+      "name": "operator_assignment_singleton_check",
+      "relation": "operator_assignment",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK ((expires_at > created_at))",
+      "name": "operator_proof_expiry_check",
+      "relation": "operator_proof",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK ((((state = 'available'::text) AND (claimed_at IS NULL) AND (consumed_at IS NULL)) OR ((state = 'claimed'::text) AND (claimed_at IS NOT NULL) AND (consumed_at IS NULL)) OR ((state = 'consumed'::text) AND (claimed_at IS NOT NULL) AND (consumed_at IS NOT NULL))))",
+      "name": "operator_proof_lifecycle_check",
+      "relation": "operator_proof",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK ((operation = ANY (ARRAY['researcher.sessions.revoke'::text, 'data.refresh.market.submit'::text, 'data.refresh.dataset.submit'::text, 'data.refresh.financial.submit'::text, 'data.refresh.industry.submit'::text, 'data.refresh.cancel'::text, 'data.refresh.retry'::text])))",
+      "name": "operator_proof_operation_check",
+      "relation": "operator_proof",
+      "type": "c"
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "operator_proof_pkey",
+      "relation": "operator_proof",
+      "type": "p"
+    },
+    {
+      "definition": "CHECK ((octet_length(request_hash) = 32))",
+      "name": "operator_proof_request_hash_check",
+      "relation": "operator_proof",
+      "type": "c"
+    },
+    {
+      "definition": "FOREIGN KEY (session_id) REFERENCES auth.session(id) ON DELETE CASCADE",
+      "name": "operator_proof_session_id_fkey",
+      "relation": "operator_proof",
+      "type": "f"
+    },
+    {
+      "definition": "CHECK ((state = ANY (ARRAY['available'::text, 'claimed'::text, 'consumed'::text])))",
+      "name": "operator_proof_state_check",
+      "relation": "operator_proof",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK ((octet_length(token_hash) = 32))",
+      "name": "operator_proof_token_hash_check",
+      "relation": "operator_proof",
+      "type": "c"
+    },
+    {
+      "definition": "UNIQUE (token_hash)",
+      "name": "operator_proof_token_hash_key",
+      "relation": "operator_proof",
+      "type": "u"
+    },
+    {
+      "definition": "UNIQUE (key)",
+      "name": "ratelimit_key_key",
+      "relation": "rateLimit",
+      "type": "u"
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "ratelimit_pkey",
+      "relation": "rateLimit",
+      "type": "p"
+    },
+    {
+      "definition": "PRIMARY KEY (singleton)",
+      "name": "schema_contract_pkey",
+      "relation": "schema_contract",
+      "type": "p"
+    },
+    {
+      "definition": "CHECK ((schema_fingerprint ~ '^[0-9a-f]{64}$'::text))",
+      "name": "schema_contract_schema_fingerprint_check",
+      "relation": "schema_contract",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK (singleton)",
+      "name": "schema_contract_singleton_check",
+      "relation": "schema_contract",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK ((event = ANY (ARRAY['sign_in_succeeded'::text, 'sign_in_failed'::text, 'sessions_revoked'::text, 'researcher_deactivated'::text, 'researcher_reactivated'::text, 'display_label_corrected'::text])))",
+      "name": "security_audit_event_check",
+      "relation": "security_audit",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK ((num_nonnulls(researcher_id, unknown_email_hmac) = 1))",
+      "name": "security_audit_identity_check",
+      "relation": "security_audit",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK ((outcome = ANY (ARRAY['succeeded'::text, 'failed'::text, 'rejected'::text, 'no_change'::text])))",
+      "name": "security_audit_outcome_check",
+      "relation": "security_audit",
+      "type": "c"
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "security_audit_pkey",
+      "relation": "security_audit",
+      "type": "p"
+    },
+    {
+      "definition": "FOREIGN KEY (researcher_id) REFERENCES auth.\"user\"(id) ON DELETE RESTRICT",
+      "name": "security_audit_researcher_id_fkey",
+      "relation": "security_audit",
+      "type": "f"
+    },
+    {
+      "definition": "CHECK (((unknown_email_hmac IS NULL) OR (octet_length(unknown_email_hmac) = 32)))",
+      "name": "security_audit_unknown_email_hmac_check",
+      "relation": "security_audit",
+      "type": "c"
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "session_pkey",
+      "relation": "session",
+      "type": "p"
+    },
+    {
+      "definition": "UNIQUE (token)",
+      "name": "session_token_key",
+      "relation": "session",
+      "type": "u"
+    },
+    {
+      "definition": "FOREIGN KEY (\"userId\") REFERENCES auth.\"user\"(id) ON DELETE CASCADE",
+      "name": "session_userid_fkey",
+      "relation": "session",
+      "type": "f"
+    },
+    {
+      "definition": "CHECK (((email = lower(btrim(email))) AND (char_length(email) <= 254)))",
+      "name": "user_email_canonical_check",
+      "relation": "user",
+      "type": "c"
+    },
+    {
+      "definition": "UNIQUE (email)",
+      "name": "user_email_key",
+      "relation": "user",
+      "type": "u"
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "user_pkey",
+      "relation": "user",
+      "type": "p"
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "verification_pkey",
+      "relation": "verification",
+      "type": "p"
+    }
+  ],
+  "indexes": [
+    {
+      "definition": "CREATE UNIQUE INDEX \"account_issuer_accountId_uidx\" ON auth.account USING btree (issuer, \"accountId\")",
+      "name": "account_issuer_accountId_uidx",
+      "relation": "account"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX account_pkey ON auth.account USING btree (id)",
+      "name": "account_pkey",
+      "relation": "account"
+    },
+    {
+      "definition": "CREATE INDEX \"account_userId_idx\" ON auth.account USING btree (\"userId\")",
+      "name": "account_userId_idx",
+      "relation": "account"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX auth_secret_contract_pkey ON auth.auth_secret_contract USING btree (singleton)",
+      "name": "auth_secret_contract_pkey",
+      "relation": "auth_secret_contract"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX billing_account_checkout_id_key ON auth.billing_account USING btree (checkout_id)",
+      "name": "billing_account_checkout_id_key",
+      "relation": "billing_account"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX billing_account_checkout_request_id_key ON auth.billing_account USING btree (checkout_request_id)",
+      "name": "billing_account_checkout_request_id_key",
+      "relation": "billing_account"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX billing_account_customer_id_key ON auth.billing_account USING btree (customer_id)",
+      "name": "billing_account_customer_id_key",
+      "relation": "billing_account"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX billing_account_pkey ON auth.billing_account USING btree (researcher_id)",
+      "name": "billing_account_pkey",
+      "relation": "billing_account"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX billing_account_subscription_id_key ON auth.billing_account USING btree (subscription_id)",
+      "name": "billing_account_subscription_id_key",
+      "relation": "billing_account"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX billing_adjustment_pkey ON auth.billing_adjustment USING btree (transaction_id)",
+      "name": "billing_adjustment_pkey",
+      "relation": "billing_adjustment"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX billing_command_open_per_researcher ON auth.billing_command USING btree (researcher_id) WHERE (status = ANY (ARRAY['prepared'::text, 'dispatched'::text, 'uncertain'::text]))",
+      "name": "billing_command_open_per_researcher",
+      "relation": "billing_command"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX billing_command_pkey ON auth.billing_command USING btree (id)",
+      "name": "billing_command_pkey",
+      "relation": "billing_command"
+    },
+    {
+      "definition": "CREATE INDEX billing_event_pending ON auth.billing_event USING btree (received_at) WHERE (processed_at IS NULL)",
+      "name": "billing_event_pending",
+      "relation": "billing_event"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX billing_event_pkey ON auth.billing_event USING btree (id)",
+      "name": "billing_event_pkey",
+      "relation": "billing_event"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX billing_payment_pkey ON auth.billing_payment USING btree (transaction_id)",
+      "name": "billing_payment_pkey",
+      "relation": "billing_payment"
+    },
+    {
+      "definition": "CREATE INDEX billing_payment_researcher_period ON auth.billing_payment USING btree (researcher_id, ends_at)",
+      "name": "billing_payment_researcher_period",
+      "relation": "billing_payment"
+    },
+    {
+      "definition": "CREATE INDEX \"oauthAccessToken_authorizationCodeId_idx\" ON auth.\"oauthAccessToken\" USING btree (\"authorizationCodeId\")",
+      "name": "oauthAccessToken_authorizationCodeId_idx",
+      "relation": "oauthAccessToken"
+    },
+    {
+      "definition": "CREATE INDEX \"oauthAccessToken_clientId_idx\" ON auth.\"oauthAccessToken\" USING btree (\"clientId\")",
+      "name": "oauthAccessToken_clientId_idx",
+      "relation": "oauthAccessToken"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX \"oauthAccessToken_pkey\" ON auth.\"oauthAccessToken\" USING btree (id)",
+      "name": "oauthAccessToken_pkey",
+      "relation": "oauthAccessToken"
+    },
+    {
+      "definition": "CREATE INDEX \"oauthAccessToken_refreshId_idx\" ON auth.\"oauthAccessToken\" USING btree (\"refreshId\")",
+      "name": "oauthAccessToken_refreshId_idx",
+      "relation": "oauthAccessToken"
+    },
+    {
+      "definition": "CREATE INDEX \"oauthAccessToken_sessionId_idx\" ON auth.\"oauthAccessToken\" USING btree (\"sessionId\")",
+      "name": "oauthAccessToken_sessionId_idx",
+      "relation": "oauthAccessToken"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX \"oauthAccessToken_token_key\" ON auth.\"oauthAccessToken\" USING btree (token)",
+      "name": "oauthAccessToken_token_key",
+      "relation": "oauthAccessToken"
+    },
+    {
+      "definition": "CREATE INDEX \"oauthAccessToken_userId_idx\" ON auth.\"oauthAccessToken\" USING btree (\"userId\")",
+      "name": "oauthAccessToken_userId_idx",
+      "relation": "oauthAccessToken"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX \"oauthClient_clientId_key\" ON auth.\"oauthClient\" USING btree (\"clientId\")",
+      "name": "oauthClient_clientId_key",
+      "relation": "oauthClient"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX \"oauthClient_pkey\" ON auth.\"oauthClient\" USING btree (id)",
+      "name": "oauthClient_pkey",
+      "relation": "oauthClient"
+    },
+    {
+      "definition": "CREATE INDEX \"oauthClient_userId_idx\" ON auth.\"oauthClient\" USING btree (\"userId\")",
+      "name": "oauthClient_userId_idx",
+      "relation": "oauthClient"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX \"oauthClientAssertion_pkey\" ON auth.\"oauthClientAssertion\" USING btree (id)",
+      "name": "oauthClientAssertion_pkey",
+      "relation": "oauthClientAssertion"
+    },
+    {
+      "definition": "CREATE INDEX \"oauthClientResource_clientId_idx\" ON auth.\"oauthClientResource\" USING btree (\"clientId\")",
+      "name": "oauthClientResource_clientId_idx",
+      "relation": "oauthClientResource"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX \"oauthClientResource_pkey\" ON auth.\"oauthClientResource\" USING btree (id)",
+      "name": "oauthClientResource_pkey",
+      "relation": "oauthClientResource"
+    },
+    {
+      "definition": "CREATE INDEX \"oauthClientResource_resourceId_idx\" ON auth.\"oauthClientResource\" USING btree (\"resourceId\")",
+      "name": "oauthClientResource_resourceId_idx",
+      "relation": "oauthClientResource"
+    },
+    {
+      "definition": "CREATE INDEX \"oauthConsent_clientId_idx\" ON auth.\"oauthConsent\" USING btree (\"clientId\")",
+      "name": "oauthConsent_clientId_idx",
+      "relation": "oauthConsent"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX \"oauthConsent_pkey\" ON auth.\"oauthConsent\" USING btree (id)",
+      "name": "oauthConsent_pkey",
+      "relation": "oauthConsent"
+    },
+    {
+      "definition": "CREATE INDEX \"oauthConsent_userId_idx\" ON auth.\"oauthConsent\" USING btree (\"userId\")",
+      "name": "oauthConsent_userId_idx",
+      "relation": "oauthConsent"
+    },
+    {
+      "definition": "CREATE INDEX \"oauthRefreshToken_authorizationCodeId_idx\" ON auth.\"oauthRefreshToken\" USING btree (\"authorizationCodeId\")",
+      "name": "oauthRefreshToken_authorizationCodeId_idx",
+      "relation": "oauthRefreshToken"
+    },
+    {
+      "definition": "CREATE INDEX \"oauthRefreshToken_clientId_idx\" ON auth.\"oauthRefreshToken\" USING btree (\"clientId\")",
+      "name": "oauthRefreshToken_clientId_idx",
+      "relation": "oauthRefreshToken"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX \"oauthRefreshToken_pkey\" ON auth.\"oauthRefreshToken\" USING btree (id)",
+      "name": "oauthRefreshToken_pkey",
+      "relation": "oauthRefreshToken"
+    },
+    {
+      "definition": "CREATE INDEX \"oauthRefreshToken_sessionId_idx\" ON auth.\"oauthRefreshToken\" USING btree (\"sessionId\")",
+      "name": "oauthRefreshToken_sessionId_idx",
+      "relation": "oauthRefreshToken"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX \"oauthRefreshToken_token_key\" ON auth.\"oauthRefreshToken\" USING btree (token)",
+      "name": "oauthRefreshToken_token_key",
+      "relation": "oauthRefreshToken"
+    },
+    {
+      "definition": "CREATE INDEX \"oauthRefreshToken_userId_idx\" ON auth.\"oauthRefreshToken\" USING btree (\"userId\")",
+      "name": "oauthRefreshToken_userId_idx",
+      "relation": "oauthRefreshToken"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX \"oauthResource_identifier_key\" ON auth.\"oauthResource\" USING btree (identifier)",
+      "name": "oauthResource_identifier_key",
+      "relation": "oauthResource"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX \"oauthResource_pkey\" ON auth.\"oauthResource\" USING btree (id)",
+      "name": "oauthResource_pkey",
+      "relation": "oauthResource"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX operator_assignment_pkey ON auth.operator_assignment USING btree (singleton)",
+      "name": "operator_assignment_pkey",
+      "relation": "operator_assignment"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX operator_assignment_researcher_id_key ON auth.operator_assignment USING btree (researcher_id)",
+      "name": "operator_assignment_researcher_id_key",
+      "relation": "operator_assignment"
+    },
+    {
+      "definition": "CREATE INDEX operator_proof_expires_at_idx ON auth.operator_proof USING btree (expires_at)",
+      "name": "operator_proof_expires_at_idx",
+      "relation": "operator_proof"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX operator_proof_pkey ON auth.operator_proof USING btree (id)",
+      "name": "operator_proof_pkey",
+      "relation": "operator_proof"
+    },
+    {
+      "definition": "CREATE INDEX operator_proof_session_id_idx ON auth.operator_proof USING btree (session_id)",
+      "name": "operator_proof_session_id_idx",
+      "relation": "operator_proof"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX operator_proof_token_hash_key ON auth.operator_proof USING btree (token_hash)",
+      "name": "operator_proof_token_hash_key",
+      "relation": "operator_proof"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX ratelimit_key_key ON auth.\"rateLimit\" USING btree (key)",
+      "name": "ratelimit_key_key",
+      "relation": "rateLimit"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX ratelimit_pkey ON auth.\"rateLimit\" USING btree (id)",
+      "name": "ratelimit_pkey",
+      "relation": "rateLimit"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX schema_contract_pkey ON auth.schema_contract USING btree (singleton)",
+      "name": "schema_contract_pkey",
+      "relation": "schema_contract"
+    },
+    {
+      "definition": "CREATE INDEX security_audit_occurred_at_idx ON auth.security_audit USING btree (occurred_at)",
+      "name": "security_audit_occurred_at_idx",
+      "relation": "security_audit"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX security_audit_pkey ON auth.security_audit USING btree (id)",
+      "name": "security_audit_pkey",
+      "relation": "security_audit"
+    },
+    {
+      "definition": "CREATE INDEX security_audit_researcher_id_idx ON auth.security_audit USING btree (researcher_id)",
+      "name": "security_audit_researcher_id_idx",
+      "relation": "security_audit"
+    },
+    {
+      "definition": "CREATE INDEX security_audit_unknown_email_hmac_idx ON auth.security_audit USING btree (unknown_email_hmac)",
+      "name": "security_audit_unknown_email_hmac_idx",
+      "relation": "security_audit"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX session_pkey ON auth.session USING btree (id)",
+      "name": "session_pkey",
+      "relation": "session"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX session_token_key ON auth.session USING btree (token)",
+      "name": "session_token_key",
+      "relation": "session"
+    },
+    {
+      "definition": "CREATE INDEX \"session_userId_idx\" ON auth.session USING btree (\"userId\")",
+      "name": "session_userId_idx",
+      "relation": "session"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX user_email_key ON auth.\"user\" USING btree (email)",
+      "name": "user_email_key",
+      "relation": "user"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX user_pkey ON auth.\"user\" USING btree (id)",
+      "name": "user_pkey",
+      "relation": "user"
+    },
+    {
+      "definition": "CREATE INDEX verification_identifier_idx ON auth.verification USING btree (identifier)",
+      "name": "verification_identifier_idx",
+      "relation": "verification"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX verification_pkey ON auth.verification USING btree (id)",
+      "name": "verification_pkey",
+      "relation": "verification"
+    }
+  ],
+  "policies": [],
+  "relations": [
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "account",
+      "owner": "thesistrace_owner",
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "auth_secret_contract",
+      "owner": "thesistrace_owner",
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "billing_account",
+      "owner": "thesistrace_owner",
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "billing_adjustment",
+      "owner": "thesistrace_owner",
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "billing_command",
+      "owner": "thesistrace_owner",
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "billing_event",
+      "owner": "thesistrace_owner",
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "billing_payment",
+      "owner": "thesistrace_owner",
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "oauthAccessToken",
+      "owner": "thesistrace_owner",
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "oauthClient",
+      "owner": "thesistrace_owner",
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "oauthClientAssertion",
+      "owner": "thesistrace_owner",
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "oauthClientResource",
+      "owner": "thesistrace_owner",
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "oauthConsent",
+      "owner": "thesistrace_owner",
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "oauthRefreshToken",
+      "owner": "thesistrace_owner",
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "oauthResource",
+      "owner": "thesistrace_owner",
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "operator_assignment",
+      "owner": "thesistrace_owner",
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "operator_proof",
+      "owner": "thesistrace_owner",
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "rateLimit",
+      "owner": "thesistrace_owner",
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "schema_contract",
+      "owner": "thesistrace_owner",
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "security_audit",
+      "owner": "thesistrace_owner",
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "session",
+      "owner": "thesistrace_owner",
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "user",
+      "owner": "thesistrace_owner",
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "verification",
+      "owner": "thesistrace_owner",
+      "persistence": "p",
+      "rowSecurity": false
+    }
+  ],
+  "routines": [
+    {
+      "configuration": [
+        "search_path=pg_catalog"
+      ],
+      "identityArguments": "",
+      "kind": "f",
+      "language": "plpgsql",
+      "leakproof": false,
+      "name": "enforce_active_session_owner",
+      "owner": "thesistrace_owner",
+      "parallel": "u",
+      "result": "trigger",
+      "securityDefiner": false,
+      "source": "\nBEGIN\n    PERFORM 1\n    FROM auth.\"user\"\n    WHERE id = NEW.\"userId\" AND active = TRUE\n    FOR UPDATE;\n    IF NOT FOUND THEN\n        RETURN NULL;\n    END IF;\n    RETURN NEW;\nEND;\n",
+      "strict": false,
+      "volatility": "v"
+    }
+  ],
+  "schema": {
+    "owner": "thesistrace_owner"
+  },
+  "triggers": [
+    {
+      "definition": "CREATE TRIGGER session_active_researcher_trigger BEFORE INSERT ON auth.session FOR EACH ROW EXECUTE FUNCTION auth.enforce_active_session_owner()",
+      "name": "session_active_researcher_trigger",
+      "relation": "session"
+    }
+  ],
+  "types": []
+}

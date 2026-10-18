@@ -1,7 +1,7 @@
 import { test, expect, sameOriginHeaders } from "./auth-fixture";
 
 test(
-  "Creem monthly subscription activates paid limits and preserves rights on downgrade and cancel",
+  "Creem zero-value monthly period activates paid limits and preserves rights on downgrade and cancel",
   { tag: "@isolated" },
   async ({ page }, info) => {
     await page.setViewportSize({ width: 1440, height: 1000 });
@@ -28,12 +28,12 @@ test(
     const fake = process.env.THESISTRACE_TEST_RESEND_ORIGIN;
     if (!fake) throw new Error("Isolated provider fixture required");
     const complete = await page.request.post(`${fake}/__test/creem/complete`, {
-      data: { checkout_id: checkoutId },
+      data: { checkout_id: checkoutId, amount_paid: 0 },
     });
     expect(complete.status()).toBe(200);
     await page.goto((await complete.json()).return_url);
     await expect(page.getByLabel("Current plan")).toContainText("Pro");
-    await expect(page.getByLabel("Today's usage")).toContainText("$1.00");
+    await expect(page.getByLabel("Today's usage")).toContainText("$1.50");
     const paid = await (await page.request.get("/api/billing/usage")).json();
     expect(paid.research).toMatchObject({
       limit: 100,
@@ -47,7 +47,7 @@ test(
           headers: sameOriginHeaders(),
         })
       ).json(),
-    ).toMatchObject({ limit_nanodollars: 1_000_000_000 });
+    ).toMatchObject({ limit_nanodollars: 1_500_000_000 });
     await page.getByRole("button", { name: "Choose Max", exact: true }).click();
     await page
       .getByRole("alertdialog")

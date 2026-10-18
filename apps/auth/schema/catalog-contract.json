@@ -249,6 +249,14 @@
       "type": "timestamp with time zone"
     },
     {
+      "default": "false",
+      "name": "fully_refunded",
+      "notNull": true,
+      "position": 6,
+      "relation": "billing_adjustment",
+      "type": "boolean"
+    },
+    {
       "default": null,
       "name": "id",
       "notNull": true,
@@ -455,6 +463,14 @@
       "position": 10,
       "relation": "billing_payment",
       "type": "timestamp with time zone"
+    },
+    {
+      "default": "false",
+      "name": "fully_refunded",
+      "notNull": true,
+      "position": 11,
+      "relation": "billing_payment",
+      "type": "boolean"
     },
     {
       "default": "gen_random_uuid()",
@@ -1779,7 +1795,7 @@
       "type": "p"
     },
     {
-      "definition": "CHECK ((amount > 0))",
+      "definition": "CHECK ((amount >= 0))",
       "name": "billing_payment_amount_check",
       "relation": "billing_payment",
       "type": "c"

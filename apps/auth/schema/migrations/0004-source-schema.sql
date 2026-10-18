@@ -1,0 +1,423 @@
+CREATE TABLE auth."user" (
+    "id" uuid DEFAULT pg_catalog.gen_random_uuid() NOT NULL,
+    "name" text NOT NULL,
+    "email" text NOT NULL,
+    "emailVerified" boolean NOT NULL,
+    "image" text,
+    "createdAt" timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    "updatedAt" timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    "active" boolean NOT NULL,
+    CONSTRAINT user_pkey PRIMARY KEY ("id"),
+    CONSTRAINT user_email_key UNIQUE ("email"),
+    CONSTRAINT user_email_canonical_check CHECK (
+        "email" = pg_catalog.lower(pg_catalog.btrim("email"))
+        AND pg_catalog.char_length("email") <= 254
+    )
+);
+
+CREATE TABLE auth.operator_assignment (
+    singleton boolean NOT NULL,
+    researcher_id uuid NOT NULL,
+    assigned_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    CONSTRAINT operator_assignment_pkey PRIMARY KEY (singleton),
+    CONSTRAINT operator_assignment_singleton_check CHECK (singleton),
+    CONSTRAINT operator_assignment_researcher_id_key UNIQUE (researcher_id),
+    CONSTRAINT operator_assignment_researcher_id_fkey FOREIGN KEY (researcher_id)
+        REFERENCES auth."user" (id) ON DELETE RESTRICT
+);
+
+CREATE TABLE auth."session" (
+    "id" uuid DEFAULT pg_catalog.gen_random_uuid() NOT NULL,
+    "expiresAt" timestamp with time zone NOT NULL,
+    "token" text NOT NULL,
+    "createdAt" timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    "updatedAt" timestamp with time zone NOT NULL,
+    "ipAddress" text,
+    "userAgent" text,
+    "userId" uuid NOT NULL,
+    CONSTRAINT session_pkey PRIMARY KEY ("id"),
+    CONSTRAINT session_token_key UNIQUE ("token"),
+    CONSTRAINT session_userId_fkey FOREIGN KEY ("userId")
+        REFERENCES auth."user" ("id") ON DELETE CASCADE
+);
+
+CREATE TABLE auth."account" (
+    "id" uuid DEFAULT pg_catalog.gen_random_uuid() NOT NULL,
+    "issuer" text NOT NULL,
+    "accountId" text NOT NULL,
+    "providerId" text NOT NULL,
+    "userId" uuid NOT NULL,
+    "accessToken" text,
+    "refreshToken" text,
+    "idToken" text,
+    "accessTokenExpiresAt" timestamp with time zone,
+    "refreshTokenExpiresAt" timestamp with time zone,
+    "scope" text,
+    "password" text,
+    "createdAt" timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    "updatedAt" timestamp with time zone NOT NULL,
+    CONSTRAINT account_pkey PRIMARY KEY ("id"),
+    CONSTRAINT account_userId_fkey FOREIGN KEY ("userId")
+        REFERENCES auth."user" ("id") ON DELETE CASCADE
+);
+
+CREATE TABLE auth.operator_proof (
+    id uuid DEFAULT pg_catalog.gen_random_uuid() NOT NULL,
+    token_hash bytea NOT NULL,
+    session_id uuid NOT NULL,
+    operation text NOT NULL,
+    request_hash bytea NOT NULL,
+    state text NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    claimed_at timestamp with time zone,
+    consumed_at timestamp with time zone,
+    CONSTRAINT operator_proof_pkey PRIMARY KEY (id),
+    CONSTRAINT operator_proof_token_hash_key UNIQUE (token_hash),
+    CONSTRAINT operator_proof_session_id_fkey FOREIGN KEY (session_id)
+        REFERENCES auth."session" (id) ON DELETE CASCADE,
+    CONSTRAINT operator_proof_token_hash_check CHECK (
+        pg_catalog.octet_length(token_hash) = 32
+    ),
+    CONSTRAINT operator_proof_request_hash_check CHECK (
+        pg_catalog.octet_length(request_hash) = 32
+    ),
+    CONSTRAINT operator_proof_operation_check CHECK (
+        operation = ANY (ARRAY[
+            'researcher.sessions.revoke'::text,
+            'data.refresh.market.submit'::text,
+            'data.refresh.dataset.submit'::text,
+            'data.refresh.financial.submit'::text,
+            'data.refresh.industry.submit'::text,
+            'data.refresh.cancel'::text,
+            'data.refresh.retry'::text
+        ])
+    ),
+    CONSTRAINT operator_proof_state_check CHECK (
+        state = ANY (ARRAY[
+            'available'::text,
+            'claimed'::text,
+            'consumed'::text
+        ])
+    ),
+    CONSTRAINT operator_proof_expiry_check CHECK (expires_at > created_at),
+    CONSTRAINT operator_proof_lifecycle_check CHECK (
+        (state = 'available' AND claimed_at IS NULL AND consumed_at IS NULL)
+        OR (state = 'claimed' AND claimed_at IS NOT NULL
+            AND consumed_at IS NULL)
+        OR (state = 'consumed' AND claimed_at IS NOT NULL
+            AND consumed_at IS NOT NULL)
+    )
+);
+
+CREATE TABLE auth."verification" (
+    "id" uuid DEFAULT pg_catalog.gen_random_uuid() NOT NULL,
+    "identifier" text NOT NULL,
+    "value" text NOT NULL,
+    "expiresAt" timestamp with time zone NOT NULL,
+    "createdAt" timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    "updatedAt" timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    CONSTRAINT verification_pkey PRIMARY KEY ("id")
+);
+
+CREATE TABLE auth."rateLimit" (
+    "id" uuid DEFAULT pg_catalog.gen_random_uuid() NOT NULL,
+    "key" text NOT NULL,
+    "count" integer NOT NULL,
+    "lastRequest" bigint NOT NULL,
+    CONSTRAINT rateLimit_pkey PRIMARY KEY ("id"),
+    CONSTRAINT rateLimit_key_key UNIQUE ("key")
+);
+
+CREATE TABLE auth.security_audit (
+    id uuid DEFAULT pg_catalog.gen_random_uuid() NOT NULL,
+    occurred_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    event text NOT NULL,
+    outcome text NOT NULL,
+    researcher_id uuid,
+    unknown_email_hmac bytea,
+    CONSTRAINT security_audit_pkey PRIMARY KEY (id),
+    CONSTRAINT security_audit_researcher_id_fkey FOREIGN KEY (researcher_id)
+        REFERENCES auth."user" (id) ON DELETE RESTRICT,
+    CONSTRAINT security_audit_event_check CHECK (
+        event = ANY (ARRAY[
+            'sign_in_succeeded'::text,
+            'sign_in_failed'::text,
+            'sessions_revoked'::text,
+            'researcher_deactivated'::text,
+            'researcher_reactivated'::text,
+            'display_label_corrected'::text
+        ])
+    ),
+    CONSTRAINT security_audit_outcome_check CHECK (
+        outcome = ANY (ARRAY[
+            'succeeded'::text,
+            'failed'::text,
+            'rejected'::text,
+            'no_change'::text
+        ])
+    ),
+    CONSTRAINT security_audit_identity_check CHECK (
+        pg_catalog.num_nonnulls(researcher_id, unknown_email_hmac) = 1
+    ),
+    CONSTRAINT security_audit_unknown_email_hmac_check CHECK (
+        unknown_email_hmac IS NULL
+        OR pg_catalog.octet_length(unknown_email_hmac) = 32
+    )
+);
+
+CREATE TABLE auth.auth_secret_contract (
+    singleton boolean NOT NULL,
+    secret_fingerprint text NOT NULL,
+    CONSTRAINT auth_secret_contract_pkey PRIMARY KEY (singleton),
+    CONSTRAINT auth_secret_contract_singleton_check CHECK (singleton),
+    CONSTRAINT auth_secret_contract_secret_fingerprint_check CHECK (
+        secret_fingerprint ~ '^[0-9a-f]{64}$'::text
+    )
+);
+
+CREATE TABLE auth.schema_contract (
+    singleton boolean NOT NULL,
+    schema_fingerprint text NOT NULL,
+    CONSTRAINT schema_contract_pkey PRIMARY KEY (singleton),
+    CONSTRAINT schema_contract_singleton_check CHECK (singleton),
+    CONSTRAINT schema_contract_schema_fingerprint_check
+        CHECK (schema_fingerprint ~ '^[0-9a-f]{64}$'::text)
+);
+
+CREATE FUNCTION auth.enforce_active_session_owner()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = pg_catalog
+AS $function$
+BEGIN
+    PERFORM 1
+    FROM auth."user"
+    WHERE id = NEW."userId" AND active = TRUE
+    FOR UPDATE;
+    IF NOT FOUND THEN
+        RETURN NULL;
+    END IF;
+    RETURN NEW;
+END;
+$function$;
+
+CREATE TRIGGER session_active_researcher_trigger
+BEFORE INSERT ON auth."session"
+FOR EACH ROW
+EXECUTE FUNCTION auth.enforce_active_session_owner();
+
+CREATE INDEX "session_userId_idx" ON auth."session" ("userId");
+CREATE INDEX "account_userId_idx" ON auth."account" ("userId");
+CREATE INDEX operator_proof_session_id_idx
+    ON auth.operator_proof (session_id);
+CREATE INDEX operator_proof_expires_at_idx
+    ON auth.operator_proof (expires_at);
+CREATE INDEX "verification_identifier_idx" ON auth."verification" ("identifier");
+CREATE UNIQUE INDEX "account_issuer_accountId_uidx"
+    ON auth."account" ("issuer", "accountId");
+CREATE INDEX security_audit_occurred_at_idx
+    ON auth.security_audit (occurred_at);
+CREATE INDEX security_audit_researcher_id_idx
+    ON auth.security_audit (researcher_id);
+CREATE INDEX security_audit_unknown_email_hmac_idx
+    ON auth.security_audit (unknown_email_hmac);
+
+-- OAuth provider 1.7.2: current schema, installed only into an empty auth scope.
+
+CREATE TABLE auth."oauthClient" (
+    "id" uuid DEFAULT pg_catalog.gen_random_uuid() PRIMARY KEY,
+    "clientId" text NOT NULL UNIQUE,
+    "clientSecret" text,
+    "clientDiscoveryId" text,
+    "disabled" boolean,
+    "skipConsent" boolean,
+    "enableEndSession" boolean,
+    "subjectType" text,
+    "scopes" jsonb,
+    "clientCredentialsScopes" jsonb,
+    "userId" uuid REFERENCES auth."user" ("id") ON DELETE CASCADE,
+    "createdAt" timestamp with time zone,
+    "updatedAt" timestamp with time zone,
+    "name" text,
+    "uri" text,
+    "icon" text,
+    "contacts" jsonb,
+    "tos" text,
+    "policy" text,
+    "softwareId" text,
+    "softwareVersion" text,
+    "softwareStatement" text,
+    "redirectUris" jsonb NOT NULL,
+    "postLogoutRedirectUris" jsonb,
+    "backchannelLogoutUri" text,
+    "backchannelLogoutSessionRequired" boolean,
+    "tokenEndpointAuthMethod" text,
+    "applicationType" text,
+    "jwks" text,
+    "jwksUri" text,
+    "grantTypes" jsonb,
+    "responseTypes" jsonb,
+    "requirePKCE" boolean,
+    "dpopBoundAccessTokens" boolean,
+    "referenceId" text,
+    "metadata" jsonb
+);
+CREATE INDEX "oauthClient_userId_idx" ON auth."oauthClient" ("userId");
+
+CREATE TABLE auth."oauthResource" (
+    "id" uuid DEFAULT pg_catalog.gen_random_uuid() PRIMARY KEY,
+    "identifier" text NOT NULL UNIQUE,
+    "name" text NOT NULL,
+    "accessTokenTtl" integer,
+    "refreshTokenTtl" integer,
+    "signingAlgorithm" text,
+    "signingKeyId" text,
+    "allowedScopes" jsonb,
+    "customClaims" jsonb,
+    "dpopBoundAccessTokensRequired" boolean,
+    "disabled" boolean,
+    "createdAt" timestamp with time zone,
+    "updatedAt" timestamp with time zone,
+    "policyVersion" integer,
+    "metadata" jsonb
+);
+
+
+CREATE TABLE auth."oauthClientResource" (
+    "id" uuid DEFAULT pg_catalog.gen_random_uuid() PRIMARY KEY,
+    "clientId" text NOT NULL REFERENCES auth."oauthClient" ("clientId") ON DELETE CASCADE,
+    "resourceId" text NOT NULL REFERENCES auth."oauthResource" ("identifier") ON DELETE CASCADE,
+    "metadata" jsonb,
+    "createdAt" timestamp with time zone
+);
+CREATE INDEX "oauthClientResource_clientId_idx" ON auth."oauthClientResource" ("clientId");
+CREATE INDEX "oauthClientResource_resourceId_idx" ON auth."oauthClientResource" ("resourceId");
+
+CREATE TABLE auth."oauthRefreshToken" (
+    "id" uuid DEFAULT pg_catalog.gen_random_uuid() PRIMARY KEY,
+    "token" text NOT NULL UNIQUE,
+    "clientId" text NOT NULL REFERENCES auth."oauthClient" ("clientId") ON DELETE CASCADE,
+    "sessionId" uuid REFERENCES auth."session" ("id") ON DELETE SET NULL,
+    "userId" uuid NOT NULL REFERENCES auth."user" ("id") ON DELETE CASCADE,
+    "referenceId" text,
+    "authorizationCodeId" text,
+    "resources" jsonb,
+    "requestedUserInfoClaims" jsonb,
+    "expiresAt" timestamp with time zone NOT NULL,
+    "createdAt" timestamp with time zone NOT NULL,
+    "revoked" timestamp with time zone,
+    "rotatedAt" timestamp with time zone,
+    "rotationReplayResponse" text,
+    "rotationReplayExpiresAt" timestamp with time zone,
+    "authTime" timestamp with time zone,
+    "confirmation" jsonb,
+    "scopes" jsonb NOT NULL
+);
+CREATE INDEX "oauthRefreshToken_clientId_idx" ON auth."oauthRefreshToken" ("clientId");
+CREATE INDEX "oauthRefreshToken_sessionId_idx" ON auth."oauthRefreshToken" ("sessionId");
+CREATE INDEX "oauthRefreshToken_userId_idx" ON auth."oauthRefreshToken" ("userId");
+CREATE INDEX "oauthRefreshToken_authorizationCodeId_idx" ON auth."oauthRefreshToken" ("authorizationCodeId");
+
+CREATE TABLE auth."oauthAccessToken" (
+    "id" uuid DEFAULT pg_catalog.gen_random_uuid() PRIMARY KEY,
+    "token" text NOT NULL UNIQUE,
+    "clientId" text NOT NULL REFERENCES auth."oauthClient" ("clientId") ON DELETE CASCADE,
+    "sessionId" uuid REFERENCES auth."session" ("id") ON DELETE SET NULL,
+    "userId" uuid REFERENCES auth."user" ("id") ON DELETE CASCADE,
+    "referenceId" text,
+    "authorizationCodeId" text,
+    "resources" jsonb,
+    "requestedUserInfoClaims" jsonb,
+    "refreshId" uuid REFERENCES auth."oauthRefreshToken" ("id") ON DELETE CASCADE,
+    "expiresAt" timestamp with time zone NOT NULL,
+    "createdAt" timestamp with time zone NOT NULL,
+    "revoked" timestamp with time zone,
+    "confirmation" jsonb,
+    "scopes" jsonb NOT NULL
+);
+CREATE INDEX "oauthAccessToken_clientId_idx" ON auth."oauthAccessToken" ("clientId");
+CREATE INDEX "oauthAccessToken_sessionId_idx" ON auth."oauthAccessToken" ("sessionId");
+CREATE INDEX "oauthAccessToken_userId_idx" ON auth."oauthAccessToken" ("userId");
+CREATE INDEX "oauthAccessToken_authorizationCodeId_idx" ON auth."oauthAccessToken" ("authorizationCodeId");
+CREATE INDEX "oauthAccessToken_refreshId_idx" ON auth."oauthAccessToken" ("refreshId");
+
+CREATE TABLE auth."oauthConsent" (
+    "id" uuid DEFAULT pg_catalog.gen_random_uuid() PRIMARY KEY,
+    "clientId" text NOT NULL REFERENCES auth."oauthClient" ("clientId") ON DELETE CASCADE,
+    "userId" uuid REFERENCES auth."user" ("id") ON DELETE CASCADE,
+    "referenceId" text,
+    "resources" jsonb,
+    "requestedUserInfoClaims" jsonb,
+    "scopes" jsonb NOT NULL,
+    "createdAt" timestamp with time zone NOT NULL,
+    "updatedAt" timestamp with time zone NOT NULL
+);
+CREATE INDEX "oauthConsent_clientId_idx" ON auth."oauthConsent" ("clientId");
+CREATE INDEX "oauthConsent_userId_idx" ON auth."oauthConsent" ("userId");
+
+CREATE TABLE auth."oauthClientAssertion" (
+    "id" text PRIMARY KEY,
+    "expiresAt" timestamp with time zone NOT NULL
+);
+
+-- Billing subscriptions: paid rights remain associated with supporting transactions.
+CREATE TABLE auth.billing_account (
+    researcher_id uuid PRIMARY KEY REFERENCES auth."user"(id),
+    customer_id text UNIQUE,
+    subscription_id text UNIQUE,
+    checkout_request_id uuid NOT NULL UNIQUE DEFAULT pg_catalog.gen_random_uuid(),
+    checkout_plan text CHECK (checkout_plan IN ('pro','max')),
+    checkout_id text UNIQUE,
+    checkout_url text,
+    provider_status text,
+    renewal_plan text CHECK (renewal_plan IN ('pro','max')),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE auth.billing_payment (
+    transaction_id text PRIMARY KEY,
+    researcher_id uuid NOT NULL REFERENCES auth."user"(id),
+    subscription_id text NOT NULL,
+    plan_key text NOT NULL CHECK (plan_key IN ('pro','max')),
+    starts_at timestamptz NOT NULL,
+    ends_at timestamptz NOT NULL,
+    amount integer NOT NULL CHECK (amount > 0),
+    refunded_amount integer NOT NULL DEFAULT 0 CHECK (refunded_amount >= 0 AND refunded_amount <= amount),
+    disputed boolean NOT NULL DEFAULT false,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    CHECK (ends_at > starts_at)
+);
+CREATE INDEX billing_payment_researcher_period ON auth.billing_payment(researcher_id,ends_at);
+CREATE TABLE auth.billing_adjustment (
+    transaction_id text PRIMARY KEY,
+    refunded_amount integer NOT NULL DEFAULT 0 CHECK (refunded_amount >= 0),
+    disputed boolean NOT NULL DEFAULT false,
+    dispute_resolved_at timestamptz,
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE auth.billing_event (
+    id text PRIMARY KEY,
+    event_type text NOT NULL,
+    raw_body text NOT NULL,
+    body_sha256 bytea NOT NULL CHECK (octet_length(body_sha256) = 32),
+    received_at timestamptz NOT NULL DEFAULT now(),
+    processed_at timestamptz,
+    attempts integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    failure_code text
+);
+CREATE INDEX billing_event_pending ON auth.billing_event(received_at) WHERE processed_at IS NULL;
+
+CREATE TABLE auth.billing_command (
+    id uuid PRIMARY KEY,
+    researcher_id uuid NOT NULL REFERENCES auth."user"(id),
+    kind text NOT NULL CHECK (kind IN ('checkout','change','cancel')),
+    plan_key text CHECK (plan_key IN ('pro','max')),
+    status text NOT NULL CHECK (status IN ('prepared','dispatched','completed','uncertain')),
+    result jsonb,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CHECK ((kind = 'cancel') = (plan_key IS NULL))
+);
+CREATE UNIQUE INDEX billing_command_open_per_researcher ON auth.billing_command(researcher_id)
+    WHERE status IN ('prepared','dispatched','uncertain');

@@ -19,7 +19,7 @@ export async function paidEntitlements(
   const result = await pool.query<PaidEntitlement>(
     `
     SELECT plan_key AS plan, starts_at AS "startsAt", ends_at AS "endsAt",
-           amount, refunded_amount AS refunded, disputed
+           amount, refunded_amount AS refunded, fully_refunded AS "fullyRefunded", disputed
     FROM auth.billing_payment WHERE researcher_id = $1 AND ends_at > $2
   `,
     [researcherId, now],

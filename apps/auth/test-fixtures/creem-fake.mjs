@@ -194,7 +194,11 @@ export async function handleCreemFake(req, res) {
           updated_at: start.toISOString(),
         };
         subscriptions.set(subscription.id, subscription);
-        payment(subscription, subscription.product.price);
+        // Private test control models the provider's settled amount, including a fully discounted invoice.
+        const amount = body.amount_paid ?? subscription.product.price;
+        if (!Number.isSafeInteger(amount) || amount < 0 || amount > subscription.product.price)
+          throw new Error("Invalid fixture payment amount");
+        payment(subscription, amount);
         checkout.subscription = subscription;
         checkout.status = "completed";
         await deliver("checkout.completed", checkout);

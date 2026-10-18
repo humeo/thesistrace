@@ -182,14 +182,14 @@ export class BillingEvents {
         : (transaction.refundedAmount ?? 0);
     if (
       !Number.isSafeInteger(amount) ||
-      amount <= 0 ||
+      amount < 0 ||
       !Number.isSafeInteger(refunded) ||
       refunded < 0 ||
       refunded > amount ||
-      (transaction.status !== "refunded" && refunded === amount)
+      (amount > 0 && transaction.status !== "refunded" && refunded === amount)
     )
       throw new BillingError("BILLING_TRANSACTION_INVALID", 503);
-    return { amount, refunded, disputed: transaction.status === "chargedBack" };
+    return { amount, refunded, fullyRefunded: transaction.status === "refunded", disputed: transaction.status === "chargedBack" };
   }
   private async synchronizeAccount(
     client: PoolClient,
@@ -221,16 +221,17 @@ export class BillingEvents {
       throw new BillingError("BILLING_TRANSACTION_INVALID", 503);
     const state = this.checkTransaction(transaction, subscriptionId);
     await client.query(
-      `INSERT INTO auth.billing_adjustment(transaction_id,refunded_amount,disputed)
-      VALUES($1,$2,$3) ON CONFLICT(transaction_id) DO UPDATE SET
+      `INSERT INTO auth.billing_adjustment(transaction_id,refunded_amount,disputed,fully_refunded)
+      VALUES($1,$2,$3,$4) ON CONFLICT(transaction_id) DO UPDATE SET
       refunded_amount=GREATEST(auth.billing_adjustment.refunded_amount,EXCLUDED.refunded_amount),
+      fully_refunded=auth.billing_adjustment.fully_refunded OR EXCLUDED.fully_refunded,
       disputed=auth.billing_adjustment.disputed OR EXCLUDED.disputed,updated_at=now()`,
-      [transaction.id, state.refunded, state.disputed],
+      [transaction.id, state.refunded, state.disputed, state.fullyRefunded],
     );
     await client.query(
       `UPDATE auth.billing_payment SET refunded_amount=LEAST(amount,GREATEST(refunded_amount,$2)),
-      disputed=disputed OR $3 WHERE transaction_id=$1`,
-      [transaction.id, state.refunded, state.disputed],
+      disputed=disputed OR $3, fully_refunded=fully_refunded OR $4 WHERE transaction_id=$1`,
+      [transaction.id, state.refunded, state.disputed, state.fullyRefunded],
     );
   }
   /** Owner-only maintenance entrypoint; the merchant must review Creem dispute resolution first. */
@@ -275,7 +276,8 @@ export class BillingEvents {
         if (
           !payment ||
           payment.amount !== state.amount ||
-          state.refunded >= state.amount
+          state.fullyRefunded ||
+          (state.amount > 0 && state.refunded >= state.amount)
         )
           throw new BillingError("BILLING_PAYMENT_UNCONFIRMED", 409);
         await client.query(
@@ -464,15 +466,16 @@ export class BillingEvents {
           throw new BillingError("BILLING_PAYMENT_PERIOD_INVALID", 503);
         await this.projectTransaction(client, transaction);
         const adjustment = (
-          await client.query<{ refunded_amount: number; disputed: boolean }>(
-            "SELECT refunded_amount,disputed FROM auth.billing_adjustment WHERE transaction_id=$1",
+          await client.query<{ refunded_amount: number; disputed: boolean; fully_refunded: boolean }>(
+            "SELECT refunded_amount,disputed,fully_refunded FROM auth.billing_adjustment WHERE transaction_id=$1",
             [transaction.id],
           )
         ).rows[0]!;
         const stored = await client.query(
-          `INSERT INTO auth.billing_payment(transaction_id,researcher_id,subscription_id,plan_key,starts_at,ends_at,amount,refunded_amount,disputed)
-          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(transaction_id) DO UPDATE SET
+          `INSERT INTO auth.billing_payment(transaction_id,researcher_id,subscription_id,plan_key,starts_at,ends_at,amount,refunded_amount,disputed,fully_refunded)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(transaction_id) DO UPDATE SET
           refunded_amount=GREATEST(auth.billing_payment.refunded_amount,EXCLUDED.refunded_amount),
+          fully_refunded=auth.billing_payment.fully_refunded OR EXCLUDED.fully_refunded,
           disputed=auth.billing_payment.disputed OR EXCLUDED.disputed
           WHERE auth.billing_payment.researcher_id=EXCLUDED.researcher_id
             AND auth.billing_payment.subscription_id=EXCLUDED.subscription_id
@@ -489,6 +492,7 @@ export class BillingEvents {
             state.amount,
             Math.min(state.amount, adjustment.refunded_amount),
             adjustment.disputed,
+            adjustment.fully_refunded,
           ],
         );
         if (stored.rowCount !== 1)
@@ -497,7 +501,8 @@ export class BillingEvents {
           start <= this.clock() &&
           end > this.clock() &&
           !adjustment.disputed &&
-          adjustment.refunded_amount < state.amount
+          !adjustment.fully_refunded &&
+          (state.amount === 0 || adjustment.refunded_amount < state.amount)
         )
           await client.query(
             `UPDATE auth.billing_command SET result='{"status":"completed"}'::jsonb,updated_at=now()

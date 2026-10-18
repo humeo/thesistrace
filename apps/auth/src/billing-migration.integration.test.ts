@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { Pool } from "pg";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { AUTH_BILLING_SOURCE, migrateBilling } from "./billing-migration.js";
-import { initializeAuthSchema } from "./schema-initialize.js";
+import { assertExactCatalog, collectAuthSchemaCatalog } from "./schema-contract.js";
 
 const pool = new Pool({
   connectionString: process.env.THESISTRACE_AUTH_TEST_OWNER_DATABASE_URL,
@@ -47,7 +47,8 @@ describe.sequential("Explicit paid-entitlement schema upgrade", () => {
     const before = (await pool.query('SELECT * FROM auth."user"')).rows;
     expect((await migrateBilling(pool)).status).toBe("validated");
     expect((await migrateBilling(pool, true)).status).toBe("applied");
-    await initializeAuthSchema(pool);
+    const target = JSON.parse(await readFile(new URL("../schema/migrations/0003-target-catalog.json", import.meta.url), "utf8"));
+    await assertExactCatalog(target, await collectAuthSchemaCatalog(pool));
     expect((await migrateBilling(pool, true)).status).toBe("already_current");
     expect((await pool.query('SELECT * FROM auth."user"')).rows).toEqual(
       before,

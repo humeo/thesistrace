@@ -6,6 +6,7 @@ export type PaidEntitlement = Readonly<{
   endsAt: Date;
   amount: number;
   refunded: number;
+  fullyRefunded: boolean;
   disputed: boolean;
 }>;
 
@@ -20,8 +21,9 @@ export function effectivePlan(
       payment.startsAt > now ||
       payment.endsAt <= now ||
       payment.disputed ||
-      payment.amount <= 0 ||
-      payment.refunded >= payment.amount
+      payment.amount < 0 ||
+      payment.fullyRefunded ||
+      (payment.amount > 0 && payment.refunded >= payment.amount)
     )
       continue;
     if (payment.plan === "max") return "max";

@@ -96,6 +96,56 @@ afterAll(async () => {
   await pool.end();
 });
 
+it("activates a verified zero-value paid period and preserves cancellation, expiry and refund semantics", async () => {
+  const fixture = makeCreemFixture();
+  fixture.transaction.amount = 0;
+  fixture.transaction.amount_paid = 0;
+  let now = billingNow;
+  const service = new BillingService({ pool, settings: billingSettings, publicOrigin: "http://auth.test", client: fixture.client, clock: () => now });
+  await service.command({ id, email: "billing@fixture.test" }, "checkout", { request_id: randomUUID(), plan: "pro" });
+  const completed = fixture.checkoutCompleted();
+  await service.receiveWebhook(completed.raw, completed.headers);
+  expect((await service.summary(id)).plan).toBe("free");
+  const paid = fixture.event("evt_zero_paid", "subscription.paid", fixture.subscription);
+  await service.receiveWebhook(paid.raw, paid.headers);
+  await service.receiveWebhook(paid.raw, paid.headers);
+  expect((await service.summary(id)).plan).toBe("pro");
+  fixture.transaction.status = "chargedBack";
+  const dispute = fixture.event("evt_zero_disputed", "subscription.paid", fixture.subscription);
+  await service.receiveWebhook(dispute.raw, dispute.headers);
+  expect((await service.summary(id)).plan).toBe("free");
+  fixture.transaction.status = "paid";
+  await service.resolveDispute(fixture.transaction.id, "merchant-review:zero-period");
+  expect((await service.summary(id)).plan).toBe("pro");
+  await service.command({ id, email: "billing@fixture.test" }, "cancel", { request_id: randomUUID() });
+  expect(await service.summary(id)).toMatchObject({ plan: "pro", subscription_status: "scheduled_cancel" });
+  now = new Date("2026-11-01Z");
+  expect((await service.summary(id)).plan).toBe("free");
+  now = billingNow;
+  fixture.transaction.status = "refunded";
+  const refunded = fixture.event("evt_zero_refunded", "subscription.paid", fixture.subscription);
+  await service.receiveWebhook(refunded.raw, refunded.headers);
+  expect((await service.summary(id)).plan).toBe("free");
+  fixture.transaction.status = "paid";
+  const stalePaid = fixture.event("evt_zero_stale_paid", "subscription.paid", fixture.subscription);
+  await service.receiveWebhook(stalePaid.raw, stalePaid.headers);
+  expect((await service.summary(id)).plan).toBe("free");
+});
+
+it.each([{ amount: 0, status: "pending" }, { amount: -1, status: "paid" }])("never grants an invalid zero-value period: %j", async ({ amount, status }) => {
+  const fixture = makeCreemFixture();
+  fixture.transaction.amount = amount;
+  fixture.transaction.amount_paid = amount;
+  fixture.transaction.status = status;
+  const service = new BillingService({ pool, settings: billingSettings, publicOrigin: "http://auth.test", client: fixture.client, clock: () => billingNow });
+  await service.command({ id, email: "billing@fixture.test" }, "checkout", { request_id: randomUUID(), plan: "pro" });
+  const completed = fixture.checkoutCompleted();
+  await service.receiveWebhook(completed.raw, completed.headers);
+  const paid = fixture.event("evt_invalid_zero_paid", "subscription.paid", fixture.subscription);
+  await expect(service.receiveWebhook(paid.raw, paid.headers)).rejects.toThrow();
+  expect((await service.summary(id)).plan).toBe("free");
+});
+
 it("resolves Free until a currently paid transaction supports a higher entitlement", async () => {
   const now = new Date("2026-10-17T12:00:00Z");
   expect(await researcherPlan(pool, id, now)).toBe("free");

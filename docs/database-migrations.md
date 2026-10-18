@@ -374,6 +374,28 @@ Chinese words can instead use the existing researcher index and scan that user's
 compact search columns. Matching IDs and sort values are materialized once for
 the exact total and page, and only the page retrieves complete immutable inputs.
 
+## Auth 0004: Verified zero-value subscription periods
+
+Source fingerprint: `1b50ec71fe68647a99ccdcf76c76fc1d5fa05cd59673bda0028f6fd7c22ce386`.
+Target fingerprint: `78bdfd071c325493a48f7ab947cfc846c9e65d1adb207d1aeba1fa94fe7d4e2e`.
+
+Back up PostgreSQL, stop Auth writers, and run
+`node apps/auth/dist/migrate-zero-value-periods.js --backup-directory <private-backup>`
+before adding `--apply`. This follows Auth 0003; it is never run by startup.
+The migration allows zero charged amount, adds explicit full-refund markers to
+payment and adjustment records, and backfills existing fully refunded payments.
+Existing payment and adjustment columns are checksummed before and after the DDL.
+The catalog transition, backfill and migration receipt commit atomically; a late
+failure rolls everything back. Repeated execution verifies the target without
+rewriting billing records. Retain the database backup and matching prior image
+for whole-release rollback; do not edit fingerprints or discard zero-value rows.
+
+The amount remains the actual charged amount. A zero-value period grants access
+only after a verified provider `subscription.paid` event and authoritative
+transaction, customer, product, mode and period checks. A completed checkout or
+redirect alone cannot activate it. Full refund and dispute markers revoke only
+that period; cancellation preserves its remaining term.
+
 ## Billing: Auth 0003, Core 0011 and Agent 0001
 
 Stop Auth, Core and Agent writers and preserve a verified private PostgreSQL backup

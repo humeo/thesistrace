@@ -382,10 +382,11 @@ CREATE TABLE auth.billing_payment (
     plan_key text NOT NULL CHECK (plan_key IN ('pro','max')),
     starts_at timestamptz NOT NULL,
     ends_at timestamptz NOT NULL,
-    amount integer NOT NULL CHECK (amount > 0),
+    amount integer NOT NULL CHECK (amount >= 0),
     refunded_amount integer NOT NULL DEFAULT 0 CHECK (refunded_amount >= 0 AND refunded_amount <= amount),
     disputed boolean NOT NULL DEFAULT false,
     created_at timestamptz NOT NULL DEFAULT now(),
+    fully_refunded boolean NOT NULL DEFAULT false,
     CHECK (ends_at > starts_at)
 );
 CREATE INDEX billing_payment_researcher_period ON auth.billing_payment(researcher_id,ends_at);
@@ -394,7 +395,8 @@ CREATE TABLE auth.billing_adjustment (
     refunded_amount integer NOT NULL DEFAULT 0 CHECK (refunded_amount >= 0),
     disputed boolean NOT NULL DEFAULT false,
     dispute_resolved_at timestamptz,
-    updated_at timestamptz NOT NULL DEFAULT now()
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    fully_refunded boolean NOT NULL DEFAULT false
 );
 CREATE TABLE auth.billing_event (
     id text PRIMARY KEY,
