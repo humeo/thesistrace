@@ -13,7 +13,7 @@ compose() {
     grep -Fqx '{"status":"ready"}' "$evidence_root/readiness.json"
     grep -Fqx '{"ok":true}' "$evidence_root/auth-ok.json"
     test "$(compose exec -T auth id -u)" -ne 0
-    test "$(compose exec -T auth node --version)" = v24.14.0
+    test "$(compose exec -T auth node --version)" = v24.22.1
     compose exec -T auth test ! -e /app/auth/dist/$stale_canary_name
     compose exec -T auth test -s /app/web/public/brand/qhypo-icon-128.png
 

@@ -16,7 +16,7 @@ services:
     environment: *test-environment
 
   resend-fake:
-    image: node:24.14.0-bookworm-slim@sha256:d8e448a56fc63242f70026718378bd4b00f8c82e78d20eefb199224a4d8e33d8
+    image: node:24.22.1-bookworm-slim@sha256:1681862882da07ee5476fee047bcf34138833f1df42633bb25bcb0f438d5bf3d
     command: ["node", "/test-fixtures/resend-fake.mjs"]
     environment:
       THESISTRACE_RESEND_FAKE_HOST: 0.0.0.0
@@ -101,7 +101,7 @@ services:
       - ../apps/auth/test-fixtures:/test-fixtures:ro
 
   auth-exchange-proxy:
-    image: node:24.14.0-bookworm-slim@sha256:d8e448a56fc63242f70026718378bd4b00f8c82e78d20eefb199224a4d8e33d8
+    image: node:24.22.1-bookworm-slim@sha256:1681862882da07ee5476fee047bcf34138833f1df42633bb25bcb0f438d5bf3d
     command: ["node", "/test-fixtures/auth-exchange-proxy.mjs"]
     environment:
       THESISTRACE_AUTH_PROXY_PORT: "8250"
@@ -125,7 +125,7 @@ services:
       - 127.0.0.1::8250
 
   mcp-fault-proxy:
-    image: node:24.14.0-bookworm-slim@sha256:d8e448a56fc63242f70026718378bd4b00f8c82e78d20eefb199224a4d8e33d8
+    image: node:24.22.1-bookworm-slim@sha256:1681862882da07ee5476fee047bcf34138833f1df42633bb25bcb0f438d5bf3d
     command: ["node", "/test-fixtures/mcp-fault-proxy.mjs"]
     environment:
       THESISTRACE_MCP_PROXY_PORT: "8150"

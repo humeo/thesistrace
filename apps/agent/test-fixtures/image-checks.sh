@@ -12,7 +12,7 @@ compose() {
     grep -Fqx '{"status":"ok"}' "$evidence_root/liveness.json"
     grep -Fqx '{"status":"ready"}' "$evidence_root/readiness.json"
     test "$(compose exec -T agent id -u)" -ne 0
-    test "$(compose exec -T agent node --version)" = v24.14.0
+    test "$(compose exec -T agent node --version)" = v24.22.1
     compose exec -T agent test ! -e /app/agent/dist/$stale_canary_name
 
     unauthenticated_status=$(curl --silent --show-error --max-time 10 \

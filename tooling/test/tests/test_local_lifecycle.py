@@ -861,7 +861,7 @@ def test_container_builds_exclude_host_dependency_directories() -> None:
     assert "--mount=type=cache,target=/root/.cache/uv" in backend
     assert "pnpm --dir apps/agent build" in agent
     assert "pnpm --filter thesistrace-agent-host deploy --prod /agent-runtime" in agent
-    assert "node:24.14.0-bookworm-slim" in web
+    assert "node:24.22.1-bookworm-slim" in web
     assert "caddy:2.11.4-alpine" in web
     assert "pnpm@11.9.0" in web
     assert "--mount=type=cache,target=/root/.local/share/pnpm/store" in web
@@ -1278,7 +1278,7 @@ def test_test_overlay_uses_random_loopback_ports_and_project_scoped_volumes() ->
 
     for port in (5432, 8150, 8250, 8260, 9000):
         assert f"127.0.0.1::{port}" in overlay
-    assert overlay.count("node:24.14.0-bookworm-slim@sha256:") == 3
+    assert overlay.count("node:24.22.1-bookworm-slim@sha256:") == 3
     assert (
         "127.0.0.1:${THESISTRACE_TEST_CADDY_PORT}:${THESISTRACE_TEST_CADDY_PORT}"
         in overlay

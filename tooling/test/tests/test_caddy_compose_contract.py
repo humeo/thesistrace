@@ -166,7 +166,7 @@ def test_caddy_bounds_idle_upstream_connections_without_retrying_mutations() -> 
 def test_auth_image_reuses_the_package_store_for_production_deploy() -> None:
     dockerfile = (ROOT / "apps/auth" / "Dockerfile").read_text()
 
-    assert dockerfile.count("node:24.14.0-bookworm-slim@sha256:") == 2
+    assert dockerfile.count("node:24.22.1-bookworm-slim@sha256:") == 2
     assert (
         dockerfile.count("--mount=type=cache,target=/root/.local/share/pnpm/store") == 2
     )
@@ -176,7 +176,7 @@ def test_auth_image_reuses_the_package_store_for_production_deploy() -> None:
 def test_agent_image_is_a_private_pinned_node_runtime() -> None:
     dockerfile = (ROOT / "apps/agent" / "Dockerfile").read_text()
 
-    assert dockerfile.count("node:24.14.0-bookworm-slim@sha256:") == 2
+    assert dockerfile.count("node:24.22.1-bookworm-slim@sha256:") == 2
     assert (
         dockerfile.count("--mount=type=cache,target=/root/.local/share/pnpm/store") == 2
     )
