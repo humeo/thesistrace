@@ -24,6 +24,7 @@ import {
   projectSafeToolResult,
 } from "./safe-tool-result.js";
 import { isCanonicalUuid } from "./uuid.js";
+import { CODE_MODE_ACTIVITY, readCodeModeActivity } from "./code-mode-activity.js";
 
 export { SAFE_TOOL_COMPLETED, SAFE_TOOL_FAILED } from "./safe-tool-result.js";
 
@@ -358,6 +359,10 @@ export class BrowserEventProjector {
           type: EventType.TOOL_CALL_RESULT,
         }];
       case EventType.CUSTOM: {
+        if (event.name === CODE_MODE_ACTIVITY) {
+          const activity = readCodeModeActivity(event.value);
+          return activity ? [{ type: EventType.CUSTOM, name: CODE_MODE_ACTIVITY, value: activity }] : [];
+        }
         if (event.name === "provider_retry" && isRecord(event.value)
           && typeof event.value.runId === "string" && isCanonicalUuid(event.value.runId)
           && typeof event.value.messageId === "string") {
@@ -414,7 +419,7 @@ function isStructuredToolError(content: unknown): boolean {
   if (typeof content !== "string") return false;
   try {
     const parsed: unknown = JSON.parse(content);
-    return isRecord(parsed) && parsed.isError === true;
+    return isRecord(parsed) && (parsed.isError === true || parsed[DURABLE_TOOL_OUTCOME_FIELD] === DURABLE_TOOL_FAILURE);
   } catch {
     return false;
   }

@@ -1,3 +1,5 @@
+import { scriptedCodeModeCall } from "../src/scripted-code-mode.js";
+
 export const MEMORY_FACT = "ResearchRun run_memory_alpha failed with INSUFFICIENT_HISTORY; retain the 120-session formula.";
 
 /** Deterministic Responses replay for the native Observer/Reflector protocol. */
@@ -32,8 +34,9 @@ export function openAIMemoryProvider(options: { tool?: string; toolArguments?: R
       : `<observations>\nDate: Sep 6, 2026\n* 🔴 ${remembers ? MEMORY_FACT : "No earlier failure is known."}\n</observations>`);
     const id = `memory_${requests.length}`;
     const item = { type: "message", id: `msg_${id}` };
-    const tool = phase === "answer" && options.tool && (options.toolOnAnswers ?? [options.toolOnAnswer ?? 1]).includes(requests.filter((request) => request.phase === "answer").length)
-      ? { type: "function_call", id: `fc_${id}`, call_id: `call_${id}`, name: options.tool, arguments: JSON.stringify(options.toolArguments ?? {}) } : undefined;
+    const read = options.tool ? scriptedCodeModeCall({ name: options.tool, input: options.toolArguments ?? {} }) : undefined;
+    const tool = phase === "answer" && read && (options.toolOnAnswers ?? [options.toolOnAnswer ?? 1]).includes(requests.filter((request) => request.phase === "answer").length)
+      ? { type: "function_call", id: `fc_${id}`, call_id: `call_${id}`, name: read.name, arguments: JSON.stringify(read.input) } : undefined;
     const frames = [
       { type: "response.created", response: { id: `resp_${id}`, model: "gpt-5.6-luna", created_at: 1 } },
       ...(tool ? [

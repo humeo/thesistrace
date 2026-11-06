@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { LanguageModelV3CallOptions, LanguageModelV3StreamPart } from "@ai-sdk/provider";
 import { isRecord, latestUserText, textContent, toolObservations } from "./scripted-research-support.js";
+import { scriptedCodeModeBatch, scriptedCodeModeCall } from "./scripted-code-mode.js";
 
 /** Deterministic browser cases still traverse the real controller, store and Tool boundary. */
 export function scriptedContextStream(options: LanguageModelV3CallOptions): { stream: ReadableStream<LanguageModelV3StreamPart> } | undefined {
@@ -58,7 +59,7 @@ function stream(text: string, reason: "stop" | "length" | "tool-calls", tools: r
   const id = "scripted-context";
   const parts: LanguageModelV3StreamPart[] = [{ type: "stream-start", warnings: [] }];
   if (text) parts.push({ type: "text-start", id }, { type: "text-delta", id, delta: text }, { type: "text-end", id });
-  for (const tool of tools) {
+  for (const tool of tools.length > 1 ? [scriptedCodeModeBatch(tools)] : tools.map(scriptedCodeModeCall)) {
     const toolCallId = `context-read-${randomUUID()}`;
     parts.push({ type: "tool-input-start", id: toolCallId, toolName: tool.name },
       { type: "tool-input-delta", id: toolCallId, delta: JSON.stringify(tool.input) }, { type: "tool-input-end", id: toolCallId },

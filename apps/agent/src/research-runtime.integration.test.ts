@@ -1037,7 +1037,7 @@ describe.sequential("durable Research Agent runtime", () => {
       expect(await runtime.timeline(input.threadId, primaryResearcher, undefined, 20)).toEqual(timeline);
       const entries = timeline.turns[0]!.entries.filter((entry) => entry.kind === "assistant_message" || entry.kind === "tool_activity");
       expect(entries.map((entry) => entry.kind === "assistant_message" ? entry.payload.content : entry.payload.name)).toEqual([
-        "Checking.", "get_research_context", "Read the context.", "get_research_context", "Finished.",
+        "Checking.", "get_research_context", "execute_typescript", "Read the context.", "get_research_context", "execute_typescript", "Finished.",
       ]);
       await runtime.close();
       runtime = await createIntegrationRuntime();
@@ -1865,14 +1865,14 @@ describe.sequential("durable Research Agent runtime", () => {
     const barrier = toolBarrier();
     const acceptedTools = new Set<string>();
     const runtime = await createResearchRuntime(settings, {
-      mcpRunFactory: async (_headers, acceptedRunId) => ({
+      mcpRunFactory: async (_headers, acceptedRunId) => {
+        acceptedTools.add(acceptedRunId);
+        await barrier.promise;
+        return {
         close: async () => undefined, hasFatalToolFailure: () => false, toolFailure: () => undefined,
-        tools: { get_research_context: createTool({
-          id: "get_research_context", description: "Read context at the deterministic saturation barrier.",
-          inputSchema: z.object({}).strict(),
-          execute: async () => { acceptedTools.add(acceptedRunId); await barrier.promise; return { available: true }; },
-        }) },
-      }),
+        tools: {},
+        };
+      },
     });
     const inputs = Array.from({ length: MAX_ACTIVE_AGENT_RUNS + 1 }, (_, index) => runInput({
       threadId: fixedUuid(9300 + index * 3), runId: fixedUuid(9301 + index * 3),
@@ -2798,7 +2798,7 @@ describe.sequential("durable Research Agent runtime", () => {
         "RUN_FINISHED",
       ]);
       expect(events.find((event) => event.type === "TOOL_CALL_START")).toMatchObject({
-        toolCallName: "get_research_context",
+        toolCallName: "execute_typescript",
       });
       expect(events.find((event) => event.type === "TOOL_CALL_ARGS")).toMatchObject({
         delta: "{}",
@@ -3268,18 +3268,21 @@ describe.sequential("durable Research Agent runtime", () => {
     }
   }, 15_000);
 
-  it("passes every four-scope capability and subsequent discovery changes through to the native Mastra model", async () => {
+  it("exposes only current commands and Code Mode while declaring authenticated reads", async () => {
     const completeDiscovery = [
       "get_research_context", "get_alpha_catalog", "diagnose_alpha_formula",
       "list_research_runs", "get_research_run", "get_research_run_result", "submit_research_run",
       "list_research_batches", "get_research_batch", "submit_research_batch",
       "list_daily_tracks", "get_daily_track", "get_daily_track_result", "start_daily_track", "refresh_daily_track", "retry_daily_track",
+      "stop_daily_track", "cancel_research_run",
     ];
     let discovered = completeDiscovery;
-    const runtime = await createResearchRuntime(settings, {
+    const provider = openAIToolProvider([]);
+    vi.stubGlobal("fetch", provider.fetch);
+    const runtime = await createResearchRuntime(memoryConfiguration, {
       mcpRunFactory: async () => ({
         close: async () => undefined, hasFatalToolFailure: () => false, toolFailure: () => undefined,
-        tools: Object.fromEntries(discovered.map((name) => [name, createTool({
+        tools: Object.fromEntries(discovered.map(name => [name, createTool({
           id: name, description: `Current discovered capability ${name}`,
           inputSchema: z.record(z.string(), z.unknown()),
           execute: async () => { throw new Error("Discovery inspection must not execute a business Tool"); },
@@ -3288,24 +3291,25 @@ describe.sequential("durable Research Agent runtime", () => {
     });
     const threadId = randomUUID();
     try {
-      let history: Message[] | undefined;
-      for (const names of [completeDiscovery, [...completeDiscovery.filter((name) => name !== "retry_daily_track"), "newly_discovered_tracking_capability"]]) {
+      for (const [index, names] of [completeDiscovery, [...completeDiscovery.filter(name => name !== "retry_daily_track"), "newly_discovered_tracking_capability"]].entries()) {
         discovered = names;
-        const messageId = randomUUID();
-        const events = await run(runtime, runInput({
-          content: SCRIPTED_DISCOVERY_PROMPT, messageId, runId: randomUUID(), threadId,
-          ...(history === undefined ? {} : { messages: [{ id: messageId, role: "user" as const, content: SCRIPTED_DISCOVERY_PROMPT }] }),
+        const events = await run(runtime, runInput({ content: "Describe the current capabilities.",
+          messageId: randomUUID(), runId: randomUUID(), threadId, sessionMode: index ? "existing" : "new",
+          modelKey: "luna", reasoningEffort: "high",
         }), primaryResearcher);
         expect(events.at(-1)?.type).toBe("RUN_FINISHED");
-        const reply = events.filter((event) => event.type === "TEXT_MESSAGE_CONTENT").map((event) => event.delta).join("");
-        expect(reply).toBe(`Available capabilities: ${[...names, "ask_user", "render_a2ui"].sort().join(", ")}`);
-        expect(reply).not.toContain("stop_daily_track");
-        expect(reply).not.toContain("cancel_research_run");
-        history = snapshotMessages(await connect(runtime, threadId, primaryResearcher));
+        const request = provider.requests.at(-1)!;
+        expect(request.tools?.map(tool => tool.name).sort()).toEqual([
+          "ask_user", "execute_typescript", "refresh_daily_track", "render_a2ui", "start_daily_track", "submit_research_batch", "submit_research_run",
+          ...(index ? [] : ["retry_daily_track"]),
+        ].sort());
+        const instructions = JSON.stringify(request.input);
+        expect(instructions).toContain("declare function external_get_research_context(");
+        expect(instructions).not.toContain("external_submit_research_run(");
+        expect(instructions).not.toContain("newly_discovered_tracking_capability");
+        expect(instructions).not.toContain("external_stop_daily_track(");
       }
-    } finally {
-      await runtime.close();
-    }
+    } finally { await runtime.close(); vi.unstubAllGlobals(); }
   });
 
   it.each(["formula", "admission"] as const)("reads %s correction facts from real native Memory with an owner-scoped read", async (kind) => {
@@ -3389,13 +3393,13 @@ describe.sequential("durable Research Agent runtime", () => {
       expect(events.filter((event) => event.type === "TOOL_CALL_START").map((event) => (
         event.toolCallName
       ))).toEqual([
-        "get_research_context",
-        "get_alpha_catalog",
-        "diagnose_alpha_formula",
+        "execute_typescript",
+        "execute_typescript",
+        "execute_typescript",
         "submit_research_run",
-        "get_research_run",
-        "get_research_run",
-        "get_research_run_result",
+        "execute_typescript",
+        "execute_typescript",
+        "execute_typescript",
       ]);
       expect(calls.map((call) => call.name)).toEqual([
         "get_research_context",
@@ -3653,7 +3657,7 @@ describe.sequential("durable Research Agent runtime", () => {
       }), primaryResearcher);
       expect(followUp.map((event) => event.type)).toContain("TOOL_CALL_START");
       expect(followUp.find((event) => event.type === "TOOL_CALL_START")).toMatchObject({
-        toolCallName: "get_research_context",
+        toolCallName: "execute_typescript",
       });
       expect(followUp.at(-1)?.type).toBe("RUN_FINISHED");
       const outcomes = await owner.query<{
@@ -3722,7 +3726,9 @@ describe.sequential("durable Research Agent runtime", () => {
     try {
       const events = await run(runtime, input, primaryResearcher);
 
-      expect(observedMcpRun?.toolFailure("scripted-tool-call-1")).toEqual({ code: "MCP_TRANSIENT", fatal: true });
+      const timeline = await runtime.timeline(input.threadId, primaryResearcher, undefined, 20);
+      const child = timeline.turns.flatMap(turn => turn.entries).find(entry => entry.kind === "tool_activity" && entry.payload.name === "get_research_context")!;
+      expect(observedMcpRun?.toolFailure(child.entryId.slice("tool:".length))).toEqual({ code: "MCP_TRANSIENT", fatal: true });
       expect(lifecycleEventTypes(events)).toEqual([
         "RUN_STARTED",
         "TOOL_CALL_START",
@@ -3846,7 +3852,9 @@ describe.sequential("durable Research Agent runtime", () => {
     try {
       const events = await run(runtime, input, primaryResearcher);
 
-      expect(observedMcpRun?.toolFailure("scripted-tool-call-1")).toEqual({ code: "MCP_TRANSIENT", fatal: false });
+      const timeline = await runtime.timeline(input.threadId, primaryResearcher, undefined, 20);
+      const child = timeline.turns.flatMap(turn => turn.entries).find(entry => entry.kind === "tool_activity" && entry.payload.name === "get_research_context")!;
+      expect(observedMcpRun?.toolFailure(child.entryId.slice("tool:".length))).toEqual({ code: "MCP_TRANSIENT", fatal: false });
       expect(lifecycleEventTypes(events)).toEqual([
         "RUN_STARTED",
         "TOOL_CALL_START",
@@ -3876,7 +3884,8 @@ describe.sequential("durable Research Agent runtime", () => {
       expect(durableJson).toContain(businessError.code);
       expect(durableJson).toContain(businessError.message);
       expect(durableJson).toContain(businessError.trace_id);
-      expect(durableJson).toContain("modelOutput");
+      expect(durableJson).toContain("execute_typescript");
+      expect(durableJson).not.toContain('"toolName":"thesistrace_get_research_context"');
 
       const productRun = await owner.query<{ status: string }>(`
         SELECT status FROM agent.agent_run WHERE id = $1

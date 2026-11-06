@@ -17,7 +17,7 @@ http.createServer((request, response) => {
   if (request.method === "GET"
     && request.url === `/internal/researchers/${researcher.researcher_id}/quota-policy`) {
     json(response, 200, { timezone: "Asia/Shanghai", daily_model_budget_nanodollars: 1_000_000_000,
-      daily_run_limit: 10, active_daily_track_limit: 10 });
+      daily_run_limit: 100, active_daily_track_limit: 10 });
     return;
   }
   if (request.method !== "POST") {

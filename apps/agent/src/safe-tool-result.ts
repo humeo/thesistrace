@@ -105,6 +105,9 @@ function unwrapToolResult(value: unknown): unknown {
     }
   }
   if (!isRecord(value)) return value;
+  if (value.success === true && "result" in value && !("code" in value)) {
+    return unwrapToolResult(value.result);
+  }
   if (value.type === "json" && "value" in value) {
     return unwrapToolResult(value.value);
   }

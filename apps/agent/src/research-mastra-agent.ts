@@ -26,7 +26,8 @@ import {
 } from "./browser-message-safety.js";
 import type { ValidatedChatRun } from "./chat-request.js";
 import { projectAskUserInterrupt } from "./chat-control.js";
-import type { McpRun } from "./mcp-run.js";
+import type { McpRun, McpToolFailure } from "./mcp-run.js";
+import { CODE_MODE_ACTIVITY, CODE_MODE_TOOL_NAME, readCodeModeActivity, type CodeModeActivity } from "./code-mode-activity.js";
 import type { ResearchSessionRepository } from "./session-repository.js";
 import type { PersistedTokenUsage } from "./usage-capture.js";
 import type { AgentFailureCode } from "@thesistrace/contracts/agent-failure";
@@ -92,6 +93,7 @@ export class ResearchMastraAgent extends MastraAgent {
     }
 
     return defer(() => {
+      this.execution.requestContext.set("agentRunDeadline", performance.now() + this.execution.runMaxWallMs);
       let disposed = false;
       let ownsRun = false;
       let shouldScheduleTitle = false;
@@ -99,7 +101,7 @@ export class ResearchMastraAgent extends MastraAgent {
       let activeMcpRun: McpRun | undefined;
       let mcpRunPromise: Promise<McpRun> | undefined;
       let mcpClosePromise: Promise<void> | undefined;
-      const observedTools = new Map<string, "mcp" | "a2ui">();
+      const observedTools = new Map<string, "mcp" | "a2ui" | "code">();
       const finishPendingTools = (failure: AgentFailureCode | null) => {
         for (const kind of observedTools.values()) {
           this.execution.telemetry.toolFinished(failure ?? (kind === "a2ui" ? "TOOL_REJECTION" : "TOOL_ERROR"));
@@ -112,6 +114,8 @@ export class ResearchMastraAgent extends MastraAgent {
       const projector = new BrowserEventProjector(A2UI_FRAMEWORK_TOOL_NAMES);
       const closeMcp = () => {
         this.execution.requestContext.set("mcpTools", {});
+        this.execution.requestContext.set("mcpRun", undefined);
+        this.execution.requestContext.set("researchCodeMode", undefined);
         mcpClosePromise ??= (async () => {
           try {
             const mcpRun = await mcpRunPromise;
@@ -211,9 +215,14 @@ export class ResearchMastraAgent extends MastraAgent {
               // The durable acceptance event above is the sole RUN_STARTED.
               concatMap((event) => {
                 if (event.type === EventType.RUN_STARTED) return from([]);
+                if (event.type === EventType.CUSTOM && event.name === CODE_MODE_ACTIVITY) {
+                  const activity = readCodeModeActivity(event.value);
+                  if (activity && activity.status !== "running") this.execution.telemetry.toolFinished(activity.failureCode ?? null, activity.resultBytes);
+                }
                 if (event.type === EventType.TOOL_CALL_START
                   && typeof event.toolCallId === "string" && typeof event.toolCallName === "string") {
                   if (activeMcpRun !== undefined && Object.hasOwn(activeMcpRun.tools, event.toolCallName)) observedTools.set(event.toolCallId, "mcp");
+                  else if (event.toolCallName === CODE_MODE_TOOL_NAME) observedTools.set(event.toolCallId, "code");
                   else if (A2UI_FRAMEWORK_TOOL_NAMES.has(event.toolCallName)) observedTools.set(event.toolCallId, "a2ui");
                 }
                 const toolCallId = event.type === EventType.TOOL_CALL_RESULT
@@ -222,7 +231,8 @@ export class ResearchMastraAgent extends MastraAgent {
                   : undefined;
                 const toolFailure = toolCallId === undefined
                   ? undefined
-                  : activeMcpRun?.toolFailure(toolCallId);
+                  : activeMcpRun?.toolFailure(toolCallId)
+                    ?? this.execution.requestContext.get<string, ((id: string) => McpToolFailure | undefined) | undefined>("codeModeToolFailure")?.(toolCallId);
                 if (toolCallId !== undefined && observedTools.has(toolCallId)) {
                   const failure = observedTools.get(toolCallId) === "a2ui"
                     ? a2uiFailure(event.content) : toolFailure?.code ?? null;
@@ -263,7 +273,8 @@ export class ResearchMastraAgent extends MastraAgent {
         concatMap((event) => {
           const toolFailed = event.type === EventType.TOOL_CALL_RESULT
             && typeof event.toolCallId === "string"
-            && activeMcpRun?.toolFailure(event.toolCallId) !== undefined;
+            && (activeMcpRun?.toolFailure(event.toolCallId) !== undefined
+              || this.execution.requestContext.get<string, ((id: string) => McpToolFailure | undefined) | undefined>("codeModeToolFailure")?.(event.toolCallId) !== undefined);
           return from(projector.project(event, toolFailed));
         }),
       );
@@ -314,6 +325,9 @@ export class ResearchMastraAgent extends MastraAgent {
       let settle!: () => void;
       const drained = new Promise<void>((resolve) => { settle = resolve; });
       this.execution.pendingBridges.add(drained);
+      this.execution.requestContext.set("reportCodeModeActivity", (activity: CodeModeActivity) => {
+        subscriber.next({ type: EventType.CUSTOM, name: CODE_MODE_ACTIVITY, value: activity });
+      });
       this.execution.requestContext.set("notifyModelRecovery", (claimed: boolean) => {
         if (claimed) this.execution.telemetry.recoveryClaimed();
         subscriber.next({ type: EventType.CUSTOM, name: "session_recovery_changed", value: { runId: input.runId } });
@@ -325,6 +339,7 @@ export class ResearchMastraAgent extends MastraAgent {
         completed = true;
         this.execution.requestContext.set("notifyModelRecovery", undefined);
         this.execution.requestContext.set("notifyProviderRetry", undefined);
+        this.execution.requestContext.set("reportCodeModeActivity", undefined);
         this.execution.pendingBridges.delete(drained);
         settle();
       };

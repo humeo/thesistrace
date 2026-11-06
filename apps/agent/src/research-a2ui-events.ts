@@ -7,6 +7,7 @@ import {
   RESEARCH_A2UI_ACTIVITY_TYPE,
 } from "@thesistrace/contracts/research-a2ui";
 import { A2UI_FRAMEWORK_TOOL_NAMES } from "./browser-message-safety.js";
+import { CODE_MODE_ACTIVITY } from "./code-mode-activity.js";
 
 type PersistableA2UIActivity = Readonly<{
   content: Record<string, unknown>;
@@ -33,6 +34,8 @@ export class ResearchA2UIEventProjector {
   private nextSequence = 1;
 
   project(event: BaseEvent): A2UIProjectionBatch {
+    // Internal activity has already updated the public timeline; it is not a Provider call.
+    if (event.type === EventType.CUSTOM && event.name === CODE_MODE_ACTIVITY) return empty();
     if (event.type === EventType.TOOL_CALL_START) {
       if (typeof event.toolCallName !== "string" || typeof event.toolCallId !== "string") {
         return empty();

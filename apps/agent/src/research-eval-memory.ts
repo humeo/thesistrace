@@ -4,6 +4,8 @@ import { Pool } from "pg";
 import { z } from "zod";
 
 import { ResearchEvalError } from "./research-eval.js";
+import { CODE_MODE_TOOL_NAME } from "./code-mode-activity.js";
+import { readCodeModeReadThrough } from "./code-mode-read-through.js";
 
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const runId = z.string().regex(/^run_[a-f0-9]{20}$/);
@@ -52,7 +54,7 @@ export function researchEvalMemoryFacts(
     for (const [messageIndex, message] of convertMessages([...messages]).to("Mastra.V2").entries()) {
       if (message.role !== "assistant") continue;
       let markerStep = -1, unmarkedStep = -1;
-      for (const part of message.content.parts) {
+      for (const part of readThroughParts(message.content.parts)) {
         if (part.type === "step-start") {
           // Native Memory may omit the first marker. A later marker still
           // starts a new step, not the step containing the initial Tool result.
@@ -140,6 +142,23 @@ export function researchEvalMemoryFacts(
   } catch {
     throw new ResearchEvalError("REPORT_INVALID");
   }
+}
+
+/** Interpret proven read-throughs in place; never rewrite native model history. */
+function readThroughParts(parts: MastraDBMessage["content"]["parts"]): MastraDBMessage["content"]["parts"] {
+  return parts.flatMap(part => {
+    if (part.type !== "tool-invocation" || part.toolInvocation.toolName !== CODE_MODE_TOOL_NAME
+      || part.toolInvocation.state !== "result") return [part];
+    const call = part.toolInvocation;
+    if (!isRecord(call.result) || call.result.success !== true) return [part];
+    const program = readCodeModeReadThrough(call.args);
+    if (!program) return [part];
+    const outputs = program.kind === "batch" ? call.result.result : [call.result.result];
+    if (!Array.isArray(outputs) || outputs.length !== program.calls.length) return [part];
+    return program.calls.map((read, index) => ({ ...part, toolInvocation: { ...call,
+      toolCallId: `${call.toolCallId}:read:${index}`, toolName: read.name, args: read.input, result: outputs[index],
+    } }));
+  });
 }
 
 export async function readResearchEvalMemoryFacts(pool: Pool, value: unknown): Promise<ResearchEvalMemoryFacts> {

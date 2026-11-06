@@ -38,9 +38,19 @@ http.createServer(async (request, response) => {
   });
   const hasToolResult = body.input.some((item) => item?.type === "function_call_output");
   const hasResearchTool = Array.isArray(body.tools)
-    && body.tools.some((tool) => tool?.type === "function" && tool?.name === "get_research_context");
-  if (hasResearchTool && !hasToolResult) {
-    streamToolCall(response, responseOrdinal);
+    && body.tools.some((tool) => tool?.type === "function" && tool?.name === "execute_typescript");
+  const prompt = JSON.stringify(body.input);
+  if (hasResearchTool && !hasToolResult && !prompt.includes("image-code-mode-text")) {
+    const program = prompt.includes("image-code-mode-loop")
+      ? 'const hold = new Array(5000000).fill(42); await external_get_research_context({}); let i=0; while (true) { hold[i++ % hold.length] ^= 1; }'
+      : prompt.includes("image-code-mode-heap")
+      ? 'const rows=[]; while (true) rows.push(new Array(10000).fill(42));'
+      : prompt.includes("image-code-mode-arguments")
+      ? 'return await external_get_research_context({value:"private-code-mode-image-canary".repeat(10000)});'
+      : prompt.includes("image-code-mode-logs")
+      ? 'for(let i=0;i<10000;i++) console.log("private-code-mode-image-canary"); return 42;'
+      : 'return await external_get_research_context({});';
+    streamToolCall(response, responseOrdinal, program);
   } else {
     streamText(response, responseOrdinal, hasToolResult);
   }
@@ -48,7 +58,8 @@ http.createServer(async (request, response) => {
   response.end();
 }).listen(8600, "0.0.0.0");
 
-function streamToolCall(response, ordinal) {
+function streamToolCall(response, ordinal, code) {
+  const argumentsJson = JSON.stringify({ code });
   const responseId = `resp_image_smoke_${ordinal}`;
   const itemId = `fc_image_smoke_${ordinal}`;
   const callId = `call_image_smoke_${ordinal}`;
@@ -63,7 +74,7 @@ function streamToolCall(response, ordinal) {
       type: "function_call",
       id: itemId,
       call_id: callId,
-      name: "get_research_context",
+      name: "execute_typescript",
       arguments: "",
     },
   });
@@ -71,13 +82,13 @@ function streamToolCall(response, ordinal) {
     type: "response.function_call_arguments.delta",
     item_id: itemId,
     output_index: 0,
-    delta: "{}",
+    delta: argumentsJson,
   });
   event(response, {
     type: "response.function_call_arguments.done",
     item_id: itemId,
     output_index: 0,
-    arguments: "{}",
+    arguments: argumentsJson,
   });
   event(response, {
     type: "response.output_item.done",
@@ -86,8 +97,8 @@ function streamToolCall(response, ordinal) {
       type: "function_call",
       id: itemId,
       call_id: callId,
-      name: "get_research_context",
-      arguments: "{}",
+      name: "execute_typescript",
+      arguments: argumentsJson,
       status: "completed",
     },
   });

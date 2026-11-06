@@ -1,6 +1,8 @@
 import { fileURLToPath } from "node:url";
 import { createOpenAI } from "@ai-sdk/openai";
 import { Agent } from "@mastra/core/agent";
+import { RequestContext } from "@mastra/core/request-context";
+import { noopObserve } from "@mastra/core/tools";
 import { noopLogger } from "@mastra/core/logger";
 import { MCPClient } from "@mastra/mcp";
 import { expect, it } from "vitest";
@@ -10,6 +12,7 @@ import { AGENT_LIMITS } from "./guarded-language-model.js";
 import { createMcpRunFactory } from "./mcp-run.js";
 import { McpSchemaValidator } from "./mcp-schema-validator.js";
 import { openAIToolProvider } from "../test-fixtures/openai-tool-provider.js";
+import { createResearchCodeModeHost } from "./research-code-mode.js";
 
 it("consumes Core instructions, recoverable rejections and bounded Result pages through the real SDKs", async () => {
   const core = fileURLToPath(new URL("../../core/", import.meta.url));
@@ -120,6 +123,24 @@ it("consumes Core instructions, recoverable rejections and bounded Result pages 
     expect(next.checksum_sha256).toBe(first.checksum_sha256);
     expect(next.offset).toBe((first.json_fragment as string).length);
     expect(run.hasFatalToolFailure()).toBe(false);
+    const failures: string[] = [];
+    const scope = createResearchCodeModeHost().forRun({ mcpRun: run, signal: new AbortController().signal,
+      deadline: performance.now() + 30_000, onFatal: code => failures.push(code), onActivity: () => {} });
+    const combined = await scope.tools.execute_typescript.execute!({ code: `
+      const query = {track_id: "track_test", section: "origin"};
+      const [context, first] = await Promise.all([external_get_research_context({}), external_get_daily_track_result(query)]);
+      const next = await external_get_daily_track_result({section: "result_page", query, result_cursor: first.next_result_cursor});
+      if (first.checksum_sha256 !== next.checksum_sha256) throw new TypeError("Result version changed");
+      return {characters: first.json_fragment.length + next.json_fragment.length, secondOffset: next.offset,
+        checksum: first.checksum_sha256, contextAvailable: Boolean(context), hasMore: typeof next.next_result_cursor === "string"};
+    ` }, { requestContext: new RequestContext(), observe: noopObserve,
+      agent: { agentId: "core-code-contract", toolCallId: "combined", messages: [], suspend: async () => {} } });
+    expect(combined).toMatchObject({ success: true, result: {
+      characters: (first.json_fragment as string).length + (next.json_fragment as string).length,
+      secondOffset: next.offset, checksum: first.checksum_sha256, contextAvailable: true,
+      hasMore: typeof next.next_result_cursor === "string",
+    } });
+    expect(failures).toEqual([]);
   } finally {
     await run.close();
   }

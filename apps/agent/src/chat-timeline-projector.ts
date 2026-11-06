@@ -4,6 +4,7 @@ import { EventType, type BaseEvent } from "@ag-ui/core";
 import { parseSafeToolResult } from "./safe-tool-result.js";
 import { A2UI_FRAMEWORK_TOOL_NAMES } from "./browser-message-safety.js";
 import type { ResearchSessionRepository } from "./session-repository.js";
+import { CODE_MODE_ACTIVITY, readCodeModeActivity } from "./code-mode-activity.js";
 
 const FLUSH_INTERVAL_MS = 75;
 const FLUSH_BYTES = 512;
@@ -36,6 +37,14 @@ export class ChatTimelineProjector {
   ) {}
 
   async project(event: BaseEvent): Promise<void> {
+    if (event.type === EventType.CUSTOM && event.name === CODE_MODE_ACTIVITY) {
+      const activity = readCodeModeActivity(event.value);
+      if (!activity) return;
+      await this.flushAssistants();
+      await this.repository.persistToolActivity(this.threadId, this.runId, activity.toolCallId, activity.name, activity.status);
+      this.savedRevision++;
+      return;
+    }
     if (event.type === EventType.CUSTOM && event.name === "provider_retry") {
       const value = event.value as { runId?: unknown; messageId?: unknown } | undefined;
       if (value?.runId !== this.runId || typeof value.messageId !== "string") return;

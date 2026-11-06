@@ -75,6 +75,8 @@ import { RunModelObservation } from "./guarded-language-model.js";
 import { providerFailureCode } from "./run-failure.js";
 import { agentTraceId, createRunTelemetry, type AgentTelemetryWriter } from "./run-telemetry.js";
 import { PRIVACY_CANARIES } from "./scripted-privacy-model.js";
+import { createResearchCodeModeHost, type ResearchCodeMode } from "./research-code-mode.js";
+import { CODE_MODE_TOOL_NAME, type CodeModeActivity } from "./code-mode-activity.js";
 
 const RESEARCH_AGENT_ID = "research";
 const RESEARCH_AGENT_INSTRUCTIONS = `You are the QAgentis Research Agent.
@@ -149,6 +151,7 @@ export async function createResearchRuntime(
   settings: AgentSettings,
   dependencies: ResearchRuntimeDependencies = {},
 ): Promise<ResearchRuntime> {
+  const codeModeHost = createResearchCodeModeHost();
   const pool = createAgentPool(settings.databaseUrl);
   try {
     await verifyAgentSchema(pool);
@@ -206,11 +209,12 @@ export async function createResearchRuntime(
         // A transport/protocol failure is converted into one safe Tool result so
         // AG-UI can close that exact invocation. Stop before another provider
         // step; ResearchMastraAgent will persist the failed product Run.
-        stopWhen: () => mcpRunFrom(requestContext)?.hasFatalToolFailure() === true,
+        stopWhen: () => mcpRunFrom(requestContext)?.hasFatalToolFailure() === true
+          || codeModeFrom(requestContext, codeModeHost)?.hasFatalToolFailure() === true,
       };
     },
     id: RESEARCH_AGENT_ID,
-    instructions: ({ requestContext }) => researchAgentInstructions(requestContext),
+    instructions: ({ requestContext }) => researchAgentInstructions(requestContext, codeModeHost),
     maxRetries: 0,
     memory: ({ requestContext }) => {
       const selection = selectionFrom(requestContext);
@@ -224,7 +228,7 @@ export async function createResearchRuntime(
     },
     ...continuation.agentOptions,
     name: "QAgentis Research Agent",
-    tools: ({ requestContext }) => researchToolsFrom(requestContext),
+    tools: ({ requestContext }) => researchToolsFrom(requestContext, codeModeHost),
   });
   const mastra = new Mastra({
     agents: { [RESEARCH_AGENT_ID]: agent },
@@ -694,12 +698,12 @@ function mcpToolsFrom(context: RequestContext): DiscoveredMcpTools {
   return context.get<string, DiscoveredMcpTools>("mcpTools");
 }
 
-function researchToolsFrom(context: RequestContext): DiscoveredMcpTools {
+function researchToolsFrom(context: RequestContext, host: ReturnType<typeof createResearchCodeModeHost>): DiscoveredMcpTools {
   const mcpTools = mcpToolsFrom(context);
-  if (Object.hasOwn(mcpTools, RESEARCH_A2UI_TOOL_NAME) || Object.hasOwn(mcpTools, "ask_user")) {
+  if (Object.hasOwn(mcpTools, RESEARCH_A2UI_TOOL_NAME) || Object.hasOwn(mcpTools, "ask_user") || Object.hasOwn(mcpTools, CODE_MODE_TOOL_NAME)) {
     throw new Error("MCP_TOOL_NAME_RESERVED");
   }
-  return Object.fromEntries(Object.entries({ ...mcpTools, ask_user: askUserTool,
+  return Object.fromEntries(Object.entries({ ...codeModeFrom(context, host)?.tools, ask_user: askUserTool,
     [RESEARCH_A2UI_TOOL_NAME]: researchA2UITool }).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0));
 }
 
@@ -707,10 +711,28 @@ function mcpRunFrom(context: RequestContext): import("./mcp-run.js").McpRun | un
   return context.get<string, import("./mcp-run.js").McpRun | undefined>("mcpRun");
 }
 
-function researchAgentInstructions(context: RequestContext): string {
-  return selectionFrom(context).model.providerAdapter === "scripted"
+function researchAgentInstructions(context: RequestContext, host: ReturnType<typeof createResearchCodeModeHost>): string {
+  const instructions = selectionFrom(context).model.providerAdapter === "scripted"
     ? `${RESEARCH_AGENT_INSTRUCTIONS}\nDeterministic privacy fixture: ${PRIVACY_CANARIES.system}.`
     : RESEARCH_AGENT_INSTRUCTIONS;
+  return `${instructions}\n${codeModeFrom(context, host)?.instructions ?? ""}`;
+}
+
+function codeModeFrom(context: RequestContext, host: ReturnType<typeof createResearchCodeModeHost>): ResearchCodeMode | undefined {
+  const mcpRun = mcpRunFrom(context);
+  if (!mcpRun) return undefined; // Capability inspection before Run discovery has no private tool scope.
+  let scope = context.get<string, ResearchCodeMode | undefined>("researchCodeMode");
+  if (!scope) {
+    scope = host.forRun({ mcpRun,
+      signal: context.get<string, AbortSignal>("agentAbortSignal"),
+      deadline: context.get<string, number>("agentRunDeadline"),
+      onFatal: code => context.get<string, RunModelObservation>("modelObservation").fail(code),
+      onActivity: activity => context.get<string, ((activity: CodeModeActivity) => void) | undefined>("reportCodeModeActivity")?.(activity),
+    });
+    context.set("researchCodeMode", scope);
+    context.set("codeModeToolFailure", scope.toolFailure);
+  }
+  return scope;
 }
 
 function safeJsonResponse(code: string, status: number): Response {

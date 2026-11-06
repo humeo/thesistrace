@@ -30,6 +30,7 @@ describe("safe Tool result marker", () => {
 
   it("handles adapted, serialized, and nested JSON Tool results", () => {
     for (const value of [
+      { success: true, result: { id: "run_0123456789abcdef0123", status: "succeeded", private: "private-code-result" }, logs: [] },
       { id: "run_0123456789abcdef0123", status: "succeeded" },
       JSON.stringify({ run_id: "run_0123456789abcdef0123", status: "running" }),
       {

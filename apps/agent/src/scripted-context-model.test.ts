@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import type { LanguageModelV3CallOptions, LanguageModelV3StreamPart } from "@ai-sdk/provider";
 import { ScriptedLanguageModel } from "./scripted-language-model.js";
+import { scriptedCodeModeReads } from "./scripted-code-mode.js";
 
 async function response(prompt: LanguageModelV3CallOptions["prompt"]) {
   const model = new ScriptedLanguageModel("scripted-v1");
@@ -47,12 +48,12 @@ test("Scripted context batches retain distinct Core reads and exact continuation
     return parts.filter(part => part.type === "tool-call");
   };
   const first = await read();
-  expect(first.map(call => call.toolName)).toEqual(["get_research_context", "get_alpha_catalog"]);
-  expect(new Set(first.map(call => call.toolCallId)).size).toBe(2);
-  prompt.push({ role: "assistant", content: first.map(call => ({ type: "tool-call", toolCallId: call.toolCallId, toolName: call.toolName, input: {} })) });
+  expect(first.map(call => call.toolName)).toEqual(["execute_typescript"]);
+  expect(scriptedCodeModeReads(JSON.parse(first[0]!.input)).map(read => read.name)).toEqual(["get_research_context", "get_alpha_catalog"]);
+  prompt.push({ role: "assistant", content: first.map(call => ({ type: "tool-call", toolCallId: call.toolCallId, toolName: call.toolName, input: JSON.parse(call.input) })) });
   prompt.push({ role: "tool", content: first.map(call => ({ type: "tool-result", toolCallId: call.toolCallId, toolName: call.toolName,
-    output: { type: "json", value: call.toolName === "get_research_context" ? { folders: { items: [], next_cursor: "folders-exact" } } : { fields: [], builtins: [], next_cursor: "catalog-exact" } } })) });
-  expect((await read()).map(call => ({ name: call.toolName, input: JSON.parse(call.input) }))).toEqual([
+    output: { type: "json", value: { success: true, result: [{ folders: { items: [], next_cursor: "folders-exact" } }, { fields: [], builtins: [], next_cursor: "catalog-exact" }] } } })) });
+  expect((await read()).flatMap(call => scriptedCodeModeReads(JSON.parse(call.input)))).toEqual([
     { name: "get_research_context", input: { folder_cursor: "folders-exact" } },
     { name: "get_alpha_catalog", input: { cursor: "catalog-exact" } },
   ]);

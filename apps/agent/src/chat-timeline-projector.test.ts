@@ -11,6 +11,19 @@ const RUN_ID = "00000000-0000-4000-8000-000000000002";
 afterEach(() => vi.useRealTimers());
 
 describe("browser-safe chat timeline projection", () => {
+  it("persists Code Mode reads as activity without inventing model tool messages", async () => {
+    const persistToolActivity = vi.fn(async () => {});
+    const projector = new ChatTimelineProjector({ persistToolActivity } as unknown as ResearchSessionRepository, THREAD_ID, RUN_ID);
+    for (const status of ["running", "complete"] as const) {
+      await projector.project(event({ type: EventType.CUSTOM, name: "research_code_mode_activity",
+        value: { toolCallId: "outer:external:1", name: "get_research_context", status } }));
+    }
+    expect(persistToolActivity).toHaveBeenLastCalledWith(THREAD_ID, RUN_ID, "outer:external:1", "get_research_context", "complete");
+    expect(projector.revision).toBe(2);
+    await projector.project(event({ type: EventType.CUSTOM, name: "research_code_mode_activity",
+      value: { toolCallId: "outer:external:2", name: "get_research_context", status: "running", args: "private-canary" } }));
+    expect(projector.revision).toBe(2);
+  });
   it("keeps framework rendering calls out of persisted public tool activity", async () => {
     const rows = new Map<string, string>();
     const projector = new ChatTimelineProjector({

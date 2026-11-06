@@ -1,4 +1,5 @@
 import { Ajv, type AnySchema } from "ajv";
+import { scriptedCodeModeCall } from "../src/scripted-code-mode.js";
 
 export type ToolFixtureCall = Readonly<{
   name: string;
@@ -15,6 +16,10 @@ type ProviderRequest = {
 
 /** Replays Responses over the real SDK boundary, never the network or a model. */
 export function openAIToolProvider(calls: readonly ToolFixtureCall[]) {
+  calls = calls.map(call => {
+    const encoded = scriptedCodeModeCall({ name: call.name, input: call.arguments });
+    return { name: encoded.name, arguments: encoded.input };
+  });
   const requests: ProviderRequest[] = [];
   const schemaErrors: string[] = [];
   const validator = new Ajv({ strict: false, allErrors: true });

@@ -94,7 +94,7 @@ if (!['auth', 'agent'].includes(app) || !['integration', 'image-smoke', 'schema-
           await phase('schema-generate', () => exec('node', [`${appRoot}/scripts/generate-schema-contract.mjs`], { env: { ...env, [`THESISTRACE_${app.toUpperCase()}_SCHEMA_GENERATION`]: 'isolated' } }));
         } else {
           if (app === 'auth') await phase('build', () => exec(`${appRoot}/node_modules/.bin/tsc`, ['--project', `${appRoot}/tsconfig.build.json`, '--pretty', 'false']));
-          await phase('integration', () => exec(`${appRoot}/node_modules/.bin/vitest`, ['run', '--root', appRoot, '--config', `${appRoot}/vitest.integration.config.ts`, ...args], { env }));
+          await phase('integration', () => exec('node', [...(app === 'agent' ? ['--no-node-snapshot'] : []), `${appRoot}/node_modules/vitest/vitest.mjs`, 'run', '--root', appRoot, '--config', `${appRoot}/vitest.integration.config.ts`, ...args], { env }));
         }
       }
     }

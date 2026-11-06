@@ -20,7 +20,7 @@ const MCP_SERVER_ID = "thesistrace";
 const MCP_TOOL_OUTCOME_META_KEY = "thesistrace/tool-outcome";
 
 export type DiscoveredMcpTools = Record<string, Tool<any, any, any, any>>;
-type McpToolFailure = Readonly<{ code: AgentFailureCode; fatal: boolean }>;
+export type McpToolFailure = Readonly<{ code: AgentFailureCode; fatal: boolean }>;
 export type McpRun = Readonly<{
   close: () => Promise<void>;
   hasFatalToolFailure: () => boolean;

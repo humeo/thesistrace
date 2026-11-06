@@ -2,6 +2,7 @@ import type { MastraDBMessage } from "@mastra/core/agent";
 import { describe, expect, it, vi } from "vitest";
 
 import { researchEvalMemoryFacts, type ResearchEvalMemoryExpectation } from "./research-eval-memory.js";
+import { scriptedCodeModeBatch, scriptedCodeModeCall } from "./scripted-code-mode.js";
 
 const run = {
   id: "run_0123456789abcdef0123", formula: "rank(close)", start_date: "2026-07-20", end_date: "2026-08-04",
@@ -48,6 +49,22 @@ function implicitFirstStep(...groups: MastraDBMessage[][]): MastraDBMessage {
 }
 
 describe("content-free native Memory outcome oracle", () => {
+  it.each([false, true])("recognizes unchanged read-through programs without accepting forged read evidence; batch=%s", batch => {
+    const encoded = (item: MastraDBMessage): MastraDBMessage => ({ ...item, content: { format: 2, parts: item.content.parts.map(part => {
+      if (part.type !== "tool-invocation" || part.toolInvocation.state !== "result") return part;
+      const call = part.toolInvocation;
+      const named = { name: call.toolName.replace(/^thesistrace_/, ""), input: call.args as Record<string, unknown> };
+      const read = scriptedCodeModeCall(named);
+      const input = batch ? scriptedCodeModeBatch([named]).input : read.input;
+      return read.name !== "execute_typescript" ? part : { ...part, toolInvocation: { ...call, toolName: read.name, args: input, result: { success: true, result: batch ? [call.result] : call.result, logs: [] } } };
+    }) } });
+    const history = [encoded(bad()), encoded(good()), accepted()];
+    expect(facts(history, formula).formula_corrected).toBe(true);
+    const goodPart = history[1]!.content.parts[0]!;
+    if (goodPart.type !== "tool-invocation") throw new Error("Expected read-through fixture");
+    goodPart.toolInvocation.args = { code: 'return {valid: true}; // external_diagnose_alpha_formula was never called' };
+    expect(facts(history, formula).formula_corrected).toBe(false);
+  });
   it("checks the actual global ranking and threshold units independently of prose", () => {
     const ids = Array.from({ length: 10 }, (_, index) => `run_${index.toString(16).padStart(20, "0")}`);
     const expectation: ResearchEvalMemoryExpectation = { kind: "query-ranking", run_ids: ids };

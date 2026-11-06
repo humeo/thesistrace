@@ -102,6 +102,7 @@ The current Strategy contract in [ADR-0250](0250-admit-strategy-programs-with-ex
 - [ADR-0237 — Exchange Login Sessions for short-lived MCP tokens in Auth](0237-exchange-login-sessions-for-short-lived-mcp-tokens-in-auth.md)
 - [ADR-0238 — Keep Agent content out of operational telemetry](0238-keep-agent-content-out-of-operational-telemetry.md)
 - [ADR-0242 — Own external MCP authorization and revocation in Auth](0242-own-external-mcp-authorization-in-auth.md)
+- [ADR-0262 — Orchestrate authenticated reads with Mastra Code Mode](0262-orchestrate-authenticated-reads-with-mastra-code-mode.md)
 
 ## Alpha language and authoring
 

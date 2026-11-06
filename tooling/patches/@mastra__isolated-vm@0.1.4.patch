@@ -1,0 +1,252 @@
+diff --git a/dist/index.cjs b/dist/index.cjs
+index 7dbadc464b9bd985b64c54c00704c7741c5df2ac..e31aac36e487a5c636b8a7748d910efca5544f02 100644
+--- a/dist/index.cjs
++++ b/dist/index.cjs
+@@ -93,6 +93,7 @@ var IsolatedVmCodeModeTransport = class {
+ 			toolId,
+ 			externalName: (0, _mastra_core_tools.sanitizeToolId)(toolId)
+ 		}));
++		const guestJson = "const __stringify = JSON.stringify;\nconst __codeAt = Function.prototype.call.bind(String.prototype.charCodeAt);\nconst __Error = Error;\nconst __reportLimit = globalThis.__codeModeLimit;\nconst __boundedJson = (value, maxBytes) => {\n  const json = __stringify(value);\n  if (json === undefined) return json;\n  let bytes = 0;\n  for (let i = 0; i < json.length; i++) {\n    const code = __codeAt(json, i);\n    if (code < 128) bytes++;\n    else if (code < 2048) bytes += 2;\n    else if (code >= 0xd800 && code <= 0xdbff && i + 1 < json.length && __codeAt(json, i + 1) >= 0xdc00 && __codeAt(json, i + 1) <= 0xdfff) { bytes += 4; i++; }\n    else bytes += 3;\n    if (bytes > maxBytes) {\n      __reportLimit();\n      const error = new __Error('Code Mode data limit exceeded');\n      error.name = 'CodeModeLimitError';\n      throw error;\n    }\n  }\n  return json;\n};";
+ 		const allowList = new Set(toolIds);
+ 		const logs = [];
+ 		const notifyCall = (tool, args) => {
+@@ -123,6 +124,7 @@ var IsolatedVmCodeModeTransport = class {
+ 		}
+ 		const rpcHost = async (tool, argsJson) => {
+ 			const started = Date.now();
++			if (typeof argsJson !== "string" || Buffer.byteLength(argsJson, "utf8") > 64 * 1024) return JSON.stringify({ ok: false, error: { name: "CodeModeLimitError", message: "Code Mode argument limit exceeded" } });
+ 			let args;
+ 			try {
+ 				args = JSON.parse(argsJson);
+@@ -160,9 +162,6 @@ var IsolatedVmCodeModeTransport = class {
+ 				});
+ 			}
+ 		};
+-		const logHost = (message) => {
+-			logs.push(message);
+-		};
+ 		const isolate = new isolated_vm.default.Isolate({ memoryLimit: this.#memoryLimitMb });
+ 		let disposed = false;
+ 		const disposeIsolate = () => {
+@@ -175,6 +174,12 @@ var IsolatedVmCodeModeTransport = class {
+ 		let timedOut = false;
+ 		let timer;
+ 		const onAbort = () => disposeIsolate();
++		let limitExceeded = false;
++		const reportLimit = () => {
++			if (limitExceeded) return;
++			limitExceeded = true;
++			queueMicrotask(disposeIsolate);
++		};
+ 		abortSignal?.addEventListener("abort", onAbort, { once: true });
+ 		try {
+ 			if (abortSignal?.aborted) return {
+@@ -187,9 +192,13 @@ var IsolatedVmCodeModeTransport = class {
+ 			};
+ 			const context = await isolate.createContext();
+ 			await context.evalClosure(`
++        const __limitCallback = $1;
++        globalThis.__codeModeLimit = () => __limitCallback.applySync(undefined, []);
++        ${guestJson}
+         const __rpc = (tool, args) => {
+           let argsJson;
+-          try { argsJson = JSON.stringify(args === undefined ? null : args); } catch (e) {
++          try { argsJson = __boundedJson(args === undefined ? null : args, 64 * 1024); } catch (e) {
++            if (e && e.name === 'CodeModeLimitError') return Promise.reject(e);
+             return Promise.reject(new Error('Arguments passed to an external_* function must be JSON-serializable'));
+           }
+           return $0
+@@ -202,42 +211,25 @@ var IsolatedVmCodeModeTransport = class {
+               throw err;
+             });
+         };
+-        const __safeStringify = (value) => {
+-          try { return JSON.stringify(value); } catch { return String(value); }
+-        };
+-        const __log = (level, args) => {
+-          const message = args.map((a) => (typeof a === 'string' ? a : __safeStringify(a))).join(' ');
+-          $1.applyIgnored(undefined, [message]);
+-        };
+-        globalThis.console = Object.freeze({
+-          log: (...args) => __log('log', args),
+-          info: (...args) => __log('info', args),
+-          warn: (...args) => __log('warn', args),
+-          error: (...args) => __log('error', args),
+-        });
++        // Product content is returned explicitly; never retain console payloads on the host.
++        globalThis.console = Object.freeze({ log() {}, info() {}, warn() {}, error() {} });
+         for (const { externalName, toolId } of ${JSON.stringify(externals)}) {
+           globalThis['external_' + externalName] = (input) => __rpc(toolId, input);
+         }
+-        `, [rpcHost, logHost], { arguments: { reference: true } });
++        `, [rpcHost, reportLimit], { arguments: { reference: true } });
+ 			const evalSource = `
+         (async () => {
++          ${guestJson}
+           const __user = ${strippedProgram}
+           try {
+-            const __result = await __user();
++            const result = await __user();
++            return __boundedJson({ ok: true, value: result }, 256 * 1024);
++          } catch (e) {
+             try {
+-              const json = JSON.stringify({ ok: true, value: __result });
+-              return json === undefined ? '{"ok":true}' : json;
++              return __boundedJson({ ok: false, error: { message: (e && e.message) || String(e), name: e && e.name } }, 256 * 1024);
+             } catch {
+-              return JSON.stringify({
+-                ok: false,
+-                error: { message: 'Code Mode result is not JSON-serializable', name: 'TypeError' },
+-              });
++              return '{"ok":false,"error":{"message":"Code Mode data limit exceeded","name":"CodeModeLimitError"}}';
+             }
+-          } catch (e) {
+-            return JSON.stringify({
+-              ok: false,
+-              error: { message: (e && e.message) || String(e), name: e && e.name },
+-            });
+           }
+         })()
+       `;
+@@ -266,6 +258,7 @@ var IsolatedVmCodeModeTransport = class {
+ 				json: void 0,
+ 				error: void 0
+ 			}))]);
++			if (limitExceeded) return { success: false, logs, error: { name: "CodeModeLimitError", message: "Code Mode data limit exceeded" } };
+ 			if (outcome.kind === "timeout" || timedOut) return {
+ 				success: false,
+ 				logs,
+@@ -284,6 +277,7 @@ var IsolatedVmCodeModeTransport = class {
+ 						name: "AbortError"
+ 					}
+ 				};
++				if (isolate.isDisposed) return { success: false, logs, error: { name: "CodeModeLimitError", message: "Code Mode isolate memory limit exceeded" } };
+ 				if (/timed out/i.test(err?.message ?? "")) return {
+ 					success: false,
+ 					logs,
+diff --git a/dist/index.js b/dist/index.js
+index 1dfed1b8e5c8047dbe8f1533aa5880fddcec6c9c..8f777244def30df58cf90c8ee16ac8f2902179a6 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -70,6 +70,7 @@ var IsolatedVmCodeModeTransport = class {
+ 			toolId,
+ 			externalName: sanitizeToolId(toolId)
+ 		}));
++		const guestJson = "const __stringify = JSON.stringify;\nconst __codeAt = Function.prototype.call.bind(String.prototype.charCodeAt);\nconst __Error = Error;\nconst __reportLimit = globalThis.__codeModeLimit;\nconst __boundedJson = (value, maxBytes) => {\n  const json = __stringify(value);\n  if (json === undefined) return json;\n  let bytes = 0;\n  for (let i = 0; i < json.length; i++) {\n    const code = __codeAt(json, i);\n    if (code < 128) bytes++;\n    else if (code < 2048) bytes += 2;\n    else if (code >= 0xd800 && code <= 0xdbff && i + 1 < json.length && __codeAt(json, i + 1) >= 0xdc00 && __codeAt(json, i + 1) <= 0xdfff) { bytes += 4; i++; }\n    else bytes += 3;\n    if (bytes > maxBytes) {\n      __reportLimit();\n      const error = new __Error('Code Mode data limit exceeded');\n      error.name = 'CodeModeLimitError';\n      throw error;\n    }\n  }\n  return json;\n};";
+ 		const allowList = new Set(toolIds);
+ 		const logs = [];
+ 		const notifyCall = (tool, args) => {
+@@ -100,6 +101,7 @@ var IsolatedVmCodeModeTransport = class {
+ 		}
+ 		const rpcHost = async (tool, argsJson) => {
+ 			const started = Date.now();
++			if (typeof argsJson !== "string" || Buffer.byteLength(argsJson, "utf8") > 64 * 1024) return JSON.stringify({ ok: false, error: { name: "CodeModeLimitError", message: "Code Mode argument limit exceeded" } });
+ 			let args;
+ 			try {
+ 				args = JSON.parse(argsJson);
+@@ -137,9 +139,6 @@ var IsolatedVmCodeModeTransport = class {
+ 				});
+ 			}
+ 		};
+-		const logHost = (message) => {
+-			logs.push(message);
+-		};
+ 		const isolate = new ivm.Isolate({ memoryLimit: this.#memoryLimitMb });
+ 		let disposed = false;
+ 		const disposeIsolate = () => {
+@@ -152,6 +151,12 @@ var IsolatedVmCodeModeTransport = class {
+ 		let timedOut = false;
+ 		let timer;
+ 		const onAbort = () => disposeIsolate();
++		let limitExceeded = false;
++		const reportLimit = () => {
++			if (limitExceeded) return;
++			limitExceeded = true;
++			queueMicrotask(disposeIsolate);
++		};
+ 		abortSignal?.addEventListener("abort", onAbort, { once: true });
+ 		try {
+ 			if (abortSignal?.aborted) return {
+@@ -164,9 +169,13 @@ var IsolatedVmCodeModeTransport = class {
+ 			};
+ 			const context = await isolate.createContext();
+ 			await context.evalClosure(`
++        const __limitCallback = $1;
++        globalThis.__codeModeLimit = () => __limitCallback.applySync(undefined, []);
++        ${guestJson}
+         const __rpc = (tool, args) => {
+           let argsJson;
+-          try { argsJson = JSON.stringify(args === undefined ? null : args); } catch (e) {
++          try { argsJson = __boundedJson(args === undefined ? null : args, 64 * 1024); } catch (e) {
++            if (e && e.name === 'CodeModeLimitError') return Promise.reject(e);
+             return Promise.reject(new Error('Arguments passed to an external_* function must be JSON-serializable'));
+           }
+           return $0
+@@ -179,42 +188,25 @@ var IsolatedVmCodeModeTransport = class {
+               throw err;
+             });
+         };
+-        const __safeStringify = (value) => {
+-          try { return JSON.stringify(value); } catch { return String(value); }
+-        };
+-        const __log = (level, args) => {
+-          const message = args.map((a) => (typeof a === 'string' ? a : __safeStringify(a))).join(' ');
+-          $1.applyIgnored(undefined, [message]);
+-        };
+-        globalThis.console = Object.freeze({
+-          log: (...args) => __log('log', args),
+-          info: (...args) => __log('info', args),
+-          warn: (...args) => __log('warn', args),
+-          error: (...args) => __log('error', args),
+-        });
++        // Product content is returned explicitly; never retain console payloads on the host.
++        globalThis.console = Object.freeze({ log() {}, info() {}, warn() {}, error() {} });
+         for (const { externalName, toolId } of ${JSON.stringify(externals)}) {
+           globalThis['external_' + externalName] = (input) => __rpc(toolId, input);
+         }
+-        `, [rpcHost, logHost], { arguments: { reference: true } });
++        `, [rpcHost, reportLimit], { arguments: { reference: true } });
+ 			const evalSource = `
+         (async () => {
++          ${guestJson}
+           const __user = ${strippedProgram}
+           try {
+-            const __result = await __user();
++            const result = await __user();
++            return __boundedJson({ ok: true, value: result }, 256 * 1024);
++          } catch (e) {
+             try {
+-              const json = JSON.stringify({ ok: true, value: __result });
+-              return json === undefined ? '{"ok":true}' : json;
++              return __boundedJson({ ok: false, error: { message: (e && e.message) || String(e), name: e && e.name } }, 256 * 1024);
+             } catch {
+-              return JSON.stringify({
+-                ok: false,
+-                error: { message: 'Code Mode result is not JSON-serializable', name: 'TypeError' },
+-              });
++              return '{"ok":false,"error":{"message":"Code Mode data limit exceeded","name":"CodeModeLimitError"}}';
+             }
+-          } catch (e) {
+-            return JSON.stringify({
+-              ok: false,
+-              error: { message: (e && e.message) || String(e), name: e && e.name },
+-            });
+           }
+         })()
+       `;
+@@ -243,6 +235,7 @@ var IsolatedVmCodeModeTransport = class {
+ 				json: void 0,
+ 				error: void 0
+ 			}))]);
++			if (limitExceeded) return { success: false, logs, error: { name: "CodeModeLimitError", message: "Code Mode data limit exceeded" } };
+ 			if (outcome.kind === "timeout" || timedOut) return {
+ 				success: false,
+ 				logs,
+@@ -261,6 +254,7 @@ var IsolatedVmCodeModeTransport = class {
+ 						name: "AbortError"
+ 					}
+ 				};
++				if (isolate.isDisposed) return { success: false, logs, error: { name: "CodeModeLimitError", message: "Code Mode isolate memory limit exceeded" } };
+ 				if (/timed out/i.test(err?.message ?? "")) return {
+ 					success: false,
+ 					logs,

@@ -32,7 +32,8 @@ compose() {
       >"$evidence_root/run.sse"
     grep -F '"type":"RUN_STARTED"' "$evidence_root/run.sse" >/dev/null
     grep -F '"type":"TOOL_CALL_START"' "$evidence_root/run.sse" >/dev/null
-    grep -F '"toolCallName":"get_research_context"' "$evidence_root/run.sse" >/dev/null
+    grep -F '"toolCallName":"execute_typescript"' "$evidence_root/run.sse" >/dev/null
+    grep -F '"name":"get_research_context"' "$evidence_root/run.sse" >/dev/null
     node "$agent_root/scripts/assert-safe-tool-sse.mjs" "$evidence_root/run.sse"
     grep -F '"type":"TEXT_MESSAGE_CONTENT"' "$evidence_root/run.sse" >/dev/null
     grep -F '"type":"RUN_FINISHED"' "$evidence_root/run.sse" >/dev/null
@@ -49,6 +50,8 @@ compose() {
       --command "SELECT status || '|' || (token_usage->'outputTokens'->>'total') FROM agent.agent_run WHERE id='00000000-0000-4000-8000-000000000301'" \
       >"$evidence_root/run-row.txt"
     grep -Fqx 'completed|24' "$evidence_root/run-row.txt"
+
+    node "$agent_root/test-fixtures/code-mode-image-check.mjs"
 
     if compose run --rm --no-deps -T --interactive=false \
       -e THESISTRACE_AGENT_OPENAI_API_KEY= \

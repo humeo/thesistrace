@@ -2,6 +2,7 @@ import { APICallError, type LanguageModelV3CallOptions, type LanguageModelV3Stre
 import { latestUserText, toolObservations } from "./scripted-research-support.js";
 import { SCRIPTED_FAILURE_AFTER_ADMISSION_PROMPT } from "./scripted-research-model.js";
 import { PRIVACY_CANARIES } from "./scripted-privacy-model.js";
+import { scriptedReadCall } from "./scripted-code-mode.js";
 
 export const SCRIPTED_FAILURE_PROMPTS = Object.freeze({
   PROVIDER_TIMEOUT: "[scripted-provider-timeout] Test a bounded provider timeout.",
@@ -29,7 +30,7 @@ export function scriptedFailureStream(options: LanguageModelV3CallOptions) {
       textStart,
       { ...textDelta, delta: ["Checking.", "Read the context.", "Finished."][reads] ?? "Finished." },
       textEnd,
-      ...(reads < 2 ? [{ type: "tool-call" as const, toolCallId: `timeline-read-${reads}`, toolName: "get_research_context", input: "{}" }] : []),
+      ...(reads < 2 ? [scriptedReadCall(`timeline-read-${reads}`)] : []),
       { ...finish, finishReason: { unified: reads < 2 ? "tool-calls" : "stop", raw: "scripted" } },
     ]);
   }
@@ -41,7 +42,7 @@ export function scriptedFailureStream(options: LanguageModelV3CallOptions) {
       { type: "text-start", id },
       { type: "text-delta", id, delta: `${`${word} `.repeat(4_499)}${word}.` },
       { type: "text-end", id },
-      ...(contextInspected ? [] : [{ type: "tool-call" as const, toolCallId: "scripted-output-context", toolName: "get_research_context", input: "{}" }]),
+      ...(contextInspected ? [] : [scriptedReadCall("scripted-output-context")]),
       {
         ...finish,
         finishReason: { unified: contextInspected ? "stop" : "tool-calls", raw: "scripted" },
@@ -57,7 +58,7 @@ export function scriptedFailureStream(options: LanguageModelV3CallOptions) {
     if (text === SCRIPTED_LONG_TOOL_LOOP_PROMPT && toolResults >= 20) return parts([textStart, textDelta, textEnd, finish]);
     if (text === SCRIPTED_FAILURE_AFTER_TOOL_PROMPT && toolResults > 0) throw new DOMException("private-timeout-canary", "TimeoutError");
     return parts([
-      { type: "tool-call", toolCallId: `scripted-fault-call-${toolResults + 1}`, toolName: "get_research_context", input: "{}" },
+      scriptedReadCall(`scripted-fault-call-${toolResults + 1}`),
       { ...finish, finishReason: { unified: "tool-calls", raw: "scripted" } },
     ]);
   }

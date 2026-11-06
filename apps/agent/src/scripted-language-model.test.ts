@@ -85,9 +85,9 @@ test("calls a discovered no-argument Tool and then explains its result", async (
   } satisfies LanguageModelV3CallOptions;
   const first = await readParts(await model.doStream(firstOptions));
   expect(first).toContainEqual({
-    input: "{}",
+    input: JSON.stringify({ code: "return await external_get_research_context({});" }),
     toolCallId: "scripted-tool-call-1",
-    toolName: "get_research_context",
+    toolName: "execute_typescript",
     type: "tool-call",
   });
 
@@ -152,9 +152,9 @@ test("calls a discovered no-argument Tool and then explains its result", async (
     ],
   }));
   expect(repeated).toContainEqual({
-    input: "{}",
+    input: JSON.stringify({ code: "return await external_get_research_context({});" }),
     toolCallId: "scripted-tool-call-2",
-    toolName: "get_research_context",
+    toolName: "execute_typescript",
     type: "tool-call",
   });
 });
@@ -337,8 +337,8 @@ test("reads the JSON text model output produced by real MCP Tools", async () => 
 
   const generated = await model.doGenerate(options);
   expect(generated.content).toContainEqual(expect.objectContaining({
-    input: JSON.stringify({ source: "rank(-abs(pct_change(close, 1)))" }),
-    toolName: "diagnose_alpha_formula",
+    input: JSON.stringify({ code: 'return await external_diagnose_alpha_formula({"source":"rank(-abs(pct_change(close, 1)))"});' }),
+    toolName: "execute_typescript",
     type: "tool-call",
   }));
 });
@@ -711,7 +711,8 @@ test("ends after admission when requested and lets a later turn resume from hist
   });
   const resumed = await model.doGenerate(options);
   expect(resumed.content).toContainEqual(expect.objectContaining({
-    toolName: "get_research_run",
+    toolName: "execute_typescript",
+    input: JSON.stringify({ code: 'return await external_get_research_run({"run_id":"run_0123456789abcdef0123"});' }),
     type: "tool-call",
   }));
 });
@@ -760,28 +761,25 @@ test("gives every resume turn a fresh bounded poll budget", async () => {
   const resumedPoll = await model.doGenerate(options);
   const pollCall = resumedPoll.content.find((part) => part.type === "tool-call");
   expect(pollCall).toMatchObject({
-    input: JSON.stringify({ run_id: "run_0123456789abcdef0123" }),
-    toolName: "get_research_run",
+    input: JSON.stringify({ code: 'return await external_get_research_run({"run_id":"run_0123456789abcdef0123"});' }),
+    toolName: "execute_typescript",
   });
   if (pollCall?.type !== "tool-call") throw new Error("resume did not poll");
   appendExchange(
     options,
     pollCall.toolCallId,
     pollCall.toolName,
-    { run_id: "run_0123456789abcdef0123" },
-    pollingDetail(
+    JSON.parse(pollCall.input),
+    { success: true, result: pollingDetail(
       { run_id: "run_0123456789abcdef0123" },
       "succeeded",
       ["factor", "provenance"],
-    ),
+    ) },
   );
   const resultRequest = await model.doGenerate(options);
   expect(resultRequest.content).toContainEqual(expect.objectContaining({
-    input: JSON.stringify({
-      run_id: "run_0123456789abcdef0123",
-      section: "factor",
-    }),
-    toolName: "get_research_run_result",
+    input: JSON.stringify({ code: 'return await external_get_research_run_result({"run_id":"run_0123456789abcdef0123","section":"factor"});' }),
+    toolName: "execute_typescript",
     type: "tool-call",
   }));
 });

@@ -32,4 +32,4 @@ RUN mkdir -p /app/agent/state && chown node:node /app/agent/state && chmod 700 /
 
 USER node
 EXPOSE 8400
-CMD ["node", "dist/server.js"]
+CMD ["node", "--no-node-snapshot", "dist/server.js"]

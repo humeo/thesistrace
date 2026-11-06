@@ -16,6 +16,7 @@ export function toolActivity(page: Page, name: string, status: ToolStatus): Loca
 export async function revealWorkHistory(page: Page): Promise<void> {
   // Native Think and ThoughtChain unmount collapsed content. Expand the visible
   // history controls before locating their accessible Tool items.
+  await expect(page.locator(".ant-think").first()).toBeVisible();
   for (const history of await page.locator(".ant-think").all()) {
     const content = history.locator(".ant-think-content");
     if (!await content.isVisible()) await history.locator(".ant-think-status-wrapper").click();

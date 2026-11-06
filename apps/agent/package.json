@@ -8,11 +8,11 @@
     "eval:session-title": "pnpm build && node scripts/eval-session-title.mjs",
     "schema:generate": "node ../../tooling/test/app.mjs agent schema-generate",
     "typecheck": "tsc -b --pretty false",
-    "test": "vitest run",
+    "test": "node --no-node-snapshot ./node_modules/vitest/vitest.mjs run",
     "test:eval-preflight": "pnpm build && node --test scripts/eval-research.test.mjs",
     "test:integration": "node ../../tooling/test/app.mjs agent integration",
     "test:image-smoke": "node ../../tooling/test/app.mjs agent image-smoke",
-    "start": "node dist/server.js"
+    "start": "node --no-node-snapshot dist/server.js"
   },
   "dependencies": {
     "@ag-ui/client": "0.0.59",
@@ -26,18 +26,19 @@
     "@copilotkit/runtime": "1.70.0",
     "@hono/node-server": "2.1.1",
     "@mastra/core": "1.63.1",
+    "@mastra/isolated-vm": "0.1.4",
     "@mastra/mcp": "1.17.2",
     "@mastra/memory": "1.28.1",
     "@mastra/pg": "1.22.1",
     "@modelcontextprotocol/client": "2.0.0",
+    "@thesistrace/contracts": "workspace:*",
     "ai": "6.0.271",
     "exit-hook": "5.1.0",
     "hono": "4.13.5",
     "pg": "8.23.0",
     "rxjs": "7.8.1",
     "tokenx": "1.6.0",
-    "zod": "4.4.3",
-    "@thesistrace/contracts": "workspace:*"
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@types/node": "24.13.3",

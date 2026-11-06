@@ -15,6 +15,7 @@ import { scriptedBatchDecision } from "./scripted-batch-model.js";
 import { scriptedDailyTrackDecision } from "./scripted-daily-track-model.js";
 import { scriptedFailureStream } from "./scripted-failure-model.js";
 import { scriptedPrivacyDecision } from "./scripted-privacy-model.js";
+import { scriptedCodeModeCall, scriptedCodeModeOptions, scriptedCodeModeDecision } from "./scripted-code-mode.js";
 
 export {
   SCRIPTED_START_DAILY_TRACK_PROMPT,
@@ -102,11 +103,12 @@ export class ScriptedLanguageModel implements LanguageModelV3 {
     options: LanguageModelV3CallOptions,
   ): Promise<LanguageModelV3GenerateResult> {
     this.assertAvailable();
+    options = scriptedCodeModeOptions(options);
     const response = scriptedResponse(options);
     if (response.waitSeconds !== undefined) {
       await this.guidanceWait(response.waitSeconds, options.abortSignal);
     }
-    const tool = response.tool;
+    const tool = response.tool === null ? null : scriptedCodeModeCall(response.tool);
     if (tool !== null) {
       const toolCallId = nextScriptedToolCallId(options);
       return {
@@ -138,6 +140,7 @@ export class ScriptedLanguageModel implements LanguageModelV3 {
     options: LanguageModelV3CallOptions,
   ): Promise<{ stream: ReadableStream<LanguageModelV3StreamPart> }> {
     this.assertAvailable();
+    options = scriptedCodeModeOptions(options);
     const context = scriptedContextStream(options);
     if (context !== undefined) return context;
     const failure = scriptedFailureStream(options);
@@ -147,7 +150,7 @@ export class ScriptedLanguageModel implements LanguageModelV3 {
     if (response.waitSeconds !== undefined) {
       await this.guidanceWait(response.waitSeconds, options.abortSignal);
     }
-    const tool = response.tool;
+    const tool = response.tool === null ? null : scriptedCodeModeCall(response.tool);
     const toolCallId = tool === null ? null : nextScriptedToolCallId(options);
     const selectedChunks = response.chunks;
     return {
@@ -220,7 +223,7 @@ function scriptedResponse(options: LanguageModelV3CallOptions): ScriptedResponse
       tool: null,
     };
   }
-  const research = scriptedPrivacyDecision(options) ?? scriptedResearchDecision(options);
+  const research = scriptedCodeModeDecision(options) ?? scriptedPrivacyDecision(options) ?? scriptedResearchDecision(options);
   if (research !== null) return responseFromResearchDecision(research);
   const batch = scriptedBatchDecision(options);
   if (batch !== null) return responseFromResearchDecision(batch);
