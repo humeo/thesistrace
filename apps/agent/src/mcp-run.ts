@@ -1,5 +1,5 @@
 import { noopLogger } from "@mastra/core/logger";
-import type { Tool } from "@mastra/core/tools";
+import { isValidationError, type Tool } from "@mastra/core/tools";
 import { getMcpCallToolMeta, MCPClient } from "@mastra/mcp";
 
 import type { AgentSettings } from "./config.js";
@@ -150,6 +150,11 @@ function trackToolFailures(tools: DiscoveredMcpTools): Readonly<{
               return markDurableToolFailure(result);
             }
             if (outcome === "succeeded") return result;
+            if (isValidationError(result)) {
+              // Mastra can reject the arguments before sending a Core request.
+              failures.set(toolCallId, { code: "TOOL_REJECTION", fatal: false });
+              return result;
+            }
             // ThesisTrace Core is the sole MCP server and marks every Tool
             // result. A missing or malformed marker is a protocol failure, not
             // a successful business result that may continue the model loop.

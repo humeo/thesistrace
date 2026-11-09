@@ -2,8 +2,9 @@ import { RequestContext } from "@mastra/core/request-context";
 import { createTool, noopObserve } from "@mastra/core/tools";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import type { AgentSettings } from "./config.js";
+import { createMcpRunFactory, type McpRun, type McpToolFailure, type DiscoveredMcpTools } from "./mcp-run.js";
 import { createResearchCodeModeHost } from "./research-code-mode.js";
-import type { McpRun, McpToolFailure, DiscoveredMcpTools } from "./mcp-run.js";
 import type { CodeModeActivity } from "./code-mode-activity.js";
 
 describe("Research Code Mode", () => {
@@ -39,14 +40,58 @@ describe("Research Code Mode", () => {
     expect(activity.filter(item => item.status === "complete")).toHaveLength(2);
   });
 
-  it("preserves schema validation failures and lets the model correct the program", async () => {
-    const { scope, activity } = fixture({ get_alpha_catalog: createTool({ id: "get_alpha_catalog", description: "Read", inputSchema: z.object({ count: z.number().int().positive() }), execute: async () => 42 }) });
-    const rejected = await scope.tools.execute_typescript.execute!({ code: 'return await external_get_alpha_catalog({count: "wrong"});' }, invocation());
-    expect(rejected).toMatchObject({ success: false, code: "TOOL_REJECTION", error: { message: expect.stringContaining("count") } });
-    expect(activity.at(-1)).toMatchObject({ status: "failed", failureCode: "TOOL_REJECTION" });
-    expect(scope.hasFatalToolFailure()).toBe(false);
-    await expect(scope.tools.execute_typescript.execute!({ code: 'return await external_get_alpha_catalog({count: 1});' }, invocation("corrected")))
-      .resolves.toMatchObject({ success: true, result: 42 });
+  it("lets a Run correct locally rejected MCP arguments and finish the diagnostics", async () => {
+    const diagnose = vi.fn(async () => ({
+      valid: true,
+      issues: [],
+      _meta: { "thesistrace/tool-outcome": "succeeded" },
+    }));
+    const createRun = createMcpRunFactory({
+      authInternalOrigin: "http://auth:8200",
+      mcpInternalUrl: "http://api:8100/mcp",
+      mcpClockSkewSeconds: 30,
+      runMaxWallSeconds: 300,
+    } as AgentSettings, {
+      fetch: async () => Response.json({ access_token: "fixture-token", expires_in: 360, token_type: "Bearer" }),
+      mcpClient: () => ({
+        __setLogger() {},
+        disconnect: async () => undefined,
+        listToolsetsWithErrors: async () => ({
+          errors: {},
+          errorDetails: {},
+          toolsets: { thesistrace: { diagnose_research_spec: createTool({
+            id: "thesistrace_diagnose_research_spec",
+            description: "Validate a research specification",
+            inputSchema: z.strictObject({ spec: z.strictObject({ holdings_count: z.number().int().positive() }) }),
+            execute: diagnose,
+          }) } },
+        }),
+      }),
+    });
+    const mcpRun = await createRun(new Headers(), "diagnosis-run");
+    const activity: CodeModeActivity[] = [];
+    const onFatal = vi.fn();
+    const scope = createResearchCodeModeHost().forRun({ mcpRun,
+      signal: new AbortController().signal, deadline: performance.now() + 30_000,
+      onFatal, onActivity: value => activity.push(value) });
+    try {
+      const rejected = await scope.tools.execute_typescript.execute!({
+        code: 'return await Promise.all([20, 25, 30, 35, 40].map(holdings_count => external_diagnose_research_spec({spec: {holdings_count, name: "extra"}})));',
+      }, invocation());
+      expect(rejected).toMatchObject({ success: false, code: "TOOL_REJECTION", error: { message: expect.stringContaining("name") } });
+      expect(activity).toContainEqual(expect.objectContaining({
+        name: "diagnose_research_spec", status: "failed", failureCode: "TOOL_REJECTION",
+      }));
+      expect(mcpRun.hasFatalToolFailure()).toBe(false);
+      expect(onFatal).not.toHaveBeenCalled();
+      expect(diagnose).not.toHaveBeenCalled();
+
+      await expect(scope.tools.execute_typescript.execute!({
+        code: 'const results = await Promise.all([20, 25, 30, 35, 40].map(holdings_count => external_diagnose_research_spec({spec: {holdings_count}}))); return results.map(result => result.valid);',
+      }, invocation("corrected"))).resolves.toMatchObject({ success: true, result: [true, true, true, true, true] });
+    } finally {
+      await mcpRun.close();
+    }
   });
 
   it("does not let program error handling swallow a fatal MCP failure", async () => {

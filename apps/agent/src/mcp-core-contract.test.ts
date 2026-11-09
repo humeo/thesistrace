@@ -126,6 +126,26 @@ it("consumes Core instructions, recoverable rejections and bounded Result pages 
     const failures: string[] = [];
     const scope = createResearchCodeModeHost().forRun({ mcpRun: run, signal: new AbortController().signal,
       deadline: performance.now() + 30_000, onFatal: code => failures.push(code), onActivity: () => {} });
+    const codeOptions = (toolCallId: string) => ({
+      requestContext: new RequestContext(), observe: noopObserve,
+      agent: { agentId: "core-code-contract", toolCallId, messages: [], suspend: async () => {} },
+    });
+    const spec = {
+      research_kind: "strategy_backtest", strategy_mode: "framework", name: "extra",
+      start_date: framework.start_date, end_date: framework.end_date, universe: framework.universe,
+      formula: "close", neutralization: "none", initial_cash_cny: "100000",
+      holdings_count: 10, selection_every_sessions: 5, weighting: "equal_weight", exposure_expression: "1",
+      costs: { commission_rate_all_in: "0.0003", commission_min_cny: "5", stamp_duty_sell_rate: "0.0005",
+        transfer_fee_rate: "0.00001", slippage_bps: "0" },
+    };
+    const invalid = await scope.tools.execute_typescript.execute!({
+      code: `return await external_diagnose_research_spec(${JSON.stringify({ spec })});`,
+    }, codeOptions("invalid-spec"));
+    expect(invalid).toMatchObject({
+      success: false, code: "TOOL_REJECTION",
+      error: { message: expect.stringContaining('"name"') },
+    });
+
     const combined = await scope.tools.execute_typescript.execute!({ code: `
       const query = {track_id: "track_test", section: "origin"};
       const [context, first] = await Promise.all([external_get_research_context({}), external_get_daily_track_result(query)]);
@@ -133,8 +153,7 @@ it("consumes Core instructions, recoverable rejections and bounded Result pages 
       if (first.checksum_sha256 !== next.checksum_sha256) throw new TypeError("Result version changed");
       return {characters: first.json_fragment.length + next.json_fragment.length, secondOffset: next.offset,
         checksum: first.checksum_sha256, contextAvailable: Boolean(context), hasMore: typeof next.next_result_cursor === "string"};
-    ` }, { requestContext: new RequestContext(), observe: noopObserve,
-      agent: { agentId: "core-code-contract", toolCallId: "combined", messages: [], suspend: async () => {} } });
+    ` }, codeOptions("combined"));
     expect(combined).toMatchObject({ success: true, result: {
       characters: (first.json_fragment as string).length + (next.json_fragment as string).length,
       secondOffset: next.offset, checksum: first.checksum_sha256, contextAvailable: true,

@@ -9,6 +9,7 @@ import { CODE_MODE_READ_TOOLS, CODE_MODE_TOOL_NAME, type CodeModeActivity } from
 
 const DIRECT_COMMANDS = new Set(["submit_research_run", "submit_research_batch", "start_daily_track", "refresh_daily_track", "retry_daily_track"]);
 const READ_TOOLS = new Set<string>(CODE_MODE_READ_TOOLS);
+const MAX_PROGRAM_ERROR_CHARS = 1_024;
 const LIMITS = Object.freeze({ sourceBytes: 64 * 1024, wallMs: 30_000, calls: 32, parallel: 4,
   inputBytes: 64 * 1024, cumulativeBytes: 8 * 1024 * 1024, resultBytes: 256 * 1024,
   hostPrograms: 8, heapMiB: 64, cleanupMs: 1_000 });
@@ -178,7 +179,14 @@ export function createResearchCodeModeHost() {
           if (failure?.fatal) fail(failure.code);
           if (isValidationError(result)) {
             failure = { code: "TOOL_REJECTION", fatal: false };
-            throw new TypeError(result.message.slice(0, 1_024));
+            let message = result.message;
+            if (message.length > MAX_PROGRAM_ERROR_CHARS) {
+              // The SDK appends a bounded argument excerpt after the schema issues.
+              const excerpt = message.slice(-256);
+              const separator = "\n…\n";
+              message = message.slice(0, MAX_PROGRAM_ERROR_CHARS - excerpt.length - separator.length) + separator + excerpt;
+            }
+            throw new TypeError(message);
           }
           if (failure?.fatal) throw new AgentRunFailure(failure.code);
           return result;
@@ -202,7 +210,7 @@ function failed(code: AgentFailureCode, message: string) {
 
 function safeProgramError(error: { name?: string; message?: string } | undefined): string {
   return error?.name === "SyntaxError" || error?.name === "ReferenceError" || error?.name === "TypeError"
-    ? (error.message ?? "Correct the program.").slice(0, 1_024) : "Correct the program or its tool arguments.";
+    ? (error.message ?? "Correct the program.").slice(0, MAX_PROGRAM_ERROR_CHARS) : "Correct the program or its tool arguments.";
 }
 
 const RESEARCH_CODE_MODE_INSTRUCTIONS = `Use execute_typescript for authenticated reads and diagnostics, including a single read. Only the declared external_* functions exist. Filter and rank through list_research_runs before reading selected details. Await every external call before returning; use Promise.all or Promise.allSettled for independent reads. The Host limits each program to 32 calls, four concurrent reads, 30 seconds, 64 KiB of code and 256 KiB of output. Return only needed fields with genuine resource IDs, units, missing/failed items and continuation cursors. Compare Research Kind, dates and Universe before ranking. Do not treat missing metrics as zero, diagnosis valid=false as accepted research, or failed reads as successful data. No console output, modules, network, filesystem or background work. Use the directly provided business commands for submissions and Tracking actions, ask_user for clarification and render_a2ui for fixed resource views. Program output is analysis, never an authoritative Research Result.`;
