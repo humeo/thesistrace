@@ -8,7 +8,7 @@ from thesistrace.researcher.quota import QuotaPolicyUnavailable
 
 
 def test_reads_the_complete_effective_policy_without_local_defaults(monkeypatch):
-    value = {"timezone": "America/New_York", "daily_model_budget_nanodollars": 250_000_000,
+    value = {"timezone": "America/New_York", "weekly_model_budget_nanodollars": 250_000_000,
              "daily_run_limit": 3, "active_daily_track_limit": 2}
     monkeypatch.setattr(httpx, "get", lambda url, **_kwargs:
                         httpx.Response(200, json=value, request=httpx.Request("GET", url)))
@@ -18,9 +18,9 @@ def test_reads_the_complete_effective_policy_without_local_defaults(monkeypatch)
 @pytest.mark.parametrize("value", [
     {"unlimited": True},
     {"timezone": "Asia/Shanghai"},
-    {"timezone": "invalid", "daily_model_budget_nanodollars": 1,
+    {"timezone": "invalid", "weekly_model_budget_nanodollars": 1,
      "daily_run_limit": 1, "active_daily_track_limit": 1},
-    {"timezone": "Asia/Shanghai", "daily_model_budget_nanodollars": 1,
+    {"timezone": "Asia/Shanghai", "weekly_model_budget_nanodollars": 1,
      "daily_run_limit": True, "active_daily_track_limit": 1},
 ])
 def test_rejects_malformed_policy(monkeypatch, value):

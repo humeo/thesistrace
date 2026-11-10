@@ -37,7 +37,7 @@ test("offline preflight rejects a finite reserve without a model-call bound", ()
 test("offline query preflight exports the configured model with an explicit bounded scenario", () => {
   const result = invoke("configure", {
     THESISTRACE_AGENT_EVAL_CASE_IDS: "global-strategy-top-ten",
-    THESISTRACE_AGENT_EVAL_SPEND_LIMIT_USD: "5",
+    THESISTRACE_AGENT_EVAL_SPEND_LIMIT_USD: "14",
     THESISTRACE_AGENT_EVAL_PHASE: "qualification",
   });
   assert.equal(result.status, 0);

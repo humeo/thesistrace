@@ -56,7 +56,7 @@ def seed(database, users, runs_per_user):
     service = ResearchRunService(
         database, compile_formula=alpha_language.compile, current_dataset=lambda: snapshot,
         quota_policy=lambda _: QuotaPolicy(timezone="Asia/Shanghai",
-                                          daily_model_budget_nanodollars=1_000_000_000,
+                                          weekly_model_budget_nanodollars=1_000_000_000,
                                           daily_run_limit=None, active_daily_track_limit=10),
     )
     template = service.admit(researcher, TypeAdapter(ResearchRunAdmissionCommand).validate_python({

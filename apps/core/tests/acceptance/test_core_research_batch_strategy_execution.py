@@ -1602,7 +1602,7 @@ def test_strategy_sweep_one_and_twenty_items_use_the_same_ordered_contract(
         lambda _origin: (
             lambda _researcher_id: QuotaPolicy(
                 timezone="Asia/Shanghai",
-                daily_model_budget_nanodollars=None,
+                weekly_model_budget_nanodollars=None,
                 daily_run_limit=None,
                 active_daily_track_limit=None,
             )

@@ -66,17 +66,11 @@ Stop the gateway before `pnpm prod down`, because it also uses that network. Res
 it after the product network is recreated. Normal product container updates preserve
 the network.
 
-Paid model calls reserve the configured context-window input ceiling plus the
-requested output allowance before dispatch. They settle against the provider's
-actual token usage, including configured cache prices. No token-count endpoint is
-required: gateway estimates can omit provider-added input. The configured model
-capacity must bound provider usage. A small remaining daily budget can reject a
-call whose eventual cost would be lower; interrupted calls without final usage
-retain their reservation. The GPT-6 Sol and Luna prices in
-`apps/agent/config/model-registry.json` use the published Standard short-context
-rates. Their configured input ceilings stay below the 272K-token long-context
-pricing threshold, and each maximum reservation fits the ordinary $1 daily
-model budget. Subscription calls are not treated as free.
+AI quota accumulates actual token costs during the week and resets at Monday
+00:00 Asia/Shanghai. The Agent blocks new calls after the weekly quota is reached.
+Calls already in progress settle in the week they started. The ledger retains
+each call's Beijing admission date. The weekly rollout uses existing ledger
+rows and requires no database migration.
 
 For an existing local research dataset, copy a consistent Canonical and benchmark
 snapshot into the server's new data volumes before starting data updates. Verify the

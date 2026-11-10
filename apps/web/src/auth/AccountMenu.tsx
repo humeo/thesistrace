@@ -1,12 +1,11 @@
-import { CaretUpDown, SignOut } from "@phosphor-icons/react";
-import { useState } from "react";
+import { CaretUpDown } from "@phosphor-icons/react";
+import { lazy, Suspense, useState } from "react";
 
-import { Alert, AlertDescription } from "../components/ui/alert";
 import { Button } from "../components/ui/button";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "../components/ui/popover";
 import { Separator } from "../components/ui/separator";
-import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group";
-import { changeInterfaceLanguage, interfaceLocale, useTranslation } from "../i18n";
+import { Skeleton } from "../components/ui/skeleton";
+import { useTranslation } from "../i18n";
 import { useAuthRetry } from "./useAuthRetry";
 import { useAuth } from "./AuthProvider";
 import type { AuthErrorCode, AuthResult } from "./errors";
@@ -16,6 +15,7 @@ type AccountMenuContentProps = Readonly<{
   session: PublicSession;
   signOut: () => Promise<AuthResult>;
 }>;
+const AccountMenuActions = lazy(() => import("./AccountMenuActions"));
 
 export function AccountMenu() {
   const { signOut, state } = useAuth();
@@ -30,8 +30,7 @@ export function AccountMenu() {
 }
 
 export function AccountMenuContent({ session, signOut }: AccountMenuContentProps) {
-  const { t } = useTranslation(["common", "auth"]);
-  const locale = interfaceLocale();
+  const { t } = useTranslation("common");
   const [open, setOpen] = useState(false);
   const [retryAt, setRetryAt] = useState(0);
   const cooldown = useAuthRetry(retryAt);
@@ -70,34 +69,14 @@ export function AccountMenuContent({ session, signOut }: AccountMenuContentProps
           </span>
         </div>
         <Separator className="account-menu-divider" />
-        <Button variant="ghost" className="account-action" nativeButton={false} render={<a href="/billing" />}>{t("billing")}</Button>
-        {message !== null ? <Alert variant="destructive"><AlertDescription>{message === "tooManyRequests" && cooldown > 0 ? t("auth:rateLimited", {seconds: cooldown}) : t(`auth:errors.${message}`)}</AlertDescription></Alert> : null}
-        <Button variant="ghost" className="account-action" render={
-          <a href="https://discord.gg/tdwxubVhMJ" target="_blank" rel="noopener noreferrer" />
-        }>
-          <img src="/brand/discord-symbol-white.svg" alt="" width={20} height={16} />
-          <span>{t("joinCommunity")}</span>
-        </Button>
-        <Button variant="ghost" className="account-action" disabled={signingOut || cooldown > 0} onClick={() => void submitSignOut()} type="button">
-          <SignOut aria-hidden="true" size={18} />
-          <span>{t(signingOut ? "signingOut" : "signOut")}</span>
-        </Button>
-        <div className="account-language">
-          <span>{t("language")}</span>
-          <ToggleGroup
-            aria-label={t("language")}
-            value={[locale]}
-            onValueChange={(value) => {
-              const selected = value[0] ?? locale;
-              if (selected === "en" || selected === "zh-CN") void changeInterfaceLanguage(selected);
-            }}
-            variant="outline"
-            className="account-language-options"
-          >
-            <ToggleGroupItem value="en" lang="en">English</ToggleGroupItem>
-            <ToggleGroupItem value="zh-CN" lang="zh-CN">简体中文</ToggleGroupItem>
-          </ToggleGroup>
-        </div>
+        <Suspense fallback={<Skeleton className="h-48 w-full" />}>
+          <AccountMenuActions
+            cooldown={cooldown}
+            message={message}
+            signingOut={signingOut}
+            onSignOut={() => void submitSignOut()}
+          />
+        </Suspense>
       </PopoverContent>
     </Popover>
   );

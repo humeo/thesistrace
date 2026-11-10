@@ -22,7 +22,7 @@ const policySchema = z
         return false;
       }
     }),
-    daily_model_budget_nanodollars: limit,
+    weekly_model_budget_nanodollars: limit,
     daily_run_limit: limit,
     active_daily_track_limit: limit,
   })
@@ -73,20 +73,23 @@ export class ModelBudget {
       const result = await client.query<{ used: string }>(
         `
         SELECT COALESCE(sum(actual_nanodollars), 0)::text AS used
-        FROM agent.model_charge WHERE researcher_id = $1 AND budget_day = $2
+        FROM agent.model_charge
+        WHERE researcher_id = $1
+          AND budget_day >= date_trunc('week', $2::date::timestamp)::date
+          AND budget_day < date_trunc('week', $2::date::timestamp)::date + 7
       `,
         [researcherId, date],
       );
       if (
-        policy.daily_model_budget_nanodollars !== null &&
+        policy.weekly_model_budget_nanodollars !== null &&
         BigInt(result.rows[0]!.used) >=
-          BigInt(policy.daily_model_budget_nanodollars)
+          BigInt(policy.weekly_model_budget_nanodollars)
       ) {
         throw new AgentRunFailure("DAILY_MODEL_BUDGET_EXCEEDED");
       }
       const id = randomUUID();
       // Keep a durable in-flight call for settlement/recovery, without holding
-      // money. Concurrent calls may finish beyond the daily allowance.
+      // money. Concurrent calls may finish beyond the weekly allowance.
       await client.query(
         `INSERT INTO agent.model_charge
         (id, researcher_id, budget_day, reserved_nanodollars,run_id) VALUES ($1, $2, $3, 0,$4)`,
@@ -193,16 +196,21 @@ export class ModelBudget {
         resets_at: Date;
       }>(
         `
-      SELECT COALESCE(sum(actual_nanodollars),0)::text actual,
-        COALESCE(sum(CASE WHEN settlement_state='reserved' THEN reserved_nanodollars ELSE 0 END),0)::text reserved,
-        (date_trunc('day',now() AT TIME ZONE $2)+interval '1 day') AT TIME ZONE $2 resets_at
-      FROM agent.model_charge WHERE researcher_id=$1 AND budget_day=(now() AT TIME ZONE $2)::date`,
+      WITH week AS (SELECT date_trunc('week', now() AT TIME ZONE $2) AS starts_at)
+      SELECT COALESCE(sum(charge.actual_nanodollars),0)::text actual,
+        COALESCE(sum(charge.reserved_nanodollars) FILTER (WHERE charge.settlement_state='reserved'),0)::text reserved,
+        (week.starts_at + interval '7 days') AT TIME ZONE $2 resets_at
+      FROM week
+      LEFT JOIN agent.model_charge charge ON charge.researcher_id=$1
+        AND charge.budget_day >= week.starts_at::date
+        AND charge.budget_day < week.starts_at::date + 7
+      GROUP BY week.starts_at`,
         [researcherId, policy.timezone],
       )
     ).rows[0]!;
     const actual = Number(row.actual),
       reserved = Number(row.reserved),
-      limit = policy.daily_model_budget_nanodollars;
+      limit = policy.weekly_model_budget_nanodollars;
     if (!Number.isSafeInteger(actual) || !Number.isSafeInteger(reserved))
       throw new Error("MODEL_USAGE_OVERFLOW");
     return {

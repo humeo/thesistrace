@@ -5,7 +5,7 @@ const count = z.number().int().nonnegative();
 const limits = z
   .object({
     monthly_price_usd: count,
-    daily_model_budget_usd: z.number().nonnegative(),
+    weekly_model_budget_usd: z.number().nonnegative(),
     daily_run_limit: count,
     active_daily_track_limit: count,
   })

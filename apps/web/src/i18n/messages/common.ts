@@ -1,8 +1,10 @@
 export const commonEn = {
-  billing:"Plan and billing",
+  billing: "Subscription",
   accountMenu: "Account menu",
-  language: "Interface language",
-  joinCommunity: "Join Discord",
+  language: "Language",
+  theme: "Theme",
+  darkTheme: "Dark",
+  joinCommunity: "Join community",
   signOut: "Log out",
   signingOut: "Logging out…",
   signOutFailed: "Logout could not be completed.",
@@ -28,9 +30,11 @@ export const commonEn = {
 } as const;
 
 export const commonZh = {
-  billing:"套餐与账单",
+  billing: "订阅",
   accountMenu: "账户菜单",
-  language: "界面语言",
+  language: "语言",
+  theme: "主题",
+  darkTheme: "深色",
   joinCommunity: "加入社区",
   signOut: "退出登录",
   signingOut: "正在退出…",

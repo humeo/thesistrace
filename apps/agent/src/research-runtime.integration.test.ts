@@ -150,7 +150,7 @@ const createIntegrationRuntime = () => createResearchRuntime(settings, {
 function createResearchRuntime(configuration: AgentSettings, dependencies: ResearchRuntimeDependencies = {}) {
   return createRuntime(configuration, { telemetry: () => undefined,
     quotaPolicyFetch: async () => Response.json({ timezone: "Asia/Shanghai",
-      daily_model_budget_nanodollars: 1_000_000_000, daily_run_limit: 10, active_daily_track_limit: 10 }),
+      weekly_model_budget_nanodollars: 1_000_000_000, daily_run_limit: 10, active_daily_track_limit: 10 }),
     ...dependencies });
 }
 

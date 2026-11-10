@@ -13,19 +13,19 @@ const plans = {
     monthly_price_usd: 0,
     daily_run_limit: 10,
     active_daily_track_limit: 1,
-    daily_model_budget_usd: 1,
+    weekly_model_budget_usd: 7,
   },
   pro: {
     monthly_price_usd: 20,
     daily_run_limit: 100,
     active_daily_track_limit: 10,
-    daily_model_budget_usd: 1.5,
+    weekly_model_budget_usd: 10.5,
   },
   max: {
     monthly_price_usd: 100,
     daily_run_limit: 500,
     active_daily_track_limit: 50,
-    daily_model_budget_usd: 2,
+    weekly_model_budget_usd: 14,
   },
 };
 async function mount(page: Page, initial: "free" | "pro" | "max" = "free") {
@@ -99,13 +99,27 @@ test("return URL alone never grants a plan; verified server rights and separate 
 }, info) => {
   const { summary, commands } = await mount(page);
   await expect(
-    page.getByRole("heading", { name: "Plan and billing" }),
+    page.getByRole("heading", { name: "Subscription" }),
   ).toBeVisible();
   await expect(page.getByLabel("Current plan")).toContainText("Free");
-  await page.getByRole("button", { name: "Choose Pro", exact: true }).click();
+  const changePlan = page.getByRole("button", { name: "Change plan", exact: true });
+  await changePlan.click();
+  const plans = page.getByRole("dialog", { name: "Change plan" });
+  await expect(plans.getByRole("button", { name: "Your current plan" })).toBeDisabled();
+  await expect(plans).toHaveCSS("opacity", "1");
+  await page.screenshot({ path: info.outputPath("billing-plan-chooser.png"), animations: "disabled" });
+  const upgrade = plans.getByRole("button", { name: "Upgrade to Pro", exact: true });
+  await upgrade.click();
+  const review = page.getByRole("alertdialog", { name: "Upgrade to Pro" });
+  await expect(review).not.toContainText(/creem/i);
+  await expect(review).toHaveCSS("opacity", "1");
+  await page.screenshot({ path: info.outputPath("billing-review.png"), animations: "disabled" });
+  await review.getByRole("button", { name: "Back", exact: true }).click();
+  await expect(upgrade).toBeFocused();
+  await upgrade.click();
   await page
     .getByRole("alertdialog")
-    .getByRole("button", { name: "Confirm", exact: true })
+    .getByRole("button", { name: "Continue to checkout", exact: true })
     .click();
   await expect(page.getByRole("status")).toContainText("being confirmed");
   await expect(page.getByLabel("Current plan")).toContainText("Free");
@@ -121,11 +135,11 @@ test("return URL alone never grants a plan; verified server rights and separate 
   summary.pending_operation = false;
   await page.getByRole("button", { name: "Refresh", exact: true }).click();
   await expect(page.getByLabel("Current plan")).toContainText("Pro");
-  await expect(page.getByLabel("Today's usage")).toContainText("$0.20");
-  await expect(page.getByLabel("Today's usage")).toContainText("$0.30");
-  await expect(page.getByLabel("Today's usage")).toContainText("$0.50");
+  const quota = page.getByRole("progressbar", { name: "AI quota" });
+  await expect(quota).toHaveAttribute("aria-valuetext", "50% remaining this week");
+  await expect(page.getByLabel("Usage")).toContainText("50% remaining this week");
   await page.getByRole("button", { name: "简体中文", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "套餐与账单" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "订阅" })).toBeVisible();
   await page.screenshot({
     path: info.outputPath("billing-desktop.png"),
     fullPage: true,
@@ -135,7 +149,8 @@ test("downgrade sets renewal plan and cancellation preserves current paid rights
   page,
 }) => {
   const { commands } = await mount(page, "max");
-  await page.getByRole("button", { name: "Choose Pro", exact: true }).click();
+  await page.getByRole("button", { name: "Change plan", exact: true }).click();
+  await page.getByRole("button", { name: "Switch to Pro", exact: true }).click();
   await expect(page.getByRole("alertdialog")).toContainText("no refund");
   await page
     .getByRole("alertdialog")
@@ -163,7 +178,7 @@ test("a refunded plan refresh replaces older usage and does not promise paid rig
   page,
 }) => {
   const { summary } = await mount(page, "max");
-  await expect(page.getByLabel("Today's usage")).toContainText("50 slots");
+  await expect(page.getByLabel("Usage")).toContainText("1 / 50");
   let releaseBilling!: () => void;
   let releaseUsage!: () => void;
   let startedBilling!: () => void;
@@ -213,8 +228,8 @@ test("a refunded plan refresh replaces older usage and does not promise paid rig
   releaseBilling();
   await expect(page.getByLabel("Current plan")).toContainText("Free");
   releaseUsage();
-  await expect(page.getByLabel("Today's usage")).toContainText("1 slots");
-  await expect(page.getByLabel("Today's usage")).not.toContainText("50 slots");
+  await expect(page.getByLabel("Usage")).toContainText("1 / 1");
+  await expect(page.getByLabel("Usage")).not.toContainText("1 / 50");
   await expect(page.getByLabel("Current plan")).toContainText(
     "Free limits apply",
   );
@@ -237,7 +252,7 @@ test("canceling renewal after a full refund does not promise paid limits", async
   await expect(confirmation).toContainText("Free limits apply");
   await expect(confirmation).not.toContainText("paid limits remain");
   await confirmation
-    .getByRole("button", { name: "Go back", exact: true })
+    .getByRole("button", { name: "Back", exact: true })
     .click();
   await page.getByRole("button", { name: "简体中文", exact: true }).click();
   await page.getByRole("button", { name: "取消续费", exact: true }).click();

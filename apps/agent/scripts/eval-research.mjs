@@ -7,6 +7,7 @@ import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import quotaConfiguration from "../../auth/src/quota-policy.config.json" with { type: "json" };
 
 const compiledEval = new URL("../dist/research-eval.js", import.meta.url);
 let runtimeModules;
@@ -84,7 +85,8 @@ try {
   const registry = readModelRegistry(JSON.stringify(registryValue), process.env);
   const selected = new RegisteredModelRuntime(registry).resolve(candidate.key, effort);
   const controls = readResearchEvalControls(candidate, process.env.THESISTRACE_AGENT_EVAL_PHASE, process.env.THESISTRACE_AGENT_EVAL_SPEND_LIMIT_USD,
-    process.env.THESISTRACE_AGENT_EVAL_CASE_IDS === "global-strategy-top-ten" ? 1 : undefined);
+    process.env.THESISTRACE_AGENT_EVAL_CASE_IDS === "global-strategy-top-ten"
+      ? quotaConfiguration.plans.free.weekly_model_budget_usd : undefined);
   if (process.argv.length !== 3 || !["configure", "run"].includes(process.argv[2])) throw new ResearchEvalError("CONFIG_INVALID");
   if (process.argv[2] === "configure") {
     process.stdout.write(`${JSON.stringify(registryValue)}\n`);
@@ -198,7 +200,7 @@ async function evaluate({ candidate, candidateBytes, repetitions, effort, regist
           const policy = JSON.parse(docker(["exec", `${project}-auth-1`, "node", "--input-type=module", "--eval",
             `const r=await fetch('http://127.0.0.1:8200/internal/researchers/${researcher.id}/quota-policy'); if(!r.ok)process.exit(2);console.log(JSON.stringify(await r.json()));`]));
           const day = new Intl.DateTimeFormat("en-CA", { timeZone: policy.timezone, year: "numeric", month: "2-digit", day: "2-digit" });
-          if (policy.daily_model_budget_nanodollars !== turnCostReserveUsd * 1e9
+          if (policy.weekly_model_budget_nanodollars !== turnCostReserveUsd * 1e9
             || day.format(Date.now()) !== day.format(Date.now() + (Number(process.env.THESISTRACE_AGENT_RUN_MAX_WALL_SECONDS) + 180) * 1000)) {
             throw new ResearchEvalError("CONFIG_INVALID");
           }

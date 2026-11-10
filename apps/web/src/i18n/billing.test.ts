@@ -7,10 +7,10 @@ test("billing messages load with their routes and follow the selected language",
   await import("./billing");
   try {
     await i18n.changeLanguage("en");
-    expect(i18n.t("billing:title")).toBe("Plan and billing");
+    expect(i18n.t("billing:title")).toBe("Subscription");
     expect(i18n.t("billing:trackAmount", { count: 10 })).toBe("10 tracking slots");
     await i18n.changeLanguage("zh-CN");
-    expect(i18n.t("billing:title")).toBe("套餐与账单");
+    expect(i18n.t("billing:title")).toBe("订阅");
     expect(i18n.t("billing:trackAmount", { count: 1 })).toBe("1 个跟踪名额");
   } finally {
     await i18n.changeLanguage("en");

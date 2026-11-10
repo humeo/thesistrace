@@ -3360,7 +3360,7 @@ def test_current_data_track_limit_releases_capacity_after_stop(
 ) -> None:
     # Three slots cover active, blocked and stopping occupancy in one race.
     # Catalog-specific Free/Pro/Max limits have their own billing tests.
-    policy = QuotaPolicy(timezone="Asia/Shanghai", daily_model_budget_nanodollars=1_000_000_000,
+    policy = QuotaPolicy(timezone="Asia/Shanghai", weekly_model_budget_nanodollars=1_000_000_000,
                          daily_run_limit=100, active_daily_track_limit=3)
     monkeypatch.setattr("thesistrace.entrypoints.runtime.quota_policy_lookup",
                         lambda _origin: lambda _rid: policy)
@@ -3395,7 +3395,7 @@ def test_current_data_track_limit_releases_capacity_after_stop(
 
         zero_tracks = DailyTrackService(runtime.database, publication=runtime.publication,
             quota_policy=lambda _rid: QuotaPolicy(timezone="Asia/Shanghai",
-                daily_model_budget_nanodollars=0, daily_run_limit=0, active_daily_track_limit=0))
+                weekly_model_budget_nanodollars=0, daily_run_limit=0, active_daily_track_limit=0))
         zero_runs = ResearchRunService(runtime.database, publication=runtime.publication,
             activate_track=zero_tracks.activate)
         with pytest.raises(ResearchRunTrackingUnavailable, match="limit of 0") as rejection:
@@ -3571,7 +3571,7 @@ def test_current_data_track_limit_releases_capacity_after_stop(
             json={"request_id": "ordinary-extra-track"}).status_code == 409
         operator_tracks = DailyTrackService(runtime.database, publication=runtime.publication,
             quota_policy=lambda _researcher_id: QuotaPolicy(
-                timezone="Asia/Shanghai", daily_model_budget_nanodollars=None,
+                timezone="Asia/Shanghai", weekly_model_budget_nanodollars=None,
                 daily_run_limit=None, active_daily_track_limit=None))
         operator_runs = ResearchRunService(runtime.database, publication=runtime.publication,
             activate_track=operator_tracks.activate)

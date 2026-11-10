@@ -33,10 +33,11 @@ test('account popup aligns with its trigger and keeps Discord in keyboard order'
  expect(panel.y + panel.height).toBeLessThan(trigger.y);
  await page.screenshot({path:testInfo.outputPath('account-card.png'),clip:{x:0,y:panel.y-8,width:240,height:850-panel.y+8}});
  await page.screenshot({path:testInfo.outputPath('account-menu-desktop.png')});
- const billing = page.getByRole('button',{name:'Plan and billing'});
+ const billing = page.getByRole('link',{name:'Subscription'});
  await expect(billing).toHaveAttribute('href','/billing');
  await account.press('Tab'); await expect(billing).toBeFocused();
- await page.keyboard.press('Tab'); await expect(page.getByRole('link',{name:'Join Discord'})).toBeFocused();
+ await page.keyboard.press('Tab'); await expect(page.getByRole('button',{name:'Language English'})).toBeFocused();
+ await page.keyboard.press('Tab'); await expect(page.getByRole('link',{name:'Join community'})).toBeFocused();
  await page.keyboard.press('Tab'); await expect(page.getByRole('button',{name:'Log out'})).toBeFocused();
  await page.keyboard.press('Escape'); await expect(account).toBeFocused();
 });
@@ -68,6 +69,7 @@ test('selecting the current interface language saves an entry query preference',
  await page.addScriptTag({ content: script });
  await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
  await page.getByRole('button', { name: '账户菜单' }).click();
+ await page.getByRole('button', { name: '语言 简体中文' }).click();
  await page.getByRole('button', { name: '简体中文', exact: true }).click();
  expect(await page.evaluate(() => localStorage.getItem('quantgrove.interface-language'))).toBe('zh-CN');
  await page.goto('http://shell.fixture/data');
@@ -111,6 +113,7 @@ for (const width of [1200]) {
   const initialUrl = page.url();
   const sidebarWidth = (await page.locator('.application-sidebar').boundingBox())!.width;
   await page.getByRole('button',{name:'Account menu'}).click();
+  await page.getByRole('button', { name: 'Language English' }).click();
   const chinese = page.getByRole('button', { name: '简体中文', exact: true });
 
   await chinese.click();
@@ -122,6 +125,8 @@ for (const width of [1200]) {
   expect(page.url()).toBe(initialUrl);
   expect((await page.locator('.application-sidebar').boundingBox())!.width).toBe(sidebarWidth);
   await chinese.press('Escape');
+  await expect(page.getByRole('button', { name: '语言 简体中文' })).toBeFocused();
+  await page.keyboard.press('Escape');
   await expect(page.getByRole('button',{name:'账户菜单'})).toBeFocused();
   await expect(page.getByRole('button',{name:'账户菜单'})).toHaveAttribute('aria-expanded', 'false');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -130,6 +135,7 @@ for (const width of [1200]) {
   await page.addScriptTag({ content: script });
 
   await page.getByRole('button',{name:'账户菜单'}).click();
+  await page.getByRole('button', { name: '语言 简体中文' }).click();
   await expect(page.getByRole('button', { name: '简体中文', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await page.getByRole('button', { name: 'English', exact: true }).click();
   await expect(page.getByRole('link', { name: 'Data', exact: true })).toBeVisible();

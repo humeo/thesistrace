@@ -54,7 +54,7 @@ def fair_runtime(
         lambda _origin: (
             lambda _researcher_id: QuotaPolicy(
                 timezone="Asia/Shanghai",
-                daily_model_budget_nanodollars=None,
+                weekly_model_budget_nanodollars=None,
                 daily_run_limit=None,
                 active_daily_track_limit=None,
             )

@@ -26,7 +26,7 @@ from thesistrace.research_run import (
 from thesistrace.researcher import ResearcherIdentity, ResearcherService
 from thesistrace.researcher.quota import QuotaPolicy
 
-TEST_QUOTA = QuotaPolicy(timezone="Asia/Shanghai", daily_model_budget_nanodollars=1_000_000_000,
+TEST_QUOTA = QuotaPolicy(timezone="Asia/Shanghai", weekly_model_budget_nanodollars=1_000_000_000,
                          daily_run_limit=10, active_daily_track_limit=10)
 
 RESEARCHER_A = ResearcherIdentity(

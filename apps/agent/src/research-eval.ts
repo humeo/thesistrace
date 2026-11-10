@@ -140,9 +140,9 @@ export function usageCostUsd(usage: EvalUsage, pricing: ResearchEvalPricing): nu
     + usage.outputTokens.total * pricing.output_usd_per_million) / 1_000_000;
 }
 
-/** A verified daily quota bounds a scenario; otherwise the full-Turn reserve is unknown. */
-export function maximumEvalTurnCostUsd(_candidate: ResearchEvalCandidate, dailyBudgetUsd?: number): number {
-  return dailyBudgetUsd ?? Number.POSITIVE_INFINITY;
+/** A verified weekly quota bounds a scenario; otherwise the full-Turn reserve is unknown. */
+export function maximumEvalTurnCostUsd(_candidate: ResearchEvalCandidate, weeklyBudgetUsd?: number): number {
+  return weeklyBudgetUsd ?? Number.POSITIVE_INFINITY;
 }
 export function maximumTitleCostUsd(candidate: ResearchEvalCandidate): number {
   // One separate first-message title invocation; use the provider's full
@@ -151,17 +151,17 @@ export function maximumTitleCostUsd(candidate: ResearchEvalCandidate): number {
     + 32 * candidate.pricing.output_usd_per_million) / 1_000_000;
 }
 
-export function readResearchEvalControls(candidate: ResearchEvalCandidate, phase: string | undefined, encodedBudget: string | undefined, dailyBudgetUsd?: number) {
+export function readResearchEvalControls(candidate: ResearchEvalCandidate, phase: string | undefined, encodedBudget: string | undefined, weeklyBudgetUsd?: number) {
   const budget = Number(encodedBudget);
   if ((phase !== "baseline" && phase !== "qualification") || encodedBudget === undefined
     || !/^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/.test(encodedBudget)
-    || !Number.isFinite(budget) || budget < 2 * maximumEvalTurnCostUsd(candidate, dailyBudgetUsd) || budget > 100) {
+    || !Number.isFinite(budget) || budget < 2 * maximumEvalTurnCostUsd(candidate, weeklyBudgetUsd) || budget > 100) {
     throw new ResearchEvalError("CONFIG_INVALID");
   }
-  if (dailyBudgetUsd !== undefined && (!Number.isFinite(dailyBudgetUsd) || dailyBudgetUsd <= 0)) {
+  if (weeklyBudgetUsd !== undefined && (!Number.isFinite(weeklyBudgetUsd) || weeklyBudgetUsd <= 0)) {
     throw new ResearchEvalError("CONFIG_INVALID");
   }
-  return { phase, budget, turnCostReserveUsd: maximumEvalTurnCostUsd(candidate, dailyBudgetUsd) };
+  return { phase, budget, turnCostReserveUsd: maximumEvalTurnCostUsd(candidate, weeklyBudgetUsd) };
 }
 
 export function evalFailureSource(code: AgentFailureCode | null, evidence?: {

@@ -178,7 +178,7 @@ describe.sequential("Auth database-backed HTTP contract", () => {
       expect(policy.status).toBe(200);
       expect(await policy.json()).toEqual({
         timezone: "Asia/Shanghai",
-        daily_model_budget_nanodollars: unlimited ? null : 1_000_000_000,
+        weekly_model_budget_nanodollars: unlimited ? null : 7_000_000_000,
         daily_run_limit: unlimited ? null : 10,
         active_daily_track_limit: unlimited ? null : 1,
       });

@@ -92,7 +92,7 @@ describe("fixed real-model evaluation contract", () => {
     expect(corpus.cases.filter((item) => !["strategy-backtest", "alpha-comparison-batch", "global-strategy-top-ten"].includes(item.id))
       .every((item) => item.max_duration_ms === 180_000)).toBe(true);
   });
-  it("can reserve a scenario bounded by a verified daily model quota", () => {
+  it("can reserve a scenario bounded by a verified weekly model quota", () => {
     expect(readResearchEvalControls(candidate, "qualification", "5", 1)).toEqual({
       phase: "qualification", budget: 5, turnCostReserveUsd: 1,
     });

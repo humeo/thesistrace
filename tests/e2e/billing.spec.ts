@@ -16,10 +16,11 @@ test(
         body: "<h1>Creem Test Checkout</h1>",
       }),
     );
-    await page.getByRole("button", { name: "Choose Pro", exact: true }).click();
+    await page.getByRole("button", { name: "Change plan", exact: true }).click();
+    await page.getByRole("button", { name: "Upgrade to Pro", exact: true }).click();
     await page
       .getByRole("alertdialog")
-      .getByRole("button", { name: "Confirm", exact: true })
+      .getByRole("button", { name: "Continue to checkout", exact: true })
       .click();
     await expect(
       page.getByRole("heading", { name: "Creem Test Checkout" }),
@@ -33,7 +34,7 @@ test(
     expect(complete.status()).toBe(200);
     await page.goto((await complete.json()).return_url);
     await expect(page.getByLabel("Current plan")).toContainText("Pro");
-    await expect(page.getByLabel("Today's usage")).toContainText("$1.50");
+    await expect(page.getByRole("progressbar", { name: "AI quota" })).toHaveAttribute("aria-valuetext", "100% remaining this week");
     const paid = await (await page.request.get("/api/billing/usage")).json();
     expect(paid.research).toMatchObject({
       limit: 100,
@@ -47,8 +48,9 @@ test(
           headers: sameOriginHeaders(),
         })
       ).json(),
-    ).toMatchObject({ limit_nanodollars: 1_500_000_000 });
-    await page.getByRole("button", { name: "Choose Max", exact: true }).click();
+    ).toMatchObject({ limit_nanodollars: 10_500_000_000 });
+    await page.getByRole("button", { name: "Change plan", exact: true }).click();
+    await page.getByRole("button", { name: "Upgrade to Max", exact: true }).click();
     await page
       .getByRole("alertdialog")
       .getByRole("button", { name: "Confirm", exact: true })
@@ -66,7 +68,8 @@ test(
     expect(
       await (await page.request.get("/api/billing/usage")).json(),
     ).toMatchObject({ research: { limit: 500 }, tracking: { limit: 50 } });
-    await page.getByRole("button", { name: "Choose Pro", exact: true }).click();
+    await page.getByRole("button", { name: "Change plan", exact: true }).click();
+    await page.getByRole("button", { name: "Switch to Pro", exact: true }).click();
     await page
       .getByRole("alertdialog")
       .getByRole("button", { name: "Confirm", exact: true })

@@ -135,7 +135,7 @@ def test_python_batch_shares_one_validation_budget_and_accepts_twenty_framework_
     # Operators can submit the full Batch capacity without the daily ten-Run quota.
     monkeypatch.setattr("thesistrace.entrypoints.runtime.quota_policy_lookup",
         lambda _origin: lambda _researcher_id: QuotaPolicy(
-            timezone="Asia/Shanghai", daily_model_budget_nanodollars=None,
+            timezone="Asia/Shanghai", weekly_model_budget_nanodollars=None,
             daily_run_limit=None, active_daily_track_limit=None,
         ))
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)

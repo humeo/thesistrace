@@ -4,15 +4,9 @@ import "../i18n/billing";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowClockwise } from "@phosphor-icons/react";
 import { Page, PageContent, PageHeader } from "../components/layout/Page";
-import {
-  Card,
-  CardHeader,
-  CardTitle,
-  CardDescription,
-  CardContent,
-  CardFooter,
-} from "../components/ui/card";
+import { Dialog, DialogTrigger } from "../components/ui/dialog";
 import { Alert, AlertDescription } from "../components/ui/alert";
+import { Card } from "../components/ui/card";
 import {
   AlertDialog,
   AlertDialogContent,
@@ -21,13 +15,11 @@ import {
   AlertDialogDescription,
   AlertDialogFooter,
 } from "../components/ui/alert-dialog";
-import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Skeleton } from "../components/ui/skeleton";
-import { Separator } from "../components/ui/separator";
 import { Spinner } from "../components/ui/spinner";
 import { useTranslation } from "../i18n";
-import { formatNumber, formatTimestamp } from "../i18n/format";
+import { formatTimestamp } from "../i18n/format";
 import {
   BillingRequestError,
   billingPortal,
@@ -39,20 +31,14 @@ import {
   type BillingCommand,
   type Plan,
 } from "./client";
+import { BillingUsage } from "./BillingUsage";
+import { PlanPicker, planName, planPrice } from "./PlanPicker";
 
-const planName = (plan: Plan) =>
-  plan === "free" ? "Free" : plan === "pro" ? "Pro" : "Max";
-const usd = (amount: number) =>
-  formatNumber(amount, {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 6,
-  });
 export function BillingPage() {
   const { t } = useTranslation("billing");
   const queryClient = useQueryClient();
   const [pollUntil, setPollUntil] = useState(() => Date.now() + 120_000);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [command, setCommand] = useState<BillingCommand | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<"error" | "paymentRequired" | null>(null);
@@ -94,6 +80,7 @@ export function BillingPage() {
       const result = await submitBilling(command);
       if (result.url) window.location.assign(result.url);
       setCommand(null);
+      setPickerOpen(false);
       refresh();
     } catch (error) {
       setError(
@@ -143,321 +130,150 @@ export function BillingPage() {
       ? summary.plans[command.plan].monthly_price_usd >
         summary.plans[summary.plan].monthly_price_usd
       : false;
+  const reviewPlan = command?.plan;
+  const confirmation = (
+    <AlertDialog
+      open={command !== null}
+      onOpenChange={(open) => {
+        if (!open && !busy) setCommand(null);
+      }}
+    >
+      <AlertDialogContent
+        className="w-[calc(100%-2rem)] gap-5 rounded-[18px] border border-input bg-card p-6 ring-0 data-[size=default]:max-w-[500px] data-[size=default]:sm:max-w-[500px]"
+        overlayProps={{ forceRender: true, className: "bg-black/75" }}
+      >
+        <AlertDialogHeader className="gap-2">
+          <AlertDialogTitle className="m-0 text-2xl">
+            {command?.kind === "cancel"
+              ? t("cancelTitle")
+              : t(command?.kind === "checkout" || higher ? "upgradeTo" : "changeTitle", {
+                  plan: reviewPlan ? planName[reviewPlan] : "",
+                })}
+          </AlertDialogTitle>
+          {reviewPlan && summary ? (
+            <p className="m-0 flex w-full justify-between gap-3 border-b border-border pt-5 pb-7 text-base">
+              {planName[reviewPlan]} <span className="font-medium tabular-nums">
+                {planPrice(summary.plans[reviewPlan].monthly_price_usd)} {t("monthly")}
+              </span>
+            </p>
+          ) : null}
+          <AlertDialogDescription className="m-0">
+            {command?.kind === "cancel"
+              ? t(summary?.paid_until ? "cancelDescription" : "cancelDescriptionFree")
+              : command?.kind === "checkout"
+                ? t("tax")
+                : t(higher ? "upgrade" : "downgrade")}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        {error ? <Alert variant="destructive"><AlertDescription>{t(error)}</AlertDescription></Alert> : null}
+        <AlertDialogFooter>
+          <Button variant="outline" size="sm" className="h-11 min-w-24 rounded-full px-5" disabled={busy} onClick={() => setCommand(null)}>
+            {t("back")}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-11 rounded-full border-transparent bg-foreground px-5 text-background hover:bg-foreground/90 hover:text-background"
+            disabled={busy}
+            onClick={() => void confirm()}
+          >
+            {busy ? <Spinner data-icon="inline-start" /> : null}
+            {t(busy ? "working" : command?.kind === "checkout" ? "continueCheckout" : "confirm")}
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+
   return (
     <Page className="console-workspace" aria-label={t("title")}>
-      <PageContent width="wide" className="flex flex-col gap-6 p-6">
+      <PageContent width="settings" className="flex flex-col gap-10 px-5 pt-14 pb-10">
         <PageHeader
           variant="console"
-          className="mb-0"
+          className="mb-0 [&_h1]:text-[34px] [&_h1]:leading-[48px]"
           title={t("title")}
-          description={t("subtitle")}
           actions={
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={billing.isFetching}
-              onClick={refresh}
-            >
-              <ArrowClockwise data-icon="inline-start" />
-              {t("retry")}
+            <Button variant="ghost" size="icon-sm" aria-label={t("retry")} title={t("retry")} disabled={billing.isFetching} onClick={refresh}>
+              <ArrowClockwise aria-hidden="true" />
             </Button>
           }
         />
-        {billing.isError ? (
-          <Alert variant="destructive">
-            <AlertDescription>{t("unavailable")}</AlertDescription>
-          </Alert>
-        ) : null}
-        {error && !command ? (
-          <Alert variant="destructive">
-            <AlertDescription>{t(error ?? "error")}</AlertDescription>
-          </Alert>
-        ) : null}
+        {billing.isError ? <Alert variant="destructive"><AlertDescription>{t("unavailable")}</AlertDescription></Alert> : null}
+        {error && !command ? <Alert variant="destructive"><AlertDescription>{t(error)}</AlertDescription></Alert> : null}
         {!summary ? (
-          <Skeleton className="h-64 w-full" />
+          billing.isPending ? <Skeleton className="h-64 w-full" /> : null
         ) : (
           <>
-            <section aria-label={t("current")} className="flex flex-col gap-3">
-              <div className="flex flex-wrap items-center gap-3">
-                <Badge variant="secondary">{planName(summary.plan)}</Badge>
-                {summary.paid_until ? (
-                  <span>
-                    {t("until", {
-                      date: formatTimestamp(summary.paid_until, {
-                        dateStyle: "medium",
-                        timeStyle: "short",
-                      }),
-                    })}
-                  </span>
-                ) : null}
-                {summary.renewal_plan && !ending ? (
-                  <span className="text-sm text-muted-foreground">
-                    {t("renewal", { plan: planName(summary.renewal_plan) })}
-                  </span>
-                ) : null}
-              </div>
-              {ending ? (
-                <p role="status">
-                  {t(summary.paid_until ? "ending" : "endingFree")}
+            <section aria-label={t("current")} className="grid gap-3">
+              <Dialog open={pickerOpen} onOpenChange={(open) => {
+                if (busy) return;
+                setPickerOpen(open);
+                if (!open) setCommand(null);
+              }}>
+                <Card className="min-h-[108px] flex-row flex-wrap items-center justify-between gap-4 rounded-[14px]! border-input! p-[22px]">
+                  <div className="grid gap-1">
+                    <h2 className="m-0 text-2xl font-semibold">{planName[summary.plan]}</h2>
+                    <p className="m-0 text-sm text-muted-foreground tabular-nums">
+                      {planPrice(summary.plans[summary.plan].monthly_price_usd)} {t("monthly")}
+                    </p>
+                  </div>
+                  <DialogTrigger disabled={busy} render={
+                    <Button variant="outline" size="sm" className="h-11 min-w-36 rounded-full border-transparent bg-foreground px-6 text-background hover:bg-foreground/90 hover:text-background aria-expanded:bg-foreground" />
+                  }>
+                    {t("changePlan")}
+                  </DialogTrigger>
+                </Card>
+                <PlanPicker summary={summary} busy={busy} choose={choose}>
+                  {command && command.kind !== "cancel" ? confirmation : null}
+                </PlanPicker>
+              </Dialog>
+              {command?.kind === "cancel" ? confirmation : null}
+              {summary.paid_until ? (
+                <p className="m-0 text-sm text-muted-foreground">
+                  {t("until", { date: formatTimestamp(summary.paid_until, { dateStyle: "medium", timeStyle: "short" }) })}
                 </p>
               ) : null}
+              {summary.renewal_plan && summary.renewal_plan !== summary.plan && !ending ? (
+                <p className="m-0 text-sm text-muted-foreground">{t("renewal", { plan: planName[summary.renewal_plan] })}</p>
+              ) : null}
+              {ending ? <p role="status" className="m-0 text-sm">{t(summary.paid_until ? "ending" : "endingFree")}</p> : null}
               {summary.pending_operation ? (
-                <Alert role="status">
-                  <AlertDescription>{t("pending")}</AlertDescription>
-                </Alert>
+                <Alert role="status"><AlertDescription>{t("pending")}</AlertDescription></Alert>
               ) : null}
-              {!summary.checkout_available ? (
-                <Alert role="status">
-                  <AlertDescription>{t("disabled")}</AlertDescription>
-                </Alert>
-              ) : null}
-              <div className="flex flex-wrap gap-2">
-                {summary.pending_checkout_url && summary.checkout_available ? (
-                  <Button
-                    nativeButton={false}
-                    render={
-                      <a
-                        href={hostedPaymentUrl(summary.pending_checkout_url)}
-                      />
-                    }
-                  >
-                    {t("continueCheckout")}
-                  </Button>
-                ) : null}
-                {summary.subscription_status ? (
-                  <Button
-                    variant="outline"
-                    disabled={busy || !summary.checkout_available}
-                    onClick={() => void portal()}
-                  >
-                    {t("portal")}
-                  </Button>
-                ) : null}
-                {summary.subscription_status && !ending ? (
-                  <Button
-                    variant="outline"
-                    disabled={busy || !summary.checkout_available}
-                    onClick={() => {
-                      setError(null);
-                      setCommand({
-                        kind: "cancel",
-                        request_id: crypto.randomUUID(),
-                      });
-                    }}
-                  >
-                    {t("cancelRenewal")}
-                  </Button>
-                ) : null}
-              </div>
-            </section>
-            <section className="grid grid-cols-3 gap-4" aria-label={t("title")}>
-              {(["free", "pro", "max"] as const).map((plan) => {
-                const limits = summary.plans[plan],
-                  current = summary.plan === plan;
-                return (
-                  <Card key={plan}>
-                    <CardHeader>
-                      <CardTitle>{planName(plan)}</CardTitle>
-                      <CardDescription>
-                        {usd(limits.monthly_price_usd)} {t("monthly")}
-                      </CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <ul className="flex flex-col gap-3">
-                        <li>
-                          {t("researchAmount", {
-                            count: limits.daily_run_limit,
-                          })}
-                        </li>
-                        <li>
-                          {t("trackAmount", {
-                            count: limits.active_daily_track_limit,
-                          })}
-                        </li>
-                        <li>
-                          {t(`aiAmount.${plan}`)}
-                        </li>
-                      </ul>
-                    </CardContent>
-                    <CardFooter>
-                      {plan === "free" ? (
-                        <Badge variant="secondary">
-                          {current ? t("active") : "Free"}
-                        </Badge>
-                      ) : (
+              {summary.subscription_status || (summary.pending_checkout_url && summary.checkout_available) ? (
+                <div className="flex flex-wrap gap-2">
+                  {summary.pending_checkout_url && summary.checkout_available ? (
+                    <Button nativeButton={false} render={<a href={hostedPaymentUrl(summary.pending_checkout_url)} />}>
+                      {t("continueCheckout")}
+                    </Button>
+                  ) : null}
+                  {summary.subscription_status ? (
+                    <>
+                      <Button variant="outline" disabled={busy || !summary.checkout_available} onClick={() => void portal()}>
+                        {t("portal")}
+                      </Button>
+                      {!ending ? (
                         <Button
-                          variant={current ? "outline" : "default"}
-                          disabled={
-                            busy ||
-                            !summary.checkout_available ||
-                            summary.pending_operation ||
-                            summary.subscription_status ===
-                              "scheduled_cancel" ||
-                            (current &&
-                              (summary.renewal_plan === plan ||
-                                !summary.subscription_status))
-                          }
-                          onClick={() => choose(plan)}
+                          variant="outline"
+                          disabled={busy || !summary.checkout_available}
+                          onClick={() => {
+                            setError(null);
+                            setCommand({ kind: "cancel", request_id: crypto.randomUUID() });
+                          }}
                         >
-                          {current && summary.renewal_plan === plan
-                            ? t("active")
-                            : current
-                              ? t("renewWith", { plan: planName(plan) })
-                              : t("choose", { plan: planName(plan) })}
+                          {t("cancelRenewal")}
                         </Button>
-                      )}
-                    </CardFooter>
-                  </Card>
-                );
-              })}
+                      ) : null}
+                    </>
+                  ) : null}
+                </div>
+              ) : null}
             </section>
-            <p className="text-sm text-muted-foreground">{t("tax")}</p>
+            <BillingUsage core={core.data} model={model.data} coreFailed={core.isError} modelFailed={model.isError} />
           </>
         )}
-        <Separator />
-        <section className="flex flex-col gap-4" aria-label={t("usage")}>
-          <h2 className="text-lg font-semibold">{t("usage")}</h2>
-          <p className="text-sm text-muted-foreground">{t("reset")}</p>
-          <div className="grid grid-cols-2 gap-4">
-            <Card>
-              <CardHeader>
-                <CardTitle>{t("research")}</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {core.data ? (
-                  <UsageValues
-                    actual={formatNumber(core.data.research.actual)}
-                    reserved={formatNumber(core.data.research.reserved)}
-                    remaining={
-                      core.data.research.remaining === null
-                        ? t("unlimited")
-                        : formatNumber(core.data.research.remaining)
-                    }
-                  />
-                ) : (
-                  <p>{t("usageUnavailable")}</p>
-                )}
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader>
-                <CardTitle>{t("ai")}</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {model.data ? (
-                  <UsageValues
-                    actual={usd(model.data.actual_nanodollars / 1e9)}
-                    reserved={usd(model.data.reserved_nanodollars / 1e9)}
-                    remaining={
-                      model.data.remaining_nanodollars === null
-                        ? t("unlimited")
-                        : usd(model.data.remaining_nanodollars / 1e9)
-                    }
-                  />
-                ) : (
-                  <p>{t("usageUnavailable")}</p>
-                )}
-              </CardContent>
-            </Card>
-          </div>
-          {core.data ? (
-            <div className="flex flex-col gap-2">
-              <p>
-                {t("trackingUsage", {
-                  selected: core.data.tracking.selected_track_ids.length,
-                  limit: core.data.tracking.limit ?? t("unlimited"),
-                  retained: core.data.tracking.retained_count,
-                })}
-              </p>
-              {core.data.tracking.selection_required ? (
-                <Alert>
-                  <AlertDescription>{t("selectionRequired")}</AlertDescription>
-                </Alert>
-              ) : null}
-              <p className="text-sm text-muted-foreground">
-                {t("trackingHistory")}
-              </p>
-            </div>
-          ) : null}
-        </section>
-        <p className="text-sm text-muted-foreground">{t("refund")}</p>
-        <a className="text-sm underline underline-offset-4" href="mailto:support@qagentis.com">support@qagentis.com</a>
-        <PolicyLinks />
-        <AlertDialog
-          open={command !== null}
-          onOpenChange={(open) => {
-            if (!open && !busy) setCommand(null);
-          }}
-        >
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>
-                {command?.kind === "cancel"
-                  ? t("cancelTitle")
-                  : t("changeTitle", {
-                      plan: command?.plan ? planName(command.plan) : "",
-                    })}
-              </AlertDialogTitle>
-              <AlertDialogDescription>
-                {command?.kind === "cancel"
-                  ? t(
-                      summary?.paid_until
-                        ? "cancelDescription"
-                        : "cancelDescriptionFree",
-                    )
-                  : command?.kind === "checkout"
-                    ? t("checkout")
-                    : t(higher ? "upgrade" : "downgrade")}
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            {error ? (
-              <Alert variant="destructive">
-                <AlertDescription>{t(error ?? "error")}</AlertDescription>
-              </Alert>
-            ) : null}
-            <AlertDialogFooter>
-              <Button
-                variant="outline"
-                disabled={busy}
-                onClick={() => setCommand(null)}
-              >
-                {t("back")}
-              </Button>
-              <Button disabled={busy} onClick={() => void confirm()}>
-                {busy ? <Spinner data-icon="inline-start" /> : null}
-                {t(busy ? "working" : "confirm")}
-              </Button>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+        <PolicyLinks includePricing={false} />
       </PageContent>
     </Page>
-  );
-}
-function UsageValues({
-  actual,
-  reserved,
-  remaining,
-}: {
-  actual: string;
-  reserved: string;
-  remaining: string;
-}) {
-  const { t } = useTranslation("billing");
-  return (
-    <dl className="grid grid-cols-3 gap-4">
-      {(
-        [
-          ["actual", actual],
-          ["reserved", reserved],
-          ["remaining", remaining],
-        ] as const
-      ).map(([label, value]) => (
-        <div key={label} className="flex flex-col gap-2">
-          <dt className="text-xs text-muted-foreground">{t(label)}</dt>
-          <dd className="m-0 tabular-nums">{value}</dd>
-        </div>
-      ))}
-    </dl>
   );
 }

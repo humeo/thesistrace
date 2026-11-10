@@ -22,7 +22,7 @@ def pro_quota_policy(monkeypatch: pytest.MonkeyPatch) -> QuotaPolicy:
     """Multi-track execution fixtures buy capacity explicitly; Free stays at one."""
     policy = QuotaPolicy(
         timezone="Asia/Shanghai",
-        daily_model_budget_nanodollars=1_000_000_000,
+        weekly_model_budget_nanodollars=1_000_000_000,
         daily_run_limit=100,
         active_daily_track_limit=10,
     )

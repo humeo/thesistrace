@@ -21,7 +21,7 @@ for (const language of ["en", "zh"] as const) {
       await expect(page.getByRole("main")).not.toContainText(language === "en" ? "Pre-launch preview" : "上线前预览");
       await expect(page.getByRole("main")).not.toContainText("[支持及隐私联系邮箱]");
       await expect(page.locator('a[aria-current="page"]')).toHaveCount(2);
-      await expect(page.getByRole("link", { name: "koltenluca433@gmail.com", exact: true })).toHaveAttribute("href", "mailto:koltenluca433@gmail.com");
+      await expect(page.getByRole("link", { name: "support@qagentis.com", exact: true })).toHaveAttribute("href", "mailto:support@qagentis.com");
       if (path === "/terms" || path === "/privacy") {
         await expect(page.getByRole("main")).toContainText("朱城磊");
       }
@@ -37,8 +37,8 @@ for (const language of ["en", "zh"] as const) {
     await expect(page.getByRole("table")).toContainText("$20");
     await expect(page.getByRole("table")).toContainText("$100");
     const pro = page.getByRole("row").filter({ hasText: "Pro" });
+    await expect(page.getByRole("columnheader", { name: language === "en" ? "Weekly AI quota" : "每周 AI 额度" })).toBeVisible();
     await expect(pro).toContainText(language === "en" ? "More usage" : "更多用量");
-    await expect(pro).toContainText(language === "en" ? "About $1.5 / day" : "约 $1.5／天");
     await page.getByRole("button", { name: language === "en" ? "中文" : "English", exact: true }).click();
     await page.reload();
     await expect(page.getByRole("heading", { level: 1 })).toHaveText(language === "en" ? "套餐与额度" : "Plans and usage");

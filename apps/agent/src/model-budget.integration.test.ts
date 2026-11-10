@@ -12,14 +12,14 @@ const url = process.env.THESISTRACE_AGENT_TEST_OWNER_DATABASE_URL;
 if (!url) throw new Error("Isolated database URL required");
 const pool = new Pool({ connectionString: url, max: 6 });
 const operator = randomUUID();
-let dailyBudget = 1_000_000_000;
+let weeklyBudget = 1_000_000_000;
 const server = createServer((request, response) => {
   response.setHeader("content-type", "application/json");
   const unlimited = request.url?.includes(operator) === true;
   response.end(
     JSON.stringify({
       timezone: "Asia/Shanghai",
-      daily_model_budget_nanodollars: unlimited ? null : dailyBudget,
+      weekly_model_budget_nanodollars: unlimited ? null : weeklyBudget,
       daily_run_limit: unlimited ? null : 10,
       active_daily_track_limit: unlimited ? null : 10,
     }),
@@ -40,7 +40,7 @@ beforeAll(async () => {
   );
 });
 beforeEach(async () => {
-  dailyBudget = 1_000_000_000;
+  weeklyBudget = 1_000_000_000;
   await pool.query("DELETE FROM agent.model_charge");
 });
 afterAll(async () => {
@@ -84,7 +84,7 @@ it("keeps database connections available while waiting for the quota policy", as
       await released;
       return Response.json({
         timezone: "Asia/Shanghai",
-        daily_model_budget_nanodollars: null,
+        weekly_model_budget_nanodollars: null,
         daily_run_limit: null,
         active_daily_track_limit: null,
       });
@@ -116,14 +116,27 @@ it("settles once and refuses the next call at the exact allowance", async () => 
   await budget.settle(next, 800_000_000);
   await expect(budget.begin(researcher)).rejects.toMatchObject({ code: "DAILY_MODEL_BUDGET_EXCEEDED" });
 });
-it("exempts the current Operator and isolates researchers and Beijing dates", async () => {
+it("counts the Beijing week, excludes the preceding Sunday and isolates researchers", async () => {
   const operatorCall = await budget.begin(operator);
   await budget.settle(operatorCall, 2_000_000_000);
   await expect(budget.begin(operator)).resolves.toBeDefined();
   const researcher = randomUUID();
   const prior = await budget.begin(researcher);
   await budget.settle(prior, 1_000_000_000);
-  await pool.query("UPDATE agent.model_charge SET budget_day = budget_day - 1 WHERE id = $1", [prior.id]);
+  const { rows: [week] } = await pool.query<{ monday: string; next_monday: Date }>(
+    `SELECT date_trunc('week', now() AT TIME ZONE 'Asia/Shanghai')::date::text AS monday,
+      (date_trunc('week', now() AT TIME ZONE 'Asia/Shanghai') + interval '7 days')
+        AT TIME ZONE 'Asia/Shanghai' AS next_monday`,
+  );
+  await pool.query("UPDATE agent.model_charge SET budget_day = $2::date WHERE id = $1", [prior.id, week.monday]);
+  expect(await budget.usage(researcher)).toMatchObject({
+    actual_nanodollars: 1_000_000_000,
+    remaining_nanodollars: 0,
+    resets_at: week.next_monday.toISOString(),
+  });
+  await expect(budget.begin(researcher)).rejects.toMatchObject({ code: "DAILY_MODEL_BUDGET_EXCEEDED" });
+  await pool.query("UPDATE agent.model_charge SET budget_day = $2::date - 1 WHERE id = $1", [prior.id, week.monday]);
+  expect(await budget.usage(researcher)).toMatchObject({ actual_nanodollars: 0 });
   await expect(budget.begin(researcher)).resolves.toBeDefined();
   await expect(budget.begin(randomUUID())).resolves.toBeDefined();
   const result = await pool.query("SELECT count(*)::int AS count FROM agent.model_charge WHERE budget_day = (now() AT TIME ZONE 'Asia/Shanghai')::date");
@@ -131,13 +144,13 @@ it("exempts the current Operator and isolates researchers and Beijing dates", as
 });
 it("uses changed policy values immediately and rejects zero allowance", async () => {
   const researcher = randomUUID();
-  dailyBudget = 0;
+  weeklyBudget = 0;
   await expect(budget.begin(researcher)).rejects.toMatchObject({ code: "DAILY_MODEL_BUDGET_EXCEEDED" });
-  dailyBudget = 200_000_000;
+  weeklyBudget = 200_000_000;
   const call = await budget.begin(researcher);
   await budget.settle(call, 200_000_000);
   await expect(budget.begin(researcher)).rejects.toMatchObject({ code: "DAILY_MODEL_BUDGET_EXCEEDED" });
-  dailyBudget = 300_000_000;
+  weeklyBudget = 300_000_000;
   await expect(budget.begin(researcher)).resolves.toBeDefined();
 });
 it("fails closed when the quota policy is unavailable or malformed", async () => {
@@ -146,7 +159,7 @@ it("fails closed when the quota policy is unavailable or malformed", async () =>
     { timezone: "Asia/Shanghai" },
     {
       timezone: "invalid",
-      daily_model_budget_nanodollars: 1,
+      weekly_model_budget_nanodollars: 1,
       daily_run_limit: 1,
       active_daily_track_limit: 1,
     },

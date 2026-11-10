@@ -34,10 +34,12 @@ export default function PolicyPage({ path }: { path: PublicPolicyPath }) {
       <h1>{policy.title}</h1>
       <p className="policy-notice">{zh ? "生效日期：2026 年 10 月 18 日" : "Effective date: October 18, 2026"}</p>
       {path === "/pricing" && <Table>
-        <TableHeader><TableRow>{(zh ? ["套餐", "USD / 月", "研究 / 日", "跟踪名额", "AI 用量"] : ["Plan", "USD / month", "Runs / day", "Tracking slots", "AI usage"]).map(label => <TableHead key={label}>{label}</TableHead>)}</TableRow></TableHeader>
-        <TableBody>{[["Free", "$0", "10", "1", "$1"], ["Pro", "$20", "100", "10", "$1.5"], ["Max", "$100", "500", "50", "$2"]].map((row, planIndex) => <TableRow key={row[0]}>{row.map((cell, index) => <TableCell key={index}>{index === 4
-          ? <div className="flex flex-col gap-1"><span>{(zh ? ["基础用量", "更多用量", "充裕用量"] : ["Basic usage", "More usage", "Generous usage"])[planIndex]}</span><span className="text-xs text-muted-foreground">{zh ? `约 ${cell}／天` : `About ${cell} / day`}</span></div>
-          : cell}</TableCell>)}</TableRow>)}</TableBody>
+        <TableHeader><TableRow>{(zh ? ["套餐", "USD / 月", "研究 / 日", "跟踪名额", "每周 AI 额度"] : ["Plan", "USD / month", "Runs / day", "Tracking slots", "Weekly AI quota"]).map(label => <TableHead key={label}>{label}</TableHead>)}</TableRow></TableHeader>
+        <TableBody>{[
+          ["Free", "$0", "10", "1", zh ? "基础用量" : "Basic usage"],
+          ["Pro", "$20", "100", "10", zh ? "更多用量" : "More usage"],
+          ["Max", "$100", "500", "50", zh ? "最高用量" : "Highest usage"],
+        ].map((row) => <TableRow key={row[0]}>{row.map((cell, index) => <TableCell key={index}>{cell}</TableCell>)}</TableRow>)}</TableBody>
       </Table>}
       {policy.sections.map(section => <section key={section.title}>
         <h2>{section.title}</h2>

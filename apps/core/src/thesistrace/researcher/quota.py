@@ -14,7 +14,7 @@ class QuotaPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     timezone: str
-    daily_model_budget_nanodollars: QuotaLimit | None
+    weekly_model_budget_nanodollars: QuotaLimit | None
     daily_run_limit: QuotaLimit | None
     active_daily_track_limit: QuotaLimit | None
 
